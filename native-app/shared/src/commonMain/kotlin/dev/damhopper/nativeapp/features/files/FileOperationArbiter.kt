@@ -25,6 +25,7 @@ enum class ReservationState {
  */
 interface ReservationToken {
     val id: Long
+    val arbiter: FileOperationArbiter
     val owner: WorkspaceFileOwner
     val paths: Set<String>
     val kind: ReservationKind
@@ -50,6 +51,7 @@ class FileOperationArbiter {
 
     private class MutableReservationToken(
         override val id: Long,
+        override val arbiter: FileOperationArbiter,
         override val owner: WorkspaceFileOwner,
         override val paths: Set<String>,
         override val kind: ReservationKind,
@@ -68,6 +70,7 @@ class FileOperationArbiter {
         }
         val token = MutableReservationToken(
             id = nextTokenId++,
+            arbiter = this,
             owner = owner,
             paths = setOf(normalized),
             kind = ReservationKind.EXACT_FILE_SAVE,
@@ -96,6 +99,7 @@ class FileOperationArbiter {
 
         val token = MutableReservationToken(
             id = nextTokenId++,
+            arbiter = this,
             owner = owner,
             paths = paths,
             kind = ReservationKind.MUTATION_SUBTREE,
@@ -109,6 +113,9 @@ class FileOperationArbiter {
      * Prevents self-deadlock when saving dirty documents within a reserved mutation subtree.
      */
     fun createChildSaveToken(parentToken: ReservationToken, savePath: String): ReservationToken = synchronized(lock) {
+        require(parentToken.arbiter === this) {
+            "Parent token was issued by another arbiter instance"
+        }
         val parent = activeTokens[parentToken.id]
             ?: throw IllegalStateException("Parent token ${parentToken.id} is not active")
         require(parent.state == ReservationState.ACTIVE) {
@@ -131,6 +138,7 @@ class FileOperationArbiter {
 
         val child = MutableReservationToken(
             id = nextTokenId++,
+            arbiter = this,
             owner = parent.owner,
             paths = setOf(normalizedSave),
             kind = ReservationKind.CHILD_SAVE,
@@ -145,6 +153,9 @@ class FileOperationArbiter {
      * Quarantined tokens cannot be released by ordinary releaseToken().
      */
     fun quarantineToken(token: ReservationToken, operation: QuarantinedOperation): Unit = synchronized(lock) {
+        require(token.arbiter === this) {
+            "Token ${token.id} was issued by another arbiter instance"
+        }
         val active = activeTokens[token.id]
             ?: throw IllegalStateException("Token ${token.id} is not tracked")
         active.state = ReservationState.QUARANTINED
@@ -153,15 +164,35 @@ class FileOperationArbiter {
 
     /**
      * Releases an active reservation token.
-     * Throws IllegalStateException if the token is currently quarantined.
+     * Throws IllegalStateException if the token is currently quarantined,
+     * or if any child tokens derived from this token are currently quarantined.
      */
     fun releaseToken(token: ReservationToken): Unit = synchronized(lock) {
+        require(token.arbiter === this) {
+            "Token ${token.id} was issued by another arbiter instance"
+        }
         val active = activeTokens[token.id] ?: return@synchronized
         if (active.state == ReservationState.QUARANTINED) {
             throw IllegalStateException(
                 "Cannot release quarantined token ${token.id} for path(s) ${token.paths}. " +
                     "Reconciliation or explicit abandonQuarantine required."
             )
+        }
+        val quarantinedChildren = activeTokens.values.filter {
+            it.parentTokenId == token.id && it.state == ReservationState.QUARANTINED
+        }
+        if (quarantinedChildren.isNotEmpty()) {
+            throw IllegalStateException(
+                "Cannot release parent token ${token.id} while child save token(s) are quarantined"
+            )
+        }
+        // Release active children spawned from this parent
+        val activeChildren = activeTokens.values.filter {
+            it.parentTokenId == token.id && it.state == ReservationState.ACTIVE
+        }
+        for (child in activeChildren) {
+            child.state = ReservationState.RELEASED
+            activeTokens.remove(child.id)
         }
         active.state = ReservationState.RELEASED
         activeTokens.remove(token.id)
@@ -171,11 +202,40 @@ class FileOperationArbiter {
      * Explicitly abandons a quarantined reservation after user confirmation or successful reconciliation.
      */
     fun abandonQuarantine(token: ReservationToken, reason: String): Unit = synchronized(lock) {
+        require(token.arbiter === this) {
+            "Token ${token.id} was issued by another arbiter instance"
+        }
         val active = activeTokens[token.id] ?: return@synchronized
+        require(active.state == ReservationState.QUARANTINED) {
+            "Cannot abandon non-quarantined token ${token.id} (state=${active.state})"
+        }
         active.state = ReservationState.RELEASED
         activeTokens.remove(token.id)
         quarantinedOps.remove(token.id)
+        val childTokens = activeTokens.values.filter { it.parentTokenId == token.id }
+        for (child in childTokens) {
+            child.state = ReservationState.RELEASED
+            activeTokens.remove(child.id)
+            quarantinedOps.remove(child.id)
+        }
     }
+
+    /**
+     * Finds the active or quarantined reservation token covering the given path and owner, if any.
+     */
+    fun findActiveReservation(owner: WorkspaceFileOwner, path: String): ReservationToken? = synchronized(lock) {
+        val normalized = normalizeRelativePath(path)
+        for (token in activeTokens.values) {
+            if (token.owner != owner || token.state == ReservationState.RELEASED) continue
+            for (tokenPath in token.paths) {
+                if (pathsConflict(normalized, tokenPath)) {
+                    return token
+                }
+            }
+        }
+        null
+    }
+
 
     /**
      * Checks if a path is currently reserved under the given owner.

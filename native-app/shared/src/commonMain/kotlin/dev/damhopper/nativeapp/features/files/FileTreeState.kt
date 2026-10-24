@@ -274,6 +274,63 @@ class FileTreeState(
         _selectedPath.value = path?.let { watchCoordinator.normalizeDirectoryPath(it) }
     }
 
+    fun rekeyPath(oldPath: String, newPath: String) {
+        val cleanOld = watchCoordinator.normalizeDirectoryPath(oldPath)
+        val cleanNew = watchCoordinator.normalizeDirectoryPath(newPath)
+        val oldPrefix = if (cleanOld.isEmpty()) "" else "$cleanOld/"
+        val sel = _selectedPath.value
+        if (sel != null && (sel == cleanOld || FileOperationArbiter.isPathAncestorOrEqual(cleanOld, sel))) {
+            _selectedPath.value = if (sel == cleanOld) cleanNew else cleanNew + "/" + sel.removePrefix(oldPrefix)
+        }
+
+        // Rekey active watch subscriptions under cleanOld to cleanNew
+        val oldDemands = watchCoordinator.activeSubscriptions.value.keys.filter {
+            it == cleanOld || FileOperationArbiter.isPathAncestorOrEqual(cleanOld, it)
+        }
+        for (oldSub in oldDemands) {
+            val newSub = if (oldSub == cleanOld) cleanNew else cleanNew + "/" + oldSub.removePrefix(oldPrefix)
+            watchCoordinator.releaseExplorerDemandImmediate(oldSub)
+            if (newSub.isNotEmpty()) {
+                coroutineScope.launch {
+                    watchCoordinator.acquireExplorerDemand(newSub)
+                }
+            }
+        }
+
+        // Recursively rekey loaded tree nodes
+        fun rekeyNode(node: FileTreeNode): FileTreeNode {
+            val rekeyedPath = if (node.path == cleanOld) {
+                cleanNew
+            } else if (cleanOld.isNotEmpty() && node.path.startsWith(oldPrefix)) {
+                cleanNew + "/" + node.path.removePrefix(oldPrefix)
+            } else {
+                node.path
+            }
+            val rekeyedName = if (rekeyedPath.isEmpty() || node.path.isEmpty()) node.name else rekeyedPath.substringAfterLast('/')
+            return node.copy(
+                path = rekeyedPath,
+                name = rekeyedName,
+                children = node.children.map { rekeyNode(it) },
+            )
+        }
+        _root.value = rekeyNode(_root.value)
+    }
+
+    fun handleConfirmedDeletion(deletedPath: String) {
+        val clean = watchCoordinator.normalizeDirectoryPath(deletedPath)
+        val sel = _selectedPath.value
+        if (sel != null && (sel == clean || FileOperationArbiter.isPathAncestorOrEqual(clean, sel))) {
+            _selectedPath.value = null
+        }
+        for (subDir in watchCoordinator.activeSubscriptions.value.keys.toList()) {
+            if (subDir == clean || FileOperationArbiter.isPathAncestorOrEqual(clean, subDir)) {
+                if (subDir.isNotEmpty()) {
+                    watchCoordinator.releaseExplorerDemandImmediate(subDir)
+                }
+            }
+        }
+    }
+
     fun setShowHidden(show: Boolean) {
         _showHidden.value = show
     }

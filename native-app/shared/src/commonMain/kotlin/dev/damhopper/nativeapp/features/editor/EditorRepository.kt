@@ -119,43 +119,61 @@ class EditorRepository(
         if (doc.isReadOnly.value) return FileOperationOutcome.NotSubmitted("Document is read-only")
         val gate = saveGate ?: return FileOperationOutcome.NotSubmitted("No save eligibility gate installed")
         gate(id)?.let { return FileOperationOutcome.NotSubmitted(it) }
+        val effectiveOwner = dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(fileRepository.owner, target)
+        val acquiredToken = fileRepository.arbiter.tryReserveSave(effectiveOwner, id.relativePath)
+            ?: return FileOperationOutcome.NotSubmitted("Path '${id.relativePath}' is currently reserved by another file operation")
 
-        val snapshot = doc.snapshotForSave()
-        val content = snapshot.utf8Bytes.decodeToString()
-        val expectedMtime = if (explicitOverwrite) {
-            try {
-                fileRepository.stat(target, id.relativePath).mtime.toLong()
-            } catch (e: Throwable) {
-                return FileOperationOutcome.NotSubmitted("Failed to stat file for overwrite: ${e.message}", e)
+        try {
+            val snapshot = doc.snapshotForSave()
+            val content = snapshot.utf8Bytes.decodeToString()
+            val expectedMtime = if (explicitOverwrite) {
+                try {
+                    fileRepository.stat(target, id.relativePath).mtime.toLong()
+                } catch (e: Throwable) {
+                    return FileOperationOutcome.NotSubmitted("Failed to stat file for overwrite: ${e.message}", e)
+                }
+            } else {
+                snapshot.mtime
             }
-        } else {
-            snapshot.mtime
-        }
 
-        val outcome = fileRepository.writeFileWithOutcome(
-            target = target,
-            relativePath = id.relativePath,
-            content = content,
-            expectedMtime = expectedMtime
-        )
+            val outcome = fileRepository.writeFileWithOutcome(
+                target = target,
+                relativePath = id.relativePath,
+                content = content,
+                expectedMtime = expectedMtime,
+                reservationToken = acquiredToken,
+                submittedRevision = snapshot.revision,
+                tabIncarnation = id.tabIncarnation,
+            )
 
-        return when (outcome) {
-            is FileOperationOutcome.Confirmed -> {
-                val confirmedMtime = outcome.result.newMtime ?: expectedMtime
-                doc.markSaved(snapshot.revision, confirmedMtime)
-                FileOperationOutcome.Confirmed(confirmedMtime)
+            return when (outcome) {
+                is FileOperationOutcome.Confirmed -> {
+                    val confirmedMtime = outcome.result.newMtime ?: expectedMtime
+                    doc.markSaved(snapshot.revision, confirmedMtime)
+                    FileOperationOutcome.Confirmed(confirmedMtime)
+                }
+                is FileOperationOutcome.Rejected -> FileOperationOutcome.Rejected(outcome.code, outcome.message, outcome.details)
+                is FileOperationOutcome.Unknown -> FileOperationOutcome.Unknown(outcome.stage, outcome.opId, outcome.message, outcome.cause)
+                is FileOperationOutcome.NotSubmitted -> FileOperationOutcome.NotSubmitted(outcome.reason, outcome.cause)
             }
-            is FileOperationOutcome.Rejected -> FileOperationOutcome.Rejected(outcome.code, outcome.message, outcome.details)
-            is FileOperationOutcome.Unknown -> FileOperationOutcome.Unknown(outcome.stage, outcome.opId, outcome.message, outcome.cause)
-            is FileOperationOutcome.NotSubmitted -> FileOperationOutcome.NotSubmitted(outcome.reason, outcome.cause)
+        } finally {
+            if (acquiredToken.state == dev.damhopper.nativeapp.features.files.ReservationState.ACTIVE) {
+                try {
+                    fileRepository.arbiter.releaseToken(acquiredToken)
+                } catch (_: Throwable) {}
+            }
         }
     }
+
     suspend fun saveFile(
         target: ProjectTargetRef,
         path: String,
         submittedContent: String,
         expectedMtime: Long,
         encryptedRequested: Boolean = false,
+        reservationToken: dev.damhopper.nativeapp.features.files.ReservationToken? = null,
+        submittedRevision: Long? = null,
+        tabIncarnation: Long? = null,
     ): EditorSaveResult {
         if (encryptedRequested) {
             val session = cryptoSessionProvider?.invoke()
@@ -169,8 +187,10 @@ class EditorRepository(
             relativePath = path,
             content = submittedContent,
             expectedMtime = expectedMtime,
+            reservationToken = reservationToken,
+            submittedRevision = submittedRevision,
+            tabIncarnation = tabIncarnation,
         )
-
         return when (outcome) {
             is FileOperationOutcome.Confirmed -> {
                 EditorSaveResult.Success(outcome.result.newMtime ?: expectedMtime)
@@ -209,6 +229,7 @@ class EditorRepository(
         path: String,
         submittedContent: String,
         encryptedRequested: Boolean = false,
+        reservationToken: dev.damhopper.nativeapp.features.files.ReservationToken? = null,
     ): EditorSaveResult {
         if (encryptedRequested) {
             val session = cryptoSessionProvider?.invoke()
@@ -224,6 +245,7 @@ class EditorRepository(
                 submittedContent = submittedContent,
                 expectedMtime = freshStat.mtime.toLong(),
                 encryptedRequested = encryptedRequested,
+                reservationToken = reservationToken,
             )
         } catch (e: CancellationException) {
             throw e

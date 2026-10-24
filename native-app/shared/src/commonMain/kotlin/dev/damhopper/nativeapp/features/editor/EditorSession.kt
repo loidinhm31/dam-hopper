@@ -11,14 +11,19 @@ import dev.damhopper.nativeapp.features.workspace.DocumentId
  */
 class EditorSession(
     val document: EditorDocument,
-    val key: String,
+    key: String,
     val profileId: String,
     val target: ProjectTargetRef,
-    val path: String,
+    path: String,
     val sessionIncarnation: Long = 1L,
     initialMtime: Long? = null,
     val isReadOnly: Boolean = false,
 ) : AutoCloseable {
+
+    var key: String = key; private set
+    var path: String = path; private set
+    var isFrozen: Boolean = false
+    val isInputPermitted: Boolean get() = !isFrozen && isInputAllowed()
 
     var serverMtime: Long? = initialMtime; private set
     var submittedSnapshot: DocumentSaveSnapshot? = null; private set
@@ -61,7 +66,7 @@ class EditorSession(
 
     fun setText(newText: String, newModelVersion: Long = modelVersion + 1L) {
         checkNotDisposed()
-        if (isReadOnly || !isInputAllowed()) return
+        if (isReadOnly || !isInputPermitted) return
         document.applyEdit(1, 1, maxOf(1, lineCount), maxOf(1, length + 1), newText)
         editEpoch++
         cursorPosition = TextPosition(1, 1)
@@ -126,9 +131,16 @@ class EditorSession(
         submittedEpoch = null
     }
 
+    fun rekey(newKey: String, newPath: String) {
+        checkNotDisposed()
+        key = newKey
+        path = newPath
+        document.rekey(newPath)
+    }
+
     fun undo(): Boolean {
         checkNotDisposed()
-        if (!canUndo() || !isInputAllowed()) return false
+        if (!canUndo() || !isInputPermitted) return false
         document.undo()
         editEpoch++
         onContentChangeListener?.invoke(getText(), modelVersion, editEpoch)
@@ -137,7 +149,7 @@ class EditorSession(
 
     fun redo(): Boolean {
         checkNotDisposed()
-        if (!canRedo() || !isInputAllowed()) return false
+        if (!canRedo() || !isInputPermitted) return false
         document.redo()
         editEpoch++
         onContentChangeListener?.invoke(getText(), modelVersion, editEpoch)
@@ -146,7 +158,7 @@ class EditorSession(
 
     fun applyEdit(edit: TextEdit) {
         checkNotDisposed()
-        if (isReadOnly || !isInputAllowed()) return
+        if (isReadOnly || !isInputPermitted) return
         document.applyEdit(
             startLine = edit.range.start.line,
             startCol = edit.range.start.column,

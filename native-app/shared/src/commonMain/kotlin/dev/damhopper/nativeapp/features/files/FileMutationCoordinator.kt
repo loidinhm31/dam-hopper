@@ -1,7 +1,10 @@
 package dev.damhopper.nativeapp.features.files
 
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import dev.damhopper.nativeapp.features.editor.CloseDecision
 import dev.damhopper.nativeapp.features.editor.EditorDirtyGuardPort
+import dev.damhopper.nativeapp.features.editor.EditorTabsState
+import dev.damhopper.nativeapp.features.workspace.DocumentId
 import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -68,6 +71,7 @@ sealed interface ExplorerDialogState {
         val isSubmitting: Boolean = false,
         val errorMessage: String? = null,
         val unknownOutcome: FileOperationOutcome.Unknown? = null,
+        val capturedDirtyRevisions: Map<DocumentId, Long> = emptyMap(),
     ) : ExplorerDialogState
 
     data class Move(
@@ -79,6 +83,7 @@ sealed interface ExplorerDialogState {
         val isSubmitting: Boolean = false,
         val errorMessage: String? = null,
         val unknownOutcome: FileOperationOutcome.Unknown? = null,
+        val capturedDirtyRevisions: Map<DocumentId, Long> = emptyMap(),
     ) : ExplorerDialogState
 
     data class DeleteConfirm(
@@ -90,6 +95,7 @@ sealed interface ExplorerDialogState {
         val isSubmitting: Boolean = false,
         val errorMessage: String? = null,
         val unknownOutcome: FileOperationOutcome.Unknown? = null,
+        val capturedDirtyRevisions: Map<DocumentId, Long> = emptyMap(),
     ) : ExplorerDialogState
 }
 
@@ -103,7 +109,10 @@ class FileMutationCoordinator(
     private val treeState: FileTreeState,
     private val dirtyGuardPort: EditorDirtyGuardPort? = null,
     val arbiter: FileOperationArbiter = repository.arbiter,
+    val editorTabsState: EditorTabsState? = null,
 ) {
+    private val effectiveDirtyGuard: EditorDirtyGuardPort?
+        get() = dirtyGuardPort ?: editorTabsState
     val target: ProjectTargetRef
         get() = treeState.target
 
@@ -232,6 +241,10 @@ class FileMutationCoordinator(
         }
         if (cleanSource.isEmpty()) return
         val currentName = cleanSource.substringAfterLast('/')
+        val dirtyRevs = editorTabsState?.let { tabs ->
+            val dirty = effectiveDirtyGuard?.getDirtyDocumentIds(target, cleanSource) ?: emptyList()
+            dirty.associateWith { id -> tabs.openTabs.value.find { it.id == id }?.currentRevision ?: 0L }
+        } ?: emptyMap()
         _dialogState.value = ExplorerDialogState.Rename(
             actionId = allocateActionId(),
             owner = owner,
@@ -239,6 +252,7 @@ class FileMutationCoordinator(
             sourcePath = cleanSource,
             currentName = currentName,
             draftNewName = currentName,
+            capturedDirtyRevisions = dirtyRevs,
         )
     }
 
@@ -254,12 +268,17 @@ class FileMutationCoordinator(
         }
         if (cleanSource.isEmpty()) return
         val defaultDest = initialDestDirPath ?: FileTreeHelpers.resolveParentPath(cleanSource)
+        val dirtyRevs = editorTabsState?.let { tabs ->
+            val dirty = effectiveDirtyGuard?.getDirtyDocumentIds(target, cleanSource) ?: emptyList()
+            dirty.associateWith { id -> tabs.openTabs.value.find { it.id == id }?.currentRevision ?: 0L }
+        } ?: emptyMap()
         _dialogState.value = ExplorerDialogState.Move(
             actionId = allocateActionId(),
             owner = owner,
             target = target,
             sourcePath = cleanSource,
             draftDestDirPath = defaultDest,
+            capturedDirtyRevisions = dirtyRevs,
         )
     }
 
@@ -272,12 +291,17 @@ class FileMutationCoordinator(
         }
         if (cleanPath.isEmpty()) return
         val node = FileTreeHelpers.findNode(treeState.root.value, cleanPath)
+        val dirtyRevs = editorTabsState?.let { tabs ->
+            val dirty = effectiveDirtyGuard?.getDirtyDocumentIds(target, cleanPath) ?: emptyList()
+            dirty.associateWith { id -> tabs.openTabs.value.find { it.id == id }?.currentRevision ?: 0L }
+        } ?: emptyMap()
         _dialogState.value = ExplorerDialogState.DeleteConfirm(
             actionId = allocateActionId(),
             owner = owner,
             target = target,
             targetPath = cleanPath,
             isDirectory = node?.isDirectory ?: false,
+            capturedDirtyRevisions = dirtyRevs,
         )
     }
 
@@ -325,11 +349,15 @@ class FileMutationCoordinator(
                 is ExplorerDialogState.None -> return null
                 is ExplorerDialogState.CreateFile -> createFileWithOutcome(snapshot.parentPath, snapshot.draftName, actionId = capturedActionId)
                 is ExplorerDialogState.CreateDirectory -> createDirectoryWithOutcome(snapshot.parentPath, snapshot.draftName, actionId = capturedActionId)
-                is ExplorerDialogState.Rename -> renameWithOutcome(snapshot.sourcePath, snapshot.draftNewName, actionId = capturedActionId)
-                is ExplorerDialogState.Move -> moveWithOutcome(snapshot.sourcePath, snapshot.draftDestDirPath, actionId = capturedActionId)
-                is ExplorerDialogState.DeleteConfirm -> deleteWithOutcome(snapshot.targetPath, confirmed = true, actionId = capturedActionId)
+                is ExplorerDialogState.Rename -> renameWithOutcome(snapshot.sourcePath, snapshot.draftNewName, expectedDirtyRevisions = snapshot.capturedDirtyRevisions, actionId = capturedActionId)
+                is ExplorerDialogState.Move -> moveWithOutcome(snapshot.sourcePath, snapshot.draftDestDirPath, expectedDirtyRevisions = snapshot.capturedDirtyRevisions, actionId = capturedActionId)
+                is ExplorerDialogState.DeleteConfirm -> deleteWithOutcome(snapshot.targetPath, confirmed = true, expectedDirtyRevisions = snapshot.capturedDirtyRevisions, actionId = capturedActionId)
             }
         } catch (e: CancellationException) {
+            val current = _dialogState.value
+            if (current.actionId == capturedActionId) {
+                _dialogState.value = updateDialogSubmitting(current, submitting = false)
+            }
             throw e
         } catch (e: IllegalArgumentException) {
             FileOperationOutcome.NotSubmitted(e.message ?: "Validation failed before submission", e)
@@ -378,6 +406,18 @@ class FileMutationCoordinator(
         is ExplorerDialogState.DeleteConfirm -> state.copy(isSubmitting = false, errorMessage = errorMessage, unknownOutcome = unknown)
         is ExplorerDialogState.None -> state
     }
+    private fun updateDialogSubmitting(
+        state: ExplorerDialogState,
+        submitting: Boolean,
+    ): ExplorerDialogState = when (state) {
+        is ExplorerDialogState.CreateFile -> state.copy(isSubmitting = submitting)
+        is ExplorerDialogState.CreateDirectory -> state.copy(isSubmitting = submitting)
+        is ExplorerDialogState.Rename -> state.copy(isSubmitting = submitting)
+        is ExplorerDialogState.Move -> state.copy(isSubmitting = submitting)
+        is ExplorerDialogState.DeleteConfirm -> state.copy(isSubmitting = submitting)
+        is ExplorerDialogState.None -> state
+    }
+
 
     // --- Typed Phase-Aware Mutation Operations ---
 
@@ -436,6 +476,8 @@ class FileMutationCoordinator(
     suspend fun renameWithOutcome(
         path: String,
         newName: String,
+        dirtyDecision: CloseDecision = CloseDecision.SAVE,
+        expectedDirtyRevisions: Map<DocumentId, Long>? = null,
         actionId: Long = allocateActionId(),
     ): FileOperationOutcome<FsOpOutcome> {
         val cleanSource = try {
@@ -470,6 +512,8 @@ class FileMutationCoordinator(
             sourcePath = cleanSource,
             destPath = newRelativePath,
             checkDirtySubtree = true,
+            dirtyDecision = dirtyDecision,
+            expectedDirtyRevisions = expectedDirtyRevisions,
             onConfirmedRefresh = {
                 treeState.loadDirectorySuspending(parentPath, isPostMutationRefresh = true)
             },
@@ -479,6 +523,8 @@ class FileMutationCoordinator(
     suspend fun moveWithOutcome(
         sourcePath: String,
         destDirPath: String,
+        dirtyDecision: CloseDecision = CloseDecision.SAVE,
+        expectedDirtyRevisions: Map<DocumentId, Long>? = null,
         actionId: Long = allocateActionId(),
     ): FileOperationOutcome<FsOpOutcome> {
         val cleanSource = try {
@@ -516,6 +562,8 @@ class FileMutationCoordinator(
             sourcePath = cleanSource,
             destPath = newRelativePath,
             checkDirtySubtree = true,
+            dirtyDecision = dirtyDecision,
+            expectedDirtyRevisions = expectedDirtyRevisions,
             onConfirmedRefresh = {
                 val sourceParent = FileTreeHelpers.resolveParentPath(cleanSource)
                 treeState.loadDirectorySuspending(sourceParent, isPostMutationRefresh = true)
@@ -530,6 +578,8 @@ class FileMutationCoordinator(
         path: String,
         confirmed: Boolean = true,
         forceGit: Boolean = false,
+        dirtyDecision: CloseDecision = CloseDecision.SAVE,
+        expectedDirtyRevisions: Map<DocumentId, Long>? = null,
         actionId: Long = allocateActionId(),
     ): FileOperationOutcome<FsOpOutcome> {
         if (!confirmed) {
@@ -563,12 +613,10 @@ class FileMutationCoordinator(
             sourcePath = cleanPath,
             destPath = null,
             checkDirtySubtree = true,
+            dirtyDecision = dirtyDecision,
+            expectedDirtyRevisions = expectedDirtyRevisions,
             onConfirmedRefresh = {
                 treeState.loadDirectorySuspending(parentPath, isPostMutationRefresh = true)
-                val currentSelection = treeState.selectedPath.value
-                if (currentSelection != null && FileOperationArbiter.isPathAncestorOrEqual(cleanPath, currentSelection)) {
-                    treeState.selectPath(null)
-                }
             },
         )
     }
@@ -584,6 +632,8 @@ class FileMutationCoordinator(
         sourcePath: String,
         destPath: String?,
         checkDirtySubtree: Boolean,
+        dirtyDecision: CloseDecision = CloseDecision.SAVE,
+        expectedDirtyRevisions: Map<DocumentId, Long>? = null,
         onConfirmedRefresh: suspend () -> Unit,
     ): FileOperationOutcome<FsOpOutcome> {
         val capturedOwner = owner
@@ -636,18 +686,80 @@ class FileMutationCoordinator(
             return FileOperationOutcome.NotSubmitted("Reservation token failed owner/path qualification check")
         }
 
-        if (checkDirtySubtree && dirtyGuardPort != null) {
-            val hasDirtySource = dirtyGuardPort.isFileDirty(capturedTarget, normalizedSource) ||
-                dirtyGuardPort.hasDirtyDescendants(capturedTarget, normalizedSource)
-            val hasDirtyDest = normalizedDest != null && (
-                dirtyGuardPort.isFileDirty(capturedTarget, normalizedDest) ||
-                    dirtyGuardPort.hasDirtyDescendants(capturedTarget, normalizedDest)
+        // Enforce destination open-tab collision prevention
+        if (normalizedDest != null && editorTabsState != null) {
+            val isDestCollision = editorTabsState.openTabs.value.any { tab ->
+                tab.target.project == capturedTarget.project &&
+                tab.target.worktreePath == capturedTarget.worktreePath &&
+                (tab.relativePath == normalizedDest || FileOperationArbiter.isPathAncestorOrEqual(normalizedDest, tab.relativePath))
+            }
+            if (isDestCollision) {
+                releaseIfActive(token)
+                return FileOperationOutcome.NotSubmitted(
+                    "Cannot $op to '$normalizedDest': destination path is already open in an active editor tab. Close or resolve destination tab first."
                 )
-            if (hasDirtySource || hasDirtyDest) {
+            }
+        }
+
+        // Settle dirty documents in affected subtrees before dispatch
+        val guard = effectiveDirtyGuard
+        val isSourceDirty = checkDirtySubtree && guard != null && (
+            guard.isFileDirty(capturedTarget, normalizedSource) ||
+            guard.hasDirtyDescendants(capturedTarget, normalizedSource)
+        )
+        val isDestDirty = checkDirtySubtree && guard != null && normalizedDest != null && (
+            guard.isFileDirty(capturedTarget, normalizedDest) ||
+            guard.hasDirtyDescendants(capturedTarget, normalizedDest)
+        )
+        val hasAnyDirty = isSourceDirty || isDestDirty
+
+        val allDirtyDocIds = if (hasAnyDirty) {
+            val sourceDirty = guard.getDirtyDocumentIds(capturedTarget, normalizedSource)
+            val destDirty = if (normalizedDest != null) {
+                guard.getDirtyDocumentIds(capturedTarget, normalizedDest)
+            } else emptyList()
+            (sourceDirty + destDirty).distinct()
+        } else emptyList()
+
+        if (hasAnyDirty) {
+            val tabsState = editorTabsState
+            if (tabsState == null || allDirtyDocIds.isEmpty()) {
                 releaseIfActive(token)
                 return FileOperationOutcome.NotSubmitted(
                     "Cannot $op '$normalizedSource' while open editor documents have unsaved edits"
                 )
+            }
+
+            val capturedRevisions = if (expectedDirtyRevisions != null && expectedDirtyRevisions.isNotEmpty()) {
+                expectedDirtyRevisions
+            } else {
+                allDirtyDocIds.associateWith { docId ->
+                    tabsState.openTabs.value.find { it.id == docId }?.currentRevision ?: 0L
+                }
+            }
+
+            tabsState.freezeDocuments(allDirtyDocIds.toSet())
+            try {
+                val settleOutcome = settleDirtyDocuments(
+                    parentToken = token,
+                    dirtyDocIds = allDirtyDocIds,
+                    decision = dirtyDecision,
+                    capturedRevisions = capturedRevisions,
+                )
+                if (settleOutcome !is FileOperationOutcome.Confirmed) {
+                    tabsState.unfreezeDocuments(allDirtyDocIds.toSet())
+                    releaseIfActive(token)
+                    return when (settleOutcome) {
+                        is FileOperationOutcome.NotSubmitted -> FileOperationOutcome.NotSubmitted(settleOutcome.reason, settleOutcome.cause)
+                        is FileOperationOutcome.Rejected -> FileOperationOutcome.Rejected(settleOutcome.code, settleOutcome.message, settleOutcome.details)
+                        is FileOperationOutcome.Unknown -> FileOperationOutcome.Unknown(settleOutcome.stage, settleOutcome.opId, settleOutcome.message, settleOutcome.cause)
+                        is FileOperationOutcome.Confirmed -> error("Unreachable")
+                    }
+                }
+            } catch (t: Throwable) {
+                tabsState.unfreezeDocuments(allDirtyDocIds.toSet())
+                releaseIfActive(token)
+                throw t
             }
         }
 
@@ -662,6 +774,9 @@ class FileMutationCoordinator(
                 reservationToken = token,
             )
         } catch (e: CancellationException) {
+            if (allDirtyDocIds.isNotEmpty()) {
+                editorTabsState?.unfreezeDocuments(allDirtyDocIds.toSet())
+            }
             if (token.state == ReservationState.QUARANTINED) {
                 recordUnresolvedMutation(
                     actionId = actionId,
@@ -680,6 +795,9 @@ class FileMutationCoordinator(
             _isMutating.value = false
             throw e
         } catch (t: Throwable) {
+            if (allDirtyDocIds.isNotEmpty()) {
+                editorTabsState?.unfreezeDocuments(allDirtyDocIds.toSet())
+            }
             releaseIfActive(token)
             _isMutating.value = false
             return FileOperationOutcome.NotSubmitted(t.message ?: "Failed before mutation dispatch", t)
@@ -688,7 +806,31 @@ class FileMutationCoordinator(
 
         when (outcome) {
             is FileOperationOutcome.Confirmed -> {
-                releaseIfActive(token)
+                if (allDirtyDocIds.isNotEmpty()) {
+                    editorTabsState?.unfreezeDocuments(allDirtyDocIds.toSet())
+                }
+
+                // Step 1: Apply atomic local settlement FIRST before releasing reservation
+                if (op == "rename" || op == "move") {
+                    if (normalizedDest != null) {
+                        editorTabsState?.rekeyPath(capturedTarget, normalizedSource, normalizedDest)
+                        treeState.rekeyPath(normalizedSource, normalizedDest)
+                    }
+                } else if (op == "delete") {
+                    editorTabsState?.markPathDeleted(capturedTarget, normalizedSource)
+                    treeState.handleConfirmedDeletion(normalizedSource)
+                }
+
+                // Step 2: Release reservation
+                if (token.state == ReservationState.QUARANTINED) {
+                    try {
+                        arbiter.abandonQuarantine(token, "Confirmed by server")
+                    } catch (_: Throwable) {}
+                } else {
+                    releaseIfActive(token)
+                }
+
+                // Step 3: Run suspendable directory refresh (refresh error does not change Confirmed outcome)
                 try {
                     onConfirmedRefresh()
                 } catch (e: CancellationException) {
@@ -698,15 +840,29 @@ class FileMutationCoordinator(
                 }
             }
             is FileOperationOutcome.NotSubmitted, is FileOperationOutcome.Rejected -> {
-                releaseIfActive(token)
+                if (allDirtyDocIds.isNotEmpty()) {
+                    editorTabsState?.unfreezeDocuments(allDirtyDocIds.toSet())
+                }
+                if (token.state == ReservationState.QUARANTINED) {
+                    try {
+                        arbiter.abandonQuarantine(token, "Operation rejected or not submitted")
+                    } catch (_: Throwable) {}
+                } else {
+                    releaseIfActive(token)
+                }
             }
             is FileOperationOutcome.Unknown -> {
+                if (allDirtyDocIds.isNotEmpty()) {
+                    editorTabsState?.unfreezeDocuments(allDirtyDocIds.toSet())
+                }
                 if (token.state == ReservationState.ACTIVE) {
                     arbiter.quarantineToken(
                         token,
                         QuarantinedOperation(
                             owner = capturedOwner,
                             path = normalizedSource,
+                            destinationPath = normalizedDest,
+                            operationKind = op,
                             stage = outcome.stage,
                             opId = outcome.opId,
                             timestampMillis = Clock.System.now().toEpochMilliseconds(),
@@ -729,6 +885,105 @@ class FileMutationCoordinator(
         }
 
         return outcome
+    }
+
+    private suspend fun settleDirtyDocuments(
+        parentToken: ReservationToken,
+        dirtyDocIds: List<DocumentId>,
+        decision: CloseDecision,
+        capturedRevisions: Map<DocumentId, Long>,
+    ): FileOperationOutcome<Unit> {
+        val tabsState = editorTabsState
+            ?: return FileOperationOutcome.NotSubmitted("EditorTabsState not configured for dirty document settlement")
+
+        when (decision) {
+            CloseDecision.CANCEL -> {
+                return FileOperationOutcome.NotSubmitted("Operation cancelled by user")
+            }
+            CloseDecision.DISCARD -> {
+                for (docId in dirtyDocIds) {
+                    val expectedRev = capturedRevisions[docId]
+                    val tabMeta = tabsState.openTabs.value.find { it.id == docId }
+                    if (expectedRev != null && tabMeta != null && tabMeta.currentRevision > expectedRev) {
+                        return FileOperationOutcome.NotSubmitted(
+                            "New edits occurred on '${docId.relativePath}' after discard consent; discard cancelled to protect local edits"
+                        )
+                    }
+                }
+                return FileOperationOutcome.Confirmed(Unit)
+            }
+            CloseDecision.SAVE -> {
+                for (docId in dirtyDocIds) {
+                    val childToken = try {
+                        arbiter.createChildSaveToken(parentToken, docId.relativePath)
+                    } catch (e: Throwable) {
+                        return FileOperationOutcome.NotSubmitted(
+                            "Failed creating child save token for '${docId.relativePath}': ${e.message}", e
+                        )
+                    }
+                    val saveRes = tabsState.saveDocumentWithToken(docId, childToken)
+                    if (saveRes !is FileOperationOutcome.Confirmed) {
+                        if (saveRes is FileOperationOutcome.Unknown) {
+                            recordUnresolvedMutation(
+                                actionId = parentToken.id,
+                                owner = parentToken.owner,
+                                target = target,
+                                op = "save",
+                                sourcePath = docId.relativePath,
+                                destPath = null,
+                                stage = saveRes.stage,
+                                opId = saveRes.opId,
+                                message = "Child save on '${docId.relativePath}' outcome unknown: ${saveRes.message}",
+                            )
+                        }
+                        return when (saveRes) {
+                            is FileOperationOutcome.Rejected -> FileOperationOutcome.Rejected(saveRes.code, saveRes.message, saveRes.details)
+                            is FileOperationOutcome.Unknown -> FileOperationOutcome.Unknown(saveRes.stage, saveRes.opId, saveRes.message, saveRes.cause)
+                            is FileOperationOutcome.NotSubmitted -> FileOperationOutcome.NotSubmitted(saveRes.reason, saveRes.cause)
+                            is FileOperationOutcome.Confirmed -> error("Unreachable")
+                        }
+                    }
+                    val isStillDirty = tabsState.isFileDirty(target, docId.relativePath)
+                    if (isStillDirty) {
+                        return FileOperationOutcome.NotSubmitted("New edits occurred while saving '${docId.relativePath}'")
+                    }
+                }
+                return FileOperationOutcome.Confirmed(Unit)
+            }
+        }
+    }
+
+    fun abandonUnresolvedOperation(actionId: Long, reason: String = "User abandoned unresolved operation") {
+        val op = _unresolvedOperations.value.find { it.actionId == actionId } ?: return
+        _unresolvedOperations.value = _unresolvedOperations.value.filterNot { it.actionId == actionId }
+        val quarantined = arbiter.getQuarantinedOperations(op.owner).find { it.path == op.sourcePath }
+        if (quarantined != null) {
+            val token = arbiter.findActiveReservation(op.owner, op.sourcePath)
+            if (token != null) {
+                try {
+                    arbiter.abandonQuarantine(token, reason)
+                } catch (_: Throwable) {}
+            }
+        }
+        val currentDialog = _dialogState.value
+        if (currentDialog.actionId == actionId) {
+            _dialogState.value = ExplorerDialogState.None
+        }
+    }
+
+    suspend fun reconcileUnknownOperation(actionId: Long): dev.damhopper.nativeapp.features.files.MutationReconciliationResult? {
+        val op = _unresolvedOperations.value.find { it.actionId == actionId } ?: return null
+        val result = repository.reconcileUnknownMutation(
+            target = op.target,
+            op = op.operation,
+            sourcePath = op.sourcePath,
+            destPath = op.destinationPath,
+        )
+        _lastFeedbackNotice.value = when (result) {
+            is dev.damhopper.nativeapp.features.files.MutationReconciliationResult.Reconciled -> "[Reconciled] ${result.message}"
+            is dev.damhopper.nativeapp.features.files.MutationReconciliationResult.Unresolved -> "[Unresolved] ${result.message}"
+        }
+        return result
     }
 
     private fun releaseIfActive(token: ReservationToken) {

@@ -136,4 +136,96 @@ class EditorSaveRaceTest {
         assertEquals("my local changes\n", session.getText())
         assertTrue(session.isDirty)
     }
+
+    @Test
+    fun testFrozenDocumentBlocksEditsDuringMutation() = runTest {
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val text = "original text\n"
+            exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(text.toByteArray()) }
+        }
+
+        val state = createTabsState()
+        val target = ProjectTargetRef(project = "demo")
+        state.openTab(target, "frozen.txt")
+        val docId = state.activeTabId.value!!
+        val session = state.getSession(state.activeTabKey.value!!)!!
+
+        // Freeze document
+        state.freezeDocuments(setOf(docId))
+        assertTrue(session.isFrozen)
+        assertFalse(session.isInputPermitted)
+
+        // Edits must be ignored while frozen
+        session.setText("blocked edit")
+        assertEquals("original text\n", session.getText())
+
+        // Unfreeze restores editing
+        state.unfreezeDocuments(setOf(docId))
+        assertFalse(session.isFrozen)
+        assertTrue(session.isInputPermitted)
+
+        session.setText("allowed edit")
+        assertEquals("allowed edit", session.getText())
+    }
+
+    @Test
+    fun testSaveReconciliationAdoptsSubmittedBaselineAndPreservesNewerEdits() = runTest {
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":15,"mtime":200,"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val text = "submitted text\n"
+            exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(text.toByteArray()) }
+        }
+
+        val state = createTabsState()
+        val target = ProjectTargetRef(project = "demo")
+        state.openTab(target, "reconcile.txt")
+        val tabKey = state.activeTabKey.value!!
+        val session = state.getSession(tabKey)!!
+
+        // User types text and save begins
+        session.setText("submitted text\n")
+        val snapshot = session.snapshotSave()!!
+
+        // Record quarantined operation
+        val token = state.editorRepository.fileRepository.arbiter.tryReserveSave(
+            state.editorRepository.fileRepository.owner,
+            "reconcile.txt",
+        )!!
+        val quarantinedOp = dev.damhopper.nativeapp.features.files.QuarantinedOperation(
+            owner = state.editorRepository.fileRepository.owner,
+            path = "reconcile.txt",
+            stage = dev.damhopper.nativeapp.features.files.OperationStage.COMMIT_DISPATCHED,
+            opId = "write-42",
+            submittedRevision = snapshot.revision,
+            baselineMtime = 100L,
+            submittedBytes = snapshot.utf8Bytes,
+            timestampMillis = 1000L,
+        )
+        state.editorRepository.fileRepository.arbiter.quarantineToken(token, quarantinedOp)
+
+        // User continues editing while save was in flight/unknown
+        session.setText("submitted text\nnewer keystrokes\n")
+        assertTrue(session.isDirty)
+
+        // Reconcile unknown save
+        val result = state.reconcileUnknownSave(tabKey)
+        assertIs<dev.damhopper.nativeapp.features.files.SaveReconciliationResult.Reconciled>(result)
+        assertEquals(200L, result.newMtime)
+
+        // Newer keystrokes remain dirty and intact
+        assertTrue(session.isDirty, "Newer keystrokes must remain dirty after reconciling submitted snapshot")
+        assertEquals("submitted text\nnewer keystrokes\n", session.getText())
+        assertEquals(200L, session.serverMtime)
+    }
 }

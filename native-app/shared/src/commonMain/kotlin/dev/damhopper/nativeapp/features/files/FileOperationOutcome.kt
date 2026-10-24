@@ -80,6 +80,10 @@ data class QuarantinedOperation(
     val submittedBytes: ByteArray? = null,
     val timestampMillis: Long,
     val error: Throwable? = null,
+    val destinationPath: String? = null,
+    val operationKind: String? = null,
+    val tabIncarnation: Long? = null,
+    val baselineMtime: Long? = null,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -90,7 +94,11 @@ data class QuarantinedOperation(
             opId == other.opId &&
             submittedRevision == other.submittedRevision &&
             baselineRevision == other.baselineRevision &&
-            timestampMillis == other.timestampMillis
+            timestampMillis == other.timestampMillis &&
+            destinationPath == other.destinationPath &&
+            operationKind == other.operationKind &&
+            tabIncarnation == other.tabIncarnation &&
+            baselineMtime == other.baselineMtime
     }
 
     override fun hashCode(): Int {
@@ -101,6 +109,10 @@ data class QuarantinedOperation(
         result = 31 * result + (submittedRevision?.hashCode() ?: 0)
         result = 31 * result + (baselineRevision?.hashCode() ?: 0)
         result = 31 * result + timestampMillis.hashCode()
+        result = 31 * result + (destinationPath?.hashCode() ?: 0)
+        result = 31 * result + (operationKind?.hashCode() ?: 0)
+        result = 31 * result + (tabIncarnation?.hashCode() ?: 0)
+        result = 31 * result + (baselineMtime?.hashCode() ?: 0)
         return result
     }
 }

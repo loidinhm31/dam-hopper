@@ -1,7 +1,7 @@
 # Phase 06 — Sequential mutation save and identity integration
 
 ## Context and status
-- Priority P2. Status pending; phase01 feasibility gates block downstream scheduling. Owner: Main (sole integration owner).
+- Priority P2. Status: **Complete (2026-10-24)**. Owner: Main (sole integration owner). See [closure](#closure-2026-10-24).
 - Authority: [overview](plan.md), [contracts C1-C7](contracts.md), [acceptance matrix](acceptance-matrix.md).
 - Evidence: [coordinator](reports/coordinator-evidence.md), [files/watchers](reports/files-watchers-evidence.md), [editor/widget](reports/editor-widget-evidence.md), [approved design](../reports/brainstorm-261023-1351-native-editor-file-explorer.md).
 - Source anchors and current gaps in those evidence reports are read-only; this phase describes future changes, not observed success. Root for every literal path: `G:/ws/sharing/dam-hopper/`.
@@ -23,7 +23,7 @@ Apply C4/C5 as a transaction across editor/tree/watch state, with exact-owner su
 ## Ordered task implementation and related files
 
 ### `integrate-subtree-mutation-transactions` — Integrate dirty guards saves and confirmed path rekey
-- [ ] <!-- evcrate-task:integrate-subtree-mutation-transactions --> Integrate dirty guards saves and confirmed path rekey
+- [x] <!-- evcrate-task:integrate-subtree-mutation-transactions --> Integrate dirty guards saves and confirmed path rekey — done 2026-10-24 (review Cycle 3 7/10, 0 Critical; 36/36 targeted Phase 06 tests, 495/495 full suite, `compileDebugKotlin` passed)
 - Dependencies: `implement-incarnation-safe-tabs-saves`, `implement-focused-explorer-actions`, `bridge-shared-editor-presentation`.
 - Exact writable files/actions:
   - Modify (explicit sequential transfer from completed earlier task): `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/files/FileOperationArbiter.kt`.
@@ -52,7 +52,7 @@ Apply C4/C5 as a transaction across editor/tree/watch state, with exact-owner su
   - .\native-app\gradlew.bat -p native-app :shared:jvmTest --tests "dev.damhopper.nativeapp.features.files.FileEditorMutationTest" --tests "dev.damhopper.nativeapp.features.files.FileOperationArbiterTest" --tests "dev.damhopper.nativeapp.features.editor.EditorSaveRaceTest"; use deterministic latches at reservation/prompt/send/result boundaries.
 
 ### `integrate-unknown-outcome-reconciliation` — Reconcile uncertain saves and source destination mutations
-- [ ] <!-- evcrate-task:integrate-unknown-outcome-reconciliation --> Reconcile uncertain saves and source destination mutations
+- [x] <!-- evcrate-task:integrate-unknown-outcome-reconciliation --> Reconcile uncertain saves and source destination mutations — done 2026-10-24 (review Cycle 3 7/10, 0 Critical; 36/36 targeted Phase 06 tests, 495/495 full suite, `compileDebugKotlin` passed)
 - Dependencies: `integrate-subtree-mutation-transactions`.
 - Exact writable files/actions:
   - Modify (explicit sequential transfer from completed earlier task): `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/files/FileRepository.kt`.
@@ -160,6 +160,12 @@ This is sequential ownership transfer, not a fourth concurrent worker. Protocol 
 ## Completion and next dependencies
 Both tasks complete before phase07 mounts workspace. Main receives files explicitly from03/04 plus stable widget05; no parallel writers. Phase08 actual integration tests follow07. Frozen interface edits require coordinator review, not ad hoc worker changes.
 - Exit evidence: exact changed paths, behavioral check commands/results and blockers. Complete only on task acceptance plus coherent integrated evidence; planned command text is not a pass.
+
+## Closure (2026-10-24)
+- Both tasks complete. Review Cycle 3: 7/10, 0 Critical.
+- Verification recorded by Main: 36/36 targeted Phase 06 tests (`FileEditorMutationTest`, `FileOperationArbiterTest`, `FileMutationCoordinatorTest`, `EditorSaveRaceTest`), 495/495 full suite, `compileDebugKotlin` passed.
+- Changed paths: listed `allowed_files` of both tasks (`FileOperationArbiter`, `FileMutationCoordinator`, `FileTreeState`, `FileModalsHost`, `FileActionDialogs`, `FileRepository`, `FsWriteCoordinator`, `FileOperationOutcome`, `EditorTabsState`, `EditorTabSaveCoordinator`, `EditorSession`, `EditorRepository` + 4 jvmTest classes).
+- Not claimed: final real-server lost-response save/op journey (task 2 planned check 2) — unit-level evidence only; carried to Phase 08 integrated qualification. Phase 07 unblocked.
 
 ## Unresolved questions
 - No new product decision. Phase01 feasibility and phase08 runtime/distribution gates remain evidence requirements; unresolved gates block readiness/release.

@@ -92,7 +92,6 @@ fun CreateItemDialog(
                     ) {
                         Text(if (isUnresolved) "Close" else "Cancel", color = DamHopperColors.TextSecondary)
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = { if (effectiveName.isNotBlank() && !isSubmitting && !isUnresolved) onConfirm(effectiveName.trim()) },
                         enabled = effectiveName.isNotBlank() && !isSubmitting && !isUnresolved,
@@ -279,7 +278,6 @@ fun MoveItemDialog(
                         color = if (isUnresolved) DamHopperColors.Warning else DamHopperColors.Error,
                     )
                 }
-                Spacer(modifier = Modifier.height(16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(
                         onClick = onDismiss,
@@ -287,7 +285,6 @@ fun MoveItemDialog(
                     ) {
                         Text(if (isUnresolved) "Close" else "Cancel", color = DamHopperColors.TextSecondary)
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = { if (!isSubmitting && !isUnresolved) onConfirm(effectiveDest.trim()) },
                         enabled = !isSubmitting && !isUnresolved,
@@ -335,7 +332,6 @@ fun DeleteConfirmDialog(
                         color = if (isUnresolved) DamHopperColors.Warning else DamHopperColors.Error,
                     )
                 }
-                Spacer(modifier = Modifier.height(16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(
                         onClick = onDismiss,
@@ -343,7 +339,6 @@ fun DeleteConfirmDialog(
                     ) {
                         Text(if (isUnresolved) "Close" else "Cancel", color = DamHopperColors.TextSecondary)
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = { if (!isSubmitting && !isUnresolved) onConfirm() },
                         enabled = !isSubmitting && !isUnresolved,

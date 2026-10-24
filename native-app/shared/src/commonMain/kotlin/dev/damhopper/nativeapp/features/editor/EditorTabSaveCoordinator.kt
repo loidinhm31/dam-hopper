@@ -13,6 +13,7 @@ class EditorTabSaveCoordinator(
         currentTabProvider: () -> EditorTab?,
         session: EditorSession?,
         transformTab: ((EditorTab) -> EditorTab) -> Unit,
+        reservationToken: dev.damhopper.nativeapp.features.files.ReservationToken? = null,
     ): EditorSaveResult {
         val tab = currentTabProvider() ?: return EditorSaveResult.Error("Tab not found")
         if (session == null || session.isDisposed || tab.isSaving || !session.isDirty || tab.tier.isReadOnly || !tab.targetAvailable) {
@@ -28,7 +29,10 @@ class EditorTabSaveCoordinator(
             path = tab.path,
             submittedContent = submittedText,
             expectedMtime = tab.mtime,
-            encryptedRequested = tab.encryptedSessionRequired
+            encryptedRequested = tab.encryptedSessionRequired,
+            reservationToken = reservationToken,
+            submittedRevision = snapshot.revision,
+            tabIncarnation = tab.sessionIncarnation,
         )
         if (session.isDisposed) {
             transformTab { it.copy(isSaving = false, submittedContent = null) }
@@ -54,11 +58,13 @@ class EditorTabSaveCoordinator(
                 session.abortSave()
                 transformTab { it.copy(isSaving = false, isConflicted = true, submittedContent = null) }
             }
-            is EditorSaveResult.UnknownOutcome, is EditorSaveResult.TargetUnavailable, is EditorSaveResult.Error -> {
+            is EditorSaveResult.UnknownOutcome -> {
+                // Do not clear submittedSnapshot on Unknown; retain it for reconciliation (Contract C4)
+                transformTab { it.copy(isSaving = false, error = result.message, submittedContent = null) }
+            }
+            is EditorSaveResult.TargetUnavailable, is EditorSaveResult.Error -> {
                 session.abortSave()
-                val err = if (result is EditorSaveResult.UnknownOutcome) result.message
-                else if (result is EditorSaveResult.Error) result.message
-                else "Save failed"
+                val err = if (result is EditorSaveResult.Error) result.message else "Save failed"
                 transformTab { it.copy(isSaving = false, error = err, submittedContent = null) }
             }
         }
@@ -70,6 +76,7 @@ class EditorTabSaveCoordinator(
         currentTabProvider: () -> EditorTab?,
         session: EditorSession?,
         transformTab: ((EditorTab) -> EditorTab) -> Unit,
+        reservationToken: dev.damhopper.nativeapp.features.files.ReservationToken? = null,
     ): EditorSaveResult {
         val tab = currentTabProvider() ?: return EditorSaveResult.Error("Tab not found")
         if (session == null || session.isDisposed || tab.isSaving || tab.tier.isReadOnly || !tab.targetAvailable || !session.isInputAllowed()) {
@@ -84,7 +91,8 @@ class EditorTabSaveCoordinator(
             target = tab.target,
             path = tab.path,
             submittedContent = submittedText,
-            encryptedRequested = tab.encryptedSessionRequired
+            encryptedRequested = tab.encryptedSessionRequired,
+            reservationToken = reservationToken,
         )
         if (session.isDisposed) {
             transformTab { it.copy(isSaving = false, submittedContent = null) }

@@ -59,9 +59,10 @@ class EditorTabsState(
             when {
                 tab.tier.isReadOnly -> "Tier ${tab.tier} is read-only"
                 tab.encryptedSessionRequired -> "Encrypted session required; plaintext port save denied"
-                !tab.targetAvailable -> "Target unavailable"
+                !tab.targetAvailable -> tab.error ?: "Target unavailable"
                 tab.isSaving -> "Save already in flight"
                 sessions[key] == null -> "No retained session"
+                sessions[key]?.isFrozen == true -> "Document editing is frozen"
                 !isInputAllowed() -> "Input blocked"
                 else -> null
             }
@@ -443,52 +444,288 @@ class EditorTabsState(
         }
     }
 
-    suspend fun saveTab(key: String): EditorSaveResult = saveMutex.withLock {
+    suspend fun saveTab(
+        key: String,
+        reservationToken: dev.damhopper.nativeapp.features.files.ReservationToken? = null,
+    ): EditorSaveResult = saveMutex.withLock {
         val docId = tabDocumentIds[key]
-        val res = saveCoordinator.save(
-            tabKey = key,
-            currentTabProvider = { _tabs.value.find { it.key == key } },
-            session = sessions[key],
-            transformTab = { transform ->
-                _tabs.value = _tabs.value.map { if (it.key == key) transform(it) else it }
-                updateMetadataFlow()
+        val tab = _tabs.value.find { it.key == key }
+        val effectiveOwner = if (tab != null) {
+            dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(editorRepository.fileRepository.owner, tab.target)
+        } else editorRepository.fileRepository.owner
+        val acquiredToken = if (reservationToken == null && tab != null) {
+            editorRepository.fileRepository.arbiter.tryReserveSave(effectiveOwner, tab.path)
+                ?: return@withLock EditorSaveResult.Error("Path '${tab.path}' is currently reserved by another file operation")
+        } else null
+
+        val tokenToUse = reservationToken ?: acquiredToken
+        try {
+            val res = saveCoordinator.save(
+                tabKey = key,
+                currentTabProvider = { _tabs.value.find { it.key == key } },
+                session = sessions[key],
+                transformTab = { transform ->
+                    _tabs.value = _tabs.value.map { if (it.key == key) transform(it) else it }
+                    updateMetadataFlow()
+                },
+                reservationToken = tokenToUse,
+            )
+            if (docId != null) {
+                val outcome = when (res) {
+                    is EditorSaveResult.Success -> FileOperationOutcome.Confirmed(res.newMtime)
+                    is EditorSaveResult.Conflict -> FileOperationOutcome.Rejected("CAS_CONFLICT", res.message, null)
+                    is EditorSaveResult.TargetUnavailable -> FileOperationOutcome.NotSubmitted(res.message, null)
+                    is EditorSaveResult.UnknownOutcome -> FileOperationOutcome.Unknown(dev.damhopper.nativeapp.features.files.OperationStage.COMMIT_DISPATCHED, "save-$key", res.message, null)
+                    is EditorSaveResult.Error -> FileOperationOutcome.Rejected(res.code ?: "ERROR", res.message, null)
+                }
+                _saveOutcomes.value = _saveOutcomes.value + (docId to outcome)
             }
-        )
-        if (docId != null) {
-            val outcome = when (res) {
-                is EditorSaveResult.Success -> FileOperationOutcome.Confirmed(res.newMtime)
-                is EditorSaveResult.Conflict -> FileOperationOutcome.Rejected("CAS_CONFLICT", res.message, null)
-                is EditorSaveResult.TargetUnavailable -> FileOperationOutcome.NotSubmitted(res.message, null)
-                is EditorSaveResult.UnknownOutcome -> FileOperationOutcome.Unknown(dev.damhopper.nativeapp.features.files.OperationStage.COMMIT_DISPATCHED, "save-$key", res.message, null)
-                is EditorSaveResult.Error -> FileOperationOutcome.Rejected(res.code ?: "ERROR", res.message, null)
+            res
+        } finally {
+            if (acquiredToken != null && acquiredToken.state == dev.damhopper.nativeapp.features.files.ReservationState.ACTIVE) {
+                try {
+                    editorRepository.fileRepository.arbiter.releaseToken(acquiredToken)
+                } catch (_: Throwable) {}
             }
-            _saveOutcomes.value = _saveOutcomes.value + (docId to outcome)
         }
-        res
     }
 
-    suspend fun forceOverwriteTab(key: String): EditorSaveResult = saveMutex.withLock {
+    suspend fun saveDocumentWithToken(
+        docId: DocumentId,
+        token: dev.damhopper.nativeapp.features.files.ReservationToken,
+    ): FileOperationOutcome<Long> {
+        val entry = tabDocumentIds.entries.find { it.value == docId }
+            ?: return FileOperationOutcome.NotSubmitted("Tab not found for document $docId")
+        val res = saveTab(entry.key, reservationToken = token)
+        return when (res) {
+            is EditorSaveResult.Success -> FileOperationOutcome.Confirmed(res.newMtime)
+            is EditorSaveResult.Conflict -> FileOperationOutcome.Rejected("CAS_CONFLICT", res.message, null)
+            is EditorSaveResult.TargetUnavailable -> FileOperationOutcome.NotSubmitted(res.message, null)
+            is EditorSaveResult.UnknownOutcome -> FileOperationOutcome.Unknown(
+                dev.damhopper.nativeapp.features.files.OperationStage.COMMIT_DISPATCHED,
+                "save-${entry.key}",
+                res.message,
+                null,
+            )
+            is EditorSaveResult.Error -> FileOperationOutcome.Rejected(res.code ?: "ERROR", res.message, null)
+        }
+    }
+
+    fun freezeDocuments(docIds: Set<DocumentId>) {
+        for ((key, docId) in tabDocumentIds) {
+            if (docId in docIds) {
+                sessions[key]?.isFrozen = true
+            }
+        }
+    }
+
+    fun unfreezeDocuments(docIds: Set<DocumentId>) {
+        for ((key, docId) in tabDocumentIds) {
+            if (docId in docIds) {
+                sessions[key]?.isFrozen = false
+            }
+        }
+    }
+
+    fun rekeyPath(target: ProjectTargetRef, oldPath: String, newPath: String) {
+        val cleanOld = dev.damhopper.nativeapp.features.files.FileOperationArbiter.normalizeRelativePath(oldPath)
+        val cleanNew = dev.damhopper.nativeapp.features.files.FileOperationArbiter.normalizeRelativePath(newPath)
+        val oldPrefix = if (cleanOld.isEmpty()) "" else "$cleanOld/"
+
+        val affectedKeys = _tabs.value.filter { tab ->
+            tab.target.project == target.project &&
+            tab.target.worktreePath == target.worktreePath &&
+            (tab.path == cleanOld || tab.path.startsWith(oldPrefix))
+        }.map { it.key }
+
+        val tabReplacements = mutableMapOf<String, EditorTab>()
+        for (oldKey in affectedKeys) {
+            val tab = _tabs.value.find { it.key == oldKey } ?: continue
+            val session = sessions[oldKey]
+            val oldDocId = tabDocumentIds[oldKey] ?: continue
+
+            val rekeyedRelativePath = if (tab.path == cleanOld) {
+                cleanNew
+            } else {
+                cleanNew + "/" + tab.path.removePrefix(oldPrefix)
+            }
+
+            val newKey = buildEditorTabKey("file", profileId, target.project, target.worktreePath, rekeyedRelativePath)
+            val newDocId = oldDocId.rekeyed(rekeyedRelativePath)
+
+            if (session != null) {
+                session.rekey(newKey, rekeyedRelativePath)
+                session.isFrozen = false
+                sessions.remove(oldKey)
+                sessions[newKey] = session
+            }
+
+            tabDocumentIds.remove(oldKey)
+            tabDocumentIds[newKey] = newDocId
+
+            val oldOutcome = _saveOutcomes.value[oldDocId]
+            if (oldOutcome != null) {
+                _saveOutcomes.value = (_saveOutcomes.value - oldDocId) + (newDocId to oldOutcome)
+            }
+
+            tabReplacements[oldKey] = tab.copy(
+                key = newKey,
+                path = rekeyedRelativePath,
+                name = rekeyedRelativePath.substringAfterLast('/'),
+            )
+
+            if (_activeTabKey.value == oldKey) {
+                _activeTabKey.value = newKey
+                _activeTabId.value = newDocId
+            }
+        }
+        if (tabReplacements.isNotEmpty()) {
+            _tabs.value = _tabs.value.map { tabReplacements[it.key] ?: it }
+        }
+        updateMetadataFlow()
+    }
+
+    fun markPathDeleted(target: ProjectTargetRef, deletedPath: String) {
+        val cleanDeleted = dev.damhopper.nativeapp.features.files.FileOperationArbiter.normalizeRelativePath(deletedPath)
+        val prefix = if (cleanDeleted.isEmpty()) "" else "$cleanDeleted/"
+
+        val affectedKeys = _tabs.value.filter { tab ->
+            tab.target.project == target.project &&
+            tab.target.worktreePath == target.worktreePath &&
+            (tab.path == cleanDeleted || tab.path.startsWith(prefix))
+        }.map { it.key }
+
+        _tabs.value = _tabs.value.map { tab ->
+            if (tab.key in affectedKeys) {
+                tab.copy(
+                    targetAvailable = false,
+                    error = "File has been deleted remotely. Changes cannot be saved.",
+                )
+            } else tab
+        }
+        updateMetadataFlow()
+    }
+
+    suspend fun forceOverwriteTab(
+        key: String,
+        reservationToken: dev.damhopper.nativeapp.features.files.ReservationToken? = null,
+    ): EditorSaveResult = saveMutex.withLock {
         val docId = tabDocumentIds[key]
-        val res = saveCoordinator.forceOverwrite(
-            tabKey = key,
-            currentTabProvider = { _tabs.value.find { it.key == key } },
-            session = sessions[key],
-            transformTab = { transform ->
-                _tabs.value = _tabs.value.map { if (it.key == key) transform(it) else it }
+        val tab = _tabs.value.find { it.key == key }
+        val effectiveOwner = if (tab != null) {
+            dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(editorRepository.fileRepository.owner, tab.target)
+        } else editorRepository.fileRepository.owner
+        val acquiredToken = if (reservationToken == null && tab != null) {
+            editorRepository.fileRepository.arbiter.tryReserveSave(effectiveOwner, tab.path)
+                ?: return@withLock EditorSaveResult.Error("Path '${tab.path}' is currently reserved by another file operation")
+        } else null
+
+        val tokenToUse = reservationToken ?: acquiredToken
+        try {
+            val res = saveCoordinator.forceOverwrite(
+                tabKey = key,
+                currentTabProvider = { _tabs.value.find { it.key == key } },
+                session = sessions[key],
+                transformTab = { transform ->
+                    _tabs.value = _tabs.value.map { if (it.key == key) transform(it) else it }
+                    updateMetadataFlow()
+                },
+                reservationToken = tokenToUse,
+            )
+            if (docId != null) {
+                val outcome = when (res) {
+                    is EditorSaveResult.Success -> FileOperationOutcome.Confirmed(res.newMtime)
+                    is EditorSaveResult.Conflict -> FileOperationOutcome.Rejected("CAS_CONFLICT", res.message, null)
+                    is EditorSaveResult.TargetUnavailable -> FileOperationOutcome.NotSubmitted(res.message, null)
+                    is EditorSaveResult.UnknownOutcome -> FileOperationOutcome.Unknown(dev.damhopper.nativeapp.features.files.OperationStage.COMMIT_DISPATCHED, "overwrite-$key", res.message, null)
+                    is EditorSaveResult.Error -> FileOperationOutcome.Rejected(res.code ?: "ERROR", res.message, null)
+                }
+                _saveOutcomes.value = _saveOutcomes.value + (docId to outcome)
+            }
+            res
+        } finally {
+            if (acquiredToken != null && acquiredToken.state == dev.damhopper.nativeapp.features.files.ReservationState.ACTIVE) {
+                try {
+                    editorRepository.fileRepository.arbiter.releaseToken(acquiredToken)
+                } catch (_: Throwable) {}
+            }
+        }
+    }
+
+    suspend fun reconcileUnknownSave(key: String): dev.damhopper.nativeapp.features.files.SaveReconciliationResult {
+        val tab = _tabs.value.find { it.key == key }
+            ?: return dev.damhopper.nativeapp.features.files.SaveReconciliationResult.Unresolved("Tab not found: $key")
+        val session = sessions[key]
+            ?: return dev.damhopper.nativeapp.features.files.SaveReconciliationResult.Unresolved("No session for tab: $key")
+        val effectiveOwner = dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(editorRepository.fileRepository.owner, tab.target)
+        val quarantined = editorRepository.fileRepository.arbiter.getQuarantinedOperations(effectiveOwner)
+            .find { it.path == tab.path }
+            ?: return dev.damhopper.nativeapp.features.files.SaveReconciliationResult.Unresolved("No quarantined save operation for path ${tab.path}")
+        if (quarantined.tabIncarnation != null && tab.sessionIncarnation != quarantined.tabIncarnation) {
+            return dev.damhopper.nativeapp.features.files.SaveReconciliationResult.Unresolved(
+                "Tab incarnation (${tab.sessionIncarnation}) does not match quarantined save incarnation (${quarantined.tabIncarnation})"
+            )
+        }
+        if (quarantined.operationKind != null && quarantined.operationKind != "write") {
+            return dev.damhopper.nativeapp.features.files.SaveReconciliationResult.Unresolved(
+                "Quarantined operation kind '${quarantined.operationKind}' is not a file save"
+            )
+        }
+        val result = editorRepository.fileRepository.reconcileUnknownSave(tab.target, tab.path, quarantined)
+        when (result) {
+            is dev.damhopper.nativeapp.features.files.SaveReconciliationResult.Reconciled -> {
+                val snapshot = session.submittedSnapshot
+                val submittedRev = snapshot?.revision ?: quarantined.submittedRevision
+                if (submittedRev != null) {
+                    val s = snapshot ?: DocumentSaveSnapshot(
+                        id = session.id,
+                        revision = submittedRev,
+                        utf8Bytes = quarantined.submittedBytes ?: session.getText().encodeToByteArray(),
+                        mtime = quarantined.baselineMtime ?: 0L,
+                    )
+                    session.completeSave(result.newMtime, s)
+                } else {
+                    session.loadServerContent(quarantined.submittedBytes?.decodeToString() ?: session.getText(), result.newMtime)
+                }
+                val token = editorRepository.fileRepository.arbiter.findActiveReservation(effectiveOwner, tab.path)
+                if (token != null) {
+                    try {
+                        editorRepository.fileRepository.arbiter.abandonQuarantine(token, "Reconciled with server bytes")
+                    } catch (_: Throwable) {}
+                }
+                _tabs.value = _tabs.value.map {
+                    if (it.key == key) it.copy(
+                        isSaving = false,
+                        isDirty = session.isDirty,
+                        isStale = false,
+                        isConflicted = false,
+                        mtime = result.newMtime,
+                        error = null,
+                    ) else it
+                }
                 updateMetadataFlow()
             }
-        )
-        if (docId != null) {
-            val outcome = when (res) {
-                is EditorSaveResult.Success -> FileOperationOutcome.Confirmed(res.newMtime)
-                is EditorSaveResult.Conflict -> FileOperationOutcome.Rejected("CAS_CONFLICT", res.message, null)
-                is EditorSaveResult.TargetUnavailable -> FileOperationOutcome.NotSubmitted(res.message, null)
-                is EditorSaveResult.UnknownOutcome -> FileOperationOutcome.Unknown(dev.damhopper.nativeapp.features.files.OperationStage.COMMIT_DISPATCHED, "overwrite-$key", res.message, null)
-                is EditorSaveResult.Error -> FileOperationOutcome.Rejected(res.code ?: "ERROR", res.message, null)
+            is dev.damhopper.nativeapp.features.files.SaveReconciliationResult.Conflicted -> {
+                _tabs.value = _tabs.value.map {
+                    if (it.key == key) it.copy(
+                        isSaving = false,
+                        isConflicted = true,
+                        error = "Conflict: ${result.message}",
+                    ) else it
+                }
+                updateMetadataFlow()
             }
-            _saveOutcomes.value = _saveOutcomes.value + (docId to outcome)
+            is dev.damhopper.nativeapp.features.files.SaveReconciliationResult.Unresolved -> {
+                _tabs.value = _tabs.value.map {
+                    if (it.key == key) it.copy(
+                        isSaving = false,
+                        error = "Unresolved: ${result.message}",
+                    ) else it
+                }
+                updateMetadataFlow()
+            }
         }
-        res
+        return result
     }
 
     suspend fun reloadTab(key: String, forceDiscardLocal: Boolean = false) {

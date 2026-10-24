@@ -230,11 +230,14 @@ class FileRepository(
         expectedMtime: Long,
         timeoutMillis: Long = 30_000,
         reservationToken: ReservationToken? = null,
+        submittedRevision: Long? = null,
+        tabIncarnation: Long? = null,
     ): FileOperationOutcome<ServerMsg.FsWriteResult> {
         assertTargetMatchesOwner(target, "writeFileWithOutcome")
         val cleanPath = dev.damhopper.nativeapp.features.workspace.DocumentId.normalizeRelativePath(relativePath)
+        val effectiveOwner = dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(owner, target)
         return writeCoordinator.writeFileWithOutcome(
-            owner = owner,
+            owner = effectiveOwner,
             target = target,
             path = cleanPath,
             content = content,
@@ -242,6 +245,8 @@ class FileRepository(
             timeoutMillis = timeoutMillis,
             arbiter = arbiter,
             reservationToken = reservationToken,
+            submittedRevision = submittedRevision,
+            tabIncarnation = tabIncarnation,
         )
     }
 
@@ -283,6 +288,7 @@ class FileRepository(
         assertTargetMatchesOwner(target, "executeFsOpWithOutcome")
         val cleanPath = dev.damhopper.nativeapp.features.workspace.DocumentId.normalizeRelativePath(path)
         val cleanNewPath = newPath?.let { dev.damhopper.nativeapp.features.workspace.DocumentId.normalizeRelativePath(it) }
+        val effectiveOwner = dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(owner, target)
 
         val activeSocket = wsConnection.activeSocketRef()
             ?: return FileOperationOutcome.NotSubmitted("WebSocket is not connected")
@@ -299,8 +305,10 @@ class FileRepository(
         )
 
         val quarantinedOp = QuarantinedOperation(
-            owner = owner,
+            owner = effectiveOwner,
             path = cleanPath,
+            destinationPath = cleanNewPath,
+            operationKind = op,
             stage = OperationStage.FS_OP_DISPATCHED,
             opId = reqId.toString(),
             submittedRevision = null,
@@ -311,20 +319,13 @@ class FileRepository(
         if (reservationToken != null) {
             arbiter.quarantineToken(reservationToken, quarantinedOp)
         }
-
         return try {
             val response = wsConnection.requestOnSocket(activeSocket, reqId, opMsg)
             when (response) {
                 is ServerMsg.FsOpResult -> {
                     if (response.ok) {
-                        if (reservationToken != null) {
-                            arbiter.abandonQuarantine(reservationToken, "Confirmed by server")
-                        }
                         FileOperationOutcome.Confirmed(FsOpOutcome(ok = true))
                     } else {
-                        if (reservationToken != null) {
-                            arbiter.abandonQuarantine(reservationToken, "Rejected by server")
-                        }
                         FileOperationOutcome.Rejected(
                             code = "FS_OP_FAILED",
                             message = response.error ?: "File operation failed",
@@ -332,9 +333,6 @@ class FileRepository(
                     }
                 }
                 is ServerMsg.FsError -> {
-                    if (reservationToken != null) {
-                        arbiter.abandonQuarantine(reservationToken, "Rejected by server")
-                    }
                     FileOperationOutcome.Rejected(
                         code = response.code,
                         message = response.message,
@@ -394,4 +392,97 @@ class FileRepository(
 
     fun unsubscribeTree(subId: ULong) = subscriptionManager.unsubscribe(subId)
     fun dispose() = subscriptionManager.dispose()
+    suspend fun reconcileUnknownSave(
+        target: ProjectTargetRef,
+        relativePath: String,
+        quarantinedOp: QuarantinedOperation,
+    ): SaveReconciliationResult {
+        assertTargetMatchesOwner(target, "reconcileUnknownSave")
+        val cleanPath = dev.damhopper.nativeapp.features.workspace.DocumentId.normalizeRelativePath(relativePath)
+        val effectiveOwner = dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(owner, target)
+        val submitted = quarantinedOp.submittedBytes
+            ?: return SaveReconciliationResult.Unresolved("No submitted bytes recorded for quarantined save on '$cleanPath'")
+
+        val preStat = try {
+            stat(target, cleanPath)
+        } catch (e: Throwable) {
+            return SaveReconciliationResult.Unresolved("Failed to stat file during reconciliation: ${e.message}")
+        }
+
+        if (preStat.size.toLong() != submitted.size.toLong()) {
+            return SaveReconciliationResult.Conflicted(
+                "Remote file size (${preStat.size}) does not match submitted bytes (${submitted.size})"
+            )
+        }
+
+        val readRes = try {
+            readFile(target, cleanPath, offset = 0uL, len = (submitted.size + 1).toULong())
+        } catch (e: Throwable) {
+            return SaveReconciliationResult.Unresolved("Failed reading server bytes for comparison: ${e.message}")
+        }
+
+        val serverBytes = readRes.binaryData ?: readRes.textContent?.encodeToByteArray()
+            ?: return SaveReconciliationResult.Unresolved("Failed reading server content data")
+
+        if (serverBytes.size != submitted.size || !serverBytes.contentEquals(submitted)) {
+            return SaveReconciliationResult.Conflicted("Server content differs from submitted bytes")
+        }
+
+        val postStat = try {
+            stat(target, cleanPath)
+        } catch (e: Throwable) {
+            return SaveReconciliationResult.Unresolved("Failed post-read stat during reconciliation: ${e.message}")
+        }
+
+        if (postStat.mtime != preStat.mtime || postStat.size != preStat.size) {
+            return SaveReconciliationResult.Unresolved("File was modified concurrently during reconciliation read")
+        }
+
+        return SaveReconciliationResult.Reconciled(postStat.mtime.toLong())
+    }
+
+    suspend fun reconcileUnknownMutation(
+        target: ProjectTargetRef,
+        op: String,
+        sourcePath: String,
+        destPath: String?,
+    ): MutationReconciliationResult {
+        assertTargetMatchesOwner(target, "reconcileUnknownMutation")
+        val cleanSource = dev.damhopper.nativeapp.features.workspace.DocumentId.normalizeRelativePath(sourcePath)
+        val cleanDest = destPath?.let { dev.damhopper.nativeapp.features.workspace.DocumentId.normalizeRelativePath(it) }
+        val effectiveOwner = dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(owner, target)
+
+        val sourceStat = try { stat(target, cleanSource) } catch (_: Throwable) { null }
+        val destStat = cleanDest?.let { try { stat(target, it) } catch (_: Throwable) { null } }
+
+        val sourceParent = FileTreeHelpers.resolveParentPath(cleanSource)
+        val sourceParentList = try { listDirectory(target, sourceParent) } catch (_: Throwable) { emptyList() }
+        val destParentList = cleanDest?.let {
+            val destParent = FileTreeHelpers.resolveParentPath(it)
+            if (destParent == sourceParent) sourceParentList
+            else try { listDirectory(target, destParent) } catch (_: Throwable) { emptyList() }
+        } ?: emptyList()
+
+        val statusDesc = buildString {
+            append("Probed server state for $op: ")
+            append("source '$cleanSource' ${if (sourceStat != null) "exists (size=${sourceStat.size})" else "not found"}; ")
+            if (cleanDest != null) {
+                append("destination '$cleanDest' ${if (destStat != null) "exists (size=${destStat.size})" else "not found"}; ")
+            }
+            append("Protocol cannot authoritatively prove operation identity without inode/opId confirmation. Local identity preserved in quarantine.")
+        }
+        return MutationReconciliationResult.Unresolved(op, statusDesc)
+    }
+}
+
+
+sealed interface SaveReconciliationResult {
+    data class Reconciled(val newMtime: Long) : SaveReconciliationResult
+    data class Conflicted(val message: String) : SaveReconciliationResult
+    data class Unresolved(val message: String) : SaveReconciliationResult
+}
+
+sealed interface MutationReconciliationResult {
+    data class Reconciled(val op: String, val message: String) : MutationReconciliationResult
+    data class Unresolved(val op: String, val message: String) : MutationReconciliationResult
 }

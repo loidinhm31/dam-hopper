@@ -200,4 +200,86 @@ class FileOperationArbiterTest {
         assertFalse(arbiter.isPathReserved(ownerA, "important.kt"))
         assertEquals(0, arbiter.getQuarantinedOperations(ownerA).size)
     }
+
+    @Test
+    fun testForeignArbiterTokenRejected() {
+        val arbiter1 = FileOperationArbiter()
+        val arbiter2 = FileOperationArbiter()
+
+        val token1 = arbiter1.tryReserveSave(ownerA, "file.kt")
+        assertNotNull(token1)
+
+        // Using token from arbiter1 in arbiter2 MUST throw IllegalArgumentException
+        assertFailsWith<IllegalArgumentException> {
+            arbiter2.releaseToken(token1)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            arbiter2.createChildSaveToken(token1, "file.kt")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            arbiter2.quarantineToken(
+                token1,
+                QuarantinedOperation(
+                    owner = ownerA,
+                    path = "file.kt",
+                    stage = OperationStage.COMMIT_DISPATCHED,
+                    timestampMillis = 100L,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            arbiter2.abandonQuarantine(token1, "abandon")
+        }
+
+        arbiter1.releaseToken(token1)
+    }
+
+    @Test
+    fun testParentCannotReleaseWhileChildQuarantined() {
+        val arbiter = FileOperationArbiter()
+        val parent = arbiter.tryReserveMutation(ownerA, "src")
+        assertNotNull(parent)
+
+        val child = arbiter.createChildSaveToken(parent, "src/main.kt")
+        assertNotNull(child)
+
+        // Quarantine the child token
+        val quarantinedChild = QuarantinedOperation(
+            owner = ownerA,
+            path = "src/main.kt",
+            stage = OperationStage.COMMIT_DISPATCHED,
+            opId = "save-1",
+            timestampMillis = 500L,
+        )
+        arbiter.quarantineToken(child, quarantinedChild)
+
+        // Parent release MUST fail because child save is unresolved/quarantined
+        assertFailsWith<IllegalStateException> {
+            arbiter.releaseToken(parent)
+        }
+
+        // Once child quarantine is abandoned or reconciled, parent can be released
+        arbiter.abandonQuarantine(child, "Reconciled child save")
+        arbiter.releaseToken(parent)
+        assertFalse(arbiter.isPathReserved(ownerA, "src"))
+        assertFalse(arbiter.isPathReserved(ownerA, "src/main.kt"))
+    }
+
+    @Test
+    fun testParentReleaseCleansUpActiveChildren() {
+        val arbiter = FileOperationArbiter()
+        val parent = arbiter.tryReserveMutation(ownerA, "src")
+        assertNotNull(parent)
+
+        val child = arbiter.createChildSaveToken(parent, "src/main.kt")
+        assertNotNull(child)
+        assertEquals(ReservationState.ACTIVE, child.state)
+
+        // Releasing parent releases active child
+        arbiter.releaseToken(parent)
+        assertEquals(ReservationState.RELEASED, parent.state)
+        assertEquals(ReservationState.RELEASED, child.state)
+        assertFalse(arbiter.isPathReserved(ownerA, "src"))
+        assertFalse(arbiter.isPathReserved(ownerA, "src/main.kt"))
+    }
 }

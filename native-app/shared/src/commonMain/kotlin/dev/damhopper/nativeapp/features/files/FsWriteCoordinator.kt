@@ -64,6 +64,8 @@ class FsWriteCoordinator(
         timeoutMillis: Long = 30_000,
         arbiter: FileOperationArbiter? = null,
         reservationToken: ReservationToken? = null,
+        submittedRevision: Long? = null,
+        tabIncarnation: Long? = null,
     ): FileOperationOutcome<ServerMsg.FsWriteResult> = coroutineScope {
         if (owner != null && !owner.matchesTarget(target)) {
             return@coroutineScope FileOperationOutcome.NotSubmitted("Target $target does not match owner $owner")
@@ -131,8 +133,11 @@ class FsWriteCoordinator(
                 path = path,
                 stage = OperationStage.COMMIT_DISPATCHED,
                 opId = writeId.toString(),
-                submittedRevision = null,
-                baselineRevision = expectedMtime,
+                submittedRevision = submittedRevision,
+                baselineRevision = null,
+                baselineMtime = expectedMtime,
+                tabIncarnation = tabIncarnation,
+                operationKind = "write",
                 submittedBytes = utf8Bytes,
                 timestampMillis = Clock.System.now().toEpochMilliseconds(),
             )
