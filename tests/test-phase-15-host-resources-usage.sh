@@ -35,9 +35,9 @@ assert_not_contains() {
 }
 
 echo "=== Suite 1: Host Resource Models & DTOs (H01) ==="
-MODELS_FILE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostResourceModels.kt"
-METRICS_FILE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostMetricsModels.kt"
-ALERT_FILE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostResourceAlertModels.kt"
+MODELS_FILE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostResourceModels.kt"
+METRICS_FILE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostMetricsModels.kt"
+ALERT_FILE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostResourceAlertModels.kt"
 
 assert_contains "AvailabilityState enum declared" "enum class AvailabilityState" "$MODELS_FILE"
 assert_contains "Availability data class declared" "data class Availability(" "$MODELS_FILE"
@@ -61,8 +61,8 @@ assert_contains "AlertSummary data class declared" "data class AlertSummary(" "$
 assert_contains "AlertIncident data class declared" "data class AlertIncident(" "$ALERT_FILE"
 
 echo "=== Suite 2: Usage Models & DTOs (U01) ==="
-USAGE_MODELS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageModels.kt"
-USAGE_SETTINGS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageSettingsModels.kt"
+USAGE_MODELS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageModels.kt"
+USAGE_SETTINGS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageSettingsModels.kt"
 
 assert_contains "UsageRange declared" "data class UsageRange(" "$USAGE_MODELS"
 assert_contains "TokenAggregate declared" "data class TokenAggregate(" "$USAGE_MODELS"
@@ -83,12 +83,12 @@ assert_contains "SettingsPatchRequest declared" "data class SettingsPatchRequest
 assert_contains "UsageSetupStatusResponse declared" "data class UsageSetupStatusResponse(" "$USAGE_SETTINGS"
 
 echo "=== Suite 3: Streaming, Pairing & Coordination (H01) ==="
-STREAM_MODELS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceStreamModels.kt"
-STREAM_COORD="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceStreamCoordinator.kt"
-STREAM_TIMERS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceStreamTimers.kt"
-FRAME_COMMIT="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceFrameCommitter.kt"
-FAILURE_HANDLER="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceFailureHandler.kt"
-SSE_CLIENT="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/transport/HostResourceSseClient.kt"
+STREAM_MODELS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceStreamModels.kt"
+STREAM_COORD="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceStreamCoordinator.kt"
+STREAM_TIMERS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceStreamTimers.kt"
+FRAME_COMMIT="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceFrameCommitter.kt"
+FAILURE_HANDLER="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceFailureHandler.kt"
+SSE_CLIENT="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/transport/HostResourceSseClient.kt"
 
 assert_contains "ResourceSourceMode declared" "enum class ResourceSourceMode" "$STREAM_MODELS"
 assert_contains "ResourceConsumerKind declared" "enum class ResourceConsumerKind" "$STREAM_MODELS"
@@ -110,10 +110,10 @@ assert_contains "Data event overflow limit check" "MAX_DATA_EVENT_BYTES" "$SSE_C
 assert_contains "Byte progress notification" "onByteProgress" "$SSE_CLIENT"
 
 echo "=== Suite 4: Repositories & Controllers (H01, U01) ==="
-HOST_REPO="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostResourceRepository.kt"
-USAGE_REPO="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageRepository.kt"
-HOST_CTRL="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostResourceController.kt"
-USAGE_CTRL="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageController.kt"
+HOST_REPO="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostResourceRepository.kt"
+USAGE_REPO="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageRepository.kt"
+HOST_CTRL="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostResourceController.kt"
+USAGE_CTRL="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageController.kt"
 
 assert_contains "HostResourceRepository declared" "class HostResourceRepository(" "$HOST_REPO"
 assert_contains "getSnapshot route" "/api/system/resources/v1/snapshot" "$HOST_REPO"
@@ -133,10 +133,10 @@ assert_contains "summaryGeneration tracking" "summaryGeneration++" "$USAGE_CTRL"
 assert_contains "sessionsGeneration tracking" "sessionsGeneration++" "$USAGE_CTRL"
 
 echo "=== Suite 5: UI & Workbench Integration (H01, U01) ==="
-FLEET_SCREENS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/FleetScreens.kt"
-USAGE_SCREENS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageScreens.kt"
-UNIFIED_SCREEN="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourcesUnifiedPanelScreen.kt"
-WORKBENCH="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
+FLEET_SCREENS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/FleetScreens.kt"
+USAGE_SCREENS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageScreens.kt"
+UNIFIED_SCREEN="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourcesUnifiedPanelScreen.kt"
+WORKBENCH="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
 
 assert_contains "FleetScreens composable" "fun FleetScreens(" "$FLEET_SCREENS"
 assert_contains "UsageScreens composable" "fun UsageScreens(" "$USAGE_SCREENS"

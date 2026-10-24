@@ -35,10 +35,10 @@ assert_not_contains() {
 }
 
 echo "=== Suite 1: OPAQUE Cryptographic Session & Envelope Invariants (X01) ==="
-CRYPTO_ENV="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/security/CryptoEnvelope.kt"
-CRYPTO_SESS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/security/CryptoSession.kt"
-PLATFORM_CRYPTO="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/security/PlatformCrypto.kt"
-BRIDGE_RS="native-app/crypto-bridge/src/lib.rs"
+CRYPTO_ENV="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/security/CryptoEnvelope.kt"
+CRYPTO_SESS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/security/CryptoSession.kt"
+PLATFORM_CRYPTO="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/security/PlatformCrypto.kt"
+BRIDGE_RS="native/android-app/crypto-bridge/src/lib.rs"
 
 assert_contains "CryptoEnvelope object declared" "object CryptoEnvelope" "$CRYPTO_ENV"
 assert_contains "IV_LENGTH 12 bytes defined" "const val IV_LENGTH: Int = 12" "$CRYPTO_ENV"
@@ -59,8 +59,8 @@ assert_contains "Rust decrypt_envelope function declared" "pub fn decrypt_envelo
 assert_contains "Rust METADATA_MAX defined" "pub const METADATA_MAX: usize = 4096;" "$BRIDGE_RS"
 
 echo "=== Suite 2: Transfer Coordinator & Chunked Binary State Machine (X01) ==="
-TRANSFER_COORD="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/files/TransferCoordinator.kt"
-FILE_REPO="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/files/FileRepository.kt"
+TRANSFER_COORD="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/files/TransferCoordinator.kt"
+FILE_REPO="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/files/FileRepository.kt"
 
 assert_contains "TransferCoordinator class declared" "class TransferCoordinator(" "$TRANSFER_COORD"
 assert_contains "TransferResult sealed class declared" "sealed class TransferResult" "$TRANSFER_COORD"
@@ -79,8 +79,8 @@ assert_contains "FileRepository exposes uploadPlain" "suspend fun uploadPlain(" 
 assert_contains "FileRepository exposes uploadEncrypted" "suspend fun uploadEncrypted(" "$FILE_REPO"
 
 echo "=== Suite 3: Encrypted Save Coordinator & Conflict-Aware Saves (X01) ==="
-ENC_SAVE_COORD="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EncryptedSaveCoordinator.kt"
-EDITOR_REPO="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorRepository.kt"
+ENC_SAVE_COORD="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EncryptedSaveCoordinator.kt"
+EDITOR_REPO="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorRepository.kt"
 
 assert_contains "EncryptedSaveCoordinator class declared" "class EncryptedSaveCoordinator(" "$ENC_SAVE_COORD"
 assert_contains "saveEncrypted function declared" "suspend fun saveEncrypted(" "$ENC_SAVE_COORD"
@@ -92,7 +92,7 @@ assert_contains "saveFile enforces encryptedRequested without plaintext downgrad
 assert_contains "forceOverwrite enforces encryptedRequested without plaintext downgrade" "if (encryptedRequested)" "$EDITOR_REPO"
 
 echo "=== Suite 4: Android SAF Document Storage & Size Cap Enforcement (SAF-01) ==="
-DOC_STORAGE="native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/storage/AndroidDocumentStorage.kt"
+DOC_STORAGE="native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/storage/AndroidDocumentStorage.kt"
 
 assert_contains "DocumentStorage interface declared" "interface DocumentStorage" "$DOC_STORAGE"
 assert_contains "AndroidDocumentStorage class declared" "class AndroidDocumentStorage(" "$DOC_STORAGE"
@@ -105,8 +105,8 @@ assert_contains "streamToUri function declared" "override suspend fun streamToUr
 assert_contains "sanitizeFilename helper declared" "fun sanitizeFilename(raw: String): String" "$DOC_STORAGE"
 
 echo "=== Suite 5: Media Lease, Origin-Bound Client & Cookie Isolation (M01) ==="
-MEDIA_MODELS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/media/MediaModels.kt"
-MEDIA_CLIENT="native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/media/AndroidMediaClient.kt"
+MEDIA_MODELS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/media/MediaModels.kt"
+MEDIA_CLIENT="native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/media/AndroidMediaClient.kt"
 
 assert_contains "MediaKind enum declared" "enum class MediaKind" "$MEDIA_MODELS"
 assert_contains "MediaPurpose enum declared" "enum class MediaPurpose" "$MEDIA_MODELS"
@@ -138,8 +138,8 @@ assert_contains "LeaseMediaDataSource class declared" "class LeaseMediaDataSourc
 assert_contains "LeaseMediaDataSource extends MediaDataSource" ": MediaDataSource()" "$MEDIA_CLIENT"
 
 echo "=== Suite 6: Native Media Presentation & Zero FABs Invariant (NAV-01, M01) ==="
-VIDEO_SURFACE="native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/media/AndroidVideoSurface.kt"
-PREVIEW_CARD="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/MediaPreviewCard.kt"
+VIDEO_SURFACE="native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/media/AndroidVideoSurface.kt"
+PREVIEW_CARD="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/MediaPreviewCard.kt"
 
 assert_contains "AndroidVideoSurface composable declared" "fun AndroidVideoSurface(" "$VIDEO_SURFACE"
 assert_contains "SurfaceView used in AndroidVideoSurface" "SurfaceView(context)" "$VIDEO_SURFACE"

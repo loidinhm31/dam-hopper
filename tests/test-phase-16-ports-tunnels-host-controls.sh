@@ -35,8 +35,8 @@ assert_not_contains() {
 }
 
 echo "=== Suite 1: Port and Tunnel Models & Contracts ==="
-PORT_MODELS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/PortModels.kt"
-TUNNEL_MODELS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/TunnelModels.kt"
+PORT_MODELS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/PortModels.kt"
+TUNNEL_MODELS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/TunnelModels.kt"
 
 assert_contains "DetectedVia enum declared" "enum class DetectedVia" "$PORT_MODELS"
 assert_contains "PortState enum declared" "enum class PortState" "$PORT_MODELS"
@@ -53,9 +53,9 @@ assert_contains "startedAt wire mapping" '@SerialName("startedAt")' "$TUNNEL_MOD
 assert_contains "reminderDue wire mapping" '@SerialName("reminderDue")' "$TUNNEL_MODELS"
 
 echo "=== Suite 2: Port & Tunnel Repositories & WebSocket Events ==="
-PORT_REPO="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/PortRepository.kt"
-TUNNEL_REPO="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/TunnelRepository.kt"
-SERVER_MSG="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/transport/ServerMsg.kt"
+PORT_REPO="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/PortRepository.kt"
+TUNNEL_REPO="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/TunnelRepository.kt"
+SERVER_MSG="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/transport/ServerMsg.kt"
 
 assert_contains "PortRepository declared" "class PortRepository(" "$PORT_REPO"
 assert_contains "GET /api/ports route called" '"/api/ports"' "$PORT_REPO"
@@ -79,7 +79,7 @@ assert_contains "host:idleSuspendChanged defined in ServerMsg" 'host:idleSuspend
 assert_contains "IdleSuspendChangedPayload defined" "data class IdleSuspendChangedPayload(" "$SERVER_MSG"
 
 echo "=== Suite 3: Idle Suspend Models, DTOs & Fallback Normalization ==="
-IDLE_MODELS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleSuspendModels.kt"
+IDLE_MODELS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleSuspendModels.kt"
 
 assert_contains "IdleSuspendState enum declared" "enum class IdleSuspendState" "$IDLE_MODELS"
 assert_contains "AutomaticPolicy enum declared" "enum class AutomaticPolicy" "$IDLE_MODELS"
@@ -97,8 +97,8 @@ assert_contains "decodeIdleSuspendStatusV1 fallback normalization" "fun decodeId
 assert_contains "decisionCapability redacted in toString" "decisionCapability=[REDACTED]" "$IDLE_MODELS"
 
 echo "=== Suite 4: Idle Suspend Repository & Consent Controller ==="
-IDLE_REPO="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleSuspendRepository.kt"
-IDLE_CTRL="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleConsentController.kt"
+IDLE_REPO="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleSuspendRepository.kt"
+IDLE_CTRL="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleConsentController.kt"
 
 assert_contains "IdleSuspendRepository declared" "class IdleSuspendRepository(" "$IDLE_REPO"
 assert_contains "GET status route called" '"/api/system/idle-suspend/v1/status"' "$IDLE_REPO"
@@ -117,12 +117,12 @@ assert_contains "submitConsent method declared" "suspend fun submitConsent(" "$I
 assert_contains "requestForceSuspend non-retrying method" "suspend fun requestForceSuspend(" "$IDLE_CTRL"
 
 echo "=== Suite 5: SSH, Host Control, and Diagnostics Repositories ==="
-SSH_MODELS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/SshModels.kt"
-SSH_REPO="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/SshRepository.kt"
-HOST_ACTION_MODELS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostActionModels.kt"
-HOST_ACTION_REPO="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostControlRepository.kt"
-DIAG_MODELS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/DiagnosticsModels.kt"
-DIAG_REPO="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/DiagnosticsRepository.kt"
+SSH_MODELS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/SshModels.kt"
+SSH_REPO="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/SshRepository.kt"
+HOST_ACTION_MODELS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostActionModels.kt"
+HOST_ACTION_REPO="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostControlRepository.kt"
+DIAG_MODELS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/DiagnosticsModels.kt"
+DIAG_REPO="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/DiagnosticsRepository.kt"
 
 assert_contains "SshAgentStatus snake_case has_keys wire mapping" '@SerialName("has_keys")' "$SSH_MODELS"
 assert_contains "SshAgentStatus snake_case key_count wire mapping" '@SerialName("key_count")' "$SSH_MODELS"
@@ -146,8 +146,8 @@ assert_contains "DiagnosticExportRequest default false for terminal output" "val
 assert_contains "POST /api/diagnostics/export called" '"/api/diagnostics/export"' "$DIAG_REPO"
 
 echo "=== Suite 6: UI Presentation & Workbench Wiring Invariants ==="
-WORKBENCH_SCREEN="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
-HOST_DIR="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host"
+WORKBENCH_SCREEN="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
+HOST_DIR="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host"
 
 assert_contains "PORTS wired in WorkbenchScreen" "PortsPanelScreen(" "$WORKBENCH_SCREEN"
 assert_contains "SSH_HOST wired in WorkbenchScreen" "HostControlScreens(" "$WORKBENCH_SCREEN"

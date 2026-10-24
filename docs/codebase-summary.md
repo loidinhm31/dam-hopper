@@ -21,7 +21,7 @@ The previous inventory counted **2,046 eligible text files and 411,852 physical 
 | `deploy/` | Release packaging, systemd units, and installers | 4 | 877 | 22 | 5,224 |
 | `scripts/` | Test runners, qualification harnesses, and tooling | 9 | 2,154 | 9 | 2,154 |
 | `.github/workflows/` | CI/CD pipelines, release publishing, quality gates | 4 | 950 | 4 | 950 |
-| `native-app/` | Android native client (Kotlin Multiplatform + Compose; current app flow summarized below; counts and phase labels in this historical row are not refreshed) | 5 | 240 | 348 | 55,167 |
+| `native/android-app/` | Android native client (Kotlin Multiplatform + Compose; current app flow summarized below; counts and phase labels in this historical row are not refreshed) | 5 | 240 | 348 | 55,167 |
 
 ## Backend Map
 
@@ -50,7 +50,7 @@ The previous inventory counted **2,046 eligible text files and 411,852 physical 
 
 *Note:* The former DamHopper plugin platform (`dam-hopper-plugin-runner`) has been completely removed from `server/`.
 
-## Android Native Client Map (`native-app/`)
+## Android Native Client Map (`native/android-app/`)
 
 The Android client connects to the existing remote Rust backend through Kotlin Multiplatform and Jetpack Compose. Its root route stages remain Profile Login → Project List → Terminal, and the Terminal stage now mounts focused Terminal/Files/Editor panels through retained per-owner workspace state. Phase 05 supplied the Android editor bridge; Phase 06 completed save/mutation integration; Phase 07 was closed by user approval after Cycle 3 with noted issues. User-reported Phase 07 evidence is 141 passing tests and successful compilation, with 0 critical build/test failures; it does not qualify live-server/device/release behavior. See the Phase 07 closeout below and [Android Native Client Architecture](./architecture/android-native-client.md).
 

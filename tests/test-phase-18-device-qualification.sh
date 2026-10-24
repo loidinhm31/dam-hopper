@@ -59,7 +59,7 @@ assert_executable() {
 }
 
 echo "=== Suite 1: Core Qualification Suites & Journeys ==="
-OWNERSHIP_TEST="native-app/shared/src/commonTest/kotlin/dev/damhopper/nativeapp/OwnershipAndReplayTests.kt"
+OWNERSHIP_TEST="native/android-app/shared/src/commonTest/kotlin/dev/damhopper/nativeapp/OwnershipAndReplayTests.kt"
 assert_file_exists "OwnershipAndReplayTests exists in commonTest" "$OWNERSHIP_TEST"
 assert_contains "Profile isolation test declared" "fun testMultiServerProfileIsolationAndWatermarkRejection" "$OWNERSHIP_TEST"
 assert_contains "UTF-8 chunk splitting test declared" "fun testTerminalReplayGateUtf8SplittingAcrossChunkBoundaries" "$OWNERSHIP_TEST"
@@ -70,7 +70,7 @@ assert_contains "UTC interval calculations and formatting test declared" "fun te
 assert_contains "Crypto tamper rejection fail-closed test declared" "fun testCryptoEnvelopeTamperRejectionFailsClosed" "$OWNERSHIP_TEST"
 assert_contains "Lifecycle state machine transitions test declared" "fun testLifecycleCoordinatorStateTransitionsAndRetirement" "$OWNERSHIP_TEST"
 
-JOURNEYS_UNIT="native-app/androidApp/src/test/kotlin/dev/damhopper/nativeapp/WorkbenchJourneysUnitTest.kt"
+JOURNEYS_UNIT="native/android-app/androidApp/src/test/kotlin/dev/damhopper/nativeapp/WorkbenchJourneysUnitTest.kt"
 assert_file_exists "WorkbenchJourneysUnitTest exists in androidApp unit tests" "$JOURNEYS_UNIT"
 assert_contains "Complete 12-panel journey test declared" "fun testCompleteTwelvePanelNavigationJourney" "$JOURNEYS_UNIT"
 assert_contains "Top navigation row invariants test declared" "fun testSolitaryTopNavigationRowInvariants" "$JOURNEYS_UNIT"
@@ -79,7 +79,7 @@ assert_contains "Zero WebViews across entire app test declared" "fun testZeroWeb
 assert_contains "Cognito privacy overlay input gating test declared" "fun testCognitoPrivacyOverlayInputGatingAndDismissal" "$JOURNEYS_UNIT"
 assert_contains "Navigation stack hierarchical unwinding test declared" "fun testNavigationStackHierarchicalUnwinding" "$JOURNEYS_UNIT"
 
-JOURNEYS_DEVICE="native-app/androidApp/src/androidTest/kotlin/dev/damhopper/nativeapp/WorkbenchJourneys.kt"
+JOURNEYS_DEVICE="native/android-app/androidApp/src/androidTest/kotlin/dev/damhopper/nativeapp/WorkbenchJourneys.kt"
 assert_file_exists "WorkbenchJourneys device instrumentation test exists in androidApp" "$JOURNEYS_DEVICE"
 assert_contains "Instrumentation runner annotation present" "@RunWith(AndroidJUnit4::class)" "$JOURNEYS_DEVICE"
 assert_contains "Device application context test declared" "fun testApplicationContextAndPackageIdentity" "$JOURNEYS_DEVICE"
@@ -88,7 +88,7 @@ assert_contains "Complete 12-panel on-device journey declared" "fun testComplete
 assert_contains "Cognito overlay on device runtime declared" "fun testCognitoPrivacyOverlayOnDeviceRuntime" "$JOURNEYS_DEVICE"
 
 echo "=== Suite 2: Automation & Security Tooling ==="
-DEVICE_SCRIPT="native-app/scripts/run-device-journeys.sh"
+DEVICE_SCRIPT="native/android-app/scripts/run-device-journeys.sh"
 assert_file_exists "run-device-journeys.sh script exists" "$DEVICE_SCRIPT"
 assert_executable "run-device-journeys.sh is executable" "$DEVICE_SCRIPT"
 assert_contains "Script handles missing ADB" "ADB command not found in PATH" "$DEVICE_SCRIPT"
@@ -96,7 +96,7 @@ assert_contains "Script reports honest blocked status" "BLOCKED_PENDING_DEVICE" 
 assert_contains "Script configures reverse port forwarding" "reverse tcp:4801 tcp:4801" "$DEVICE_SCRIPT"
 assert_contains "Script executes connectedDebugAndroidTest" "connectedDebugAndroidTest" "$DEVICE_SCRIPT"
 
-AUDIT_SCRIPT="native-app/scripts/audit-apk-security.sh"
+AUDIT_SCRIPT="native/android-app/scripts/audit-apk-security.sh"
 assert_file_exists "audit-apk-security.sh script exists" "$AUDIT_SCRIPT"
 assert_executable "audit-apk-security.sh is executable" "$AUDIT_SCRIPT"
 assert_contains "Manifest allowBackup check present" "android:allowBackup=\"false\"" "$AUDIT_SCRIPT"
@@ -109,56 +109,56 @@ assert_contains "ABI filters check present" "arm64-v8a" "$AUDIT_SCRIPT"
 assert_contains "16 KiB page size check present" "16 KiB" "$AUDIT_SCRIPT"
 
 echo "=== Suite 3: Cross-Phase Residual Remediations ==="
-STREAM_COORD="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceStreamCoordinator.kt"
+STREAM_COORD="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceStreamCoordinator.kt"
 assert_contains "SSE stream clean EOF handling declared" "SSE stream completed (EOF)" "$STREAM_COORD"
 
-HOST_CTRL="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostResourceController.kt"
+HOST_CTRL="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostResourceController.kt"
 assert_contains "REST fallback interval aligned to 5s" "REST_FALLBACK_INTERVAL_MS = 5_000L" "$HOST_CTRL"
 assert_contains "HostResourceController implements LifecycleAware" ": LifecycleAware" "$HOST_CTRL"
 assert_contains "onForeground lifecycle hook implemented" "override fun onForeground()" "$HOST_CTRL"
 assert_contains "onBackground lifecycle hook implemented" "override fun onBackground()" "$HOST_CTRL"
 assert_contains "onOwnerRetired lifecycle hook implemented" "override fun onOwnerRetired(" "$HOST_CTRL"
 
-USAGE_MODELS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageModels.kt"
+USAGE_MODELS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageModels.kt"
 assert_contains "formatUtcDate helper declared in UsageBoundsHelper" "fun formatUtcDate(epochMs: Long): String" "$USAGE_MODELS"
 
-USAGE_DIALOGS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageDialogs.kt"
+USAGE_DIALOGS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageDialogs.kt"
 assert_contains "Readable UTC bounds rendered in delete dialog" "UsageBoundsHelper.formatUtcDate(fromUtc)" "$USAGE_DIALOGS"
 assert_contains "Completed UTC days explicitly labeled" "Completed UTC days [from, to):" "$USAGE_DIALOGS"
 
-USAGE_SCREENS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageScreens.kt"
+USAGE_SCREENS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageScreens.kt"
 assert_contains "Dynamic model filter derivation from sessions" "val dynamicModels = remember(uiState.knownModels, uiState.sessions)" "$USAGE_SCREENS"
 
-USAGE_SETTINGS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageSettingsSection.kt"
+USAGE_SETTINGS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageSettingsSection.kt"
 assert_contains "onUpdateSettings callback declared" "onUpdateSettings: (SettingsPatchRequest) -> Unit" "$USAGE_SETTINGS"
 assert_contains "Collector enabled update wired" "onUpdateSettings(SettingsPatchRequest(enabled = !isCollectorActive))" "$USAGE_SETTINGS"
 assert_contains "Retention presets wired" "detailRetentionDays = days" "$USAGE_SETTINGS"
 assert_contains "Retry collector action wired" "retryCollector = true" "$USAGE_SETTINGS"
 
-IDLE_CTRL="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleConsentController.kt"
+IDLE_CTRL="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleConsentController.kt"
 assert_contains "refreshStatus preserves action error parameter" "refreshStatus(preserveActionError: Boolean = false)" "$IDLE_CTRL"
 assert_contains "requestForceSuspend preserves action error" "refreshStatus(preserveActionError = true)" "$IDLE_CTRL"
 
-SSH_REPO="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/SshRepository.kt"
+SSH_REPO="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/SshRepository.kt"
 assert_contains "forgetCredential validates result.success" "if (!result.success) {" "$SSH_REPO"
 
-THEME_FILE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/theme/NativeTheme.kt"
+THEME_FILE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/theme/NativeTheme.kt"
 assert_contains "NativeTheme supports WorkbenchTheme parameter" "theme: WorkbenchTheme = WorkbenchTheme.DARK" "$THEME_FILE"
 assert_contains "High contrast color scheme declared" "HighContrastColorScheme" "$THEME_FILE"
 
-SETTINGS_MODELS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings/SettingsModels.kt"
+SETTINGS_MODELS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings/SettingsModels.kt"
 assert_contains "HIGH_CONTRAST theme enum variant declared" "HIGH_CONTRAST" "$SETTINGS_MODELS"
 
-TERM_SCREENS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/terminal/TerminalScreens.kt"
+TERM_SCREENS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/terminal/TerminalScreens.kt"
 assert_contains "TerminalPanelScreen accepts fontSize parameter" "fontSize: Int = 13" "$TERM_SCREENS"
 
-EDITOR_SCREENS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorScreens.kt"
+EDITOR_SCREENS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorScreens.kt"
 assert_contains "EditorPanelScreen accepts fontSize parameter" "fontSize: Int = 14" "$EDITOR_SCREENS"
 
-EDITOR_VIEW="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/NativeTextEditorView.kt"
+EDITOR_VIEW="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/NativeTextEditorView.kt"
 assert_contains "NativeTextEditorView accepts fontSize parameter" "fontSize: Int = 14" "$EDITOR_VIEW"
 
-WORKBENCH_SCREEN="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
+WORKBENCH_SCREEN="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
 assert_contains "WorkbenchScreen wraps UI in NativeTheme with preferences theme" "NativeTheme(theme = workbenchPreferences.theme)" "$WORKBENCH_SCREEN"
 assert_contains "TerminalPanelScreen passed terminalFontSize preference" "fontSize = workbenchPreferences.terminalFontSize" "$WORKBENCH_SCREEN"
 assert_contains "EditorPanelScreen passed editorFontSize preference" "fontSize = workbenchPreferences.editorFontSize" "$WORKBENCH_SCREEN"
@@ -172,16 +172,16 @@ assert_contains "GATE-C qualification status recorded in Gate Approvals" "GATE-C
 
 echo "=== Suite 5: Zero FABs and Zero WebViews in Phase 18 Production Files ==="
 PHASE18_PROD_FILES=(
-    "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceStreamCoordinator.kt"
-    "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostResourceController.kt"
-    "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageModels.kt"
-    "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageScreens.kt"
-    "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageSettingsSection.kt"
-    "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageDialogs.kt"
-    "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleConsentController.kt"
-    "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/SshRepository.kt"
-    "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/theme/NativeTheme.kt"
-    "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
+    "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/ResourceStreamCoordinator.kt"
+    "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/HostResourceController.kt"
+    "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageModels.kt"
+    "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageScreens.kt"
+    "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageSettingsSection.kt"
+    "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/UsageDialogs.kt"
+    "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/IdleConsentController.kt"
+    "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/SshRepository.kt"
+    "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/theme/NativeTheme.kt"
+    "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
 )
 
 for f in "${PHASE18_PROD_FILES[@]}"; do

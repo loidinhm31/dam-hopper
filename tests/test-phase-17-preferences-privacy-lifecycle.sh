@@ -35,7 +35,7 @@ assert_not_contains() {
 }
 
 echo "=== Suite 1: Settings and Preferences Models & Clamping ==="
-SETTINGS_MODELS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings/SettingsModels.kt"
+SETTINGS_MODELS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings/SettingsModels.kt"
 
 assert_contains "WorkbenchPreferences declared" "data class WorkbenchPreferences(" "$SETTINGS_MODELS"
 assert_contains "WorkbenchTheme declared" "enum class WorkbenchTheme" "$SETTINGS_MODELS"
@@ -51,9 +51,9 @@ assert_contains "Scroll step clamp helper" "fun clampScrollStep" "$SETTINGS_MODE
 assert_contains "TerminalAgentNotifications declared" "data class TerminalAgentNotifications(" "$SETTINGS_MODELS"
 
 echo "=== Suite 2: Settings Repository, Multi-Source & TOML Import/Export ==="
-SETTINGS_REPO="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings/SettingsRepository.kt"
-PREF_STORE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings/PreferencesStore.kt"
-API_CLIENT="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/transport/ApiClient.kt"
+SETTINGS_REPO="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings/SettingsRepository.kt"
+PREF_STORE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings/PreferencesStore.kt"
+API_CLIENT="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/transport/ApiClient.kt"
 
 assert_contains "PreferencesStore interface declared" "interface PreferencesStore" "$PREF_STORE"
 assert_contains "SettingsRepository class declared" "class SettingsRepository(" "$SETTINGS_REPO"
@@ -70,12 +70,12 @@ assert_contains "Import route path" '"/api/settings/import/workspace.toml"' "$SE
 assert_contains "postToml declared in ApiClient" "suspend fun postToml(" "$API_CLIENT"
 
 echo "=== Suite 3: Ephemeral Cognito Privacy Controller & Overlay ==="
-PRIVACY_CTRL="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/security/PrivacyController.kt"
-COGNITO_OVERLAY="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/components/CognitoOverlay.kt"
-TERM_SESSION="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/terminal/TerminalSessionController.kt"
-TERM_INPUT="native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/terminal/TerminalInputController.kt"
-EDITOR_SESSION="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorSession.kt"
-EDITOR_TABS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTabsState.kt"
+PRIVACY_CTRL="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/security/PrivacyController.kt"
+COGNITO_OVERLAY="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/components/CognitoOverlay.kt"
+TERM_SESSION="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/terminal/TerminalSessionController.kt"
+TERM_INPUT="native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/terminal/TerminalInputController.kt"
+EDITOR_SESSION="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorSession.kt"
+EDITOR_TABS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTabsState.kt"
 
 assert_contains "PrivacyController declared" "class PrivacyController" "$PRIVACY_CTRL"
 assert_contains "isMaskActive flow" "val isMaskActive: StateFlow<Boolean>" "$PRIVACY_CTRL"
@@ -91,11 +91,11 @@ assert_contains "TerminalSessionController input allowed check" "if (!isInputAll
 assert_contains "TerminalInputController input allowed check" "!sessionController.isInputAllowed()" "$TERM_INPUT"
 assert_contains "EditorSession input allowed check" "if (isReadOnly || !isInputAllowed()) return" "$EDITOR_SESSION"
 assert_contains "EditorTabsState isInputAllowed wired" "session.isInputAllowed = { isInputAllowed() }" "$EDITOR_TABS"
-assert_contains "AndroidEditorSurface isInputAllowed check" "!isInputAllowed()" "native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/AndroidEditorSurface.kt"
+assert_contains "AndroidEditorSurface isInputAllowed check" "if (!inputAllowed)" "native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/AndroidEditorSurface.kt"
 
 echo "=== Suite 4: Notification Sink & Privacy Redaction ==="
-NOTIF_SINK="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/notifications/NotificationSink.kt"
-ANDROID_NOTIF_SINK="native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/notifications/AndroidNotificationSink.kt"
+NOTIF_SINK="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/notifications/NotificationSink.kt"
+ANDROID_NOTIF_SINK="native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/notifications/AndroidNotificationSink.kt"
 
 assert_contains "NotificationSink interface declared" "interface NotificationSink" "$NOTIF_SINK"
 assert_contains "NotificationChannelId enum declared" "enum class NotificationChannelId" "$NOTIF_SINK"
@@ -108,14 +108,14 @@ assert_contains "Public generic notification set" "setPublicVersion(publicNotifi
 assert_contains "Profile notifications cancellation" "fun cancelNotificationsForProfile(" "$ANDROID_NOTIF_SINK"
 assert_contains "Deep link EXTRA_TARGET_PROFILE_ID" "EXTRA_TARGET_PROFILE_ID" "$ANDROID_NOTIF_SINK"
 assert_contains "Deep link EXTRA_TARGET_GENERATION" "EXTRA_TARGET_GENERATION" "$ANDROID_NOTIF_SINK"
-assert_contains "AndroidManifest declares POST_NOTIFICATIONS" 'android.permission.POST_NOTIFICATIONS' "native-app/androidApp/src/main/AndroidManifest.xml"
-assert_contains "NotificationsView checks areNotificationsEnabled" "areNotificationsEnabled" "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings/NotificationsView.kt"
+assert_contains "AndroidManifest declares POST_NOTIFICATIONS" 'android.permission.POST_NOTIFICATIONS' "native/android-app/androidApp/src/main/AndroidManifest.xml"
+assert_contains "NotificationsView checks areNotificationsEnabled" "areNotificationsEnabled" "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings/NotificationsView.kt"
 
 echo "=== Suite 5: Lifecycle Coordination & Process Recreation ==="
-LIFECYCLE_COORD="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/lifecycle/LifecycleCoordinator.kt"
-ANDROID_LIFECYCLE="native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/lifecycle/AndroidLifecycleCoordinator.kt"
-ANDROID_PREFS="native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/storage/AndroidPreferencesStore.kt"
-WORKBENCH_SCREEN="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
+LIFECYCLE_COORD="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/lifecycle/LifecycleCoordinator.kt"
+ANDROID_LIFECYCLE="native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/lifecycle/AndroidLifecycleCoordinator.kt"
+ANDROID_PREFS="native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/storage/AndroidPreferencesStore.kt"
+WORKBENCH_SCREEN="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
 
 assert_contains "LifecycleCoordinator declared" "class LifecycleCoordinator" "$LIFECYCLE_COORD"
 assert_contains "LifecycleAware interface declared" "interface LifecycleAware" "$LIFECYCLE_COORD"
@@ -129,10 +129,10 @@ assert_contains "WorkbenchScreen registers LifecycleAware" "val listener = objec
 assert_contains "WorkbenchScreen onProfileRetired calls onProfileRemoved" "settingsRepository.onProfileRemoved" "$WORKBENCH_SCREEN"
 
 echo "=== Suite 6: UI Presentation & Workbench Invariants ==="
-SETTINGS_SCREENS="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings/SettingsScreens.kt"
-WORKBENCH_SCREEN="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
-MAIN_ACTIVITY="native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/MainActivity.kt"
-SETTINGS_DIR="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings"
+SETTINGS_SCREENS="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings/SettingsScreens.kt"
+WORKBENCH_SCREEN="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
+MAIN_ACTIVITY="native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/MainActivity.kt"
+SETTINGS_DIR="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings"
 
 assert_contains "SettingsScreens declared" "fun SettingsScreens(" "$SETTINGS_SCREENS"
 assert_contains "WorkbenchScreen integrates SettingsScreens" "SettingsScreens(" "$WORKBENCH_SCREEN"

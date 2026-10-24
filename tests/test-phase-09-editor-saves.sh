@@ -35,7 +35,7 @@ assert_not_contains() {
 }
 
 echo "=== Suite 1: File Tier Policy & Exact Boundaries (E01, M01) ==="
-TIER_FILE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/FileTierPolicy.kt"
+TIER_FILE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/FileTierPolicy.kt"
 assert_contains "FileTier enum declared" "enum class FileTier" "$TIER_FILE"
 assert_contains "NORMAL tier defined" "NORMAL," "$TIER_FILE"
 assert_contains "DEGRADED tier defined" "DEGRADED," "$TIER_FILE"
@@ -51,7 +51,7 @@ assert_contains "isPreviewOnlyFile function declared" "fun isPreviewOnlyFile(" "
 assert_contains "decodeUtf8Safe helper declared" "fun decodeUtf8Safe(" "$TIER_FILE"
 
 echo "=== Suite 2: Editor Models & In-Memory Session (E01) ==="
-MODELS_FILE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorModels.kt"
+MODELS_FILE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorModels.kt"
 assert_contains "TextPosition declared" "data class TextPosition(" "$MODELS_FILE"
 assert_contains "TextRange declared" "data class TextRange(" "$MODELS_FILE"
 assert_contains "TextEdit declared" "data class TextEdit(" "$MODELS_FILE"
@@ -68,7 +68,7 @@ else
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
-SESSION_FILE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorSession.kt"
+SESSION_FILE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorSession.kt"
 assert_contains "EditorSession declared" "class EditorSession(" "$SESSION_FILE"
 assert_contains "EditorSession tracks server mtime" "var serverMtime: Long? = initialMtime" "$SESSION_FILE"
 assert_contains "EditorSession tracks saved content" "var savedContent: String = initialContent" "$SESSION_FILE"
@@ -83,17 +83,17 @@ assert_contains "EditorSession undo declared" "fun undo(): Boolean" "$SESSION_FI
 assert_contains "EditorSession redo declared" "fun redo(): Boolean" "$SESSION_FILE"
 
 echo "=== Suite 3: Safe Saves, CAS Conflict & Force Overwrite (E02) ==="
-REPO_FILE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorRepository.kt"
+REPO_FILE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorRepository.kt"
 assert_contains "EditorRepository declared" "class EditorRepository(" "$REPO_FILE"
 assert_contains "EditorRepository loadFile declared" "suspend fun loadFile(" "$REPO_FILE"
 assert_contains "EditorRepository saveFile declared" "suspend fun saveFile(" "$REPO_FILE"
 assert_contains "EditorRepository forceOverwrite declared" "suspend fun forceOverwrite(" "$REPO_FILE"
-assert_contains "EditorSaveResult Conflict handled" "is EditorSaveResult.Conflict ->" "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTabSaveCoordinator.kt"
+assert_contains "EditorSaveResult Conflict handled" "is EditorSaveResult.Conflict ->" "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTabSaveCoordinator.kt"
 assert_contains "EditorSaveResult UnknownOutcome on timeout" "catch (e: TimeoutCancellationException)" "$REPO_FILE"
 assert_contains "Encrypted save requires Phase 11 session" "Encrypted save requires Phase 11 owner-bound crypto session" "$REPO_FILE"
 
 echo "=== Suite 4: Multi-Tab State & Watcher Invalidation (E01, E02) ==="
-TABS_FILE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTabsState.kt"
+TABS_FILE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTabsState.kt"
 assert_contains "EditorTabsState declared" "class EditorTabsState(" "$TABS_FILE"
 assert_contains "EditorTabsState openTab declared" "suspend fun openTab(" "$TABS_FILE"
 assert_contains "EditorTabsState selectTab declared" "fun selectTab(" "$TABS_FILE"
@@ -106,31 +106,31 @@ assert_contains "handleRemoteFileModified clean reload" "suspend fun handleRemot
 assert_contains "dirty tab marked stale without overwriting" "it.copy(isStale = true)" "$TABS_FILE"
 
 echo "=== Suite 5: Language Services & Multi-Dimensional Fencing (E01) ==="
-LANG_FILE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/LanguageService.kt"
+LANG_FILE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/LanguageService.kt"
 assert_contains "LanguageService interface declared" "interface LanguageService {" "$LANG_FILE"
 assert_contains "JsonLanguageService declared" "class JsonLanguageService(" "$LANG_FILE"
-assert_contains "TsJsLanguageService declared" "class TsJsLanguageService(" "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/TsJsLanguageService.kt"
+assert_contains "TsJsLanguageService declared" "class TsJsLanguageService(" "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/TsJsLanguageService.kt"
 assert_contains "TypeScriptLanguageServiceAudit declared" "object TypeScriptLanguageServiceAudit {" "$LANG_FILE"
 assert_contains "LanguageServiceCoordinator fences requests" "class LanguageServiceCoordinator {" "$LANG_FILE"
 assert_contains "Multi-dimensional qualified request registration" "fun registerQualifiedRequest(" "$LANG_FILE"
 assert_contains "Multi-dimensional qualified response validation" "fun isQualifiedResponseValid(" "$LANG_FILE"
 
 echo "=== Suite 6: Workbench UI & Zero Floating Action Buttons Invariants (NAV-01, E01, M01) ==="
-SCREEN_FILE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorScreens.kt"
+SCREEN_FILE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorScreens.kt"
 assert_contains "EditorPanelScreen declared" "fun EditorPanelScreen(" "$SCREEN_FILE"
-assert_contains "LargeFileView declared" "fun LargeFileView(" "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/LargeFileView.kt"
-assert_contains "BinaryHexView declared" "fun BinaryHexView(" "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/BinaryHexView.kt"
-assert_contains "MarkdownPreviewView declared" "fun MarkdownPreviewView(" "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/MarkdownPreviewView.kt"
-assert_contains "Mermaid rendering deferred banner" "Mermaid rendering deferred for this release" "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/MarkdownPreviewView.kt"
-assert_contains "SaveConflictDialog declared" "fun SaveConflictDialog(" "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/SaveConflictDialog.kt"
+assert_contains "LargeFileView declared" "fun LargeFileView(" "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/LargeFileView.kt"
+assert_contains "BinaryHexView declared" "fun BinaryHexView(" "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/BinaryHexView.kt"
+assert_contains "MarkdownPreviewView declared" "fun MarkdownPreviewView(" "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/MarkdownPreviewView.kt"
+assert_contains "Mermaid rendering deferred banner" "Mermaid rendering deferred for this release" "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/MarkdownPreviewView.kt"
+assert_contains "SaveConflictDialog declared" "fun SaveConflictDialog(" "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/SaveConflictDialog.kt"
 
 # FAB Invariant check
 assert_not_contains "Zero FloatingActionButton in EditorScreens" "FloatingActionButton" "$SCREEN_FILE"
 assert_not_contains "Zero ExtendedFloatingActionButton in EditorScreens" "ExtendedFloatingActionButton" "$SCREEN_FILE"
-assert_not_contains "Zero FloatingActionButton in EditorTopBar" "FloatingActionButton" "native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTopBar.kt"
+assert_not_contains "Zero FloatingActionButton in EditorTopBar" "FloatingActionButton" "native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTopBar.kt"
 
 # WorkbenchScreen integration
-WB_FILE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
+WB_FILE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/WorkbenchScreen.kt"
 assert_contains "WorkbenchScreen wires editorContent" "editorContent = {" "$WB_FILE"
 assert_contains "WorkbenchScreen hosts EditorPanelScreen" "EditorPanelScreen(tabsState = editorTabsState!!)" "$WB_FILE"
 assert_contains "WorkbenchScreen onOpenFile opens tab" "editorTabsState?.openTab(target, path)" "$WB_FILE"

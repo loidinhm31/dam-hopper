@@ -35,7 +35,7 @@ assert_not_contains() {
 }
 
 echo "=== Suite 1: Terminal Candidate & Surface Contract Invariants ==="
-TERM_SURFACE="native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/terminal/AndroidTerminalSurface.kt"
+TERM_SURFACE="native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/terminal/AndroidTerminalSurface.kt"
 assert_contains "CandidateTerminalAdapter pins ConnectBot termlib" 'val name: String = "ConnectBot termlib"' "$TERM_SURFACE"
 assert_contains "CandidateTerminalAdapter pins version 0.3.13" 'val version: String = "0.3.13"' "$TERM_SURFACE"
 assert_contains "CandidateTerminalAdapter notes libvterm.so JNI" 'val jniLibrary: String = "libvterm.so"' "$TERM_SURFACE"
@@ -54,7 +54,7 @@ assert_contains "TerminalSessionController encodes Ctrl and Alt modifiers" "fun 
 assert_contains "TerminalSessionController encodes special navigation keys" "fun encodeSpecialKey(name: String): ByteArray" "$TERM_SURFACE"
 
 echo "=== Suite 2: Editor Candidate & Surface Contract Invariants ==="
-EDIT_SURFACE="native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/AndroidEditorSurface.kt"
+EDIT_SURFACE="native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/editor/AndroidEditorSurface.kt"
 assert_contains "CandidateEditorAdapter pins Sora Editor" 'val name: String = "Sora Editor"' "$EDIT_SURFACE"
 assert_contains "CandidateEditorAdapter pins version 0.23.4" 'val version: String = "0.23.4"' "$EDIT_SURFACE"
 assert_contains "CandidateEditorAdapter pins artifact coordinate" 'io.github.rosemoe.sora-editor:editor:0.23.4' "$EDIT_SURFACE"
@@ -72,7 +72,7 @@ assert_contains "EditorSession tracks dirty state" "var isDirty: Boolean = false
 assert_contains "EditorSession guards save operations" "fun canSave(): Boolean" "$EDIT_SURFACE"
 
 echo "=== Suite 3: Language Service Contract & Stale Request Fencing ==="
-LANG_SERVICE="native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/LanguageService.kt"
+LANG_SERVICE="native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/LanguageService.kt"
 assert_contains "LanguageService interface declared" "interface LanguageService {" "$LANG_SERVICE"
 assert_contains "LanguageService declares validateDocument" "fun validateDocument(request: LanguageServiceRequest): LanguageServiceResponse<List<Diagnostic>>" "$LANG_SERVICE"
 assert_contains "LanguageService declares getCompletions" "fun getCompletions(" "$LANG_SERVICE"
@@ -84,9 +84,9 @@ assert_contains "TypeScriptLanguageServiceAudit notes absence of server LSP" "do
 assert_contains "LanguageServiceCoordinator fences stale responses" "class LanguageServiceCoordinator {" "$LANG_SERVICE"
 
 echo "=== Suite 4: OPAQUE Crypto Bridge & JNI Invariants ==="
-CRYPTO_TOML="native-app/crypto-bridge/Cargo.toml"
-CRYPTO_RS="native-app/crypto-bridge/src/lib.rs"
-CRYPTO_KT="native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/crypto/OpaqueClientBridge.kt"
+CRYPTO_TOML="native/android-app/crypto-bridge/Cargo.toml"
+CRYPTO_RS="native/android-app/crypto-bridge/src/lib.rs"
+CRYPTO_KT="native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/crypto/OpaqueClientBridge.kt"
 assert_contains "Cargo.toml defines cdylib crate type" 'crate-type = ["cdylib", "rlib"]' "$CRYPTO_TOML"
 assert_contains "Cargo.toml pins opaque-ke 4.0.1" 'opaque-ke = "4.0.1"' "$CRYPTO_TOML"
 assert_contains "DamHopperOpaqueSuite declared in Rust" "pub struct DamHopperOpaqueSuite;" "$CRYPTO_RS"
@@ -107,7 +107,7 @@ assert_contains "Kotlin OpaqueClientBridge masks aesKey in toString" "[REDACTED]
 assert_contains "Kotlin OpaqueClientBridge implements deriveAesKey" "fun deriveAesKey(sessionKey: ByteArray): ByteArray" "$CRYPTO_KT"
 
 echo "=== Suite 5: Packaging & License Compliance Invariants ==="
-APP_BUILD_GRADLE="native-app/androidApp/build.gradle.kts"
+APP_BUILD_GRADLE="native/android-app/androidApp/build.gradle.kts"
 DECISIONS_DOC="docs/android-native-dependency-decisions.md"
 assert_contains "androidApp build.gradle preserves AL2.0 and LGPL2.1 notices" 'pickFirsts += setOf("/META-INF/AL2.0", "/META-INF/LGPL2.1")' "$APP_BUILD_GRADLE"
 assert_not_contains "androidApp build.gradle does not strip license files" 'excludes += "/META-INF/{AL2.0,LGPL2.1}"' "$APP_BUILD_GRADLE"

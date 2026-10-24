@@ -13,7 +13,7 @@ These standards describe the current Rust backend, shared React UI, and profile-
 | `packages/ui/src/components/`, `hooks/`, `stores/`, `lib/` | Shared React UI and client-side domain behavior |
 | `apps/web/`, `apps/native/` | Vite browser and Tauri desktop hosts |
 | `server/tests/`, colocated Rust tests, `packages/ui/browser-tests/` | Backend and browser-level behavioral coverage |
-| `native-app/` | Kotlin Multiplatform + Jetpack Compose Android client; current root flow is Profile Login → Project List → Project Terminal |
+| `native/android-app/` | Kotlin Multiplatform + Jetpack Compose Android client; current root flow is Profile Login → Project List → Project Terminal |
 
 ## Cross-cutting rules
 
@@ -52,14 +52,14 @@ These standards describe the current Rust backend, shared React UI, and profile-
 - **Editor & Terminal Font Independence:** Monaco code editor (`editorFontSize`) and xterm terminal (`terminalFontSize`) maintain independent font size configurations and must never be driven by `--app-font-size`.
 - **Virtualized Trees (`FileTree`):** Uniform item row heights in Arborist are computed dynamically using `getFileTreeRowHeight(systemFontSize)` from `@/lib/workbench-typography.js` to ensure content never clips across the supported 10–32px range without resetting scroll or unmounting trees.
 
-### Kotlin Multiplatform and Android Native Client (`native-app`)
+### Kotlin Multiplatform and Android Native Client (`native/android-app`)
 
 - **Ownership & Connection Scoping:** Mirror React/web invariants; asynchronous operations must capture `ConnectionRef = { profileId, generation }` and recheck upon resume. Never route through ambient fallback.
-- **Client boundary:** No WebView, embedded browser engine, local PTY, local Git, or local AI execution in `native-app/`. The remote Rust backend owns PTY, Git, agent, and remote workbench operations; Android owns presentation, Keystore credential storage, and client cryptography. Embedded interactive HTML preview and rendered Mermaid diagrams remain deferred.
+- **Client boundary:** No WebView, embedded browser engine, local PTY, local Git, or local AI execution in `native/android-app/`. The remote Rust backend owns PTY, Git, agent, and remote workbench operations; Android owns presentation, Keystore credential storage, and client cryptography. Embedded interactive HTML preview and rendered Mermaid diagrams remain deferred.
 - **Navigation ownership:** Route the active app flow through `DamHopperMobileApp` and `AppFlowNavigation` (`PROFILE_LOGIN` → `PROJECT_LIST` → `TERMINAL`). The separate `WorkbenchScreen`/12-panel subsystem is not mounted by the current root; do not infer user-visible reachability from a component's presence in source.
 - **Network security:** Release builds prohibit cleartext. Debug network config permits cleartext to any host and trusts user-installed CAs; this does not make HTTP safe. Profile Login blocks password/MFA over HTTP. REST/SSE request builders restrict bearer headers to HTTPS or loopback; the WebSocket builder restricts query tokens to HTTPS/WSS or loopback. These request-construction guards do not prove redirect safety. The panel-shell SSE client is not mounted by the current root. `--no-auth` must remain loopback-only.
 - **Panel-shell contract:** When the separate workbench shell is mounted, it uses TERMINAL/Traditional presentation, a single top horizontal panel-navigation row, and zero floating action buttons (FABs) or draggable triggers.
-- **Module Separation:** Kotlin Multiplatform `commonMain` (`native-app/shared/`) owns domain models, networking, DTOs, and Compose UI; platform adapters in `androidApp/`. Never leak Android platform types into `commonMain`.
+- **Module Separation:** Kotlin Multiplatform `commonMain` (`native/android-app/shared/`) owns domain models, networking, DTOs, and Compose UI; platform adapters in `androidApp/`. Never leak Android platform types into `commonMain`.
 - **Wire Projection:** Wire requests omit client-only `profileId`; backend authenticates and authorizes project/worktree paths.
 - **Filesystem Wire Invariants:** File, directory, stat, read, and mutation operations pass the explicit `ProjectTargetRef`; write operations use chunked streaming with expected mtime compare-and-swap (CAS).
 - **Watcher Registration & Invalidation:** Directory watcher subscriptions must register event listeners before dispatching subscription requests to prevent race windows, and reconcile snapshot/event ordering cleanly without relying on unbounded buffering.

@@ -11,7 +11,7 @@
 ## 1. Scope Baseline & Boundary Constraints
 
 ### 1.1 Product Boundary
-- **Root location:** `native-app/` at repository root, completely isolated from `apps/native/` (the Tauri 2 desktop host).
+- **Root location:** `native/android-app/` at repository root, completely isolated from `apps/native/` (the Tauri 2 desktop host).
 - **Technology foundation:** Kotlin Multiplatform (`commonMain`) for state, models, networking, and validation + Jetpack Compose for UI. Platform adapters in `androidApp` for terminal, editor, Keystore, and media playback.
 - **Operating environment:** Android 10+ (`minSdk 29`, `targetSdk 35`). Physical ARM64 device (`arm64-v8a`) and emulator (`x86_64`) qualification targets.
 - **Packaging:** Signed private APK; no Google Play Store distribution or background Google Play Services dependency.

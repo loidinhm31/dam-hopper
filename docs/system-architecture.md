@@ -4,13 +4,13 @@
 
 ## Runtime Overview
 
-DamHopper is a monorepo with an Axum/Tokio Rust server and multiple workbench clients: shared React UI for browser and desktop (Tauri 2), and a dedicated native Android client (`native-app`) built with Kotlin Multiplatform and Jetpack Compose. The server owns remote project/workspace configuration, filesystem operations, Git, PTYs, authentication, workflow data, host resources, and privileged helper coordination. Clients own only their local profile connection state, credentials, and UI presentation.
+DamHopper is a monorepo with an Axum/Tokio Rust server and multiple workbench clients: shared React UI for browser and desktop (Tauri 2), and a dedicated native Android client (`native/android-app`) built with Kotlin Multiplatform and Jetpack Compose. The server owns remote project/workspace configuration, filesystem operations, Git, PTYs, authentication, workflow data, host resources, and privileged helper coordination. Clients own only their local profile connection state, credentials, and UI presentation.
 
 ```mermaid
 flowchart LR
   Web["Vite web host (apps/web)"] --> UI["Shared React 19 UI (packages/ui)"]
   Native["Tauri 2 host (apps/native)"] --> UI
-  Android["Android host (native-app/androidApp)"] --> KMP["KMP Shared Core (native-app/shared)"]
+  Android["Android host (native/android-app/androidApp)"] --> KMP["KMP Shared Core (native/android-app/shared)"]
   UI --> Profiles["Web Profile connection runtime<br/>profileId + generation"]
   KMP --> Reg["ConnectionRegistry<br/>ConnectionRef + watermark"]
   Profiles --> Client["Owner-bound API client / transport"]
@@ -27,7 +27,7 @@ flowchart LR
 - `server/src/` domains include `auth`, `config`, `crypto`, `fs`, `git`, `pty`, `workflow`, `agent_status`, `agent_store`, `telemetry`, `idle_suspend`, `linux_release`, `port_forward`, and `tunnel`.
 - `packages/ui/src/` owns the shared React application, owner-bound API clients, transports, query keys, stores, and feature components (canonical entry `packages/ui/src/embed/dam-hopper-app.tsx`).
 - `apps/web/` is the Vite browser host; `apps/native/` is the Tauri 2 desktop host. `packages/shared/` contains shared utilities; `packages/browser-bridge/` contains browser-debug runtime protocol v1.
-- `native-app/` is the native Android workbench implementation using Kotlin Multiplatform (`:shared` for core models, connection registry, and live transports; `:androidApp` for Jetpack Compose UI, `MainActivity`, and Android platform OkHttp network factory).
+- `native/android-app/` is the native Android workbench implementation using Kotlin Multiplatform (`:shared` for core models, connection registry, and live transports; `:androidApp` for Jetpack Compose UI, `MainActivity`, and Android platform OkHttp network factory).
 - The former DamHopper plugin platform, runner, SDK, plugin APIs, and plugin iframe bridge are retired.
 
 ### Port & Network Topology
@@ -90,7 +90,7 @@ See [Multi-Server Profiles User Guide](./user-guide-multi-server-profiles.md) an
 
 ### Native Android Ownership Implementation (Kotlin Multiplatform)
 
-The native Android client (`native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/`) realizes the exact multi-profile ownership invariants natively in Kotlin without browser runtime dependencies:
+The native Android client (`native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/core/`) realizes the exact multi-profile ownership invariants natively in Kotlin without browser runtime dependencies:
 
 1. **`ConnectionRef` Tuple Keys:** Modeled as `ConnectionRef(profileId, generation)` producing deterministic JSON tuple keys `["profileId", generation]` identically matching web TypeScript clients.
 2. **Monotonic Watermark ABA Guard:** `ConnectionRegistry` maintains an in-memory `generationWatermarks` table that survives profile deletion/logout within the registry process lifetime, ensuring newly registered profiles with previously used IDs never reuse earlier generation numbers.
@@ -99,7 +99,7 @@ The native Android client (`native-app/shared/src/commonMain/kotlin/dev/damhoppe
 
 ### Native Android Profiles, Auth, MFA & Credential Vault Architecture
 
-The native Android client implements end-to-end multi-server profile management, protocol version 2 authentication with TOTP MFA, and fail-closed credential custody (`native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/profiles/` and `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/`):
+The native Android client implements end-to-end multi-server profile management, protocol version 2 authentication with TOTP MFA, and fail-closed credential custody (`native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/profiles/` and `native/android-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/platform/`):
 
 1. **Profile Lifecycle & Non-Secret Metadata Storage:**
    - `ProfileRepository`: Central orchestrator for profile CRUD, active profile selection, and auth state coordination across independent server endpoints.
@@ -145,7 +145,7 @@ Tunnels are explicitly started port forwards, independent of detected PTY owners
 - **Linux Desktop & Web:** Native SSH port forwarding is unsupported (`cfg(windows)` gated). Non-Windows native desktop enforces exact same-origin server profile URLs for security isolation.
 - **Host Remediation Actions:** The `HostActionService` scaffolding exists in `server/src/host_actions/` (`/api/system/actions/v1/*`), but `HostActionService::new()` uses `UnavailableExecutor`, and capabilities currently report `available: false` (reasons include `noAuth`, `reauthUnavailable`, or `helperNotEnrolled`).
 
-### Android Native Client Transport Boundary (`native-app`)
+### Android Native Client Transport Boundary (`native/android-app`)
 
 The native Android client connects directly to the Axum backend using a specialized, owner-fenced Kotlin networking stack:
 
@@ -375,7 +375,7 @@ Phase 01 through Phase 06 are fully implemented and certified, including end-to-
 
 ## Android Native Client Architecture
 
-**Android app entry flow and focused workspace implemented; runtime/release qualification remains open.** `native-app/` is the Kotlin Multiplatform and Jetpack Compose client, isolated from Tauri (`apps/native/`). The root keeps Profile Login → Project List → Terminal route stages; the Terminal stage mounts focused Terminal/Files/Editor panels through retained workspace state. User-approved Phase 07 closeout is distinct from live-server or physical-device qualification.
+**Android app entry flow and focused workspace implemented; runtime/release qualification remains open.** `native/android-app/` is the Kotlin Multiplatform and Jetpack Compose client, isolated from Tauri (`apps/native/`). The root keeps Profile Login → Project List → Terminal route stages; the Terminal stage mounts focused Terminal/Files/Editor panels through retained workspace state. User-approved Phase 07 closeout is distinct from live-server or physical-device qualification.
 
 ### Two-Module Architecture
 - `:shared` — Kotlin Multiplatform module targeting Android and JVM (`jvmTarget` set to JVM 17, `minSdk = 29`). Contains common domain models (`dev.damhopper.nativeapp.model.WorkbenchModel`), state containers, theme definitions, and Compose Multiplatform UI components (`WorkbenchScreen`, `WorkbenchHeader`, `PanelNavigationRow`, `PanelPlaceholders`). Common code strictly excludes Android- or Swing-specific APIs.
@@ -395,7 +395,7 @@ The current root does not mount `WorkbenchScreen` or `PanelHost`. Their separate
 
 
 ### Toolchain Pins
-Cataloged in `native-app/gradle/libs.versions.toml` and pinned in wrapper:
+Cataloged in `native/android-app/gradle/libs.versions.toml` and pinned in wrapper:
 - **Gradle**: 8.11.1 wrapper with verified SHA-256 checksum (`f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6`).
 - **Android Gradle Plugin (AGP)**: 8.7.3.
 - **Kotlin**: 2.1.10 (`org.jetbrains.kotlin.multiplatform`, `org.jetbrains.kotlin.plugin.serialization`, `org.jetbrains.kotlin.plugin.compose`).
