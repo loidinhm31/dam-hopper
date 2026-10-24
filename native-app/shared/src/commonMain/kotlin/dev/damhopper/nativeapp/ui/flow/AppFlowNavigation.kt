@@ -3,7 +3,6 @@ package dev.damhopper.nativeapp.ui.flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 
 /**
@@ -28,9 +27,23 @@ class AppFlowNavigation(
     val state: StateFlow<AppFlowState> = _state.asStateFlow()
 
     /**
+     * Interception hook for departure guards (e.g. dirty documents in workspace).
+     * If returning true, navigation is intercepted and deferred until user confirms.
+     */
+    var departureGuard: ((targetStage: AppFlowStage, onProceed: () -> Unit) -> Boolean)? = null
+
+    /**
      * Navigates back to the profile authentication stage.
      */
     fun navigateToProfiles() {
+        val guard = departureGuard
+        if (guard != null && guard(AppFlowStage.PROFILE_LOGIN) { directNavigateToProfiles() }) {
+            return
+        }
+        directNavigateToProfiles()
+    }
+
+    private fun directNavigateToProfiles() {
         _state.update { it.copy(stage = AppFlowStage.PROFILE_LOGIN, activeSessionId = null) }
     }
 
@@ -59,6 +72,14 @@ class AppFlowNavigation(
      * @param projectName Selected project name or workspace path.
      */
     fun selectProject(projectName: String) {
+        val guard = departureGuard
+        if (guard != null && guard(AppFlowStage.TERMINAL) { directSelectProject(projectName) }) {
+            return
+        }
+        directSelectProject(projectName)
+    }
+
+    private fun directSelectProject(projectName: String) {
         _state.update { current ->
             val projectChanged = current.activeProject != projectName
             current.copy(
@@ -68,6 +89,7 @@ class AppFlowNavigation(
             )
         }
     }
+
     /**
      * Updates the active terminal session ID for the current project.
      *
@@ -88,13 +110,25 @@ class AppFlowNavigation(
      * @return True if back event was consumed by the flow navigation; false if unhandled.
      */
     fun handleBackPress(): Boolean {
-        val previousState = _state.getAndUpdate { current ->
-            when (current.stage) {
-                AppFlowStage.TERMINAL -> current.copy(stage = AppFlowStage.PROJECT_LIST)
-                AppFlowStage.PROJECT_LIST -> current.copy(stage = AppFlowStage.PROFILE_LOGIN)
-                AppFlowStage.PROFILE_LOGIN -> current
-            }
+        val current = _state.value
+        val targetStage = when (current.stage) {
+            AppFlowStage.TERMINAL -> AppFlowStage.PROJECT_LIST
+            AppFlowStage.PROJECT_LIST -> AppFlowStage.PROFILE_LOGIN
+            AppFlowStage.PROFILE_LOGIN -> null
         }
-        return previousState.stage != AppFlowStage.PROFILE_LOGIN
+        if (targetStage == null) return false
+
+        val guard = departureGuard
+        if (guard != null && guard(targetStage) { directProceedBack(targetStage) }) {
+            return true
+        }
+        return directProceedBack(targetStage)
+    }
+
+    private fun directProceedBack(targetStage: AppFlowStage): Boolean {
+        _state.update { current ->
+            current.copy(stage = targetStage)
+        }
+        return true
     }
 }

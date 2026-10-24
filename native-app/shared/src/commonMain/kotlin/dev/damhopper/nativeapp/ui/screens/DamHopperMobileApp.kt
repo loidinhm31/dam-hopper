@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import kotlinx.coroutines.CancellationException
 import dev.damhopper.nativeapp.core.lifecycle.LifecycleCoordinator
 import dev.damhopper.nativeapp.core.transport.ApiClient
+import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.core.transport.WsConnection
 import dev.damhopper.nativeapp.features.profiles.AuthStatus
 import dev.damhopper.nativeapp.features.profiles.ProfileRepository
@@ -27,7 +28,10 @@ import dev.damhopper.nativeapp.features.workspace.WorkspaceRepository
 import dev.damhopper.nativeapp.ui.flow.AppFlowNavigation
 import dev.damhopper.nativeapp.ui.flow.AppFlowStage
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
-
+import dev.damhopper.nativeapp.features.editor.EditorRepository
+import dev.damhopper.nativeapp.features.files.FileRepository
+import dev.damhopper.nativeapp.features.workspace.ProjectWorkspaceState
+import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 /**
  * Root Mobile Entry Application Composable.
  *
@@ -48,6 +52,7 @@ fun DamHopperMobileApp(
     navigation: AppFlowNavigation = remember { AppFlowNavigation() },
     preferencesStore: PreferencesStore = remember { InMemoryPreferencesStore() },
     lifecycleCoordinator: LifecycleCoordinator = remember { LifecycleCoordinator() },
+    workspaceStateProvider: ((WorkspaceFileOwner, ProjectTargetRef, ApiClient, WsConnection) -> ProjectWorkspaceState)? = null,
     modifier: Modifier = Modifier,
 ) {
     val flowState by navigation.state.collectAsState()
@@ -124,11 +129,45 @@ fun DamHopperMobileApp(
         }
     }
 
+    val selectedProj = flowState.activeProject
+    val activeWorkspaceState = remember(activeProfileId, currentProfile?.baseUrl, currentConn?.generation, selectedProj, apiClient, wsConnection) {
+        val client = apiClient
+        val ws = wsConnection
+        val profId = activeProfileId
+        val prof = currentProfile
+        if (profId != null && prof != null && client != null && ws != null && selectedProj != null) {
+            val accountUser = (currentAuthStatus as? AuthStatus.Authenticated)?.session?.user
+                ?: if (prof.baseUrl.contains("127.0.0.1") || prof.baseUrl.contains("localhost")) "dev-user" else "authenticated-user"
+            val owner = WorkspaceFileOwner(
+                profileId = profId,
+                baseUrl = prof.baseUrl,
+                accountUser = accountUser,
+                project = selectedProj,
+                worktreePath = flowState.activeWorktreePath,
+            )
+            val target = owner.toProjectTargetRef()
+            if (workspaceStateProvider != null) {
+                workspaceStateProvider(owner, target, client, ws)
+            } else {
+                val fileRepo = FileRepository(owner, client, ws)
+                val editorRepo = EditorRepository(fileRepo, profileId = profId)
+                ProjectWorkspaceState.create(
+                    owner = owner,
+                    target = target,
+                    fileRepository = fileRepo,
+                    editorRepository = editorRepo,
+                    lifecycleCoordinator = lifecycleCoordinator,
+                )
+            }
+        } else null
+    }
+
     // Auto-advance or redirect based on authentication status and active profile
     LaunchedEffect(activeProfileId, currentAuthStatus) {
         val profId = activeProfileId
         val isAuthenticated = currentAuthStatus is AuthStatus.Authenticated
         if (!isAuthenticated && flowState.stage != AppFlowStage.PROFILE_LOGIN) {
+            activeWorkspaceState?.revokeAuthority()
             navigation.navigateToProfiles()
         } else if (isAuthenticated && profId != null) {
             if (!hasInitialAutoAdvanced) {
@@ -178,14 +217,28 @@ fun DamHopperMobileApp(
             }
 
             AppFlowStage.TERMINAL -> {
-                val selectedProj = flowState.activeProject
-                if (selectedProj.isNullOrBlank()) {
+                val proj = flowState.activeProject
+                if (proj.isNullOrBlank()) {
                     LaunchedEffect(Unit) {
                         navigation.handleBackPress()
                     }
+                } else if (activeWorkspaceState != null) {
+                    ProjectWorkspaceScreen(
+                        projectName = proj,
+                        workspaceState = activeWorkspaceState,
+                        terminalRepo = terminalRepo,
+                        navigation = navigation,
+                        initialSessionId = flowState.activeSessionId,
+                        onSessionSelected = { sessionId ->
+                            navigation.selectSession(sessionId)
+                        },
+                        profileId = activeProfileId,
+                        preferencesStore = preferencesStore,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 } else {
                     ProjectTerminalScreen(
-                        projectName = selectedProj,
+                        projectName = proj,
                         terminalRepo = terminalRepo,
                         onBackToProjects = {
                             navigation.handleBackPress()

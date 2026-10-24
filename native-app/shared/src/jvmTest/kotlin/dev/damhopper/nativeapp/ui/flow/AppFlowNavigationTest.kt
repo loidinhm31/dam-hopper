@@ -143,4 +143,44 @@ class AppFlowNavigationTest {
         assertEquals(AppFlowStage.PROFILE_LOGIN, state.stage)
         assertNull(state.activeSessionId, "Active session ID must be cleared when returning to profiles")
     }
+
+    @Test
+    fun testDepartureGuardInterceptsBackPressAndDefersTransition() {
+        val nav = AppFlowNavigation()
+        nav.onProfileAuthenticated("server-A")
+        nav.selectProject("proj-1")
+        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+
+        var guardInvoked = false
+        var deferredProceed: (() -> Unit)? = null
+
+        nav.departureGuard = { targetStage, onProceed ->
+            guardInvoked = true
+            deferredProceed = onProceed
+            true // Intercept!
+        }
+
+        // Back press should be consumed/intercepted
+        val handled = nav.handleBackPress()
+        assertTrue(handled)
+        assertTrue(guardInvoked)
+        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage, "State must remain unchanged while intercepted")
+
+        // Invoking deferred callback must execute transition
+        deferredProceed?.invoke()
+        assertEquals(AppFlowStage.PROJECT_LIST, nav.state.value.stage)
+    }
+
+    @Test
+    fun testDepartureGuardPermitsImmediateTransitionWhenAllowed() {
+        val nav = AppFlowNavigation()
+        nav.onProfileAuthenticated("server-A")
+        nav.selectProject("proj-1")
+
+        nav.departureGuard = { _, _ -> false } // No dirty documents -> allow immediate navigation
+
+        val handled = nav.handleBackPress()
+        assertTrue(handled)
+        assertEquals(AppFlowStage.PROJECT_LIST, nav.state.value.stage)
+    }
 }

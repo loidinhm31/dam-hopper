@@ -1,10 +1,10 @@
 # Phase 07 — Retained active workspace terminal and guarded navigation
 
 ## Context and status
-- Priority P2. Status pending; phase01 feasibility gates block downstream scheduling. Owner: Main (sole host/runtime integration owner).
+- Priority P2. Status: Complete / Closed administratively by user approval on 2026-10-24 after Cycle 3, with noted issues; not technically accepted pending review-carryover resolution. Cycle 3 user-reported: 43 scoped JVM + 98 Android unit tests (141 total) passed; compilation passed; 0 Critical build/test failures. Owner: Main (sole host/runtime integration owner).
 - Authority: [overview](plan.md), [contracts C1-C7](contracts.md), [acceptance matrix](acceptance-matrix.md).
 - Evidence: [coordinator](reports/coordinator-evidence.md), [files/watchers](reports/files-watchers-evidence.md), [editor/widget](reports/editor-widget-evidence.md), [approved design](../reports/brainstorm-261023-1351-native-editor-file-explorer.md).
-- Source anchors and current gaps in those evidence reports are read-only; this phase describes future changes, not observed success. Root for every literal path: `G:/ws/sharing/dam-hopper/`.
+- Phase 07 is administratively closed as a user-approved work cycle, not technically accepted; the [linked review report](../reports/code-reviewer-261024-1117-phase07-retained-active-workspace.md) records C1/C2 and W1–W7 as findings to reconcile in Phase 08. Any required production-code remediation needs an explicitly authorized owner/task transfer before qualification claims acceptance. Actual app/server/device/distribution qualification is not claimed.
 
 ## Insights
 Active root renders only current ProjectTerminalScreen. MainActivity fields and remember navigation recreate on rotation; local screen controller maps close on composition exit. System Back and terminal Projects clear navigation/session before feature guards. Correct retention must include runtime ownership, not only remember panel state.
@@ -23,7 +23,7 @@ Implement C7 without mounting monolithic WorkbenchScreen. Retain non-Activity pr
 ## Ordered task implementation and related files
 
 ### `retain-native-workspace-runtime` — Retain non-Activity runtime documents and navigation
-- [ ] <!-- evcrate-task:retain-native-workspace-runtime --> Retain non-Activity runtime documents and navigation
+- [X] <!-- evcrate-task:retain-native-workspace-runtime --> Retain non-Activity runtime documents and navigation
 - Dependencies: `integrate-unknown-outcome-reconciliation`.
 - Exact writable files/actions:
   - Modify: `native-app/androidApp/src/main/kotlin/dev/damhopper/nativeapp/MainActivity.kt`.
@@ -44,12 +44,12 @@ Implement C7 without mounting monolithic WorkbenchScreen. Retain non-Activity pr
   - Rotation retains profile runtime, logical owner, panel/tree/document/undo and route without stale Activity/native widget references.
   - Forced auth loss keeps original detached buffers while routing auth; exact-owner reconnect reconciles, other profile cannot adopt drafts.
   - True owner close releases resources exactly once; configuration change does not destroy store.
-- Planned checks / observable evidence (not executed):
+- Check commands / observable evidence (Cycle 3 scoped unit/build results are user-reported; mounted-app/device journeys remain Phase 08):
   - .\native-app\gradlew.bat -p native-app :shared:jvmTest --tests "dev.damhopper.nativeapp.features.workspace.ProjectWorkspaceStateTest"; verify exact-owner detach/rebind and lifecycle policy.
   - .\native-app\gradlew.bat -p native-app :androidApp:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=dev.damhopper.nativeapp.RetainedWorkspaceLifecycleTest; actual MainActivity recreation and widget/resource evidence required.
 
 ### `retain-current-terminal-panel` — Retain current terminal and gate every activation path
-- [ ] <!-- evcrate-task:retain-current-terminal-panel --> Retain current terminal and gate every activation path
+- [X] <!-- evcrate-task:retain-current-terminal-panel --> Retain current terminal and gate every activation path
 - Dependencies: `retain-native-workspace-runtime`.
 - Exact writable files/actions:
   - Modify: `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/ProjectTerminalScreen.kt`.
@@ -66,12 +66,12 @@ Implement C7 without mounting monolithic WorkbenchScreen. Retain non-Activity pr
   - Current terminal PTY/session/replay/atomic snapshot/font/pinch/scroll behavior preserved across panel switches and rotation.
   - Hidden terminal accepts no keyboard/paste/IME even when session attach/replay/reconnect completes; visible editor alone accepts edits.
   - No hidden input surface or newer activation branch bypasses visibility gate.
-- Planned checks / observable evidence (not executed):
+- Check commands / observable evidence (Cycle 3 scoped unit/build results are user-reported; mounted-app/device journeys remain Phase 08):
   - .\native-app\gradlew.bat -p native-app :shared:jvmTest --tests "dev.damhopper.nativeapp.features.terminal.ProjectTerminalVisibilityTest" --tests "dev.damhopper.nativeapp.features.terminal.TerminalReplayGateTest" --tests "dev.damhopper.nativeapp.features.terminal.TerminalReplayRenderingTest" --tests "dev.damhopper.nativeapp.features.terminal.TerminalSessionControllerTest" --tests "dev.damhopper.nativeapp.features.terminal.TerminalPresentationPolicyTest"; behavior, not assignment-source assertions.
   - Final mounted UI IME/paste/reconnect journey confirms hidden PTY receives no input while same session survives.
 
 ### `mount-focused-workspace-and-guard-departures` — Mount focused panels and guard every destructive departure
-- [ ] <!-- evcrate-task:mount-focused-workspace-and-guard-departures --> Mount focused panels and guard every destructive departure
+- [X] <!-- evcrate-task:mount-focused-workspace-and-guard-departures --> Mount focused panels and guard every destructive departure
 - Dependencies: `retain-current-terminal-panel`.
 - Exact writable files/actions:
   - Create: `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/ProjectWorkspaceScreen.kt`.
@@ -92,11 +92,12 @@ Implement C7 without mounting monolithic WorkbenchScreen. Retain non-Activity pr
   - Installed active app exposes complete browse/manage/edit loop with exactly one visible panel and single inline navigation row.
   - Every voluntary destructive path including System Back resolves dirty state before clearing project/session; save failure/Unknown never loses draft.
   - Forced authority loss prevents writes immediately and leaves recoverable in-memory detached buffers under exact owner.
-- Planned checks / observable evidence (not executed):
+- Check commands / observable evidence (Cycle 3 scoped unit/build results are user-reported; mounted-app/device journeys remain Phase 08):
   - .\native-app\gradlew.bat -p native-app :shared:jvmTest --tests "dev.damhopper.nativeapp.ui.flow.AppFlowNavigationTest" --tests "dev.damhopper.nativeapp.features.workspace.WorkspaceDepartureTest"; save failure and post-snapshot edit must block commit.
   - Phase08 launches real MainActivity and uses visible navigation/Back/Projects/deep-link/auth flows; a standalone state test is insufficient.
 
 ## Durable tasks
+- All three task markers are checked per user-approved work-cycle closure; they do not certify that every planned acceptance criterion or Phase 08 qualification gate has been verified. The linked review findings remain carryovers for Phase 08 reconciliation.
 ```evcrate-tasks
 [
   {
@@ -195,8 +196,10 @@ Main alone owns sequential host/runtime/terminal changes. Do not keep hidden wid
 - Escalate missing writable path, unsupported native API, threshold change or severe safety defect to Main; keep gate blocked until explicit scoped revision. No automatic Git/dependency execution is authorized by this plan.
 
 ## Completion and next dependencies
-All tasks sequential. Phase08 owns actual-app tests/build/license/docs after07 completes. Prior tests are planned checks, not permission to run during this planning assignment. No broader native release gate is satisfied by reachability alone.
-- Exit evidence: exact changed paths, behavioral check commands/results and blockers. Complete only on task acceptance plus coherent integrated evidence; planned command text is not a pass.
+
+All Phase 07 tasks were closed by user approval after Cycle 3 on 2026-10-24 with noted issues. Phase 08 owns integrated qualification and documentation; closure here does not claim installed-app, real-server, device, or distribution qualification.
+- User-reported Cycle 3 evidence: 43 scoped JVM + 98 Android unit tests (141 total) passed; compilation passed; 0 Critical build/test failures. The separately linked review report records its own 41 scoped JVM + 96 Android unit tests (137 total), plus review findings C1/C2 and W1–W7.
+- Phase 07 review/qualification carryovers join prior-phase carryovers for resolution/reconciliation in Phase 08 integrated qualification. Any source remediation required must have an authorized owner/task transfer; Phase 08 qualification records exact outcomes and blockers. Unresolved gates block overall feature acceptance and release.
 
 ## Unresolved questions
-- No new product decision. Phase01 feasibility and phase08 runtime/distribution gates remain evidence requirements; unresolved gates block readiness/release.
+- No new product-scope question. Phase 01 feasibility is qualified on x86_64/API 36. Phase 07 is closed by user approval with noted review/qualification carryovers; these join prior-phase carryovers in Phase 08, whose runtime/distribution gates remain open.
