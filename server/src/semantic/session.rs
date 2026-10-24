@@ -936,7 +936,7 @@ impl SemanticSessionActor {
 
         let mut init_options = serde_json::json!({
             "disableAutomaticTypingAcquisition": true,
-            "maxTsServerMemory": self.launch_spec.v8_max_old_space_mb,
+            "maxTsServerMemory": self.launch_spec.v8_max_old_space_mb.max(512),
             "plugins": [],
             "hostInfo": "dam-hopper"
         });
