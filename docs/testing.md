@@ -40,6 +40,38 @@ Dam-Hopper maintains strict quality gates across backend, shared libraries, and 
 - **Exclusion of legacy `.e2e.tsx`:** Old `.e2e.tsx` pseudo-harnesses are completely retired and excluded from all runners.
 - **Typecheck Isolation:** `packages/ui/tsconfig.e2e.json` typechecks E2E specs and fixtures without altering production compiler options (`pnpm --filter @dam-hopper/ui test:e2e:typecheck`).
 
+### Semantic navigation qualification
+
+`node scripts/qualify-semantic-navigation.mjs` runs `verify-inputs`, `off-baseline`,
+`exploratory`, or `final`. Use `--output` outside the checkout for disposable raw
+artifacts. The predeclared method and budgets live in
+`plans/260901-1000-lsp-server-integration/reports/phase-09-qualification-budget-v1.json`.
+Exploration selects one `--candidate-threshold` matching the compiled server
+constant; it cannot override runtime policy. Freeze `finalPolicy` only after
+candidate evidence; final runs require optimized builds and retain failures.
+
+`node --test scripts/qualify-semantic-navigation.test.mjs` checks fail-closed
+verdicts: numerical boundaries, missing measurements, hidden restarts, residual
+storage, incomplete overlap, and stale reveals. These policy tests do not replace
+runtime measurements.
+
+Pressure reports distinguish transition-maintained per-session high-water marks
+from sampled concurrent observations. Directly held actor handles are inspected;
+browser-created WebSocket session pressure remains explicitly unmeasured. Queue
+slot/byte gauges exclude dequeued active writes. Numeric diagnostics survive
+retirement so post-reap zeros cannot be inferred from a revocation facade.
+
+
+The ignored Rust qualification owns authenticated SQLite/Axum sessions and the
+packaged engine. Its private loopback helper launches the focused browser client
+measurement across a fixed UTF-8 threshold union. That suite skips outside the
+owned harness; a skip is not qualification. It measures production synchronization
+and actual Monaco command freshness, not the complete application shell.
+`semantic-navigation.browser.tsx` independently checks native Monaco provider
+coexistence with a controlled backend collaborator. Neither replaces Phase 10
+authenticated built-SPA journeys or human visual acceptance.
+
+
 ---
 
 ## 3. Running Tests

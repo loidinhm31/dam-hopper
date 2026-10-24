@@ -1541,8 +1541,20 @@ pub fn is_protected_global_config_path(path: &Path) -> bool {
 
     // Check parent directory and filename if target does not exist yet
     if let (Some(parent_a), Some(parent_b)) = (path.parent(), global_path.parent()) {
-        if let (Ok(can_pa), Ok(can_pb)) = (dunce::canonicalize(parent_a), dunce::canonicalize(parent_b)) {
+        if let (Ok(can_pa), Ok(can_pb)) =
+            (dunce::canonicalize(parent_a), dunce::canonicalize(parent_b))
+        {
             if can_pa == can_pb && path.file_name() == global_path.file_name() {
+                return true;
+            }
+        }
+    }
+
+    // Moving or removing a containing directory also moves/removes the protected
+    // file. Resolve both directories so symlinked ancestors cannot bypass this.
+    if let (Ok(candidate), Some(parent)) = (dunce::canonicalize(path), global_path.parent()) {
+        if let Ok(config_parent) = dunce::canonicalize(parent) {
+            if config_parent.starts_with(&candidate) {
                 return true;
             }
         }
@@ -1552,7 +1564,8 @@ pub fn is_protected_global_config_path(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if let (Ok(meta_a), Ok(meta_b)) = (std::fs::metadata(path), std::fs::metadata(&global_path)) {
+        if let (Ok(meta_a), Ok(meta_b)) = (std::fs::metadata(path), std::fs::metadata(&global_path))
+        {
             if meta_a.dev() == meta_b.dev() && meta_a.ino() == meta_b.ino() {
                 return true;
             }

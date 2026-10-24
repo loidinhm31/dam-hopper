@@ -39,7 +39,8 @@ pub async fn update_config(
         || body.get("server").and_then(|s| s.get("semantic")).is_some()
     {
         return Err(ApiError::from_app(AppError::InvalidInput(
-            "Semantic configuration is server-global only and forbidden in workspace configuration".to_string(),
+            "Semantic configuration is server-global only and forbidden in workspace configuration"
+                .to_string(),
         )));
     }
     let current = state.config.read().await.clone();
@@ -335,7 +336,16 @@ pub(crate) async fn update_global_ui_at_path(
     } else {
         None
     };
-    let mut gc = read_global_config_at(gc_path)?.unwrap_or_default();
+    let mut gc = match read_global_config_at(gc_path)? {
+        Some(c) => c,
+        None => {
+            if gc_path.exists() {
+                state.global_config.read().await.clone()
+            } else {
+                crate::config::schema::GlobalConfig::default()
+            }
+        }
+    };
 
     if let Some(ui_val) = incoming_ui {
         gc.ui = Some(merge_global_ui_config(gc.ui.clone(), ui_val)?);
@@ -348,7 +358,11 @@ pub(crate) async fn update_global_ui_at_path(
 
         // Validate agentSettingsPaths if provided
         if let Some(paths) = ui.agent_settings_paths.as_ref() {
-            if let Some(omp_dir) = paths.omp_agent_dir.as_deref().filter(|s| !s.trim().is_empty()) {
+            if let Some(omp_dir) = paths
+                .omp_agent_dir
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+            {
                 crate::api::agent_status::expand_and_validate_path(omp_dir, Some(&home))
                     .map_err(|e| AppError::Config(format!("Invalid OMP agent directory: {e}")))?;
             }
@@ -424,9 +438,7 @@ pub(crate) async fn update_global_ui_at_path(
             let claude_dir = match configured_claude_dir.filter(|s| !s.trim().is_empty()) {
                 Some(explicit) => {
                     crate::api::agent_status::expand_and_validate_path(explicit, Some(&home))
-                        .map_err(|e| {
-                            AppError::Config(format!("Invalid Claude directory: {e}"))
-                        })?
+                        .map_err(|e| AppError::Config(format!("Invalid Claude directory: {e}")))?
                 }
                 None => claude_notification_dir.clone(),
             };

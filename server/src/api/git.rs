@@ -239,9 +239,14 @@ pub async fn prepare_leased_push_route(
     let root = resolve_git_request_root(&project_path, body.root.as_deref())
         .map_err(ApiError::from_app)?;
     let ssh_cred = state.ssh_creds.read().await.clone();
-    let preview = crate::git::prepare_leased_push(&project_path, &root.root_path, body.branch.as_deref(), ssh_cred)
-        .await
-        .map_err(ApiError::from_app)?;
+    let preview = crate::git::prepare_leased_push(
+        &project_path,
+        &root.root_path,
+        body.branch.as_deref(),
+        ssh_cred,
+    )
+    .await
+    .map_err(ApiError::from_app)?;
     Ok(Json(preview))
 }
 
@@ -445,6 +450,11 @@ pub async fn remove_worktree_route(
                     ),
                 )));
             }
+            let retiring = state
+                .semantic_supervisor
+                .prepare_invalidate_target(&project, Some(&worktree.path))
+                .await;
+            state.semantic_supervisor.spawn_reap_sessions(retiring);
             if let Err(error) =
                 remove_worktree(&project_path, &worktree.repository_path, body.force).await
             {
@@ -484,6 +494,11 @@ pub async fn remove_worktree_route(
                         "Cannot remove locked worktree".to_string(),
                     )));
                 }
+                let retiring = state
+                    .semantic_supervisor
+                    .prepare_invalidate_target(&project, Some(&candidate.path))
+                    .await;
+                state.semantic_supervisor.spawn_reap_sessions(retiring);
                 // Clean up stale worktree administrative metadata when the directory is already gone.
                 let _ = remove_worktree(&project_path, &candidate.repository_path, false).await;
                 let _ = prune_worktrees(&project_path).await;
@@ -511,10 +526,25 @@ pub async fn prune_worktrees_route(
     State(state): State<AppState>,
     Path(project): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let _workspace_context = state.workspace_context_guard.write().await;
     let project_path = state
         .workspace_target_project_path(&project)
         .await
         .map_err(ApiError::from_app)?;
+    let worktrees = state
+        .refresh_project_worktrees(&project)
+        .await
+        .map_err(map_worktree_git_error)?;
+    for worktree in worktrees
+        .iter()
+        .filter(|worktree| !worktree.is_main && (!worktree.is_available || worktree.is_prunable))
+    {
+        let retiring = state
+            .semantic_supervisor
+            .prepare_invalidate_target(&project, Some(&worktree.path))
+            .await;
+        state.semantic_supervisor.spawn_reap_sessions(retiring);
+    }
     prune_worktrees(&project_path)
         .await
         .map_err(map_worktree_git_error)?;
@@ -851,7 +881,8 @@ pub async fn get_commit_message_route(
     let path = resolve_target_path(&state, &project, query.worktree_path).await?;
     let root =
         resolve_git_request_root(&path, query.root.as_deref()).map_err(ApiError::from_app)?;
-    let snapshot = get_commit_message(&root.root_path, &hash, query.branch.as_deref()).map_err(ApiError::from_app)?;
+    let snapshot = get_commit_message(&root.root_path, &hash, query.branch.as_deref())
+        .map_err(ApiError::from_app)?;
     Ok(Json(CommitMessageResponse {
         message: snapshot.message,
         branch: snapshot.branch,
@@ -867,12 +898,11 @@ pub async fn get_commit_details_route(
     let path = resolve_target_path(&state, &project, query.worktree_path).await?;
     let root =
         resolve_git_request_root(&path, query.root.as_deref()).map_err(ApiError::from_app)?;
-    let details = tokio::task::spawn_blocking(move || {
-        crate::git::get_commit_details(&root.root_path, &hash)
-    })
-    .await
-    .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?
-    .map_err(ApiError::from)?;
+    let details =
+        tokio::task::spawn_blocking(move || crate::git::get_commit_details(&root.root_path, &hash))
+            .await
+            .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?
+            .map_err(ApiError::from)?;
     Ok(Json(details))
 }
 

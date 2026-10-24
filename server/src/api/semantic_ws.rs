@@ -18,18 +18,23 @@ use axum_extra::extract::CookieJar;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::collections::HashMap;
+use std::future::Future;
+use std::sync::{OnceLock, Weak};
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, watch};
 use tracing::{debug, warn};
 
 use super::auth::AUTH_COOKIE;
 use super::ws::websocket_origin_allowed;
 use crate::api::auth::AuthenticatedActor;
-use crate::semantic::gateway::{json_rpc_error, SemanticGateway, RPC_ERR_PARSE_ERROR};
+use crate::semantic::gateway::{
+    json_rpc_error, SemanticGateway, RPC_ERR_AUTH_INVALIDATED, RPC_ERR_PARSE_ERROR,
+};
+use crate::semantic::outbound;
 use crate::semantic::protocol::ConnectionId;
 use crate::semantic::resources::{
-    AUTH_STORE_LOOKUP_TIMEOUT, MAX_FRAME_BODY_BYTES, MAX_QUEUED_MESSAGES, MESSAGE_RATE_BURST,
-    MESSAGE_RATE_PER_SEC, SOCKET_SEND_TIMEOUT,
+    AUTH_STORE_LOOKUP_TIMEOUT, MAX_FRAME_BODY_BYTES, MESSAGE_RATE_BURST, MESSAGE_RATE_PER_SEC,
+    SOCKET_SEND_TIMEOUT, TOTAL_TEARDOWN_BUDGET,
 };
 use crate::state::AppState;
 /// Exact required WebSocket subprotocol for DamHopper semantic LSP v1.
@@ -41,6 +46,93 @@ pub const CLOSE_INTERNAL_ERROR: u16 = 1011;
 pub const CLOSE_FULL_LOGIN_REQUIRED: u16 = 4401;
 pub const CLOSE_MFA_REQUIRED: u16 = 4403;
 pub const CLOSE_AUTH_UNAVAILABLE: u16 = 1013;
+
+/// Recorded stage timings for live-authentication cutoff and tree reaping,
+/// measured independently of WebSocket close-frame delivery.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthCutoffTelemetry {
+    pub connection_id: String,
+    pub close_code: u16,
+    pub reason: String,
+    pub store_check_duration_ms: u64,
+    pub admission_cutoff_duration_ms: u64,
+    pub cancel_signal_duration_ms: u64,
+    pub reap_completed_duration_ms: u64,
+}
+
+/// Bounded, opt-in observations. They contain no auth identifiers or message
+/// contents and never delay the socket, auth checks, or teardown.
+#[derive(Clone, Debug)]
+pub struct SemanticSocketObservation {
+    pub connection_id: String,
+    pub at: Instant,
+    pub kind: SemanticSocketObservationKind,
+}
+
+#[derive(Clone, Debug)]
+pub enum SemanticSocketObservationKind {
+    Opened {
+        presence: Weak<crate::idle_suspend::client_presence::ClientPresenceRegistry>,
+    },
+    AuthCheckStarted,
+    AuthCheckPassed {
+        next_check_at: Instant,
+    },
+    SendPending {
+        send_id: u64,
+        bytes: usize,
+        accounted_bytes: usize,
+    },
+    SendFinished {
+        send_id: u64,
+        succeeded: bool,
+    },
+    AdmissionRevoked,
+    ReapCompleted,
+    CancelSignalled,
+    AuthCutoffCompleted(AuthCutoffTelemetry),
+    Closed,
+}
+
+static SOCKET_OBSERVATIONS: OnceLock<broadcast::Sender<SemanticSocketObservation>> =
+    OnceLock::new();
+
+pub fn subscribe_semantic_socket_observations() -> broadcast::Receiver<SemanticSocketObservation> {
+    SOCKET_OBSERVATIONS
+        .get_or_init(|| broadcast::channel(1024).0)
+        .subscribe()
+}
+
+fn observe_socket(connection_id: &ConnectionId, kind: SemanticSocketObservationKind) {
+    if let Some(sender) = SOCKET_OBSERVATIONS.get() {
+        if sender.receiver_count() != 0 {
+            let _ = sender.send(SemanticSocketObservation {
+                connection_id: connection_id.0.clone(),
+                at: Instant::now(),
+                kind,
+            });
+        }
+    }
+}
+/// A dropped/aborted send must also end its observed pending interval.
+struct SocketSendObservation<'a> {
+    connection_id: &'a ConnectionId,
+    send_id: u64,
+    succeeded: bool,
+}
+
+impl Drop for SocketSendObservation<'_> {
+    fn drop(&mut self) {
+        observe_socket(
+            self.connection_id,
+            SemanticSocketObservationKind::SendFinished {
+                send_id: self.send_id,
+                succeeded: self.succeeded,
+            },
+        );
+    }
+}
 
 /// In-memory token-bucket rate limiter for semantic WebSocket messages.
 struct TokenBucketRateLimiter {
@@ -274,18 +366,39 @@ async fn handle_semantic_socket(
         .semantic_supervisor
         .register_connection(&connection_id)
         .await;
+    observe_socket(
+        &connection_id,
+        SemanticSocketObservationKind::Opened {
+            presence: std::sync::Arc::downgrade(&state.client_presence),
+        },
+    );
 
-    let (outbound_tx, mut outbound_rx) = mpsc::channel::<String>(MAX_QUEUED_MESSAGES);
+    let (outbound_tx, mut outbound_rx) = outbound::channel();
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
     let (close_tx, close_rx) = watch::channel::<Option<(u16, String)>>(None);
 
+    // Instantiate semantic gateway before spawning writer/watcher so they share the immediate revocation token
+    let mut gateway = SemanticGateway::new(
+        connection_id.clone(),
+        state.clone(),
+        actor.clone(),
+        start_admission_epoch,
+        outbound_tx.clone(),
+    );
+    let session_revocation = gateway.session_revocation_handle();
+
     let (mut ws_sink, mut ws_stream) = socket.split();
 
-    // Spawn dedicated writer task with bounded send timeouts
+    // Spawn dedicated writer task with bounded send timeouts and queued writer-boundary revocation fencing
     let mut cancel_rx_writer = cancel_rx.clone();
     let cancel_tx_writer = cancel_tx.clone();
     let close_rx_writer = close_rx.clone();
+    let session_revocation_writer = std::sync::Arc::clone(&session_revocation);
+    let state_writer = state.clone();
+    let conn_id_writer = connection_id.clone();
     let writer_task = tokio::spawn(async move {
+        let mut send_id = 0u64;
+        let mut transport_failed = false;
         loop {
             tokio::select! {
                 biased;
@@ -294,21 +407,110 @@ async fn handle_semantic_socket(
                 }
                 msg_opt = outbound_rx.recv() => {
                     match msg_opt {
-                        Some(text) => {
-                            let send_res = tokio::time::timeout(
-                                SOCKET_SEND_TIMEOUT,
-                                ws_sink.send(Message::Text(text.into())),
-                            )
-                            .await;
-                            if send_res.is_err() || matches!(send_res, Ok(Err(_))) {
+                        Some(frame) => {
+                            let (mut text, byte_reservation) = frame.into_parts();
+                            let reserved_bytes = text.len();
+                            // Queued writer boundary check: no non-null success response may survive prepare/revocation
+                            let token_revoked = session_revocation_writer
+                                .read()
+                                .ok()
+                                .and_then(|g| g.as_ref().map(|t| t.is_revoked()))
+                                .unwrap_or(false);
+                            let supervisor_disabled = !state_writer.semantic_supervisor.is_enabled();
+                            let conn_revoked = state_writer
+                                .semantic_supervisor
+                                .get_connection_epoch(&conn_id_writer)
+                                .await
+                                != Some(start_admission_epoch);
+                            let authority_revoked = token_revoked || supervisor_disabled || conn_revoked;
+                            if authority_revoked {
+                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+                                    if parsed.get("result").is_some_and(|r| !r.is_null()) {
+                                        let id = parsed
+                                            .get("id")
+                                            .cloned()
+                                            .unwrap_or(serde_json::Value::Null);
+                                        text = json_rpc_error(
+                                            id,
+                                            RPC_ERR_AUTH_INVALIDATED,
+                                            "Session invalidated before response delivery",
+                                            Some("AUTH_REVOKED"),
+                                        )
+                                        .to_string();
+                                    }
+                                }
+                            }
+                            let _extra_reservation = if text.len() > reserved_bytes {
+                                match outbound_rx.try_reserve_extra(text.len() - reserved_bytes) {
+                                    Some(reservation) => Some(reservation),
+                                    None => {
+                                        outbound_rx.close();
+                                        transport_failed = true;
+                                        break;
+                                    }
+                                }
+                            } else { None };
+
+                            send_id += 1;
+                            let bytes = text.len();
+                            let mut observation = SocketSendObservation {
+                                connection_id: &conn_id_writer,
+                                send_id,
+                                succeeded: false,
+                            };
+                            let revocation = if authority_revoked { None } else {
+                                session_revocation_writer.read().ok().and_then(|guard| guard.clone())
+                            };
+                            let mut send = std::pin::pin!(ws_sink.send(Message::Text(text.into())));
+                            let mut observed_pending = false;
+                            let send_res = tokio::select! {
+                                biased;
+                                _ = cancel_rx_writer.changed() => None,
+                                _ = async {
+                                    if let Some(token) = revocation { token.cancelled().await; }
+                                    else { std::future::pending::<()>().await; }
+                                } => None,
+                                result = tokio::time::timeout(
+                                    SOCKET_SEND_TIMEOUT,
+                                    std::future::poll_fn(|cx| {
+                                        let result = send.as_mut().poll(cx);
+                                        if result.is_pending() && !observed_pending {
+                                            observed_pending = true;
+                                            observe_socket(
+                                                &conn_id_writer,
+                                                SemanticSocketObservationKind::SendPending {
+                                                    send_id, bytes, accounted_bytes: outbound_rx.reserved_bytes(),
+                                                },
+                                            );
+                                        }
+                                        result
+                                    }),
+                                ) => Some(result),
+                            };
+                            observation.succeeded = matches!(send_res, Some(Ok(Ok(()))));
+                            drop(observation);
+                            if !matches!(send_res, Some(Ok(Ok(())))) {
+                                // Never flush a retained data frame while attempting a close.
+                                // Closing admission also wakes byte-budget waiters.
+                                outbound_rx.close();
+                                transport_failed = true;
+                                drop(byte_reservation);
                                 break;
                             }
+                            drop(byte_reservation);
                         }
                         None => break,
                     }
                 }
             }
         }
+        // Immediately close outbound_rx and notify reader of writer termination (W-A)
+        outbound_rx.close();
+        let _ = cancel_tx_writer.send(true);
+        if transport_failed {
+            return;
+        }
+
         let close_info = close_rx_writer.borrow().clone();
         let (code, reason) = close_info.unwrap_or((1000, "Normal closure".to_string()));
         let _ = tokio::time::timeout(
@@ -319,7 +521,6 @@ async fn handle_semantic_socket(
             }))),
         )
         .await;
-        let _ = cancel_tx_writer.send(true);
     });
 
     // Spawn live auth watcher: cancellation-first invalidation
@@ -330,6 +531,7 @@ async fn handle_semantic_socket(
         let cancel_tx_c = cancel_tx.clone();
         let close_tx_c = close_tx.clone();
         let mut cancel_rx_watcher = cancel_rx.clone();
+        let session_revocation_watcher = std::sync::Arc::clone(&session_revocation);
 
         Some(tokio::spawn(async move {
             let session_id = actor_c.session_id.clone().unwrap();
@@ -342,7 +544,9 @@ async fn handle_semantic_socket(
             loop {
                 tokio::select! {
                     _ = cancel_rx_watcher.changed() => break,
-                    _ = interval.tick() => {
+                    scheduled_tick = interval.tick() => {
+                        let check_start = Instant::now();
+                        observe_socket(&conn_id_c, SemanticSocketObservationKind::AuthCheckStarted);
                         let now = state_c.auth_service.clock().now();
                         let mut invalidate_reason: Option<(u16, &str)> = None;
 
@@ -403,21 +607,57 @@ async fn handle_semantic_socket(
                                         invalidate_reason = Some((CLOSE_AUTH_UNAVAILABLE, "Authentication check timed out"));
                                     }
                                 }
+                            } else if state_c.auth_service.mock_user().is_none() {
+                                invalidate_reason = Some((CLOSE_AUTH_UNAVAILABLE, "Authentication backend unavailable"));
                             }
                         }
 
+                        let store_check_duration_ms = check_start.elapsed().as_millis() as u64;
+
                         if let Some((code, reason)) = invalidate_reason {
                             warn!(reason = %reason, "Live auth invalidation detected; triggering cancellation-first teardown");
-
-                            // 1. Invalidate admission and reap trees FIRST before any socket operation
-                            state_c.semantic_supervisor.invalidate_connection(&conn_id_c).await;
-
-                            // 2. Deliver actual auth close code to writer
+                            let cutoff_start = Instant::now();
+                            // Publish ownership of auth teardown before waking the writer.
                             let _ = close_tx_c.send(Some((code, reason.to_string())));
 
-                            // 3. Signal cancel to reader and writer loops
+                            // 1. Immediately revoke shared session token (lock-free, 0 awaits)
+                            if let Ok(guard) = session_revocation_watcher.read() {
+                                if let Some(tok) = guard.as_ref() {
+                                    tok.revoke();
+                                }
+                            }
+                            let admission_cutoff_duration_ms =
+                                cutoff_start.elapsed().as_millis() as u64;
+                            observe_socket(&conn_id_c, SemanticSocketObservationKind::AdmissionRevoked);
+
+                            // Cancellation is out-of-band; neither a socket send nor tree reap
+                            // may delay stopping the writer or reader.
                             let _ = cancel_tx_c.send(true);
+                            let cancel_signal_duration_ms =
+                                cutoff_start.elapsed().as_millis() as u64;
+                            observe_socket(&conn_id_c, SemanticSocketObservationKind::CancelSignalled);
+                            state_c.semantic_supervisor.invalidate_connection(&conn_id_c).await;
+                            let reap_completed_duration_ms =
+                                cutoff_start.elapsed().as_millis() as u64;
+                            observe_socket(&conn_id_c, SemanticSocketObservationKind::ReapCompleted);
+
+                            observe_socket(&conn_id_c, SemanticSocketObservationKind::AuthCutoffCompleted(AuthCutoffTelemetry {
+                                connection_id: conn_id_c.0.clone(),
+                                close_code: code,
+                                reason: reason.to_string(),
+                                store_check_duration_ms,
+                                admission_cutoff_duration_ms,
+                                cancel_signal_duration_ms,
+                                reap_completed_duration_ms,
+                            }));
                             break;
+                        } else {
+                            observe_socket(
+                                &conn_id_c,
+                                SemanticSocketObservationKind::AuthCheckPassed {
+                                    next_check_at: (scheduled_tick + Duration::from_secs(5)).into_std(),
+                                },
+                            );
                         }
                     }
                 }
@@ -426,15 +666,6 @@ async fn handle_semantic_socket(
     } else {
         None
     };
-
-    // Instantiate semantic gateway
-    let mut gateway = SemanticGateway::new(
-        connection_id.clone(),
-        state.clone(),
-        actor,
-        start_admission_epoch,
-        outbound_tx.clone(),
-    );
 
     let mut rate_limiter = TokenBucketRateLimiter::new(MESSAGE_RATE_PER_SEC, MESSAGE_RATE_BURST);
 
@@ -461,16 +692,22 @@ async fn handle_semantic_socket(
                                 "Rate limit exceeded (40 msg/s, burst 80)",
                                 Some("RATE_LIMIT_EXCEEDED"),
                             );
-                            let _ = tokio::time::timeout(
+                            let send_res = tokio::time::timeout(
                                 SOCKET_SEND_TIMEOUT,
                                 outbound_tx.send(err_msg.to_string()),
                             )
                             .await;
+                            if send_res.is_err() || matches!(send_res, Ok(Err(_))) {
+                                break;
+                            }
                             continue;
                         }
 
                         if let Err(e) = gateway.handle_incoming_text(&text).await {
                             warn!(error = ?e, "Gateway handled text error");
+                        }
+                        if gateway.is_terminated() || outbound_tx.is_closed() {
+                            break;
                         }
                     }
                     Ok(Some(Ok(Message::Binary(_)))) => {
@@ -484,14 +721,19 @@ async fn handle_semantic_socket(
                             "Binary messages are not permitted in semantic protocol",
                             None,
                         );
-                        let _ = tokio::time::timeout(
+                        let send_res = tokio::time::timeout(
                             SOCKET_SEND_TIMEOUT,
                             outbound_tx.send(err_msg.to_string()),
                         )
                         .await;
+                        if send_res.is_err() || matches!(send_res, Ok(Err(_))) {
+                            break;
+                        }
                     }
                     Ok(Some(Ok(Message::Ping(_)))) | Ok(Some(Ok(Message::Pong(_)))) => {
-                        // Axum handles ping/pong automatically
+                        if outbound_tx.is_closed() || gateway.is_terminated() {
+                            break;
+                        }
                     }
                     Ok(Some(Ok(Message::Close(_)))) => {
                         debug!("Client sent WebSocket close");
@@ -515,10 +757,17 @@ async fn handle_semantic_socket(
         }
     }
     let _ = cancel_tx.send(true);
-
-    if let Some(task) = auth_watcher_task {
-        task.abort();
-        let _ = task.await;
+    if let Some(mut task) = auth_watcher_task {
+        // A writer interrupted by auth revocation must not abort its cleanup owner.
+        let auth_teardown_started = close_rx.borrow().is_some();
+        if !auth_teardown_started
+            || tokio::time::timeout(TOTAL_TEARDOWN_BUDGET + Duration::from_secs(1), &mut task)
+                .await
+                .is_err()
+        {
+            task.abort();
+            let _ = task.await;
+        }
     }
 
     gateway.teardown().await;
@@ -533,4 +782,5 @@ async fn handle_semantic_socket(
         let _ = writer_task.await;
     }
     drop(presence_guard);
+    observe_socket(&connection_id, SemanticSocketObservationKind::Closed);
 }

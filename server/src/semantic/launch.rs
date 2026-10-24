@@ -1,4 +1,6 @@
-use super::resources::V8_MAX_OLD_SPACE_MB;
+use super::resources::{
+    LINUX_CGROUP_MEMORY_MAX_BYTES, MAX_PROCESSES_PER_TREE, V8_MAX_OLD_SPACE_MB,
+};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use thiserror::Error;
@@ -37,6 +39,8 @@ pub struct BundledLaunchSpec {
     pub home_dir: PathBuf,
     pub tsserver_path: Option<PathBuf>,
     pub v8_max_old_space_mb: usize,
+    pub max_processes_per_tree: usize,
+    pub max_tree_rss_bytes: u64,
     pub cgroup_procs_path: Option<PathBuf>,
 }
 
@@ -77,6 +81,8 @@ impl BundledLaunchSpec {
             home_dir: home_dir.as_ref().to_path_buf(),
             tsserver_path: None,
             v8_max_old_space_mb: V8_MAX_OLD_SPACE_MB,
+            max_processes_per_tree: MAX_PROCESSES_PER_TREE,
+            max_tree_rss_bytes: LINUX_CGROUP_MEMORY_MAX_BYTES,
             cgroup_procs_path: None,
         })
     }
@@ -99,6 +105,30 @@ impl BundledLaunchSpec {
         self
     }
 
+    #[doc(hidden)]
+    pub fn with_max_processes_per_tree(mut self, max_processes: usize) -> Self {
+        self.max_processes_per_tree = max_processes;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn with_max_tree_rss_bytes(mut self, max_rss_bytes: u64) -> Self {
+        self.max_tree_rss_bytes = max_rss_bytes;
+        self
+    }
+
+    /// Returns the fixed CLI arguments passed to the bundled Node binary.
+    /// Note: `tsserver_path` is passed via server-owned `initializationOptions.tsserver.path`,
+    /// never via CLI `--tsserver-path` (which TSLS 6.0.2 rejects).
+    #[doc(hidden)]
+    pub fn build_args(&self) -> Vec<String> {
+        let mut args = Vec::with_capacity(2 + self.extra_args.len());
+        args.push(format!("--max-old-space-size={}", self.v8_max_old_space_mb));
+        args.push(self.entrypoint.to_string_lossy().into_owned());
+        args.extend(self.extra_args.iter().cloned());
+        args
+    }
+
     /// Constructs the configured `tokio::process::Command` ready for spawning.
     #[doc(hidden)]
     pub fn build_command(&self) -> Command {
@@ -110,10 +140,6 @@ impl BundledLaunchSpec {
 
         for arg in &self.extra_args {
             cmd.arg(arg);
-        }
-
-        if let Some(tsserver) = &self.tsserver_path {
-            cmd.arg(format!("--tsserver-path={}", tsserver.display()));
         }
         cmd.current_dir(&self.cwd);
 

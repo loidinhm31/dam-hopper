@@ -10,7 +10,24 @@
  * - Reconnect updates wire bindings without rekeying or recreating dirty Monaco models.
  */
 
+import type { ResourceBinding } from "@/api/ownership.js";
+import * as connectionsModule from "@/api/connections.js";
+import * as serverConfigModule from "@/api/server-config.js";
+import { sha256 } from "@noble/hashes/sha256";
+import { bytesToHex } from "@noble/hashes/utils";
+import { profileQueryKey } from "@/api/query-client.js";
+
 export type SupportedLanguageDescriptor = "typescript" | "javascript";
+
+/**
+ * Immutable endpoint, configured project root, and authenticated actor provenance
+ * captured on authorized file load or semantic client initialization.
+ */
+export interface SemanticProvenance extends ResourceBinding {
+  readonly serverUrl: string;
+  readonly configuredRoot: string;
+  readonly actor: string;
+}
 
 export interface StableModelIdentity {
   readonly profileId: string;
@@ -20,6 +37,7 @@ export interface StableModelIdentity {
   readonly tabKey: string;
   readonly localModelUri: string;
   readonly incarnation: number;
+  readonly provenance: SemanticProvenance | null;
 }
 
 export interface SemanticWireBinding {
@@ -36,6 +54,92 @@ export interface SemanticWireBinding {
 export interface RegisteredModel {
   readonly identity: StableModelIdentity;
   wireBinding: SemanticWireBinding | null;
+}
+
+/** Normalize HTTP/WS server URL for endpoint provenance comparison. */
+export function normalizeSemanticServerUrl(rawUrl: string): string {
+  if (typeof rawUrl !== "string") return "";
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return "";
+  const httpUrl = trimmed
+    .replace(/^wss:\/\//i, "https://")
+    .replace(/^ws:\/\//i, "http://")
+    .replace(/\/ws\/semantic\/v1(?:\?.*)?$/i, "")
+    .replace(/\/+$/, "");
+  if (typeof serverConfigModule.normalizeServerUrl === "function") {
+    try {
+      return serverConfigModule.normalizeServerUrl(httpUrl).replace(/\/+$/, "");
+    } catch {
+      return httpUrl;
+    }
+  }
+  return httpUrl;
+}
+
+/** Capture only the current connected owner's endpoint, root, and credential identity. */
+export function captureSemanticProvenance(target: {
+  readonly profileId?: string | null;
+  readonly project: string;
+  readonly worktreePath?: string | null;
+}): SemanticProvenance | null {
+  if (!target.profileId || !target.project) return null;
+  const snapshot = connectionsModule.getConnectionSnapshot(target.profileId);
+  if (!snapshot || snapshot.status !== "connected" ||
+      snapshot.owner.profileId !== target.profileId) return null;
+  const profile = serverConfigModule.getProfiles().find((entry) => entry.id === target.profileId);
+  if (!profile) return null;
+  const serverUrl = normalizeSemanticServerUrl(snapshot.serverUrl);
+  if (!serverUrl || normalizeSemanticServerUrl(profile.url) !== serverUrl) return null;
+
+  let configuredRoot: string | null = null;
+  const key = profileQueryKey(snapshot.owner, "projects");
+  for (const queryClient of connectionsModule.getRegisteredQueryClients()) {
+    if (queryClient.getQueryState(key)?.isInvalidated) continue;
+    const data = queryClient.getQueryData<unknown>(key);
+    if (!Array.isArray(data)) continue;
+    const project = data.find((entry: unknown): entry is { name: string; path: string } =>
+      typeof entry === "object" && entry !== null && "name" in entry &&
+      entry.name === target.project && "path" in entry && typeof entry.path === "string");
+    if (project?.path) {
+      if (configuredRoot !== null && configuredRoot !== project.path) return null;
+      configuredRoot = project.path;
+    }
+  }
+  if (!configuredRoot) return null;
+  const token = serverConfigModule.getAuthToken(target.profileId);
+  if (profile.authType === "basic" && !token) return null;
+  const actor = token ? `credential:${computeUtf8Sha256HexSync(token)}` :
+    profile.authType === "none" ? "no-auth" : null;
+  if (!actor) return null;
+  return { serverUrl, configuredRoot, actor };
+}
+
+/**
+ * Strict fail-closed provenance comparison across endpoint, configuredRoot, and actor.
+ */
+export function matchesSemanticProvenance(
+  a: SemanticProvenance | null | undefined,
+  b: SemanticProvenance | null | undefined,
+): boolean {
+  if (!a || !b) return false;
+  const urlA = normalizeSemanticServerUrl(a.serverUrl);
+  const urlB = normalizeSemanticServerUrl(b.serverUrl);
+  if (!urlA || !urlB || urlA !== urlB) return false;
+  if ((a.configuredRoot ?? "") !== (b.configuredRoot ?? "")) return false;
+  if (!a.actor || !b.actor || a.actor !== b.actor) return false;
+  return true;
+}
+
+const sharedTextEncoder = new TextEncoder();
+
+/** SHA-256 of exact UTF-8 model content using the shared hashing dependency. */
+export function computeUtf8Sha256HexSync(text: string): string {
+  return bytesToHex(sha256(sharedTextEncoder.encode(text)));
+}
+
+/** Compute lowercase hex SHA-256 of UTF-8 text for G5 destination content verification. */
+export async function computeUtf8Sha256Hex(text: string): Promise<string> {
+  return computeUtf8Sha256HexSync(text);
 }
 
 /** Check if a relative path has a supported TypeScript/JavaScript extension. */
@@ -173,10 +277,29 @@ export class SemanticModelRegistry {
   private readonly wireUriIndex = new Map<string, string>(); // wireUri -> tabKey
   private readonly localModelUriIndex = new Map<string, string>(); // localModelUri -> tabKey
   private incarnationCounters = new Map<string, number>();
+  private readonly listeners = new Set<() => void>();
+
+  /** Subscribe to model registration, wire bind/unbind, and unregister events. */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private notifyListeners(): void {
+    for (const listener of Array.from(this.listeners)) {
+      try {
+        listener();
+      } catch {
+        // Ignore listener errors
+      }
+    }
+  }
 
   /**
-   * Register a local model. If already registered, increments incarnation
-   * and preserves or clears wire binding as instructed.
+   * Register a local model with immutable provenance.
+   * If already registered with identical identity and provenance, returns existing idempotently.
    */
   registerModel(params: {
     tabKey: string;
@@ -184,6 +307,7 @@ export class SemanticModelRegistry {
     project: string;
     targetKey: string;
     relativePath: string;
+    provenance?: SemanticProvenance | null;
   }): RegisteredModel {
     const normPath = normalizeRelativePath(params.relativePath);
     if (!normPath) {
@@ -192,9 +316,34 @@ export class SemanticModelRegistry {
       );
     }
 
+    const nextProvenance: SemanticProvenance | null = params.provenance
+      ? {
+          serverUrl: normalizeSemanticServerUrl(params.provenance.serverUrl),
+          configuredRoot: params.provenance.configuredRoot ?? "",
+          actor: params.provenance.actor,
+        }
+      : null;
+
     const existing = this.models.get(params.tabKey);
     if (existing) {
-      return existing;
+      const sameIdentity =
+        existing.identity.profileId === params.profileId &&
+        existing.identity.project === params.project &&
+        existing.identity.targetKey === params.targetKey &&
+        existing.identity.relativePath === normPath;
+      const sameProvenance =
+        existing.identity.provenance === null && nextProvenance === null
+          ? true
+          : matchesSemanticProvenance(
+              existing.identity.provenance,
+              nextProvenance,
+            );
+      if (sameIdentity && sameProvenance) {
+        return existing;
+      }
+      if (existing.wireBinding) {
+        this.wireUriIndex.delete(existing.wireBinding.wireUri);
+      }
     }
 
     const prevIncarnation = this.incarnationCounters.get(params.tabKey) ?? 0;
@@ -210,6 +359,7 @@ export class SemanticModelRegistry {
       tabKey: params.tabKey,
       localModelUri,
       incarnation,
+      provenance: nextProvenance,
     };
 
     const registered: RegisteredModel = {
@@ -219,6 +369,7 @@ export class SemanticModelRegistry {
 
     this.models.set(params.tabKey, registered);
     this.localModelUriIndex.set(localModelUri, params.tabKey);
+    this.notifyListeners();
     return registered;
   }
 
@@ -261,6 +412,7 @@ export class SemanticModelRegistry {
 
     model.wireBinding = wireBinding;
     this.wireUriIndex.set(wireUri, tabKey);
+    this.notifyListeners();
     return wireBinding;
   }
 
@@ -270,16 +422,27 @@ export class SemanticModelRegistry {
     if (!model || !model.wireBinding) return;
     this.wireUriIndex.delete(model.wireBinding.wireUri);
     model.wireBinding = null;
+    this.notifyListeners();
   }
 
   /** Clear all wire bindings (e.g. server disconnect or target switch). */
-  clearWireBindings(targetId: string): void {
+  clearWireBindings(targetId: string, sessionGeneration?: number): void {
     if (!targetId) return;
+    let changed = false;
     for (const model of this.models.values()) {
-      if (model.wireBinding && model.wireBinding.targetId === targetId) {
+      if (
+        model.wireBinding &&
+        model.wireBinding.targetId === targetId &&
+        (sessionGeneration === undefined ||
+          model.wireBinding.sessionGeneration === sessionGeneration)
+      ) {
         this.wireUriIndex.delete(model.wireBinding.wireUri);
         model.wireBinding = null;
+        changed = true;
       }
+    }
+    if (changed) {
+      this.notifyListeners();
     }
   }
 
@@ -292,6 +455,7 @@ export class SemanticModelRegistry {
       }
       this.localModelUriIndex.delete(model.identity.localModelUri);
       this.models.delete(tabKey);
+      this.notifyListeners();
     }
   }
 
@@ -344,10 +508,17 @@ export class SemanticModelRegistry {
   }
 
   clearAll(): void {
+    const hadEntries =
+      this.models.size > 0 ||
+      this.wireUriIndex.size > 0 ||
+      this.localModelUriIndex.size > 0;
     this.models.clear();
     this.wireUriIndex.clear();
     this.localModelUriIndex.clear();
     this.incarnationCounters.clear();
+    if (hadEntries) {
+      this.notifyListeners();
+    }
   }
 }
 

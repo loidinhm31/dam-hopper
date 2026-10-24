@@ -93,6 +93,11 @@ pub fn decrypt_and_write(
     aes_key: &[u8],
     output_abs: std::path::PathBuf,
 ) -> Result<DecryptResult, FsError> {
+    if crate::fs::secure_path::is_protected_global_config_path(&output_abs) {
+        return Err(FsError::MutationRefused(
+            "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+        ));
+    }
     let result = decrypt_blob(ciphertext_blob, aes_key)?;
 
     let parent = output_abs.parent().ok_or_else(|| {
@@ -102,10 +107,15 @@ pub fn decrypt_and_write(
         ))
     })?;
 
-    let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(FsError::Io)?;
-    use std::io::Write as _;
-    tmp.write_all(&result.content).map_err(FsError::Io)?;
-    tmp.persist(&output_abs).map_err(|e| FsError::Io(e.error))?;
+    let name = output_abs.file_name().ok_or(FsError::PathEscape)?;
+    crate::fs::secure_path::write_bytes(
+        parent,
+        std::path::Path::new(name),
+        &result.content,
+        None,
+        None,
+        false,
+    )?;
 
     Ok(result)
 }

@@ -4,12 +4,16 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::timeout;
 
 use super::framing::{AsyncLspReader, AsyncLspWriter, FramingError};
 use super::launch::{BundledLaunchSpec, LaunchError};
-use super::reaper::{terminate_and_reap_tree, verify_pgid_reaped, ReaperError};
+use super::pressure::{OutboundChildMessage, OutboundSlotPermit, SessionPressureCounters};
+use super::reaper::{
+    merge_descendants, sample_tree_resources, terminate_and_reap_tree_with_descendants,
+    verify_pids_dead, verify_tree_reaped, ReaperError,
+};
 pub use super::types::{
     BoundedMessage, ByteBudgetCounter, ChildEvent, ChildStatus, FORCED_KILL_GRACE,
     GRACEFUL_SHUTDOWN_TIMEOUT, MAX_QUEUE_BYTES, MAX_QUEUE_COUNT, MAX_STDERR_RING_BYTES,
@@ -52,10 +56,12 @@ enum InternalSignal {
 pub struct SemanticChildHandle {
     pub pid: u32,
     pub pgid: u32,
-    cmd_tx: mpsc::Sender<Vec<u8>>,
+    cmd_tx: mpsc::Sender<OutboundChildMessage>,
     stop_tx: Option<oneshot::Sender<()>>,
     byte_budget: ByteBudgetCounter,
     terminal_published: Arc<AtomicBool>,
+    term_rx: watch::Receiver<Option<ChildStatus>>,
+    counters: Arc<SessionPressureCounters>,
 }
 
 impl SemanticChildHandle {
@@ -72,18 +78,29 @@ impl SemanticChildHandle {
         if !self.byte_budget.try_reserve(msg_len) {
             return Err(ChildError::QueueFull);
         }
-
-        match self.cmd_tx.try_send(payload) {
-            Ok(()) => Ok(()),
+        let permit = match self.cmd_tx.try_reserve() {
+            Ok(p) => p,
             Err(mpsc::error::TrySendError::Full(_)) => {
                 self.byte_budget.release(msg_len);
-                Err(ChildError::QueueFull)
+                return Err(ChildError::QueueFull);
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 self.byte_budget.release(msg_len);
-                Err(ChildError::NotRunning)
+                return Err(ChildError::NotRunning);
             }
-        }
+        };
+
+        let slot_permit = OutboundSlotPermit::new(
+            msg_len,
+            Arc::clone(&self.counters),
+            self.byte_budget.clone(),
+        );
+
+        permit.send(OutboundChildMessage {
+            payload,
+            permit: slot_permit,
+        });
+        Ok(())
     }
 
     pub fn shutdown(&mut self) {
@@ -94,6 +111,23 @@ impl SemanticChildHandle {
 
     pub fn is_terminated(&self) -> bool {
         self.terminal_published.load(Ordering::Acquire)
+    }
+
+    /// Awaits terminal status publication directly from the owner actor without depending on
+    /// bounded stdout message queue capacity.
+    pub async fn wait_terminated(&mut self) -> ChildStatus {
+        loop {
+            if let Some(status) = self.term_rx.borrow().clone() {
+                return status;
+            }
+            if self.term_rx.changed().await.is_err() {
+                return self
+                    .term_rx
+                    .borrow()
+                    .clone()
+                    .unwrap_or_else(|| ChildStatus::Crashed("Child owner task exited".into()));
+            }
+        }
     }
 }
 
@@ -111,6 +145,14 @@ impl SemanticChildOwner {
     pub fn spawn(
         spec: &BundledLaunchSpec,
     ) -> Result<(SemanticChildHandle, mpsc::Receiver<ChildEvent>), ChildError> {
+        Self::spawn_with_counters(spec, Arc::new(SessionPressureCounters::default()))
+    }
+
+    #[doc(hidden)]
+    pub fn spawn_with_counters(
+        spec: &BundledLaunchSpec,
+        counters: Arc<SessionPressureCounters>,
+    ) -> Result<(SemanticChildHandle, mpsc::Receiver<ChildEvent>), ChildError> {
         let mut cmd = spec.build_command();
         let mut child = cmd.spawn()?;
 
@@ -123,15 +165,18 @@ impl SemanticChildOwner {
         let stdout = child.stdout.take().ok_or(ChildError::MissingStdio)?;
         let stderr = child.stderr.take().ok_or(ChildError::MissingStdio)?;
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<Vec<u8>>(MAX_QUEUE_COUNT);
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<OutboundChildMessage>(MAX_QUEUE_COUNT);
         let (event_tx, event_rx) = mpsc::channel::<ChildEvent>(MAX_QUEUE_COUNT);
         let (internal_tx, mut internal_rx) = mpsc::channel::<InternalSignal>(4);
         let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
+        let (term_tx, term_rx) = watch::channel::<Option<ChildStatus>>(None);
+
+        let max_processes_per_tree = spec.max_processes_per_tree;
+        let max_tree_rss_bytes = spec.max_tree_rss_bytes;
 
         let outbound_budget = ByteBudgetCounter::new(MAX_QUEUE_BYTES);
         let inbound_budget = ByteBudgetCounter::new(MAX_QUEUE_BYTES);
         let terminal_published = Arc::new(AtomicBool::new(false));
-
         // 1. Binary-safe bounded stderr drain task with circular byte ring and redaction
         let event_tx_stderr = event_tx.clone();
         tokio::spawn(async move {
@@ -207,11 +252,12 @@ impl SemanticChildOwner {
 
         // 3. Owner actor
         let terminal_for_owner = Arc::clone(&terminal_published);
-        let budget_for_owner = outbound_budget.clone();
         tokio::spawn(async move {
             let mut writer = AsyncLspWriter::new(stdin);
             let graceful: bool;
             let mut termination_reason: Option<ChildStatus> = None;
+            let mut recorded_descendants: Vec<u32> = Vec::new();
+            let mut resource_ticker = tokio::time::interval(Duration::from_millis(200));
 
             loop {
                 tokio::select! {
@@ -247,6 +293,7 @@ impl SemanticChildOwner {
                     }
 
                     exit_res = child.wait() => {
+                        merge_descendants(pgid, &mut recorded_descendants);
                         let mut final_status = match exit_res {
                             Ok(st) => ChildStatus::Exited(st.code()),
                             Err(e) => ChildStatus::Crashed(e.to_string()),
@@ -254,24 +301,30 @@ impl SemanticChildOwner {
 
                         #[cfg(unix)]
                         {
-                            use nix::sys::signal::Signal;
+                            use nix::sys::signal::{kill, Signal};
+                            use nix::unistd::Pid;
                             let _ = super::reaper::signal_pgid(pgid, Some(Signal::SIGKILL));
-                            if !verify_pgid_reaped(pgid, FORCED_KILL_GRACE).await {
+                            for &desc_pid in &recorded_descendants {
+                                let _ = kill(Pid::from_raw(desc_pid as i32), Some(Signal::SIGKILL));
+                            }
+                            if !verify_tree_reaped(pgid, &recorded_descendants, FORCED_KILL_GRACE).await {
                                 final_status = ChildStatus::Crashed(format!("Descendant leak in PGID {pgid}"));
                             }
                         }
 
-                        let _ = timeout(Duration::from_millis(500), event_tx.send(ChildEvent::Terminated(final_status))).await;
+                        // Release queued payloads and close admission before terminal acknowledgment.
+                        drop(cmd_rx);
+                        let _ = term_tx.send(Some(final_status.clone()));
                         terminal_for_owner.store(true, Ordering::Release);
+                        let _ = timeout(Duration::from_millis(500), event_tx.send(ChildEvent::Terminated(final_status))).await;
                         return;
                     }
 
                     cmd = cmd_rx.recv() => {
                         match cmd {
-                            Some(payload) => {
-                                let payload_len = payload.len();
-                                budget_for_owner.release(payload_len);
-
+                            Some(msg) => {
+                                let OutboundChildMessage { payload, permit } = msg;
+                                drop(permit);
                                 match timeout(STDIN_WRITE_TIMEOUT, writer.write_message(&payload)).await {
                                     Ok(Ok(())) => {}
                                     Ok(Err(_)) | Err(_) => {
@@ -287,8 +340,37 @@ impl SemanticChildOwner {
                             }
                         }
                     }
+
+                    _ = resource_ticker.tick() => {
+                        let sample = sample_tree_resources(pid);
+                        for p in sample.pids {
+                            if p != pid && !recorded_descendants.contains(&p) {
+                                recorded_descendants.push(p);
+                            }
+                        }
+                        if sample.process_count > max_processes_per_tree {
+                            graceful = false;
+                            termination_reason = Some(ChildStatus::Crashed(format!(
+                                "Portable process tree limit exceeded: {} > {}",
+                                sample.process_count, max_processes_per_tree
+                            )));
+                            break;
+                        }
+                        if sample.rss_bytes > max_tree_rss_bytes {
+                            graceful = false;
+                            termination_reason = Some(ChildStatus::Crashed(format!(
+                                "Portable sampled RSS limit exceeded: {} bytes > {} bytes",
+                                sample.rss_bytes, max_tree_rss_bytes
+                            )));
+                            break;
+                        }
+                    }
                 }
             }
+            drop(cmd_rx);
+
+            // Snapshot descendants before sending graceful shutdown RPC so `/proc/<pid>/children` is captured while alive
+            merge_descendants(pgid, &mut recorded_descendants);
 
             // Execute bounded teardown
             let teardown_result = timeout(TOTAL_TEARDOWN_BUDGET, async {
@@ -305,7 +387,14 @@ impl SemanticChildOwner {
                     // Await voluntary exit within grace window
                     if let Ok(Ok(status)) = timeout(Duration::from_millis(500), child.wait()).await
                     {
-                        if super::reaper::is_pgid_empty(pgid) {
+                        merge_descendants(pgid, &mut recorded_descendants);
+                        if verify_tree_reaped(
+                            pgid,
+                            &recorded_descendants,
+                            Duration::from_millis(100),
+                        )
+                        .await
+                        {
                             return ChildStatus::Exited(status.code());
                         }
                     }
@@ -316,16 +405,24 @@ impl SemanticChildOwner {
 
                     if let Ok(Ok(status)) = timeout(Duration::from_millis(300), child.wait()).await
                     {
-                        if super::reaper::is_pgid_empty(pgid) {
+                        merge_descendants(pgid, &mut recorded_descendants);
+                        if verify_tree_reaped(
+                            pgid,
+                            &recorded_descendants,
+                            Duration::from_millis(100),
+                        )
+                        .await
+                        {
                             return ChildStatus::Exited(status.code());
                         }
                     }
                 }
 
                 // Forceful tree escalation
-                match terminate_and_reap_tree(
+                match terminate_and_reap_tree_with_descendants(
                     &mut child,
                     pgid,
+                    &mut recorded_descendants,
                     Duration::from_millis(800),
                     Duration::from_millis(1200),
                 )
@@ -338,25 +435,33 @@ impl SemanticChildOwner {
             .await;
 
             // Unconditional final cleanup safety outside timeout (C1)
+            merge_descendants(pgid, &mut recorded_descendants);
             #[cfg(unix)]
             {
-                use nix::sys::signal::Signal;
+                use nix::sys::signal::{kill, Signal};
+                use nix::unistd::Pid;
                 let _ = super::reaper::signal_pgid(pgid, Some(Signal::SIGKILL));
+                for &desc_pid in &recorded_descendants {
+                    let _ = kill(Pid::from_raw(desc_pid as i32), Some(Signal::SIGKILL));
+                }
             }
-            let _ = verify_pgid_reaped(pgid, Duration::from_millis(500)).await;
+            let _ =
+                verify_tree_reaped(pgid, &recorded_descendants, Duration::from_millis(500)).await;
 
+            let tree_clean =
+                super::reaper::is_pgid_empty(pgid) && verify_pids_dead(&recorded_descendants);
             let final_status = match teardown_result {
                 Ok(status) => {
                     if let Some(reason) = termination_reason {
                         reason
-                    } else if !super::reaper::is_pgid_empty(pgid) {
+                    } else if !tree_clean {
                         ChildStatus::Crashed(format!("Descendant leak in PGID {pgid}"))
                     } else {
                         status
                     }
                 }
                 Err(_) => {
-                    if !super::reaper::is_pgid_empty(pgid) {
+                    if !tree_clean {
                         ChildStatus::Crashed(format!(
                             "Teardown timed out; descendant leak in PGID {pgid}"
                         ))
@@ -368,12 +473,13 @@ impl SemanticChildOwner {
                 }
             };
 
+            let _ = term_tx.send(Some(final_status.clone()));
+            terminal_for_owner.store(true, Ordering::Release);
             let _ = timeout(
                 Duration::from_millis(500),
                 event_tx.send(ChildEvent::Terminated(final_status)),
             )
             .await;
-            terminal_for_owner.store(true, Ordering::Release);
         });
 
         let handle = SemanticChildHandle {
@@ -383,6 +489,8 @@ impl SemanticChildOwner {
             stop_tx: Some(stop_tx),
             byte_budget: outbound_budget,
             terminal_published,
+            term_rx,
+            counters,
         };
 
         Ok((handle, event_rx))

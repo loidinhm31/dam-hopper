@@ -1,10 +1,72 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   SemanticClient,
-  ADAPTIVE_SYNC_THRESHOLD_BYTES,
+  computeUtf8Sha256HexSync,
+  type SemanticNegotiatedPolicy,
+  type SemanticProvenance,
 } from "./semantic-client.js";
 import { SemanticModelRegistry } from "@/lib/semantic-model-uri.js";
 
+const authority = vi.hoisted(() => ({ current: {
+  serverUrl: "http://127.0.0.1:4803", configuredRoot: "/fixture", actor: "no-auth",
+} }));
+vi.mock("@/lib/semantic-model-uri.js", async () => ({
+  ...await vi.importActual<typeof import("@/lib/semantic-model-uri.js")>("@/lib/semantic-model-uri.js"),
+  captureSemanticProvenance: () => authority.current,
+}));
+
+const TEST_PROVENANCE: SemanticProvenance = {
+  serverUrl: "http://127.0.0.1:4803",
+  configuredRoot: "/fixture",
+  actor: "no-auth",
+};
+
+const WIRE_POLICY: SemanticNegotiatedPolicy = {
+  version: "1.0.0",
+  adaptiveSyncThresholdBytes: 65536,
+  maxDocumentBytes: 1048576,
+  maxOpenDocuments: 16,
+  maxSessionOverlayBytes: 4194304,
+  maxInFlightRequests: 8,
+};
+
+function makeAttachResult(
+  targetId: string,
+  policy: SemanticNegotiatedPolicy = WIRE_POLICY,
+) {
+  return {
+    targetId,
+    descriptor: "typescript",
+    resourcePolicyVersion: policy.version,
+    adaptiveSyncThresholdBytes: policy.adaptiveSyncThresholdBytes,
+    maxDocumentBytes: policy.maxDocumentBytes,
+    maxOpenDocuments: policy.maxOpenDocuments,
+    maxSessionOverlayBytes: policy.maxSessionOverlayBytes,
+    maxInFlightRequests: policy.maxInFlightRequests,
+  };
+}
+
+function makeInitializeResult(
+  policy: SemanticNegotiatedPolicy = WIRE_POLICY,
+) {
+  return {
+    capabilities: {
+      textDocumentSync: 2,
+      definitionProvider: true,
+      implementationProvider: true,
+      experimental: {
+        damHopperAdaptiveSync: {
+          version: policy.version,
+          thresholdBytes: policy.adaptiveSyncThresholdBytes,
+          maxDocumentBytes: policy.maxDocumentBytes,
+          maxOpenDocuments: policy.maxOpenDocuments,
+          maxSessionOverlayBytes: policy.maxSessionOverlayBytes,
+          maxInFlightRequests: policy.maxInFlightRequests,
+        },
+      },
+    },
+  };
+}
 class MockWebSocket {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
@@ -16,7 +78,11 @@ class MockWebSocket {
   readonly CLOSED = 3;
 
   static instances: MockWebSocket[] = [];
+  static deferClose = false;
+  static deferOpen = false;
   readyState = MockWebSocket.CONNECTING;
+  onopen: (() => void) | null = null;
+  onclose: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
   sent: string[] = [];
@@ -26,10 +92,12 @@ class MockWebSocket {
     public protocols?: string[],
   ) {
     MockWebSocket.instances.push(this);
-    queueMicrotask(() => {
-      this.readyState = 1; // OPEN
-      this.onopen?.();
-    });
+    if (!MockWebSocket.deferOpen) {
+      queueMicrotask(() => {
+        this.readyState = 1; // OPEN
+        this.onopen?.();
+      });
+    }
   }
 
   send(data: string) {
@@ -37,8 +105,26 @@ class MockWebSocket {
   }
 
   close() {
+    if (MockWebSocket.deferClose) {
+      this.readyState = 2; // CLOSING
+      return;
+    }
     this.readyState = 3; // CLOSED
     this.onclose?.();
+  }
+
+  triggerOpen() {
+    this.readyState = 1;
+    this.onopen?.();
+  }
+
+  triggerClose() {
+    this.readyState = 3;
+    this.onclose?.();
+  }
+
+  triggerError(err: unknown = new Error("socket error")) {
+    this.onerror?.(err);
   }
 
   // Test helper to simulate receiving a message from server
@@ -61,10 +147,16 @@ describe("SemanticClient", () => {
   let registry: SemanticModelRegistry;
 
   beforeEach(() => {
+    authority.current = { ...TEST_PROVENANCE };
     originalWebSocket = globalThis.WebSocket;
     MockWebSocket.instances = [];
-    (globalThis as unknown as { WebSocket: unknown }).WebSocket =
-      MockWebSocket as unknown as typeof WebSocket;
+    MockWebSocket.deferClose = false;
+    MockWebSocket.deferOpen = false;
+    Object.defineProperty(globalThis, "WebSocket", {
+      value: MockWebSocket,
+      configurable: true,
+      writable: true,
+    });
     registry = new SemanticModelRegistry();
   });
 
@@ -83,6 +175,15 @@ describe("SemanticClient", () => {
       targetGeneration: 1,
       registry,
     });
+    expect(client.getNegotiatedPolicy()).toEqual({
+      version: "",
+      adaptiveSyncThresholdBytes: 0,
+      maxDocumentBytes: 0,
+      maxOpenDocuments: 0,
+      maxSessionOverlayBytes: 0,
+      maxInFlightRequests: 0,
+    });
+    expect(client.getAdaptiveSyncThresholdBytes()).toBe(0);
 
     const connectPromise = client.connect();
 
@@ -102,7 +203,7 @@ describe("SemanticClient", () => {
     ws.receive({
       jsonrpc: "2.0",
       id: attachReq.id,
-      result: { targetId: "target-42", descriptor: "typescript" },
+      result: makeAttachResult("target-42", WIRE_POLICY),
     });
 
     // Wait for initialize request
@@ -115,7 +216,7 @@ describe("SemanticClient", () => {
     ws.receive({
       jsonrpc: "2.0",
       id: initReq.id,
-      result: { capabilities: { textDocumentSync: 2 } },
+      result: makeInitializeResult(WIRE_POLICY),
     });
 
     // Wait for initialized notification
@@ -128,9 +229,14 @@ describe("SemanticClient", () => {
 
     expect(client.getStatus()).toBe("ready");
     expect(client.getTargetId()).toBe("target-42");
+    expect(client.getNegotiatedPolicy()).toEqual(WIRE_POLICY);
   });
 
-  it("handles single-kind adaptive sync (<64KB full vs >=64KB incremental)", async () => {
+  it("handles single-kind adaptive sync (< negotiated threshold full vs >= negotiated threshold incremental)", async () => {
+    const negotiatedPolicy: SemanticNegotiatedPolicy = {
+      ...WIRE_POLICY,
+      adaptiveSyncThresholdBytes: 4096,
+    };
     const client = new SemanticClient({
       wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
       profileId: "test-profile",
@@ -152,13 +258,13 @@ describe("SemanticClient", () => {
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("damHopper/attachTarget")!.id,
-      result: { targetId: "target-42" },
+      result: makeAttachResult("target-42", negotiatedPolicy),
     });
     await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("initialize")!.id,
-      result: { capabilities: {} },
+      result: makeInitializeResult(negotiatedPolicy),
     });
     await connectPromise;
 
@@ -170,6 +276,7 @@ describe("SemanticClient", () => {
       project: "my-project",
       targetKey: "target-1",
       relativePath: "src/main.ts",
+      provenance: TEST_PROVENANCE,
     });
 
     // Open document
@@ -196,8 +303,10 @@ describe("SemanticClient", () => {
     expect(change1?.params.textDocument.version).toBe(2);
     expect(change1?.params.contentChanges).toEqual([{ text: smallContent }]);
 
-    // Edit 2: Large edit (>= 64 KiB) -> incremental edit with range
-    const largeContent = "a".repeat(ADAPTIVE_SYNC_THRESHOLD_BYTES + 100);
+    // Edit 2: Large edit (>= negotiated threshold) -> incremental edit with range
+    const largeContent = "a".repeat(
+      negotiatedPolicy.adaptiveSyncThresholdBytes + 100,
+    );
     await client.notifyDidChange(tabKey, largeContent, {
       range: {
         start: { line: 0, character: 0 },
@@ -242,13 +351,13 @@ describe("SemanticClient", () => {
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("damHopper/attachTarget")!.id,
-      result: { targetId: "target-42" },
+      result: makeAttachResult("target-42"),
     });
     await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("initialize")!.id,
-      result: { capabilities: {} },
+      result: makeInitializeResult(),
     });
     await connectPromise;
 
@@ -259,6 +368,7 @@ describe("SemanticClient", () => {
       project: "my-project",
       targetKey: "target-1",
       relativePath: "src/main.ts",
+      provenance: TEST_PROVENANCE,
     });
 
     await client.notifyDidOpen(tabKey, "const a = 10;");
@@ -316,13 +426,13 @@ describe("SemanticClient", () => {
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("damHopper/attachTarget")!.id,
-      result: { targetId: "target-42" },
+      result: makeAttachResult("target-42"),
     });
     await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("initialize")!.id,
-      result: { capabilities: {} },
+      result: makeInitializeResult(),
     });
     await connectPromise;
 
@@ -333,6 +443,7 @@ describe("SemanticClient", () => {
       project: "my-project",
       targetKey: "target-1",
       relativePath: "src/main.ts",
+      provenance: TEST_PROVENANCE,
     });
     await client.notifyDidOpen(tabKey, "const a = 10;");
 
@@ -396,13 +507,13 @@ describe("SemanticClient", () => {
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("damHopper/attachTarget")!.id,
-      result: { targetId: "target-42" },
+      result: makeAttachResult("target-42"),
     });
     await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("initialize")!.id,
-      result: { capabilities: {} },
+      result: makeInitializeResult(),
     });
     await connectPromise;
 
@@ -441,13 +552,13 @@ describe("SemanticClient", () => {
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("damHopper/attachTarget")!.id,
-      result: { targetId: "target-42" },
+      result: makeAttachResult("target-42"),
     });
     await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("initialize")!.id,
-      result: { capabilities: {} },
+      result: makeInitializeResult(),
     });
     await connectPromise;
 
@@ -458,6 +569,7 @@ describe("SemanticClient", () => {
       project: "my-project",
       targetKey: "target-1",
       relativePath: "src/cancel.ts",
+      provenance: TEST_PROVENANCE,
     });
     await client.notifyDidOpen(tabKey, "const x = 1;");
 
@@ -521,13 +633,13 @@ describe("SemanticClient", () => {
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("damHopper/attachTarget")!.id,
-      result: { targetId: "target-42" },
+      result: makeAttachResult("target-42"),
     });
     await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("initialize")!.id,
-      result: { capabilities: {} },
+      result: makeInitializeResult(),
     });
     await connectPromise;
 
@@ -538,6 +650,7 @@ describe("SemanticClient", () => {
       project: "my-project",
       targetKey: "target-1",
       relativePath: "src/resync.ts",
+      provenance: TEST_PROVENANCE,
     });
     await client.notifyDidOpen(tabKey, "const initial = 1;");
 
@@ -611,13 +724,13 @@ describe("SemanticClient", () => {
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("damHopper/attachTarget")!.id,
-      result: { targetId: "target-42" },
+      result: makeAttachResult("target-42"),
     });
     await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
     ws.receive({
       jsonrpc: "2.0",
       id: ws.lastSent("initialize")!.id,
-      result: { capabilities: {} },
+      result: makeInitializeResult(),
     });
     await connectPromise;
 
@@ -628,6 +741,7 @@ describe("SemanticClient", () => {
       project: "my-project",
       targetKey: "target-1",
       relativePath: "src/inval.ts",
+      provenance: TEST_PROVENANCE,
     });
     await client.notifyDidOpen(tabKey, "const a = 1;");
 
@@ -648,5 +762,634 @@ describe("SemanticClient", () => {
     expect(result).toEqual({ locations: [] });
     expect(client.getStatus()).toBe("disconnected");
     client.disconnect();
+  });
+
+  it("attaches worktree target using target.worktreePath without legacy worktree alias (R2)", async () => {
+    const client = new SemanticClient({
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      profileId: "test-profile",
+      project: "my-project",
+      worktreePath: "worktrees/feat-branch",
+      targetKey: "worktree:worktrees/feat-branch",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+      provenance: TEST_PROVENANCE,
+      registry,
+    });
+
+    const connectPromise = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+    const ws = MockWebSocket.instances[0];
+
+    await vi.waitFor(() =>
+      expect(ws.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    const attachMsg = ws.lastSent("damHopper/attachTarget")!;
+    expect(attachMsg.params.target).toEqual({
+      project: "my-project",
+      worktreePath: "worktrees/feat-branch",
+    });
+    expect("worktree" in attachMsg.params.target).toBe(false);
+
+    ws.receive({
+      jsonrpc: "2.0",
+      id: attachMsg.id,
+      result: makeAttachResult("worktree:worktrees/feat-branch"),
+    });
+    await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
+    ws.receive({
+      jsonrpc: "2.0",
+      id: ws.lastSent("initialize")!.id,
+      result: makeInitializeResult(),
+    });
+    await connectPromise;
+    expect(client.getStatus()).toBe("ready");
+  });
+
+  it("settles rejected handshake deterministically under async browser close and isolates replacement attempt B from retired attempt A callbacks (W2)", async () => {
+    MockWebSocket.deferClose = true;
+    const statusHistory: string[] = [];
+    const client = new SemanticClient({
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      profileId: "test-profile",
+      project: "my-project",
+      targetKey: "root",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+      provenance: TEST_PROVENANCE,
+      registry,
+      onStatusChange: (s) => statusHistory.push(s),
+    });
+
+    // 1. Handshake failure with async close must still settle (reject) connect()
+    const connect1 = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+    const ws1 = MockWebSocket.instances[0];
+    await vi.waitFor(() =>
+      expect(ws1.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    ws1.receive({
+      jsonrpc: "2.0",
+      id: ws1.lastSent("damHopper/attachTarget")!.id,
+      error: { code: -32001, message: "Target not found" },
+    });
+
+    await expect(connect1).rejects.toMatchObject({
+      code: -32001,
+      message: "Target not found",
+    });
+    expect(client.getStatus()).toBe("error");
+
+    // Delayed browser onclose on ws1 must NOT overwrite "error" status
+    ws1.triggerClose();
+    expect(client.getStatus()).toBe("error");
+
+    // 2. Start Attempt A, then supersede with disconnect() + Attempt B reaching ready
+    const connectA = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(2));
+    const wsA = MockWebSocket.instances[1];
+    await vi.waitFor(() =>
+      expect(wsA.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+
+    // Retire Attempt A before attachTarget replies; connectA must reject immediately
+    client.disconnect();
+    await expect(connectA).rejects.toThrow(/disconnected|closed/i);
+
+    // Start Attempt B and bring it to ready with a bound model
+    const tabKey = "tab-w2";
+    registry.registerModel({
+      tabKey,
+      profileId: "test-profile",
+      project: "my-project",
+      targetKey: "root",
+      relativePath: "src/w2.ts",
+      provenance: TEST_PROVENANCE,
+    });
+
+    const connectB = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(3));
+    const wsB = MockWebSocket.instances[2];
+    await vi.waitFor(() =>
+      expect(wsB.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    wsB.receive({
+      jsonrpc: "2.0",
+      id: wsB.lastSent("damHopper/attachTarget")!.id,
+      result: makeAttachResult("target-b"),
+    });
+    await vi.waitFor(() => expect(wsB.lastSent("initialize")).toBeDefined());
+    wsB.receive({
+      jsonrpc: "2.0",
+      id: wsB.lastSent("initialize")!.id,
+      result: makeInitializeResult(),
+    });
+    await connectB;
+    expect(client.getStatus()).toBe("ready");
+    expect(client.getTargetId()).toBe("target-b");
+    expect(registry.getByTabKey(tabKey)?.wireBinding?.targetId).toBe("target-b");
+
+    // Now fire delayed error/response/close callbacks on retired socket wsA
+    wsA.receive({
+      jsonrpc: "2.0",
+      id: wsA.lastSent("damHopper/attachTarget")!.id,
+      error: { code: -32000, message: "Delayed A error" },
+    });
+    wsA.triggerError(new Error("Delayed A socket error"));
+    wsA.triggerClose();
+
+    // Replacement Attempt B must remain ready, open, and bound!
+    expect(client.getStatus()).toBe("ready");
+    expect(client.getTargetId()).toBe("target-b");
+    expect(wsB.readyState).toBe(MockWebSocket.OPEN);
+    expect(registry.getByTabKey(tabKey)?.wireBinding?.targetId).toBe("target-b");
+  });
+
+  it("denies foreign endpoint/root/actor and labels-only models without reading draft text, while replaying matching provenance on reconnect (R1)", async () => {
+    const baseProv: SemanticProvenance = {
+      serverUrl: "http://127.0.0.1:4803",
+      configuredRoot: "/workspace/proj-a",
+      actor: "basic:alice:tok-alice",
+    };
+    authority.current = baseProv;
+
+    // Register 5 models sharing identical profileId/project/targetKey labels:
+    // 1. Matching provenance
+    registry.registerModel({
+      tabKey: "tab-matching",
+      profileId: "prof-1",
+      project: "proj-a",
+      targetKey: "root",
+      relativePath: "src/matching.ts",
+      provenance: baseProv,
+    });
+    // 2. Labels-only (unknown provenance = null)
+    registry.registerModel({
+      tabKey: "tab-labels-only",
+      profileId: "prof-1",
+      project: "proj-a",
+      targetKey: "root",
+      relativePath: "src/labels-only.ts",
+      provenance: null,
+    });
+    // 3. Different endpoint serverUrl
+    registry.registerModel({
+      tabKey: "tab-foreign-endpoint",
+      profileId: "prof-1",
+      project: "proj-a",
+      targetKey: "root",
+      relativePath: "src/foreign-endpoint.ts",
+      provenance: { ...baseProv, serverUrl: "http://127.0.0.1:4899" },
+    });
+    // 4. Different configuredRoot
+    registry.registerModel({
+      tabKey: "tab-foreign-root",
+      profileId: "prof-1",
+      project: "proj-a",
+      targetKey: "root",
+      relativePath: "src/foreign-root.ts",
+      provenance: { ...baseProv, configuredRoot: "/workspace/other-root" },
+    });
+    // 5. Different actor
+    registry.registerModel({
+      tabKey: "tab-foreign-actor",
+      profileId: "prof-1",
+      project: "proj-a",
+      targetKey: "root",
+      relativePath: "src/foreign-actor.ts",
+      provenance: { ...baseProv, actor: "basic:bob:tok-bob" },
+    });
+
+    const readKeys: string[] = [];
+    const getModelText = vi.fn((key: string) => {
+      readKeys.push(key);
+      return `// dirty content for ${key}`;
+    });
+
+    const client = new SemanticClient({
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      serverUrl: "http://127.0.0.1:4803",
+      profileId: "prof-1",
+      project: "proj-a",
+      targetKey: "root",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+      provenance: baseProv,
+      getModelText,
+      registry,
+    });
+
+    expect(client.canAccessModel("tab-matching")).toBe(true);
+    expect(client.canAccessModel("tab-labels-only")).toBe(false);
+    expect(client.canAccessModel("tab-foreign-endpoint")).toBe(false);
+    expect(client.canAccessModel("tab-foreign-root")).toBe(false);
+    expect(client.canAccessModel("tab-foreign-actor")).toBe(false);
+
+    // Connect Session 1
+    const connect1 = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+    const ws1 = MockWebSocket.instances[0];
+    await vi.waitFor(() =>
+      expect(ws1.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    ws1.receive({
+      jsonrpc: "2.0",
+      id: ws1.lastSent("damHopper/attachTarget")!.id,
+      result: makeAttachResult("target-s1"),
+    });
+    await vi.waitFor(() => expect(ws1.lastSent("initialize")).toBeDefined());
+    ws1.receive({
+      jsonrpc: "2.0",
+      id: ws1.lastSent("initialize")!.id,
+      result: makeInitializeResult(),
+    });
+    await connect1;
+
+    // Only tab-matching was read and replayed! Foreign/labels-only drafts were NEVER read!
+    expect(readKeys).toEqual(["tab-matching"]);
+    const didOpens1 = ws1.sent
+      .map((s) => JSON.parse(s))
+      .filter((m) => m.method === "textDocument/didOpen");
+    expect(didOpens1).toHaveLength(1);
+    expect(didOpens1[0].params.textDocument.uri).toBe(
+      "dam-hopper://semantic/target-s1/src/matching.ts",
+    );
+    expect(didOpens1[0].params.textDocument.text).toBe(
+      "// dirty content for tab-matching",
+    );
+
+    // Direct notifyDidOpen / notifyDidChange on denied models are no-ops
+    await client.notifyDidOpen("tab-foreign-endpoint", "secret");
+    const ver = await client.notifyDidChange("tab-foreign-actor", "secret");
+    expect(ver).toBe(0);
+    expect(registry.getByTabKey("tab-foreign-endpoint")?.wireBinding).toBeNull();
+
+    // Disconnect and reconnect same binding (Session 2 with new targetId):
+    // Local model incarnation is preserved (1) and dirty text is replayed onto new wire URI
+    client.disconnect();
+    const connect2 = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(2));
+    const ws2 = MockWebSocket.instances[1];
+    await vi.waitFor(() =>
+      expect(ws2.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    ws2.receive({
+      jsonrpc: "2.0",
+      id: ws2.lastSent("damHopper/attachTarget")!.id,
+      result: makeAttachResult("target-s2"),
+    });
+    await vi.waitFor(() => expect(ws2.lastSent("initialize")).toBeDefined());
+    ws2.receive({
+      jsonrpc: "2.0",
+      id: ws2.lastSent("initialize")!.id,
+      result: makeInitializeResult(),
+    });
+    await connect2;
+
+    const matchingModel = registry.getByTabKey("tab-matching")!;
+    expect(matchingModel.identity.incarnation).toBe(1);
+    expect(matchingModel.wireBinding?.targetId).toBe("target-s2");
+    expect(matchingModel.wireBinding?.sessionGeneration).toBe(2);
+    expect(readKeys).toEqual(["tab-matching", "tab-matching"]);
+  });
+
+  it("rejects missing, malformed, aliased, or disagreeing server policies before replay or admission", async () => {
+    const tabKey = "tab-policy-guard";
+    registry.registerModel({
+      tabKey,
+      profileId: "test-profile",
+      project: "my-project",
+      targetKey: "target-1",
+      relativePath: "src/policy.ts",
+      provenance: TEST_PROVENANCE,
+    });
+    const getModelText = vi.fn(() => "export const draft = 1;\n");
+
+    const client = new SemanticClient({
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      profileId: "test-profile",
+      project: "my-project",
+      targetKey: "target-1",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+      provenance: TEST_PROVENANCE,
+      getModelText,
+      registry,
+    });
+
+    // Pre-handshake defaults are bounded and inert (0), never 64 KiB
+    expect(client.getNegotiatedPolicy()).toEqual({
+      version: "",
+      adaptiveSyncThresholdBytes: 0,
+      maxDocumentBytes: 0,
+      maxOpenDocuments: 0,
+      maxSessionOverlayBytes: 0,
+      maxInFlightRequests: 0,
+    });
+    await client.notifyDidOpen(tabKey, "");
+    expect(await client.notifyDidChange(tabKey, "")).toBe(0);
+    expect(registry.getByTabKey(tabKey)?.wireBinding).toBeNull();
+
+    // 1. Missing attachTarget policy fields -> fails before initialize or replay
+    const connectMissingAttach = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+    const ws1 = MockWebSocket.instances[0];
+    await vi.waitFor(() =>
+      expect(ws1.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    ws1.receive({
+      jsonrpc: "2.0",
+      id: ws1.lastSent("damHopper/attachTarget")!.id,
+      result: { targetId: "target-42", descriptor: "typescript" },
+    });
+    await expect(connectMissingAttach).rejects.toThrow(
+      /Invalid attachTarget response: missing or malformed resource policy/i,
+    );
+    expect(ws1.lastSent("initialize")).toBeUndefined();
+    expect(ws1.lastSent("initialized")).toBeUndefined();
+    expect(getModelText).not.toHaveBeenCalled();
+    expect(client.getAdaptiveSyncThresholdBytes()).toBe(0);
+
+    // 2. Malformed attachTarget policy (non-positive threshold) -> fails before initialize
+    const connectBadAttach = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(2));
+    const ws2 = MockWebSocket.instances[1];
+    await vi.waitFor(() =>
+      expect(ws2.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    ws2.receive({
+      jsonrpc: "2.0",
+      id: ws2.lastSent("damHopper/attachTarget")!.id,
+      result: {
+        ...makeAttachResult("target-42"),
+        adaptiveSyncThresholdBytes: 0,
+      },
+    });
+    await expect(connectBadAttach).rejects.toThrow(
+      /Invalid attachTarget response: missing or malformed resource policy/i,
+    );
+    expect(ws2.lastSent("initialize")).toBeUndefined();
+    expect(getModelText).not.toHaveBeenCalled();
+
+    // 3. Obsolete alias on attachTarget (thresholdBytes instead of adaptiveSyncThresholdBytes) -> rejected
+    const connectAliasAttach = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(3));
+    const ws3 = MockWebSocket.instances[2];
+    await vi.waitFor(() =>
+      expect(ws3.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    ws3.receive({
+      jsonrpc: "2.0",
+      id: ws3.lastSent("damHopper/attachTarget")!.id,
+      result: {
+        ...makeAttachResult("target-42"),
+        thresholdBytes: 65536,
+      },
+    });
+    await expect(connectAliasAttach).rejects.toThrow(
+      /Invalid attachTarget response: unexpected policy field alias/i,
+    );
+    expect(ws3.lastSent("initialize")).toBeUndefined();
+
+    // 4. Missing experimental.damHopperAdaptiveSync on initialize -> fails before initialized/replay
+    const connectMissingInit = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(4));
+    const ws4 = MockWebSocket.instances[3];
+    await vi.waitFor(() =>
+      expect(ws4.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    ws4.receive({
+      jsonrpc: "2.0",
+      id: ws4.lastSent("damHopper/attachTarget")!.id,
+      result: makeAttachResult("target-42"),
+    });
+    await vi.waitFor(() => expect(ws4.lastSent("initialize")).toBeDefined());
+    ws4.receive({
+      jsonrpc: "2.0",
+      id: ws4.lastSent("initialize")!.id,
+      result: { capabilities: { textDocumentSync: 2 } },
+    });
+    await expect(connectMissingInit).rejects.toThrow(
+      /Invalid initialize response: missing experimental\.damHopperAdaptiveSync policy/i,
+    );
+    expect(ws4.lastSent("initialized")).toBeUndefined();
+    expect(getModelText).not.toHaveBeenCalled();
+    expect(client.getAdaptiveSyncThresholdBytes()).toBe(0);
+
+    // 5. Obsolete alias adaptiveSyncThresholdBytes in initialize damHopperAdaptiveSync -> rejected
+    const connectAliasInit = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(5));
+    const ws5 = MockWebSocket.instances[4];
+    await vi.waitFor(() =>
+      expect(ws5.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    ws5.receive({
+      jsonrpc: "2.0",
+      id: ws5.lastSent("damHopper/attachTarget")!.id,
+      result: makeAttachResult("target-42"),
+    });
+    await vi.waitFor(() => expect(ws5.lastSent("initialize")).toBeDefined());
+    ws5.receive({
+      jsonrpc: "2.0",
+      id: ws5.lastSent("initialize")!.id,
+      result: {
+        capabilities: {
+          textDocumentSync: 2,
+          experimental: {
+            damHopperAdaptiveSync: {
+              version: "1.0.0",
+              adaptiveSyncThresholdBytes: 65536,
+              maxDocumentBytes: 1048576,
+              maxOpenDocuments: 16,
+              maxSessionOverlayBytes: 4194304,
+              maxInFlightRequests: 8,
+            },
+          },
+        },
+      },
+    });
+    await expect(connectAliasInit).rejects.toThrow(
+      /Invalid initialize response: unexpected damHopperAdaptiveSync field alias/i,
+    );
+    expect(ws5.lastSent("initialized")).toBeUndefined();
+    expect(getModelText).not.toHaveBeenCalled();
+
+    // 6. Initialize policy disagrees with attachTarget authoritative policy -> rejected before replay
+    const connectDisagreeInit = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(6));
+    const ws6 = MockWebSocket.instances[5];
+    await vi.waitFor(() =>
+      expect(ws6.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    ws6.receive({
+      jsonrpc: "2.0",
+      id: ws6.lastSent("damHopper/attachTarget")!.id,
+      result: makeAttachResult("target-42", {
+        ...WIRE_POLICY,
+        adaptiveSyncThresholdBytes: 128,
+      }),
+    });
+    await vi.waitFor(() => expect(ws6.lastSent("initialize")).toBeDefined());
+    ws6.receive({
+      jsonrpc: "2.0",
+      id: ws6.lastSent("initialize")!.id,
+      result: makeInitializeResult({
+        ...WIRE_POLICY,
+        adaptiveSyncThresholdBytes: 256,
+      }),
+    });
+    await expect(connectDisagreeInit).rejects.toThrow(
+      /damHopperAdaptiveSync policy disagrees with attachTarget policy/i,
+    );
+    expect(ws6.lastSent("initialized")).toBeUndefined();
+    expect(getModelText).not.toHaveBeenCalled();
+    expect(registry.getByTabKey(tabKey)?.wireBinding).toBeNull();
+    expect(client.getAdaptiveSyncThresholdBytes()).toBe(0);
+  });
+
+  it("consumes server-negotiated adaptive sync threshold and handles exact boundary crossings and G5 destination validation", async () => {
+    const customPolicy: SemanticNegotiatedPolicy = {
+      version: "1.0.0",
+      adaptiveSyncThresholdBytes: 128,
+      maxDocumentBytes: 512,
+      maxOpenDocuments: 2,
+      maxSessionOverlayBytes: 768,
+      maxInFlightRequests: 4,
+    };
+
+    const client = new SemanticClient({
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      profileId: "test-profile",
+      project: "my-project",
+      targetKey: "target-1",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+      provenance: TEST_PROVENANCE,
+      registry,
+    });
+
+    const connectPromise = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+    const ws = MockWebSocket.instances[0];
+
+    await vi.waitFor(() =>
+      expect(ws.lastSent("damHopper/attachTarget")).toBeDefined(),
+    );
+    ws.receive({
+      jsonrpc: "2.0",
+      id: ws.lastSent("damHopper/attachTarget")!.id,
+      result: makeAttachResult("target-42", customPolicy),
+    });
+    await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
+    ws.receive({
+      jsonrpc: "2.0",
+      id: ws.lastSent("initialize")!.id,
+      result: makeInitializeResult(customPolicy),
+    });
+    await connectPromise;
+    expect(client.getAdaptiveSyncThresholdBytes()).toBe(128);
+    expect(client.getNegotiatedPolicy()).toEqual(customPolicy);
+
+    const tabKey = "tab-threshold";
+    registry.registerModel({
+      tabKey,
+      profileId: "test-profile",
+      project: "my-project",
+      targetKey: "target-1",
+      relativePath: "src/threshold.ts",
+      provenance: TEST_PROVENANCE,
+    });
+    await client.notifyDidOpen(tabKey, "x".repeat(50));
+
+    const rangeChange = {
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 1 },
+      },
+      rangeLength: 1,
+      text: "y",
+    };
+
+    // 1. 127 bytes (< 128 threshold) -> range-less full text
+    const below127 = "a".repeat(127);
+    await client.notifyDidChange(tabKey, below127, rangeChange);
+    expect(ws.lastSent("textDocument/didChange")?.params.contentChanges).toEqual([
+      { text: below127 },
+    ]);
+
+    // 2. Exactly 128 bytes (== 128 threshold) -> incremental range change
+    const exact128 = "a".repeat(128);
+    await client.notifyDidChange(tabKey, exact128, rangeChange);
+    expect(ws.lastSent("textDocument/didChange")?.params.contentChanges).toEqual([
+      rangeChange,
+    ]);
+
+    // 3. 129 bytes (> 128 threshold) -> incremental range change
+    const above129 = "a".repeat(129);
+    await client.notifyDidChange(tabKey, above129, rangeChange);
+    expect(ws.lastSent("textDocument/didChange")?.params.contentChanges).toEqual([
+      rangeChange,
+    ]);
+
+    // 4. Cross downward to 127 bytes (< 128 threshold) -> range-less full text
+    const down127 = "b".repeat(127);
+    await client.notifyDidChange(tabKey, down127, rangeChange);
+    expect(ws.lastSent("textDocument/didChange")?.params.contentChanges).toEqual([
+      { text: down127 },
+    ]);
+
+    // 5. Multi-byte UTF-8 exact boundary crossing (63 * 2 + 1 = 127 UTF-8 bytes vs 64 * 2 = 128 UTF-8 bytes)
+    const utf8Below127 = "é".repeat(63) + "a";
+    await client.notifyDidChange(tabKey, utf8Below127, rangeChange);
+    expect(ws.lastSent("textDocument/didChange")?.params.contentChanges).toEqual([
+      { text: utf8Below127 },
+    ]);
+
+    const utf8Exact128 = "é".repeat(64);
+    await client.notifyDidChange(tabKey, utf8Exact128, rangeChange);
+    expect(ws.lastSent("textDocument/didChange")?.params.contentChanges).toEqual([
+      rangeChange,
+    ]);
+
+    // 6. Negotiated maxDocumentBytes cap (512 bytes) rejects oversized edit (513 bytes)
+    const oversized = "z".repeat(513);
+    expect(await client.notifyDidChange(tabKey, oversized, rangeChange)).toBe(0);
+
+    // 7. Disconnect resets negotiated policy to inert defaults
+    const destText = "export function targetFn() {}\n";
+    const destHash = computeUtf8Sha256HexSync(destText);
+    const validLoc = {
+      uri: "dam-hopper://semantic/target-42/src/dest.ts",
+      range: {
+        start: { line: 0, character: 16 },
+        end: { line: 0, character: 24 },
+      },
+      damHopperDestinationContentSha256: destHash,
+      damHopperDestinationVersion: null,
+      damHopperDestinationIncarnation: null,
+    };
+    expect(
+      await client.validateDestination(validLoc, "tab-dest", destText),
+    ).toBe(true);
+    expect(
+      await client.validateDestination(
+        validLoc,
+        "tab-dest",
+        "export function modifiedFn() {}\n",
+      ),
+    ).toBe(false);
+    expect(
+      await client.validateDestination(
+        {
+          uri: "dam-hopper://semantic/target-42/src/dest.ts",
+          range: validLoc.range,
+        },
+        "tab-dest",
+        destText,
+      ),
+    ).toBe(false);
+
+    client.disconnect();
+    expect(client.getAdaptiveSyncThresholdBytes()).toBe(0);
   });
 });

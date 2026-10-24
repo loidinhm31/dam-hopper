@@ -109,11 +109,11 @@ Inspects configured intent, effective runtime admission, toolchain readiness, re
   "configuredEnabled": false,
   "runtimeEnabled": false,
   "runtimeState": "disabled",
-  "integrityStatus": "Valid",
-  "toolchainReady": true,
-  "tupleIdentifier": "node-24.16.0-ts-5.9.3-tsls-6.0.2",
-  "policyCapability": "cgroup-v2",
-  "resourceWarning": null,
+  "integrityStatus": "Unverified",
+  "toolchainReady": false,
+  "tupleIdentifier": "node-24.16.0-ts-5.9.3-tsls-6.0.2-linux-x64",
+  "policyCapability": "portable-only",
+  "resourceWarning": "Semantic children run with portable application limits, not hard RSS/CPU limits or a filesystem sandbox. Trusted workspaces only.",
   "activeTrees": 0,
   "openDocuments": 0,
   "totalOverlayBytes": 0,
@@ -130,11 +130,11 @@ Inspects configured intent, effective runtime admission, toolchain readiness, re
 | `configuredEnabled` | boolean | Persisted intent in the server's global configuration (`GlobalConfig.semantic.enabled`). |
 | `runtimeEnabled` | boolean | Effective admission state in `SemanticSupervisor`. |
 | `runtimeState` | string | Current lifecycle state: `"disabled"`, `"enabled"`, `"safe-disabled"`, or `"shutting-down"`. |
-| `integrityStatus` | string or null | Descriptive toolchain verification outcome: `"Valid"`, `"Missing component: <name>"`, `"Invalid file type: <reason>"`, `"Permission denied: <reason>"`, or `"Digest mismatch"`. |
-| `toolchainReady` | boolean | True if passive cryptographic digests and file permission checks succeeded. |
+| `integrityStatus` | string or null | Last passive verification outcome, initially `"Unverified"`; `"Valid"` is not continuous filesystem monitoring or protocol qualification. |
+| `toolchainReady` | boolean | Last passive verification succeeded. Fresh bounded off-thread verification is still mandatory at enable and child launch/restart. |
 | `tupleIdentifier` | string or null | Immutable release-bundled engine tuple identifier. |
-| `policyCapability` | string | Detected host containment capability: `"cgroup-v2"` or `"portable-only"`. |
-| `resourceWarning` | string or null | Advisory warning when Linux cgroup v2 controllers are missing and running with portable limits. |
+| `policyCapability` | string | Currently `"portable-only"`; detecting host controllers does not establish child-tree hard containment. |
+| `resourceWarning` | string or null | Portable application caps and sampled termination are not hard RSS/CPU guarantees or a filesystem sandbox. |
 | `activeTrees` | number | Number of active semantic language server process trees. |
 | `openDocuments` | number | Number of open document overlays tracked across active sessions. |
 | `totalOverlayBytes` | number | Total memory in bytes consumed by in-memory document overlays. |
@@ -146,7 +146,8 @@ Inspects configured intent, effective runtime admission, toolchain readiness, re
 
 Hot-toggles server-global semantic navigation on or off without restarting the daemon.
 
-- **Authorization:** Strictly requires a signed session with fresh verification of the `Admin` role (`evaluate_current_admin`). Two sequential checks (initial pre-lock and pre-commit) ensure role verification linearizes at the fresh store lookup immediately preceding durable commit. External operator demotions occurring after commit remain subject to subsequent request rechecks.
+- **Authorization:** Requires a signed session and fresh `Admin` verification before locking, after lock acquisition (including no-ops), and immediately before durable commit. A dropped HTTP request does not cancel an already admitted transition. Demotion or persistence failure after irreversible OFF cleanup retains durable intent with safe-disabled runtime and a sanitized mismatch error; overlays are never resurrected.
+- **Admission deadline:** GET and PATCH authenticate against the live store within two seconds; a stalled admission returns HTTP 503 `AUTH_UNAVAILABLE`. Only authentication is timed out, not an admitted mutation or its irreversible cleanup.
 - **Rejection:** Requests from `--no-auth`, `CredentialMechanism::NoAuthDev`, ordinary `user` roles, or demoted accounts are rejected immediately with HTTP 403 Forbidden.
 - **Request body:** Accepts typed `{ "enabled": boolean }` only; unknown fields or malformed payloads return HTTP 400 Bad Request or HTTP 422 Unprocessable Entity.
 
@@ -177,5 +178,5 @@ Hot-toggles server-global semantic navigation on or off without restarting the d
   - `403 Forbidden`: Non-admin role, development session, or `--no-auth` mode (`AdminRequired`).
   - `422 Unprocessable Entity`: Malformed JSON or rejected unknown fields.
   - `500 Internal Server Error`: Active session teardown failure or atomic disk write error.
-  - `503 Service Unavailable`: Auth store lookup timed out during role evaluation.
+  - `503 Service Unavailable`: Authentication admission or a fresh role evaluation timed out or the auth store was unavailable.
 

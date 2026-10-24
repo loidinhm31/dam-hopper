@@ -6,11 +6,7 @@
 //! - `PATCH /api/semantic/settings`: Admin-only hot toggle (`{ enabled: bool }`) requiring signed
 //!   credentials and fresh role re-evaluation. Rejects `--no-auth` and non-admin users.
 
-use axum::{
-    extract::State,
-    response::IntoResponse,
-    Extension, Json,
-};
+use axum::{extract::State, response::IntoResponse, Extension, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::api::auth::{
@@ -48,70 +44,54 @@ pub struct PatchSemanticSettingsRequest {
     pub enabled: bool,
 }
 
-fn detect_resource_capability() -> (String, Option<String>) {
-    #[cfg(target_os = "linux")]
-    {
-        let cgroup_base = std::path::Path::new("/sys/fs/cgroup");
-        let controllers_file = cgroup_base.join("cgroup.controllers");
-        if controllers_file.exists() {
-            if let Ok(controllers) = std::fs::read_to_string(&controllers_file) {
-                if controllers.contains("memory") && controllers.contains("cpu") && controllers.contains("pids") {
-                    return ("cgroup-v2".to_string(), None);
-                }
-            }
-        }
-        (
-            "portable-only".to_string(),
-            Some("Linux cgroup v2 controllers not fully available; running with advisory portable resource limits.".to_string()),
-        )
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        (
-            "portable-only".to_string(),
-            Some("Host platform does not support Linux cgroups; running with portable resource limits.".to_string()),
-        )
-    }
-}
-
 async fn build_settings_response(
     state: &AppState,
     configured_enabled: bool,
     can_mutate: bool,
 ) -> SemanticSettingsResponse {
     let agg = state.semantic_supervisor.get_aggregate_status().await;
-    let (policy_capability, resource_warning) = detect_resource_capability();
+    // Controller availability is not evidence of controls applied to a child.
+    // The production session owner currently uses portable enforcement only.
+    let policy_capability = "portable-only".to_string();
+    let resource_warning = Some(
+        "Semantic children run with portable application limits, not hard RSS/CPU limits or a filesystem sandbox. Trusted workspaces only.".to_string(),
+    );
     let tuple_identifier = state
         .semantic_supervisor
         .tool_profile()
         .map(|p| p.tuple_id().to_string());
 
-    let integrity_status = state
-        .semantic_supervisor
-        .tool_integrity_status()
-        .map(|s| match s {
-            crate::semantic::tool_profile::ToolIntegrityStatus::Valid => "Valid".to_string(),
-            crate::semantic::tool_profile::ToolIntegrityStatus::Missing { component, .. } => {
-                format!("Missing component: {component}")
-            }
-            crate::semantic::tool_profile::ToolIntegrityStatus::InvalidFileType { reason, .. } => {
-                format!("Invalid file type: {reason}")
-            }
-            crate::semantic::tool_profile::ToolIntegrityStatus::PermissionDenied { reason, .. } => {
-                format!("Permission denied: {reason}")
-            }
-            crate::semantic::tool_profile::ToolIntegrityStatus::DigestMismatch { .. } => {
-                "Digest mismatch".to_string()
-            }
-        });
+    let cached_status = state.semantic_supervisor.tool_integrity_status();
+    let (integrity_status, toolchain_ready) = match &cached_status {
+        None => (None, false),
+        Some(crate::semantic::tool_profile::ToolIntegrityStatus::Unverified) => {
+            (Some("Unverified".to_string()), false)
+        }
+        Some(crate::semantic::tool_profile::ToolIntegrityStatus::Valid) => {
+            (Some("Valid".to_string()), true)
+        }
+        Some(crate::semantic::tool_profile::ToolIntegrityStatus::Missing { component, .. }) => {
+            (Some(format!("Missing component: {component}")), false)
+        }
+        Some(crate::semantic::tool_profile::ToolIntegrityStatus::InvalidFileType {
+            reason,
+            ..
+        }) => (Some(format!("Invalid file type: {reason}")), false),
+        Some(crate::semantic::tool_profile::ToolIntegrityStatus::PermissionDenied {
+            reason,
+            ..
+        }) => (Some(format!("Permission denied: {reason}")), false),
+        Some(crate::semantic::tool_profile::ToolIntegrityStatus::DigestMismatch { .. }) => {
+            (Some("Digest mismatch".to_string()), false)
+        }
+    };
 
-    let toolchain_ready = state
+    // Internal failures can contain release/config paths. Never publish those details.
+    let transition_error = state
         .semantic_supervisor
-        .tool_integrity_status()
-        .map(|s| s.is_valid())
-        .unwrap_or(false);
-
-    let transition_error = state.semantic_supervisor.last_transition_error().await;
+        .last_transition_error()
+        .await
+        .map(|_| "SEMANTIC_TRANSITION_FAILED".to_string());
 
     SemanticSettingsResponse {
         configured_enabled,
@@ -156,6 +136,31 @@ pub async fn get_settings(
     Json(response)
 }
 
+/// Bound authentication admission, not the cancellable HTTP response lifetime of
+/// an admitted settings transaction.
+pub async fn authenticate_settings_request(
+    State(state): State<AppState>,
+    jar: axum_extra::extract::CookieJar,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let admitted = tokio::time::timeout(
+        crate::semantic::resources::AUTH_STORE_LOOKUP_TIMEOUT,
+        crate::api::auth::authenticate_request(&state, &jar, request),
+    )
+    .await;
+    match admitted {
+        Ok(Ok(request)) => next.run(request).await,
+        Ok(Err(response)) => response,
+        Err(_) => crate::api::auth_mfa::auth_error_response(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "AUTH_UNAVAILABLE",
+            "Authentication backend unavailable",
+            None,
+        ),
+    }
+}
+
 pub async fn patch_settings(
     State(state): State<AppState>,
     actor: Option<Extension<AuthenticatedActor>>,
@@ -163,6 +168,23 @@ pub async fn patch_settings(
     claims: Option<Extension<VerifiedAuthClaims>>,
     Json(patch): Json<PatchSemanticSettingsRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // The transaction owns its locks and completes even when the HTTP request is dropped.
+    tokio::spawn(apply_settings_patch(state, actor, mechanism, claims, patch))
+        .await
+        .map_err(|_| {
+            ApiError::from_app(crate::error::AppError::Internal(
+                "Semantic settings transition failed".to_string(),
+            ))
+        })?
+}
+
+async fn apply_settings_patch(
+    state: AppState,
+    actor: Option<Extension<AuthenticatedActor>>,
+    mechanism: Option<Extension<CredentialMechanism>>,
+    claims: Option<Extension<VerifiedAuthClaims>>,
+    patch: PatchSemanticSettingsRequest,
+) -> Result<Json<SemanticSettingsResponse>, ApiError> {
     // 1. Initial Authorization: verify admin authority before any side effects or locks
     evaluate_current_admin(
         &state,
@@ -176,8 +198,22 @@ pub async fn patch_settings(
     let _config_guard = state.global_config_mutation_lock.lock().await;
     let _transition_guard = state.semantic_supervisor.transition_lock().lock().await;
 
+    // Waiting for a concurrent transition must not retain a stale privilege grant,
+    // including the authorized no-op path.
+    evaluate_current_admin(
+        &state,
+        actor.as_ref().map(|e| &e.0),
+        mechanism.as_ref().map(|e| &e.0),
+        claims.as_ref().map(|e| &e.0),
+    )
+    .await?;
+
     let gc_path = global_config_path();
-    let mut gc = match read_global_config_at(&gc_path).map_err(ApiError::from_app)? {
+    let mut gc = match read_global_config_at(&gc_path).map_err(|_| {
+        ApiError::from_app(crate::error::AppError::Internal(
+            "Semantic settings could not be read".to_string(),
+        ))
+    })? {
         Some(c) => c,
         None => state.global_config.read().await.clone(),
     };
@@ -194,13 +230,13 @@ pub async fn patch_settings(
     if !patch.enabled {
         // --- Transitioning OFF ---
         // a. Immediate admission revocation and complete child tree reaping
-        if let Err(disable_err) = state.semantic_supervisor.prepare_disable().await {
+        if state.semantic_supervisor.prepare_disable().await.is_err() {
             state
                 .semantic_supervisor
-                .record_disable_failure(format!("Teardown failed: {disable_err}"))
+                .record_disable_failure("SEMANTIC_TEARDOWN_FAILED".to_string())
                 .await;
             return Err(ApiError::from_app(crate::error::AppError::Internal(
-                format!("Failed to clean up active semantic sessions: {disable_err}"),
+                "Semantic session cleanup failed".to_string(),
             )));
         }
 
@@ -227,12 +263,14 @@ pub async fn patch_settings(
 
         // c. Durable atomic commit to disk and in-memory config
         gc.semantic = Some(SemanticConfig { enabled: false });
-        if let Err(write_err) = write_global_config_at(&gc_path, &gc) {
+        if write_global_config_at(&gc_path, &gc).is_err() {
             state
                 .semantic_supervisor
-                .record_disable_failure(format!("Failed to persist disabled config: {write_err}"))
+                .record_disable_failure("SEMANTIC_PERSIST_FAILED".to_string())
                 .await;
-            return Err(ApiError::from_app(write_err));
+            return Err(ApiError::from_app(crate::error::AppError::Internal(
+                "Semantic settings persistence failed".to_string(),
+            )));
         }
 
         *state.global_config.write().await = gc.clone();
@@ -243,7 +281,12 @@ pub async fn patch_settings(
         state
             .semantic_supervisor
             .prepare_enable()
-            .map_err(|e| ApiError::from_app(crate::error::AppError::InvalidInput(e.to_string())))?;
+            .await
+            .map_err(|_| {
+                ApiError::from_app(crate::error::AppError::InvalidInput(
+                    "Bundled semantic engine is unavailable or cleanup is incomplete".to_string(),
+                ))
+            })?;
 
         // b. Fresh admin re-evaluation immediately before durable disk commit
         evaluate_current_admin(
@@ -256,7 +299,11 @@ pub async fn patch_settings(
 
         // c. Durable atomic commit to disk and in-memory config
         gc.semantic = Some(SemanticConfig { enabled: true });
-        write_global_config_at(&gc_path, &gc).map_err(ApiError::from_app)?;
+        write_global_config_at(&gc_path, &gc).map_err(|_| {
+            ApiError::from_app(crate::error::AppError::Internal(
+                "Semantic settings persistence failed".to_string(),
+            ))
+        })?;
         *state.global_config.write().await = gc.clone();
         state.semantic_supervisor.commit_enable().await;
     }

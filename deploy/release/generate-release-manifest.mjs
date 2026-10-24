@@ -375,7 +375,15 @@ function main() {
       const tslsVer = provenance?.components?.typescriptLanguageServer?.version || "6.0.2";
       const nodeVer = provenance?.components?.node?.version || "v24.16.0";
       const nodeSource = provenance?.components?.node?.source || `https://nodejs.org/dist/${nodeVer}/node-${nodeVer}-linux-x64.tar.gz`;
-      const nodeSha = provenance?.components?.node?.sha256;
+      // npm integrity identifies the downloaded package archive, not its entrypoint.
+      const archiveChecksum = (integrity) => {
+        if (typeof integrity !== "string" || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity)) {
+          throw new Error("Semantic package archive SHA512 integrity is missing");
+        }
+        const digest = Buffer.from(integrity.slice(7), "base64");
+        if (digest.length !== 64) throw new Error("Invalid semantic package archive SHA512 integrity");
+        return [{ algorithm: "SHA512", checksumValue: digest.toString("hex") }];
+      };
 
       packages.push(
         {
@@ -386,6 +394,7 @@ function main() {
           filesAnalyzed: false,
           licenseConcluded: "Apache-2.0",
           licenseDeclared: "Apache-2.0",
+          checksums: archiveChecksum(provenance?.components?.typescript?.integrity),
         },
         {
           name: "typescript-language-server",
@@ -395,6 +404,7 @@ function main() {
           filesAnalyzed: false,
           licenseConcluded: "Apache-2.0",
           licenseDeclared: "Apache-2.0",
+          checksums: archiveChecksum(provenance?.components?.typescriptLanguageServer?.integrity),
         },
         {
           name: "nodejs",
@@ -404,7 +414,6 @@ function main() {
           filesAnalyzed: false,
           licenseConcluded: "MIT",
           licenseDeclared: "MIT",
-          ...(nodeSha ? { checksums: [{ algorithm: "SHA256", checksumValue: nodeSha }] } : {}),
         },
       );
       relationships.push(

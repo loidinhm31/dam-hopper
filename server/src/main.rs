@@ -898,7 +898,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(false);
 
     if semantic_configured_enabled {
-        match state.semantic_supervisor.prepare_enable() {
+        match state.semantic_supervisor.prepare_enable().await {
             Ok(()) => {
                 state.semantic_supervisor.commit_enable().await;
                 tracing::info!(

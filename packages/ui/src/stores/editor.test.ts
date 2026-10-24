@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const captureProvenance = vi.hoisted(() => vi.fn((): { serverUrl: string; configuredRoot: string; actor: string } | null => null));
+vi.mock("@/lib/semantic-model-uri.js", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/semantic-model-uri.js")>("@/lib/semantic-model-uri.js");
+  return { ...actual, captureSemanticProvenance: captureProvenance };
+});
 
 const fsRead = vi.fn();
 const fsWriteFile = vi.fn();
@@ -1202,5 +1207,49 @@ describe("blameEnabled session toggle and persistence exclusion", () => {
 
     const migrated = migrateEditorState(rawPersisted);
     expect(migrated.tabs[0]?.blameEnabled).toBe(false);
+  });
+});
+
+describe("editor accepted-source semantic provenance", () => {
+  const original = { serverUrl: "http://endpoint-a", configuredRoot: "/root-a", actor: "actor-a" };
+  const replacement = { ...original, configuredRoot: "/root-b", actor: "actor-b" };
+  const node = { id: "src/provenance.ts", name: "provenance.ts", kind: "file" as const,
+    size: 16, mtime: 1, isSymlink: false, children: null };
+  beforeEach(() => {
+    resetEditorStore();
+    fsRead.mockReset();
+    captureProvenance.mockReturnValue(original);
+  });
+  afterEach(() => { captureProvenance.mockReturnValue(null); resetEditorStore(); });
+
+  it("stores the pre-read authorized binding with accepted source", async () => {
+    fsRead.mockResolvedValue({ ok: true, binary: false, content: btoa("accepted source"), size: 15, mtime: 1 });
+    await useEditorStore.getState().open("alpha", node);
+    expect(useEditorStore.getState().tabs[0].semanticProvenance).toEqual(original);
+  });
+
+  it("rejects actor/root replacement while a read is pending", async () => {
+    const pending = deferred<SuccessfulRead>();
+    fsRead.mockReturnValue(pending.promise);
+    const opening = useEditorStore.getState().open("alpha", node);
+    captureProvenance.mockReturnValue(replacement);
+    pending.resolve({ ok: true, binary: false, content: btoa("foreign source"), mime: "text/plain", size: 14, mtime: 2 });
+    await opening;
+    const tab = useEditorStore.getState().tabs[0];
+    expect(tab.content).toBe("");
+    expect(tab.semanticProvenance).toBeUndefined();
+    expect(tab.error).toContain("Source binding changed");
+  });
+
+  it("keeps retained dirty text and its original authority when a later clean read uses another binding", async () => {
+    const tab = { ...makeTab("alpha", node.id), content: "unsaved draft", savedContent: "old source",
+      dirty: true, semanticProvenance: original };
+    useEditorStore.setState({ tabs: [tab] });
+    captureProvenance.mockReturnValue(replacement);
+    fsRead.mockResolvedValue({ ok: true, binary: false, content: btoa("new binding source"), size: 18, mtime: 2 });
+    await useEditorStore.getState().reloadTab(tab.key);
+    expect(useEditorStore.getState().tabs[0]).toEqual(expect.objectContaining({
+      content: "unsaved draft", semanticProvenance: original, dirty: true, stale: true,
+    }));
   });
 });

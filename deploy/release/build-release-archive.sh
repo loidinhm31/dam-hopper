@@ -14,6 +14,7 @@ WEB_DIST=""
 OUTPUT_DIR="${REPO_ROOT}/artifacts/release"
 EPOCH="${SOURCE_DATE_EPOCH:-}"
 SEMANTIC_ENGINE_DIR="${SEMANTIC_ENGINE_DIR:-}"
+STAGE_SEMANTIC_ENGINE=0
 
 usage() {
     cat <<EOF
@@ -26,6 +27,7 @@ Options:
   --output-dir <dir>      Output directory for release archive (default: artifacts/release)
   --source-date-epoch <n> Deterministic Unix timestamp for file mtimes
   --semantic-engine-dir <dir> Staged directory containing lib/semantic-engine payload
+  --stage-semantic-engine     Stage and verify bundled semantic engine from pinned provenance
   -h, --help              Show this help message
 EOF
     exit 1
@@ -56,6 +58,10 @@ while [[ $# -gt 0 ]]; do
         --semantic-engine-dir)
             SEMANTIC_ENGINE_DIR="$2"
             shift 2
+            ;;
+        --stage-semantic-engine)
+            STAGE_SEMANTIC_ENGINE=1
+            shift
             ;;
         -h|--help)
             usage
@@ -214,23 +220,24 @@ chmod 0644 "${TMP_STAGE}/LICENSE"
 cp -r "${WEB_DIST}/." "${TMP_STAGE}/web/"
 
 # Copy semantic engine assets if provided
-if [[ -n "${SEMANTIC_ENGINE_DIR}" ]]; then
-    if [[ ! -f "${SEMANTIC_ENGINE_DIR}/node" ]]; then
-        echo "Error: Semantic engine node binary not found in '${SEMANTIC_ENGINE_DIR}'" >&2
-        exit 1
-    fi
-    if [[ ! -f "${SEMANTIC_ENGINE_DIR}/tsls/package.json" ]]; then
-        echo "Error: Semantic engine tsls/package.json not found in '${SEMANTIC_ENGINE_DIR}'" >&2
-        exit 1
-    fi
-    if [[ ! -f "${SEMANTIC_ENGINE_DIR}/tsls/node_modules/typescript-language-server/lib/cli.mjs" ]]; then
-        echo "Error: Semantic engine TSLS cli.mjs not found in '${SEMANTIC_ENGINE_DIR}'" >&2
-        exit 1
-    fi
-    if [[ ! -f "${SEMANTIC_ENGINE_DIR}/tsls/node_modules/typescript/lib/tsserver.js" ]]; then
-        echo "Error: Semantic engine tsserver.js not found in '${SEMANTIC_ENGINE_DIR}'" >&2
-        exit 1
-    fi
+if [[ "${STAGE_SEMANTIC_ENGINE}" -eq 1 && -z "${SEMANTIC_ENGINE_DIR}" ]]; then
+    node "${SCRIPT_DIR}/semantic-engine/stage-semantic-engine.mjs" \
+        --output-dir "${TMP_STAGE}/lib/semantic-engine"
+elif [[ -n "${SEMANTIC_ENGINE_DIR}" ]]; then
+    for req_sem in \
+        "node" \
+        "tsls/package.json" \
+        "tsls/node_modules/typescript-language-server/lib/cli.mjs" \
+        "tsls/node_modules/typescript/lib/tsserver.js" \
+        "tsls/node_modules/typescript/lib/_tsserver.js" \
+        "tsls/node_modules/typescript/lib/typescript.js"; do
+        if [[ ! -f "${SEMANTIC_ENGINE_DIR}/${req_sem}" ]]; then
+            echo "Error: Semantic engine required file '${req_sem}' not found in '${SEMANTIC_ENGINE_DIR}'" >&2
+            exit 1
+        fi
+    done
+    node "${SCRIPT_DIR}/semantic-engine/stage-semantic-engine.mjs" \
+        --verify-only "${SEMANTIC_ENGINE_DIR}"
     mkdir -p "${TMP_STAGE}/lib/semantic-engine"
     # Dereference symlinks so release archive contains only regular files and directories
     cp -rL "${SEMANTIC_ENGINE_DIR}/." "${TMP_STAGE}/lib/semantic-engine/"
@@ -242,6 +249,10 @@ find "${TMP_STAGE}" -type f ! -path "${TMP_STAGE}/bin/*" -exec chmod 0644 {} +
 find "${TMP_STAGE}/bin" -type f -exec chmod 0755 {} +
 if [[ -f "${TMP_STAGE}/lib/semantic-engine/node" ]]; then
     chmod 0755 "${TMP_STAGE}/lib/semantic-engine/node"
+fi
+if [[ -d "${TMP_STAGE}/lib/semantic-engine" ]]; then
+    node "${SCRIPT_DIR}/semantic-engine/stage-semantic-engine.mjs" \
+        --verify-only "${TMP_STAGE}/lib/semantic-engine"
 fi
 
 # Normalize mtimes deterministically

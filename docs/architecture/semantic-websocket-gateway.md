@@ -1,7 +1,7 @@
 # Authenticated Semantic WebSocket Gateway Architecture
 
 **Authority:** Server Semantic Subsystem (`server/src/api/semantic_ws.rs`, `server/src/semantic/gateway.rs`, `server/src/semantic/uri.rs`)  
-**Status:** Maintained Architecture Specification (Phase 05 Delivered; Phase 07 Shared Monaco Client Integrated)
+**Status:** Maintained Architecture Specification (Phase 09 Qualified for Portable-Only Linux x64 Server + Web)
 
 ## Scope and Subsystem Boundary
 
@@ -23,7 +23,7 @@ flowchart TD
 - **Dedicated Route & Protocol Isolation:** The `/ws/semantic/v1` endpoint is isolated from the core `/ws` multiplexed connection. It uses standard JSON-RPC 2.0 frames instead of the `{ kind: ... }` message envelope and shares zero channel budgets, message queues, or event dispatchers with terminal PTY or filesystem operations.
 - **Required Subprotocol:** Handshakes require exact negotiation of the `dam-hopper.semantic.lsp.v1` subprotocol via `Sec-WebSocket-Protocol`. Requests omitting or offering differing subprotocols fail with HTTP 400 Bad Request.
 - **Server-Global Hot Toggle & Default-Disabled State:** The semantic supervisor defaults to disabled (`is_enabled() == false`). Server administrators can enable or disable the subsystem dynamically at runtime via `PATCH /api/semantic/settings` without daemon restart. When disabled, WebSocket connections may upgrade at the HTTP layer, but initialization attempts return JSON-RPC error `-32000 SEMANTIC_DISABLED`. When toggled OFF by an administrator, active sessions are immediately revoked and their process trees reaped before updating persisted configuration.
-- **Cancellation-First Teardown:** Live authentication invalidation terminates supervisor admission and reaps the child process tree _before_ socket-level close delivery, preventing slow network consumers from delaying resource reclamation.
+- **Cancellation-First Teardown:** Live authentication invalidation terminates supervisor admission, immediately revokes shared session tokens lock-free, fences queued outgoing results, and reaps the child process tree _before_ socket-level close delivery, preventing slow or stalled network consumers from delaying resource reclamation or receiving late responses.
 
 ---
 
@@ -86,7 +86,7 @@ Once the socket is upgraded, a dedicated asynchronous watcher monitors authentic
   - Active user enablement (`user.is_enabled == true`).
   - Session revocation timestamps (`session.revoked_at.is_none()`).
   - Version increments (`session.auth_version == user.auth_version == actor.auth_version`, `session.credential_version == actor.credential_version`).
-  - Store unavailability or query timeout fails closed.
+  - Store unavailability or query timeout fails closed (HTTP 503 / close code 1013 `CLOSE_AUTH_UNAVAILABLE`). Tested against real SQLite WAL reader locks and MongoDB network timeouts (sustained exactly 2,001 ms).
 
 ### Cancellation-First Teardown Sequence
 
@@ -94,20 +94,26 @@ When invalidation is detected, the watcher enforces strict cancellation-first or
 
 ```text
 Watcher detects invalidation
-  1. state.semantic_supervisor.invalidate_connection(&connection_id).await
-     -> Reaps child process tree and cancels session actor IMMEDIATELY
-  2. Deliver close frame code (4401 / 4403 / 1013) to writer task
-  3. Signal cancel channel (cancel_tx.send(true)) to abort reader and writer loops
+  1. session_revocation.revoke()
+     -> Immediately revokes shared session token lock-free (0 awaits)
+  2. state.semantic_supervisor.invalidate_connection(&connection_id).await
+     -> Reaps child process tree and cancels session actor out-of-band (~508ms)
+  3. Queued writer fence drops non-null success results if token is revoked
+  4. Deliver close frame code (4401 / 4403 / 1013) to writer task
+  5. Signal cancel channel (cancel_tx.send(true)) to abort reader and writer loops
 ```
 
-This ordering guarantees that an unresponsive network client or full outbound channel cannot prolong child process lifetime or delay host resource cleanup.
-
+This ordering guarantees that an unresponsive network client or full outbound channel cannot prolong child process lifetime, delay host resource cleanup, or observe stale results. Phase 09 qualification verified 20/20 cases across real SQLite and MongoDB stores: admission cutoff was immediate (0 ms) and descendant process tree reap completed in 506–510 ms under saturated backpressure with non-reading consumers.
 ---
 
 ## Resource Controls and Finite Bounds
 
 | Parameter                     | Limit                   | Constant / Enforcement Location                                      |
 | ----------------------------- | ----------------------- | -------------------------------------------------------------------- |
+| Adaptive Wire Sync Threshold  | 64 KiB (65,536 bytes)   | `ADAPTIVE_SYNC_THRESHOLD_BYTES` in `resources.rs` (frozen post-Phase 09) |
+| Max Single Document Size      | 1 MiB (1,048,576 bytes) | `MAX_DOCUMENT_BYTES` in `resources.rs`                               |
+| Max Session Overlay Budget    | 4 MiB (4,194,304 bytes) | `MAX_SESSION_OVERLAY_BYTES` in `resources.rs`                        |
+| Max Global Overlay Budget     | 8 MiB (8,388,608 bytes) | `MAX_GLOBAL_OVERLAY_BYTES` in `resources.rs`                         |
 | Max Frame & Message Size      | 4 MiB (4,194,304 bytes) | `MAX_FRAME_BODY_BYTES` in `resources.rs`; Axum upgrade config        |
 | Max Stdio Header Size         | 8 KiB (8,192 bytes)     | `MAX_STDIO_HEADER_BYTES` in `resources.rs`                           |
 | Token Bucket Refill Rate      | 40 tokens / sec         | `MESSAGE_RATE_PER_SEC` in `resources.rs`                             |
@@ -115,9 +121,11 @@ This ordering guarantees that an unresponsive network client or full outbound ch
 | Rate Cost per Message         | 1.0 token               | In-memory `TokenBucketRateLimiter` in `semantic_ws.rs`               |
 | In-Flight Navigation Requests | 8 concurrent requests   | `MAX_IN_FLIGHT_REQUESTS` in `resources.rs`; `in_flight_count` atomic |
 | Outbound Message Queue        | 32 messages             | `MAX_QUEUED_MESSAGES` in `resources.rs`; bounded Tokio mpsc          |
+| Outbound Queued Byte Budget   | 4 MiB (4,194,304 bytes) | `MAX_QUEUED_BYTES` in `resources.rs`; serialized UTF-8 accounting    |
 | Socket Write Timeout          | 2.0 seconds             | `SOCKET_SEND_TIMEOUT` in `resources.rs`                              |
+| Live Auth Lookup Timeout      | 2.0 seconds             | `AUTH_STORE_LOOKUP_TIMEOUT` in `resources.rs`                        |
 | Peer Inactivity Timeout       | 60.0 seconds            | Read stream timeout in `semantic_ws.rs`                              |
-
+| Resource Control Mode         | Portable-Only Qualified | Linux cgroups v2 mode explicitly unqualified (`NOT_SELECTED`)        |
 ### Throttling & Payload Rejections
 
 - **Rate Limit Exceeded:** When bucket tokens fall below 1.0, the message is dropped and the gateway returns JSON-RPC error `-32004` (`RATE_LIMIT_EXCEEDED`).
@@ -126,8 +134,7 @@ This ordering guarantees that an unresponsive network client or full outbound ch
 
 ### Reader/Writer Task Decoupling & Inactivity Limitation
 
-The socket handler splits into a dedicated writer task and a sequential reader loop. If the outbound writer task terminates (e.g. on socket send failure or close frame delivery), incoming messages continue to be read until the reader encounters an error, disconnect, or timeout. If an active client continuously transmits frames, the 60-second peer inactivity timeout does not trigger. Adding an explicit writer-closure select branch (`outbound_tx.closed()`) to immediately abort the reader loop is tracked for Phase 06/08.
-
+The socket handler splits into a dedicated writer task and a sequential reader loop. The reader loop includes an explicit select branch on `outbound_tx.closed()` and the shared cancellation channel; if the outbound writer task terminates on socket send failure or close frame delivery, the reader terminates immediately without lingering until the 60-second inactivity timeout.
 ---
 
 ## Filtered JSON-RPC 2.0 Protocol Profile
@@ -297,32 +304,32 @@ To prevent dirty editor state, undo stacks, or cursor positions from being destr
 
 - **Local Model URI:** Follows Monaco's existing in-memory scheme: `inmemory://dam-hopper/${encodeURIComponent(tabKey)}`.
 - **Virtual Wire URI:** Follows the gateway's RFC 3986 virtual URI scheme: `dam-hopper://semantic/<target-id>/<encoded-relative-path>`.
-- **Reconnection Invariant:** On reconnect or target re-attach, the local model object is retained in memory. Only the wire binding is updated, and current editor text is replayed to the new language server session before transitioning to `ready` (subsequent edit dispatch across generation shifts is governed by dynamic client resolution at call time via `findClientForTab`, remediating Phase 07 C-1 in Phase 08).
+- **Reconnection Invariant:** Retain the local model, undo and view state. Replay requires matching immutable endpoint/root/credential provenance, the current profile connection generation, and an exact-owner project cache entry. Missing or conflicting authority fails closed before reading retained draft text. Each socket attempt owns its promises, bindings, queues and cleanup.
 
 ### 3. Adaptive Document Synchronization
 
-`SemanticClient` mirrors the server's single-capability adaptive sync policy at `ADAPTIVE_SYNC_THRESHOLD_BYTES = 64 KiB`:
+`SemanticClient` requires the complete attach policy and an identical initialize policy before replay or navigation. It has no operational threshold fallback; the server's compiled threshold is the single authority.
 
 - **Exact Post-Edit Accounting:** Keystroke edits compute the new full document UTF-8 byte length via `new TextEncoder().encode(newFullContent).length`.
 - **Sync Path Selection:**
-  - **Below 64 KiB:** Transmits range-less full text replacements (`{ text: newFullContent }`).
-  - **At or Above 64 KiB:** Forwards incremental edit change batches (`{ range, text }`) directly.
+  - **Below the negotiated threshold:** Range-less full text replacement (`{ text: newFullContent }`).
+  - **At or above the threshold:** Ordered ranged change batches (`{ range, text }`); the boundary uses post-edit UTF-8 bytes.
 - **Monotonic Wire Versioning & Queue Serialization:** Each committed edit increments `wireBinding.wireVersion`. Document edits are queued sequentially per document via promise chaining (`documentQueues`), ensuring strict FIFO order across async boundaries.
 
 ### 4. Model-Scoped Monaco Provider Coexistence
 
 `SemanticMonacoManager` registers Monaco `DefinitionProvider` and `ImplementationProvider` for `typescript` and `javascript` (`.ts`, `.tsx`, `.js`, `.jsx`):
 
-- **Model-Scoped Resolution:** Callbacks check whether the requesting Monaco model is registered in `SemanticModelRegistry` and bound to an active `SemanticClient`. Semantic models query the language server via `queryDefinition` / `queryImplementation`. Non-semantic models (e.g. diff editors, scratchpads, non-project files) delegate directly to Monaco's built-in TypeScript worker (`getTypeScriptWorker` / `getJavaScriptWorker`).
-- **Coordinate Translation:** Converts between Monaco 1-based line/column coordinates (`monacoPositionToLsp`) and LSP 0-based UTF-16 code units (`lspRangeToMonaco`).
-- **Clean Mode Restoration:** Deactivating the manager or toggling the feature OFF restores Monaco's default TypeScript/JavaScript mode configuration (`definitions: true, implementations: true`).
+- **Model-Scoped Resolution:** Exclusive per-model selectors suppress competing providers only for authorized semantic models. Every mounting manager registration owns a distinct disposal token; unrelated models retain their built-in providers.
+- **Coordinate Translation:** Converts Monaco 1-based coordinates to LSP 0-based UTF-16 code units.
+- **Clean Mode Restoration:** OFF disposes owned selectors; global Monaco TypeScript/JavaScript mode defaults are never modified.
 
 ### 5. Ephemeral Reveal Coordination
 
 Cross-document navigation utilizes `useSemanticNavigationStore`:
 
-- Navigation responses outside the active editor file dispatch a typed `NavigationRevealIntent` (`targetId`, `profileId`, `project`, `targetKey`, `relativePath`, `range`, `createdAt`) with a 10-second TTL.
-- Destination editor tabs consume the intent atomically upon mounting or focusing, selecting and revealing the matching range before clearing the intent.
+- Navigation captures exact source version/incarnation and destination content SHA256 plus overlay version/incarnation when open. Unopened destinations are bounded disk snapshots temporarily pinned into the child, then re-queried in FIFO order; hashing a later read alone is insufficient.
+- Reveal intents preserve the actual source profile/project/worktree target. Destination content, authority and currentness are rechecked after asynchronous work and immediately before synchronous selection. Rejected owned semantic destinations cannot fall through to an ambient opener.
 - The ephemeral semantic navigation store (`useSemanticNavigationStore`) tracks reveal intents in memory (intents and document content are never persisted to `localStorage`; tab metadata persistence is governed independently by the editor store).
 
 ### 6. Gateway Cancellation & Desync Protection Hardening
@@ -379,19 +386,19 @@ The frontend `SemanticClient` (`packages/ui/src/api/semantic-client.ts`) and nav
    - `EditorStatusBar` inspects the active model's semantic client status from `useSemanticNavigationStore` (`clientStatuses`).
    - Displays live status: `ready` (emerald dot), `starting` / `replaying` (amber dot), `error` (rose dot), `disconnected` (muted dot), or `unsupported` (muted label), accompanied by descriptive tooltips.
 
-### 3. Open Review Items and Acceptance Boundaries
+### 3. Remediated Review Items and Phase 09 Qualification
 
-Static review of Phase 08 implementation (`plans/reports/code-reviewer-261023-2250-phase-08-lifecycle-cycle-2.md`, score 6/10) identifies the following tracked boundaries carried forward into the Phase 09 receiving checklist:
+Phase 09 resolved and qualified all tracked boundaries carried forward from Phase 08 review:
 
-- **C2 (Actor Invalidation Fence):** `SemanticSessionHandle::invalidate()` dispatches `SessionCommand::Invalidate` over a bounded mpsc channel. Invalidation is enqueued rather than acting as a synchronous execution barrier if the session actor is blocked during startup or backoff. Gateway result publishing fencing is tracked for Phase 09.
-- **R1 (Foreign-Binding Dirty Replay Gate):** `replayMatchingModels` filters models by target key equality without validating that the local draft's captured endpoint, project root, and actor provenance match the newly authorized connection. Mismatched draft upload protection is tracked for Phase 09.
-- **W2 (Handshake Socket Identity Race):** Asynchronous WebSocket close events that clear `this.ws` before `performHandshake()` rejection continuations execute could strand pending connect promises or tear down replacement sockets.
-- **W3 (Monaco Opener Target Derivation):** Opener callback registration and fallback routing across linked worktree destinations rather than assuming project root.
-- **R2 (Worktree Wire Parameter Alignment):** Client attach sends `target.worktree` while gateway expects `target.worktreePath`; wire alignment tracked for Phase 09.
-- **R3 (Invalidated Actor Exit / Reap Race):** Child termination during the prepare/reap gap could trigger restart before shutdown acknowledgment; terminal exit verification before reap completion tracked for Phase 09.
-- **W5 (Git Route Worktree Invalidation):** Target-scoped worktree invalidation across Git mutation routes.
-- **Full Browser Qualification (G8 Gate):** Headless Chromium component tests verify client recovery, cancellation, and status bar rendering; full end-to-end multi-tab application journeys and live language server process qualification against containerized server environments remain deferred to Phase 10.
-
+- **C2 (Actor Invalidation Fence):** `session_revocation_handle` provides a synchronous, lock-free revocation token fence on session and connection boundaries before actor drain and result publication, preventing stale responses from surviving invalidation.
+- **R1 (Foreign-Binding Dirty Replay Gate):** `replayMatchingModels` validates that local draft models match the newly authorized connection's exact endpoint URL, project root, and actor provenance before replaying unsaved text.
+- **W2 (Handshake Socket Identity Race):** `performHandshake()` isolates socket attempts, ensuring abort or failure cleanup operates on its own attempt-local socket without clearing or stranding replacement `this.ws` instances.
+- **W3 (Monaco Opener Target Derivation):** `SemanticMonacoManager` registers per-instance disposal tokens and routes cross-tab navigation through the unified destination target resolver across linked worktrees.
+- **R2 (Worktree Wire Parameter Alignment):** Client attach and gateway wire contracts align on `target.worktreePath`.
+- **R3 (Invalidated Actor Exit / Reap Race):** Child processes exit cleanly on invalidated actors before reap acknowledgment, eliminating crash restart races during retirement.
+- **W5 (Git Route Worktree Invalidation):** Git mutation routes enforce target-scoped worktree invalidation rather than project-wide disruption.
+- **G5 / Phase 07 W-1 (Destination Freshness Proof):** Destination coordinate-to-content freshness validates file content and pins unopened destinations before cross-tab reveal.
+- **G8 / Phase 07 C-2 (Real Browser Monaco Qualification):** 21-step fixed union qualification executed in real Chromium against live Axum server and packaged TSLS. Verified 0 stale reveals, stable model retention, and clean provider restoration on OFF. Full end-to-end multi-tab user journey visual sign-off is governed by Phase 10.
 ## Related Documentation
 
 - [WebSocket API](../api/websocket.md) — Endpoint overview and core `/ws` protocol comparison.

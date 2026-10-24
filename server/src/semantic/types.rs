@@ -1,6 +1,7 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Notify;
 
 use super::resources::{
     FORCE_KILL_REAP_BUDGET, GRACEFUL_SHUTDOWN_TIMEOUT as RES_GRACEFUL_SHUTDOWN, MAX_QUEUED_BYTES,
@@ -119,3 +120,59 @@ impl ByteBudgetCounter {
         self.current_bytes.load(Ordering::Acquire)
     }
 }
+
+/// Snapshot of an open overlay document with cryptographic SHA-256 digest
+/// for G5 destination coordinate-to-content freshness verification.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OverlayDocumentSnapshot {
+    pub uri: String,
+    pub language_id: String,
+    pub version: i64,
+    pub open_incarnation: u64,
+    pub content_sha256: String,
+    pub text: String,
+}
+
+/// Synchronously observable, lock-free revocation token shared across session handle,
+/// session actor, supervisor, and gateway tasks.
+#[derive(Clone, Debug, Default)]
+pub struct RevocationToken {
+    revoked: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+impl RevocationToken {
+    pub fn new() -> Self {
+        Self {
+            revoked: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Synchronously mark this token as revoked and wake all current/future waiters.
+    pub fn revoke(&self) {
+        if !self.revoked.swap(true, Ordering::SeqCst) {
+            self.notify.notify_waiters();
+        }
+    }
+
+    /// Check whether this token has been revoked.
+    #[inline]
+    pub fn is_revoked(&self) -> bool {
+        self.revoked.load(Ordering::Acquire)
+    }
+
+    /// Future that resolves immediately if already revoked, or as soon as `revoke()` is called.
+    pub async fn cancelled(&self) {
+        if self.is_revoked() {
+            return;
+        }
+        let notified = self.notify.notified();
+        if self.is_revoked() {
+            return;
+        }
+        notified.await;
+    }
+}
+
+pub use super::pressure::SessionDiagnosticsSnapshot;

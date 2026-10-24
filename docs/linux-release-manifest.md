@@ -180,9 +180,10 @@ When the archive packages the bundled semantic language server toolchain, the in
 - **Contained Tool Packages:** When `lib/semantic-engine` is present, provenance metadata (`deploy/release/semantic-engine/provenance.json`) declares pinned tool packages:
   - `typescript` (v5.9.3, Apache-2.0)
   - `typescript-language-server` (v6.0.2, Apache-2.0)
-  - `nodejs` (v24.16.0, MIT, with download source and SHA-256)
+  - `nodejs` (v24.16.0, MIT, source URL; binary SHA256 belongs to the file inventory, not the archive package checksum).
 - **Relationships:** `SPDXRef-Package-dam-hopper CONTAINS SPDXRef-Package-typescript`, `CONTAINS SPDXRef-Package-typescript-language-server`, and `CONTAINS SPDXRef-Package-nodejs`.
 - **File-Level Attribution:** Packaged files under `lib/semantic-engine/tsls/node_modules/typescript*` are concluded `Apache-2.0`, while base DamHopper files are concluded `MIT`.
+- **Package Checksums:** TypeScript and TSLS package checksums use the lockfile-backed npm archive SHA512 integrity. Entrypoint SHA256 values remain file checksums and passive runtime verification inputs.
 
 
 The publisher must compute exact inventory set equality for each projection; a

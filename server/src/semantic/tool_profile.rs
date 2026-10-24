@@ -22,19 +22,155 @@ use thiserror::Error;
 /// Pinned SHA-256 digest of the bundled Linux x64 Node.js runtime (v24.16.0).
 pub const PINNED_NODE_SHA256: &str =
     "b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd";
-
 /// Pinned SHA-256 digest of bundled typescript-language-server (v6.0.2 cli.mjs).
 pub const PINNED_TSLS_ENTRYPOINT_SHA256: &str =
     "192638f1fa62c907fd54c0b55b12dd3dff01325a1a0ed5973907efca1c57b5eb";
-
-/// Pinned SHA-256 digest of bundled typescript compiler (v5.9.3 tsserver.js).
+/// Pinned SHA-256 digest of bundled typescript compiler shim (v5.9.3 tsserver.js).
 pub const PINNED_TSSERVER_SHA256: &str =
     "e3ccfeec65ec5c470b8ffc5611878a31182650c7e8a062c38a719f83b523edcb";
-
-/// Pinned SHA-256 digest of bundled tsls package.json.
+/// Pinned SHA-256 digest of bundled tsls/package.json.
 pub const PINNED_PACKAGE_JSON_SHA256: &str =
     "1aebb20f4c8d8b699745853542ecce7f1e7e42c85f97843bfd8064f9efdc3f7c";
+/// Pinned SHA-256 digest of bundled tsls/pnpm-lock.yaml.
+pub const PINNED_LOCKFILE_SHA256: &str =
+    "003c24ed03f9491035a8f2a3a956d7e83f10def028b028987bdc5d618c2fdcbd";
+/// Pinned SHA-256 digest of bundled tsls/LICENSES.txt.
+pub const PINNED_LICENSES_SHA256: &str =
+    "d0e2824ee948e8505d22d5997789516a762373f66c6f34da5d22e07bee059b66";
+/// Pinned SHA-256 digest of bundled typescript-language-server/package.json.
+pub const PINNED_TSLS_PACKAGE_JSON_SHA256: &str =
+    "76115ed65ae7fe2f0112d784b523cc89a0751bf9cfad673c37d85a4634bdf699";
+/// Pinned SHA-256 digest of bundled typescript-language-server/LICENSE.
+pub const PINNED_TSLS_LICENSE_SHA256: &str =
+    "899d21038f87dd6243dd33b7ee82a078e639d4325a427c01e64d8116315b9680";
+/// Pinned SHA-256 digest of bundled typescript/package.json.
+pub const PINNED_TS_PACKAGE_JSON_SHA256: &str =
+    "822ef7ca6452205657b6288b066481ecf508bfbf43455d715cf7d3ec457561e6";
+/// Pinned SHA-256 digest of bundled typescript/lib/_tsserver.js (actual executed server implementation).
+pub const PINNED_TSSERVER_IMPL_SHA256: &str =
+    "0efcc88cdf0593cc1dcc8b6afd605c7bed9eca6f648c70c8f0df8695114bf6d7";
+/// Pinned SHA-256 digest of bundled typescript/lib/typescript.js (transitively required compiler core).
+pub const PINNED_TYPESCRIPT_JS_SHA256: &str =
+    "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675";
+/// Pinned SHA-256 digest of bundled typescript/lib/typingsInstaller.js.
+pub const PINNED_TYPINGS_INSTALLER_SHA256: &str =
+    "2d48a038523ea7c626fa2796a30fa5fdc07612ea5fab83544423009d7683a213";
+/// Pinned SHA-256 digest of bundled typescript/lib/_typingsInstaller.js.
+pub const PINNED_TYPINGS_INSTALLER_IMPL_SHA256: &str =
+    "62a69c574365f1c81633b86b3214f9df860aad08843028dd5244b00aa7f1e190";
+/// Pinned SHA-256 digest of bundled typescript/lib/watchGuard.js.
+pub const PINNED_WATCH_GUARD_SHA256: &str =
+    "471200d4bc555ef8d8429358bdca2a68ea7c9bfff6c853b5b048d2512fe4092a";
+/// Pinned SHA-256 digest of bundled typescript/lib/typesMap.json.
+pub const PINNED_TYPES_MAP_SHA256: &str =
+    "4143fb8b1c5d4421dfa19a4b80ddf2da375fc0835a349c3b18519fda5955e1d9";
+/// Pinned SHA-256 digest of bundled typescript/lib/lib.d.ts.
+pub const PINNED_LIB_D_TS_SHA256: &str =
+    "a7297ff837fcdf174a9524925966429eb8e5feecc2cc55cc06574e6b092c1eaa";
+/// Pinned SHA-256 digest of bundled typescript/lib/lib.es5.d.ts.
+pub const PINNED_LIB_ES5_D_TS_SHA256: &str =
+    "c430d44666289dae81f30fa7b2edebf186ecc91a2d4c71266ea6ae76388792e1";
+/// Pinned SHA-256 digest of bundled typescript/LICENSE.txt.
+pub const PINNED_TS_LICENSE_SHA256: &str =
+    "a7d00bfd54525bc694b6e32f64c7ebcf5e6b7ae3657be5cc12767bce74654a47";
+/// Pinned SHA-256 digest of bundled typescript/ThirdPartyNoticeText.txt.
+pub const PINNED_TS_THIRD_PARTY_NOTICE_SHA256: &str =
+    "1af3c68039c57e539422da82a4faada506ce6d0ea6f90e0b699d02dbcdb7a90c";
 
+/// Complete transitive executed payload manifest `(relative_path_under_semantic_engine, component_id, sha256)`.
+pub const PINNED_TRANSITIVE_PAYLOAD_DIGESTS: &[(&str, &str, &str)] = &[
+    ("node", "node_binary", PINNED_NODE_SHA256),
+    (
+        "tsls/package.json",
+        "package_json",
+        PINNED_PACKAGE_JSON_SHA256,
+    ),
+    (
+        "tsls/pnpm-lock.yaml",
+        "pnpm_lockfile",
+        PINNED_LOCKFILE_SHA256,
+    ),
+    (
+        "tsls/LICENSES.txt",
+        "bundle_licenses",
+        PINNED_LICENSES_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript-language-server/package.json",
+        "tsls_package_json",
+        PINNED_TSLS_PACKAGE_JSON_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript-language-server/lib/cli.mjs",
+        "tsls_entrypoint",
+        PINNED_TSLS_ENTRYPOINT_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript-language-server/LICENSE",
+        "tsls_license",
+        PINNED_TSLS_LICENSE_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript/package.json",
+        "typescript_package_json",
+        PINNED_TS_PACKAGE_JSON_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript/lib/tsserver.js",
+        "tsserver_entrypoint",
+        PINNED_TSSERVER_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript/lib/_tsserver.js",
+        "tsserver_impl",
+        PINNED_TSSERVER_IMPL_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript/lib/typescript.js",
+        "typescript_core",
+        PINNED_TYPESCRIPT_JS_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript/lib/typingsInstaller.js",
+        "typings_installer",
+        PINNED_TYPINGS_INSTALLER_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript/lib/_typingsInstaller.js",
+        "typings_installer_impl",
+        PINNED_TYPINGS_INSTALLER_IMPL_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript/lib/watchGuard.js",
+        "watch_guard",
+        PINNED_WATCH_GUARD_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript/lib/typesMap.json",
+        "types_map",
+        PINNED_TYPES_MAP_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript/lib/lib.d.ts",
+        "typescript_lib_d_ts",
+        PINNED_LIB_D_TS_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript/lib/lib.es5.d.ts",
+        "typescript_lib_es5_d_ts",
+        PINNED_LIB_ES5_D_TS_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript/LICENSE.txt",
+        "typescript_license",
+        PINNED_TS_LICENSE_SHA256,
+    ),
+    (
+        "tsls/node_modules/typescript/ThirdPartyNoticeText.txt",
+        "typescript_third_party_notices",
+        PINNED_TS_THIRD_PARTY_NOTICE_SHA256,
+    ),
+];
 /// Default installation release root on Linux systems.
 pub const DEFAULT_RELEASE_ROOT: &str = "/opt/dam-hopper";
 
@@ -42,7 +178,6 @@ pub const DEFAULT_RELEASE_ROOT: &str = "/opt/dam-hopper";
 pub const TYPESCRIPT_DESCRIPTOR: &str = "typescript";
 /// Canonical immutable tuple identifier for the pinned bundled toolchain.
 pub const BUNDLED_TUPLE_ID: &str = "node-24.16.0-ts-5.9.3-tsls-6.0.2-linux-x64";
-
 
 /// Supported language identifiers for the TypeScript tool profile.
 pub const SUPPORTED_LANGUAGE_IDS: &[&str] = &[
@@ -75,6 +210,8 @@ pub enum ToolProfileError {
 /// Passive integrity status resulting from non-executing filesystem and digest checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolIntegrityStatus {
+    /// Integrity has not been verified yet (cached diagnostic state prior to first verification).
+    Unverified,
     /// All required artifacts exist, are regular files with correct permissions, and digests match.
     Valid,
     /// A required tool component is missing.
@@ -126,12 +263,16 @@ pub struct SemanticToolProfile {
     tsserver_path: PathBuf,
     package_json_path: PathBuf,
     expected_digests: PinnedDigests,
+    enforce_transitive_payload: bool,
 }
 
 impl SemanticToolProfile {
-    /// Create a tool profile bound to a specific release root directory using default pinned digests.
+    /// Create a tool profile bound to a specific release root directory using default pinned digests
+    /// and enforcing the full transitive payload digest inventory.
     pub fn from_release_root(root: impl AsRef<Path>) -> Self {
-        Self::from_release_root_with_digests(root, PinnedDigests::default())
+        let mut profile = Self::from_release_root_with_digests(root, PinnedDigests::default());
+        profile.enforce_transitive_payload = true;
+        profile
     }
 
     /// Create a tool profile bound to a specific release root directory with explicit expected digests.
@@ -155,9 +296,23 @@ impl SemanticToolProfile {
             package_json_path: tsls_dir.join("package.json"),
             release_root: root,
             expected_digests: digests,
+            enforce_transitive_payload: false,
         }
     }
 
+    /// Enable or disable full transitive payload digest verification.
+    pub fn with_transitive_payload_verification(mut self, enforce: bool) -> Self {
+        self.enforce_transitive_payload = enforce;
+        self
+    }
+
+    /// Returns true only when this profile enforces and passes full packaged tuple verification
+    /// (never true for synthetic or custom-digest test fixtures).
+    pub fn is_packaged_tuple_verified(&self) -> bool {
+        self.enforce_transitive_payload
+            && self.expected_digests == PinnedDigests::default()
+            && self.verify_packaged_tuple_integrity().is_valid()
+    }
     /// Discover the active tool profile from the current executable location or default release root.
     ///
     /// Never inspects environment variables or custom configuration flags to resolve tool paths.
@@ -201,7 +356,6 @@ impl SemanticToolProfile {
     pub fn tuple_id(&self) -> &'static str {
         BUNDLED_TUPLE_ID
     }
-
 
     /// Perform a passive, zero-child integrity check of the bundled toolchain.
     ///
@@ -256,31 +410,121 @@ impl SemanticToolProfile {
             Err(status) => return status,
         }
 
-        // 6. Cryptographic digest verification
-        if let Err(status) = self.verify_digest(&self.node_path, &self.expected_digests.node_sha256)
-        {
-            return status;
-        }
-
-        if let Some(expected) = &self.expected_digests.tsls_entrypoint_sha256 {
-            if let Err(status) = self.verify_digest(&self.tsls_entrypoint, expected) {
+        // The packaged inventory includes all four entry artifacts. Hash them once;
+        // explicit custom expectations still need their own comparison.
+        if self.enforce_transitive_payload {
+            if let Err(status) = self.verify_transitive_payload() {
                 return status;
             }
         }
-
-        if let Some(expected) = &self.expected_digests.tsserver_sha256 {
-            if let Err(status) = self.verify_digest(&self.tsserver_path, expected) {
-                return status;
-            }
-        }
-
-        if let Some(expected) = &self.expected_digests.package_json_sha256 {
-            if let Err(status) = self.verify_digest(&self.package_json_path, expected) {
-                return status;
+        for (path, expected, pinned) in [
+            (
+                &self.node_path,
+                Some(self.expected_digests.node_sha256.as_str()),
+                PINNED_NODE_SHA256,
+            ),
+            (
+                &self.tsls_entrypoint,
+                self.expected_digests.tsls_entrypoint_sha256.as_deref(),
+                PINNED_TSLS_ENTRYPOINT_SHA256,
+            ),
+            (
+                &self.tsserver_path,
+                self.expected_digests.tsserver_sha256.as_deref(),
+                PINNED_TSSERVER_SHA256,
+            ),
+            (
+                &self.package_json_path,
+                self.expected_digests.package_json_sha256.as_deref(),
+                PINNED_PACKAGE_JSON_SHA256,
+            ),
+        ] {
+            if let Some(expected) = expected {
+                if !self.enforce_transitive_payload || !expected.eq_ignore_ascii_case(pinned) {
+                    if let Err(status) = self.verify_digest(path, expected) {
+                        return status;
+                    }
+                }
             }
         }
 
         ToolIntegrityStatus::Valid
+    }
+
+    /// Unconditionally verify the release root against the full pinned packaged tuple
+    /// (including all transitive executed JS files, package manifests, lockfile, and licenses).
+    pub fn verify_packaged_tuple_integrity(&self) -> ToolIntegrityStatus {
+        let mut strict = self.clone();
+        strict.expected_digests = PinnedDigests::default();
+        strict.enforce_transitive_payload = true;
+        strict.verify_integrity()
+    }
+
+    fn verify_transitive_payload(&self) -> Result<(), ToolIntegrityStatus> {
+        let engine_dir = self.release_root.join("lib").join("semantic-engine");
+        for (rel_path, component, expected_sha) in PINNED_TRANSITIVE_PAYLOAD_DIGESTS {
+            let full_path = engine_dir.join(rel_path);
+            self.check_regular_file(&full_path, component)?;
+            self.verify_digest(&full_path, expected_sha)?;
+        }
+        self.verify_directory_tree_no_symlinks_or_writable(&engine_dir)
+    }
+
+    fn verify_directory_tree_no_symlinks_or_writable(
+        &self,
+        dir: &Path,
+    ) -> Result<(), ToolIntegrityStatus> {
+        let symlink_meta =
+            std::fs::symlink_metadata(dir).map_err(|_| ToolIntegrityStatus::Missing {
+                path: dir.to_path_buf(),
+                component: "semantic_engine_dir".to_string(),
+            })?;
+        if symlink_meta.file_type().is_symlink() {
+            return Err(ToolIntegrityStatus::InvalidFileType {
+                path: dir.to_path_buf(),
+                reason: "Symlinks are prohibited in immutable release payload".to_string(),
+            });
+        }
+        #[cfg(unix)]
+        {
+            let mode = symlink_meta.permissions().mode();
+            if mode & 0o022 != 0 {
+                return Err(ToolIntegrityStatus::PermissionDenied {
+                    path: dir.to_path_buf(),
+                    reason: format!(
+                        "Directory has unsafe group- or world-writable permissions ({mode:#o})"
+                    ),
+                });
+            }
+        }
+        let entries = std::fs::read_dir(dir).map_err(|e| ToolIntegrityStatus::InvalidFileType {
+            path: dir.to_path_buf(),
+            reason: format!("Failed to read directory in semantic engine payload: {e}"),
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|e| ToolIntegrityStatus::InvalidFileType {
+                path: dir.to_path_buf(),
+                reason: format!("Failed to read directory entry: {e}"),
+            })?;
+            let path = entry.path();
+            let meta =
+                std::fs::symlink_metadata(&path).map_err(|_| ToolIntegrityStatus::Missing {
+                    path: path.clone(),
+                    component: "semantic_engine_entry".to_string(),
+                })?;
+            if meta.file_type().is_symlink() {
+                return Err(ToolIntegrityStatus::InvalidFileType {
+                    path,
+                    reason: "Symlinks are prohibited in immutable release payload".to_string(),
+                });
+            }
+            if meta.is_dir() {
+                self.verify_directory_tree_no_symlinks_or_writable(&path)?;
+            } else {
+                self.check_regular_file(&path, "semantic_engine_entry")?;
+            }
+        }
+        Ok(())
     }
 
     /// Check that a path exists, is a regular file, is NOT a symlink, and is not group/world-writable.

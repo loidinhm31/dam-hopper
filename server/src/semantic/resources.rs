@@ -34,7 +34,7 @@ pub const MESSAGE_RATE_PER_SEC: u32 = 40;
 pub const MESSAGE_RATE_BURST: u32 = 80;
 
 // --- Models & Sync Thresholds ---
-/// Adaptive sync UTF-8 byte threshold (64 KiB).
+/// Adaptive sync UTF-8 byte threshold (64 KiB frozen final policy).
 /// Below this threshold, full text edits are sent; at or above, ranged incremental edits are used.
 pub const ADAPTIVE_SYNC_THRESHOLD_BYTES: usize = 64 * 1024;
 /// Maximum document size in UTF-8 bytes (1 MiB).

@@ -1,223 +1,244 @@
 import "@/lib/monaco-setup.js";
-import * as React from "react";
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import Editor from "@monaco-editor/react";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import * as monaco from "monaco-editor";
 import { SemanticMonacoManager } from "@/lib/semantic-monaco.js";
-import {
-  SemanticModelRegistry,
-  buildLocalModelUri,
-} from "@/lib/semantic-model-uri.js";
+import { SemanticModelRegistry, buildLocalModelUri, computeUtf8Sha256Hex } from "@/lib/semantic-model-uri.js";
+import { editorFileTabKey, useEditorStore, type Tab } from "@/stores/editor.js";
 import type { SemanticClient } from "@/api/semantic-client.js";
+import { useSemanticNavigationStore } from "@/stores/semantic-navigation.js";
 import "@/index.css";
 
-(
-  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
+// Observe real built-in adapters, preserving their actual worker implementation.
+// Monaco 0.55.1 ships a DefinitionAdapter, but no built-in ImplementationAdapter.
+const builtinDefinitions = new Map<string, MockInstance<monaco.languages.DefinitionProvider["provideDefinition"]>>();
+const registerDefinition = monaco.languages.registerDefinitionProvider.bind(monaco.languages);
+vi.spyOn(monaco.languages, "registerDefinitionProvider").mockImplementation((selector, provider) => {
+  if (typeof selector === "string" && ["typescript", "javascript"].includes(selector)) {
+    builtinDefinitions.set(selector, vi.spyOn(provider, "provideDefinition"));
+  }
+  return registerDefinition(selector, provider);
+});
 
-describe("Semantic Navigation Browser Component Tests", () => {
-  let container: HTMLDivElement | null = null;
-  let root: Root | null = null;
+describe("semantic Monaco real actions (UI boundary, not packaged-server qualification)", () => {
+  let container: HTMLDivElement;
+  let editor: monaco.editor.IStandaloneCodeEditor;
   let registry: SemanticModelRegistry;
   let manager: SemanticMonacoManager;
-  let mockClient: Partial<SemanticClient>;
+  const disposables: monaco.IDisposable[] = [];
+  const models: monaco.editor.ITextModel[] = [];
+  const target = { profileId: "browser-profile", project: "browser-project", worktreePath: "/worktrees/browser-feature" };
+  const text = "const value = 1;\nvalue;\nconst semanticTarget = 2;\n";
+  let destinationHash: string;
 
-  beforeEach(() => {
+  async function readyBuiltin(language: "typescript" | "javascript", model: monaco.editor.ITextModel) {
+    await vi.waitFor(() => expect(builtinDefinitions.has(language)).toBe(true), { timeout: 20_000 });
+    const getWorker = language === "typescript"
+      ? monaco.languages.typescript.getTypeScriptWorker
+      : monaco.languages.typescript.getJavaScriptWorker;
+    const workerFactory = await getWorker();
+    const worker = await workerFactory(model.uri);
+    await worker.getDefinitionAtPosition(model.uri.toString(), model.getOffsetAt({ lineNumber: 2, column: 3 }));
+    const builtin = builtinDefinitions.get(language)!;
+    builtin.mockClear();
+    return builtin;
+  }
+
+  beforeAll(async () => {
+    for (const language of ["typescript", "javascript"] as const) {
+      const ext = language === "typescript" ? "ts" : "js";
+      const warmupModel = monaco.editor.createModel(text, language, monaco.Uri.parse(`inmemory://warmup/main.${ext}`));
+      try {
+        await readyBuiltin(language, warmupModel);
+      } finally {
+        warmupModel.dispose();
+      }
+    }
+  }, 30_000);
+
+  beforeEach(async () => {
+    destinationHash = await computeUtf8Sha256Hex(text);
     container = document.createElement("div");
-    container.style.width = "800px";
-    container.style.height = "600px";
+    Object.assign(container.style, { width: "800px", height: "500px" });
     document.body.appendChild(container);
-    root = createRoot(container);
-
     registry = new SemanticModelRegistry();
-    mockClient = {
-      getStatus: vi.fn().mockReturnValue("ready"),
-      getDefinition: vi.fn().mockResolvedValue({
-        locations: [
-          {
-            uri: "dam-hopper://semantic/target-1/src/destination.ts",
-            range: {
-              start: { line: 5, character: 0 },
-              end: { line: 5, character: 15 },
-            },
-          },
-        ],
-      }),
-      getImplementation: vi.fn().mockResolvedValue({
-        locations: [],
-      }),
-    };
-
-    manager = new SemanticMonacoManager({
-      registry,
-      getClientForModel: () => mockClient as SemanticClient,
-    });
+    useSemanticNavigationStore.getState().setRevealIntent(null);
+    manager = new SemanticMonacoManager({ registry });
+    useEditorStore.setState({ tabs: [], activeKeys: {} });
+    for (const spy of builtinDefinitions.values()) spy.mockClear();
   });
-
   afterEach(() => {
     manager.deactivate();
-    if (root) {
-      act(() => {
-        root?.unmount();
-      });
-      root = null;
-    }
-    if (container?.parentNode) {
-      container.parentNode.removeChild(container);
-      container = null;
-    }
+    for (const disposable of disposables.splice(0)) disposable.dispose();
+    editor?.setModel(null);
+    editor?.dispose();
+    for (const model of models.splice(0)) model.dispose();
+    container.remove();
+    useEditorStore.setState({ tabs: [], activeKeys: {} });
   });
+  function create(language: "typescript" | "javascript", owned: boolean) {
+    const path = language === "typescript" ? "src/main.ts" : "src/main.js";
+    const tabKey = editorFileTabKey(target, path);
+    const model = monaco.editor.createModel(text, language,
+      monaco.Uri.parse(owned ? buildLocalModelUri(tabKey) : `inmemory://scratch/${path}`));
+    models.push(model);
+    const tab = { key: tabKey, target, project: target.project, targetKey: "worktree:/worktrees/browser-feature",
+      targetAvailable: true, path, content: text, savedContent: text, dirty: false } as Tab;
+    useEditorStore.setState({ tabs: [tab] });
+    const registered = registry.registerModel({ tabKey, profileId: target.profileId, project: target.project,
+      targetKey: tab.targetKey, relativePath: path });
+    registry.bindWire(tabKey, { targetId: "browser-target", connectionGeneration: 1, targetGeneration: 1,
+      sessionGeneration: 1, languageDescriptor: language });
+    const client = {
+      canAccessModel: (key: string) => !!registry.getByTabKey(key),
+      getStatus: () => "ready",
+      validateDestination: async (_location: unknown, _key: string, content: string) => await computeUtf8Sha256Hex(content) === destinationHash,
+      getDefinition: vi.fn().mockResolvedValue({ locations: [{ uri: `dam-hopper://semantic/browser-target/${path}`,
+        damHopperDestinationContentSha256: destinationHash, damHopperDestinationVersion: 1,
+        range: { start: { line: 2, character: 6 }, end: { line: 2, character: 20 } } }] }),
+      getImplementation: vi.fn().mockResolvedValue({ locations: [{ uri: `dam-hopper://semantic/browser-target/${path}`,
+        damHopperDestinationContentSha256: destinationHash, damHopperDestinationVersion: 1,
+        range: { start: { line: 2, character: 6 }, end: { line: 2, character: 20 } } }] }),
+    };
+    editor = monaco.editor.create(container, { model, automaticLayout: true,
+      gotoLocation: { multipleDefinitions: "peek", multipleImplementations: "peek" },
+      minimap: { enabled: false }, occurrencesHighlight: "off", inlayHints: { enabled: "off" },
+      codeLens: false, links: false });
+    return { model, tabKey, registered, client };
+  }
 
-  it("activates provider coexistence and routes semantic models in real browser environment", async () => {
+  async function action(id: string) {
+    editor.focus();
+    editor.setPosition({ lineNumber: 2, column: 3 });
+    editor.trigger("semantic-browser-test", id, {});
+    await vi.waitFor(() => {
+      const completed = editor.getPosition()?.lineNumber !== 2 ||
+        useSemanticNavigationStore.getState().activeRevealIntent !== null ||
+        container.querySelector(".monaco-editor-overlaymessage") !== null;
+      expect(completed, `actual Monaco command ${id} completion`).toBe(true);
+    }, { timeout: 10_000 });
+    const settled = Promise.withResolvers<void>();
+    setTimeout(settled.resolve, 0);
+    await settled.promise;
+  }
+
+  for (const language of ["typescript", "javascript"] as const) {
+    it(`${language}: owned Definition excludes actual built-in; nonowned and OFF restore it`, async () => {
+      const { model, client } = create(language, true);
+      const builtin = await readyBuiltin(language, model);
+      const first = manager.register({ getClientForModel: () => client as unknown as SemanticClient });
+      const surviving = manager.register({ getClientForModel: () => client as unknown as SemanticClient });
+      manager.activate();
+      first.dispose();
+      await action("editor.action.revealDefinition");
+      expect(client.getDefinition).toHaveBeenCalledTimes(1);
+      expect(builtin).not.toHaveBeenCalled();
+      expect(editor.getPosition()?.lineNumber).toBe(3);
+      expect(container.querySelector(".peekview-widget")).toBeNull();
+      surviving.dispose();
+      manager.deactivate();
+      await action("editor.action.revealDefinition");
+      expect(builtin).toHaveBeenCalled();
+      expect(editor.getPosition()?.lineNumber).toBe(1);
+      expect(editor.getModel()).toBe(model);
+      expect(model.getValue()).toBe(text);
+    });
+
+    it(`${language}: nonowned Definition retains actual built-in while manager is ON`, async () => {
+      const { model, client } = create(language, false);
+      const builtin = await readyBuiltin(language, model);
+      manager.register({ getClientForModel: () => client as unknown as SemanticClient });
+      manager.activate();
+      await action("editor.action.revealDefinition");
+      expect(client.getDefinition).not.toHaveBeenCalled();
+      expect(builtin).toHaveBeenCalled();
+      expect(editor.getPosition()?.lineNumber).toBe(1);
+    });
+
+    it(`${language}: Implementation excludes competing provider only for owned model`, async () => {
+      const { model, client } = create(language, true);
+      const competing = vi.fn((current: monaco.editor.ITextModel) => [{ uri: current.uri,
+        range: { startLineNumber: 1, startColumn: 7, endLineNumber: 1, endColumn: 12 } }]);
+      disposables.push(monaco.languages.registerImplementationProvider(language, { provideImplementation: competing }));
+      manager.register({ getClientForModel: () => client as unknown as SemanticClient });
+      manager.activate();
+      await action("editor.action.goToImplementation");
+      expect(client.getImplementation).toHaveBeenCalledTimes(1);
+      expect(competing).not.toHaveBeenCalled();
+      expect(editor.getPosition()?.lineNumber).toBe(3);
+      registry.clearWireBindings("browser-target");
+      await action("editor.action.goToImplementation");
+      expect(competing).toHaveBeenCalledTimes(1);
+      expect(editor.getPosition()?.lineNumber).toBe(1);
+      expect(editor.getModel()).toBe(model);
+    });
+  }
+
+  it("an actual Definition action opens an unopened destination in the source worktree, carrying its proof", async () => {
+    const { client } = create("typescript", true);
+    client.getDefinition.mockResolvedValue({ locations: [{
+      uri: "dam-hopper://semantic/browser-target/src/destination.ts",
+      range: { start: { line: 2, character: 6 }, end: { line: 2, character: 20 } },
+      damHopperDestinationContentSha256: destinationHash, damHopperDestinationVersion: null,
+    }] });
+    const open = vi.spyOn(useEditorStore.getState(), "open").mockImplementation(async () => {
+      const source = useEditorStore.getState().tabs[0];
+      useEditorStore.setState({ tabs: [source, { ...source, key: editorFileTabKey(target, "src/destination.ts"), path: "src/destination.ts" }] });
+    });
+    disposables.push({ dispose: () => open.mockRestore() });
+    manager.register({ getClientForModel: () => client as unknown as SemanticClient });
     manager.activate();
-
-    const tabKey = JSON.stringify([
-      "file",
-      "test-project",
-      "target-1",
-      "src/index.ts",
-    ]);
-    const model = registry.registerModel({
-      tabKey,
-      profileId: "default",
-      project: "test-project",
-      targetKey: "target-1",
-      relativePath: "src/index.ts",
-    });
-
-    registry.bindWire(tabKey, {
-      targetId: "target-1",
-      connectionGeneration: 1,
-      targetGeneration: 1,
-      sessionGeneration: 1,
-      languageDescriptor: "typescript",
-    });
-
-    let editorInstance: monaco.editor.IStandaloneCodeEditor | null = null;
-
-    await act(async () => {
-      root?.render(
-        <div style={{ width: "800px", height: "600px" }}>
-          <Editor
-            path={buildLocalModelUri(tabKey)}
-            value="export const greeting = 'hello world';\n"
-            language="typescript"
-            theme="vs-dark"
-            onMount={(editor) => {
-              editorInstance = editor;
-            }}
-          />
-        </div>,
-      );
-    });
-
-    await vi.waitFor(() => expect(editorInstance).not.toBeNull());
-
-    const edModel = editorInstance!.getModel();
-    expect(edModel).not.toBeNull();
-    expect(edModel?.uri.toString()).toBe(
-      monaco.Uri.parse(buildLocalModelUri(tabKey)).toString(),
-    );
-    // Query definition on model via delegating manager
-    const cancellationToken = new monaco.CancellationTokenSource().token;
-    const definitionResult = await (
-      manager as unknown as {
-        provideDefinition: (
-          model: monaco.editor.ITextModel,
-          position: monaco.IPosition,
-          token: monaco.CancellationToken,
-        ) => Promise<monaco.languages.Definition | null>;
-      }
-    ).provideDefinition(
-      edModel!,
-      { lineNumber: 1, column: 15 },
-      cancellationToken,
-    );
-
-    expect(mockClient.getDefinition).toHaveBeenCalled();
-    expect(Array.isArray(definitionResult)).toBe(true);
-    const locations = definitionResult as monaco.languages.Location[];
-    expect(locations.length).toBe(1);
-    expect(locations[0].range.startLineNumber).toBe(6);
-
-    // Deactivate restores modeConfiguration cleanly
-    manager.deactivate();
+    await action("editor.action.revealDefinition");
+    await vi.waitFor(() => expect(open).toHaveBeenCalledTimes(1));
+    expect(useSemanticNavigationStore.getState().activeRevealIntent).toEqual(expect.objectContaining({
+      profileId: target.profileId, project: target.project, relativePath: "src/destination.ts",
+      destinationContentSha256: destinationHash, destinationVersion: null,
+    }));
+    expect(open).toHaveBeenCalledWith(target, expect.objectContaining({ id: "src/destination.ts" }));
   });
 
-  it("preserves dirty text and undo stack across wire re-bind on simulated reconnect", async () => {
-    const tabKey = JSON.stringify([
-      "file",
-      "test-project",
-      "target-1",
-      "src/dirty.ts",
-    ]);
-    registry.registerModel({
-      tabKey,
-      profileId: "default",
-      project: "test-project",
-      targetKey: "target-1",
-      relativePath: "src/dirty.ts",
-    });
+  it("a destination edit during awaited proof validation prevents actual Monaco navigation", async () => {
+    const { client } = create("typescript", true);
+    const destinationKey = editorFileTabKey(target, "src/destination.ts");
+    const destinationModel = monaco.editor.createModel(text, "typescript", monaco.Uri.parse(buildLocalModelUri(destinationKey)));
+    models.push(destinationModel);
+    registry.registerModel({ tabKey: destinationKey, profileId: target.profileId, project: target.project,
+      targetKey: "worktree:/worktrees/browser-feature", relativePath: "src/destination.ts" });
+    client.getDefinition.mockResolvedValue({ locations: [{
+      uri: "dam-hopper://semantic/browser-target/src/destination.ts",
+      range: { start: { line: 2, character: 6 }, end: { line: 2, character: 20 } },
+      damHopperDestinationContentSha256: destinationHash, damHopperDestinationVersion: null,
+    }] });
+    const proof = Promise.withResolvers<boolean>();
+    const validate = vi.spyOn(client, "validateDestination").mockReturnValueOnce(proof.promise);
+    manager.register({ getClientForModel: () => client as unknown as SemanticClient });
+    manager.activate();
+    const navigation = action("editor.action.revealDefinition");
+    await vi.waitFor(() => expect(validate).toHaveBeenCalledTimes(1));
+    destinationModel.applyEdits([{ range: new monaco.Range(1, 1, 1, 1), text: "// changed\n" }]);
+    proof.resolve(true);
+    await navigation;
+    expect(editor.getModel()).not.toBe(destinationModel);
+    expect(editor.getPosition()?.lineNumber).toBe(2);
+  });
 
-    registry.bindWire(tabKey, {
-      targetId: "target-1",
-      connectionGeneration: 1,
-      targetGeneration: 1,
-      sessionGeneration: 1,
-      languageDescriptor: "typescript",
-    });
-
-    let editorInstance: monaco.editor.IStandaloneCodeEditor | null = null;
-
-    await act(async () => {
-      root?.render(
-        <div style={{ width: "800px", height: "600px" }}>
-          <Editor
-            path={buildLocalModelUri(tabKey)}
-            value="const x = 1;\n"
-            language="typescript"
-            theme="vs-dark"
-            onMount={(editor) => {
-              editorInstance = editor;
-            }}
-          />
-        </div>,
-      );
-    });
-
-    await vi.waitFor(() => expect(editorInstance).not.toBeNull());
-
-    // User makes a dirty edit
-    editorInstance!.trigger("keyboard", "type", { text: "// new comment\n" });
-    const dirtyText = editorInstance!.getValue();
-    expect(dirtyText).toContain("// new comment");
-
-    // Simulate reconnect: clear wire bindings for target-1
-    registry.clearWireBindings("target-1");
-
-    // Local model is STILL registered with the same stable identity
-    const preserved = registry.getByTabKey(tabKey);
-    expect(preserved).toBeDefined();
-    expect(preserved?.wireBinding).toBeNull();
-
-    // Editor content is UNCHANGED
-    expect(editorInstance!.getValue()).toBe(dirtyText);
-
-    // Re-bind to new wire session target-2
-    const rebind = registry.bindWire(tabKey, {
-      targetId: "target-2",
-      connectionGeneration: 2,
-      targetGeneration: 1,
-      sessionGeneration: 2,
-      languageDescriptor: "typescript",
-      initialWireVersion: 1,
-    });
-
-    expect(rebind?.targetId).toBe("target-2");
-    expect(rebind?.wireUri).toBe("dam-hopper://semantic/target-2/src/dirty.ts");
-    // Content in Monaco buffer is still intact!
-    expect(editorInstance!.getValue()).toBe(dirtyText);
+  it("same-binding reconnect preserves actual Monaco model, dirty text, undo and view state", async () => {
+    const { model, tabKey } = create("typescript", true);
+    editor.setPosition({ lineNumber: 2, column: 3 });
+    model.pushStackElement();
+    editor.executeEdits("user", [{ range: new monaco.Range(1, 1, 1, 1), text: "// unsaved\n" }]);
+    model.pushStackElement();
+    editor.setSelection(new monaco.Range(3, 1, 3, 4));
+    const before = editor.saveViewState();
+    const dirty = model.getValue();
+    registry.clearWireBindings("browser-target");
+    registry.bindWire(tabKey, { targetId: "browser-reconnected", connectionGeneration: 2,
+      targetGeneration: 1, sessionGeneration: 2, languageDescriptor: "typescript" });
+    expect(editor.getModel()).toBe(model);
+    expect(model.getValue()).toBe(dirty);
+    expect(editor.saveViewState()).toEqual(before);
+    await model.undo();
+    expect(model.getValue()).toBe(text);
+    await model.redo();
+    expect(model.getValue()).toBe(dirty);
   });
 });

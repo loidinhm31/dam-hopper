@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "status": "predeclared-before-candidate-and-final-execution",
+  "scope": "Linux x64 server and web, bundled TS/JS Definition and Implementation",
+  "tuple": "node-24.16.0-ts-5.9.3-tsls-6.0.2-linux-x64",
+  "defaultEnabled": false,
+  "workloads": [
+    { "name": "small", "files": 8, "bytesPerFile": 4096, "totalBytes": 32768 },
+    { "name": "medium", "files": 64, "bytesPerFile": 16384, "totalBytes": 1048576 },
+    { "name": "large", "files": 256, "bytesPerFile": 32768, "totalBytes": 8388608 }
+  ],
+  "fixtureSeed": 24301,
+  "maxConcurrentTrees": 2,
+  "maxOpenDocumentsPerSession": 16,
+  "candidateThresholdBytes": [32768, 65536, 131072],
+  "finalPolicy": {
+    "adaptiveSyncThresholdBytes": 65536,
+    "maxDocumentBytes": 1048576,
+    "maxOpenDocumentsPerSession": 16,
+    "maxGlobalSemanticTrees": 2,
+    "maxTreesPerConnection": 1,
+    "maxProcessesPerTree": 8,
+    "v8MaxOldSpaceMb": 256,
+    "maxSessionOverlayBytes": 4194304,
+    "maxGlobalOverlayBytes": 8388608,
+    "maxQueuedMessages": 32,
+    "maxQueuedBytes": 4194304,
+    "maxInFlightRequests": 8,
+    "messageRatePerSec": 40,
+    "messageRateBurst": 80,
+    "startupTimeoutMs": 30000,
+    "navigationTimeoutMs": 10000,
+    "idleShutdownTimeoutMs": 60000,
+    "socketSendTimeoutMs": 2000,
+    "authStoreLookupTimeoutMs": 2000,
+    "selectionRationale": "All three bounded candidates (32 KiB, 64 KiB, 128 KiB) passed all acceptance budgets with zero unexpected errors, zero stale reveals, and complete zero-residual reap. 64 KiB (65536 bytes) is selected as the simplest evidence-supported baseline: matches Phase 01 proven spike constant, conservative text-size threshold, wire payload within 0.2% of 32 KiB across the 21-step fixed union (1,604,624 vs 1,601,075 bytes), and lowest small-tier navigation p95 latency (8.96 ms)."
+  },
+  "sampling": {
+    "freshFinalRepetitions": 3,
+    "coldSessionsPerWorkload": 4,
+    "warmupNavigationsPerWorkload": 5,
+    "warmNavigationsPerWorkload": 60,
+    "coreSamplesPerEndpointPerCondition": 100,
+    "treeResourceIntervalMs": 100,
+    "baseline": "semantics OFF, same fixture and core/terminal schedule; repeat before each final comparison",
+    "navigation": "alternate Definition and Implementation with deterministic unsaved edits and fixed pacing within rate policy",
+    "coreConcurrency": "Barrier-started core and terminal schedule overlaps sustained navigation for every tier and repetition; record observed overlap and per-endpoint distributions.",
+    "adaptiveClient": "Identical 21-step union for every compiled candidate: for each threshold T in 32768/65536/131072 bytes, T-1 ASCII, T-1 multibyte, T multibyte, T+1 multibyte, T+64 multibyte, T multibyte, T-1 ASCII. Real Chromium SemanticClient, authenticated gateway and packaged engine.",
+    "freshnessProbe": "Actual Monaco Definition positive control, then edit source after a real server answer but before provider publication; observe no stale reveal.",
+    "pressure": "Cached nontransactional actor diagnostics: transition-maintained per-session queue/in-flight/overlay high-water marks, lifetime launch/restart/outcome counters, completion-boundary concurrent samples, and post-reap residual accounting. Inspect directly held cold/warm/hostile actors; browser WS-created actor pressure explicitly unmeasured. Queue gauges exclude active processing/writes. No unexpected navigation errors/restarts or residual resources permitted.",
+    "modes": ["forced-portable-only", "hard-only-if-applied-and-observed"]
+  },
+  "budgets": {
+    "coldReadyP95Ms": 15000,
+    "warmNavigationP95Ms": { "small": 500, "medium": 1500, "large": 3000 },
+    "coreAndTerminalP95AbsoluteMs": 250,
+    "coreAndTerminalP95Relative": "loaded <= max(3 * baseline, baseline + 50ms), AND absolute budget",
+    "reapDeadlineMs": 6000,
+    "terminalDrops": 0,
+    "staleReveals": 0,
+    "unauthorizedOrOutsideTargetDisclosures": 0,
+    "orphanProcesses": 0,
+    "projectCodeCanaryExecutionsInDeniedRuns": 0
+  },
+  "failurePolicy": "retain failed aggregate; root-cause correction and a new versioned run record; never retroactively change workload/budget to pass",
+  "limitations": [
+    "Portable sampled resource observations and V8 hints are not hard RSS or CPU ceilings.",
+    "No filesystem sandbox: trusted workspaces, server-account authority.",
+    "Hard mode requires actual delegated child-tree control evidence; unavailable mode remains unqualified.",
+    "No native, Windows, Android, Java or Rust qualification by analogy.",
+    "Actual built-web human visual acceptance remains Phase 10; Phase 09 G8 technical coexistence still requires real browser actions."
+  ]
+}

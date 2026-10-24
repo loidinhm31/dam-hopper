@@ -1,0 +1,29 @@
+{
+  "description": "Deterministic adversarial project code-loading vectors and tuple-specific positive controls for Gate G6 / Phase 09",
+  "vectors": [
+    {
+      "id": "V1_TS_PLUGIN_PACKAGE",
+      "surface": "tsconfig.json compilerOptions.plugins + <workspace>/node_modules/malicious-ts-plugin/index.js",
+      "positiveControl": "Bundled TSLS initialized with initializationOptions.plugins=[{name:'malicious-ts-plugin',location:workspace}] passes --globalPlugins/--pluginProbeLocations to tsserver, which loads and executes the plugin factory",
+      "productionDenial": "SemanticSessionActor forces initializationOptions.plugins=[] and bundled tsserver.path without --allowLocalPluginLoads; tsserver searches only <release_root>/lib/semantic-engine/tsls/node_modules"
+    },
+    {
+      "id": "V2_WORKSPACE_TSSERVER_DECOY",
+      "surface": "<workspace>/node_modules/typescript/lib/tsserver.js + package.json",
+      "positiveControl": "Bundled TSLS initialized with initializationOptions={} resolves workspace TypeScript via TypeScriptVersionProvider.getWorkspaceVersion and forks decoy tsserver.js",
+      "productionDenial": "SemanticSessionActor forces initializationOptions.tsserver.path to integrity-verified <release_root>/lib/semantic-engine/tsls/node_modules/typescript/lib/tsserver.js"
+    },
+    {
+      "id": "V3_NODE_PRELOAD_AND_LOADER_HOOKS",
+      "surface": "Inherited NODE_OPTIONS (--require / --import), NODE_PATH, LD_PRELOAD, TS_NODE_PROJECT",
+      "positiveControl": "Bundled node invoked with NODE_OPTIONS='--require <preload-canary.cjs>' executes preload script before entrypoint",
+      "productionDenial": "BundledLaunchSpec::build_command calls cmd.env_clear() and populates only fixed PATH=/usr/bin:/bin, HOME, LANG, LC_ALL, NO_COLOR, TERM"
+    },
+    {
+      "id": "V4_ATA_NPM_PACKAGE_HOOKS",
+      "surface": "Automatic Type Acquisition (typingsInstaller.js) + workspace package.json lifecycle scripts / PATH npm decoy",
+      "positiveControl": "Direct execution of npm decoy script writes ATA canary",
+      "productionDenial": "SemanticSessionActor sets disableAutomaticTypingAcquisition=true (passing --disableAutomaticTypingAcquisition to tsserver) and BundledLaunchSpec pins PATH=/usr/bin:/bin"
+    }
+  ]
+}

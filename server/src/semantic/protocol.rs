@@ -47,6 +47,94 @@ pub fn is_supported_language(language_id: &str) -> bool {
     )
 }
 
+/// Check whether a method in the semantic profile is a request (requires `id`).
+pub fn is_request_method(method: &str) -> bool {
+    matches!(
+        method,
+        "damHopper/attachTarget"
+            | METHOD_INITIALIZE
+            | METHOD_DEFINITION
+            | METHOD_IMPLEMENTATION
+            | METHOD_SHUTDOWN
+    )
+}
+
+/// Check whether a method in the semantic profile is a notification (forbids `id`).
+pub fn is_notification_method(method: &str) -> bool {
+    matches!(
+        method,
+        METHOD_INITIALIZED
+            | METHOD_DID_OPEN
+            | METHOD_DID_CHANGE
+            | METHOD_DID_CLOSE
+            | METHOD_CANCEL_REQUEST
+            | METHOD_EXIT
+    )
+}
+
+/// Validate a client JSON-RPC request ID: must be an integer or a non-empty string
+/// up to 64 bytes with no control characters.
+pub fn validate_request_id(id: &serde_json::Value) -> bool {
+    match id {
+        serde_json::Value::Number(n) => n.is_i64() || n.is_u64(),
+        serde_json::Value::String(s) => {
+            !s.is_empty() && s.len() <= 64 && !s.chars().any(|c| c.is_control())
+        }
+        _ => false,
+    }
+}
+
+/// Infer the supported TypeScript/JavaScript language ID from a file path extension.
+pub fn language_id_for_path(path: &std::path::Path) -> Option<&'static str> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("ts") | Some("mts") | Some("cts") => Some("typescript"),
+        Some("tsx") => Some("typescriptreact"),
+        Some("js") | Some("mjs") | Some("cjs") => Some("javascript"),
+        Some("jsx") => Some("javascriptreact"),
+        _ => None,
+    }
+}
+
+/// Check that a JSON object contains only keys from the allowed list.
+pub fn object_has_only_keys(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    allowed: &[&str],
+) -> bool {
+    obj.keys().all(|k| allowed.contains(&k.as_str()))
+}
+
+/// Recursively check whether a JSON value contains any forbidden command, executable,
+/// plugin, environment, or token override field.
+pub fn contains_forbidden_override_field(val: &serde_json::Value) -> bool {
+    const FORBIDDEN_KEYS: &[&str] = &[
+        "command",
+        "commands",
+        "arguments",
+        "executable",
+        "nodePath",
+        "tsserverPath",
+        "tsserver",
+        "plugins",
+        "env",
+        "cwd",
+        "settings",
+        "workDoneToken",
+        "partialResultToken",
+    ];
+    match val {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map {
+                if FORBIDDEN_KEYS.contains(&k.as_str()) || contains_forbidden_override_field(v) {
+                    return true;
+                }
+            }
+            false
+        }
+        serde_json::Value::Array(items) => items.iter().any(contains_forbidden_override_field),
+        _ => false,
+    }
+}
+
 /// Explicit semantic supervisor lifecycle states.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -320,5 +408,28 @@ mod tests {
         assert_eq!(std_params["position"]["character"], 4);
         assert!(std_params.get("damHopperDocumentVersion").is_none());
         assert!(std_params.get("damHopperModelGeneration").is_none());
+    }
+
+    #[test]
+    fn test_validate_request_id_and_override_fields() {
+        assert!(validate_request_id(&serde_json::json!(1)));
+        assert!(validate_request_id(&serde_json::json!("req-42")));
+        assert!(!validate_request_id(&serde_json::Value::Null));
+        assert!(!validate_request_id(&serde_json::json!("")));
+        assert!(!validate_request_id(&serde_json::json!("a".repeat(65))));
+        assert!(!validate_request_id(&serde_json::json!("bad\0id")));
+        assert!(!validate_request_id(&serde_json::json!(1.5)));
+        assert!(!validate_request_id(&serde_json::json!([1])));
+        assert!(!validate_request_id(&serde_json::json!({"id": 1})));
+
+        assert!(contains_forbidden_override_field(&serde_json::json!({
+            "initializationOptions": { "tsserver": { "path": "/bin/sh" } }
+        })));
+        assert!(contains_forbidden_override_field(&serde_json::json!({
+            "command": "workspace/executeCommand"
+        })));
+        assert!(!contains_forbidden_override_field(&serde_json::json!({
+            "capabilities": {}
+        })));
     }
 }

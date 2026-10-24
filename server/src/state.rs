@@ -125,8 +125,7 @@ pub struct AppState {
     pub idle_suspend_coordinator:
         Arc<RwLock<Option<Arc<crate::idle_suspend::IdleSuspendCoordinator>>>>,
     /// Authoritative event writer for canonical server semantic events.
-    pub idle_suspend_event_writer:
-        Option<Arc<crate::idle_suspend::IdleSuspendEventWriter>>,
+    pub idle_suspend_event_writer: Option<Arc<crate::idle_suspend::IdleSuspendEventWriter>>,
     /// Monotonic timestamp for idle suspend fallback warning onset.
     pub fallback_warning_onset_ms: u64,
     /// Bounded in-memory registry for public WebSocket presence, liveness, and session binding.
@@ -188,24 +187,12 @@ impl AppState {
             .await
     }
 
+    /// Invalidate discovery metadata only. Identity-changing callers must revoke
+    /// the exact semantic target before publishing their filesystem mutation.
     pub async fn invalidate_project_worktrees(&self, project_root: &std::path::Path) {
         self.workspace_target_resolver
             .invalidate(project_root)
             .await;
-        let project_name = {
-            let cfg = self.config.read().await;
-            cfg.projects
-                .iter()
-                .find(|p| std::path::Path::new(&p.path) == project_root)
-                .map(|p| p.name.clone())
-        };
-        if let Some(project) = project_name {
-            let handles = self.semantic_supervisor.prepare_invalidate_project(&project).await;
-            self.semantic_supervisor.spawn_reap_sessions(handles);
-        } else {
-            let handles = self.semantic_supervisor.prepare_invalidate_all().await;
-            self.semantic_supervisor.spawn_reap_sessions(handles);
-        }
     }
 
     pub async fn workspace_target_project_path(&self, name: &str) -> Result<StdPathBuf, AppError> {
@@ -290,9 +277,9 @@ impl AppState {
             event_sink.clone(),
             config.server.host_resources.clone(),
         );
-        let host_resource_events = Arc::new(
-            crate::api::resource_events::HostResourceEvents::new(host_resource_monitor.clone()),
-        );
+        let host_resource_events = Arc::new(crate::api::resource_events::HostResourceEvents::new(
+            host_resource_monitor.clone(),
+        ));
         let host_action_config_dir = config
             .config_path
             .parent()
@@ -370,21 +357,25 @@ impl AppState {
             .log_path()
             .parent()
             .map(|p| p.join("idle-suspend-events-v1.jsonl"))
-            .and_then(|path| match crate::idle_suspend::IdleSuspendEventWriter::new(path) {
-                Ok(writer) => Some(Arc::new(writer)),
-                Err(err) => {
-                    let mut fields = std::collections::BTreeMap::new();
-                    fields.insert("error".to_string(), err.to_string());
-                    diagnostics.record_event(crate::diagnostics::DiagnosticEvent {
-                        timestamp_ms: crate::idle_suspend::status::IdleSuspendStatusV1::now_ms(),
-                        level: "WARN".to_string(),
-                        source: "idle_suspend::event_writer".to_string(),
-                        message: "Failed to initialize idle suspend canonical event writer".to_string(),
-                        fields,
-                    });
-                    None
-                }
-            });
+            .and_then(
+                |path| match crate::idle_suspend::IdleSuspendEventWriter::new(path) {
+                    Ok(writer) => Some(Arc::new(writer)),
+                    Err(err) => {
+                        let mut fields = std::collections::BTreeMap::new();
+                        fields.insert("error".to_string(), err.to_string());
+                        diagnostics.record_event(crate::diagnostics::DiagnosticEvent {
+                            timestamp_ms: crate::idle_suspend::status::IdleSuspendStatusV1::now_ms(
+                            ),
+                            level: "WARN".to_string(),
+                            source: "idle_suspend::event_writer".to_string(),
+                            message: "Failed to initialize idle suspend canonical event writer"
+                                .to_string(),
+                            fields,
+                        });
+                        None
+                    }
+                },
+            );
         let mfa_key = if let Ok(key_path) = std::env::var("DAM_HOPPER_MFA_KEY_FILE") {
             let key = crate::auth::MfaEncryptionKey::from_file(&key_path)
                 .map_err(|e| anyhow::anyhow!("Failed to load MFA key from {key_path}: {e}"))?;
@@ -398,7 +389,9 @@ impl AppState {
         };
         // The selected store is the only authentication authority: without one the
         // service reports authentication unavailable rather than inventing an account.
-        let auth_service = Arc::new(crate::auth::AuthService::with_system_clock(auth_store, mfa_key));
+        let auth_service = Arc::new(crate::auth::AuthService::with_system_clock(
+            auth_store, mfa_key,
+        ));
 
         Ok(Self {
             workspace_dir,
@@ -568,7 +561,10 @@ impl AppState {
     /// Under the `global_config_mutation_lock`, reads the current on-disk global config
     /// (falling back to in-memory state if unreadable), passes it to `mutate_fn`, writes the
     /// modified config atomically to disk, and updates the in-memory `global_config`.
-    pub async fn mutate_global_config<F, R>(&self, mutate_fn: F) -> Result<R, crate::error::AppError>
+    pub async fn mutate_global_config<F, R>(
+        &self,
+        mutate_fn: F,
+    ) -> Result<R, crate::error::AppError>
     where
         F: FnOnce(&mut crate::config::schema::GlobalConfig) -> Result<R, crate::error::AppError>,
     {

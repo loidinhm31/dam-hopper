@@ -1,6 +1,7 @@
 {
   "title": "DamHopperSemanticEngineProvenance",
-  "description": "Cryptographic provenance and pinned versions for immutable Linux x64 semantic engine",
+  "description": "Cryptographic provenance, lockfile, licenses, and transitive payload SHA-256 digests for the immutable Linux x64 semantic engine",
+  "tupleId": "node-24.16.0-ts-5.9.3-tsls-6.0.2-linux-x64",
   "target": "linux-x86_64",
   "components": {
     "node": {
@@ -25,7 +26,37 @@
       "entrypoint": "lib/cli.mjs"
     },
     "packageJson": {
+      "path": "package.json",
       "sha256": "1aebb20f4c8d8b699745853542ecce7f1e7e42c85f97843bfd8064f9efdc3f7c"
+    },
+    "lockfile": {
+      "path": "pnpm-lock.yaml",
+      "sha256": "003c24ed03f9491035a8f2a3a956d7e83f10def028b028987bdc5d618c2fdcbd"
+    },
+    "licenses": {
+      "path": "LICENSES.txt",
+      "sha256": "d0e2824ee948e8505d22d5997789516a762373f66c6f34da5d22e07bee059b66"
     }
+  },
+  "transitivePayloadDigests": {
+    "node": "b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd",
+    "tsls/package.json": "1aebb20f4c8d8b699745853542ecce7f1e7e42c85f97843bfd8064f9efdc3f7c",
+    "tsls/pnpm-lock.yaml": "003c24ed03f9491035a8f2a3a956d7e83f10def028b028987bdc5d618c2fdcbd",
+    "tsls/LICENSES.txt": "d0e2824ee948e8505d22d5997789516a762373f66c6f34da5d22e07bee059b66",
+    "tsls/node_modules/typescript-language-server/package.json": "76115ed65ae7fe2f0112d784b523cc89a0751bf9cfad673c37d85a4634bdf699",
+    "tsls/node_modules/typescript-language-server/lib/cli.mjs": "192638f1fa62c907fd54c0b55b12dd3dff01325a1a0ed5973907efca1c57b5eb",
+    "tsls/node_modules/typescript-language-server/LICENSE": "899d21038f87dd6243dd33b7ee82a078e639d4325a427c01e64d8116315b9680",
+    "tsls/node_modules/typescript/package.json": "822ef7ca6452205657b6288b066481ecf508bfbf43455d715cf7d3ec457561e6",
+    "tsls/node_modules/typescript/lib/tsserver.js": "e3ccfeec65ec5c470b8ffc5611878a31182650c7e8a062c38a719f83b523edcb",
+    "tsls/node_modules/typescript/lib/_tsserver.js": "0efcc88cdf0593cc1dcc8b6afd605c7bed9eca6f648c70c8f0df8695114bf6d7",
+    "tsls/node_modules/typescript/lib/typescript.js": "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675",
+    "tsls/node_modules/typescript/lib/typingsInstaller.js": "2d48a038523ea7c626fa2796a30fa5fdc07612ea5fab83544423009d7683a213",
+    "tsls/node_modules/typescript/lib/_typingsInstaller.js": "62a69c574365f1c81633b86b3214f9df860aad08843028dd5244b00aa7f1e190",
+    "tsls/node_modules/typescript/lib/watchGuard.js": "471200d4bc555ef8d8429358bdca2a68ea7c9bfff6c853b5b048d2512fe4092a",
+    "tsls/node_modules/typescript/lib/typesMap.json": "4143fb8b1c5d4421dfa19a4b80ddf2da375fc0835a349c3b18519fda5955e1d9",
+    "tsls/node_modules/typescript/lib/lib.d.ts": "a7297ff837fcdf174a9524925966429eb8e5feecc2cc55cc06574e6b092c1eaa",
+    "tsls/node_modules/typescript/lib/lib.es5.d.ts": "c430d44666289dae81f30fa7b2edebf186ecc91a2d4c71266ea6ae76388792e1",
+    "tsls/node_modules/typescript/LICENSE.txt": "a7d00bfd54525bc694b6e32f64c7ebcf5e6b7ae3657be5cc12767bce74654a47",
+    "tsls/node_modules/typescript/ThirdPartyNoticeText.txt": "1af3c68039c57e539422da82a4faada506ce6d0ea6f90e0b699d02dbcdb7a90c"
   }
 }

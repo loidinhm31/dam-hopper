@@ -39,6 +39,10 @@ export interface NavigationRevealIntent {
     readonly endColumn: number;
   };
   readonly createdAt: number;
+  readonly isCurrent?: () => boolean;
+  readonly destinationContentSha256?: string;
+  readonly destinationVersion?: number | null;
+  readonly destinationIncarnation?: number | null;
 }
 
 export interface SemanticNavigationState {
@@ -55,12 +59,13 @@ export interface SemanticNavigationState {
     project: string,
     targetKey: string,
     relativePath: string,
+    expectedIntent?: NavigationRevealIntent,
   ) => NavigationRevealIntent | null;
   getClient: (scopeKey: string) => SemanticClient | null;
   findClientForTab: (tabKey: string) => SemanticClient | null;
   getOrCreateClient: (options: SemanticClientOptions) => SemanticClient;
-  releaseClient: (scopeKey: string) => void;
-  disconnectClient: (scopeKey: string) => void;
+  releaseClient: (scopeKey: string, expectedClient?: SemanticClient) => void;
+  disconnectClient: (scopeKey: string, expectedClient?: SemanticClient) => void;
   disconnectAll: () => void;
 }
 
@@ -108,10 +113,11 @@ export const useSemanticNavigationStore = create<SemanticNavigationState>(
       if (!enabled) {
         for (const [key, client] of Array.from(activeClients.entries())) {
           if (key.startsWith(`${profileId}::`)) {
-            client.disconnect();
             activeClients.delete(key);
             clientRefCounts.delete(key);
+            client.disconnect();
             set((state) => {
+              if (activeClients.has(key)) return state;
               const next = { ...state.clientStatuses };
               delete next[key];
               return { clientStatuses: next };
@@ -143,12 +149,24 @@ export const useSemanticNavigationStore = create<SemanticNavigationState>(
       set({ activeRevealIntent: intent });
     },
 
-    consumeRevealIntent: (profileId, project, targetKey, relativePath) => {
+    consumeRevealIntent: (
+      profileId,
+      project,
+      targetKey,
+      relativePath,
+      expectedIntent,
+    ) => {
       const current = get().activeRevealIntent;
       if (!current) return null;
+      if (expectedIntent && current !== expectedIntent) {
+        return null;
+      }
 
-      // Enforce 10-second TTL
-      if (Date.now() - current.createdAt > 10_000) {
+      // Enforce 10-second TTL and optional ephemeral validity predicate
+      if (
+        Date.now() - current.createdAt > 10_000 ||
+        (current.isCurrent && !current.isCurrent())
+      ) {
         set({ activeRevealIntent: null });
         return null;
       }
@@ -176,13 +194,7 @@ export const useSemanticNavigationStore = create<SemanticNavigationState>(
       const model = defaultSemanticModelRegistry.getByTabKey(tabKey);
       if (!model) return null;
       for (const client of activeClients.values()) {
-        const opts = (client as unknown as { options: SemanticClientOptions })
-          .options;
-        if (
-          opts.profileId === model.identity.profileId &&
-          opts.project === model.identity.project &&
-          opts.targetKey === model.identity.targetKey
-        ) {
+        if (client.canAccessModel(tabKey)) {
           return client;
         }
       }
@@ -203,17 +215,21 @@ export const useSemanticNavigationStore = create<SemanticNavigationState>(
         options.connectionGeneration,
       );
 
-      clientRefCounts.set(scopeKey, (clientRefCounts.get(scopeKey) ?? 0) + 1);
-
       const existing = activeClients.get(scopeKey);
       if (existing) {
+        clientRefCounts.set(scopeKey, (clientRefCounts.get(scopeKey) ?? 0) + 1);
         return existing;
       }
+
+      clientRefCounts.set(scopeKey, 1);
 
       const client = new SemanticClient({
         ...options,
         onStatusChange: (status, error) => {
           options.onStatusChange?.(status, error);
+          if (activeClients.get(scopeKey) !== client) {
+            return;
+          }
           set((state) => ({
             clientStatuses: {
               ...state.clientStatuses,
@@ -227,38 +243,50 @@ export const useSemanticNavigationStore = create<SemanticNavigationState>(
       return client;
     },
 
-    releaseClient: (scopeKey) => {
+    releaseClient: (scopeKey, expectedClient) => {
+      const client = activeClients.get(scopeKey);
+      if (!client) {
+        clientRefCounts.delete(scopeKey);
+        return;
+      }
+      if (expectedClient && client !== expectedClient) {
+        return;
+      }
       const currentCount = clientRefCounts.get(scopeKey) ?? 1;
       const nextCount = currentCount - 1;
       if (nextCount <= 0) {
         clientRefCounts.delete(scopeKey);
-        const client = activeClients.get(scopeKey);
-        if (client) {
-          client.disconnect();
-          activeClients.delete(scopeKey);
-          set((state) => {
-            const next = { ...state.clientStatuses };
-            delete next[scopeKey];
-            return { clientStatuses: next };
-          });
-        }
+        activeClients.delete(scopeKey);
+        client.disconnect();
+        set((state) => {
+          if (activeClients.has(scopeKey)) return state;
+          const next = { ...state.clientStatuses };
+          delete next[scopeKey];
+          return { clientStatuses: next };
+        });
       } else {
         clientRefCounts.set(scopeKey, nextCount);
       }
     },
 
-    disconnectClient: (scopeKey) => {
-      clientRefCounts.delete(scopeKey);
+    disconnectClient: (scopeKey, expectedClient) => {
       const client = activeClients.get(scopeKey);
-      if (client) {
-        client.disconnect();
-        activeClients.delete(scopeKey);
-        set((state) => {
-          const next = { ...state.clientStatuses };
-          delete next[scopeKey];
-          return { clientStatuses: next };
-        });
+      if (!client) {
+        clientRefCounts.delete(scopeKey);
+        return;
       }
+      if (expectedClient && client !== expectedClient) {
+        return;
+      }
+      clientRefCounts.delete(scopeKey);
+      activeClients.delete(scopeKey);
+      client.disconnect();
+      set((state) => {
+        if (activeClients.has(scopeKey)) return state;
+        const next = { ...state.clientStatuses };
+        delete next[scopeKey];
+        return { clientStatuses: next };
+      });
     },
 
     disconnectAll: () => {

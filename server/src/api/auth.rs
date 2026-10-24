@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 use crate::api::auth_mfa::{auth_error_response, no_store_json_response, LoginChallengeResponse};
+use crate::api::error::ApiError;
 use crate::auth::model::{
     bson_to_chrono, chrono_to_bson, AuthChallenge, AuthClaims, AuthDecision, ChallengePurpose,
     UserRecord,
@@ -22,7 +23,6 @@ use crate::auth::policy::{
 use crate::auth::totp::TotpEngine;
 use crate::auth::{AuthService, AuthStore, StoreError};
 use crate::state::AppState;
-use crate::api::error::ApiError;
 
 pub const AUTH_COOKIE: &str = "damhopper-auth";
 
@@ -338,23 +338,15 @@ pub async fn evaluate_current_admin(
             }
             Ok(CurrentAdminSession { user, session })
         }
-        AuthDecision::MfaRequired { .. } => {
-            Err(ApiError::from_app(crate::error::AppError::Unauthorized(
-                "MFA verification required".to_string(),
-            )))
-        }
-        AuthDecision::FullLoginRequired { reason } => {
-            Err(ApiError::from_app(crate::error::AppError::Unauthorized(format!(
-                "Authentication required: {}",
-                reason
-            ))))
-        }
-        AuthDecision::Unavailable { reason } => {
-            Err(ApiError::from_app(crate::error::AppError::Unavailable(format!(
-                "Auth backend unavailable: {}",
-                reason
-            ))))
-        }
+        AuthDecision::MfaRequired { .. } => Err(ApiError::from_app(
+            crate::error::AppError::Unauthorized("MFA verification required".to_string()),
+        )),
+        AuthDecision::FullLoginRequired { reason } => Err(ApiError::from_app(
+            crate::error::AppError::Unauthorized(format!("Authentication required: {}", reason)),
+        )),
+        AuthDecision::Unavailable { .. } => Err(ApiError::from_app(
+            crate::error::AppError::Unavailable("Authentication backend unavailable".to_string()),
+        )),
     }
 }
 

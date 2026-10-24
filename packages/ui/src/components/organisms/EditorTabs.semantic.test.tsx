@@ -1,237 +1,131 @@
-vi.mock("@/lib/monaco-setup.js", () => ({}));
 // @vitest-environment jsdom
-
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-
-const mockConnectionSnapshot = {
-  status: "connected",
-  serverUrl: "http://127.0.0.1:4803",
-  owner: { generation: 1 },
-};
-
-let mockSemanticEnabled = false;
-
-vi.mock("@/stores/editor.js", async () => {
-  const actual = await vi.importActual<typeof import("@/stores/editor.js")>(
-    "@/stores/editor.js",
-  );
-  return {
-    ...actual,
-    useEditorStore: (selector?: (s: unknown) => unknown) => {
-      const state = {
-        tabs: testState.tabs,
-        activeKeys: testState.activeKeys,
-        reconcileTabFreshness: vi.fn().mockResolvedValue(undefined),
-        loadContent: vi.fn().mockResolvedValue(undefined),
-        openDiff: vi.fn(),
-        close: vi.fn(),
-        closeOthers: vi.fn(),
-        closeAll: vi.fn(),
-        setContent: vi.fn(),
-        save: vi.fn(),
-        saveViewState: vi.fn(),
-        forceOverwrite: vi.fn(),
-        reloadTab: vi.fn(),
-        clearConflict: vi.fn(),
-        clearStale: vi.fn(),
-        markSaved: vi.fn(),
-        markTargetUnavailable: vi.fn(),
-        beginAsyncRequest: vi.fn(),
-        isCurrentAsyncRequest: vi.fn(),
-      };
-      return selector ? selector(state) : state;
-    },
-  };
+const boundaries = vi.hoisted(() => ({
+  enabled: false,
+  provenance: { serverUrl: "http://127.0.0.1:4803", configuredRoot: "/projects/example", actor: "actor-a" },
+  register: vi.fn(),
+}));
+vi.mock("@/lib/monaco-setup.js", () => ({}));
+vi.mock("@/lib/semantic-monaco.js", () => ({ defaultSemanticMonacoManager: { register: boundaries.register } }));
+vi.mock("@/lib/semantic-model-uri.js", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/semantic-model-uri.js")>("@/lib/semantic-model-uri.js");
+  return { ...actual, captureSemanticProvenance: () => boundaries.provenance };
 });
-
 vi.mock("@/api/connections.js", () => ({
-  useConnectionSnapshot: () => mockConnectionSnapshot,
-  getAuthToken: () => "test-token",
+  useConnectionSnapshot: () => ({ status: "connected", serverUrl: "http://127.0.0.1:4803", owner: { generation: 1 } }),
+  getConnectionSnapshot: () => ({ status: "connected", serverUrl: "http://127.0.0.1:4803", owner: { generation: 1 } }),
 }));
-
-vi.mock("@/contexts/EncryptContext.js", () => ({
-  useEncryptMode: () => ({ isEncryptEnabled: () => false }),
-}));
-
+vi.mock("@/api/server-config.js", async () => {
+  const actual = await vi.importActual<typeof import("@/api/server-config.js")>("@/api/server-config.js");
+  return { ...actual, getAuthToken: () => "test-token" };
+});
+vi.mock("@/contexts/EncryptContext.js", () => ({ useEncryptMode: () => ({ isEncryptEnabled: () => false }) }));
 vi.mock("@/api/queries.js", () => ({
-  useGitDiff: () => ({ data: undefined }),
-  useGitFileDiff: () => ({ data: undefined }),
-  useSemanticSettings: () => ({
-    data: { runtimeEnabled: mockSemanticEnabled },
-    isLoading: false,
-    isError: false,
-  }),
+  useGitDiff: () => ({ data: undefined }), useGitFileDiff: () => ({ data: undefined }),
+  useSemanticSettings: () => ({ data: { runtimeEnabled: boundaries.enabled } }),
 }));
-
-vi.mock("@/api/transport.js", () => ({
-  getTransport: () => ({
-    onStatusChange: vi.fn(() => vi.fn()),
-  }),
-}));
-
-vi.mock("@/components/organisms/MonacoHost.js", () => ({
-  MonacoHost: () => <div data-testid="monaco-host">Monaco</div>,
-}));
-
-import { editorFileTabKey, type Tab } from "@/stores/editor.js";
+vi.mock("@/api/transport.js", () => ({ getTransport: () => ({ onStatusChange: () => () => {} }) }));
+vi.mock("@/components/organisms/MonacoHost.js", () => ({ MonacoHost: () => <div>Monaco</div> }));
+import { editorFileTabKey, useEditorStore, type Tab } from "@/stores/editor.js";
 import { EditorTabs } from "./EditorTabs.js";
 import { useSemanticNavigationStore } from "@/stores/semantic-navigation.js";
+import type { SemanticClient, SemanticClientOptions } from "@/api/semantic-client.js";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-(
-  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
-
-const testState = {
-  tabs: [] as Tab[],
-  activeKeys: {} as Record<string, string | null>,
-};
-
-function makeTab(project: string, path: string, profileId = "prof-test"): Tab {
-  const target = { project, profileId };
-  const key = editorFileTabKey(target, path);
-  return {
-    key,
-    name: path.split("/").pop() ?? path,
-    path,
-    project,
-    target,
-    targetKey: project,
-    content: "export const x = 1;",
-    originalContent: "export const x = 1;",
-    dirty: false,
-    stale: false,
-    conflicted: false,
-    loading: false,
-    tier: "code",
-    readOnly: false,
-    targetAvailable: true,
-  };
+const target = { project: "example", profileId: "profile-a", worktreePath: "/worktrees/feature" };
+function tab(): Tab {
+  return { key: editorFileTabKey(target, "src/main.ts"), target, project: target.project,
+    targetKey: "worktree:/worktrees/feature", path: "src/main.ts", name: "main.ts", targetAvailable: true,
+    content: "unsaved text", savedContent: "saved text", semanticProvenance: boundaries.provenance,
+    dirty: true, tier: "normal", mtime: 1, size: 12, loading: false, saving: false, conflicted: false };
 }
 
-describe("EditorTabs semantic connection lifecycle (W-3)", () => {
-  let container: HTMLDivElement | null = null;
-  let root: Root | null = null;
-  let queryClient: QueryClient;
+const originalReconcileTabFreshness = useEditorStore.getState().reconcileTabFreshness;
+const originalGetOrCreateClient = useSemanticNavigationStore.getState().getOrCreateClient;
+const originalReleaseClient = useSemanticNavigationStore.getState().releaseClient;
 
+describe("EditorTabs semantic binding integration", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let queryClient: QueryClient;
+  let client: Partial<SemanticClient>;
+  let dispose: () => void;
   beforeEach(() => {
-    queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
+    container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    boundaries.enabled = false;
+    dispose = vi.fn(); boundaries.register.mockReset().mockReturnValue({ dispose });
+    useEditorStore.setState({ tabs: [], activeKeys: {}, reconcileTabFreshness: vi.fn().mockResolvedValue(undefined) });
+    useSemanticNavigationStore.setState({
+      getOrCreateClient: originalGetOrCreateClient,
+      releaseClient: originalReleaseClient,
+      globalSemanticEnabled: false,
+      profileSemanticEnabled: {},
+      activeRevealIntent: null,
+      clientStatuses: {},
     });
-    container = document.createElement("div");
-    document.body.appendChild(container);
-    root = createRoot(container);
-    testState.tabs = [];
-    testState.activeKeys = {};
-    mockSemanticEnabled = false;
-    mockConnectionSnapshot.status = "connected";
-    mockConnectionSnapshot.owner = { generation: 1 };
+    useSemanticNavigationStore.getState().disconnectAll();
+    client = { getStatus: () => "disconnected", connect: vi.fn().mockResolvedValue(undefined), canAccessModel: vi.fn().mockReturnValue(true) };
+    useSemanticNavigationStore.setState({
+      getOrCreateClient: vi.fn().mockReturnValue(client as SemanticClient),
+      releaseClient: vi.fn(),
+    });
+  });
+  afterEach(() => {
+    act(() => root.unmount()); container.remove(); queryClient.clear(); vi.restoreAllMocks();
+    useEditorStore.setState({ tabs: [], activeKeys: {}, reconcileTabFreshness: originalReconcileTabFreshness });
+    useSemanticNavigationStore.setState({
+      getOrCreateClient: originalGetOrCreateClient,
+      releaseClient: originalReleaseClient,
+      globalSemanticEnabled: false,
+      profileSemanticEnabled: {},
+      activeRevealIntent: null,
+      clientStatuses: {},
+    });
     useSemanticNavigationStore.getState().disconnectAll();
   });
-
-  afterEach(() => {
-    if (root) {
-      act(() => {
-        root?.unmount();
-      });
-      root = null;
-    }
-    if (container) {
-      container.remove();
-      container = null;
-    }
-    queryClient.clear();
+  async function render() {
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><EditorTabs project="example" target={target} /></QueryClientProvider>));
+  }
+  it("creates no client while semantics is OFF", async () => {
+    await render();
+    expect(useSemanticNavigationStore.getState().getOrCreateClient).not.toHaveBeenCalled();
+    expect(boundaries.register).not.toHaveBeenCalled();
   });
-
-  it("gates semantic connection creation when semantic navigation is disabled", async () => {
-    const tab = makeTab("proj-1", "src/main.ts");
-    testState.tabs = [tab];
-    testState.activeKeys["proj-1"] = tab.key;
-    mockSemanticEnabled = false;
-
-    const spyGetOrCreate = vi.spyOn(
-      useSemanticNavigationStore.getState(),
-      "getOrCreateClient",
-    );
-
-    await act(async () => {
-      root?.render(
-        <QueryClientProvider client={queryClient}>
-          <EditorTabs project="proj-1" target={{ project: "proj-1", profileId: "prof-test" }} />
-        </QueryClientProvider>,
-      );
-    });
-
-    expect(spyGetOrCreate).not.toHaveBeenCalled();
-    spyGetOrCreate.mockRestore();
+  it("passes immutable authority and exact worktreePath to the client", async () => {
+    boundaries.enabled = true; await render();
+    expect(useSemanticNavigationStore.getState().getOrCreateClient).toHaveBeenCalledWith(expect.objectContaining({
+      profileId: target.profileId, project: target.project, worktreePath: target.worktreePath,
+      provenance: boundaries.provenance, connectionGeneration: 1,
+    }));
+    expect(client.connect).toHaveBeenCalledTimes(1);
   });
-
-  it("creates and connects client when semantic is enabled and connection is ready", async () => {
-    const tab = makeTab("proj-1", "src/main.ts");
-    testState.tabs = [tab];
-    testState.activeKeys["proj-1"] = tab.key;
-    mockSemanticEnabled = true;
-
-    const mockClient = {
-      getStatus: vi.fn().mockReturnValue("disconnected"),
-      connect: vi.fn().mockResolvedValue(undefined),
-      disconnect: vi.fn(),
-    };
-
-    const spyGetOrCreate = vi
-      .spyOn(useSemanticNavigationStore.getState(), "getOrCreateClient")
-      // @ts-expect-error Mock client
-      .mockReturnValue(mockClient);
-
-    await act(async () => {
-      root?.render(
-        <QueryClientProvider client={queryClient}>
-          <EditorTabs project="proj-1" target={{ project: "proj-1", profileId: "prof-test" }} />
-        </QueryClientProvider>,
-      );
-    });
-
-    expect(spyGetOrCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: "prof-test",
-        project: "proj-1",
-        targetKey: "root",
-        connectionGeneration: 1,
-      }),
-    );
-    expect(mockClient.connect).toHaveBeenCalled();
-
-    spyGetOrCreate.mockRestore();
+  it("guards getModelText against foreign or unavailable retained drafts before returning source", async () => {
+    boundaries.enabled = true; await render();
+    const create = vi.mocked(useSemanticNavigationStore.getState().getOrCreateClient);
+    const options: SemanticClientOptions = create.mock.calls[0][0];
+    const retained = tab();
+    act(() => useEditorStore.setState({ tabs: [retained] }));
+    expect(options.getModelText?.(retained.key)).toBe("unsaved text");
+    act(() => useEditorStore.setState({ tabs: [{ ...retained, semanticProvenance: { ...boundaries.provenance, actor: "actor-b" } }] }));
+    expect(options.getModelText?.(retained.key)).toBeUndefined();
+    act(() => useEditorStore.setState({ tabs: [{ ...retained, targetAvailable: false }] }));
+    expect(options.getModelText?.(retained.key)).toBeUndefined();
+    act(() => useEditorStore.setState({ tabs: [retained] }));
+    vi.mocked(client.canAccessModel!).mockReturnValue(false);
+    expect(options.getModelText?.(retained.key)).toBeUndefined();
   });
-
-  it("releases client on unmount via releaseClient", async () => {
-    const tab = makeTab("proj-1", "src/main.ts");
-    testState.tabs = [tab];
-    testState.activeKeys["proj-1"] = tab.key;
-    mockSemanticEnabled = true;
-
-    const spyRelease = vi.spyOn(
-      useSemanticNavigationStore.getState(),
-      "releaseClient",
-    );
-
-    await act(async () => {
-      root?.render(
-        <QueryClientProvider client={queryClient}>
-          <EditorTabs project="proj-1" target={{ project: "proj-1", profileId: "prof-test" }} />
-        </QueryClientProvider>,
-      );
-    });
-
-    act(() => {
-      root?.unmount();
-      root = null;
-    });
-
-    expect(spyRelease).toHaveBeenCalled();
-    spyRelease.mockRestore();
+  it("releases the exact client and only its own registration on unmount", async () => {
+    boundaries.enabled = true;
+    const release = vi.mocked(useSemanticNavigationStore.getState().releaseClient);
+    await render();
+    expect(boundaries.register).toHaveBeenCalledTimes(1);
+    await act(async () => root.render(null));
+    expect(release).toHaveBeenCalledWith(expect.any(String), client);
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 });

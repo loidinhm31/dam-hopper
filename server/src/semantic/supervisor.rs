@@ -10,20 +10,24 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 use thiserror::Error;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, oneshot, RwLock, Semaphore};
 
 use super::launch::{BundledLaunchSpec, LaunchError};
+use super::pressure::{EnqueuedCommand, SessionPressureCounters};
 use super::protocol::{
     ConnectionId, SemanticAggregateStatus, SemanticState, SessionIdentityFence, SessionKey,
 };
 use super::resources::{
-    MAX_GLOBAL_OVERLAY_BYTES, MAX_GLOBAL_SEMANTIC_TREES, MAX_TREES_PER_CONNECTION,
-    RESOURCE_POLICY_VERSION,
+    FORCE_KILL_REAP_BUDGET, MAX_GLOBAL_OVERLAY_BYTES, MAX_GLOBAL_SEMANTIC_TREES,
+    MAX_TREES_PER_CONNECTION, RESOURCE_POLICY_VERSION, TOTAL_TEARDOWN_BUDGET,
 };
-use super::session::{SemanticSessionActor, SemanticSessionHandle, SessionError};
+use super::session::{
+    RevocationToken, SemanticSessionActor, SemanticSessionHandle, SessionCommand, SessionError,
+};
 use super::tool_profile::{SemanticToolProfile, ToolIntegrityStatus};
 
 #[derive(Debug, Error)]
@@ -52,24 +56,146 @@ pub enum SupervisorError {
     Shutdown(String),
 }
 
+/// Tracked retiring or failed session entry retained until physical child-tree reap is verified.
+struct RetiringSessionEntry {
+    key: SessionKey,
+    fence: SessionIdentityFence,
+    weak_cmd_tx: mpsc::WeakSender<EnqueuedCommand<SessionCommand>>,
+    failed_handle: Option<SemanticSessionHandle>,
+    revocation: RevocationToken,
+    cleanly_reaped: Arc<AtomicBool>,
+    actor_done: Arc<AtomicBool>,
+    current_pgid: Arc<AtomicU32>,
+    counters: Arc<SessionPressureCounters>,
+    initial_overlay_bytes: usize,
+}
+
+impl RetiringSessionEntry {
+    fn from_handle(handle: &SemanticSessionHandle) -> Self {
+        let (_, initial_bytes) = handle.cached_overlay_stats();
+        let (revocation, cleanly_reaped, actor_done, current_pgid, counters) =
+            handle.shared_flags();
+        Self {
+            key: handle.key.clone(),
+            fence: handle.fence.clone(),
+            weak_cmd_tx: handle.downgrade_cmd_tx(),
+            failed_handle: None,
+            revocation,
+            cleanly_reaped,
+            actor_done,
+            current_pgid,
+            counters,
+            initial_overlay_bytes: initial_bytes,
+        }
+    }
+
+    fn is_finished_and_clean(&self) -> bool {
+        self.failed_handle.is_none()
+            && self.actor_done.load(Ordering::Acquire)
+            && self.cleanly_reaped.load(Ordering::Acquire)
+    }
+
+    fn to_handle(&self) -> Option<SemanticSessionHandle> {
+        if let Some(h) = &self.failed_handle {
+            return Some(h.clone());
+        }
+        let cmd_tx = self.weak_cmd_tx.upgrade()?;
+        Some(SemanticSessionHandle::from_parts(
+            self.key.clone(),
+            self.fence.clone(),
+            cmd_tx,
+            self.revocation.clone(),
+            Arc::clone(&self.cleanly_reaped),
+            Arc::clone(&self.actor_done),
+            Arc::clone(&self.current_pgid),
+            Arc::clone(&self.counters),
+        ))
+    }
+}
+
+/// Shared bounded toolchain integrity verifier with diagnostic status publication.
+#[derive(Clone)]
+pub struct ToolchainVerifier {
+    profile: SemanticToolProfile,
+    semaphore: Arc<Semaphore>,
+    last_integrity_status: Arc<StdMutex<Option<ToolIntegrityStatus>>>,
+}
+
+impl ToolchainVerifier {
+    pub fn new(profile: SemanticToolProfile) -> Self {
+        Self {
+            profile,
+            semaphore: Arc::new(Semaphore::new(1)),
+            last_integrity_status: Arc::new(StdMutex::new(Some(ToolIntegrityStatus::Unverified))),
+        }
+    }
+
+    pub fn profile(&self) -> &SemanticToolProfile {
+        &self.profile
+    }
+
+    pub fn semaphore(&self) -> Arc<Semaphore> {
+        self.semaphore.clone()
+    }
+
+    pub fn cached_status(&self) -> Option<ToolIntegrityStatus> {
+        let guard = self
+            .last_integrity_status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        guard.clone()
+    }
+
+    pub async fn verify_fresh(&self) -> Result<ToolIntegrityStatus, SupervisorError> {
+        let permit =
+            self.semaphore.clone().acquire_owned().await.map_err(|e| {
+                SupervisorError::ToolProfile(format!("Verifier semaphore closed: {e}"))
+            })?;
+
+        let p = self.profile.clone();
+        let status_target = Arc::clone(&self.last_integrity_status);
+        let status = match tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let res =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| p.verify_integrity()))
+                    .unwrap_or(ToolIntegrityStatus::Unverified);
+            let mut guard = status_target.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = Some(res.clone());
+            res
+        })
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(SupervisorError::ToolProfile(format!(
+                    "Verifier task join error: {e}"
+                )));
+            }
+        };
+        if !status.is_valid() {
+            return Err(SupervisorError::ToolProfile(format!("{:?}", status)));
+        }
+
+        Ok(status)
+    }
+}
 /// Inner state of the semantic supervisor.
 struct SupervisorInner {
     enabled: AtomicBool,
     admission_revoked: AtomicBool,
-    toolchain_verified: AtomicBool,
-    runtime_epoch: std::sync::atomic::AtomicU64,
-    next_connection_epoch: std::sync::atomic::AtomicU64,
+    verifier: Option<ToolchainVerifier>,
+    runtime_epoch: AtomicU64,
+    next_connection_epoch: AtomicU64,
     connection_epochs: RwLock<HashMap<ConnectionId, Option<u64>>>,
     sessions: RwLock<HashMap<SessionKey, SemanticSessionHandle>>,
-    tool_profile: Option<SemanticToolProfile>,
+    retiring_sessions: StdMutex<HashMap<u64, RetiringSessionEntry>>,
     idle_notify_tx: mpsc::Sender<SessionKey>,
-    session_generation_counter: std::sync::atomic::AtomicU64,
+    session_generation_counter: AtomicU64,
     transition_lock: tokio::sync::Mutex<()>,
     safe_disabled: AtomicBool,
     last_transition_error: RwLock<Option<String>>,
-    active_reap_tasks: tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    active_reap_tasks: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
 }
-
 /// Global semantic session supervisor managing session lifecycles and admission.
 #[derive(Clone)]
 pub struct SemanticSupervisor {
@@ -81,22 +207,23 @@ impl SemanticSupervisor {
     /// Does NOT spawn any child processes.
     pub fn new(tool_profile: Option<SemanticToolProfile>) -> Self {
         let (idle_notify_tx, mut idle_notify_rx) = mpsc::channel::<SessionKey>(32);
+        let verifier = tool_profile.map(ToolchainVerifier::new);
 
         let inner = Arc::new(SupervisorInner {
             enabled: AtomicBool::new(false),
             admission_revoked: AtomicBool::new(false),
-            toolchain_verified: AtomicBool::new(false),
-            runtime_epoch: std::sync::atomic::AtomicU64::new(1),
-            next_connection_epoch: std::sync::atomic::AtomicU64::new(1),
+            verifier,
+            runtime_epoch: AtomicU64::new(1),
+            next_connection_epoch: AtomicU64::new(1),
             connection_epochs: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
-            tool_profile,
+            retiring_sessions: StdMutex::new(HashMap::new()),
             idle_notify_tx,
-            session_generation_counter: std::sync::atomic::AtomicU64::new(1),
+            session_generation_counter: AtomicU64::new(1),
             transition_lock: tokio::sync::Mutex::new(()),
             safe_disabled: AtomicBool::new(false),
             last_transition_error: RwLock::new(None),
-            active_reap_tasks: tokio::sync::Mutex::new(Vec::new()),
+            active_reap_tasks: StdMutex::new(Vec::new()),
         });
 
         let supervisor = Self { inner };
@@ -155,7 +282,7 @@ impl SemanticSupervisor {
 
     /// Reference to the bundled tool profile, if configured.
     pub fn tool_profile(&self) -> Option<&SemanticToolProfile> {
-        self.inner.tool_profile.as_ref()
+        self.inner.verifier.as_ref().map(|v| v.profile())
     }
 
     /// Transition lock guarding semantic lifecycle mutations.
@@ -163,12 +290,153 @@ impl SemanticSupervisor {
         &self.inner.transition_lock
     }
 
+    /// Synchronously register detached handles in `retiring_sessions` and revoke their tokens.
+    fn detach_and_register_retiring(&self, handles: &[SemanticSessionHandle]) {
+        if handles.is_empty() {
+            return;
+        }
+        let mut retiring = self
+            .inner
+            .retiring_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        retiring.retain(|_, entry| !entry.is_finished_and_clean());
+        for h in handles {
+            let entry = RetiringSessionEntry::from_handle(h);
+            h.revoke_now();
+            h.try_enqueue_invalidate();
+            retiring.entry(h.fence.session_generation).or_insert(entry);
+        }
+    }
+
+    /// Prune completed clean entries from `retiring_sessions` and return `(retiring_total, per_conn_counts, retiring_overlay_bytes, retiring_with_child)`.
+    fn snapshot_retiring_accounting(&self) -> (usize, HashMap<ConnectionId, usize>, usize, usize) {
+        let mut retiring = self
+            .inner
+            .retiring_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        retiring.retain(|_, entry| !entry.is_finished_and_clean());
+        let total = retiring.len();
+        let mut by_conn = HashMap::new();
+        let mut overlay_bytes = 0usize;
+        let mut with_child = 0usize;
+        for entry in retiring.values() {
+            *by_conn.entry(entry.key.connection_id.clone()).or_insert(0) += 1;
+            let current_bytes = entry.counters.overlay_bytes.load(Ordering::Acquire);
+            overlay_bytes += current_bytes.max(entry.initial_overlay_bytes);
+            if !entry.cleanly_reaped.load(Ordering::Acquire)
+                || entry.current_pgid.load(Ordering::Acquire) > 0
+                || entry.failed_handle.is_some()
+            {
+                with_child += 1;
+            }
+        }
+        (total, by_conn, overlay_bytes, with_child)
+    }
+
+    /// Check whether any retiring, in-flight reap, or unclean failed child resources remain.
+    pub fn has_unclean_or_retiring_resources(&self) -> bool {
+        {
+            let mut retiring = self
+                .inner
+                .retiring_sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            retiring.retain(|_, entry| !entry.is_finished_and_clean());
+            if !retiring.is_empty() {
+                return true;
+            }
+        }
+        {
+            let mut tasks = self
+                .inner
+                .active_reap_tasks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            tasks.retain(|t| !t.is_finished());
+            if !tasks.is_empty() {
+                return true;
+            }
+        }
+        if let Ok(guard) = self.inner.sessions.try_read() {
+            for handle in guard.values() {
+                if !handle.is_cleanly_reaped() && handle.is_revoked() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    async fn reap_single_handle(&self, handle: SemanticSessionHandle) -> Result<(), String> {
+        let session_gen = handle.fence.session_generation;
+        let key = handle.key.clone();
+        // Outer timeout includes 1s margin above session cleanup (5.5s) and child budget (5.0s)
+        let res = tokio::time::timeout(
+            TOTAL_TEARDOWN_BUDGET + Duration::from_millis(1000),
+            handle.shutdown(),
+        )
+        .await;
+
+        match res {
+            Ok(Ok(())) if handle.is_cleanly_reaped() => {
+                let mut retiring = self
+                    .inner
+                    .retiring_sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                retiring.remove(&session_gen);
+                Ok(())
+            }
+            Ok(Ok(())) => {
+                let msg = format!(
+                    "Session {key:?} shutdown returned Ok but child tree not verified reaped"
+                );
+                tracing::warn!("{msg}");
+                let mut retiring = self
+                    .inner
+                    .retiring_sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if let Some(entry) = retiring.get_mut(&session_gen) {
+                    entry.failed_handle = Some(handle);
+                }
+                Err(msg)
+            }
+            Ok(Err(err)) => {
+                tracing::warn!(error = %err, session_key = ?key, "Failed to cleanly shut down session");
+                let mut retiring = self
+                    .inner
+                    .retiring_sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if let Some(entry) = retiring.get_mut(&session_gen) {
+                    entry.failed_handle = Some(handle);
+                }
+                Err(err.to_string())
+            }
+            Err(_) => {
+                tracing::warn!(session_key = ?key, "Session teardown timed out");
+                let mut retiring = self
+                    .inner
+                    .retiring_sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if let Some(entry) = retiring.get_mut(&session_gen) {
+                    entry.failed_handle = Some(handle);
+                }
+                Err("Session shutdown timed out".to_string())
+            }
+        }
+    }
+
     /// Prepare to disable semantic navigation:
     /// - Revokes admission immediately (enabled = false, bump epoch).
     /// - Closes connection epochs.
-    /// - Reaps all active child process trees and sessions.
-    ///
-    /// Drops internal write locks before awaiting session teardowns.
+    /// - Synchronously revokes all session tokens and detaches into tracked `retiring_sessions`.
+    /// - Executes bounded complete-tree reaping in a tracked task so dropping the caller future
+    ///   cannot abandon in-progress child teardown.
     pub async fn prepare_disable(&self) -> Result<(), SupervisorError> {
         self.inner.enabled.store(false, Ordering::Release);
         self.inner.runtime_epoch.fetch_add(1, Ordering::SeqCst);
@@ -180,51 +448,108 @@ impl SemanticSupervisor {
             }
         }
 
-        let drained: Vec<(SessionKey, SemanticSessionHandle)> = {
+        let drained: Vec<SemanticSessionHandle> = {
             let mut guard = self.inner.sessions.write().await;
-            guard.drain().collect()
+            let handles: Vec<SemanticSessionHandle> = guard.drain().map(|(_, h)| h).collect();
+            self.detach_and_register_retiring(&handles);
+            handles
         };
 
-        let mut failed_sessions = Vec::new();
-        let mut first_error = None;
-
-        for (key, handle) in drained {
-            let res = tokio::time::timeout(
-                crate::semantic::resources::TOTAL_TEARDOWN_BUDGET,
-                handle.shutdown(),
-            )
-            .await;
-
-            match res {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    tracing::warn!(error = %err, session_key = ?key, "Failed to cleanly shut down session during disable");
-                    if first_error.is_none() {
-                        first_error = Some(err.to_string());
+        // Also collect any previously retiring/failed handles for actionable retry
+        let mut all_to_reap: HashMap<u64, SemanticSessionHandle> = HashMap::new();
+        for h in drained {
+            all_to_reap.insert(h.fence.session_generation, h);
+        }
+        let mut orphan_pgids: Vec<(u64, u32)> = Vec::new();
+        {
+            let mut retiring = self
+                .inner
+                .retiring_sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            retiring.retain(|_, entry| !entry.is_finished_and_clean());
+            for (&gen, entry) in retiring.iter() {
+                if !all_to_reap.contains_key(&gen) {
+                    if let Some(h) = entry.to_handle() {
+                        all_to_reap.insert(gen, h);
+                    } else {
+                        let pgid = entry.current_pgid.load(Ordering::Acquire);
+                        if pgid > 0 {
+                            orphan_pgids.push((gen, pgid));
+                        }
                     }
-                    failed_sessions.push((key, handle));
-                }
-                Err(_) => {
-                    tracing::warn!(session_key = ?key, "Session teardown timed out during disable");
-                    if first_error.is_none() {
-                        first_error = Some("Session shutdown timed out".to_string());
-                    }
-                    failed_sessions.push((key, handle));
                 }
             }
         }
 
-        if !failed_sessions.is_empty() {
-            // Re-insert failed sessions so ownership/reaping is preserved
-            let mut guard = self.inner.sessions.write().await;
-            for (key, handle) in failed_sessions {
-                guard.insert(key, handle);
+        let (res_tx, res_rx) = oneshot::channel();
+        let this = self.clone();
+        let task = tokio::spawn(async move {
+            let mut failed_handles = Vec::new();
+            let mut first_error: Option<String> = None;
+
+            for (_, handle) in all_to_reap {
+                if let Err(err_msg) = this.reap_single_handle(handle.clone()).await {
+                    if first_error.is_none() {
+                        first_error = Some(err_msg);
+                    }
+                    failed_handles.push(handle);
+                }
             }
-            let err_msg = first_error.unwrap_or_else(|| "Failed to tear down child session".into());
-            return Err(SupervisorError::Shutdown(err_msg));
+
+            for (gen, pgid) in orphan_pgids {
+                #[cfg(unix)]
+                {
+                    use nix::sys::signal::Signal;
+                    let _ = super::reaper::signal_pgid(pgid, Some(Signal::SIGKILL));
+                }
+                if super::reaper::verify_pgid_reaped(pgid, FORCE_KILL_REAP_BUDGET).await {
+                    let mut retiring = this
+                        .inner
+                        .retiring_sessions
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    if let Some(entry) = retiring.get(&gen) {
+                        entry.cleanly_reaped.store(true, Ordering::Release);
+                        entry.current_pgid.store(0, Ordering::Release);
+                    }
+                    retiring.remove(&gen);
+                } else if first_error.is_none() {
+                    first_error = Some(format!("Descendant leak in PGID {pgid}"));
+                }
+            }
+
+            let outcome = if !failed_handles.is_empty() || first_error.is_some() {
+                let mut guard = this.inner.sessions.write().await;
+                for handle in failed_handles {
+                    guard.insert(handle.key.clone(), handle);
+                }
+                this.inner.safe_disabled.store(true, Ordering::Release);
+                let err_msg =
+                    first_error.unwrap_or_else(|| "Failed to tear down child session".into());
+                Err(SupervisorError::Shutdown(err_msg))
+            } else {
+                Ok(())
+            };
+
+            let _ = res_tx.send(outcome);
+        });
+
+        {
+            let mut guard = self
+                .inner
+                .active_reap_tasks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            guard.retain(|t| !t.is_finished());
+            guard.push(task);
         }
 
-        Ok(())
+        res_rx.await.unwrap_or_else(|_| {
+            Err(SupervisorError::Shutdown(
+                "Disable reap task cancelled unexpectedly".into(),
+            ))
+        })
     }
 
     /// Commit disabled state after persistence succeeds.
@@ -242,28 +567,57 @@ impl SemanticSupervisor {
     }
 
     /// Passive integrity and configuration verification for turning ON.
+    /// Refuses enablement if any retiring or unclean failed child resources remain,
+    /// while permitting explicit admin recovery from `safe_disabled` once zero resources remain.
     /// Spawns ZERO child processes.
-    pub fn prepare_enable(&self) -> Result<(), SupervisorError> {
-        if let Some(profile) = &self.inner.tool_profile {
-            let integrity = profile.verify_integrity();
-            if !integrity.is_valid() {
-                return Err(SupervisorError::ToolProfile(format!("{:?}", integrity)));
-            }
-        } else {
-            return Err(SupervisorError::ToolProfile("No tool profile configured".into()));
+    pub async fn prepare_enable(&self) -> Result<(), SupervisorError> {
+        if self.has_unclean_or_retiring_resources() {
+            return Err(SupervisorError::Shutdown(
+                "Cannot enable semantic runtime while retiring or unclean child resources remain"
+                    .into(),
+            ));
         }
+
+        let start_epoch = self.inner.runtime_epoch.load(Ordering::Acquire);
+
+        let integrity = self.verify_toolchain_fresh().await?;
+        if !integrity.is_valid() {
+            return Err(SupervisorError::ToolProfile(format!("{:?}", integrity)));
+        }
+
+        // Post-verification fences: cannot late-enable if admission revoked, resources became unclean,
+        // or runtime epoch changed during verification
+        if self.is_admission_revoked() {
+            return Err(SupervisorError::Session(SessionError::Invalidated));
+        }
+        if self.has_unclean_or_retiring_resources() {
+            return Err(SupervisorError::Shutdown(
+                "Cannot enable semantic runtime while retiring or unclean child resources remain"
+                    .into(),
+            ));
+        }
+        if self.inner.runtime_epoch.load(Ordering::Acquire) != start_epoch {
+            return Err(SupervisorError::Disabled);
+        }
+
         Ok(())
     }
 
     /// Commit enabled state after persistence succeeds.
     /// Spawns ZERO child processes.
     pub async fn commit_enable(&self) {
+        if self.is_admission_revoked() {
+            return;
+        }
         self.inner.enabled.store(true, Ordering::Release);
         self.inner.safe_disabled.store(false, Ordering::Release);
         self.inner.runtime_epoch.fetch_add(1, Ordering::SeqCst);
         *self.inner.last_transition_error.write().await = None;
+        if self.is_admission_revoked() {
+            self.inner.enabled.store(false, Ordering::Release);
+            self.inner.safe_disabled.store(true, Ordering::Release);
+        }
     }
-
 
     /// Enable or disable the semantic subsystem.
     pub async fn set_enabled(&self, enabled: bool) {
@@ -307,10 +661,32 @@ impl SemanticSupervisor {
 
     /// Retrieve toolchain integrity status without launching a child process.
     pub fn tool_integrity_status(&self) -> Option<ToolIntegrityStatus> {
+        self.inner.verifier.as_ref().and_then(|v| v.cached_status())
+    }
+
+    /// Perform a fresh, bounded off-thread integrity verification of the bundled toolchain.
+    ///
+    /// Invariants:
+    /// - Cached valid NEVER authorizes. A fresh filesystem and digest verification is always performed.
+    /// - Concurrency is strictly bounded by `verifier_semaphore` (1 permit).
+    /// - Permit acquisition occurs asynchronously BEFORE spawning the blocking task.
+    /// - The permit is owned by the `spawn_blocking` closure and held until the blocking check completes,
+    ///   even if the caller's await is cancelled or dropped.
+    /// - Verification runs off-thread without holding any supervisor locks (avoiding lock-held hashing).
+    /// - The result (both `Valid` and failure variants) is published to `last_integrity_status`.
+    pub async fn verify_toolchain_fresh(&self) -> Result<ToolIntegrityStatus, SupervisorError> {
         self.inner
-            .tool_profile
+            .verifier
             .as_ref()
-            .map(|profile| profile.verify_integrity())
+            .ok_or_else(|| SupervisorError::ToolProfile("No tool profile configured".into()))?
+            .verify_fresh()
+            .await
+    }
+
+    /// Bounded verifier semaphore (1 permit) for deterministic concurrency coordination.
+    #[doc(hidden)]
+    pub fn verifier_semaphore(&self) -> Option<Arc<Semaphore>> {
+        self.inner.verifier.as_ref().map(|v| v.semaphore())
     }
 
     /// Acquire or create an isolated semantic session for a connection and target.
@@ -330,19 +706,6 @@ impl SemanticSupervisor {
             Some(e) if e == expected_epoch => e,
             _ => return Err(SupervisorError::Session(SessionError::Invalidated)),
         };
-        // Verify toolchain integrity passively (cached to prevent repeated SHA-256 computation)
-        if !self.inner.toolchain_verified.load(Ordering::Acquire) {
-            if let Some(profile) = &self.inner.tool_profile {
-                let p = profile.clone();
-                let integrity = tokio::task::spawn_blocking(move || p.verify_integrity())
-                    .await
-                    .map_err(|e| SupervisorError::ToolProfile(e.to_string()))?;
-                if !integrity.is_valid() {
-                    return Err(SupervisorError::ToolProfile(format!("{:?}", integrity)));
-                }
-            }
-            self.inner.toolchain_verified.store(true, Ordering::Release);
-        }
 
         let key = SessionKey::new(connection_id.clone(), project, worktree.clone());
 
@@ -354,7 +717,9 @@ impl SemanticSupervisor {
 
         if let Some(existing) = existing_opt {
             let state = existing.get_state().await;
-            if !matches!(state, SemanticState::Crashed | SemanticState::Invalidated) {
+            if !existing.is_revoked()
+                && !matches!(state, SemanticState::Crashed | SemanticState::Invalidated)
+            {
                 return Ok(existing);
             }
             // Shut down old handle before removing, comparing session generation
@@ -362,7 +727,11 @@ impl SemanticSupervisor {
                 let mut guard = self.inner.sessions.write().await;
                 if let Some(cur) = guard.get(&key) {
                     if cur.fence.session_generation == existing.fence.session_generation {
-                        guard.remove(&key)
+                        let removed = guard.remove(&key);
+                        if let Some(h) = &removed {
+                            self.detach_and_register_retiring(std::slice::from_ref(h));
+                        }
+                        removed
                     } else {
                         None
                     }
@@ -371,9 +740,31 @@ impl SemanticSupervisor {
                 }
             };
             if let Some(old) = old_opt {
-                let _ = old.shutdown().await;
+                let _ = self.reap_single_handle(old).await;
             }
         }
+        // Mandatory fresh verification before launch using bounded verifier.
+        // Cached valid NEVER authorizes.
+        let integrity = self.verify_toolchain_fresh().await?;
+        if !integrity.is_valid() {
+            return Err(SupervisorError::ToolProfile(format!("{:?}", integrity)));
+        }
+
+        // Post-verification fences: cannot launch if runtime disabled or admission revoked
+        if !self.is_effective_enabled() || self.is_admission_revoked() {
+            return Err(SupervisorError::Disabled);
+        }
+        match self.get_connection_epoch(&connection_id).await {
+            Some(e) if e == expected_epoch => e,
+            _ => return Err(SupervisorError::Session(SessionError::Invalidated)),
+        };
+        if self.inner.runtime_epoch.load(Ordering::Acquire) != start_runtime_epoch {
+            return Err(SupervisorError::Disabled);
+        }
+
+        let (retiring_total, retiring_by_conn, retiring_overlay_bytes, _) =
+            self.snapshot_retiring_accounting();
+        let retiring_for_conn = retiring_by_conn.get(&connection_id).copied().unwrap_or(0);
 
         // Snapshot handles under read lock to query stats without holding write lock
         let active_handles: Vec<SemanticSessionHandle> = {
@@ -381,13 +772,14 @@ impl SemanticSupervisor {
             let conn_count = guard
                 .keys()
                 .filter(|k| k.connection_id == connection_id)
-                .count();
+                .count()
+                + retiring_for_conn;
             if conn_count >= MAX_TREES_PER_CONNECTION {
                 return Err(SupervisorError::ConnectionTreeLimitExceeded(
                     MAX_TREES_PER_CONNECTION,
                 ));
             }
-            if guard.len() >= MAX_GLOBAL_SEMANTIC_TREES {
+            if guard.len() + retiring_total >= MAX_GLOBAL_SEMANTIC_TREES {
                 return Err(SupervisorError::GlobalTreeLimitExceeded(
                     MAX_GLOBAL_SEMANTIC_TREES,
                 ));
@@ -395,7 +787,7 @@ impl SemanticSupervisor {
             guard.values().cloned().collect()
         };
 
-        let mut total_global_overlay_bytes = 0;
+        let mut total_global_overlay_bytes = retiring_overlay_bytes;
         for handle in active_handles {
             let (_, bytes) = handle.get_overlay_stats().await;
             total_global_overlay_bytes += bytes;
@@ -408,9 +800,7 @@ impl SemanticSupervisor {
         }
         // Resolve bundled launch spec
         let profile = self
-            .inner
-            .tool_profile
-            .as_ref()
+            .tool_profile()
             .ok_or_else(|| SupervisorError::ToolProfile("No tool profile configured".into()))?;
 
         let spec = BundledLaunchSpec::new(
@@ -441,6 +831,7 @@ impl SemanticSupervisor {
             target_root,
             spec,
             self.inner.idle_notify_tx.clone(),
+            self.inner.verifier.clone(),
         );
         let mut guard = self.inner.sessions.write().await;
         if !self.is_enabled()
@@ -464,10 +855,16 @@ impl SemanticSupervisor {
             let _ = handle.shutdown().await;
             return Ok(existing);
         }
+        let (retiring_total_now, retiring_by_conn_now, _, _) = self.snapshot_retiring_accounting();
+        let retiring_conn_now = retiring_by_conn_now
+            .get(&connection_id)
+            .copied()
+            .unwrap_or(0);
         let conn_count = guard
             .keys()
             .filter(|k| k.connection_id == connection_id)
-            .count();
+            .count()
+            + retiring_conn_now;
         if conn_count >= MAX_TREES_PER_CONNECTION {
             drop(guard);
             let _ = handle.shutdown().await;
@@ -475,7 +872,7 @@ impl SemanticSupervisor {
                 MAX_TREES_PER_CONNECTION,
             ));
         }
-        if guard.len() >= MAX_GLOBAL_SEMANTIC_TREES {
+        if guard.len() + retiring_total_now >= MAX_GLOBAL_SEMANTIC_TREES {
             drop(guard);
             let _ = handle.shutdown().await;
             return Err(SupervisorError::GlobalTreeLimitExceeded(
@@ -497,11 +894,15 @@ impl SemanticSupervisor {
     pub async fn close_session(&self, key: &SessionKey) {
         let handle_opt = {
             let mut guard = self.inner.sessions.write().await;
-            guard.remove(key)
+            let removed = guard.remove(key);
+            if let Some(h) = &removed {
+                self.detach_and_register_retiring(std::slice::from_ref(h));
+            }
+            removed
         };
 
         if let Some(handle) = handle_opt {
-            let _ = handle.shutdown().await;
+            let _ = self.reap_single_handle(handle).await;
         }
     }
 
@@ -526,6 +927,7 @@ impl SemanticSupervisor {
                     out.push(h);
                 }
             }
+            self.detach_and_register_retiring(&out);
             out
         };
 
@@ -539,7 +941,7 @@ impl SemanticSupervisor {
     }
 
     /// Phase 1: Synchronously revoke admission and detach all sessions across all connections and targets.
-    /// Caller can execute this while holding outer configuration/workspace locks.
+    /// Performs zero actor mailbox `.await` calls while holding registry or caller locks.
     pub async fn prepare_invalidate_all(&self) -> Vec<SemanticSessionHandle> {
         self.inner.runtime_epoch.fetch_add(1, Ordering::SeqCst);
         {
@@ -550,13 +952,12 @@ impl SemanticSupervisor {
         }
         let mut guard = self.inner.sessions.write().await;
         let handles: Vec<SemanticSessionHandle> = guard.drain().map(|(_, h)| h).collect();
-        for h in &handles {
-            h.invalidate().await;
-        }
+        self.detach_and_register_retiring(&handles);
         handles
     }
 
     /// Phase 1: Synchronously revoke admission and detach sessions for a specific project.
+    /// Performs zero actor mailbox `.await` calls while holding registry or caller locks.
     pub async fn prepare_invalidate_project(&self, project: &str) -> Vec<SemanticSessionHandle> {
         self.inner.runtime_epoch.fetch_add(1, Ordering::SeqCst);
         let mut guard = self.inner.sessions.write().await;
@@ -571,13 +972,12 @@ impl SemanticSupervisor {
                 handles.push(h);
             }
         }
-        for h in &handles {
-            h.invalidate().await;
-        }
+        self.detach_and_register_retiring(&handles);
         handles
     }
 
     /// Phase 1: Synchronously revoke admission and detach sessions for a specific project and worktree.
+    /// Performs zero actor mailbox `.await` calls while holding registry or caller locks.
     pub async fn prepare_invalidate_target(
         &self,
         project: &str,
@@ -596,9 +996,7 @@ impl SemanticSupervisor {
                 handles.push(h);
             }
         }
-        for h in &handles {
-            h.invalidate().await;
-        }
+        self.detach_and_register_retiring(&handles);
         handles
     }
 
@@ -608,36 +1006,30 @@ impl SemanticSupervisor {
         if handles.is_empty() {
             return;
         }
-        let reap_futures = handles.into_iter().map(|handle| async move {
-            let res = tokio::time::timeout(
-                crate::semantic::resources::TOTAL_TEARDOWN_BUDGET,
-                handle.shutdown(),
-            )
-            .await;
-            if res.is_err() {
-                tracing::warn!("Session teardown timed out during reap");
-            } else if let Ok(Err(err)) = res {
-                tracing::warn!(error = %err, "Session shutdown returned error during reap");
-            }
-        });
-        futures_util::future::join_all(reap_futures).await;
+        self.detach_and_register_retiring(&handles);
+        let reap_futures = handles
+            .into_iter()
+            .map(|handle| self.reap_single_handle(handle));
+        let _ = futures_util::future::join_all(reap_futures).await;
     }
 
-    /// Spawn asynchronous reaping of detached session handles in a tracked background task.
+    /// Spawn asynchronous reaping of detached session handles in a synchronously tracked background task.
     pub fn spawn_reap_sessions(&self, handles: Vec<SemanticSessionHandle>) {
         if handles.is_empty() {
             return;
         }
+        self.detach_and_register_retiring(&handles);
         let this = self.clone();
-        let inner = self.inner.clone();
+        let mut guard = self
+            .inner
+            .active_reap_tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        guard.retain(|t| !t.is_finished());
         let task = tokio::spawn(async move {
             this.reap_sessions(handles).await;
         });
-        tokio::spawn(async move {
-            let mut guard = inner.active_reap_tasks.lock().await;
-            guard.retain(|t| !t.is_finished());
-            guard.push(task);
-        });
+        guard.push(task);
     }
 
     /// Full two-phase invalidation of all sessions (convenience method).
@@ -666,14 +1058,17 @@ impl SemanticSupervisor {
             guard.values().cloned().collect()
         };
         let active_sessions = handles.len();
+        let (_, _, _, retiring_trees_with_child) = self.snapshot_retiring_accounting();
 
         let mut total_open_documents = 0;
         let mut total_overlay_bytes = 0;
+        let mut total_in_flight_requests = 0;
 
         for handle in handles {
-            let (docs, bytes) = handle.get_overlay_stats().await;
-            total_open_documents += docs;
-            total_overlay_bytes += bytes;
+            let diag = handle.diagnostics();
+            total_open_documents += diag.open_documents;
+            total_overlay_bytes += diag.overlay_bytes;
+            total_in_flight_requests += diag.in_flight_requests;
         }
 
         let tool_integrity = self.tool_integrity_status().map(|s| format!("{:?}", s));
@@ -682,7 +1077,7 @@ impl SemanticSupervisor {
             SemanticState::SafeDisabled
         } else if !enabled {
             SemanticState::Disabled
-        } else if active_sessions == 0 {
+        } else if active_sessions == 0 && retiring_trees_with_child == 0 {
             SemanticState::Idle
         } else {
             SemanticState::Ready
@@ -691,10 +1086,10 @@ impl SemanticSupervisor {
             state,
             enabled,
             active_sessions,
-            active_trees: active_sessions,
+            active_trees: active_sessions + retiring_trees_with_child,
             open_documents: total_open_documents,
             total_overlay_bytes,
-            in_flight_requests: 0,
+            in_flight_requests: total_in_flight_requests,
             resource_policy_version: RESOURCE_POLICY_VERSION.to_string(),
             tool_integrity_status: tool_integrity,
         }
@@ -708,32 +1103,52 @@ impl SemanticSupervisor {
         };
 
         if let Some(handle) = handle_opt {
-            let (docs, _) = handle.get_overlay_stats().await;
-            if docs == 0 {
+            let diag = handle.diagnostics();
+            if diag.open_documents == 0 && diag.in_flight_requests == 0 {
                 self.close_session(&key).await;
             }
         }
     }
 
     /// Clean shutdown of all running semantic child processes and sessions,
-    /// also awaiting any in-flight background reap tasks.
+    /// also awaiting any in-flight background reap tasks and retiring handles.
     pub async fn shutdown(&self) {
         self.revoke_admission();
-        let handles: Vec<(SessionKey, SemanticSessionHandle)> = {
+        let handles: Vec<SemanticSessionHandle> = {
             let mut guard = self.inner.sessions.write().await;
-            guard.drain().collect()
+            let list: Vec<SemanticSessionHandle> = guard.drain().map(|(_, h)| h).collect();
+            self.detach_and_register_retiring(&list);
+            list
         };
 
-        for (_, handle) in handles {
-            let _ = handle.shutdown().await;
-        }
+        self.reap_sessions(handles).await;
 
         let tasks = {
-            let mut reap_guard = self.inner.active_reap_tasks.lock().await;
+            let mut reap_guard = self
+                .inner
+                .active_reap_tasks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             std::mem::take(&mut *reap_guard)
         };
         for task in tasks {
             let _ = task.await;
+        }
+
+        let remaining_retiring: Vec<SemanticSessionHandle> = {
+            let mut retiring = self
+                .inner
+                .retiring_sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            retiring.retain(|_, entry| !entry.is_finished_and_clean());
+            retiring
+                .values()
+                .filter_map(|entry| entry.to_handle())
+                .collect()
+        };
+        if !remaining_retiring.is_empty() {
+            self.reap_sessions(remaining_retiring).await;
         }
     }
 }

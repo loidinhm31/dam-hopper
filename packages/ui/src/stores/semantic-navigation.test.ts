@@ -1,5 +1,12 @@
 // @vitest-environment jsdom
 import { vi } from "vitest";
+const currentAuthority = vi.hoisted(() => ({
+  serverUrl: "http://127.0.0.1:4803", configuredRoot: "/srv/proj", actor: "basic:alice:tok-a",
+}));
+vi.mock("@/lib/semantic-model-uri.js", async () => ({
+  ...await vi.importActual<typeof import("@/lib/semantic-model-uri.js")>("@/lib/semantic-model-uri.js"),
+  captureSemanticProvenance: () => currentAuthority,
+}));
 
 vi.hoisted(() => {
   if (
@@ -33,12 +40,15 @@ import {
   type NavigationRevealIntent,
 } from "./semantic-navigation.js";
 import { defaultSemanticMonacoManager } from "@/lib/semantic-monaco.js";
+import { defaultSemanticModelRegistry } from "@/lib/semantic-model-uri.js";
 
 describe("semantic-navigation store", () => {
   beforeEach(() => {
+    defaultSemanticModelRegistry.clearAll();
     useSemanticNavigationStore.getState().disconnectAll();
     useSemanticNavigationStore.setState({
       globalSemanticEnabled: false,
+      profileSemanticEnabled: {},
       activeRevealIntent: null,
       clientStatuses: {},
     });
@@ -205,7 +215,115 @@ describe("semantic-navigation store", () => {
     store.releaseClient(scopeKey);
     expect(spyDisconnect).toHaveBeenCalledTimes(1);
     expect(store.getClient(scopeKey)).toBeNull();
-
     spyDisconnect.mockRestore();
+  });
+
+  it("enforces exact expectedClient on releaseClient/disconnectClient and fences findClientForTab by provenance", () => {
+    const store = useSemanticNavigationStore.getState();
+    const prov = {
+      serverUrl: "http://127.0.0.1:4803",
+      configuredRoot: "/srv/proj",
+      actor: "basic:alice:tok-a",
+    };
+    const opts = {
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      serverUrl: "http://127.0.0.1:4803",
+      token: "tok-a",
+      profileId: "prof-1",
+      project: "proj-1",
+      targetKey: "root",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+      provenance: prov,
+    };
+    const scopeKey = buildSemanticScopeKey(
+      opts.profileId,
+      opts.serverUrl,
+      opts.project,
+      opts.targetKey,
+      opts.connectionGeneration,
+    );
+
+    const clientA = store.getOrCreateClient(opts);
+    store.disconnectClient(scopeKey, clientA);
+    expect(store.getClient(scopeKey)).toBeNull();
+
+    // Replacement clientB on same scopeKey
+    const clientB = store.getOrCreateClient(opts);
+    expect(clientB).not.toBe(clientA);
+    const spyDisconnectB = vi.spyOn(clientB, "disconnect");
+
+    // Late release/disconnect citing retired clientA must NOT touch clientB
+    store.releaseClient(scopeKey, clientA);
+    store.disconnectClient(scopeKey, clientA);
+    expect(spyDisconnectB).not.toHaveBeenCalled();
+    expect(store.getClient(scopeKey)).toBe(clientB);
+
+    // findClientForTab requires matching provenance
+    defaultSemanticModelRegistry.registerModel({
+      tabKey: "tab-ok",
+      profileId: "prof-1",
+      project: "proj-1",
+      targetKey: "root",
+      relativePath: "src/ok.ts",
+      provenance: prov,
+    });
+    defaultSemanticModelRegistry.registerModel({
+      tabKey: "tab-foreign",
+      profileId: "prof-1",
+      project: "proj-1",
+      targetKey: "root",
+      relativePath: "src/foreign.ts",
+      provenance: { ...prov, actor: "basic:bob:tok-b" },
+    });
+
+    expect(store.findClientForTab("tab-ok")).toBe(clientB);
+    expect(store.findClientForTab("tab-foreign")).toBeNull();
+
+    spyDisconnectB.mockRestore();
+  });
+
+  it("enforces expectedIntent identity and isCurrent predicate in consumeRevealIntent", () => {
+    const store = useSemanticNavigationStore.getState();
+    let valid = true;
+    const intent1: NavigationRevealIntent = {
+      targetId: "t-1",
+      profileId: "prof-1",
+      project: "proj-1",
+      targetKey: "root",
+      relativePath: "src/a.ts",
+      range: {
+        startLineNumber: 1,
+        startColumn: 1,
+        endLineNumber: 1,
+        endColumn: 5,
+      },
+      createdAt: Date.now(),
+      isCurrent: () => valid,
+    };
+    const intent2: NavigationRevealIntent = {
+      ...intent1,
+      range: {
+        startLineNumber: 20,
+        startColumn: 1,
+        endLineNumber: 20,
+        endColumn: 5,
+      },
+    };
+
+    store.setRevealIntent(intent2);
+    // Older async completion passing intent1 must not consume or clear intent2
+    expect(
+      store.consumeRevealIntent("prof-1", "proj-1", "root", "src/a.ts", intent1),
+    ).toBeNull();
+    expect(useSemanticNavigationStore.getState().activeRevealIntent).toBe(intent2);
+
+    // If isCurrent predicate turns false on intent1, it clears and returns null
+    store.setRevealIntent(intent1);
+    valid = false;
+    expect(
+      store.consumeRevealIntent("prof-1", "proj-1", "root", "src/a.ts", intent1),
+    ).toBeNull();
+    expect(useSemanticNavigationStore.getState().activeRevealIntent).toBeNull();
   });
 });

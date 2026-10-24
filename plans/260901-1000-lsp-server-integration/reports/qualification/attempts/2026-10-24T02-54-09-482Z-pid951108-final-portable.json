@@ -1,0 +1,1622 @@
+{
+  "stage": "final",
+  "requestedMode": "portable",
+  "requestedThresholdBytes": 65536,
+  "sourceIdentity": {
+    "gitHeadSha": "20887bf511a52ec1eccbae0679f2f832606065ef",
+    "gitWorktreeDirty": true,
+    "compiledProductionThresholdBytes": 65536,
+    "fileDigests": {
+      "resourcesRsSha256": "d401b1eb023dfe125c0ccbcf0595c8e3a48c390ecd67d0993b44e0fc3b134567",
+      "semanticClientTsSha256": "5df776ed88a5590acd121f553584443008fede986caa542b5f87cc47affa3212",
+      "semanticMonacoTsSha256": "75f72952f164fa51aeae62620762d5d5d43d8504e940e62771175ae3842966b5",
+      "semanticModelUriTsSha256": "60b2b72b46063e9e9600818b41bd06c4b89d207f157b5cbc8dd739647af7a3ca",
+      "editorStoreTsSha256": "c9f51c2b34f811f1e7d0e54eb7637bb4fbeabdec21d2b5c6e76aea56d645f505",
+      "backendQualificationRsSha256": "eb7eca1fbb79869ab8b72c0dea132898e507a77e6b0aa30036b6ba8adcc784ec",
+      "browserQualificationTsSha256": "d866014f3fa38c8d1b297f04531590d6b04d1a380e14c87e27a8b8b7028f700b",
+      "runnerMjsSha256": "65a6233ca06a8191b034579c566ee898f7a9014fadeeabfd52d90997587adc18"
+    }
+  },
+  "compiledProductionThresholdBytes": 65536,
+  "tupleIdentity": {
+    "tupleId": "node-24.16.0-ts-5.9.3-tsls-6.0.2-linux-x64",
+    "nodeSha256": "b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd",
+    "packageJsonSha256": "1aebb20f4c8d8b699745853542ecce7f1e7e42c85f97843bfd8064f9efdc3f7c",
+    "lockfileSha256": "003c24ed03f9491035a8f2a3a956d7e83f10def028b028987bdc5d618c2fdcbd",
+    "tslsEntrypointSha256": "192638f1fa62c907fd54c0b55b12dd3dff01325a1a0ed5973907efca1c57b5eb",
+    "tsserverSha256": "e3ccfeec65ec5c470b8ffc5611878a31182650c7e8a062c38a719f83b523edcb"
+  },
+  "fixtureIdentity": {
+    "fixtureSeed": 24301,
+    "smallCorpusDigest": "ddf1171cbfcebb7b7dbf50dad98736cd09925e9406c499e185e3f448e652afd2",
+    "mediumCorpusDigest": "639781a79371a14658cf5c8581bb64ead5f54112c940497799a83d7b286f1151",
+    "largeCorpusDigest": "28b75ee4299e8b2840bc47b60c091fd3fde7ea1a4a6cce2e3ffd8fe01262243f"
+  },
+  "status": "MEASURED",
+  "effectiveMode": "portable-only",
+  "hardCgroupAvailable": false,
+  "supervisorCgroupAdapterWired": false,
+  "portableChildMonitorIntervalMs": 200,
+  "qualificationObservationIntervalMs": 100,
+  "adaptiveSyncThresholdBytes": 65536,
+  "repetitions": 3,
+  "warmupSamples": 5,
+  "warmSamples": 60,
+  "coldSessionsPerWorkload": 4,
+  "coreSamplesPerEndpointPerCondition": 100,
+  "tupleDigests": {
+    "nodeSha256": "b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd",
+    "tslsEntrypointSha256": "192638f1fa62c907fd54c0b55b12dd3dff01325a1a0ed5973907efca1c57b5eb",
+    "tsserverSha256": "e3ccfeec65ec5c470b8ffc5611878a31182650c7e8a062c38a719f83b523edcb",
+    "tsserverImplSha256": "0efcc88cdf0593cc1dcc8b6afd605c7bed9eca6f648c70c8f0df8695114bf6d7",
+    "typescriptCoreSha256": "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675",
+    "packageJsonSha256": "1aebb20f4c8d8b699745853542ecce7f1e7e42c85f97843bfd8064f9efdc3f7c",
+    "lockfileSha256": "003c24ed03f9491035a8f2a3a956d7e83f10def028b028987bdc5d618c2fdcbd",
+    "qualificationBinarySha256": "05b249ecd9c2d0567e813e831b09d94fd8073a8c8d3b5d60c01abc4a98b94db8",
+    "qualificationBuildProfile": "release"
+  },
+  "coldReadyP50Ms": 744.999014,
+  "coldReadyP95Ms": 1142.01839,
+  "tiers": {
+    "small": {
+      "sampleCount": 180,
+      "warmNavMinMs": 2.8554869999999997,
+      "warmNavP50Ms": 4.874338,
+      "warmNavP95Ms": 10.077384,
+      "warmNavMaxMs": 13.991287,
+      "coreAndTerminal": {
+        "sampleCount": 1500,
+        "minMs": 0.050163,
+        "p50Ms": 0.298401,
+        "p95Ms": 40.660443,
+        "maxMs": 41.977387
+      },
+      "perEndpoint": {
+        "health": {
+          "sampleCount": 300,
+          "minMs": 0.050163,
+          "p50Ms": 0.133186,
+          "p95Ms": 0.239282,
+          "maxMs": 1.536019
+        },
+        "workspaceStatus": {
+          "sampleCount": 300,
+          "minMs": 0.114712,
+          "p50Ms": 0.295416,
+          "p95Ms": 0.47132100000000005,
+          "maxMs": 1.898659
+        },
+        "fsList": {
+          "sampleCount": 300,
+          "minMs": 0.154826,
+          "p50Ms": 0.292852,
+          "p95Ms": 0.5343070000000001,
+          "maxMs": 1.9456250000000002
+        },
+        "gitRoots": {
+          "sampleCount": 300,
+          "minMs": 1.839529,
+          "p50Ms": 2.9593000000000003,
+          "p95Ms": 4.1734420000000005,
+          "maxMs": 5.272023
+        },
+        "ptyRoundTrip": {
+          "sampleCount": 300,
+          "minMs": 0.113179,
+          "p50Ms": 0.32463000000000003,
+          "p95Ms": 41.595962,
+          "maxMs": 41.977387
+        }
+      },
+      "overlap": {
+        "barrierSynchronized": true,
+        "totalOverlapDurationMs": 6815.315608000001,
+        "minRepOverlapDurationMs": 2099.1787,
+        "observedNavigationsDuringCoreWindow": 1668,
+        "observedCoreProbesDuringNavWindow": 1500
+      },
+      "repetitions": [
+        {
+          "repetition": 0,
+          "barrierSynchronized": true,
+          "overlapDurationMs": 2361.809247,
+          "warmNavigationSampleCount": 60,
+          "sustainedTotalNavigations": 570,
+          "observedNavigationsDuringCoreWindow": 570,
+          "completedCoreRounds": 100,
+          "observedCoreProbesDuringNavWindow": 500,
+          "warmNav": {
+            "sampleCount": 60,
+            "minMs": 3.8309699999999998,
+            "p50Ms": 5.318569,
+            "p95Ms": 10.155848,
+            "maxMs": 13.991287
+          },
+          "coreAndTerminal": {
+            "sampleCount": 500,
+            "minMs": 0.055663,
+            "p50Ms": 0.296367,
+            "p95Ms": 40.822252000000006,
+            "maxMs": 41.939086
+          },
+          "perEndpoint": {
+            "health": {
+              "sampleCount": 100,
+              "minMs": 0.055663,
+              "p50Ms": 0.133657,
+              "p95Ms": 0.25411,
+              "maxMs": 0.304473
+            },
+            "workspaceStatus": {
+              "sampleCount": 100,
+              "minMs": 0.154275,
+              "p50Ms": 0.30036599999999997,
+              "p95Ms": 0.499683,
+              "maxMs": 1.2693159999999999
+            },
+            "fsList": {
+              "sampleCount": 100,
+              "minMs": 0.173872,
+              "p50Ms": 0.282743,
+              "p95Ms": 0.465931,
+              "maxMs": 1.4905549999999999
+            },
+            "gitRoots": {
+              "sampleCount": 100,
+              "minMs": 2.165472,
+              "p50Ms": 3.017356,
+              "p95Ms": 4.3016,
+              "maxMs": 5.272023
+            },
+            "ptyRoundTrip": {
+              "sampleCount": 100,
+              "minMs": 0.152562,
+              "p50Ms": 0.32463000000000003,
+              "p95Ms": 41.333546999999996,
+              "maxMs": 41.939086
+            }
+          },
+          "terminalDrops": 0
+        },
+        {
+          "repetition": 1,
+          "barrierSynchronized": true,
+          "overlapDurationMs": 2354.3276610000003,
+          "warmNavigationSampleCount": 60,
+          "sustainedTotalNavigations": 603,
+          "observedNavigationsDuringCoreWindow": 603,
+          "completedCoreRounds": 100,
+          "observedCoreProbesDuringNavWindow": 500,
+          "warmNav": {
+            "sampleCount": 60,
+            "minMs": 2.8554869999999997,
+            "p50Ms": 4.390314,
+            "p95Ms": 8.807967999999999,
+            "maxMs": 12.984727
+          },
+          "coreAndTerminal": {
+            "sampleCount": 500,
+            "minMs": 0.057746,
+            "p50Ms": 0.30616600000000005,
+            "p95Ms": 40.623885,
+            "maxMs": 41.977387
+          },
+          "perEndpoint": {
+            "health": {
+              "sampleCount": 100,
+              "minMs": 0.057746,
+              "p50Ms": 0.133186,
+              "p95Ms": 0.24916,
+              "maxMs": 1.536019
+            },
+            "workspaceStatus": {
+              "sampleCount": 100,
+              "minMs": 0.130251,
+              "p50Ms": 0.296287,
+              "p95Ms": 0.445523,
+              "maxMs": 0.619154
+            },
+            "fsList": {
+              "sampleCount": 100,
+              "minMs": 0.158583,
+              "p50Ms": 0.306427,
+              "p95Ms": 0.5577209999999999,
+              "maxMs": 1.9456250000000002
+            },
+            "gitRoots": {
+              "sampleCount": 100,
+              "minMs": 2.0131200000000002,
+              "p50Ms": 2.9446120000000002,
+              "p95Ms": 4.263338999999999,
+              "maxMs": 4.622262
+            },
+            "ptyRoundTrip": {
+              "sampleCount": 100,
+              "minMs": 0.148415,
+              "p50Ms": 0.327295,
+              "p95Ms": 41.732212999999994,
+              "maxMs": 41.977387
+            }
+          },
+          "terminalDrops": 0
+        },
+        {
+          "repetition": 2,
+          "barrierSynchronized": true,
+          "overlapDurationMs": 2099.1787,
+          "warmNavigationSampleCount": 60,
+          "sustainedTotalNavigations": 495,
+          "observedNavigationsDuringCoreWindow": 495,
+          "completedCoreRounds": 100,
+          "observedCoreProbesDuringNavWindow": 500,
+          "warmNav": {
+            "sampleCount": 60,
+            "minMs": 2.9431000000000003,
+            "p50Ms": 4.592187,
+            "p95Ms": 7.8163350000000005,
+            "maxMs": 12.867289000000001
+          },
+          "coreAndTerminal": {
+            "sampleCount": 500,
+            "minMs": 0.050163,
+            "p50Ms": 0.289035,
+            "p95Ms": 40.593368999999996,
+            "maxMs": 41.828050999999995
+          },
+          "perEndpoint": {
+            "health": {
+              "sampleCount": 100,
+              "minMs": 0.050163,
+              "p50Ms": 0.129099,
+              "p95Ms": 0.231999,
+              "maxMs": 0.414206
+            },
+            "workspaceStatus": {
+              "sampleCount": 100,
+              "minMs": 0.114712,
+              "p50Ms": 0.277163,
+              "p95Ms": 0.47132100000000005,
+              "maxMs": 1.898659
+            },
+            "fsList": {
+              "sampleCount": 100,
+              "minMs": 0.154826,
+              "p50Ms": 0.284136,
+              "p95Ms": 0.4940530000000001,
+              "maxMs": 0.615938
+            },
+            "gitRoots": {
+              "sampleCount": 100,
+              "minMs": 1.839529,
+              "p50Ms": 2.90552,
+              "p95Ms": 3.7677129999999996,
+              "maxMs": 4.70741
+            },
+            "ptyRoundTrip": {
+              "sampleCount": 100,
+              "minMs": 0.113179,
+              "p50Ms": 0.321694,
+              "p95Ms": 41.58402,
+              "maxMs": 41.828050999999995
+            }
+          },
+          "terminalDrops": 0
+        }
+      ]
+    },
+    "medium": {
+      "sampleCount": 180,
+      "warmNavMinMs": 5.6804380000000005,
+      "warmNavP50Ms": 7.214252,
+      "warmNavP95Ms": 18.734954000000002,
+      "warmNavMaxMs": 23.138021000000002,
+      "coreAndTerminal": {
+        "sampleCount": 1500,
+        "minMs": 0.043841000000000005,
+        "p50Ms": 0.329729,
+        "p95Ms": 40.768313,
+        "maxMs": 43.271538
+      },
+      "perEndpoint": {
+        "health": {
+          "sampleCount": 300,
+          "minMs": 0.043841000000000005,
+          "p50Ms": 0.142243,
+          "p95Ms": 0.2601,
+          "maxMs": 1.68784
+        },
+        "workspaceStatus": {
+          "sampleCount": 300,
+          "minMs": 0.139187,
+          "p50Ms": 0.3192,
+          "p95Ms": 0.509081,
+          "maxMs": 2.593613
+        },
+        "fsList": {
+          "sampleCount": 300,
+          "minMs": 0.17847,
+          "p50Ms": 0.31395,
+          "p95Ms": 0.58996,
+          "maxMs": 2.5819419999999997
+        },
+        "gitRoots": {
+          "sampleCount": 300,
+          "minMs": 1.9320599999999999,
+          "p50Ms": 2.9890339999999997,
+          "p95Ms": 4.316006,
+          "maxMs": 5.567328
+        },
+        "ptyRoundTrip": {
+          "sampleCount": 300,
+          "minMs": 0.100255,
+          "p50Ms": 0.412923,
+          "p95Ms": 41.563682,
+          "maxMs": 43.271538
+        }
+      },
+      "overlap": {
+        "barrierSynchronized": true,
+        "totalOverlapDurationMs": 7070.031761,
+        "minRepOverlapDurationMs": 2326.635995,
+        "observedNavigationsDuringCoreWindow": 885,
+        "observedCoreProbesDuringNavWindow": 1500
+      },
+      "repetitions": [
+        {
+          "repetition": 0,
+          "barrierSynchronized": true,
+          "overlapDurationMs": 2388.333737,
+          "warmNavigationSampleCount": 60,
+          "sustainedTotalNavigations": 299,
+          "observedNavigationsDuringCoreWindow": 299,
+          "completedCoreRounds": 100,
+          "observedCoreProbesDuringNavWindow": 500,
+          "warmNav": {
+            "sampleCount": 60,
+            "minMs": 5.959674,
+            "p50Ms": 7.194356,
+            "p95Ms": 18.552667,
+            "maxMs": 21.472603
+          },
+          "coreAndTerminal": {
+            "sampleCount": 500,
+            "minMs": 0.051445,
+            "p50Ms": 0.345929,
+            "p95Ms": 40.933307,
+            "maxMs": 42.000299
+          },
+          "perEndpoint": {
+            "health": {
+              "sampleCount": 100,
+              "minMs": 0.051445,
+              "p50Ms": 0.142032,
+              "p95Ms": 0.262735,
+              "maxMs": 1.68784
+            },
+            "workspaceStatus": {
+              "sampleCount": 100,
+              "minMs": 0.146751,
+              "p50Ms": 0.33243500000000004,
+              "p95Ms": 0.474337,
+              "maxMs": 1.720961
+            },
+            "fsList": {
+              "sampleCount": 100,
+              "minMs": 0.191323,
+              "p50Ms": 0.32543099999999997,
+              "p95Ms": 0.576406,
+              "maxMs": 2.5819419999999997
+            },
+            "gitRoots": {
+              "sampleCount": 100,
+              "minMs": 2.240421,
+              "p50Ms": 3.0267929999999996,
+              "p95Ms": 4.662807,
+              "maxMs": 5.567328
+            },
+            "ptyRoundTrip": {
+              "sampleCount": 100,
+              "minMs": 0.109221,
+              "p50Ms": 0.423563,
+              "p95Ms": 41.709191,
+              "maxMs": 42.000299
+            }
+          },
+          "terminalDrops": 0
+        },
+        {
+          "repetition": 1,
+          "barrierSynchronized": true,
+          "overlapDurationMs": 2326.635995,
+          "warmNavigationSampleCount": 60,
+          "sustainedTotalNavigations": 295,
+          "observedNavigationsDuringCoreWindow": 295,
+          "completedCoreRounds": 100,
+          "observedCoreProbesDuringNavWindow": 500,
+          "warmNav": {
+            "sampleCount": 60,
+            "minMs": 5.747592,
+            "p50Ms": 6.9475,
+            "p95Ms": 16.364072,
+            "maxMs": 19.670371999999997
+          },
+          "coreAndTerminal": {
+            "sampleCount": 500,
+            "minMs": 0.043841000000000005,
+            "p50Ms": 0.317336,
+            "p95Ms": 40.722046999999996,
+            "maxMs": 43.271538
+          },
+          "perEndpoint": {
+            "health": {
+              "sampleCount": 100,
+              "minMs": 0.043841000000000005,
+              "p50Ms": 0.142894,
+              "p95Ms": 0.240805,
+              "maxMs": 0.37385100000000004
+            },
+            "workspaceStatus": {
+              "sampleCount": 100,
+              "minMs": 0.139187,
+              "p50Ms": 0.317066,
+              "p95Ms": 0.558723,
+              "maxMs": 2.593613
+            },
+            "fsList": {
+              "sampleCount": 100,
+              "minMs": 0.17847,
+              "p50Ms": 0.29104800000000003,
+              "p95Ms": 0.590972,
+              "maxMs": 0.805689
+            },
+            "gitRoots": {
+              "sampleCount": 100,
+              "minMs": 1.9320599999999999,
+              "p50Ms": 2.937839,
+              "p95Ms": 4.108322,
+              "maxMs": 5.1607069999999995
+            },
+            "ptyRoundTrip": {
+              "sampleCount": 100,
+              "minMs": 0.100255,
+              "p50Ms": 0.388328,
+              "p95Ms": 41.688724,
+              "maxMs": 43.271538
+            }
+          },
+          "terminalDrops": 0
+        },
+        {
+          "repetition": 2,
+          "barrierSynchronized": true,
+          "overlapDurationMs": 2355.062029,
+          "warmNavigationSampleCount": 60,
+          "sustainedTotalNavigations": 291,
+          "observedNavigationsDuringCoreWindow": 291,
+          "completedCoreRounds": 100,
+          "observedCoreProbesDuringNavWindow": 500,
+          "warmNav": {
+            "sampleCount": 60,
+            "minMs": 5.6804380000000005,
+            "p50Ms": 7.702535,
+            "p95Ms": 19.629236000000002,
+            "maxMs": 23.138021000000002
+          },
+          "coreAndTerminal": {
+            "sampleCount": 500,
+            "minMs": 0.051926,
+            "p50Ms": 0.32341800000000004,
+            "p95Ms": 40.673317,
+            "maxMs": 41.913578
+          },
+          "perEndpoint": {
+            "health": {
+              "sampleCount": 100,
+              "minMs": 0.051926,
+              "p50Ms": 0.14087,
+              "p95Ms": 0.273235,
+              "maxMs": 0.522736
+            },
+            "workspaceStatus": {
+              "sampleCount": 100,
+              "minMs": 0.13982799999999998,
+              "p50Ms": 0.29818100000000003,
+              "p95Ms": 0.49963399999999997,
+              "maxMs": 0.636046
+            },
+            "fsList": {
+              "sampleCount": 100,
+              "minMs": 0.182497,
+              "p50Ms": 0.318218,
+              "p95Ms": 0.540088,
+              "maxMs": 0.7794800000000001
+            },
+            "gitRoots": {
+              "sampleCount": 100,
+              "minMs": 2.118134,
+              "p50Ms": 2.983012,
+              "p95Ms": 3.777481,
+              "maxMs": 4.993047
+            },
+            "ptyRoundTrip": {
+              "sampleCount": 100,
+              "minMs": 0.13142199999999998,
+              "p50Ms": 0.403455,
+              "p95Ms": 41.174443,
+              "maxMs": 41.913578
+            }
+          },
+          "terminalDrops": 0
+        }
+      ]
+    },
+    "large": {
+      "sampleCount": 180,
+      "warmNavMinMs": 8.952064,
+      "warmNavP50Ms": 16.02786,
+      "warmNavP95Ms": 40.421382,
+      "warmNavMaxMs": 72.776987,
+      "coreAndTerminal": {
+        "sampleCount": 1500,
+        "minMs": 0.049611,
+        "p50Ms": 0.33326599999999995,
+        "p95Ms": 40.785123999999996,
+        "maxMs": 42.404104999999994
+      },
+      "perEndpoint": {
+        "health": {
+          "sampleCount": 300,
+          "minMs": 0.049611,
+          "p50Ms": 0.145789,
+          "p95Ms": 0.256934,
+          "maxMs": 1.6945919999999999
+        },
+        "workspaceStatus": {
+          "sampleCount": 300,
+          "minMs": 0.12977,
+          "p50Ms": 0.323468,
+          "p95Ms": 0.5094420000000001,
+          "maxMs": 1.963769
+        },
+        "fsList": {
+          "sampleCount": 300,
+          "minMs": 0.15481699999999998,
+          "p50Ms": 0.321585,
+          "p95Ms": 0.5837789999999999,
+          "maxMs": 1.170934
+        },
+        "gitRoots": {
+          "sampleCount": 300,
+          "minMs": 1.943822,
+          "p50Ms": 3.134633,
+          "p95Ms": 4.1336699999999995,
+          "maxMs": 5.599017000000001
+        },
+        "ptyRoundTrip": {
+          "sampleCount": 300,
+          "minMs": 0.13181400000000001,
+          "p50Ms": 0.450813,
+          "p95Ms": 41.602002999999996,
+          "maxMs": 42.404104999999994
+        }
+      },
+      "overlap": {
+        "barrierSynchronized": true,
+        "totalOverlapDurationMs": 7107.497941,
+        "minRepOverlapDurationMs": 2325.303403,
+        "observedNavigationsDuringCoreWindow": 382,
+        "observedCoreProbesDuringNavWindow": 1500
+      },
+      "repetitions": [
+        {
+          "repetition": 0,
+          "barrierSynchronized": true,
+          "overlapDurationMs": 2325.303403,
+          "warmNavigationSampleCount": 60,
+          "sustainedTotalNavigations": 124,
+          "observedNavigationsDuringCoreWindow": 124,
+          "completedCoreRounds": 100,
+          "observedCoreProbesDuringNavWindow": 500,
+          "warmNav": {
+            "sampleCount": 60,
+            "minMs": 8.952064,
+            "p50Ms": 16.128016,
+            "p95Ms": 40.421382,
+            "maxMs": 58.936117
+          },
+          "coreAndTerminal": {
+            "sampleCount": 500,
+            "minMs": 0.049611,
+            "p50Ms": 0.331002,
+            "p95Ms": 40.723069,
+            "maxMs": 42.03096600000001
+          },
+          "perEndpoint": {
+            "health": {
+              "sampleCount": 100,
+              "minMs": 0.049611,
+              "p50Ms": 0.14962699999999998,
+              "p95Ms": 0.246095,
+              "maxMs": 0.647366
+            },
+            "workspaceStatus": {
+              "sampleCount": 100,
+              "minMs": 0.12977,
+              "p50Ms": 0.331002,
+              "p95Ms": 0.5375840000000001,
+              "maxMs": 0.875168
+            },
+            "fsList": {
+              "sampleCount": 100,
+              "minMs": 0.15481699999999998,
+              "p50Ms": 0.31518300000000005,
+              "p95Ms": 0.509392,
+              "maxMs": 0.7555869999999999
+            },
+            "gitRoots": {
+              "sampleCount": 100,
+              "minMs": 1.943822,
+              "p50Ms": 3.07883,
+              "p95Ms": 3.666847,
+              "maxMs": 4.282695
+            },
+            "ptyRoundTrip": {
+              "sampleCount": 100,
+              "minMs": 0.13181400000000001,
+              "p50Ms": 0.38927900000000004,
+              "p95Ms": 41.421941,
+              "maxMs": 42.03096600000001
+            }
+          },
+          "terminalDrops": 0
+        },
+        {
+          "repetition": 1,
+          "barrierSynchronized": true,
+          "overlapDurationMs": 2403.948935,
+          "warmNavigationSampleCount": 60,
+          "sustainedTotalNavigations": 127,
+          "observedNavigationsDuringCoreWindow": 127,
+          "completedCoreRounds": 100,
+          "observedCoreProbesDuringNavWindow": 500,
+          "warmNav": {
+            "sampleCount": 60,
+            "minMs": 9.375847,
+            "p50Ms": 16.194098,
+            "p95Ms": 37.269837,
+            "maxMs": 59.519817
+          },
+          "coreAndTerminal": {
+            "sampleCount": 500,
+            "minMs": 0.05422,
+            "p50Ms": 0.311496,
+            "p95Ms": 40.842168,
+            "maxMs": 42.404104999999994
+          },
+          "perEndpoint": {
+            "health": {
+              "sampleCount": 100,
+              "minMs": 0.05422,
+              "p50Ms": 0.144006,
+              "p95Ms": 0.235516,
+              "maxMs": 1.6945919999999999
+            },
+            "workspaceStatus": {
+              "sampleCount": 100,
+              "minMs": 0.143936,
+              "p50Ms": 0.30856,
+              "p95Ms": 0.446996,
+              "maxMs": 1.963769
+            },
+            "fsList": {
+              "sampleCount": 100,
+              "minMs": 0.188068,
+              "p50Ms": 0.300235,
+              "p95Ms": 0.486599,
+              "maxMs": 0.7644629999999999
+            },
+            "gitRoots": {
+              "sampleCount": 100,
+              "minMs": 2.5120530000000003,
+              "p50Ms": 3.195977,
+              "p95Ms": 4.7544070000000005,
+              "maxMs": 5.599017000000001
+            },
+            "ptyRoundTrip": {
+              "sampleCount": 100,
+              "minMs": 0.146591,
+              "p50Ms": 0.453758,
+              "p95Ms": 41.753453,
+              "maxMs": 42.404104999999994
+            }
+          },
+          "terminalDrops": 0
+        },
+        {
+          "repetition": 2,
+          "barrierSynchronized": true,
+          "overlapDurationMs": 2378.245603,
+          "warmNavigationSampleCount": 60,
+          "sustainedTotalNavigations": 131,
+          "observedNavigationsDuringCoreWindow": 131,
+          "completedCoreRounds": 100,
+          "observedCoreProbesDuringNavWindow": 500,
+          "warmNav": {
+            "sampleCount": 60,
+            "minMs": 9.83721,
+            "p50Ms": 15.33486,
+            "p95Ms": 38.257772,
+            "maxMs": 72.776987
+          },
+          "coreAndTerminal": {
+            "sampleCount": 500,
+            "minMs": 0.055683,
+            "p50Ms": 0.349426,
+            "p95Ms": 40.709272999999996,
+            "maxMs": 41.96264
+          },
+          "perEndpoint": {
+            "health": {
+              "sampleCount": 100,
+              "minMs": 0.055683,
+              "p50Ms": 0.14769300000000002,
+              "p95Ms": 0.267735,
+              "maxMs": 0.397334
+            },
+            "workspaceStatus": {
+              "sampleCount": 100,
+              "minMs": 0.160036,
+              "p50Ms": 0.33428800000000003,
+              "p95Ms": 0.5026889999999999,
+              "maxMs": 0.556328
+            },
+            "fsList": {
+              "sampleCount": 100,
+              "minMs": 0.202885,
+              "p50Ms": 0.355367,
+              "p95Ms": 0.6014320000000001,
+              "maxMs": 1.170934
+            },
+            "gitRoots": {
+              "sampleCount": 100,
+              "minMs": 2.198302,
+              "p50Ms": 3.1298239999999997,
+              "p95Ms": 3.8621480000000004,
+              "maxMs": 4.367762
+            },
+            "ptyRoundTrip": {
+              "sampleCount": 100,
+              "minMs": 0.14042,
+              "p50Ms": 0.423933,
+              "p95Ms": 41.198848000000005,
+              "maxMs": 41.96264
+            }
+          },
+          "terminalDrops": 0
+        }
+      ]
+    }
+  },
+  "coreAndTerminalP50Ms": 0.320602,
+  "coreAndTerminalP95Ms": 40.736294,
+  "corePerEndpoint": {
+    "health": {
+      "sampleCount": 900,
+      "minMs": 0.043841000000000005,
+      "p50Ms": 0.14096,
+      "p95Ms": 0.252276,
+      "maxMs": 1.6945919999999999
+    },
+    "workspaceStatus": {
+      "sampleCount": 900,
+      "minMs": 0.114712,
+      "p50Ms": 0.312918,
+      "p95Ms": 0.5026889999999999,
+      "maxMs": 2.593613
+    },
+    "fsList": {
+      "sampleCount": 900,
+      "minMs": 0.15481699999999998,
+      "p50Ms": 0.31028300000000003,
+      "p95Ms": 0.569693,
+      "maxMs": 2.5819419999999997
+    },
+    "gitRoots": {
+      "sampleCount": 900,
+      "minMs": 1.839529,
+      "p50Ms": 3.036031,
+      "p95Ms": 4.219939,
+      "maxMs": 5.599017000000001
+    },
+    "ptyRoundTrip": {
+      "sampleCount": 900,
+      "minMs": 0.100255,
+      "p50Ms": 0.406461,
+      "p95Ms": 41.596823,
+      "maxMs": 43.271538
+    }
+  },
+  "coreScheduleOverlap": {
+    "allTiersOverlapped": true,
+    "barrierSynchronized": true,
+    "tiersCovered": [
+      "small",
+      "medium",
+      "large"
+    ],
+    "totalOverlapDurationMs": 20992.84531,
+    "observedNavigationsDuringCoreWindow": 2935,
+    "observedCoreProbesDuringNavWindow": 4500
+  },
+  "resources": {
+    "sampleCount": 567,
+    "phaseSampleCounts": {
+      "startup": 107,
+      "warm": 270,
+      "browser": 16,
+      "reap": 182
+    },
+    "perPhaseObservations": {
+      "startup": {
+        "samples": 139,
+        "liveSamples": 107,
+        "zeroSamples": 32
+      },
+      "warm": {
+        "samples": 270,
+        "liveSamples": 270,
+        "zeroSamples": 0
+      },
+      "browser": {
+        "samples": 66,
+        "liveSamples": 16,
+        "zeroSamples": 50
+      },
+      "reap": {
+        "samples": 182,
+        "liveSamples": 174,
+        "zeroSamples": 8
+      }
+    },
+    "postCleanupZeroObservations": 1,
+    "peakTreeRssBytes": 774770688,
+    "p50TreeRssBytes": 517173248,
+    "p95TreeRssBytes": 725442560,
+    "maxObservedProcessesAcrossTrees": 4,
+    "p95ObservedProcessesAcrossTrees": 4,
+    "totalCpuDeltaMs": 95610,
+    "intervalCpuDeltaMsP50": 160,
+    "intervalCpuDeltaMsP95": 420,
+    "intervalCpuDeltaMsMax": 530,
+    "intervalCpuPctP50": 158.87735355450147,
+    "intervalCpuPctP95": 422.8059985178234,
+    "intervalCpuPctMax": 526.6704682999779,
+    "measuredScope": {
+      "scope": "whole-semantic-child-tree-descendants-of-supervisor",
+      "phasesCovered": [
+        "startup",
+        "warm",
+        "browser",
+        "reap"
+      ],
+      "samplingIntervalMs": 100,
+      "clockTicksPerSecond": 100,
+      "cpuAccounting": "cumulative totalCpuDeltaMs sums latest observed lifetime ticks (utime + stime) per (pid, starttime) across all discovered semantic trees as a sampled lower bound; intervalCpuDeltaMs measures delta ticks across consecutive ~100ms intervals with newly discovered processes baselined on first observation to avoid charging multi-second startup work to single sample rate denominators; intervalCpuPct is defined as (intervalCpuDeltaMs / elapsedMs) * 100.0 where 100% equals 1 logical CPU core",
+      "rssAccounting": "procfs /proc/<pid>/statm resident pages * _SC_PAGESIZE for non-zombie live processes across discovered semantic trees"
+    }
+  },
+  "clientThresholdQualification": {
+    "status": "MEASURED",
+    "expectedThresholdBytes": 65536,
+    "negotiatedThresholdBytes": 65536,
+    "candidateThresholdsTested": [
+      32768,
+      65536,
+      131072
+    ],
+    "fixedUnionStepCount": 21,
+    "fixedUnionSteps": [
+      {
+        "stepIndex": 1,
+        "thresholdGroup": 32768,
+        "label": "32768_below_ascii",
+        "crossingKind": "below",
+        "multibyte": false,
+        "postEditUtf8Bytes": 32767,
+        "postEditUtf16Units": 32767,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 32975,
+        "contentChangesBytes": 32803,
+        "serializationMs": 0.09999999403953552,
+        "didChangeSyncMs": 1.199999988079071,
+        "navigationMs": 440.5,
+        "documentVersion": 2,
+        "verifiedLine19Utf16Col": 39
+      },
+      {
+        "stepIndex": 2,
+        "thresholdGroup": 32768,
+        "label": "32768_below_multibyte",
+        "crossingKind": "below",
+        "multibyte": true,
+        "postEditUtf8Bytes": 32767,
+        "postEditUtf16Units": 16747,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 32975,
+        "contentChangesBytes": 32803,
+        "serializationMs": 0.19999998807907104,
+        "didChangeSyncMs": 0.9000000059604645,
+        "navigationMs": 13.699999988079073,
+        "documentVersion": 3,
+        "verifiedLine19Utf16Col": 45
+      },
+      {
+        "stepIndex": 3,
+        "thresholdGroup": 32768,
+        "label": "32768_cross_up_to_equal",
+        "crossingKind": "upward_to_equal",
+        "multibyte": true,
+        "postEditUtf8Bytes": 32768,
+        "postEditUtf16Units": 16748,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 32976,
+        "contentChangesBytes": 32804,
+        "serializationMs": 0.19999998807907104,
+        "didChangeSyncMs": 1.699999988079071,
+        "navigationMs": 7.200000017881393,
+        "documentVersion": 4,
+        "verifiedLine19Utf16Col": 45
+      },
+      {
+        "stepIndex": 4,
+        "thresholdGroup": 32768,
+        "label": "32768_cross_up_to_above",
+        "crossingKind": "upward_to_above",
+        "multibyte": true,
+        "postEditUtf8Bytes": 32769,
+        "postEditUtf16Units": 16749,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 32977,
+        "contentChangesBytes": 32805,
+        "serializationMs": 0.19999998807907104,
+        "didChangeSyncMs": 1.7000000178813934,
+        "navigationMs": 9.400000005960464,
+        "documentVersion": 5,
+        "verifiedLine19Utf16Col": 45
+      },
+      {
+        "stepIndex": 5,
+        "thresholdGroup": 32768,
+        "label": "32768_above_multibyte",
+        "crossingKind": "sustained_above",
+        "multibyte": true,
+        "postEditUtf8Bytes": 32832,
+        "postEditUtf16Units": 16782,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 33040,
+        "contentChangesBytes": 32868,
+        "serializationMs": 0.09999999403953552,
+        "didChangeSyncMs": 0.7000000178813934,
+        "navigationMs": 6.700000017881393,
+        "documentVersion": 6,
+        "verifiedLine19Utf16Col": 45
+      },
+      {
+        "stepIndex": 6,
+        "thresholdGroup": 32768,
+        "label": "32768_cross_down_to_equal",
+        "crossingKind": "downward_to_equal",
+        "multibyte": true,
+        "postEditUtf8Bytes": 32768,
+        "postEditUtf16Units": 16748,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 32976,
+        "contentChangesBytes": 32804,
+        "serializationMs": 0.09999999403953552,
+        "didChangeSyncMs": 1,
+        "navigationMs": 6.300000011920929,
+        "documentVersion": 7,
+        "verifiedLine19Utf16Col": 45
+      },
+      {
+        "stepIndex": 7,
+        "thresholdGroup": 32768,
+        "label": "32768_cross_down_to_below",
+        "crossingKind": "downward_to_below",
+        "multibyte": false,
+        "postEditUtf8Bytes": 32767,
+        "postEditUtf16Units": 32767,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 32975,
+        "contentChangesBytes": 32803,
+        "serializationMs": 0.09999999403953552,
+        "didChangeSyncMs": 0.800000011920929,
+        "navigationMs": 6.200000017881393,
+        "documentVersion": 8,
+        "verifiedLine19Utf16Col": 39
+      },
+      {
+        "stepIndex": 8,
+        "thresholdGroup": 65536,
+        "label": "65536_below_ascii",
+        "crossingKind": "below",
+        "multibyte": false,
+        "postEditUtf8Bytes": 65535,
+        "postEditUtf16Units": 65535,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 65743,
+        "contentChangesBytes": 65571,
+        "serializationMs": 0,
+        "didChangeSyncMs": 1.399999976158142,
+        "navigationMs": 6.899999976158142,
+        "documentVersion": 9,
+        "verifiedLine19Utf16Col": 39
+      },
+      {
+        "stepIndex": 9,
+        "thresholdGroup": 65536,
+        "label": "65536_below_multibyte",
+        "crossingKind": "below",
+        "multibyte": true,
+        "postEditUtf8Bytes": 65535,
+        "postEditUtf16Units": 33130,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 65744,
+        "contentChangesBytes": 65571,
+        "serializationMs": 0.20000001788139343,
+        "didChangeSyncMs": 1.2000000178813934,
+        "navigationMs": 6.699999988079071,
+        "documentVersion": 10,
+        "verifiedLine19Utf16Col": 45
+      },
+      {
+        "stepIndex": 10,
+        "thresholdGroup": 65536,
+        "label": "65536_cross_up_to_equal",
+        "crossingKind": "upward_to_equal",
+        "multibyte": true,
+        "postEditUtf8Bytes": 65536,
+        "postEditUtf16Units": 33131,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 65238,
+        "contentChangesBytes": 65065,
+        "serializationMs": 0.09999999403953552,
+        "didChangeSyncMs": 1.5999999940395355,
+        "navigationMs": 6.699999988079071,
+        "documentVersion": 11,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 11,
+        "thresholdGroup": 65536,
+        "label": "65536_cross_up_to_above",
+        "crossingKind": "upward_to_above",
+        "multibyte": true,
+        "postEditUtf8Bytes": 65537,
+        "postEditUtf16Units": 33132,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 65239,
+        "contentChangesBytes": 65066,
+        "serializationMs": 0.30000001192092896,
+        "didChangeSyncMs": 1.600000023841858,
+        "navigationMs": 7,
+        "documentVersion": 12,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 12,
+        "thresholdGroup": 65536,
+        "label": "65536_above_multibyte",
+        "crossingKind": "sustained_above",
+        "multibyte": true,
+        "postEditUtf8Bytes": 65600,
+        "postEditUtf16Units": 33165,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 65302,
+        "contentChangesBytes": 65129,
+        "serializationMs": 0.20000001788139343,
+        "didChangeSyncMs": 1.5,
+        "navigationMs": 7.0999999940395355,
+        "documentVersion": 13,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 13,
+        "thresholdGroup": 65536,
+        "label": "65536_cross_down_to_equal",
+        "crossingKind": "downward_to_equal",
+        "multibyte": true,
+        "postEditUtf8Bytes": 65536,
+        "postEditUtf16Units": 33131,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 65238,
+        "contentChangesBytes": 65065,
+        "serializationMs": 0.09999999403953552,
+        "didChangeSyncMs": 1.5999999940395355,
+        "navigationMs": 10,
+        "documentVersion": 14,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 14,
+        "thresholdGroup": 65536,
+        "label": "65536_cross_down_to_below",
+        "crossingKind": "downward_to_below",
+        "multibyte": false,
+        "postEditUtf8Bytes": 65535,
+        "postEditUtf16Units": 65535,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 65744,
+        "contentChangesBytes": 65571,
+        "serializationMs": 0,
+        "didChangeSyncMs": 1.2000000178813934,
+        "navigationMs": 6.5,
+        "documentVersion": 15,
+        "verifiedLine19Utf16Col": 40
+      },
+      {
+        "stepIndex": 15,
+        "thresholdGroup": 131072,
+        "label": "131072_below_ascii",
+        "crossingKind": "below",
+        "multibyte": false,
+        "postEditUtf8Bytes": 131071,
+        "postEditUtf16Units": 131071,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 130773,
+        "contentChangesBytes": 130600,
+        "serializationMs": 0.19999998807907104,
+        "didChangeSyncMs": 2.0999999940395355,
+        "navigationMs": 9.199999988079073,
+        "documentVersion": 16,
+        "verifiedLine19Utf16Col": 40
+      },
+      {
+        "stepIndex": 16,
+        "thresholdGroup": 131072,
+        "label": "131072_below_multibyte",
+        "crossingKind": "below",
+        "multibyte": true,
+        "postEditUtf8Bytes": 131071,
+        "postEditUtf16Units": 65901,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 130775,
+        "contentChangesBytes": 130602,
+        "serializationMs": 0.4000000059604645,
+        "didChangeSyncMs": 2.699999988079071,
+        "navigationMs": 9.600000023841858,
+        "documentVersion": 17,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 17,
+        "thresholdGroup": 131072,
+        "label": "131072_cross_up_to_equal",
+        "crossingKind": "upward_to_equal",
+        "multibyte": true,
+        "postEditUtf8Bytes": 131072,
+        "postEditUtf16Units": 65902,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 130774,
+        "contentChangesBytes": 130601,
+        "serializationMs": 0.19999998807907104,
+        "didChangeSyncMs": 2.2000000178813934,
+        "navigationMs": 12.199999988079073,
+        "documentVersion": 18,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 18,
+        "thresholdGroup": 131072,
+        "label": "131072_cross_up_to_above",
+        "crossingKind": "upward_to_above",
+        "multibyte": true,
+        "postEditUtf8Bytes": 131073,
+        "postEditUtf16Units": 65903,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 130775,
+        "contentChangesBytes": 130602,
+        "serializationMs": 0.3999999761581421,
+        "didChangeSyncMs": 2.0999999940395355,
+        "navigationMs": 8.599999994039536,
+        "documentVersion": 19,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 19,
+        "thresholdGroup": 131072,
+        "label": "131072_above_multibyte",
+        "crossingKind": "sustained_above",
+        "multibyte": true,
+        "postEditUtf8Bytes": 131136,
+        "postEditUtf16Units": 65931,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 130838,
+        "contentChangesBytes": 130665,
+        "serializationMs": 0.20000001788139343,
+        "didChangeSyncMs": 1.9000000059604645,
+        "navigationMs": 9.700000017881392,
+        "documentVersion": 20,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 20,
+        "thresholdGroup": 131072,
+        "label": "131072_cross_down_to_equal",
+        "crossingKind": "downward_to_equal",
+        "multibyte": true,
+        "postEditUtf8Bytes": 131072,
+        "postEditUtf16Units": 65902,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 130774,
+        "contentChangesBytes": 130601,
+        "serializationMs": 0.4000000059604645,
+        "didChangeSyncMs": 2.199999988079071,
+        "navigationMs": 9.400000005960464,
+        "documentVersion": 21,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 21,
+        "thresholdGroup": 131072,
+        "label": "131072_cross_down_to_below",
+        "crossingKind": "downward_to_below",
+        "multibyte": false,
+        "postEditUtf8Bytes": 131071,
+        "postEditUtf16Units": 131071,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 130773,
+        "contentChangesBytes": 130600,
+        "serializationMs": 0.20000001788139343,
+        "didChangeSyncMs": 1.9000000059604645,
+        "navigationMs": 7.400000005960464,
+        "documentVersion": 22,
+        "verifiedLine19Utf16Col": 40
+      }
+    ],
+    "thresholdCrossings": {
+      "32768": {
+        "belowBytes": 32767,
+        "equalBytes": 32768,
+        "aboveBytes": 32769,
+        "stepCount": 7,
+        "observedModes": [
+          {
+            "label": "32768_below_ascii",
+            "bytes": 32767,
+            "syncMode": "full",
+            "wireFrameBytes": 32975
+          },
+          {
+            "label": "32768_below_multibyte",
+            "bytes": 32767,
+            "syncMode": "full",
+            "wireFrameBytes": 32975
+          },
+          {
+            "label": "32768_cross_up_to_equal",
+            "bytes": 32768,
+            "syncMode": "full",
+            "wireFrameBytes": 32976
+          },
+          {
+            "label": "32768_cross_up_to_above",
+            "bytes": 32769,
+            "syncMode": "full",
+            "wireFrameBytes": 32977
+          },
+          {
+            "label": "32768_above_multibyte",
+            "bytes": 32832,
+            "syncMode": "full",
+            "wireFrameBytes": 33040
+          },
+          {
+            "label": "32768_cross_down_to_equal",
+            "bytes": 32768,
+            "syncMode": "full",
+            "wireFrameBytes": 32976
+          },
+          {
+            "label": "32768_cross_down_to_below",
+            "bytes": 32767,
+            "syncMode": "full",
+            "wireFrameBytes": 32975
+          }
+        ]
+      },
+      "65536": {
+        "belowBytes": 65535,
+        "equalBytes": 65536,
+        "aboveBytes": 65537,
+        "stepCount": 7,
+        "observedModes": [
+          {
+            "label": "65536_below_ascii",
+            "bytes": 65535,
+            "syncMode": "full",
+            "wireFrameBytes": 65743
+          },
+          {
+            "label": "65536_below_multibyte",
+            "bytes": 65535,
+            "syncMode": "full",
+            "wireFrameBytes": 65744
+          },
+          {
+            "label": "65536_cross_up_to_equal",
+            "bytes": 65536,
+            "syncMode": "incremental",
+            "wireFrameBytes": 65238
+          },
+          {
+            "label": "65536_cross_up_to_above",
+            "bytes": 65537,
+            "syncMode": "incremental",
+            "wireFrameBytes": 65239
+          },
+          {
+            "label": "65536_above_multibyte",
+            "bytes": 65600,
+            "syncMode": "incremental",
+            "wireFrameBytes": 65302
+          },
+          {
+            "label": "65536_cross_down_to_equal",
+            "bytes": 65536,
+            "syncMode": "incremental",
+            "wireFrameBytes": 65238
+          },
+          {
+            "label": "65536_cross_down_to_below",
+            "bytes": 65535,
+            "syncMode": "full",
+            "wireFrameBytes": 65744
+          }
+        ]
+      },
+      "131072": {
+        "belowBytes": 131071,
+        "equalBytes": 131072,
+        "aboveBytes": 131073,
+        "stepCount": 7,
+        "observedModes": [
+          {
+            "label": "131072_below_ascii",
+            "bytes": 131071,
+            "syncMode": "incremental",
+            "wireFrameBytes": 130773
+          },
+          {
+            "label": "131072_below_multibyte",
+            "bytes": 131071,
+            "syncMode": "incremental",
+            "wireFrameBytes": 130775
+          },
+          {
+            "label": "131072_cross_up_to_equal",
+            "bytes": 131072,
+            "syncMode": "incremental",
+            "wireFrameBytes": 130774
+          },
+          {
+            "label": "131072_cross_up_to_above",
+            "bytes": 131073,
+            "syncMode": "incremental",
+            "wireFrameBytes": 130775
+          },
+          {
+            "label": "131072_above_multibyte",
+            "bytes": 131136,
+            "syncMode": "incremental",
+            "wireFrameBytes": 130838
+          },
+          {
+            "label": "131072_cross_down_to_equal",
+            "bytes": 131072,
+            "syncMode": "incremental",
+            "wireFrameBytes": 130774
+          },
+          {
+            "label": "131072_cross_down_to_below",
+            "bytes": 131071,
+            "syncMode": "incremental",
+            "wireFrameBytes": 130773
+          }
+        ]
+      }
+    },
+    "bySyncMode": {
+      "full": {
+        "stepCount": 10,
+        "wireFrameBytes": {
+          "sampleCount": 10,
+          "min": 32975,
+          "p50": 32976,
+          "p95": 65744,
+          "max": 65744
+        },
+        "serializationMs": {
+          "sampleCount": 10,
+          "min": 0,
+          "p50": 0.09999999403953552,
+          "p95": 0.20000001788139343,
+          "max": 0.20000001788139343
+        },
+        "didChangeSyncMs": {
+          "sampleCount": 10,
+          "min": 0.7000000178813934,
+          "p50": 1.199999988079071,
+          "p95": 1.7000000178813934,
+          "max": 1.7000000178813934
+        },
+        "navigationMs": {
+          "sampleCount": 10,
+          "min": 6.200000017881393,
+          "p50": 6.700000017881393,
+          "p95": 440.5,
+          "max": 440.5
+        }
+      },
+      "incremental": {
+        "stepCount": 11,
+        "wireFrameBytes": {
+          "sampleCount": 11,
+          "min": 65238,
+          "p50": 130773,
+          "p95": 130838,
+          "max": 130838
+        },
+        "serializationMs": {
+          "sampleCount": 11,
+          "min": 0.09999999403953552,
+          "p50": 0.20000001788139343,
+          "p95": 0.4000000059604645,
+          "max": 0.4000000059604645
+        },
+        "didChangeSyncMs": {
+          "sampleCount": 11,
+          "min": 1.5,
+          "p50": 1.9000000059604645,
+          "p95": 2.699999988079071,
+          "max": 2.699999988079071
+        },
+        "navigationMs": {
+          "sampleCount": 11,
+          "min": 6.699999988079071,
+          "p50": 9.199999988079073,
+          "p95": 12.199999988079073,
+          "max": 12.199999988079073
+        }
+      }
+    },
+    "overallDistributions": {
+      "serializationMs": {
+        "sampleCount": 21,
+        "min": 0,
+        "p50": 0.19999998807907104,
+        "p95": 0.4000000059604645,
+        "max": 0.4000000059604645
+      },
+      "didChangeSyncMs": {
+        "sampleCount": 21,
+        "min": 0.7000000178813934,
+        "p50": 1.5999999940395355,
+        "p95": 2.2000000178813934,
+        "max": 2.699999988079071
+      },
+      "navigationMs": {
+        "sampleCount": 21,
+        "min": 6.200000017881393,
+        "p50": 7.400000005960464,
+        "p95": 13.699999988079073,
+        "max": 440.5
+      }
+    },
+    "staleReveals": 0,
+    "error": null,
+    "totalWirePayloadBytes": 1604624
+  },
+  "reapDurationP95Ms": 1080.451922,
+  "reapDurationMaxMs": 1081.173835,
+  "terminalDrops": 0,
+  "staleReveals": 0,
+  "staleRevealsStatus": "MEASURED_FROM_REAL_BROWSER_SEMANTIC_CLIENT_WS",
+  "unauthorizedOrOutsideTargetDisclosures": 0,
+  "projectCodeCanaryExecutionsInDeniedRuns": 0,
+  "orphanProcesses": 0,
+  "failureReason": null,
+  "sessionPressureDiagnostics": {
+    "measuredScope": {
+      "inspectedActorHandles": "cold, warm_main, warm_peer, hostile (directly held SemanticSessionHandle instances)",
+      "browserWsSessions": null,
+      "browserWsSessionStatus": "UNMEASURED (browser WS-created sessions not directly held as session handles in harness; explicitly unmeasured, not fake 0)",
+      "queueSlotSemantics": "occupied and reserved slots in bounded mpsc channels, excluding active writer in write syscall",
+      "childOutboundBytesSemantics": "child outbound buffered/reserved payload bytes, excluding active writer in write syscall",
+      "inspectedSessionCount": 31,
+      "sampledConcurrentPeakSemantics": "completion-boundary sequential handle observations during sustained loop, not atomic concurrent hardware snapshot; authoritative transition highwaters are preserved per-session in maxPerSessionPeaks"
+    },
+    "maxPerSessionPeaks": {
+      "inFlightRequests": 1,
+      "commandQueueSlots": 3,
+      "childOutboundQueueSlots": 7,
+      "childOutboundBytes": 207641,
+      "openDocuments": 8,
+      "overlayBytes": 263258
+    },
+    "sampledConcurrentPeaks": {
+      "inFlightRequests": 0,
+      "commandQueueSlots": 0,
+      "childOutboundQueueSlots": 0,
+      "childOutboundBytes": 0,
+      "openDocuments": 9,
+      "overlayBytes": 267354
+    },
+    "postReapCleanup": {
+      "reapedSessionCount": 31,
+      "allClean": true,
+      "maxResidualOverlayBytes": 0,
+      "maxResidualOpenDocuments": 0,
+      "maxResidualInFlightRequests": 0,
+      "maxResidualCommandQueueSlots": 0,
+      "maxResidualChildOutboundQueueSlots": 0,
+      "maxResidualChildOutboundBytes": 0
+    },
+    "lifetimeTotals": {
+      "spawnAttempts": 31,
+      "successfulSpawns": 31,
+      "restartAttempts": 0,
+      "successfulRestarts": 0
+    },
+    "unexpectedErrorCounters": {
+      "navigationTimeouts": 0,
+      "navigationCancellations": 0,
+      "navigationOverloads": 0,
+      "staleResults": 0
+    }
+  },
+  "hostNoise": {
+    "before": {
+      "scope": "whole-host context, not isolated workload CPU",
+      "loadAverage1m5m15m": [
+        3.17,
+        3.24,
+        2.77
+      ],
+      "memoryAvailableBytes": 15509528576
+    },
+    "after": {
+      "scope": "whole-host context, not isolated workload CPU",
+      "loadAverage1m5m15m": [
+        3.66,
+        3.33,
+        2.83
+      ],
+      "memoryAvailableBytes": 15117209600
+    }
+  },
+  "lastOperation": "project-loading-denial",
+  "cargoExitStatus": 0,
+  "cargoSignal": null
+}

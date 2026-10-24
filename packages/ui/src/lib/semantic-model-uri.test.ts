@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   isSupportedSemanticPath,
   detectLanguageDescriptor,
@@ -7,6 +7,10 @@ import {
   formatSemanticWireUri,
   parseSemanticWireUri,
   SemanticModelRegistry,
+  captureSemanticProvenance,
+  matchesSemanticProvenance,
+  computeUtf8Sha256Hex,
+  computeUtf8Sha256HexSync,
 } from "./semantic-model-uri.js";
 
 describe("semantic-model-uri", () => {
@@ -259,6 +263,109 @@ describe("semantic-model-uri", () => {
       expect(
         registry.getByWireUri("dam-hopper://semantic/target-99/src/index.ts"),
       ).toBeUndefined();
+    });
+
+    it("stores immutable provenance, notifies subscribe listeners on structural changes, and ignores version bumps", () => {
+      const listener = vi.fn();
+      const unsubscribe = registry.subscribe(listener);
+
+      const provA = {
+        serverUrl: "http://127.0.0.1:4803",
+        configuredRoot: "/srv/my-project",
+        actor: "basic:alice:tok-1",
+      };
+
+      const m1 = registry.registerModel({
+        tabKey: "tab-prov",
+        profileId: "profile-1",
+        project: "my-project",
+        targetKey: "root",
+        relativePath: "src/index.ts",
+        provenance: provA,
+      });
+      expect(m1.identity.provenance).toEqual(provA);
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      // Idempotent re-registration with matching provenance does not notify or bump incarnation
+      const mSame = registry.registerModel({
+        tabKey: "tab-prov",
+        profileId: "profile-1",
+        project: "my-project",
+        targetKey: "root",
+        relativePath: "src/index.ts",
+        provenance: provA,
+      });
+      expect(mSame.identity.incarnation).toBe(1);
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      // bindWire notifies
+      registry.bindWire("tab-prov", {
+        targetId: "target-1",
+        connectionGeneration: 1,
+        targetGeneration: 1,
+        sessionGeneration: 2,
+        languageDescriptor: "typescript",
+      });
+      expect(listener).toHaveBeenCalledTimes(2);
+
+      // bumpWireVersion does NOT notify listeners
+      registry.bumpWireVersion("tab-prov");
+      expect(listener).toHaveBeenCalledTimes(2);
+
+      // clearWireBindings with non-matching sessionGeneration does not unbind
+      registry.clearWireBindings("target-1", 1);
+      expect(registry.getByTabKey("tab-prov")?.wireBinding).not.toBeNull();
+      expect(listener).toHaveBeenCalledTimes(2);
+
+      // clearWireBindings with matching sessionGeneration unbinds and notifies
+      registry.clearWireBindings("target-1", 2);
+      expect(registry.getByTabKey("tab-prov")?.wireBinding).toBeNull();
+      expect(listener).toHaveBeenCalledTimes(3);
+
+      unsubscribe();
+      registry.unregisterModel("tab-prov");
+      expect(listener).toHaveBeenCalledTimes(3);
+    });
+
+    it("enforces fail-closed provenance matching and deterministic UTF-8 SHA-256 digests", async () => {
+      const baseProv = {
+        serverUrl: "http://127.0.0.1:4803",
+        configuredRoot: "/srv/repo-a",
+        actor: "basic:alice:tok-a",
+      };
+      expect(matchesSemanticProvenance(baseProv, null)).toBe(false);
+      expect(matchesSemanticProvenance(null, baseProv)).toBe(false);
+      expect(
+        matchesSemanticProvenance(baseProv, {
+          ...baseProv,
+          serverUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+        }),
+      ).toBe(true);
+      expect(
+        matchesSemanticProvenance(baseProv, {
+          ...baseProv,
+          serverUrl: "http://127.0.0.1:4809",
+        }),
+      ).toBe(false);
+      expect(
+        matchesSemanticProvenance(baseProv, {
+          ...baseProv,
+          configuredRoot: "/srv/repo-b",
+        }),
+      ).toBe(false);
+      expect(
+        matchesSemanticProvenance(baseProv, {
+          ...baseProv,
+          actor: "basic:bob:tok-b",
+        }),
+      ).toBe(false);
+
+      expect(computeUtf8Sha256HexSync("")).toBe(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      );
+      expect(await computeUtf8Sha256Hex("abc")).toBe(
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      );
     });
   });
 });

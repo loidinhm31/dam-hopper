@@ -81,7 +81,9 @@ let mockConnectionSnapshot: ConnectionSnapshot | null = {
   },
 } as unknown as ConnectionSnapshot;
 
-vi.mock("@/api/connections.js", () => ({
+vi.mock("@/api/connections.js", async () => ({
+  ...await vi.importActual<typeof import("@/api/connections.js")>("@/api/connections.js"),
+  getConnectionSnapshot: () => mockConnectionSnapshot,
   useConnectionSnapshot: () => mockConnectionSnapshot,
   isCurrentConnection: () => true,
 }));

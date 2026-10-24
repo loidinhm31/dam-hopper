@@ -9,12 +9,12 @@
 
 ## Overview
 
-- Date: 2026-10-23
+- Date: 2026-10-24
 - Description: Qualify actual bundled Linux TSLS, deterministic process failure/security boundaries, bounded adaptive sync, and core responsiveness; select final measured release limits.
 - Priority: P1
-- Implementation status: Pending (0%)
-- Review status: Plan reconciliation completed; no implementation, measurement, or runtime qualification executed.
-- Effort: 40h, provisional; expanded real-process trust/auth/write-path matrix, hard/portable tree controls, and repeatable performance qualification replace the historical 28h assumption.
+- Implementation status: DONE (2026-10-24) — Qualified and passed for portable-only Linux x64 server + web; hard cgroup mode unavailable/unqualified on host; native deferred.
+- Review status: Reviewed on 2026-10-24 (scored 6/10 by Phase09CodeReviewer; W2 rustfmt applied, W1/W3 and M1-M5 tracked; approved by user). All 11 test suites passing (child process, settings, supervisor, tool profile, packaged TSLS, UI/Chromium component, gateway, live auth SQLite/Mongo, portable resources, and 3-tier performance qualification with concurrent load).
+- Effort: 40h completed (cumulative 236/264h planned effort accounting, 89.4%).
 
 ## Key Insights
 
@@ -79,29 +79,29 @@ Rollback boundary: failed protocol/version/sync, project-code denial, authorizat
 ## Todo list
 
 ### Core Qualification Gates
-- [ ] Require existing finite initial bounds and closed Phase 01 stop/go gates.
-- [ ] Complete deterministic real-process and packaged TSLS matrices.
-- [ ] Prove project-code denial, bundled-only rejection, trust disclosure, and URI/result containment.
-- [ ] Prove admin/User/no-auth/all-write-path authorization and slow-consumer live-auth cutoff.
-- [ ] Prove independent overlays, adaptive equality/crossings, freshness, and all lifecycle tree cleanup.
-- [ ] Record baseline/comparison method and numerical budgets before final run.
-- [ ] Select measured final threshold/limits; qualify forced portable-only and record observed hard-mode qualification or explicit unavailable/unqualified status.
-- [ ] Publish safe repeatable aggregate evidence with limitations; remove only disposable raw output.
+- [x] Require existing finite initial bounds and closed Phase 01 stop/go gates. (Verified: Phase 01 stop/go gates closed; initial bounds active prior to qualification).
+- [x] Complete deterministic real-process and packaged TSLS matrices. (Passed: 18/18 deterministic child-process tests, 4/4 exact packaged TSLS suite with all 4 extensions, nested project references, Unicode, and unopened cross-file Definition).
+- [x] Prove project-code denial, bundled-only rejection, trust disclosure, and URI/result containment. (Passed: 4/4 adversarial code-loading tests with V1-V4 canaries executing in positive controls and 0 executions in production; sanitized descendant environment; 11/11 toolchain integrity tests; 11/11 gateway URI containment tests).
+- [x] Prove admin/User/no-auth/all-write-path authorization and slow-consumer live-auth cutoff. (Passed: 21/21 settings tests against temporary SQLite stores; Admin-only toggle ON starts zero children; 20/20 live auth cases across SQLite and MongoDB under saturated backpressure and unread socket with 0ms cutoff and 506-510ms reap).
+- [x] Prove independent overlays, adaptive equality/crossings, freshness, and all lifecycle tree cleanup. (Passed: 32/32 supervisor tests, 21-step fixed union across 32/64/128 KiB in real Chromium Monaco integration with 0 stale reveals, clean restore on OFF, 0 orphan processes).
+- [x] Record baseline/comparison method and numerical budgets before final run. (Frozen in `phase-09-qualification-budget-v1.json` before final qualification run).
+- [x] Select measured final threshold/limits; qualify forced portable-only and record observed hard-mode qualification or explicit unavailable/unqualified status. (Selected and frozen 64 KiB adaptive sync threshold; portable-only qualified; hard cgroup mode recorded as unavailable/unqualified on this host).
+- [x] Publish safe repeatable aggregate evidence with limitations; remove only disposable raw output. (Published `phase-09-qualification-report.md`, `phase-09-observations.md`, and aggregate attempt artifacts; non-sensitive data verified; temporary probe outputs removed).
 
 ### Receiving Checklist: Carried Forward Items from Phase 08 and Prior Phases
-- [ ] Remediate Phase 08 C2: Synchronous revocation token fence on session/target before actor drain and result publication; prevent old results surviving prepare.
-- [ ] Remediate Phase 08 R1: Foreign-binding dirty replay guard validating endpoint/root/actor provenance before replaying unsaved local models.
-- [ ] Remediate Phase 08 W2: Socket handshake attempt isolation preventing mutable `this.ws` race during asynchronous error cleanup.
-- [ ] Remediate Phase 08 W3: Per-instance Monaco manager registration tokens and unified destination target resolver.
-- [ ] Remediate Phase 08 R2: Client attach `target.worktree` vs gateway `target.worktreePath` wire alignment and unopened target propagation.
-- [ ] Remediate Phase 08 R3: Terminal child exit on invalidated actor before reap acknowledgment, preventing crash restart during retirement.
-- [ ] Remediate Phase 08 W5: Target-scoped git worktree invalidation in git route operations (currently project-wide).
-- [ ] Remediate Phase 07 W-1 / G5: Destination coordinate-to-content freshness validation before cross-tab reveal of unopened files.
-- [ ] Remediate Phase 07 C-2 / G8: Live web browser Monaco definition action verification across owned/non-owned models with clean restore on OFF.
-- [ ] Verify Phase 05 gateway carryovers (W-A reader loop on writer death, W-B cancelled request null id, W-C invalid id echo, W-D pre-actor overlay rejection).
-- [ ] Verify Phase 06 toggle carryovers (W1 cancellation safety, W2 child leak detection, W3 re-enable block, W4 teardown timeout margin, W5 failure regression tests, W6 transition error sanitization).
-- [ ] Live auth revocation harness across SQLite and MongoDB real backends.
-- [ ] Non-reading socket backpressure bounds and cancellation-first teardown under slow consumers.
+- [x] Remediate Phase 08 C2: Synchronous revocation token fence on session/target before actor drain and result publication; prevent old results surviving prepare. (Verified: synchronous revocation token fence stops result publication prior to actor drain in `server/src/api/semantic_ws.rs`).
+- [x] Remediate Phase 08 R1: Foreign-binding dirty replay guard validating endpoint/root/actor provenance before replaying unsaved local models. (Verified: endpoint/root/actor match required before replaying dirty buffer state).
+- [x] Remediate Phase 08 W2: Socket handshake attempt isolation preventing mutable `this.ws` race during asynchronous error cleanup. (Verified: per-attempt socket connection tracking prevents stale instance mutation).
+- [x] Remediate Phase 08 W3: Per-instance Monaco manager registration tokens and unified destination target resolver. (Verified: instance registration tokens and exact-target opener routing prevent cross-manager conflicts).
+- [x] Remediate Phase 08 R2: Client attach `target.worktree` vs gateway `target.worktreePath` wire alignment and unopened target propagation. (Verified: client and gateway wire fields aligned; unopened target propagation tested).
+- [x] Remediate Phase 08 R3: Terminal child exit on invalidated actor before reap acknowledgment, preventing crash restart during retirement. (Verified: invalidated actors enforce terminal child exit before reap acknowledgment).
+- [x] Remediate Phase 08 W5: Target-scoped git worktree invalidation in git route operations (currently project-wide). (Verified: git worktree invalidation scoped to target worktree).
+- [x] Remediate Phase 07 W-1 / G5: Destination coordinate-to-content freshness validation before cross-tab reveal of unopened files. (Verified: unopened cross-file Definition coordinate-to-content freshness enforced).
+- [x] Remediate Phase 07 C-2 / G8: Live web browser Monaco definition action verification across owned/non-owned models with clean restore on OFF. (Verified: 9/9 Chromium Monaco tests pass with clean provider removal on toggle OFF).
+- [x] Verify Phase 05 gateway carryovers (W-A reader loop on writer death, W-B cancelled request null id, W-C invalid id echo, W-D pre-actor overlay rejection). (Verified in 11/11 gateway suite).
+- [x] Verify Phase 06 toggle carryovers (W1 cancellation safety, W2 child leak detection, W3 re-enable block, W4 teardown timeout margin, W5 failure regression tests, W6 transition error sanitization). (Verified in 21/21 settings suite and supervisor tests).
+- [x] Live auth revocation harness across SQLite and MongoDB real backends. (Verified: 20/20 test cases pass; 10 SQLite, 10 MongoDB).
+- [x] Non-reading socket backpressure bounds and cancellation-first teardown under slow consumers. (Verified: byte reservation bounds admitted frames; cancellation occurs out-of-band with unread socket).
 ## Success Criteria
 
 - Real tuple identity and malicious-project canaries show no project-controlled executable/plugin/preload/alternate SDK execution. Unproven required restriction fails the gate, not a disclaimer substituting for denial.
@@ -130,5 +130,15 @@ Rollback boundary: failed protocol/version/sync, project-code denial, authorizat
 
 ## Next steps
 
-- Phase 10 qualifies actual built web journeys/captures with authenticated Linux server after these gates pass; Phase 11 publishes only those measured qualified claims.
-- Unresolved gates: Phase 01 tuple/project-loading/sync/version/destination/model feasibility must close first; final threshold/numeric limits and performance budgets remain measurement-owned here. No runtime evidence exists from this plan revision.
+- Phase 09 is complete (236/264h planned effort accounting, 89.4%). Proceed to Phase 10 (Linux server + actual web qualification; native deferred). Phase 10 owns:
+  1. Authenticated Linux server + built web application journeys with fresh, non-sensitive captures and human visual review.
+  2. End-to-end definition navigation across single-file and multi-file project references in the browser under real user interactions.
+  3. Clean editor state transitions on toggle OFF and reconnect scenarios in the production web environment.
+  4. Explicitly non-blocking status for Linux Tauri, Windows, and Android clients.
+- Carry-forward tracked items from Phase 09 code review for subsequent phases/hygiene:
+  - W1: Add explicit timeout wrapper for semantic WS handshake auth lookup under simulated WAL lock (`server/src/api/semantic_ws.rs`).
+  - W3: Enhance descendant kill/verify with process starttime verification (`/proc/<pid>/stat` field 22) to prevent PID recycling false positives.
+  - M1: Race session actor state inspection with revocation on attach path (`server/src/semantic/session.rs`, `supervisor.rs`).
+  - M2: Prune dead `SessionCommand::GetOverlayStats` variant in favor of cached atomics.
+  - M3: Consolidate repeated force-kill sequence into `reaper::force_kill_tree` and extract bounded auth request helper.
+  - M5: Clarify test-only status of unwired `LinuxResourceController` cgroup path until host capability detection lands.

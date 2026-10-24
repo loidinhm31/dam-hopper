@@ -59,7 +59,7 @@ import { markProjectTargetUnavailable } from "@/stores/project-target.js";
 import { useConnectionSnapshot } from "@/api/connections.js";
 import type { GitCommitRevealRequest } from "@/lib/git-commit-reveal.js";
 import { getAuthToken } from "@/api/server-config.js";
-import type { FsArborNode } from "@/api/fs-types.js";
+import type { SemanticClient } from "@/api/semantic-client.js";
 import {
   EditorTabContextMenu,
   getEditorTabContextMenuItems,
@@ -70,8 +70,9 @@ import {
 } from "@/stores/semantic-navigation.js";
 
 import {
-  defaultSemanticModelRegistry,
   isSupportedSemanticPath,
+  captureSemanticProvenance,
+  matchesSemanticProvenance,
 } from "@/lib/semantic-model-uri.js";
 const MonacoHost = lazy(() =>
   import("@/components/organisms/MonacoHost.js").then((m) => ({
@@ -153,6 +154,7 @@ export function EditorTabs({
     targetRef.profileId ? { profileId: targetRef.profileId } : undefined,
   );
   const semanticEnabled = semanticSettings?.runtimeEnabled ?? false;
+  const clientProvenance = captureSemanticProvenance(targetRef);
 
   useEffect(() => {
     if (targetRef.profileId) {
@@ -164,6 +166,7 @@ export function EditorTabs({
 
   useEffect(() => {
     let disposed = false;
+    let managerRegistration: monacoNs.IDisposable | undefined;
     if (
       !semanticEnabled ||
       !project ||
@@ -180,6 +183,7 @@ export function EditorTabs({
     const token = getAuthToken(profileId);
     const connectionGen = connection.owner.generation;
     const targetKey = projectTargetCacheKey(targetRef);
+    if (!clientProvenance) return;
     const scopeKey = buildSemanticScopeKey(
       profileId,
       serverUrl,
@@ -188,20 +192,24 @@ export function EditorTabs({
       connectionGen,
     );
 
-    const client = useSemanticNavigationStore.getState().getOrCreateClient({
+    const client: SemanticClient = useSemanticNavigationStore.getState().getOrCreateClient({
       wsUrl,
       serverUrl,
       token,
       profileId,
       project,
-      worktree: targetRef.worktreePath ?? null,
+      worktreePath: targetRef.worktreePath ?? null,
+      provenance: clientProvenance,
       targetKey,
       connectionGeneration: connectionGen,
       targetGeneration: 1,
       getModelText: (modelKey) => {
         const currentTabs = useEditorStore.getState().tabs;
         const currentTab = currentTabs.find((t) => t.key === modelKey);
-        return currentTab?.content;
+        if (!currentTab || currentTab.targetAvailable === false ||
+            !client.canAccessModel(modelKey) ||
+            !matchesSemanticProvenance(currentTab.semanticProvenance, clientProvenance)) return undefined;
+        return currentTab.content;
       },
     });
 
@@ -212,75 +220,16 @@ export function EditorTabs({
     void import("@/lib/semantic-monaco.js").then(
       ({ defaultSemanticMonacoManager }) => {
         if (disposed) return;
-        defaultSemanticMonacoManager.setOptions({
-          ownerId: scopeKey,
-          getClientForModel: (modelTabKey) => {
-            return useSemanticNavigationStore
-              .getState()
-              .findClientForTab(modelTabKey);
-          },
-          onOpenCodeEditor: ({ tabKey, range }) => {
-            const currentTabs = useEditorStore.getState().tabs;
-            const existingTab = currentTabs.find((t) => t.key === tabKey);
-            if (existingTab) {
-              useEditorStore.getState().setActive(targetRef, tabKey);
-              if (range) {
-                useSemanticNavigationStore.getState().setRevealIntent({
-                  targetId: "",
-                  profileId: existingTab.target.profileId ?? profileId,
-                  project: existingTab.project,
-                  targetKey: existingTab.targetKey,
-                  relativePath: existingTab.path,
-                  range,
-                  createdAt: Date.now(),
-                });
-              }
-              return true;
-            }
-
-            try {
-              const parsedKey = JSON.parse(tabKey);
-              const relativePath = parsedKey[parsedKey.length - 1];
-              if (typeof relativePath !== "string") return false;
-              const fileName = relativePath.split("/").pop() ?? relativePath;
-              const fileNode: FsArborNode = {
-                id: relativePath,
-                name: fileName,
-                kind: "file",
-                size: 0,
-                mtime: 0,
-                isSymlink: false,
-                children: null,
-              };
-              if (range) {
-                useSemanticNavigationStore.getState().setRevealIntent({
-                  targetId: "",
-                  profileId,
-                  project,
-                  targetKey: targetScopeKey,
-                  relativePath,
-                  range,
-                  createdAt: Date.now(),
-                });
-              }
-              void useEditorStore.getState().open(targetRef, fileNode);
-              return true;
-            } catch {
-              return false;
-            }
-          },
+        managerRegistration = defaultSemanticMonacoManager.register({
+          getClientForModel: (modelTabKey) => client.canAccessModel(modelTabKey) ? client : null,
         });
       },
     );
 
     return () => {
       disposed = true;
-      useSemanticNavigationStore.getState().releaseClient(scopeKey);
-      void import("@/lib/semantic-monaco.js").then(
-        ({ defaultSemanticMonacoManager }) => {
-          defaultSemanticMonacoManager.resetOptions(scopeKey);
-        },
-      );
+      useSemanticNavigationStore.getState().releaseClient(scopeKey, client);
+      managerRegistration?.dispose();
     };
   }, [
     semanticEnabled,
@@ -291,6 +240,9 @@ export function EditorTabs({
     connection?.status,
     connection?.serverUrl,
     connection?.owner.generation,
+    clientProvenance?.serverUrl,
+    clientProvenance?.configuredRoot,
+    clientProvenance?.actor,
   ]);
 
   const handleSave = useCallback(
