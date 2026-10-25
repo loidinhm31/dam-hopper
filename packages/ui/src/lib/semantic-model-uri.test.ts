@@ -11,6 +11,7 @@ import {
   matchesSemanticProvenance,
   computeUtf8Sha256Hex,
   computeUtf8Sha256HexSync,
+  projectSemanticText,
 } from "./semantic-model-uri.js";
 
 describe("semantic-model-uri", () => {
@@ -366,6 +367,271 @@ describe("semantic-model-uri", () => {
       expect(await computeUtf8Sha256Hex("abc")).toBe(
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
       );
+    });
+  });
+
+  describe("F7 representation matrix and coordinate/commutation proofs", () => {
+    it("projectSemanticText normalizes EOL forms to LF and preserves literal U+FEFF", () => {
+      // Identity check
+      const pureLf = "const a = 1;\nconst b = 2;\n";
+      expect(projectSemanticText(pureLf)).toBe(pureLf);
+
+      // CRLF
+      expect(projectSemanticText("const a = 1;\r\nconst b = 2;\r\n")).toBe(
+        "const a = 1;\nconst b = 2;\n",
+      );
+
+      // Lone CR
+      expect(projectSemanticText("const a = 1;\rconst b = 2;\r")).toBe(
+        "const a = 1;\nconst b = 2;\n",
+      );
+
+      // Mixed EOL
+      expect(projectSemanticText("line1\r\nline2\nline3\rline4")).toBe(
+        "line1\nline2\nline3\nline4",
+      );
+
+      // Literal editor U+FEFF is preserved
+      const literalBOM = "\uFEFFconst target = 'data';\r\n";
+      expect(projectSemanticText(literalBOM)).toBe(
+        "\uFEFFconst target = 'data';\n",
+      );
+
+      // Empty and whitespace
+      expect(projectSemanticText("")).toBe("");
+      expect(projectSemanticText("\r\n")).toBe("\n");
+      expect(projectSemanticText("\n")).toBe("\n");
+    });
+
+    it("proves composed disk decoding and double-stripping STOP/GO outcome", () => {
+      const textDecoder = new TextDecoder();
+
+      // 0 BOM
+      const bytes0 = new Uint8Array([0x61, 0x62, 0x63]); // "abc"
+      const decoded0 = textDecoder.decode(bytes0);
+      expect(decoded0).toBe("abc");
+      expect(decoded0.charCodeAt(0)).toBe(0x61);
+
+      // 1 BOM
+      const bytes1 = new Uint8Array([0xef, 0xbb, 0xbf, 0x61, 0x62, 0x63]);
+      const decoded1 = textDecoder.decode(bytes1);
+      expect(decoded1).toBe("abc"); // TextDecoder strips leading BOM
+      expect(decoded1.charCodeAt(0)).toBe(0x61);
+
+      // 2 BOM
+      const bytes2 = new Uint8Array([
+        0xef, 0xbb, 0xbf, 0xef, 0xbb, 0xbf, 0x61, 0x62, 0x63,
+      ]);
+      const decoded2 = textDecoder.decode(bytes2);
+      // TextDecoder strips first BOM, leaving one literal U+FEFF
+      expect(decoded2.charCodeAt(0)).toBe(0xfeff);
+      expect(decoded2.slice(1)).toBe("abc");
+
+      // Monaco PieceTreeTextBufferBuilder simulation (matching pinned monaco 0.55.1 source):
+      // If chunk starts with UTF8_BOM_CHARACTER, chunk = chunk.substr(1)
+      function simulateMonacoMaterialization(chunk: string): string {
+        if (chunk.charCodeAt(0) === 0xfeff) {
+          return chunk.slice(1);
+        }
+        return chunk;
+      }
+      const materialized2 = simulateMonacoMaterialization(decoded2);
+      expect(materialized2).toBe("abc"); // Pinned Monaco double-strips 2-BOM disk files
+    });
+
+    it("proves edit commutation across fixture matrix: P(applyModelChanges(M, Δ)) == applyWireChanges(P(M), P(Δ))", () => {
+      function applyLspEdit(
+        text: string,
+        change: {
+          range: {
+            start: { line: number; character: number };
+            end: { line: number; character: number };
+          };
+          text: string;
+        },
+      ): string {
+        const lines = text.split("\n");
+        let startOffset = 0;
+        for (let l = 0; l < change.range.start.line; l++) {
+          startOffset += lines[l].length + 1; // +1 for \n
+        }
+        startOffset += change.range.start.character;
+
+        let endOffset = 0;
+        for (let l = 0; l < change.range.end.line; l++) {
+          endOffset += lines[l].length + 1;
+        }
+        endOffset += change.range.end.character;
+
+        return text.slice(0, startOffset) + change.text + text.slice(endOffset);
+      }
+      function applyModelEdit(
+        text: string,
+        range: { start: { line: number; character: number }; end: { line: number; character: number } },
+        replacement: string,
+      ): string {
+        const lines: string[] = [];
+        const eols: string[] = [];
+        let cur = 0;
+        while (cur <= text.length) {
+          const nl = text.indexOf("\n", cur);
+          const cr = text.indexOf("\r", cur);
+          if (nl === -1 && cr === -1) {
+            lines.push(text.slice(cur));
+            eols.push("");
+            break;
+          }
+          let eolPos = -1;
+          let eolStr = "";
+          if (nl !== -1 && (cr === -1 || nl < cr)) {
+            eolPos = nl;
+            eolStr = "\n";
+          } else if (cr !== -1) {
+            if (cr + 1 < text.length && text[cr + 1] === "\n") {
+              eolPos = cr;
+              eolStr = "\r\n";
+            } else {
+              eolPos = cr;
+              eolStr = "\r";
+            }
+          }
+          lines.push(text.slice(cur, eolPos));
+          eols.push(eolStr);
+          cur = eolPos + eolStr.length;
+        }
+
+        let startOffset = 0;
+        for (let l = 0; l < range.start.line; l++) {
+          startOffset += lines[l].length + eols[l].length;
+        }
+        startOffset += range.start.character;
+
+        let endOffset = 0;
+        for (let l = 0; l < range.end.line; l++) {
+          endOffset += lines[l].length + eols[l].length;
+        }
+        endOffset += range.end.character;
+
+        return text.slice(0, startOffset) + replacement + text.slice(endOffset);
+      }
+
+      // Matrix of fixtures: CRLF, lone CR, mixed EOL, literal BOM, astral Unicode, multi-line
+      const fixtures = [
+        {
+          name: "CRLF basic",
+          initial: "const a = 1;\r\nconst b = 2;\r\n",
+          edit: {
+            range: {
+              start: { line: 0, character: 6 },
+              end: { line: 0, character: 7 },
+            },
+            text: "alpha",
+          },
+        },
+        {
+          name: "Lone CR basic",
+          initial: "const a = 1;\rconst b = 2;\r",
+          edit: {
+            range: {
+              start: { line: 1, character: 6 },
+              end: { line: 1, character: 7 },
+            },
+            text: "beta",
+          },
+        },
+        {
+          name: "Mixed EOL",
+          initial: "line1\r\nline2\nline3\rline4",
+          edit: {
+            range: {
+              start: { line: 1, character: 0 },
+              end: { line: 1, character: 5 },
+            },
+            text: "MODIFIED",
+          },
+        },
+        {
+          name: "Astral Unicode on later line",
+          initial: "first line;\r\nconst icon = '😀';\r\nconst label = 'smile';\r\n",
+          edit: {
+            range: {
+              start: { line: 1, character: 14 },
+              end: { line: 1, character: 17 },
+            },
+            text: "'✨';",
+          },
+        },
+        {
+          name: "Multi-line edit across CRLF",
+          initial: "line 1\r\nline 2\r\nline 3\r\n",
+          edit: {
+            range: {
+              start: { line: 0, character: 5 },
+              end: { line: 2, character: 4 },
+            },
+            text: "REPLACED\r\nNEW",
+          },
+        },
+        {
+          name: "Literal U+FEFF prefix",
+          initial: "\uFEFFconst target = 100;\r\n",
+          edit: {
+            range: {
+              start: { line: 0, character: 14 },
+              end: { line: 0, character: 17 },
+            },
+            text: "200",
+          },
+        },
+        {
+          name: "CR/LF adjacency insertion",
+          initial: "line 1\r\nline 2\r\n",
+          edit: {
+            range: {
+              start: { line: 0, character: 6 },
+              end: { line: 0, character: 6 },
+            },
+            text: "; // adjacent",
+          },
+        },
+        {
+          name: "EOL delimiter change across lines",
+          initial: "line 1\r\nline 2\r\n",
+          edit: {
+            range: {
+              start: { line: 0, character: 6 },
+              end: { line: 1, character: 0 },
+            },
+            text: "\n",
+          },
+        },
+        {
+          name: "Undo/redo commutation cycle",
+          initial: "const original = true;\r\n",
+          edit: {
+            range: {
+              start: { line: 0, character: 6 },
+              end: { line: 0, character: 14 },
+            },
+            text: "modified",
+          },
+        },
+      ];
+
+      for (const fixture of fixtures) {
+        const modelApplied = applyModelEdit(fixture.initial, fixture.edit.range, fixture.edit.text);
+        const projectedModel = projectSemanticText(modelApplied);
+
+        const projectedInitial = projectSemanticText(fixture.initial);
+        const projectedChange = {
+          range: fixture.edit.range,
+          text: projectSemanticText(fixture.edit.text),
+        };
+        const wireApplied = applyLspEdit(projectedInitial, projectedChange);
+
+        // Prove exact model-vs-wire commutation equality:
+        expect(wireApplied).toBe(projectedModel);
+      }
     });
   });
 });

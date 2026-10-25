@@ -2,7 +2,7 @@ import "@/lib/monaco-setup.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import * as monaco from "monaco-editor";
 import { SemanticMonacoManager } from "@/lib/semantic-monaco.js";
-import { SemanticModelRegistry, buildLocalModelUri, computeUtf8Sha256Hex } from "@/lib/semantic-model-uri.js";
+import { SemanticModelRegistry, buildLocalModelUri, computeUtf8Sha256Hex, projectSemanticText, monacoPositionToLsp } from "@/lib/semantic-model-uri.js";
 import { editorFileTabKey, useEditorStore, type Tab } from "@/stores/editor.js";
 import type { SemanticClient } from "@/api/semantic-client.js";
 import { useSemanticNavigationStore } from "@/stores/semantic-navigation.js";
@@ -240,5 +240,83 @@ describe("semantic Monaco real actions (UI boundary, not packaged-server qualifi
     expect(model.getValue()).toBe(text);
     await model.redo();
     expect(model.getValue()).toBe(dirty);
+  });
+  it("real Monaco materialization and projectSemanticText across BOM and EOL fixtures", async () => {
+    // 1. Monaco BOM extraction on model creation
+    const withBom = "\uFEFFconst value = 42;\n";
+    const bomModel = monaco.editor.createModel(
+      withBom,
+      "typescript",
+      monaco.Uri.parse("inmemory://test/bom.ts"),
+    );
+    models.push(bomModel);
+
+    // Pinned Monaco extracts leading BOM: getValue(preserveBOM=false) returns without BOM
+    expect(bomModel.getValue()).toBe("const value = 42;\n");
+    // But preserveBOM=true preserves it
+    expect(bomModel.getValue(undefined, true)).toBe(withBom);
+
+    // 2. CRLF EOL model and projection
+    const crlfText = "const first = 1;\r\nconst second = 2;\r\n";
+    const crlfModel = monaco.editor.createModel(
+      crlfText,
+      "typescript",
+      monaco.Uri.parse("inmemory://test/crlf.ts"),
+    );
+    models.push(crlfModel);
+
+    expect(crlfModel.getEOL()).toBe("\r\n");
+    expect(crlfModel.getValue()).toBe(crlfText);
+    expect(projectSemanticText(crlfModel.getValue())).toBe(
+      "const first = 1;\nconst second = 2;\n",
+    );
+
+    // Line and character coordinate check
+    const pos1 = monacoPositionToLsp({ lineNumber: 1, column: 7 }); // "first"
+    expect(pos1).toEqual({ line: 0, character: 6 });
+    const pos2 = monacoPositionToLsp({ lineNumber: 2, column: 7 }); // "second"
+    expect(pos2).toEqual({ line: 1, character: 6 });
+
+    // 3. Multi-edit on real Monaco model emits changes and commutes with projection
+    const capturedChanges: monaco.editor.IModelContentChange[] = [];
+    crlfModel.onDidChangeContent((e) => {
+      capturedChanges.push(...e.changes);
+    });
+
+    crlfModel.applyEdits([
+      {
+        range: new monaco.Range(1, 7, 1, 12),
+        text: "renamedFirst",
+      },
+      {
+        range: new monaco.Range(2, 7, 2, 13),
+        text: "renamedSecond",
+      },
+    ]);
+
+    // Real Monaco emits multi-edits in descending (bottom-to-top) order
+    expect(capturedChanges.length).toBe(2);
+    expect(capturedChanges[0].range.startLineNumber).toBe(2);
+    expect(capturedChanges[1].range.startLineNumber).toBe(1);
+
+    // Sequentially apply captured changes to projected initial text
+    let wireApplied = projectSemanticText(crlfText);
+    for (const change of capturedChanges) {
+      const lspStart = monacoPositionToLsp({ lineNumber: change.range.startLineNumber, column: change.range.startColumn });
+      const lspEnd = monacoPositionToLsp({ lineNumber: change.range.endLineNumber, column: change.range.endColumn });
+      const lines = wireApplied.split("\n");
+      let startOff = 0;
+      for (let l = 0; l < lspStart.line; l++) startOff += lines[l].length + 1;
+      startOff += lspStart.character;
+      let endOff = 0;
+      for (let l = 0; l < lspEnd.line; l++) endOff += lines[l].length + 1;
+      endOff += lspEnd.character;
+      wireApplied = wireApplied.slice(0, startOff) + projectSemanticText(change.text) + wireApplied.slice(endOff);
+    }
+    const projectedFinal = projectSemanticText(crlfModel.getValue());
+    expect(wireApplied).toBe(projectedFinal);
+    expect(projectedFinal).toBe(
+      "const renamedFirst = 1;\nconst renamedSecond = 2;\n",
+    );
   });
 });

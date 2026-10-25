@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MonacoHost } from "./MonacoHost.js";
 import { buildLocalModelUri, defaultSemanticModelRegistry, computeUtf8Sha256Hex } from "@/lib/semantic-model-uri.js";
 import { useSemanticNavigationStore, type NavigationRevealIntent } from "@/stores/semantic-navigation.js";
-import { editorFileTabKey, type Tab } from "@/stores/editor.js";
+import { editorFileTabKey, useEditorStore, type Tab } from "@/stores/editor.js";
 import type { SemanticClient } from "@/api/semantic-client.js";
 
 let editorProps: Record<string, unknown>;
@@ -64,9 +64,26 @@ describe("MonacoHost authority and reveal coordination", () => {
     act(() => root.render(<MonacoHost tabKey={tab.key} path={tab.path} content={tab.content} tier="normal" tab={tab}
       onChange={() => {}} onSave={() => {}} onViewStateChange={() => {}} />));
   }
-  function mount(tab: Tab) {
-    const model = { uri: { toString: () => buildLocalModelUri(tab.key) }, getVersionId: vi.fn().mockReturnValue(1),
-      getValue: vi.fn().mockReturnValue(tab.content), isDisposed: () => false };
+  function mount(tab: Tab, initialModelText?: string) {
+    let textVal = initialModelText !== undefined ? initialModelText : tab.content;
+    const model = {
+      uri: { toString: () => buildLocalModelUri(tab.key) },
+      getVersionId: vi.fn().mockReturnValue(1),
+      getValue: vi.fn(() => textVal),
+      setValue: vi.fn((newVal: string) => {
+        textVal = newVal;
+        (editorProps.onChange as ((val: string, ev: unknown) => void) | undefined)?.(newVal, {
+          changes: [],
+          eol: "\n",
+          isFlush: true,
+          isEolChange: false,
+          versionId: 2,
+          isUndoing: false,
+          isRedoing: false,
+        });
+      }),
+      isDisposed: () => false,
+    };
     const editor = { getModel: () => model, restoreViewState: vi.fn(), saveViewState: vi.fn(), deltaDecorations: vi.fn(() => []),
       updateOptions: vi.fn(), addCommand: vi.fn(), addAction: vi.fn(), onMouseDown: vi.fn(), onContextMenu: vi.fn(),
       onKeyDown: vi.fn(), onDidBlurEditorWidget: vi.fn(), onDidChangeCursorPosition: vi.fn(), onDidScrollChange: vi.fn(),
@@ -173,5 +190,36 @@ describe("MonacoHost authority and reveal coordination", () => {
     act(() => (editorProps.onChange as (text: string, event: { changes: unknown[] }) => void)("# local", { changes: [] }));
     expect(defaultSemanticModelRegistry.getByTabKey(tab.key)).toBeUndefined();
     expect(client.notifyDidChange).not.toHaveBeenCalled();
+  });
+
+  it("reconciles retained clean model from accepted content on mount without firing onChange (F1)", () => {
+    const tab = { ...makeTab(), content: "version 2 content", savedContent: "version 2 content", acceptedRevision: 2, dirty: false };
+    useEditorStore.setState({ tabs: [tab] });
+    const onChange = vi.fn();
+    act(() => root.render(<MonacoHost tabKey={tab.key} path={tab.path} content={tab.content} tier="normal" tab={tab}
+      onChange={onChange} onSave={() => {}} onViewStateChange={() => {}} />));
+
+    // Mount with retained model holding older version 1
+    const { model } = mount(tab, "version 1 stale content");
+
+    // Retained clean model was reconciled to accepted version 2
+    expect(model.setValue).toHaveBeenCalledWith("version 2 content");
+    expect(model.getValue()).toBe("version 2 content");
+    // Synthetic onChange was suppressed even though setValue fired the underlying editor event
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("never overwrites a dirty retained model on mount (F1)", () => {
+    const tab = { ...makeTab(), content: "external version 2", dirty: true, acceptedRevision: 1 };
+    useEditorStore.setState({ tabs: [tab] });
+    const onChange = vi.fn();
+    act(() => root.render(<MonacoHost tabKey={tab.key} path={tab.path} content={tab.content} tier="normal" tab={tab}
+      onChange={onChange} onSave={() => {}} onViewStateChange={() => {}} />));
+
+    const { model } = mount(tab, "dirty user text");
+
+    // setValue was NOT called because tab is dirty
+    expect(model.setValue).not.toHaveBeenCalled();
+    expect(model.getValue()).toBe("dirty user text");
   });
 });

@@ -1252,4 +1252,60 @@ describe("editor accepted-source semantic provenance", () => {
       content: "unsaved draft", semanticProvenance: original, dirty: true, stale: true,
     }));
   });
+
+  it("reconciles retained clean model on external reload and advances acceptedRevision (F1)", async () => {
+    const initialTab = {
+      ...makeTab("alpha", "src/reconcile.ts"),
+      content: "const v = 1;\n",
+      savedContent: "const v = 1;\n",
+      dirty: false,
+      acceptedRevision: 1,
+    };
+    useEditorStore.setState({ tabs: [initialTab] });
+
+    // External reload returns V2
+    const v2Text = "const v = 2; // reloaded\n";
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa(v2Text),
+      size: v2Text.length,
+      mtime: 200,
+    });
+
+    await useEditorStore.getState().reloadTab(initialTab.key);
+    const reloadedTab = useEditorStore.getState().tabs[0];
+    expect(reloadedTab.content).toBe(v2Text);
+    expect(reloadedTab.savedContent).toBe(v2Text);
+    expect(reloadedTab.dirty).toBe(false);
+    expect(reloadedTab.acceptedRevision).toBe(2);
+  });
+
+  it("preserves dirty tab content, undo, and does not advance acceptedRevision on reload (F1)", async () => {
+    const dirtyTab = {
+      ...makeTab("alpha", "src/reconcile-dirty.ts"),
+      content: "const draft = true;\n",
+      savedContent: "const draft = false;\n",
+      dirty: true,
+      acceptedRevision: 1,
+    };
+    useEditorStore.setState({ tabs: [dirtyTab] });
+
+    // External change arrives
+    const externalText = "const external = true;\n";
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa(externalText),
+      size: externalText.length,
+      mtime: 300,
+    });
+
+    await useEditorStore.getState().reloadTab(dirtyTab.key);
+    const tabAfterReload = useEditorStore.getState().tabs[0];
+    expect(tabAfterReload.content).toBe("const draft = true;\n"); // Untouched!
+    expect(tabAfterReload.dirty).toBe(true);
+    expect(tabAfterReload.stale).toBe(true);
+    expect(tabAfterReload.acceptedRevision).toBe(1); // Not advanced!
+  });
 });

@@ -10,6 +10,7 @@ import {
   monacoPositionToLsp,
   lspRangeToMonaco,
   computeUtf8Sha256HexSync,
+  projectSemanticText,
 } from "./semantic-model-uri.js";
 import { editorFileTabKey, useEditorStore, type Tab } from "@/stores/editor.js";
 import type { ProjectTargetRef } from "@/api/client.js";
@@ -259,7 +260,7 @@ export class SemanticMonacoManager {
       // Native navigation collapses its opener selection to the range start.
       // Revalidate and reveal this already-open exact model synchronously.
       if (!destination.client.canAccessModel(destination.tabKey) ||
-          computeUtf8Sha256HexSync(currentModel.getValue()) !== destination.location.damHopperDestinationContentSha256 ||
+          computeUtf8Sha256HexSync(projectSemanticText(currentModel.getValue())) !== destination.location.damHopperDestinationContentSha256 ||
           !destination.isCurrent() || !destination.isDestinationCurrent()) return true;
       const range = lspRangeToMonaco(destination.location.range);
       source.setSelection(range);

@@ -49,6 +49,8 @@ export interface SemanticWireBinding {
   readonly sessionGeneration: number;
   readonly languageDescriptor: SupportedLanguageDescriptor;
   wireVersion: number;
+  unsynchronized?: boolean;
+  invalidationGen?: number;
 }
 
 export interface RegisteredModel {
@@ -139,6 +141,30 @@ export function computeUtf8Sha256HexSync(text: string): string {
 /** Compute lowercase hex SHA-256 of UTF-8 text for G5 destination content verification. */
 export async function computeUtf8Sha256Hex(text: string): Promise<string> {
   return computeUtf8Sha256HexSync(text);
+}
+
+/**
+ * Projects editor/model text to canonical semantic wire/proof representation P.
+ * Converts EOL delimiters (\r\n or lone \r) to \n while preserving all other
+ * characters, including literal editor U+FEFF.
+ * Reuses the unchanged string identity if no \r is present.
+ */
+export function projectSemanticText(text: string): string {
+  if (!text.includes("\r")) {
+    return text;
+  }
+  return text.replace(/\r\n|\r/g, "\n");
+}
+
+/**
+ * Projects raw store text to canonical materialized semantic representation.
+ * If text contains a leading U+FEFF (e.g. from a 2-BOM disk file where TextDecoder
+ * stripped the 1st BOM), it extracts it matching Monaco PieceTreeTextBufferBuilder's
+ * materialization. Then converts EOL to canonical LF (\n).
+ */
+export function projectMaterializedText(text: string): string {
+  const withoutLeadingBom = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  return projectSemanticText(withoutLeadingBom);
 }
 
 /** Check if a relative path has a supported TypeScript/JavaScript extension. */

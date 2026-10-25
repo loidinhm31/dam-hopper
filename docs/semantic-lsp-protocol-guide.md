@@ -252,7 +252,9 @@ The gateway enforces a single, frozen wire threshold (`ADAPTIVE_SYNC_THRESHOLD_B
    - Initial document opening (`textDocument/didOpen`).
    - Dirty model replay during reconnection or server restart.
    - Resynchronization following a version divergence (`-32003 STALE_VERSION`).
-
+   - Re-entry resynchronization following an over-cap rejection or unsynchronized state (F6).
+   - Clean reload reconciliation synchronization via per-document FIFO queue (F1).
+   - Unmappable Monaco model events (such as flush or EOL-only delimiter changes) (F7).
 ### In-Memory Speculative Overlays
 
 Unsaved edits are tracked in memory by `SessionOverlayMap` in the server backend:
@@ -445,3 +447,70 @@ If the gateway returns `-32005` (e.g. following a workspace switch, config reloa
 1. If the user navigates away, closes a tab, or unmounts the editor while a navigation query is pending, the client immediately transmits `$/cancelRequest` with the request ID.
 2. The server cancels child processing and replies with JSON-RPC error `-32800 REQUEST_CANCELLED`.
 3. The client suppresses user-facing error notifications for cancelled requests.
+
+---
+
+## 10. PR74 Remediation Protocol Contracts (Phase 01 Implemented; Phases 02–04 Proposed Design)
+
+> **Notice:** The following protocol contracts document enhancements resolving findings F1–F13 (PR #74 review remediation). Phase 01 protocol contracts (F1, F5, F6, F7) are implemented in client and server source code with scoped unit/component test coverage, while full live-TSLS and containerized browser qualification remain open until Phase 04 integration under active release hold. Phases 02–04 specifications represent proposed future designs currently undergoing staged implementation.
+
+### 1. Clean Reload Reconciliation & Wire Synchronization (Phase 01 Implemented: F1)
+- **Tab-Keyed Host Mounting:** `EditorTabs` renders `MonacoHost` keyed by active tab (`key={activeTab.key}`), ensuring remounts isolate state and prevent cross-tab clean model overwriting.
+- **Accepted-Revision Monotonic Counter:** `Tab` records a session-only `acceptedRevision?: number` (incremented on clean load or reload), strictly separate from filesystem `mtime` and Monaco model versions.
+- **Readiness Barrier & Reconciliation:** On mount or when `acceptedRevision` changes on an open clean tab, `MonacoHost` runs `reconcileModelWithStore(editor, isMount)`:
+  - Gated by clean status: tabs with `isDirty === true` skip reconciliation, strictly preserving dirty model identity, undo stack, user edits racing reload, and mtime conflict semantics.
+  - When clean and revision advanced: suppresses synthetic `onChange` dirtying via `isReconcilingRef.current = true`, updates the model via `model.setValue(...)`, and updates `reconciledRevisionRef`.
+  - Wire synchronization: If the semantic client is bound and ready, reconciliation transmits a range-less full-content `textDocument/didChange` at a fresh monotonic `wireVersion` (or `textDocument/didOpen` if unbound) through the per-document FIFO queue before user editing begins.
+  - Model text lookup: `EditorTabs` implements `getModelText(tabKey)` preferring active non-disposed Monaco model content projected via `projectSemanticText(model.getValue())`, falling back to accepted store text materialized and projected via `projectMaterializedText(currentTab.content)`.
+  - Semantics OFF containment: F1 is implemented within core editor and tab components (`editor.ts`, `EditorTabs.tsx`, `MonacoHost.tsx`); it operates identically and protects clean model integrity even when semantic navigation is disabled (`semantics OFF`). Semantics OFF does NOT mitigate F1; the core editor fix must operate independently.
+
+### 2. Unified Semantic Representation & Server Pinning (Phase 01 Implemented: F7)
+- **Disk-to-Model Intake Pipeline:** Disk bytes → `TextDecoder` (drops one leading UTF-8 BOM `U+FEFF`) → Monaco `PieceTreeTextBufferBuilder` (extracts second leading BOM if present, normalizes EOL to dominant) → `model.getValue(preserveBOM=false)`.
+- **Double-Stripping STOP/GO Outcome:** Pinned Monaco double-stripping of 2-BOM disk files is preserved; semantic projection follows model text (`projectSemanticText`).
+- **Literal Editor `U+FEFF` Preservation:** Literal `U+FEFF` typed or inserted in the editor is preserved as character data; it is an intended invariant that it is never stripped during semantic projection or incremental change sync.
+- **Server Destination Freshness Pin Intake:** `server/src/semantic/uri.rs` provides `project_disk_text_for_pin(disk_text: &str) -> Cow<'a, str>`. It matches client `TextDecoder` + Monaco buffer builder behavior:
+  - Strips up to two leading BOMs (`\u{feff}`) from disk file metadata.
+  - Converts EOL delimiters (`\r\n` and lone `\r`) to canonical `\n` via `project_semantic_text`.
+  - Returns `Cow::Borrowed` when no `\r` is present, avoiding unnecessary String allocation.
+  - Consumed by `server/src/semantic/gateway.rs` when pinning unopened destination files for destination content freshness proofs (G5) before emitting `textDocument/didOpen`.
+- **Projection Helpers:**
+  - `projectSemanticText(text: string): string`: Converts `\r\n` and lone `\r` to canonical LF (`\n`). Returns original string reference if no `\r` exists. Preserves all other characters (including literal `U+FEFF`).
+  - `projectMaterializedText(text: string): string`: Used exclusively at raw store content fallback boundaries; extracts leading `U+FEFF` (representing the 2nd BOM from disk) and converts EOL to canonical LF.
+- **Content Digest & Coordinate Validation:** Exact UTF-8 byte SHA-256 is computed over projected semantic text. Coordinates and ranges are resolved against canonical projected text. Incremental model changes are projected; flush and EOL-only events fallback to bounded full replacement; raw `rangeLength` is omitted when unmappable.
+
+### 3. Over-Cap Fencing & Resync Protocol (Phase 01 Implemented: F6)
+- **Cap Enforcement & Invalidation Fencing:** When document (1 MiB default) or session aggregate (4 MiB default) overlay caps are exceeded, the change is rejected locally without sending wire messages. The binding is immediately marked `unsynchronized = true`, its invalidation generation is incremented (`invalidationGen`), and `onSyncInvalidated` clears active reveal intents in the UI store.
+- **Source Query Suppression:** Navigation requests (`textDocument/definition`, `textDocument/implementation`) await any active per-document queue, and then check `unsynchronized === true` or wire version / invalidation generation mismatches. If unsynchronized, queries are suppressed and return `{ locations: [] }` immediately without sending wire requests to the server.
+- **Local Admission Reservation Lifecycle:** Reservations represent *local client admission accounting* (since `didChange` is an unacknowledged LSP notification), not server acknowledgments:
+  - *Admitted operations:* An admitted change registers an `activeReservation` (`reservationId`, `tabKey`, `bytes`) in `attempt.activeReservations`.
+  - *Rejected operations:* Over-cap rejected operations do NOT create a reservation; older runnable reservations from prior admitted queued edits MUST survive and remain active.
+  - *In-flight retention & release:* Reservations are held while queued and during transmission. Upon send completion, accounted bytes are committed to `attempt.openDocumentBytes.set(tabKey, byteLength)` and the reservation entry is deleted in `finally`.
+  - *Send failure fallback:* If send throws and triggers catch/fallback full-resync, the fallback's reservation is retained through its full `didChange` transmission, committing to server bytes before release in `finally`.
+  - *Document close & attempt retirement:* Closing a document (`notifyDidClose`) removes all active reservations for that `tabKey`. Retiring a socket attempt clears all its active reservations.
+  - *Session aggregate calculation:* `calculateSessionBytes(attempt, excludeTabKey)` computes session overlay usage by taking `Math.max(serverBytes, maxPending)` across all other tabs, ensuring concurrent queued operations never exceed the session budget.
+- **Bounded Re-entry Protocol:** Re-entry from an unsynchronized state requires transmitting a range-less full-content `textDocument/didChange` at a fresh monotonic version once within caps. Even if the content exceeds the 64 KiB adaptive threshold, an unsynchronized binding forces full text resync (`wasUnsynchronized`). Once the full replacement send completes and matches `lastQueuedVersion` and current `invalidationGen`, `unsynchronized` is cleared (`false`).
+
+### 4. Owner-Current Transport Loss Recovery (Phase 01 Implemented: F5)
+- **Single Owner-Fenced Scheduler:** Unexpected socket disconnects trigger a single owner-fenced reconnect timer with a fixed 1,000 ms backoff (`this.reconnectTimer`).
+- **Active Gating Guards:** Reconnect is strictly fenced before connection:
+  - Client status must be `disconnected`.
+  - Profile enablement: `isProfileEnabled()` must return true (connected to `useSemanticNavigationStore.isSemanticEnabledForProfile(profileId)`).
+  - Active mount refcount: `hasActiveRef()` must return true (tracking mounted tab instances in `clientRefCounts`).
+  - Target provenance: Connection handshake (`performHandshake`) and dirty replay validate that the active target matches the authorized server endpoint and project root.
+- **Terminal Code Classification:** Disconnect codes `1008` (Policy Violation), `4401` (Unauthorized), `4403` (Forbidden), and `1000` (Normal Closure) are classified as terminal. They cancel reconnection timers and never auto-retry. Codes `4401`/`4403` transition the client to `error` status with descriptive error text.
+- **Error-to-Close Pipeline:** `ws.onerror` captures `attempt.lastError` without prematurely retiring the attempt. The subsequent `ws.onclose` consumes `attempt.lastError` for diagnostic reporting and correctly routes terminal vs retryable scheduling.
+- **Admissible Dirty Buffer Replay:** Prior to declaring `ready`, the client re-attaches the target, initializes the session, and replays all admissible dirty buffers matching provenance via `replayMatchingModels()`. Over-cap models remain blocked.
+
+### 5. Immutable Query Snapshot Proof & Logical Cancellation (Phase 02 Proposed: F3, F9)
+- **Immutable Query Snapshot Proof (F3):** Gateway destination proofs (target URI, range, content SHA, version, incarnation) are captured from an exact immutable query snapshot rather than mutable live state.
+- **Unified Logical Navigation Cancellation (F9):** `$/cancelRequest` spans both supervisor queue and language server execution stages, freeing resources without orphan tasks.
+
+### 6. Session Lifecycle & Idle Management (Phase 03 Proposed: F10, F11, F13)
+- **Supervisor Process Tree Reaping & Restart Budget (F10):** Replacement child processes strictly adhere to bounded restart budgets and replay accepted overlays before reaching `ready`. Exhausted supervisor actors cannot revive from `didOpen`.
+- **Server-Authoritative Idle Session Eviction (F11):** Empty sessions with zero open documents evict after a 60-second idle deadline under real WebSocket Pings.
+- **Two-Second Token Claims Evaluation Deadline (F13):** Semantic WebSocket token authentication rechecks evaluate against a strict two-second fail-closed deadline.
+
+### 7. Release Packaging & Configuration Boundaries (Phase 04 Proposed: F2, F4, F12)
+- **Bundled Toolchain Packaging (F2):** Packaging pipeline bundles and verifies the exact pinned engine tuple (Node 24.16.0, TypeScript 5.9.3, TSLS 6.0.2) with cryptographic manifest validation.
+- **Canonical Git Protected Configuration (F4):** Canonical config guards protect configuration paths across reachable Git mutations; semantics OFF does not contain F4.
+- **Hot Toggle Error Refresh (F12):** Failed administrative toggle-OFF operations refresh captured owner status and surface descriptive error diagnostics to operators.

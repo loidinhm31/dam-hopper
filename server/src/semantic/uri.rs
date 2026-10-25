@@ -13,6 +13,7 @@ use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, CONTRO
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 use url::Url;
@@ -450,6 +451,45 @@ pub fn compute_text_sha256(text: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(text.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+/// Materialize and project disk file content for destination freshness pinning,
+/// exactly matching the composed client TextDecoder + Monaco materialization pipeline.
+pub fn project_disk_text_for_pin<'a>(disk_text: &'a str) -> Cow<'a, str> {
+    // 1. Strip up to two leading BOMs from disk metadata:
+    //    - 1st BOM: stripped by TextDecoder
+    //    - 2nd BOM: stripped by Monaco PieceTreeTextBufferBuilder
+    let mut current = disk_text;
+    if let Some(stripped) = current.strip_prefix('\u{feff}') {
+        current = stripped;
+    }
+    if let Some(stripped) = current.strip_prefix('\u{feff}') {
+        current = stripped;
+    }
+    let without_bom = current;
+
+    // 2. Project EOLs to canonical LF (\n)
+    project_semantic_text(without_bom)
+}
+
+/// Project text to canonical LF EOLs while preserving all characters (including literal U+FEFF).
+pub fn project_semantic_text<'a>(text: &'a str) -> Cow<'a, str> {
+    if !text.contains('\r') {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            out.push('\n');
+        } else {
+            out.push(ch);
+        }
+    }
+    Cow::Owned(out)
 }
 
 /// Validate that a zero-based UTF-16 `Range` falls within the actual lines and
@@ -1179,5 +1219,46 @@ mod tests {
         assert_eq!(arr[0]["damHopperDestinationContentSha256"], sha);
         assert_eq!(arr[0]["damHopperDestinationVersion"], 3);
         assert_eq!(arr[0]["damHopperDestinationIncarnation"], 1);
+    }
+    #[test]
+    fn test_project_disk_text_for_pin_boms_and_eols() {
+        // 0 BOM
+        assert_eq!(project_disk_text_for_pin("const x = 1;\n"), "const x = 1;\n");
+
+        // 1 BOM stripped
+        assert_eq!(project_disk_text_for_pin("\u{feff}const x = 1;\n"), "const x = 1;\n");
+
+        // 2 BOMs stripped (double-stripping named STOP/GO outcome)
+        assert_eq!(project_disk_text_for_pin("\u{feff}\u{feff}const x = 1;\n"), "const x = 1;\n");
+
+        // Literal editor U+FEFF inside the file is preserved
+        assert_eq!(
+            project_disk_text_for_pin("const x = '\u{feff}';\n"),
+            "const x = '\u{feff}';\n"
+        );
+
+        // CRLF normalized to LF
+        assert_eq!(
+            project_disk_text_for_pin("line1\r\nline2\r\n"),
+            "line1\nline2\n"
+        );
+
+        // Lone CR normalized to LF
+        assert_eq!(
+            project_disk_text_for_pin("line1\rline2\r"),
+            "line1\nline2\n"
+        );
+
+        // Mixed EOL normalized to LF
+        assert_eq!(
+            project_disk_text_for_pin("line1\r\nline2\nline3\rline4"),
+            "line1\nline2\nline3\nline4"
+        );
+
+        // 1 BOM + CRLF
+        assert_eq!(
+            project_disk_text_for_pin("\u{feff}line1\r\nline2\r\n"),
+            "line1\nline2\n"
+        );
     }
 }

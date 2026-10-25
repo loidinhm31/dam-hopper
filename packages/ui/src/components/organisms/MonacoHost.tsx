@@ -45,6 +45,8 @@ import {
   monacoPositionToLsp,
   buildLocalModelUri,
   computeUtf8Sha256Hex,
+  projectSemanticText,
+  projectMaterializedText,
 } from "@/lib/semantic-model-uri.js";
 import { useSemanticNavigationStore } from "@/stores/semantic-navigation.js";
 interface MonacoHostProps {
@@ -207,8 +209,13 @@ export function MonacoHost({
     const client = useSemanticNavigationStore
       .getState()
       .findClientForTab(tabKey);
+    const localUri = monacoRef.current?.Uri.parse(buildLocalModelUri(tabKey));
+    const existingModel = localUri ? monacoRef.current?.editor?.getModel(localUri) : null;
+    const textToOpen = existingModel && !existingModel.isDisposed()
+      ? projectSemanticText(existingModel.getValue())
+      : projectMaterializedText(content);
     if (semanticEnabled && client?.canAccessModel(tabKey) && client.getStatus() === "ready") {
-      void client.notifyDidOpen(tabKey, content);
+      void client.notifyDidOpen(tabKey, textToOpen);
     }
   }, [
     semanticEnabled,
@@ -241,7 +248,7 @@ export function MonacoHost({
     const binding = registered.wireBinding;
     const wireVersion = binding?.wireVersion;
     let cancelled = false;
-    void computeUtf8Sha256Hex(model.getValue()).then((hash) => {
+    void computeUtf8Sha256Hex(projectSemanticText(model.getValue())).then((hash) => {
       if (cancelled || model.isDisposed() || editorInstance.getModel() !== model ||
           model.getVersionId() !== modelVersion || hash !== intent.destinationContentSha256 ||
           defaultSemanticModelRegistry.getByTabKey(tabKey) !== registered ||
@@ -281,6 +288,10 @@ export function MonacoHost({
 
   // Persist latest onSave ref so the Ctrl+S command always calls the current handler
   const onSaveRef = useRef(onSave);
+  const isReconcilingRef = useRef<boolean>(false);
+  const reconciledRevisionRef = useRef<number | undefined>(
+    effectiveTab?.acceptedRevision,
+  );
   useEffect(() => {
     onSaveRef.current = onSave;
     onViewStateChangeRef.current = onViewStateChange;
@@ -329,6 +340,54 @@ export function MonacoHost({
     onGitIndicatorClickRef.current = onGitIndicatorClick;
   }, [lineChanges, onGitIndicatorClick]);
 
+  const reconcileModelWithStore = useCallback(
+    (editor: monacoNs.editor.IStandaloneCodeEditor, isMount: boolean) => {
+      const model = editor.getModel();
+      if (!model || model.isDisposed()) return;
+
+      const expectedUri = monacoRef.current?.Uri.parse(
+        buildLocalModelUri(tabKey),
+      ).toString();
+      if (expectedUri && model.uri.toString() !== expectedUri) return;
+
+      const currentTab = useEditorStore
+        .getState()
+        .tabs.find((t) => t.key === tabKey);
+      if (!currentTab || currentTab.dirty) return;
+
+      if (
+        isMount ||
+        (currentTab.acceptedRevision !== undefined &&
+          currentTab.acceptedRevision !== reconciledRevisionRef.current)
+      ) {
+        if (model.getValue() !== currentTab.content) {
+          isReconcilingRef.current = true;
+          model.setValue(currentTab.content);
+          isReconcilingRef.current = false;
+
+          const client = useSemanticNavigationStore
+            .getState()
+            .findClientForTab(tabKey);
+          if (
+            semanticEnabled &&
+            currentTab.targetAvailable !== false &&
+            client?.canAccessModel(tabKey)
+          ) {
+            void client.notifyDidChange(
+              tabKey,
+              projectSemanticText(model.getValue()),
+            );
+          }
+        }
+        reconciledRevisionRef.current = currentTab.acceptedRevision;
+      }
+    },
+    [semanticEnabled, tabKey],
+  );
+  const reconcileModelRef = useRef(reconcileModelWithStore);
+  reconcileModelRef.current = reconcileModelWithStore;
+
+
   const handleMount: OnMount = useCallback(
     (editor, monaco) => {
       editorRef.current = editor;
@@ -338,6 +397,8 @@ export function MonacoHost({
       if (wrapperRef.current?.clientWidth) {
         setWrapperWidth(wrapperRef.current.clientWidth);
       }
+      reconcileModelRef.current(editor, true);
+
       // Restore view state (cursor pos, folds, scroll)
       if (viewState) {
         editor.restoreViewState(
@@ -493,8 +554,11 @@ export function MonacoHost({
     },
     // Re-run when the tab or platform policy changes; refs keep other callbacks current.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [isAndroidChromeNativeInputSuppressed, readOnly, tabKey],
+    [isAndroidChromeNativeInputSuppressed, readOnly, tabKey, reconcileModelWithStore],
   );
+  const handleMountRef = useRef<OnMount | undefined>(undefined);
+  handleMountRef.current = handleMount;
+
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -525,6 +589,13 @@ export function MonacoHost({
     if (!editor || !viewState) return;
     editor.restoreViewState(viewState as monacoNs.editor.ICodeEditorViewState);
   }, [tabKey, viewState]);
+
+  // Reconcile model when acceptedRevision updates on an open clean tab
+  useEffect(() => {
+    if (editorInstance) {
+      reconcileModelWithStore(editorInstance, false);
+    }
+  }, [editorInstance, effectiveTab?.acceptedRevision, reconcileModelWithStore]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -620,10 +691,12 @@ export function MonacoHost({
           theme="vs-dark"
           onChange={(val, ev) => {
             if (!isAndroidChromeNativeInputSuppressed && !readOnly) {
+              if (isReconcilingRef.current) return;
               const newText = val ?? "";
               onChange(newText);
               if (effectiveTab && isSupportedSemanticPath(effectiveTab.path)) {
-                const changes = (ev?.changes ?? []).map((change) => ({
+                const isUnmappable = ev?.isFlush || ev?.isEolChange;
+                const changes = (!isUnmappable && ev?.changes) ? ev.changes.map((change) => ({
                   range: {
                     start: monacoPositionToLsp({
                       lineNumber: change.range.startLineNumber,
@@ -634,19 +707,18 @@ export function MonacoHost({
                       column: change.range.endColumn,
                     }),
                   },
-                  rangeLength: change.rangeLength,
-                  text: change.text,
-                }));
+                  text: projectSemanticText(change.text),
+                })) : [];
                 const client = useSemanticNavigationStore
                   .getState()
                   .findClientForTab(tabKey);
                 if (semanticEnabled && effectiveTab.targetAvailable !== false && client?.canAccessModel(tabKey)) {
-                  void client.notifyDidChange(tabKey, newText, changes.length > 0 ? changes : undefined);
+                  void client.notifyDidChange(tabKey, projectSemanticText(newText), changes.length > 0 ? changes : undefined);
                 }
               }
             }
           }}
-          onMount={handleMount}
+          onMount={(editor, monaco) => handleMountRef.current?.(editor, monaco)}
           options={{
             fontSize: initialFontSize,
             fontFamily: "JetBrains Mono, Fira Code, Cascadia Code, monospace",

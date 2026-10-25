@@ -40,8 +40,9 @@ use super::session::{RevocationToken, SemanticSessionHandle, SessionError};
 use super::supervisor::SupervisorError;
 use super::uri::{
     compute_text_sha256, extract_in_target_destination_uris,
-    filter_location_or_link_result_with_provenance, parse_virtual_uri, unwrap_lsp_result_payload,
-    validate_range, virtual_uri_to_file_uri, DestinationProvenance, UriMediationError,
+    filter_location_or_link_result_with_provenance, parse_virtual_uri, project_disk_text_for_pin,
+    unwrap_lsp_result_payload, validate_range, virtual_uri_to_file_uri, DestinationProvenance,
+    UriMediationError,
 };
 use crate::api::auth::AuthenticatedActor;
 use crate::fs::secure_path::{directory_identity, DirectoryIdentity};
@@ -1739,11 +1740,13 @@ impl SemanticGateway {
                                 .await;
                                 return;
                             };
+                            let disk_text = project_disk_text_for_pin(&disk_text);
                             let sha256 = compute_text_sha256(&disk_text);
+                            let text_owned = disk_text.into_owned();
                             pinned_files.push((
                                 dest_file_uri.clone(),
                                 lang_id.to_string(),
-                                disk_text.clone(),
+                                text_owned.clone(),
                             ));
                             provenance_map.insert(
                                 dest_file_uri.clone(),
@@ -1751,7 +1754,7 @@ impl SemanticGateway {
                                     content_sha256: sha256,
                                     version: None,
                                     open_incarnation: None,
-                                    text: disk_text,
+                                    text: text_owned,
                                 },
                             );
                         }

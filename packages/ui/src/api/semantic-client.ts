@@ -23,6 +23,8 @@ import {
   computeUtf8Sha256Hex,
   computeUtf8Sha256HexSync,
   normalizeSemanticServerUrl,
+  projectSemanticText,
+  projectMaterializedText,
 } from "@/lib/semantic-model-uri.js";
 
 export {
@@ -114,6 +116,9 @@ export interface SemanticClientOptions {
   getModelText?: (tabKey: string) => string | undefined;
   registry?: SemanticModelRegistry;
   onStatusChange?: (status: SemanticClientStatus, error?: string) => void;
+  onSyncInvalidated?: (tabKey: string) => void;
+  isProfileEnabled?: () => boolean;
+  hasActiveRef?: () => boolean;
 }
 
 type TimeoutHandle = number | NodeJS.Timeout;
@@ -124,6 +129,12 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
   timer: TimeoutHandle;
+}
+
+interface ReservationEntry {
+  readonly id: number;
+  readonly tabKey: string;
+  readonly bytes: number;
 }
 
 interface SocketAttempt {
@@ -137,8 +148,10 @@ interface SocketAttempt {
   connectPromise: Promise<void>;
   resolveConnect: () => void;
   rejectConnect: (reason: unknown) => void;
+  lastError?: string | null;
   readonly pendingRequests: Map<number | string, PendingRequest>;
   readonly openDocumentBytes: Map<string, number>;
+  readonly activeReservations: Map<number, ReservationEntry>;
 }
 
 function isPositiveSafeInt(value: unknown): value is number {
@@ -335,6 +348,9 @@ export class SemanticClient {
   private negotiatedPolicy: SemanticNegotiatedPolicy = INERT_PREHANDSHAKE_POLICY;
   private textEncoder = new TextEncoder();
   private reconnectTimer: TimeoutHandle | undefined = undefined;
+  private nextReservationId = 0;
+  private readonly lastQueuedVersion = new Map<string, number>();
+  private nextInvalidationGeneration = 0;
 
   constructor(private readonly options: SemanticClientOptions) {
     this.registry = options.registry ?? defaultSemanticModelRegistry;
@@ -378,6 +394,10 @@ export class SemanticClient {
 
   getAdaptiveSyncThresholdBytes(): number {
     return this.negotiatedPolicy.adaptiveSyncThresholdBytes;
+  }
+
+  hasScheduledReconnect(): boolean {
+    return this.reconnectTimer !== undefined;
   }
 
   /**
@@ -483,6 +503,7 @@ export class SemanticClient {
     }
     attempt.pendingRequests.clear();
     attempt.openDocumentBytes.clear();
+    attempt.activeReservations.clear();
 
     if (attempt.targetId) {
       this.registry.clearWireBindings(
@@ -582,6 +603,7 @@ export class SemanticClient {
         rejectConnect,
         pendingRequests: new Map<number | string, PendingRequest>(),
         openDocumentBytes: new Map<string, number>(),
+        activeReservations: new Map<number, ReservationEntry>(),
       };
       this.currentAttempt = attempt;
       this.ws = ws;
@@ -616,28 +638,28 @@ export class SemanticClient {
       };
 
       ws.onerror = () => {
-        const errText = "WebSocket connection error";
-        this.rejectAttemptConnect(attempt, new Error(errText));
-        if (!this.isCurrentAttempt(attempt)) return;
-        this.retireAttempt(attempt, {
-          rejectReason: new Error(errText),
-          nextStatus: "error",
-          statusError: errText,
-          closeSocket: false,
-        });
+        attempt.lastError = "WebSocket connection error";
       };
 
-      ws.onclose = () => {
+      ws.onclose = (ev: CloseEvent | { code?: number; reason?: string }) => {
+        const code = ev?.code ?? 1006;
+        const reason = ev?.reason || attempt.lastError || "WebSocket closed";
         this.rejectAttemptConnect(
           attempt,
-          new Error("WebSocket closed before handshake completed"),
+          new Error(`WebSocket closed (${code}): ${reason}`),
         );
         if (!this.isCurrentAttempt(attempt)) return;
+        const isTerminal = code === 1008 || code === 4401 || code === 4403 || code === 1000;
         this.retireAttempt(attempt, {
-          rejectReason: new Error("WebSocket closed before handshake completed"),
-          nextStatus: "disconnected",
+          rejectReason: new Error(`WebSocket closed (${code}): ${reason}`),
+          nextStatus: isTerminal && (code === 4401 || code === 4403) ? "error" : "disconnected",
+          statusError: isTerminal && (code === 4401 || code === 4403) ? reason : undefined,
           closeSocket: false,
         });
+
+        if (!isTerminal) {
+          this.scheduleReconnect();
+        }
       };
     } catch (e) {
       this.setStatus("error", String(e));
@@ -778,6 +800,29 @@ export class SemanticClient {
     }
   }
 
+  private calculateSessionBytes(
+    attempt: SocketAttempt,
+    excludeTabKey?: string,
+  ): number {
+    const allTabs = new Set<string>();
+    for (const tab of attempt.openDocumentBytes.keys()) allTabs.add(tab);
+    for (const res of attempt.activeReservations.values()) allTabs.add(res.tabKey);
+
+    let total = 0;
+    for (const tab of allTabs) {
+      if (tab === excludeTabKey) continue;
+      const serverBytes = attempt.openDocumentBytes.get(tab) ?? 0;
+      let maxPending = 0;
+      for (const res of attempt.activeReservations.values()) {
+        if (res.tabKey === tab && res.bytes > maxPending) {
+          maxPending = res.bytes;
+        }
+      }
+      total += Math.max(serverBytes, maxPending);
+    }
+    return total;
+  }
+
   private canAdmitOverlayBytes(
     attempt: SocketAttempt,
     tabKey: string,
@@ -796,20 +841,24 @@ export class SemanticClient {
     if (nextBytes > policy.maxDocumentBytes) {
       return false;
     }
-    const existingBytes = attempt.openDocumentBytes.get(tabKey);
+    const hasExistingServer = attempt.openDocumentBytes.has(tabKey);
+    let hasExistingPending = false;
+    for (const res of attempt.activeReservations.values()) {
+      if (res.tabKey === tabKey) {
+        hasExistingPending = true;
+        break;
+      }
+    }
     if (
-      existingBytes === undefined &&
+      !hasExistingServer &&
+      !hasExistingPending &&
       attempt.openDocumentBytes.size >= policy.maxOpenDocuments
     ) {
       return false;
     }
-    let currentTotal = 0;
-    for (const [k, bytes] of attempt.openDocumentBytes) {
-      if (k !== tabKey) {
-        currentTotal += bytes;
-      }
-    }
-    return currentTotal + nextBytes <= policy.maxSessionOverlayBytes;
+
+    const otherBytes = this.calculateSessionBytes(attempt, tabKey);
+    return otherBytes + nextBytes <= policy.maxSessionOverlayBytes;
   }
 
   private async replayMatchingModels(attempt: SocketAttempt): Promise<void> {
@@ -832,15 +881,18 @@ export class SemanticClient {
       const lang = detectLanguageDescriptor(model.identity.relativePath);
       if (!lang) continue;
 
-      const text = this.options.getModelText
+      const rawText = this.options.getModelText
         ? this.options.getModelText(tabKey)
         : "";
-      if (typeof text !== "string") {
+      if (typeof rawText !== "string") {
         continue;
       }
-
+      const text = projectSemanticText(rawText);
       const byteLength = this.textEncoder.encode(text).length;
       if (!this.canAdmitOverlayBytes(attempt, tabKey, byteLength)) {
+        if (model.wireBinding) {
+          model.wireBinding.unsynchronized = true;
+        }
         continue;
       }
 
@@ -895,6 +947,9 @@ export class SemanticClient {
 
     const byteLength = this.textEncoder.encode(text).length;
     if (!this.canAdmitOverlayBytes(attempt, tabKey, byteLength)) {
+      if (model.wireBinding) {
+        model.wireBinding.unsynchronized = true;
+      }
       return;
     }
 
@@ -979,14 +1034,24 @@ export class SemanticClient {
       return 0;
     }
 
+    const binding = model.wireBinding;
     const byteLength = this.textEncoder.encode(newFullContent).length;
     if (!this.canAdmitOverlayBytes(attempt, tabKey, byteLength)) {
+      binding.unsynchronized = true;
+      binding.invalidationGen = ++this.nextInvalidationGeneration;
+      this.options.onSyncInvalidated?.(tabKey);
       return 0;
     }
 
-    const binding = model.wireBinding;
+    const reservationId = ++this.nextReservationId;
+    attempt.activeReservations.set(reservationId, {
+      id: reservationId,
+      tabKey,
+      bytes: byteLength,
+    });
+    const taskInvalidationGen = binding.invalidationGen ?? 0;
     const newVersion = this.registry.bumpWireVersion(tabKey);
-
+    this.lastQueuedVersion.set(tabKey, newVersion);
     const prevQueue = this.documentQueues.get(tabKey) ?? Promise.resolve();
     const nextTask = prevQueue
       .then(() => {
@@ -998,9 +1063,10 @@ export class SemanticClient {
           !this.canAccessModel(tabKey) ||
           model.wireBinding !== binding
         ) {
+          attempt.activeReservations.delete(reservationId);
           return;
         }
-        attempt.openDocumentBytes.set(tabKey, byteLength);
+        const wasUnsynchronized = binding.unsynchronized === true;
         const thresholdBytes = activePolicy.adaptiveSyncThresholdBytes;
         const changesList = Array.isArray(incrementalChanges)
           ? incrementalChanges
@@ -1009,14 +1075,19 @@ export class SemanticClient {
             : [];
 
         let contentChanges: unknown[];
-        if (byteLength < thresholdBytes || changesList.length === 0) {
+        if (wasUnsynchronized || byteLength < thresholdBytes || changesList.length === 0) {
           contentChanges = [{ text: newFullContent }];
         } else {
-          contentChanges = changesList.map((c) => ({
-            range: c.range,
-            rangeLength: c.rangeLength,
-            text: c.text,
-          }));
+          contentChanges = changesList.map((c) => {
+            const item: { range: typeof c.range; text: string; rangeLength?: number } = {
+              range: c.range,
+              text: c.text,
+            };
+            if (typeof c.rangeLength === "number") {
+              item.rangeLength = c.rangeLength;
+            }
+            return item;
+          });
         }
 
         this.sendNotificationForAttempt(attempt, "textDocument/didChange", {
@@ -1026,23 +1097,23 @@ export class SemanticClient {
           },
           contentChanges,
         });
+        if (
+          this.lastQueuedVersion.get(tabKey) === newVersion &&
+          (binding.invalidationGen ?? 0) === taskInvalidationGen
+        ) {
+          binding.unsynchronized = false;
+        }
+        attempt.openDocumentBytes.set(tabKey, byteLength);
+        attempt.activeReservations.delete(reservationId);
       })
       .catch((e) => {
+        attempt.activeReservations.delete(reservationId);
+        binding.unsynchronized = true;
+        binding.invalidationGen = ++this.nextInvalidationGeneration;
         if (!this.isCurrentAttempt(attempt) || !this.canAccessModel(tabKey)) {
           return;
         }
-        console.warn(
-          "Incremental didChange failed; sending full didChange resync:",
-          e,
-        );
-        const resyncVersion = this.registry.bumpWireVersion(tabKey);
-        this.sendNotificationForAttempt(attempt, "textDocument/didChange", {
-          textDocument: {
-            uri: binding.wireUri,
-            version: resyncVersion,
-          },
-          contentChanges: [{ text: newFullContent }],
-        });
+        console.warn("Incremental didChange failed; marked unsynchronized:", e);
       });
 
     this.documentQueues.set(tabKey, nextTask);
@@ -1066,6 +1137,11 @@ export class SemanticClient {
       model.wireBinding.sessionGeneration === attempt.sessionGeneration
     ) {
       attempt.openDocumentBytes.delete(tabKey);
+      for (const [id, res] of attempt.activeReservations) {
+        if (res.tabKey === tabKey) {
+          attempt.activeReservations.delete(id);
+        }
+      }
       this.sendNotificationForAttempt(attempt, "textDocument/didClose", {
         textDocument: { uri: wireUri },
       });
@@ -1117,7 +1193,7 @@ export class SemanticClient {
     } else if (model && !this.canAccessModel(destinationTabKey)) {
       return false;
     }
-    const actualHash = await computeUtf8Sha256Hex(content);
+    const actualHash = await computeUtf8Sha256Hex(projectSemanticText(content));
     return (
       actualHash.toLowerCase() ===
       location.damHopperDestinationContentSha256.toLowerCase()
@@ -1171,6 +1247,11 @@ export class SemanticClient {
       onCancellationRequested: (cb: () => void) => void;
     },
   ): Promise<SemanticNavigationResult> {
+    const queue = this.documentQueues.get(tabKey);
+    if (queue) {
+      await queue;
+    }
+
     const attempt = this.currentAttempt;
     if (
       this.status !== "ready" ||
@@ -1197,7 +1278,8 @@ export class SemanticClient {
       !model ||
       !model.wireBinding ||
       model.wireBinding.targetId !== attempt.targetId ||
-      model.wireBinding.sessionGeneration !== attempt.sessionGeneration
+      model.wireBinding.sessionGeneration !== attempt.sessionGeneration ||
+      model.wireBinding.unsynchronized
     ) {
       return { locations: [] };
     }
@@ -1246,7 +1328,8 @@ export class SemanticClient {
         currentModel.identity.incarnation !== requestIncarnation ||
         !currentModel.wireBinding ||
         currentModel.wireBinding.sessionGeneration !== requestSessionGen ||
-        currentModel.wireBinding.wireVersion !== requestWireVersion
+        currentModel.wireBinding.wireVersion !== requestWireVersion ||
+        currentModel.wireBinding.unsynchronized
       ) {
         return { locations: [] };
       }
@@ -1272,6 +1355,23 @@ export class SemanticClient {
     }
   }
 
+  private scheduleReconnect(): void {
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      if (this.status !== "disconnected") return;
+      if (typeof this.options.isProfileEnabled === "function" && !this.options.isProfileEnabled()) {
+        return;
+      }
+      if (typeof this.options.hasActiveRef === "function" && !this.options.hasActiveRef()) {
+        return;
+      }
+      void this.connect().catch((err) => {
+        console.warn("Semantic auto-reconnect failed:", err);
+      });
+    }, 1000);
+  }
+
   private handleServerInvalidation(attempt: SocketAttempt): void {
     if (!this.isCurrentAttempt(attempt)) return;
     this.retireAttempt(attempt, {
@@ -1279,17 +1379,8 @@ export class SemanticClient {
       nextStatus: "disconnected",
       closeSocket: true,
     });
-    clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = undefined;
-      if (this.status === "disconnected") {
-        void this.connect().catch((err) => {
-          console.warn("Semantic auto-reconnect failed:", err);
-        });
-      }
-    }, 1000);
+    this.scheduleReconnect();
   }
-
   /**
    * Perform full resync of an open document when version divergence is detected.
    */
@@ -1316,16 +1407,19 @@ export class SemanticClient {
       return;
     }
 
-    const fullText = this.options.getModelText?.(tabKey);
-    if (typeof fullText !== "string") return;
+    const rawText = this.options.getModelText?.(tabKey);
+    if (typeof rawText !== "string") return;
+    const fullText = projectSemanticText(rawText);
 
     const byteLength = this.textEncoder.encode(fullText).length;
     if (!this.canAdmitOverlayBytes(attempt, tabKey, byteLength)) {
+      model.wireBinding.unsynchronized = true;
       return;
     }
     attempt.openDocumentBytes.set(tabKey, byteLength);
 
     const resyncVersion = this.registry.bumpWireVersion(tabKey);
+    this.lastQueuedVersion.set(tabKey, resyncVersion);
     this.sendNotificationForAttempt(attempt, "textDocument/didChange", {
       textDocument: {
         uri: model.wireBinding.wireUri,
@@ -1333,6 +1427,7 @@ export class SemanticClient {
       },
       contentChanges: [{ text: fullText }],
     });
+    model.wireBinding.unsynchronized = false;
   }
 
   private cancelRequestForAttempt(

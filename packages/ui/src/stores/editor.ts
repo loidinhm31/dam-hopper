@@ -37,6 +37,7 @@ import {
   captureSemanticProvenance,
   matchesSemanticProvenance,
   type SemanticProvenance,
+  buildLocalModelUri,
 } from "@/lib/semantic-model-uri.js";
 import { useSemanticNavigationStore } from "@/stores/semantic-navigation.js";
 export type FileTier = FT | "diff";
@@ -184,6 +185,8 @@ export interface Tab {
   hydrated?: boolean;
   /** Session-only counter used to remount a clean video preview after external changes. */
   previewRevision?: number;
+  /** Session-only counter incremented on accepted clean file loads/reloads. */
+  acceptedRevision?: number;
   /** Connection and endpoint binding metadata. */
   resourceBinding?: ResourceBinding;
   /** Ephemeral authority of the accepted source text. Never recaptured for retained drafts. */
@@ -754,6 +757,7 @@ export const useEditorStore = create<EditorState>()(
                       size: result.size,
                       content: decoded,
                       savedContent: decoded,
+                      acceptedRevision: 1,
                       semanticProvenance,
                       binaryBase64,
                     }
@@ -1246,6 +1250,7 @@ export const useEditorStore = create<EditorState>()(
                   loading: false,
                   content: decoded,
                   savedContent: decoded,
+                  acceptedRevision: (t.acceptedRevision ?? 0) + 1,
                   semanticProvenance,
                   mtime: result.mtime,
                   size: typeof result.size === "number" ? result.size : t.size,
@@ -1522,6 +1527,7 @@ export const useEditorStore = create<EditorState>()(
                   size: result.size,
                   content: decoded,
                   savedContent: decoded,
+                  acceptedRevision: 1,
                   semanticProvenance,
                   binaryBase64,
                   hydrated: false,

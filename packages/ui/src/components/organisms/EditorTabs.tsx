@@ -1,3 +1,4 @@
+import type * as monacoType from "monaco-editor";
 /**
  * EditorTabs — tab bar + active editor host.
  *
@@ -74,6 +75,9 @@ import {
   captureSemanticProvenance,
   matchesSemanticProvenance,
   defaultSemanticModelRegistry,
+  projectSemanticText,
+  projectMaterializedText,
+  buildLocalModelUri,
 } from "@/lib/semantic-model-uri.js";
 const MonacoHost = lazy(() =>
   import("@/components/organisms/MonacoHost.js").then((m) => ({
@@ -210,7 +214,15 @@ export function EditorTabs({
         if (!currentTab || currentTab.targetAvailable === false ||
             !client.canAccessModel(modelKey) ||
             !matchesSemanticProvenance(currentTab.semanticProvenance, clientProvenance)) return undefined;
-        return currentTab.content;
+        const localUri = buildLocalModelUri(modelKey);
+        const monacoGlobal = (window as unknown as { monaco?: typeof monacoType }).monaco;
+        if (monacoGlobal?.editor) {
+          const model = monacoGlobal.editor.getModel(monacoGlobal.Uri.parse(localUri));
+          if (model && !model.isDisposed()) {
+            return projectSemanticText(model.getValue());
+          }
+        }
+        return projectMaterializedText(currentTab.content);
       },
     });
 
@@ -750,6 +762,7 @@ export function EditorTabs({
               }
             >
               <MonacoHost
+                key={activeTab.key}
                 tabKey={activeTab.key}
                 path={activeTab.path}
                 content={activeTab.content}

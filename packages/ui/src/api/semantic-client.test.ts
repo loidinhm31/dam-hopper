@@ -104,13 +104,13 @@ class MockWebSocket {
     this.sent.push(data);
   }
 
-  close() {
+  close(code = 1000, reason = "") {
     if (MockWebSocket.deferClose) {
       this.readyState = 2; // CLOSING
       return;
     }
     this.readyState = 3; // CLOSED
-    this.onclose?.();
+    this.onclose?.({ code, reason } as unknown as CloseEvent);
   }
 
   triggerOpen() {
@@ -1391,5 +1391,268 @@ describe("SemanticClient", () => {
 
     client.disconnect();
     expect(client.getAdaptiveSyncThresholdBytes()).toBe(0);
+  });
+  it("fences rejected over-cap overlay sync and suppresses queries until full resync (F6)", async () => {
+    const client = new SemanticClient({
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      profileId: "profile-1",
+      project: "proj-1",
+      targetKey: "root",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+      provenance: TEST_PROVENANCE,
+      registry,
+    });
+
+    const connectP = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+    const ws = MockWebSocket.instances[0];
+
+    await vi.waitFor(() => expect(ws.lastSent("damHopper/attachTarget")).toBeDefined());
+    const attachReq = ws.lastSent("damHopper/attachTarget")!;
+    const customPolicy = {
+      version: "1.0",
+      maxDocumentBytes: 1024,
+      maxSessionOverlayBytes: 2048,
+      maxOpenDocuments: 10,
+      adaptiveSyncThresholdBytes: 128,
+      maxInFlightRequests: 8,
+    };
+    ws.receive({
+      jsonrpc: "2.0",
+      id: attachReq.id,
+      result: makeAttachResult("target-f6", customPolicy),
+    });
+
+    await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
+    const initReq = ws.lastSent("initialize")!;
+    ws.receive({
+      jsonrpc: "2.0",
+      id: initReq.id,
+      result: makeInitializeResult(customPolicy),
+    });
+    await connectP;
+    expect(client.getStatus()).toBe("ready");
+
+    // Register model 1
+    const tabKey1 = '["file","proj-1","root","src/doc1.ts"]';
+    registry.registerModel({
+      tabKey: tabKey1,
+      profileId: "profile-1",
+      project: "proj-1",
+      targetKey: "root",
+      relativePath: "src/doc1.ts",
+      provenance: TEST_PROVENANCE,
+    });
+
+    await client.notifyDidOpen(tabKey1, "const initial = 1;\n");
+    const binding1 = registry.getByTabKey(tabKey1)!.wireBinding!;
+    expect(binding1.unsynchronized).toBeFalsy();
+
+    // 1. Oversized edit exceeding maxDocumentBytes (1100 > 1024)
+    const oversized = "x".repeat(1100);
+    const rejectResult = await client.notifyDidChange(tabKey1, oversized, {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+      text: "x",
+    });
+    expect(rejectResult).toBe(0);
+    expect(binding1.unsynchronized).toBe(true);
+
+    // 2. Query navigation while unsynchronized is suppressed immediately without wire send
+    const initialSentCount = ws.sent.length;
+    const navResult = await client.getDefinition(tabKey1, { line: 0, character: 6 });
+    expect(navResult).toEqual({ locations: [] });
+    expect(ws.sent.length).toBe(initialSentCount); // No wire query sent!
+
+    // 3. Re-entry with content within caps (70 bytes) sends full replacement didChange
+    const smallText = "const trimmed = 2;\n";
+    await client.notifyDidChange(tabKey1, smallText, {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+      text: "c",
+    });
+
+    // Full replacement was forced because binding was unsynchronized
+    expect(ws.lastSent("textDocument/didChange")?.params.contentChanges).toEqual([
+      { text: smallText },
+    ]);
+    expect(binding1.unsynchronized).toBe(false);
+
+    // 4. Subsequent queries now succeed on wire
+    const defP = client.getDefinition(tabKey1, { line: 0, character: 6 });
+    await vi.waitFor(() => expect(ws.lastSent("textDocument/definition")).toBeDefined());
+    const defReq = ws.lastSent("textDocument/definition")!;
+    ws.receive({
+      jsonrpc: "2.0",
+      id: defReq.id,
+      result: [{ uri: binding1.wireUri, range: { start: { line: 0, character: 6 }, end: { line: 0, character: 13 } } }],
+    });
+    const res = await defP;
+    expect(res.locations.length).toBe(1);
+
+    client.disconnect();
+  });
+
+  it("enforces session aggregate cap across multiple documents and releases on close (F6)", async () => {
+    const registry = new SemanticModelRegistry();
+    const client = new SemanticClient({
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      profileId: "profile-1",
+      project: "proj-1",
+      targetKey: "root",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+      provenance: TEST_PROVENANCE,
+      registry,
+    });
+
+    const connectP = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+    const ws = MockWebSocket.instances[0];
+
+    await vi.waitFor(() => expect(ws.lastSent("damHopper/attachTarget")).toBeDefined());
+    const attachReq = ws.lastSent("damHopper/attachTarget")!;
+    const aggregatePolicy = {
+      version: "1.0",
+      maxDocumentBytes: 1024,
+      maxSessionOverlayBytes: 1500, // Session cap is 1500
+      maxOpenDocuments: 10,
+      adaptiveSyncThresholdBytes: 128,
+      maxInFlightRequests: 8,
+    };
+    ws.receive({
+      jsonrpc: "2.0",
+      id: attachReq.id,
+      result: makeAttachResult("target-f6-agg", aggregatePolicy),
+    });
+
+    await vi.waitFor(() => expect(ws.lastSent("initialize")).toBeDefined());
+    const initReq = ws.lastSent("initialize")!;
+    ws.receive({
+      jsonrpc: "2.0",
+      id: initReq.id,
+      result: makeInitializeResult(aggregatePolicy),
+    });
+    await connectP;
+
+    const tab1 = '["file","proj-1","root","src/agg1.ts"]';
+    const tab2 = '["file","proj-1","root","src/agg2.ts"]';
+    registry.registerModel({ tabKey: tab1, profileId: "profile-1", project: "proj-1", targetKey: "root", relativePath: "src/agg1.ts", provenance: TEST_PROVENANCE });
+    registry.registerModel({ tabKey: tab2, profileId: "profile-1", project: "proj-1", targetKey: "root", relativePath: "src/agg2.ts", provenance: TEST_PROVENANCE });
+
+    await client.notifyDidOpen(tab1, "a".repeat(900)); // 900 bytes <= 1500
+    const binding1 = registry.getByTabKey(tab1)!.wireBinding!;
+    expect(binding1.unsynchronized).toBeFalsy();
+
+    await client.notifyDidOpen(tab2, "b".repeat(500)); // 900 + 500 = 1400 <= 1500
+    const binding2 = registry.getByTabKey(tab2)!.wireBinding!;
+    expect(binding2.unsynchronized).toBeFalsy();
+
+    // Tab 2 tries to expand to 700 bytes (900 + 700 = 1600 > 1500 session cap!)
+    const rejectResult = await client.notifyDidChange(tab2, "b".repeat(700));
+    expect(rejectResult).toBe(0);
+    expect(binding2.unsynchronized).toBe(true);
+
+    // Query on tab 2 is suppressed
+    const queryRes = await client.getDefinition(tab2, { line: 0, character: 1 });
+    expect(queryRes).toEqual({ locations: [] });
+
+    // Closing tab 1 releases its 900 bytes from session
+    client.notifyDidClose(tab1);
+
+    // Now tab 2 can successfully sync 700 bytes (700 <= 1500)
+    const okResult = await client.notifyDidChange(tab2, "b".repeat(700));
+    expect(okResult).toBeGreaterThan(0);
+    expect(binding2.unsynchronized).toBe(false);
+
+    client.disconnect();
+  });
+
+  it("recovers retryable transport loss under current owner, replaying admissible buffers before ready (F5)", async () => {
+    const registry = new SemanticModelRegistry();
+    let profileEnabled = true;
+    let activeRefs = 1;
+
+    const client = new SemanticClient({
+      wsUrl: "ws://127.0.0.1:4803/ws/semantic/v1",
+      profileId: "profile-1",
+      project: "proj-1",
+      targetKey: "root",
+      connectionGeneration: 1,
+      targetGeneration: 1,
+      provenance: TEST_PROVENANCE,
+      registry,
+      isProfileEnabled: () => profileEnabled,
+      hasActiveRef: () => activeRefs > 0,
+      getModelText: () => "const dirty = true;\n",
+    });
+
+    // 1. Initial connect
+    const connectP = client.connect();
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+    const ws1 = MockWebSocket.instances[0];
+
+    await vi.waitFor(() => expect(ws1.lastSent("damHopper/attachTarget")).toBeDefined());
+    ws1.receive({
+      jsonrpc: "2.0",
+      id: ws1.lastSent("damHopper/attachTarget")!.id,
+      result: makeAttachResult("target-f5"),
+    });
+
+    await vi.waitFor(() => expect(ws1.lastSent("initialize")).toBeDefined());
+    ws1.receive({
+      jsonrpc: "2.0",
+      id: ws1.lastSent("initialize")!.id,
+      result: makeInitializeResult(),
+    });
+    await connectP;
+    expect(client.getStatus()).toBe("ready");
+
+    // Register open dirty tab
+    const tabKey = '["file","proj-1","root","src/app.ts"]';
+    registry.registerModel({
+      tabKey,
+      profileId: "profile-1",
+      project: "proj-1",
+      targetKey: "root",
+      relativePath: "src/app.ts",
+      provenance: TEST_PROVENANCE,
+    });
+    await client.notifyDidOpen(tabKey, "const dirty = true;\n");
+
+    // 2. Unexpected retryable socket close (code 1006)
+    ws1.close(1006, "Abnormal closure");
+    expect(client.getStatus()).toBe("disconnected");
+
+    // 3. Auto-reconnect schedules after 1,000 ms
+    await vi.waitFor(() => expect(MockWebSocket.instances.length).toBe(2), { timeout: 3000 });
+    const ws2 = MockWebSocket.instances[1];
+    expect(ws2).not.toBe(ws1); // Distinct socket instance!
+
+    await vi.waitFor(() => expect(ws2.lastSent("damHopper/attachTarget")).toBeDefined());
+    ws2.receive({
+      jsonrpc: "2.0",
+      id: ws2.lastSent("damHopper/attachTarget")!.id,
+      result: makeAttachResult("target-f5-reconnected"),
+    });
+
+    await vi.waitFor(() => expect(ws2.lastSent("initialize")).toBeDefined());
+    ws2.receive({
+      jsonrpc: "2.0",
+      id: ws2.lastSent("initialize")!.id,
+      result: makeInitializeResult(),
+    });
+
+    // Wait for replay of dirty buffer before Ready
+    await vi.waitFor(() => expect(ws2.lastSent("textDocument/didOpen")).toBeDefined());
+    expect(ws2.lastSent("textDocument/didOpen")?.params.textDocument.text).toBe("const dirty = true;\n");
+
+    await vi.waitFor(() => expect(client.getStatus()).toBe("ready"));
+
+    // 4. Terminal close code 4401 (login required) yields no reconnect
+    ws2.close(4401, "Session expired");
+    expect(client.getStatus()).toBe("error");
+    expect(client.hasScheduledReconnect()).toBe(false);
+    expect(MockWebSocket.instances.length).toBe(2);
+    client.disconnect();
   });
 });

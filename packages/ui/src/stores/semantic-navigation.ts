@@ -225,6 +225,8 @@ export const useSemanticNavigationStore = create<SemanticNavigationState>(
 
       const client = new SemanticClient({
         ...options,
+        isProfileEnabled: () => get().isSemanticEnabledForProfile(options.profileId),
+        hasActiveRef: () => (clientRefCounts.get(scopeKey) ?? 0) > 0,
         onStatusChange: (status, error) => {
           options.onStatusChange?.(status, error);
           if (activeClients.get(scopeKey) !== client) {
@@ -236,6 +238,10 @@ export const useSemanticNavigationStore = create<SemanticNavigationState>(
               [scopeKey]: status,
             },
           }));
+        },
+        onSyncInvalidated: (tabKey) => {
+          options.onSyncInvalidated?.(tabKey);
+          set({ activeRevealIntent: null });
         },
       });
 
