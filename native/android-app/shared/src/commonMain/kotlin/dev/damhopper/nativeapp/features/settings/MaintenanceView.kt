@@ -1,31 +1,22 @@
 package dev.damhopper.nativeapp.features.settings
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -33,642 +24,430 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.features.profiles.ServerProfile
-import dev.damhopper.nativeapp.ui.theme.DamHopperColors
-import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+
+/** A bounded, strict-UTF-8 validated TOML file waiting for the user's explicit confirmation. */
+class PendingTomlImport(val operation: SettingsOperation, val bytes: ByteArray)
+
+/** An expected picker callback: the exact captured operation and kind it must carry. */
+data class PendingDocument(val kind: SettingsDocumentKind, val operation: SettingsOperation)
+
+data class DocumentWorkflowState(
+    /** operationId -> expected callback; a callback is handled only when kind AND full operation match. */
+    val pending: Map<Long, PendingDocument> = emptyMap(),
+    val awaitingImport: PendingTomlImport? = null,
+    val message: String? = null,
+    val messageIsError: Boolean = false,
+    /** Owner the message belongs to (null for local diagnostics); views show it only for that owner. */
+    val messageOwner: SettingsOwner? = null,
+    /** Authoritative server answer of the last confirmed import (never inferred locally). */
+    val lastImport: SettingsImportResult? = null,
+    val lastImportOwner: SettingsOwner? = null,
+)
 
 /**
- * Screen presenting Import / Export, Configuration synchronization, and Server Maintenance controls.
- * Strictly adheres to 0 FABs, zero browser engines, 1 MiB import ceiling, and DamHopperColors dark workbench theme.
+ * Retained owner of the system-document flows (C2): export -> CreateDocument TOML, OpenDocument -> bounded
+ * strict-UTF-8 TOML -> explicit confirmation -> guarded import, and CreateDocument diagnostics. Results are
+ * matched to the exact captured [SettingsOperation] (token, kind and full identity) and handled once;
+ * cancel/error/stale/mismatched callbacks never masquerade as saved and clean only their own token. Nothing
+ * is retried and no rollback is claimed. Create it in a retained scope (not in composition) so a rotation
+ * cannot orphan an open picker.
+ */
+class SettingsDocumentWorkflow(
+    private val repository: SettingsRepository,
+    private val port: SettingsDocumentPort,
+    private val scope: CoroutineScope,
+) {
+    private val _state = MutableStateFlow(DocumentWorkflowState())
+    val state: StateFlow<DocumentWorkflowState> = _state.asStateFlow()
+    private val localTokens = MutableStateFlow(LOCAL_TOKEN_BASE)
+
+    init {
+        scope.launch { port.results.collect { handle(it) } }
+    }
+
+    private fun note(text: String, error: Boolean, owner: SettingsOwner?) =
+        _state.update { it.copy(message = text, messageIsError = error, messageOwner = owner) }
+
+    private fun register(operation: SettingsOperation, kind: SettingsDocumentKind) =
+        _state.update { it.copy(pending = it.pending + (operation.operationId to PendingDocument(kind, operation))) }
+
+    private fun unregister(token: Long) = _state.update { it.copy(pending = it.pending - token) }
+
+    /** Atomically removes the token iff [result] carries the expected kind and the exact captured operation. */
+    private fun take(result: SettingsDocumentResult): Boolean {
+        var taken = false
+        _state.update {
+            val expected = it.pending[result.operation.operationId]
+            if (expected != null && expected.kind == result.kind && expected.operation == result.operation) {
+                taken = true
+                it.copy(pending = it.pending - result.operation.operationId)
+            } else {
+                taken = false
+                it
+            }
+        }
+        return taken
+    }
+
+    fun dismissMessage() = _state.update { it.copy(message = null, messageIsError = false, messageOwner = null) }
+
+    private fun launchPicker(operation: SettingsOperation, kind: SettingsDocumentKind, label: String, launch: () -> Unit) {
+        register(operation, kind)
+        try {
+            launch()
+        } catch (ce: CancellationException) {
+            unregister(operation.operationId)
+            throw ce
+        } catch (t: Exception) {
+            // A picker that could not even start must not leave a pending token blocking future actions.
+            unregister(operation.operationId)
+            note("$label could not start the system file picker: ${t.message ?: "unknown error"}", error = true, owner = operation.owner)
+        }
+    }
+
+    /** Exports the target's workspace TOML (bounded server read), then asks the user where to save it. */
+    fun exportToml(operation: SettingsOperation) {
+        scope.launch {
+            _state.update { it.copy(message = null, messageIsError = false, messageOwner = null) }
+            when (val outcome = repository.exportWorkspaceToml(operation)) {
+                is SettingsOutcome.Confirmed ->
+                    launchPicker(operation, SettingsDocumentKind.CREATE_TOML, "Saving the workspace TOML") {
+                        port.createDocument(operation, "dam-hopper.toml", "application/toml", outcome.value)
+                    }
+                else -> note(outcome.describe("Exporting the workspace TOML"), error = true, owner = operation.owner)
+            }
+        }
+    }
+
+    /** Opens the system picker; the chosen file is only read by the platform up to the 1 MiB ceiling + 1. */
+    fun importToml(operation: SettingsOperation) {
+        _state.update { it.copy(message = null, messageIsError = false, messageOwner = null, awaitingImport = null) }
+        launchPicker(operation, SettingsDocumentKind.OPEN_TOML, "Choosing a TOML file") { port.openToml(operation) }
+    }
+
+    /** Local diagnostics only (allowlisted bytes): no server operation is involved. */
+    fun exportDiagnostics(bytes: ByteArray, fileName: String) {
+        var token = 0L
+        localTokens.update { token = it + 1; token }
+        val local = SettingsOperation(
+            scope = SettingsScope.PREFERENCE_SOURCE,
+            owner = SettingsOwner(ConnectionRef("local-diagnostics", 0L), "local", "local"),
+            selectionRevision = 0L,
+            editRevision = 0L,
+            operationId = token,
+        )
+        _state.update { it.copy(message = null, messageIsError = false, messageOwner = null) }
+        launchPicker(local, SettingsDocumentKind.CREATE_DIAGNOSTICS, "Saving diagnostics") {
+            port.createDocument(local, fileName, SettingsDiagnostics.MIME_TYPE, bytes)
+        }
+    }
+
+    fun cancelImport() = _state.update { it.copy(awaitingImport = null) }
+
+    /** Submits the confirmed import through the request-local guard; shows only the authoritative answer. */
+    fun confirmImport() {
+        // Atomic single consumption: concurrent confirms can never both submit the same payload.
+        var taken: PendingTomlImport? = null
+        _state.update {
+            taken = it.awaitingImport
+            it.copy(awaitingImport = null)
+        }
+        val pending = taken ?: return
+        scope.launch {
+            val outcome = repository.importWorkspaceToml(pending.operation, pending.bytes)
+            if (outcome is SettingsOutcome.Confirmed) {
+                val result = outcome.value
+                _state.update {
+                    it.copy(
+                        lastImport = result,
+                        lastImportOwner = pending.operation.owner,
+                        message = "Import confirmed by the server: ${result.fileName}; backup ${result.backupFileName}" +
+                            (result.workspaceName?.let { name -> "; workspace $name" } ?: "") + ".",
+                        messageIsError = false,
+                        messageOwner = pending.operation.owner,
+                    )
+                }
+            } else {
+                note(outcome.describe("Importing the workspace TOML"), error = true, owner = pending.operation.owner)
+            }
+        }
+    }
+
+    private suspend fun handle(result: SettingsDocumentResult) {
+        if (!take(result)) return // stale/duplicate/mismatched/unknown callback: discarded
+        when (result.kind) {
+            SettingsDocumentKind.OPEN_TOML -> handleOpen(result)
+            SettingsDocumentKind.CREATE_TOML ->
+                reportCreate(result, "The workspace TOML was saved to the file you chose.", "Saving the workspace TOML", result.operation.owner)
+            SettingsDocumentKind.CREATE_DIAGNOSTICS ->
+                reportCreate(result, "Local diagnostics were saved to the file you chose.", "Saving diagnostics", null)
+        }
+    }
+
+    private fun reportCreate(result: SettingsDocumentResult, success: String, label: String, owner: SettingsOwner?) {
+        when {
+            result.cancelled -> note("$label was cancelled; nothing was saved.", error = false, owner = owner)
+            result.error != null -> note("$label failed: ${result.error}", error = true, owner = owner)
+            result.saved -> note(success, error = false, owner = owner)
+            else -> note("$label did not complete; nothing is reported as saved.", error = true, owner = owner)
+        }
+    }
+
+    private suspend fun handleOpen(result: SettingsDocumentResult) {
+        val bytes = result.bytes
+        val owner = result.operation.owner
+        when {
+            result.cancelled -> note("Choosing a file was cancelled; nothing was sent.", error = false, owner = owner)
+            result.error != null -> note("Could not read the file: ${result.error}", error = true, owner = owner)
+            bytes == null -> note("The file could not be read; nothing was sent.", error = true, owner = owner)
+            bytes.size > MAX_CONFIG_IMPORT_BYTES -> note("The file is larger than the 1 MiB import limit; nothing was sent.", error = true, owner = owner)
+            !isStrictUtf8(bytes) -> note("The file is not valid UTF-8 text; nothing was sent.", error = true, owner = owner)
+            !repository.isCurrent(result.operation) -> note("The Settings server changed while choosing the file; nothing was sent.", error = true, owner = owner)
+            else -> _state.update { it.copy(awaitingImport = PendingTomlImport(result.operation, bytes)) }
+        }
+    }
+
+    private fun isStrictUtf8(bytes: ByteArray): Boolean = try {
+        bytes.decodeToString(throwOnInvalidSequence = true)
+        true
+    } catch (_: Exception) {
+        false
+    }
+
+    private companion object {
+        const val LOCAL_TOKEN_BASE = 1L shl 52
+    }
+}
+
+@Composable
+private fun ActionCard(title: String, description: String, content: @Composable () -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            content()
+        }
+    }
+}
+
+/**
+ * Import/Export and maintenance of the selected Settings target (S01, M01-M06). The target is an independent
+ * selection (never the currently viewed workspace). Cache revalidation and reset are target-qualified;
+ * [departureGuard] is the app's dirty-state guard and runs BEFORE a reset is admitted; an Unknown reset never
+ * navigates. [onTargetRevalidated] lets retained consumers refetch only that target's queries.
  */
 @Composable
 fun MaintenanceView(
     settingsRepository: SettingsRepository,
     availableProfiles: List<ServerProfile>,
+    workflow: SettingsDocumentWorkflow?,
+    diagnosticsInput: () -> SettingsDiagnosticsInput,
+    departureGuard: suspend () -> Boolean,
+    onTargetRevalidated: (profileId: String) -> Unit,
+    onResetConfirmed: (profileId: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val sourceTargetState by settingsRepository.sourceTargetState.collectAsState()
-    val importExportState by settingsRepository.importExportState.collectAsState()
-    val coroutineScope = rememberCoroutineScope()
-    val clipboardManager = LocalClipboardManager.current
-    val scrollState = rememberScrollState()
+    val sourceTarget by settingsRepository.sourceTargetState.collectAsState()
+    val busy by settingsRepository.busy.collectAsState()
+    val ownerStatus by settingsRepository.ownerStatus.collectAsState()
+    val importExport by settingsRepository.importExportState.collectAsState()
+    val docs = workflow?.state?.collectAsState()?.value
+    val scope = rememberCoroutineScope()
+    var cachePending by remember { mutableStateOf<SettingsOperation?>(null) }
+    var resetPending by remember { mutableStateOf<SettingsOperation?>(null) }
+    var confirmDiagnostics by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
 
-    var tomlInputText by remember { mutableStateOf("") }
-    var operationFeedback by remember { mutableStateOf<String?>(null) }
-    var isFeedbackError by remember { mutableStateOf(false) }
+    val targetId = sourceTarget.settingsProfileId
+    val target = availableProfiles.firstOrNull { it.id == targetId }
+    val targetLabel = target?.name ?: "none selected"
+    val targetEndpoint = target?.baseUrl ?: ""
+    val anyBusy = busy.keys.any { it.scope == SettingsScope.SETTINGS_TARGET } || docs?.pending?.isNotEmpty() == true
+    val hasTarget = target != null
+    val lastStatus = ownerStatus.entries.filter { it.key.connection.profileId == targetId }
+        .map { it.value }.maxByOrNull { it.operationId }
 
-    // Immutable captured confirmation contexts
-    var pendingImportContext by remember { mutableStateOf<CapturedConfirmationContext?>(null) }
-    var pendingClearCacheContext by remember { mutableStateOf<CapturedConfirmationContext?>(null) }
-    var pendingNuclearResetContext by remember { mutableStateOf<CapturedConfirmationContext?>(null) }
-    // Target Server Profile resolution
-    val currentTargetId = sourceTargetState.settingsProfileId
-    val currentTargetProfile = availableProfiles.firstOrNull { it.id == currentTargetId }
+    suspend fun captureTarget(label: String): SettingsOperation? {
+        val op = settingsRepository.captureOperation(SettingsScope.SETTINGS_TARGET)
+        if (op == null) message = SettingsOutcome.NotSubmitted("The selected server is not connected.").describe(label)
+        return op
+    }
 
-    val tomlBytes = tomlInputText.encodeToByteArray().size
-    val isTomlOverLimit = tomlBytes > MAX_CONFIG_IMPORT_BYTES
+    docs?.awaitingImport?.let { pending ->
+        ImportTomlConfirmDialog(
+            targetLabel = availableProfiles.firstOrNull { it.id == pending.operation.owner.connection.profileId }?.name ?: "server",
+            targetEndpoint = pending.operation.owner.endpoint,
+            payloadBytes = pending.bytes.size,
+            onConfirm = { workflow?.confirmImport() },
+            onDismiss = { workflow?.cancelImport() },
+        )
+    }
+    cachePending?.let { op ->
+        ClearCacheConfirmDialog(
+            targetLabel = availableProfiles.firstOrNull { it.id == op.owner.connection.profileId }?.name ?: "server",
+            onConfirm = {
+                cachePending = null
+                scope.launch {
+                    // The SAME captured operation is submitted; a reconnect/account change while the dialog was
+                    // open makes admission reject it (NotSubmitted) instead of authorizing a new owner.
+                    val outcome = settingsRepository.clearCache(op)
+                    message = outcome.describe("Revalidating the server cache")
+                    if (outcome is SettingsOutcome.Confirmed && settingsRepository.isCurrent(op)) {
+                        onTargetRevalidated(op.owner.connection.profileId)
+                    }
+                }
+            },
+            onDismiss = { cachePending = null },
+        )
+    }
+    resetPending?.let { op ->
+        NuclearResetConfirmDialog(
+            targetLabel = availableProfiles.firstOrNull { it.id == op.owner.connection.profileId }?.name ?: "server",
+            targetEndpoint = op.owner.endpoint,
+            onConfirm = {
+                resetPending = null
+                scope.launch {
+                    val outcome = settingsRepository.nuclearReset(op)
+                    message = outcome.describe("Resetting the server runtime state")
+                    // Only a confirmed reset of the still-current target may navigate; Unknown never does.
+                    if (outcome is SettingsOutcome.Confirmed && settingsRepository.isCurrent(op)) {
+                        onResetConfirmed(op.owner.connection.profileId)
+                    }
+                }
+            },
+            onDismiss = { resetPending = null },
+        )
+    }
+    if (confirmDiagnostics) {
+        DiagnosticsExportConfirmDialog(
+            scopeDescription = "this device's preferences, shortcuts, notification policy and notification status",
+            onConfirm = {
+                confirmDiagnostics = false
+                val input = diagnosticsInput()
+                workflow?.exportDiagnostics(SettingsDiagnostics.build(input), SettingsDiagnostics.suggestedFileName(input.generatedAtMs))
+            },
+            onDismiss = { confirmDiagnostics = false },
+        )
+    }
 
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(DamHopperColors.Background)
-            .verticalScroll(scrollState)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // Feedback Banner
-        if (operationFeedback != null) {
-            Card(
-                shape = RoundedCornerShape(6.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isFeedbackError) DamHopperColors.Error.copy(alpha = 0.15f) else DamHopperColors.Success.copy(alpha = 0.15f),
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, if (isFeedbackError) DamHopperColors.Error else DamHopperColors.Success, RoundedCornerShape(6.dp)),
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = operationFeedback!!,
-                        color = if (isFeedbackError) DamHopperColors.Error else DamHopperColors.Success,
-                        style = DamHopperTypography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        onClick = { operationFeedback = null },
-                        modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
-                    ) {
-                        Text("Dismiss", color = DamHopperColors.TextSecondary, fontSize = 11.sp)
-                    }
-                }
-            }
-        }
-
-        // 1. Settings Target Server Card
-        Card(
-            shape = RoundedCornerShape(8.dp),
-            colors = CardDefaults.cardColors(containerColor = DamHopperColors.Surface),
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, DamHopperColors.Border, RoundedCornerShape(8.dp)),
+        ActionCard(
+            "Target server",
+            "Administrative actions below go to this server only. It is independent of the preference source and of the workspace you are viewing.",
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Settings Target Server",
-                    style = DamHopperTypography.titleMedium,
-                    color = DamHopperColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Select the server whose workspace configuration, TOML import/export, and maintenance operations are controlled.",
-                    style = DamHopperTypography.bodyMedium,
-                    color = DamHopperColors.TextSecondary,
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    availableProfiles.forEach { profile ->
-                        val isSelected = currentTargetId == profile.id
-                        Box(
-                            modifier = Modifier
-                                .defaultMinSize(minHeight = 48.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (isSelected) DamHopperColors.Primary else DamHopperColors.SurfaceVariant)
-                                .border(1.dp, if (isSelected) DamHopperColors.Primary else DamHopperColors.Border, RoundedCornerShape(6.dp))
-                                .clickable {
-                                    settingsRepository.setSettingsTarget(profile.id)
-                                }
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Column {
-                                Text(
-                                    text = profile.name,
-                                    color = if (isSelected) Color.Black else DamHopperColors.TextPrimary,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    fontSize = 12.sp,
-                                )
-                                Text(
-                                    text = profile.baseUrl,
-                                    color = if (isSelected) Color.DarkGray else DamHopperColors.TextSecondary,
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if (currentTargetProfile != null) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = "Active Target: ${currentTargetProfile.name} • ${currentTargetProfile.baseUrl}",
-                        style = DamHopperTypography.labelSmall,
-                        color = DamHopperColors.Primary,
-                    )
-                } else {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = "No target selected. Select a profile above to perform configuration or maintenance actions.",
-                        style = DamHopperTypography.labelSmall,
-                        color = DamHopperColors.Warning,
+            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                availableProfiles.forEach { profile ->
+                    FilterChip(
+                        selected = targetId == profile.id,
+                        onClick = { settingsRepository.setSettingsTarget(profile.id) },
+                        label = { Text(profile.name) },
                     )
                 }
             }
+            if (targetId != null && target == null) {
+                Text("The selected server no longer exists. Choose another.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+            }
+            if (!hasTarget) {
+                Text("Select a server to enable these actions.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            lastStatus?.let {
+                Text(
+                    "Last action on this server: ${it.outcome.name.lowercase().replace('_', ' ')} - ${it.message}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (it.outcome == SettingsOutcomeKind.UNKNOWN) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
 
-        // 2. Export Workspace TOML Card
-        Card(
-            shape = RoundedCornerShape(8.dp),
-            colors = CardDefaults.cardColors(containerColor = DamHopperColors.Surface),
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, DamHopperColors.Border, RoundedCornerShape(8.dp)),
+        ActionCard(
+            "Workspace configuration file",
+            "Export saves the server's TOML to a file you choose (max 1 MiB). Import validates a chosen UTF-8 file locally, asks you to confirm, then the server writes a backup and applies it.",
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Export Workspace Configuration (TOML)",
-                    style = DamHopperTypography.titleMedium,
-                    color = DamHopperColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Download or inspect raw workspace.toml configuration from the selected target server.",
-                    style = DamHopperTypography.bodyMedium,
-                    color = DamHopperColors.TextSecondary,
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
+            val pickerAvailable = workflow != null
+            if (!pickerAvailable) {
+                Text("The system document picker is not available in this view.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
                 Button(
-                    onClick = {
-                        val profileId = currentTargetId
-                        if (profileId == null) {
-                            operationFeedback = "Please select a target server first."
-                            isFeedbackError = true
-                            return@Button
-                        }
-                        coroutineScope.launch {
-                            val result = settingsRepository.exportWorkspaceToml(profileId)
-                            if (result.isSuccess) {
-                                operationFeedback = "Workspace TOML exported successfully (${result.getOrNull()?.length ?: 0} characters)."
-                                isFeedbackError = false
-                            } else {
-                                operationFeedback = "Export failed: ${result.exceptionOrNull()?.message}"
-                                isFeedbackError = true
-                            }
-                        }
-                    },
-                    enabled = currentTargetId != null && !importExportState.isExporting,
-                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.PrimaryVariant),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .defaultMinSize(minHeight = 48.dp),
-                ) {
-                    Text(
-                        text = if (importExportState.isExporting) "Exporting from server..." else "Export Workspace TOML",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-
-                if (importExportState.lastExportedToml != null) {
-                    Spacer(modifier = Modifier.height(14.dp))
-                    val exportedToml = importExportState.lastExportedToml!!
-                    val lineCount = exportedToml.lines().size
-                    val byteCount = exportedToml.encodeToByteArray().size
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Exported TOML ($lineCount lines • $byteCount bytes):",
-                            style = DamHopperTypography.labelSmall,
-                            color = DamHopperColors.TextPrimary,
-                        )
-
-                        TextButton(
-                            onClick = {
-                                clipboardManager.setText(AnnotatedString(exportedToml))
-                                operationFeedback = "TOML copied to clipboard."
-                                isFeedbackError = false
-                            },
-                            modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
-                        ) {
-                            Text("Copy TOML", color = DamHopperColors.Primary, fontSize = 12.sp)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 200.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(DamHopperColors.Background)
-                            .border(1.dp, DamHopperColors.Border, RoundedCornerShape(6.dp))
-                            .verticalScroll(rememberScrollState())
-                            .padding(10.dp),
-                    ) {
-                        Text(
-                            text = exportedToml,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            color = DamHopperColors.TextPrimary,
-                        )
-                    }
-                }
+                    enabled = hasTarget && pickerAvailable && !anyBusy,
+                    modifier = Modifier.defaultMinSize(minHeight = 48.dp),
+                    onClick = { scope.launch { captureTarget("Exporting the workspace TOML")?.let { workflow?.exportToml(it) } } },
+                ) { Text(if (importExport.isExporting) "Exporting…" else "Export TOML") }
+                OutlinedButton(
+                    enabled = hasTarget && pickerAvailable && !anyBusy,
+                    modifier = Modifier.defaultMinSize(minHeight = 48.dp),
+                    onClick = { scope.launch { captureTarget("Choosing a TOML file")?.let { workflow?.importToml(it) } } },
+                ) { Text(if (importExport.isImporting) "Importing…" else "Import TOML...") }
             }
+            val shown = docs
+            val ownedByTarget: (SettingsOwner?) -> Boolean = { it == null || it.connection.profileId == targetId }
+            if (shown?.lastImport != null && ownedByTarget(shown.lastImportOwner)) {
+                Text(
+                    "Last confirmed import: ${shown.lastImport.fileName} (backup ${shown.lastImport.backupFileName})",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (shown?.message != null && ownedByTarget(shown.messageOwner)) {
+                Text(
+                    shown.message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (shown.messageIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            importExport.lastError?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
         }
 
-        // 3. Import Workspace TOML Card (1 MiB Ceiling & Confirmation)
-        Card(
-            shape = RoundedCornerShape(8.dp),
-            colors = CardDefaults.cardColors(containerColor = DamHopperColors.Surface),
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, DamHopperColors.Border, RoundedCornerShape(8.dp)),
+        ActionCard("Server cache", "Revalidates the selected server's cached data and refetches only that server's queries on this device.") {
+            OutlinedButton(
+                enabled = hasTarget && !anyBusy,
+                modifier = Modifier.defaultMinSize(minHeight = 48.dp),
+                onClick = { scope.launch { cachePending = captureTarget("Revalidating the server cache") } },
+            ) { Text(if (busy.containsKey(SettingsBusyKind.CLEAR_CACHE)) "Revalidating…" else "Revalidate cache...") }
+        }
+
+        ActionCard(
+            "Reset server runtime state",
+            "Ends every running terminal and clears live runtime workspace state on the selected server. Saved preferences are not reset.",
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Import Workspace Configuration (TOML)",
-                    style = DamHopperTypography.titleMedium,
-                    color = DamHopperColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Imports configuration to the target server. Enforces a strict 1 MiB boundary (1,048,576 bytes). Server validates syntax, creates a backup file, and atomically updates settings.",
-                    style = DamHopperTypography.bodyMedium,
-                    color = DamHopperColors.TextSecondary,
-                    lineHeight = 18.sp,
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // TOML Text Input
-                OutlinedTextField(
-                    value = tomlInputText,
-                    onValueChange = { tomlInputText = it },
-                    placeholder = {
-                        Text(
-                            text = "# Paste workspace.toml content here\n[workspace]\nname = \"DamHopper Project\"\n",
-                            color = DamHopperColors.TextSecondary,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                        )
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(160.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = DamHopperColors.TextPrimary,
-                        unfocusedTextColor = DamHopperColors.TextPrimary,
-                        focusedBorderColor = if (isTomlOverLimit) DamHopperColors.Error else DamHopperColors.Primary,
-                        unfocusedBorderColor = if (isTomlOverLimit) DamHopperColors.Error else DamHopperColors.Border,
-                    ),
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                    ),
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Live Byte Counter & Meter
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "Size: $tomlBytes / $MAX_CONFIG_IMPORT_BYTES bytes",
-                        style = DamHopperTypography.labelSmall,
-                        color = if (isTomlOverLimit) DamHopperColors.Error else DamHopperColors.TextSecondary,
-                        fontWeight = if (isTomlOverLimit) FontWeight.Bold else FontWeight.Normal,
-                    )
-
-                    if (isTomlOverLimit) {
-                        Text(
-                            text = "⚠ EXCEEDS 1 MiB CEILING",
-                            style = DamHopperTypography.labelSmall,
-                            color = DamHopperColors.Error,
-                            fontWeight = FontWeight.Bold,
-                        )
+            OutlinedButton(
+                enabled = hasTarget && !anyBusy,
+                modifier = Modifier.defaultMinSize(minHeight = 48.dp),
+                onClick = {
+                    scope.launch {
+                        // The dirty-state guard runs before anything is admitted; Cancel stops here.
+                        val proceed = departureGuard()
+                        if (proceed) resetPending = captureTarget("Resetting the server")
                     }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Import Button with Confirmation Trigger
-                Button(
-                    onClick = {
-                        val target = currentTargetProfile
-                        if (target == null) {
-                            operationFeedback = "Please select a target server first."
-                            isFeedbackError = true
-                            return@Button
-                        }
-                        if (tomlInputText.isBlank()) {
-                            operationFeedback = "Please enter or paste TOML content."
-                            isFeedbackError = true
-                            return@Button
-                        }
-                        if (isTomlOverLimit) {
-                            operationFeedback = "File exceeds 1 MiB limit."
-                            isFeedbackError = true
-                            return@Button
-                        }
-                        val gen = settingsRepository.getTargetConnectionGeneration(target.id)
-                        pendingImportContext = CapturedConfirmationContext(
-                            profileId = target.id,
-                            profileName = target.name,
-                            profileUrl = target.baseUrl,
-                            generation = gen,
-                            tomlPayload = tomlInputText,
-                            payloadBytes = tomlBytes,
-                        )
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.PrimaryVariant),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .defaultMinSize(minHeight = 48.dp),
-                ) {
-                    Text(
-                        text = if (importExportState.isImporting) "Importing configuration..." else "Import Configuration...",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-
-                // Import Result Display
-                if (importExportState.lastImportResult != null) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    val res = importExportState.lastImportResult!!
-                    Card(
-                        shape = RoundedCornerShape(6.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (res.ok) DamHopperColors.Success.copy(alpha = 0.15f) else DamHopperColors.Error.copy(alpha = 0.15f),
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(1.dp, if (res.ok) DamHopperColors.Success else DamHopperColors.Error, RoundedCornerShape(6.dp))
-                            .padding(8.dp),
-                    ) {
-                        Column(modifier = Modifier.padding(8.dp)) {
-                            Text(
-                                text = if (res.ok) "Import Succeeded" else "Import Failed",
-                                color = if (res.ok) DamHopperColors.Success else DamHopperColors.Error,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                            )
-                            if (res.backupFileName != null) {
-                                Text(
-                                    text = "Backup created: ${res.backupFileName}",
-                                    style = DamHopperTypography.labelSmall,
-                                    color = DamHopperColors.TextPrimary,
-                                )
-                            }
-                            if (res.error != null) {
-                                Text(
-                                    text = "Error: ${res.error}",
-                                    style = DamHopperTypography.labelSmall,
-                                    color = DamHopperColors.Error,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+                },
+            ) { Text(if (busy.containsKey(SettingsBusyKind.RESET)) "Resetting…" else "Reset...") }
         }
 
-        // 4. Server Maintenance (Clear Cache) Card
-        Card(
-            shape = RoundedCornerShape(8.dp),
-            colors = CardDefaults.cardColors(containerColor = DamHopperColors.Surface),
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, DamHopperColors.Border, RoundedCornerShape(8.dp)),
+        ActionCard(
+            "Local diagnostics",
+            "Saves an allowlisted JSON file of this device's settings state. No server data, secrets, private paths, command history or terminal output.",
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Server Cache Maintenance",
-                    style = DamHopperTypography.titleMedium,
-                    color = DamHopperColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Clears server-side query caches, file search indexes, and syntax symbol caches on the target server.",
-                    style = DamHopperTypography.bodyMedium,
-                    color = DamHopperColors.TextSecondary,
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Button(
-                    onClick = {
-                        val target = currentTargetProfile
-                        if (target == null) {
-                            operationFeedback = "Please select a target server first."
-                            isFeedbackError = true
-                            return@Button
-                        }
-                        val gen = settingsRepository.getTargetConnectionGeneration(target.id)
-                        pendingClearCacheContext = CapturedConfirmationContext(
-                            profileId = target.id,
-                            profileName = target.name,
-                            profileUrl = target.baseUrl,
-                            generation = gen,
-                        )
-                    },
-                    enabled = currentTargetId != null,
-                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Warning),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .defaultMinSize(minHeight = 48.dp),
-                ) {
-                    Text(
-                        text = "Clear Server Cache",
-                        color = Color.Black,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
+            OutlinedButton(
+                enabled = workflow != null && docs?.pending?.isNotEmpty() != true,
+                modifier = Modifier.defaultMinSize(minHeight = 48.dp),
+                onClick = { confirmDiagnostics = true },
+            ) { Text("Save diagnostics...") }
         }
 
-        // 5. Destructive Action Card (Nuclear Reset)
-        Card(
-            shape = RoundedCornerShape(8.dp),
-            colors = CardDefaults.cardColors(containerColor = DamHopperColors.Error.copy(alpha = 0.08f)),
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, DamHopperColors.Error, RoundedCornerShape(8.dp)),
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Nuclear Reset (Destructive)",
-                    style = DamHopperTypography.titleMedium,
-                    color = DamHopperColors.Error,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Terminates all running terminal processes, unmounts managed sessions, and wipes active workspace runtime state on the target server. Server profile credentials in your vault remain intact.",
-                    style = DamHopperTypography.bodyMedium,
-                    color = DamHopperColors.TextSecondary,
-                    lineHeight = 18.sp,
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                Button(
-                    onClick = {
-                        val target = currentTargetProfile
-                        if (target == null) {
-                            operationFeedback = "Please select a target server first."
-                            isFeedbackError = true
-                            return@Button
-                        }
-                        val gen = settingsRepository.getTargetConnectionGeneration(target.id)
-                        pendingNuclearResetContext = CapturedConfirmationContext(
-                            profileId = target.id,
-                            profileName = target.name,
-                            profileUrl = target.baseUrl,
-                            generation = gen,
-                        )
-                    },
-                    enabled = currentTargetId != null,
-                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Error),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .defaultMinSize(minHeight = 48.dp),
-                ) {
-                    Text(
-                        text = "⚠️ Nuclear Reset Target Server",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
-        }
-    }
-
-    // Confirmation Dialogs
-    // Confirmation Dialogs bound to captured immutable contexts
-    pendingImportContext?.let { ctx ->
-        ImportTomlConfirmDialog(
-            targetProfileName = ctx.profileName,
-            targetProfileUrl = ctx.profileUrl,
-            targetGeneration = ctx.generation,
-            payloadBytes = ctx.payloadBytes,
-            onConfirm = {
-                pendingImportContext = null
-                coroutineScope.launch {
-                    val result = settingsRepository.importWorkspaceToml(
-                        profileId = ctx.profileId,
-                        tomlContent = ctx.tomlPayload,
-                        expectedGeneration = ctx.generation,
-                    )
-                    if (result.isSuccess) {
-                        operationFeedback = "Workspace TOML imported successfully on ${ctx.profileName}."
-                        isFeedbackError = false
-                    } else {
-                        operationFeedback = "Import failed: ${result.exceptionOrNull()?.message}"
-                        isFeedbackError = true
-                    }
-                }
-            },
-            onDismiss = { pendingImportContext = null },
-        )
-    }
-
-    pendingClearCacheContext?.let { ctx ->
-        ClearCacheConfirmDialog(
-            targetProfileName = ctx.profileName,
-            targetGeneration = ctx.generation,
-            onConfirm = {
-                pendingClearCacheContext = null
-                coroutineScope.launch {
-                    val result = settingsRepository.clearCache(
-                        profileId = ctx.profileId,
-                        expectedGeneration = ctx.generation,
-                    )
-                    if (result.isSuccess && result.getOrNull() == true) {
-                        operationFeedback = "Server cache cleared on ${ctx.profileName}."
-                        isFeedbackError = false
-                    } else {
-                        operationFeedback = "Failed to clear cache: ${result.exceptionOrNull()?.message}"
-                        isFeedbackError = true
-                    }
-                }
-            },
-            onDismiss = { pendingClearCacheContext = null },
-        )
-    }
-
-    pendingNuclearResetContext?.let { ctx ->
-        NuclearResetConfirmDialog(
-            targetProfileId = ctx.profileId,
-            targetProfileName = ctx.profileName,
-            targetProfileUrl = ctx.profileUrl,
-            targetGeneration = ctx.generation,
-            onConfirm = {
-                pendingNuclearResetContext = null
-                coroutineScope.launch {
-                    val result = settingsRepository.nuclearReset(
-                        profileId = ctx.profileId,
-                        expectedGeneration = ctx.generation,
-                    )
-                    if (result.isSuccess && result.getOrNull() == true) {
-                        operationFeedback = "Nuclear reset executed successfully on ${ctx.profileName}."
-                        isFeedbackError = false
-                    } else {
-                        operationFeedback = "Nuclear reset failed: ${result.exceptionOrNull()?.message}"
-                        isFeedbackError = true
-                    }
-                }
-            },
-            onDismiss = { pendingNuclearResetContext = null },
-        )
+        message?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 }
-
-/**
- * Immutable context captured when a confirmation dialog is opened.
- */
-data class CapturedConfirmationContext(
-    val profileId: String,
-    val profileName: String,
-    val profileUrl: String,
-    val generation: Long?,
-    val tomlPayload: String = "",
-    val payloadBytes: Int = 0,
-)

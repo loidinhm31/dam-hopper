@@ -23,6 +23,9 @@ import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 @Composable
 fun ManualForceSuspendDialog(
     isSubmitting: Boolean,
+    /** Latest current-owner status wake bounds (no hard-coded limits). */
+    minWakeSeconds: Int,
+    maxWakeSeconds: Int,
     activeFleetConflict: IdleSuspendConflictResponse?,
     fleetChangedConflict: IdleSuspendConflictResponse?,
     onDismiss: () -> Unit,
@@ -34,7 +37,7 @@ fun ManualForceSuspendDialog(
     }
 
     val wakeVal = wakeSecondsText.toIntOrNull()
-    val isWakeValid = wakeVal != null && (wakeVal == 0 || wakeVal in 60..86400)
+    val isWakeValid = wakeVal != null && (wakeVal == 0 || wakeVal in minWakeSeconds..maxWakeSeconds)
     val canSubmit = isWakeValid && !isSubmitting
 
     Dialog(onDismissRequest = onDismiss) {
@@ -92,7 +95,7 @@ fun ManualForceSuspendDialog(
             OutlinedTextField(
                 value = wakeSecondsText,
                 onValueChange = { wakeSecondsText = it.filter { ch -> ch.isDigit() } },
-                label = { Text("Wake timer in seconds (0 = indefinite, or 60-86400)", fontSize = 11.sp) },
+                label = { Text("Wake timer in seconds (0 = indefinite, or $minWakeSeconds-$maxWakeSeconds)", fontSize = 11.sp) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )

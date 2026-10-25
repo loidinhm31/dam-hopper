@@ -15,6 +15,10 @@ import dev.damhopper.nativeapp.features.files.FileMutationCoordinator
 import dev.damhopper.nativeapp.features.files.FileOperationOutcome
 import dev.damhopper.nativeapp.features.files.FileRepository
 import dev.damhopper.nativeapp.features.files.FileTreeState
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
+import dev.damhopper.nativeapp.features.settings.SettingsOwner
+import dev.damhopper.nativeapp.ui.screens.ObservableCommandHistory
+import dev.damhopper.nativeapp.ui.screens.PreferenceAccess
 import dev.damhopper.nativeapp.ui.screens.ProjectTerminalState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +51,12 @@ sealed class WorkspaceDepartureIntent {
         val dirtyDocuments: List<DocumentId>,
         val dirtyRevisions: Map<DocumentId, Long>,
         val onConfirmed: () -> Unit,
+        /**
+         * Invoked exactly once when this prompt is cancelled, dismissed, rejected by coalescing, superseded, its
+         * authority retires or a Save fails (the dirty prompt then stays but this request's continuation is spent).
+         * Never invoked after a successful Save/Discard completion.
+         */
+        val onCancelled: () -> Unit,
     ) : WorkspaceDepartureIntent()
 }
 
@@ -97,6 +107,9 @@ class ProjectWorkspaceState(
     /** Whether the editor-panel file-tree sidebar is open (split view when wide, slide-over when compact). */
     val isEditorSidebarOpen = MutableStateFlow(false)
 
+
+    /** Whether the terminal's command text input currently has user focus. */
+    val isCommandInputFocused = MutableStateFlow(false)
     fun toggleEditorSidebar() {
         isEditorSidebarOpen.value = !isEditorSidebarOpen.value
     }
@@ -119,6 +132,23 @@ class ProjectWorkspaceState(
         _activePanel.value = panel
         terminalState?.setPanelVisible(panel == WorkspacePanel.TERMINAL)
         updateInputGate()
+    }
+
+    /**
+     * Mutation-only commit of a verified exact terminal selection (retained Agents activation): shows the TERMINAL
+     * panel and writes the prevalidated exact terminal ID/selection epoch. No logging, callbacks, attach, controller
+     * creation, IO or input-policy work; those run via [applyVerifiedSelectionEffects] after the admission gates
+     * released. Callable only from the admitted leaf.
+     */
+    fun commitVerifiedTerminalSelection(instance: TerminalAgentsInstanceKey) {
+        _activePanel.value = WorkspacePanel.TERMINAL
+        terminalState?.commitVerifiedSelection(instance)
+    }
+
+    /** Ordinary panel/input-policy effects of a committed verified selection; runs after the gates released. */
+    fun applyVerifiedSelectionEffects() {
+        selectPanel(WorkspacePanel.TERMINAL)
+        terminalState?.updateAllControllersInputPolicy()
     }
 
     override fun onForeground() {
@@ -175,6 +205,7 @@ class ProjectWorkspaceState(
     fun revokeAuthority() {
         _isAuthorityRetired.value = true
         terminalState?.revokeAuthority()
+        spendPendingDeparture()
         updateInputGate()
     }
 
@@ -228,13 +259,41 @@ class ProjectWorkspaceState(
      */
     fun setPendingDeparture(intent: WorkspaceDepartureIntent?) {
         if (intent != null && _pendingDeparture.value != null) {
-            return // Coalesce: do not overwrite active departure prompt
+            // Coalesce: never overwrite the active prompt; the coalesced request is cancelled, not hijacked.
+            (intent as? WorkspaceDepartureIntent.WorkspaceLeave)?.onCancelled?.invoke()
+            return
         }
+        pendingCancelNotified = false
         _pendingDeparture.value = intent
     }
 
+    private var pendingCancelNotified = false
+
+    /** Spends the pending [WorkspaceDepartureIntent.WorkspaceLeave] continuation once; the prompt itself stays. */
+    private fun spendPendingDeparture() {
+        val current = _pendingDeparture.value as? WorkspaceDepartureIntent.WorkspaceLeave ?: return
+        if (pendingCancelNotified) return
+        pendingCancelNotified = true
+        current.onCancelled()
+    }
+
+    /** Cancels the pending departure prompt: the request's `onCancelled` runs exactly once for a workspace leave. */
     fun clearPendingDeparture() {
+        val current = _pendingDeparture.value
+        val alreadySpent = pendingCancelNotified
         _pendingDeparture.value = null
+        pendingCancelNotified = false
+        if (current is WorkspaceDepartureIntent.WorkspaceLeave && !alreadySpent) current.onCancelled()
+    }
+
+    /**
+     * Successful completion (Save/Discard) of [intent]: clears the prompt WITHOUT cancelling its own continuation.
+     * A different or already replaced intent is left untouched.
+     */
+    fun completePendingDeparture(intent: WorkspaceDepartureIntent) {
+        if (_pendingDeparture.value !== intent) return
+        _pendingDeparture.value = null
+        pendingCancelNotified = false
     }
 
     /**
@@ -243,6 +302,13 @@ class ProjectWorkspaceState(
      * during save, and no other documents became dirty before committing navigation.
      */
     suspend fun commitDepartureSave(intent: WorkspaceDepartureIntent.WorkspaceLeave): Boolean {
+        val committed = attemptDepartureSave(intent)
+        // A failed Save keeps the dirty prompt and its error UI but spends this request's continuation.
+        if (!committed && _pendingDeparture.value === intent) spendPendingDeparture()
+        return committed
+    }
+
+    private suspend fun attemptDepartureSave(intent: WorkspaceDepartureIntent.WorkspaceLeave): Boolean {
         if (_isAuthorityRetired.value) {
             departureError = "Authority is retired; cannot commit save"
             return false
@@ -277,7 +343,7 @@ class ProjectWorkspaceState(
                 departureError = "Workspace still has unsaved changes"
                 return false
             }
-            clearPendingDeparture()
+            completePendingDeparture(intent)
             intent.onConfirmed()
             return true
         } catch (e: Exception) {
@@ -324,7 +390,41 @@ class ProjectWorkspaceState(
     }
 
     fun isInteractiveEditAllowed(): Boolean {
-        return _isForeground.value && !_isAuthorityRetired.value && _activePanel.value == WorkspacePanel.EDITOR
+        return _isForeground.value && !_isAuthorityRetired.value && !_inputSuspended.value &&
+            _activePanel.value == WorkspacePanel.EDITOR
+    }
+
+    private val _inputSuspended = MutableStateFlow(false)
+
+    /** True while Settings/history/privacy covers the workspace: widget input is hidden, nothing is closed. */
+    val isInputSuspended: StateFlow<Boolean> = _inputSuspended.asStateFlow()
+
+    /**
+     * Hides terminal and editor widget input behind Settings (or another cover) without closing dirty documents,
+     * undo history, PTYs or the sidebar; lifting it restores exactly the previous state.
+     */
+    fun setInputSuspended(suspended: Boolean) {
+        _inputSuspended.value = suspended
+        terminalState?.setInputSuspended(suspended)
+    }
+
+    /** The one reactive preference truth this workspace's consumers (terminal font, files, editor) read. */
+    var preferenceAccess: PreferenceAccess? = null
+        private set
+
+    /**
+     * Binds (or rebinds after reconnection) the retained preference/history services. Idempotent; nothing here
+     * creates a second copy of any preference.
+     */
+    fun bindPreferenceConsumers(
+        access: PreferenceAccess?,
+        history: ObservableCommandHistory?,
+        historyOwner: SettingsOwner?,
+    ) {
+        preferenceAccess = access
+        terminalState?.preferenceAccess = access
+        terminalState?.commandHistory = history
+        terminalState?.historyOwner = historyOwner
     }
 
     /**
@@ -333,6 +433,7 @@ class ProjectWorkspaceState(
      */
     fun close() {
         _isAuthorityRetired.value = true
+        clearPendingDeparture()
         updateInputGate()
         lifecycleCoordinator?.unregister(this)
         terminalState?.close()
@@ -353,6 +454,9 @@ class ProjectWorkspaceState(
             documentFactory: EditorDocumentFactory? = null,
             coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Main.immediate),
             lifecycleCoordinator: LifecycleCoordinator? = null,
+            preferenceAccess: PreferenceAccess? = null,
+            commandHistory: ObservableCommandHistory? = null,
+            historyOwner: SettingsOwner? = null,
         ): ProjectWorkspaceState {
             val tabsState = EditorTabsState(
                 profileId = owner.profileId ?: "default",
@@ -374,7 +478,6 @@ class ProjectWorkspaceState(
             val termState = ProjectTerminalState(
                 projectName = target.project,
                 connectionRef = fileRepository.apiClient.connection,
-                preferencesStore = null,
                 ownerScope = coroutineScope,
             )
             val created = ProjectWorkspaceState(
@@ -390,6 +493,7 @@ class ProjectWorkspaceState(
                 lifecycleCoordinator = lifecycleCoordinator,
             )
             lifecycleCoordinator?.register(created)
+            created.bindPreferenceConsumers(preferenceAccess, commandHistory, historyOwner)
             return created
         }
     }

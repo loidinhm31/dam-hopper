@@ -24,6 +24,29 @@ data class ListResponseDto(
 )
 
 /**
+ * One file of the bounded project language scan (GET /api/fs/language-files). [language] is the server's
+ * family wire value (`rust`, `javascript-typescript`, `java`); [mtime] is Unix seconds like the other metadata.
+ */
+@Serializable
+data class LanguageFileDto(
+    val path: String,
+    val size: ULong = 0uL,
+    val mtime: Long = 0L,
+    val language: String,
+)
+
+/**
+ * Response of GET /api/fs/language-files. [truncated] means the server stopped at [limit] files, so the
+ * family view is explicitly incomplete (never presented as the whole project).
+ */
+@Serializable
+data class LanguageFilesResponse(
+    val files: List<LanguageFileDto> = emptyList(),
+    val truncated: Boolean = false,
+    val limit: Long = 0L,
+)
+
+/**
  * REST Stat response DTO for GET /api/fs/stat.
  */
 @Serializable

@@ -10,6 +10,62 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import dev.damhopper.nativeapp.features.settings.ExplorerLanguageFilter
+
+
+enum class LanguageScanStatus { IDLE, LOADING, READY, FAILED }
+
+/**
+ * Family scan state. [tree] is the ancestor tree of exactly the files whose authoritative server family matches
+ * [filter]; [truncated] (with [limit]) marks a partial result.
+ */
+data class LanguageScanState(
+    val filter: ExplorerLanguageFilter = ExplorerLanguageFilter.ALL,
+    val status: LanguageScanStatus = LanguageScanStatus.IDLE,
+    val tree: FileTreeNode? = null,
+    val truncated: Boolean = false,
+    val limit: Long = 0L,
+    val error: String? = null,
+)
+
+/**
+ * Builds the retained ancestor tree for [filter] from authoritative family metadata: only files whose server
+ * `language` equals the filter's wire value appear (no guessed extension/known equivalence), with every ancestor
+ * directory expanded. Paths with empty/`..` segments are rejected rather than normalized.
+ */
+fun buildLanguageTree(
+    target: ProjectTargetRef,
+    files: List<LanguageFileDto>,
+    filter: ExplorerLanguageFilter,
+): FileTreeNode {
+    class Builder(val path: String, val name: String) {
+        val dirs = LinkedHashMap<String, Builder>()
+        val leaves = mutableListOf<FileTreeNode>()
+    }
+    val root = Builder("", target.project)
+    for (file in files) {
+        if (filter == ExplorerLanguageFilter.ALL || file.language != filter.wire) continue
+        val segments = file.path.replace('\\', '/').split('/').filter { it.isNotEmpty() && it != "." }
+        if (segments.isEmpty() || segments.any { it == ".." }) continue
+        var dir = root
+        for (segment in segments.dropLast(1)) {
+            val childPath = if (dir.path.isEmpty()) segment else "${dir.path}/$segment"
+            dir = dir.dirs.getOrPut(segment) { Builder(childPath, segment) }
+        }
+        val name = segments.last()
+        val filePath = if (dir.path.isEmpty()) name else "${dir.path}/$name"
+        dir.leaves += FileTreeNode(target, filePath, name, isDirectory = false, size = file.size, mtime = file.mtime)
+    }
+    fun materialize(b: Builder): FileTreeNode = FileTreeNode(
+        target = target,
+        path = b.path,
+        name = b.name,
+        isDirectory = true,
+        isExpanded = true,
+        children = b.dirs.values.sortedBy { it.name.lowercase() }.map { materialize(it) } + b.leaves.sortedBy { it.name.lowercase() },
+    )
+    return materialize(root)
+}
 
 /**
  * High-level connection and authority readiness state for the file explorer.
@@ -71,6 +127,20 @@ class FileTreeState(
 
     private val _scrollOffset = MutableStateFlow(0)
     val scrollOffset: StateFlow<Int> = _scrollOffset.asStateFlow()
+
+    private val _languageFilter = MutableStateFlow(ExplorerLanguageFilter.ALL)
+
+    /** The applied Explorer language filter (ALL = ordinary tree). */
+    val languageFilter: StateFlow<ExplorerLanguageFilter> = _languageFilter.asStateFlow()
+
+    private val _languageScan = MutableStateFlow(LanguageScanState())
+
+    /** Result/progress/error of the family scan behind a non-ALL [languageFilter]. */
+    val languageScan: StateFlow<LanguageScanState> = _languageScan.asStateFlow()
+
+    @Volatile
+    private var scanTicket: Long = 0L
+    private var scanJob: kotlinx.coroutines.Job? = null
 
     init {
         watchCoordinator.onRefetchExplorerDirectory = { dirPath ->
@@ -274,6 +344,33 @@ class FileTreeState(
         _selectedPath.value = path?.let { watchCoordinator.normalizeDirectoryPath(it) }
     }
 
+    /**
+     * Reveals [path] in the current view: in the ordinary tree every ancestor directory is loaded/expanded in
+     * order through the ordered listing (a failed ancestor stops the reveal and leaves the error visible), in a
+     * language-family view the path is only selected when that view contains it. Documents are never touched.
+     */
+    fun revealPath(path: String) {
+        if (isDisposed) return
+        val clean = path.replace('\\', '/').trim('/').trim()
+        if (clean.isEmpty()) return
+        if (_languageFilter.value != ExplorerLanguageFilter.ALL) {
+            val tree = _languageScan.value.tree
+            if (tree != null && FileTreeHelpers.findNode(tree, clean) != null) _selectedPath.value = clean
+            return
+        }
+        coroutineScope.launch {
+            var dir = ""
+            for (segment in clean.split('/').filter { it.isNotEmpty() }.dropLast(1)) {
+                dir = if (dir.isEmpty()) segment else "$dir/$segment"
+                val node = FileTreeHelpers.findNode(_root.value, dir)
+                if (node == null || !node.isExpanded) {
+                    if (!loadDirectorySuspending(dir)) return@launch
+                }
+            }
+            if (!isDisposed) _selectedPath.value = clean
+        }
+    }
+
     fun rekeyPath(oldPath: String, newPath: String) {
         val cleanOld = watchCoordinator.normalizeDirectoryPath(oldPath)
         val cleanNew = watchCoordinator.normalizeDirectoryPath(newPath)
@@ -335,6 +432,57 @@ class FileTreeState(
         _showHidden.value = show
     }
 
+    /**
+     * Applies the synchronized Explorer language filter. [ExplorerLanguageFilter.ALL] uses the ordinary lazy
+     * tree and never scans. A family filter requests the bounded project scan for exactly this state's
+     * [target]; results are fenced by a ticket (filter change, refresh or disposal supersedes them), failures and
+     * truncation stay visible in [languageScan], and neither ever touches open documents or other owners.
+     * The selection is only cleared when the new view does not contain it.
+     */
+    fun setLanguageFilter(filter: ExplorerLanguageFilter, rescan: Boolean = false) {
+        if (isDisposed) return
+        val current = _languageScan.value
+        if (!rescan && _languageFilter.value == filter &&
+            (filter == ExplorerLanguageFilter.ALL || current.status != LanguageScanStatus.FAILED)
+        ) {
+            return
+        }
+        scanTicket++
+        scanJob?.cancel()
+        _languageFilter.value = filter
+        if (filter == ExplorerLanguageFilter.ALL) {
+            _languageScan.value = LanguageScanState()
+            return
+        }
+        val ticket = scanTicket
+        _languageScan.value = LanguageScanState(filter = filter, status = LanguageScanStatus.LOADING)
+        scanJob = coroutineScope.launch {
+            try {
+                val response = repository.languageFiles(target)
+                if (isDisposed || ticket != scanTicket || _languageFilter.value != filter) return@launch
+                val tree = buildLanguageTree(target, response.files, filter)
+                _languageScan.value = LanguageScanState(
+                    filter = filter,
+                    status = LanguageScanStatus.READY,
+                    tree = tree,
+                    truncated = response.truncated,
+                    limit = response.limit,
+                )
+                val selected = _selectedPath.value
+                if (selected != null && FileTreeHelpers.findNode(tree, selected) == null) _selectedPath.value = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (isDisposed || ticket != scanTicket || _languageFilter.value != filter) return@launch
+                _languageScan.value = LanguageScanState(
+                    filter = filter,
+                    status = LanguageScanStatus.FAILED,
+                    error = e.message ?: "Language scan failed",
+                )
+            }
+        }
+    }
+
     fun setError(err: String?) {
         _error.value = err
     }
@@ -350,6 +498,7 @@ class FileTreeState(
 
     fun refresh() {
         if (isDisposed) return
+        if (_languageFilter.value != ExplorerLanguageFilter.ALL) setLanguageFilter(_languageFilter.value, rescan = true)
         coroutineScope.launch {
             initTreeAndSubscription()
             refreshExpandedSubdirectories(_root.value)
@@ -454,6 +603,8 @@ class FileTreeState(
 
     fun dispose() {
         isDisposed = true
+        scanTicket++
+        scanJob?.cancel()
         watchCoordinator.dispose()
     }
 }

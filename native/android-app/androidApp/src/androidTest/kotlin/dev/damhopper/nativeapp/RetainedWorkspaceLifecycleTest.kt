@@ -108,4 +108,48 @@ class RetainedWorkspaceLifecycleTest {
         store.clear()
         assertTrue(state.isAuthorityRetired.value, "ViewModel onCleared must close workspace state")
     }
+
+    @Test
+    fun testViewModelRetainsTerminalAgentsServiceAcrossConfigurationChange() {
+        val scenario = ActivityScenario.launch(MainActivity::class.java)
+        try {
+            var originalService: dev.damhopper.nativeapp.features.terminal.RetainedTerminalAgentsService? = null
+            val customFilter = dev.damhopper.nativeapp.features.terminal.TerminalAgentsFilterSelection.Selected(
+                listOf(dev.damhopper.nativeapp.features.terminal.TerminalAgentsStatus.WORKING),
+            )
+
+            scenario.onActivity { activity ->
+                val vm = activity.viewModel
+                assertNotNull(vm)
+                val service = vm.terminalAgents
+                assertNotNull(service)
+                originalService = service
+                service.setFilter(customFilter)
+                val start = System.currentTimeMillis()
+                while (service.state.value.filter != customFilter && System.currentTimeMillis() - start < 5_000) {
+                    Thread.sleep(10)
+                }
+                assertEquals(customFilter, service.state.value.filter)
+            }
+
+            // Recreate activity (simulates configuration change)
+            scenario.recreate()
+
+            scenario.onActivity { recreatedActivity ->
+                val recreatedVm = recreatedActivity.viewModel
+                assertNotNull(recreatedVm)
+                val recreatedService = recreatedVm.terminalAgents
+                assertEquals(originalService, recreatedService, "RetainedTerminalAgentsService must survive Activity recreation")
+                val start = System.currentTimeMillis()
+                while (recreatedService.state.value.filter != customFilter && System.currentTimeMillis() - start < 5_000) {
+                    Thread.sleep(10)
+                }
+                assertEquals(customFilter, recreatedService.state.value.filter, "Filter state must be retained after recreation")
+                // Reset to All
+                recreatedService.setFilter(dev.damhopper.nativeapp.features.terminal.TerminalAgentsFilterSelection.All)
+            }
+        } finally {
+            scenario.close()
+        }
+    }
 }

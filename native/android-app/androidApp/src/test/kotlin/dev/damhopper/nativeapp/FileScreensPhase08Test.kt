@@ -28,6 +28,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import dev.damhopper.nativeapp.features.files.FileMutationCoordinator
 import dev.damhopper.nativeapp.features.files.FileTreeNode
+import dev.damhopper.nativeapp.features.files.FileTreeHelpers
+import dev.damhopper.nativeapp.features.files.LanguageFileDto
+import dev.damhopper.nativeapp.features.files.buildLanguageTree
+import dev.damhopper.nativeapp.features.settings.ExplorerLanguageFilter
 import dev.damhopper.nativeapp.features.files.ReplaceCoordinator
 import dev.damhopper.nativeapp.model.WorkbenchPanel
 import dev.damhopper.nativeapp.ui.navigation.PanelRegistry
@@ -260,5 +264,49 @@ class FileScreensPhase08Test {
         assertEquals("ab", cut.text, "Cut must not leave half a surrogate pair")
         assertTrue(cut.isTruncated)
         doc.close()
+    }
+
+    @Test
+    fun testLanguageTreeUsesOnlyAuthoritativeFamilyMetadataWithAncestors() {
+        val target = ProjectTargetRef(project = "demo-proj")
+        val files = listOf(
+            LanguageFileDto("src/main.rs", size = 10uL, mtime = 1L, language = "rust"),
+            LanguageFileDto("src/app/Main.java", size = 20uL, mtime = 2L, language = "java"),
+            LanguageFileDto("web/index.ts", size = 30uL, mtime = 3L, language = "javascript-typescript"),
+            LanguageFileDto("../escape.rs", language = "rust"),
+            LanguageFileDto(".hidden/secret.rs", language = "rust"),
+        )
+        val rust = buildLanguageTree(target, files, ExplorerLanguageFilter.RUST)
+        val visible = FileTreeHelpers.flattenVisibleNodes(rust, showHidden = false).map { it.first.path }
+        // Real family only, ancestors retained and expanded, traversal rejected, hidden respects the toggle.
+        assertEquals(listOf("src", "src/main.rs"), visible)
+        val withHidden = FileTreeHelpers.flattenVisibleNodes(rust, showHidden = true).map { it.first.path }
+        assertEquals(listOf(".hidden", ".hidden/secret.rs", "src", "src/main.rs"), withHidden)
+        val java = buildLanguageTree(target, files, ExplorerLanguageFilter.JAVA)
+        assertEquals(
+            listOf("src", "src/app", "src/app/Main.java"),
+            FileTreeHelpers.flattenVisibleNodes(java).map { it.first.path },
+        )
+        val js = buildLanguageTree(target, files, ExplorerLanguageFilter.JAVASCRIPT_TYPESCRIPT)
+        assertEquals(listOf("web", "web/index.ts"), FileTreeHelpers.flattenVisibleNodes(js).map { it.first.path })
+        // ALL never builds a family tree.
+        assertTrue(buildLanguageTree(target, files, ExplorerLanguageFilter.ALL).children.isEmpty())
+    }
+
+    @Test
+    fun testSettingsCoverSuspendsInputButKeepsSidebarAndTerminalState() = withWorkspaceState { state ->
+        state.setEditorSidebarOpen(true)
+        state.selectPanel(dev.damhopper.nativeapp.features.workspace.WorkspacePanel.EDITOR)
+        assertTrue(state.isInteractiveEditAllowed())
+
+        state.setInputSuspended(true)
+        assertTrue(state.isInputSuspended.value)
+        assertFalse(state.isInteractiveEditAllowed(), "A covered workspace never accepts widget input")
+        assertTrue(state.terminalState?.isInputSuspended == true)
+        assertTrue(state.isEditorSidebarOpen.value, "Sidebar is not reset by the cover")
+
+        state.setInputSuspended(false)
+        assertTrue(state.isInteractiveEditAllowed(), "Lifting the cover restores exactly the previous eligibility")
+        assertTrue(state.isEditorSidebarOpen.value)
     }
 }

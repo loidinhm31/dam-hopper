@@ -260,6 +260,104 @@ class WsConnectionTest {
         assertTrue(deferred.isCompleted)
     }
 
+    @Test
+    fun tryAdmitCurrentSocketAdmitsOnlyTheConnectedSocketAndAlwaysReleasesTheGate() = kotlinx.coroutines.runBlocking {
+        RawWebSocketServer().use { server ->
+            val connection = ConnectionRef("admit-profile", 1L)
+            val ws = WsConnection(connection, "http://127.0.0.1:${server.port}")
+            val absent = SocketInstanceRef(connection, "sock-1")
+            var ran = 0
+
+            // Not connected: the captured socket is stale and the leaf never runs.
+            assertEquals(WsSocketAdmission.STALE, ws.tryAdmitCurrentSocket(absent) { ran++; true })
+            assertEquals(0, ran)
+
+            kotlinx.coroutines.withTimeout(15_000) { ws.connect() }
+            val socket = assertIs<WsState.Connected>(ws.state.value).socketRef
+            assertEquals(WsSocketAdmission.COMMITTED, ws.tryAdmitCurrentSocket(socket) { ran++; true })
+            assertEquals(1, ran)
+
+            // Another socket of the same connection is stale; a declined commit is stale too.
+            val replaced = SocketInstanceRef(connection, "sock-other")
+            assertEquals(WsSocketAdmission.STALE, ws.tryAdmitCurrentSocket(replaced) { ran++; true })
+            assertEquals(WsSocketAdmission.STALE, ws.tryAdmitCurrentSocket(socket) { false })
+            assertEquals(1, ran)
+
+            // Same-coroutine reentry is BUSY (lifecycleMutex is try-locked only, never waited on).
+            var inner: WsSocketAdmission? = null
+            val outer = ws.tryAdmitCurrentSocket(socket) {
+                inner = ws.tryAdmitCurrentSocket(socket) { true }
+                false
+            }
+            assertEquals(WsSocketAdmission.BUSY, inner)
+            assertEquals(WsSocketAdmission.STALE, outer)
+
+            // Released in finally even when the leaf throws.
+            assertFailsWith<IllegalStateException> { ws.tryAdmitCurrentSocket(socket) { error("boom") } }
+            assertEquals(WsSocketAdmission.COMMITTED, ws.tryAdmitCurrentSocket(socket) { true })
+
+            // After disconnect the old socket is stale.
+            kotlinx.coroutines.withTimeout(15_000) { ws.disconnect() }
+            assertEquals(WsSocketAdmission.STALE, ws.tryAdmitCurrentSocket(socket) { true })
+        }
+    }
+
+    /** Minimal loopback RFC 6455 server: completes the upgrade handshake and then only drains client frames. */
+    private class RawWebSocketServer : java.io.Closeable {
+        private val server = java.net.ServerSocket(0, 50, java.net.InetAddress.getLoopbackAddress())
+        private val clients = java.util.concurrent.CopyOnWriteArrayList<java.net.Socket>()
+        val port: Int get() = server.localPort
+
+        init {
+            Thread {
+                try {
+                    while (!server.isClosed) {
+                        val socket = server.accept()
+                        clients += socket
+                        Thread { serve(socket) }.apply { isDaemon = true }.start()
+                    }
+                } catch (_: Exception) {
+                    // closed
+                }
+            }.apply { isDaemon = true }.start()
+        }
+
+        private fun serve(socket: java.net.Socket) {
+            try {
+                val input = socket.getInputStream()
+                val header = StringBuilder()
+                while (!header.endsWith("\r\n\r\n")) {
+                    val b = input.read()
+                    if (b < 0) return
+                    header.append(b.toChar())
+                }
+                val key = header.lines()
+                    .firstOrNull { it.startsWith("Sec-WebSocket-Key:", ignoreCase = true) }
+                    ?.substringAfter(':')?.trim() ?: return
+                val digest = java.security.MessageDigest.getInstance("SHA-1")
+                    .digest((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray(Charsets.ISO_8859_1))
+                val accept = java.util.Base64.getEncoder().encodeToString(digest)
+                val out = socket.getOutputStream()
+                out.write(
+                    ("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+                        "Sec-WebSocket-Accept: $accept\r\n\r\n").toByteArray(Charsets.ISO_8859_1),
+                )
+                out.flush()
+                val buffer = ByteArray(1024)
+                while (input.read(buffer) >= 0) {
+                    // drain client frames (close/pings) until the socket closes
+                }
+            } catch (_: Exception) {
+                // peer closed
+            }
+        }
+
+        override fun close() {
+            server.close()
+            clients.forEach { runCatching { it.close() } }
+        }
+    }
+
     private open class MockWebSocketSession(
         val sent: MutableList<Frame>,
         override val outgoing: Channel<Frame> = Channel(Channel.UNLIMITED),

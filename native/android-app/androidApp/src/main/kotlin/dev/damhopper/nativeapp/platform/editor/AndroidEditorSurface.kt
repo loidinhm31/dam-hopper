@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.damhopper.nativeapp.features.editor.EditorDocument
 import dev.damhopper.nativeapp.features.editor.FileTierPolicy
+import dev.damhopper.nativeapp.features.editor.LocalEditorFontSize
 import dev.damhopper.nativeapp.features.editor.LocalEditorInputAllowed
 import dev.damhopper.nativeapp.features.editor.NativeEditorSurfaceHost
 import io.github.rosemoe.sora.lang.EmptyLanguage
@@ -75,6 +76,9 @@ internal fun resolveEditorInputGate(
     )
 }
 
+/** The size to push into the live widget, or null when [requested] is already applied (avoids relayout churn). */
+internal fun editorFontSizeToApply(applied: Int, requested: Int): Int? = if (applied == requested) null else requested
+
 /**
  * Android native editor surface view mounting Sora Editor [CodeEditor] via [AndroidView].
  *
@@ -92,6 +96,7 @@ fun AndroidEditorSurfaceView(
 ) {
     key(document) {
         val languageGate = remember { EditorLanguageGate(document) }
+        val appliedFontSize = remember { intArrayOf(-1) }
         LaunchedEffect(document) {
             document.revision.collect {
                 languageGate.reassess()?.let { language -> languageGate.editor?.setEditorLanguage(language) }
@@ -110,6 +115,7 @@ fun AndroidEditorSurfaceView(
                     isHighlightCurrentBlock = true
                     setCursorAnimationEnabled(true)
                     setTextSize(fontSize.toFloat())
+                    appliedFontSize[0] = fontSize
                     languageGate.editor = this
                     (document as? AndroidEditorDocument)?.let { androidDoc ->
                         androidDoc.attachEditor(this, languageGate.initialLanguage())
@@ -134,7 +140,11 @@ fun AndroidEditorSurfaceView(
                     editor.hideSoftInput()
                     editor.clearFocus()
                 }
-                editor.setTextSize(fontSize.toFloat())
+                // Live font change: only the widget text size is updated; document, selection and undo are untouched.
+                editorFontSizeToApply(appliedFontSize[0], fontSize)?.let { next ->
+                    editor.setTextSize(next.toFloat())
+                    appliedFontSize[0] = next
+                }
             },
             onRelease = { editor ->
                 languageGate.editor = null
@@ -153,6 +163,7 @@ val AndroidNativeEditorSurfaceHost: NativeEditorSurfaceHost = { document, isRead
         document = document,
         isReadOnly = isReadOnly,
         isInputAllowed = LocalEditorInputAllowed.current,
+        fontSize = LocalEditorFontSize.current,
         modifier = modifier
     )
 }

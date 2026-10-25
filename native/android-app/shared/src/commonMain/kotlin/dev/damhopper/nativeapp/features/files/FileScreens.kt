@@ -22,6 +22,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.FilterChip
+import dev.damhopper.nativeapp.features.settings.ExplorerLanguageFilter
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
@@ -43,6 +50,8 @@ fun FocusedFilesExplorerScreen(
     mutationCoordinator: FileMutationCoordinator,
     onOpenFile: (target: ProjectTargetRef, path: String) -> Unit = { _, _ -> },
     onCopyRemotePath: ((String) -> Unit)? = null,
+    onSelectLanguageFilter: ((ExplorerLanguageFilter) -> Unit)? = null,
+    languageFilterNotice: String? = null,
     modifier: Modifier = Modifier,
 ) {
     FilesPanelScreen(
@@ -55,6 +64,8 @@ fun FocusedFilesExplorerScreen(
         modifier = modifier,
         focusedWorkspaceMode = true,
         onCopyRemotePath = onCopyRemotePath,
+        onSelectLanguageFilter = onSelectLanguageFilter,
+        languageFilterNotice = languageFilterNotice,
     )
 }
 
@@ -73,6 +84,8 @@ fun FilesPanelScreen(
     modifier: Modifier = Modifier,
     focusedWorkspaceMode: Boolean = false,
     onCopyRemotePath: ((String) -> Unit)? = null,
+    onSelectLanguageFilter: ((ExplorerLanguageFilter) -> Unit)? = null,
+    languageFilterNotice: String? = null,
 ) {
     val coroutineScope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
@@ -88,6 +101,9 @@ fun FilesPanelScreen(
     val connectionStatus by treeState.connectionStatus.collectAsState()
     val scrollIndex by treeState.scrollIndex.collectAsState()
     val scrollOffset by treeState.scrollOffset.collectAsState()
+    val languageFilter by treeState.languageFilter.collectAsState()
+    val languageScan by treeState.languageScan.collectAsState()
+    val familyActive = languageFilter != ExplorerLanguageFilter.ALL
 
     val isMutating by mutationCoordinator.isMutating.collectAsState()
     val unresolvedOperations by mutationCoordinator.unresolvedOperations.collectAsState()
@@ -149,6 +165,11 @@ fun FilesPanelScreen(
 
         when (effectiveSubTab) {
             FilesSubTab.EXPLORER -> {
+                LanguageFilterRow(
+                    selected = languageFilter,
+                    onSelect = onSelectLanguageFilter,
+                    migrationNotice = languageFilterNotice,
+                )
                 if (connectionStatus == ExplorerConnectionStatus.TARGET_UNAVAILABLE) {
                     Text(
                         text = "Target unavailable: project/worktree does not match active workspace authority.",
@@ -203,7 +224,7 @@ fun FilesPanelScreen(
                     )
                 }
 
-                if (isLoading) {
+                if (isLoading && !familyActive) {
                     Text(
                         text = "Loading directory...",
                         style = DamHopperTypography.labelSmall,
@@ -212,12 +233,51 @@ fun FilesPanelScreen(
                     )
                 }
 
-                val visibleNodes = remember(rootNode, showHidden) {
-                    FileTreeHelpers.flattenVisibleNodes(rootNode, showHidden = showHidden)
+                if (familyActive) {
+                    val familyLabel = languageFilterLabel(languageFilter)
+                    when (languageScan.status) {
+                        LanguageScanStatus.LOADING -> Text(
+                            text = "Scanning the project for $familyLabel files...",
+                            style = DamHopperTypography.labelSmall,
+                            color = DamHopperColors.TextSecondary,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                        LanguageScanStatus.FAILED -> Text(
+                            text = "$familyLabel scan failed: ${languageScan.error ?: "unknown error"}. Use Refresh to retry; the ordinary tree is unaffected.",
+                            style = DamHopperTypography.labelSmall,
+                            color = DamHopperColors.Warning,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                        LanguageScanStatus.READY -> if (languageScan.truncated) {
+                            Text(
+                                text = "Partial result: the scan stopped at ${languageScan.limit} files, so some $familyLabel files may be missing.",
+                                style = DamHopperTypography.labelSmall,
+                                color = DamHopperColors.Warning,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+                        LanguageScanStatus.IDLE -> Unit
+                    }
                 }
 
-                if (!isLoading && error == null && visibleNodes.isEmpty()) {
-                    val emptyText = if (!showHidden && rootNode.children.isNotEmpty()) {
+                val displayRoot = if (familyActive) languageScan.tree else rootNode
+                val visibleNodes = remember(displayRoot, showHidden) {
+                    displayRoot?.let { FileTreeHelpers.flattenVisibleNodes(it, showHidden = showHidden) } ?: emptyList()
+                }
+
+                val showEmpty = if (familyActive) {
+                    languageScan.status == LanguageScanStatus.READY && visibleNodes.isEmpty()
+                } else {
+                    !isLoading && error == null && visibleNodes.isEmpty()
+                }
+                if (showEmpty) {
+                    val emptyText = if (familyActive) {
+                        if (!showHidden && (displayRoot?.children?.isNotEmpty() == true)) {
+                            "No visible ${languageFilterLabel(languageFilter)} files (enable 'Show .' to view hidden files)."
+                        } else {
+                            "No ${languageFilterLabel(languageFilter)} files in this project."
+                        }
+                    } else if (!showHidden && rootNode.children.isNotEmpty()) {
                         "No visible items (enable 'Show .' to view hidden files)."
                     } else {
                         "Directory is empty."
@@ -239,7 +299,7 @@ fun FilesPanelScreen(
                                 depth = depth,
                                 isSelected = selectedPath == node.path,
                                 isUnresolved = mutationCoordinator.isPathUnresolved(node.path),
-                                onToggleFolder = { treeState.toggleFolder(it) },
+                                onToggleFolder = { if (!familyActive) treeState.toggleFolder(it) },
                                 onSelectNode = { path ->
                                     treeState.selectPath(path)
                                     if (!node.isDirectory) {
@@ -365,5 +425,53 @@ fun FilesPanelScreen(
                 }
             }
         )
+    }
+}
+
+/** User-facing family name of an Explorer language filter. */
+fun languageFilterLabel(filter: ExplorerLanguageFilter): String = when (filter) {
+    ExplorerLanguageFilter.ALL -> "All"
+    ExplorerLanguageFilter.RUST -> "Rust"
+    ExplorerLanguageFilter.JAVASCRIPT_TYPESCRIPT -> "JS/TS"
+    ExplorerLanguageFilter.JAVA -> "Java"
+}
+
+/**
+ * Explorer language-family selector (all / rust / javascript-typescript / java). [onSelect] null renders the
+ * current value read-only. [migrationNotice] is the explicit, non-dirty note that a legacy local filter fell back
+ * to All (it is never saved to a server automatically; only an explicit choice here writes a real value).
+ */
+@Composable
+private fun LanguageFilterRow(
+    selected: ExplorerLanguageFilter,
+    onSelect: ((ExplorerLanguageFilter) -> Unit)?,
+    migrationNotice: String?,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            ExplorerLanguageFilter.entries.forEach { entry ->
+                FilterChip(
+                    selected = entry == selected,
+                    enabled = onSelect != null,
+                    onClick = { onSelect?.invoke(entry) },
+                    label = { Text(languageFilterLabel(entry)) },
+                    modifier = Modifier.defaultMinSize(minHeight = 48.dp),
+                )
+            }
+        }
+        if (migrationNotice != null) {
+            Text(
+                text = migrationNotice,
+                style = DamHopperTypography.labelSmall,
+                color = DamHopperColors.Warning,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+            )
+        }
     }
 }

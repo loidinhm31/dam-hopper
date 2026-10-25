@@ -1,6 +1,11 @@
 package dev.damhopper.nativeapp.features.host
 
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.transport.RequestAdmissionGuard
+import dev.damhopper.nativeapp.features.settings.SettingsOutcome
+import dev.damhopper.nativeapp.features.settings.classifyCancellation
+import dev.damhopper.nativeapp.features.settings.reasonOrNull
+import kotlinx.coroutines.CancellationException
 import dev.damhopper.nativeapp.core.transport.ServerMsg
 import dev.damhopper.nativeapp.core.transport.UiConnectionReceipt
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,6 +15,11 @@ import kotlinx.coroutines.flow.asStateFlow
 class IdleConsentController(
     val connection: ConnectionRef,
     val repository: IdleSuspendRepository,
+    /**
+     * Non-null while the owner cannot accept Settings idle mutations (e.g. no-auth/dev-mode or unknown auth).
+     * Evaluated again at every timing/force-suspend submission. Runtime consent is not gated by it.
+     */
+    val mutationBlockedReason: () -> String? = { null },
     val receiptProvider: () -> UiConnectionReceipt?
 ) {
     private val _status = MutableStateFlow<IdleSuspendStatusV1?>(null)
@@ -91,84 +101,118 @@ class IdleConsentController(
         }
     }
 
+    /**
+     * Updates the atomic quiet/wake pair. The controller mirrors the repository: both validate against the
+     * LATEST status min/max (no hard-coded bounds), unknown/locked/handoff/capability states never submit, and
+     * the repository re-fetches the current-owner status before the guarded PATCH. Never retried; an ambiguous
+     * result is Unknown and the status is only re-read.
+     */
     suspend fun updateTiming(
         quietPeriodSeconds: Int,
-        wakeAfterSeconds: Int
-    ): Result<IdleSuspendTimingPatchResponse> {
-        if (isRetired) return Result.failure(IllegalStateException("Controller is retired"))
-        _actionError.value = null
-        val result = repository.updateTiming(quietPeriodSeconds, wakeAfterSeconds)
-        result.onSuccess {
-            refreshStatus()
-        }.onFailure { err ->
-            _actionError.value = err.message ?: "Failed to update idle suspend timing"
+        wakeAfterSeconds: Int,
+        guard: RequestAdmissionGuard,
+    ): SettingsOutcome<IdleSuspendTimingPatchResponse> {
+        if (isRetired) return SettingsOutcome.NotSubmitted("Controller is retired")
+        // Rechecked at submission time (not only when the control was drawn): auth/capability may have changed.
+        mutationBlockedReason()?.let { reason ->
+            _actionError.value = reason
+            return SettingsOutcome.NotSubmitted(reason)
         }
-        return result
+        _actionError.value = null
+        validateIdleTiming(_status.value, quietPeriodSeconds, wakeAfterSeconds)?.let { reason ->
+            _actionError.value = reason
+            return SettingsOutcome.NotSubmitted(reason)
+        }
+        val outcome = try {
+            idleOutcome(repository.updateTiming(quietPeriodSeconds, wakeAfterSeconds, guard), guard)
+        } catch (ce: CancellationException) {
+            _actionError.value = classifyCancellation(guard).reasonOrNull
+            throw ce
+        }
+        if (outcome is SettingsOutcome.Confirmed) {
+            refreshStatus()
+        } else {
+            _actionError.value = outcome.reasonOrNull
+            if (outcome !is SettingsOutcome.NotSubmitted) refreshStatus(preserveActionError = true)
+        }
+        return outcome
     }
 
     /**
-     * Dispatches non-retrying manual force suspend.
+     * Dispatches non-retrying manual force suspend through the request-local [guard].
      */
     suspend fun requestForceSuspend(
         wakeAfterSeconds: Int,
-        force: Boolean
-    ): Result<ForceSuspendAcceptedResponse> {
-        if (isRetired) return Result.failure(IllegalStateException("Controller is retired"))
+        force: Boolean,
+        guard: RequestAdmissionGuard,
+    ): SettingsOutcome<ForceSuspendAcceptedResponse> {
+        if (isRetired) return SettingsOutcome.NotSubmitted("Controller is retired")
+        mutationBlockedReason()?.let { reason ->
+            _actionError.value = reason
+            return SettingsOutcome.NotSubmitted(reason)
+        }
         if (_isSubmittingForceSuspend.value) {
-            return Result.failure(IllegalStateException("Force suspend request already in progress"))
+            return SettingsOutcome.NotSubmitted("Force suspend request already in progress")
+        }
+        validateForceSuspendWake(_status.value, wakeAfterSeconds)?.let { reason ->
+            _actionError.value = reason
+            return SettingsOutcome.NotSubmitted(reason)
         }
         _isSubmittingForceSuspend.value = true
         _actionError.value = null
         clearConflicts()
 
-        val result = try {
-            repository.forceSuspend(wakeAfterSeconds, force)
-        } catch (t: Throwable) {
-            Result.failure(t)
-        }
-
-        result.onSuccess { response ->
-            _lastForceSuspendAdmission.value = response
-            refreshStatus()
-        }.onFailure { err ->
-            when (err) {
-                is IdleSuspendActiveFleetConflictException -> {
-                    _activeFleetConflict.value = err.conflict
+        try {
+            val result = repository.forceSuspend(wakeAfterSeconds, force, guard)
+            val outcome = idleOutcome(result, guard)
+            result.onSuccess { response ->
+                _lastForceSuspendAdmission.value = response
+                refreshStatus()
+            }.onFailure { err ->
+                when (err) {
+                    is IdleSuspendActiveFleetConflictException -> {
+                        _activeFleetConflict.value = err.conflict
+                    }
+                    is IdleSuspendFleetChangedConflictException -> {
+                        _fleetChangedConflict.value = err.conflict
+                    }
+                    is IdleSuspendHandoffConflictException -> {
+                        _actionError.value = err.message
+                    }
+                    else -> {
+                        _actionError.value = outcome.reasonOrNull ?: "Force suspend request failed"
+                    }
                 }
-                is IdleSuspendFleetChangedConflictException -> {
-                    _fleetChangedConflict.value = err.conflict
-                }
-                is IdleSuspendHandoffConflictException -> {
-                    _actionError.value = err.message
-                }
-                else -> {
-                    _actionError.value = err.message ?: "Force suspend request failed"
-                }
+                if (outcome !is SettingsOutcome.NotSubmitted) refreshStatus(preserveActionError = true)
             }
-            refreshStatus(preserveActionError = true)
+            return outcome
+        } catch (ce: CancellationException) {
+            _actionError.value = classifyCancellation(guard).reasonOrNull
+            throw ce
+        } finally {
+            _isSubmittingForceSuspend.value = false
         }
-
-        _isSubmittingForceSuspend.value = false
-        return result
     }
 
     /**
-     * Submits consent decision with live-socket receipt fencing.
+     * Submits consent decision with live-socket receipt fencing. [guard] is the explicit runtime-owner guard
+     * (never a Settings-target fallback).
      */
     suspend fun submitConsent(
-        decision: SleepConsentDecision
-    ): Result<ConsentDecisionResponse> {
-        if (isRetired) return Result.failure(IllegalStateException("Controller is retired"))
+        decision: SleepConsentDecision,
+        guard: RequestAdmissionGuard,
+    ): SettingsOutcome<ConsentDecisionResponse> {
+        if (isRetired) return SettingsOutcome.NotSubmitted("Controller is retired")
         val currentConsent = _pendingConsent.value
-            ?: return Result.failure(IllegalStateException("No pending sleep consent request"))
+            ?: return SettingsOutcome.NotSubmitted("No pending sleep consent request")
 
         val receipt = receiptProvider()
-            ?: return Result.failure(
-                IllegalStateException("Cannot submit consent: live WebSocket capability receipt not available")
+            ?: return SettingsOutcome.NotSubmitted(
+                "Cannot submit consent: live WebSocket capability receipt not available",
             )
 
         if (_isSubmittingDecision.value) {
-            return Result.failure(IllegalStateException("Consent decision submission already in progress"))
+            return SettingsOutcome.NotSubmitted("Consent decision submission already in progress")
         }
         _isSubmittingDecision.value = true
         _actionError.value = null
@@ -181,22 +225,23 @@ class IdleConsentController(
             decision = decision
         )
 
-        val result = try {
-            repository.submitConsentDecision(request)
-        } catch (t: Throwable) {
-            Result.failure(t)
+        try {
+            val result = repository.submitConsentDecision(request, guard)
+            val outcome = idleOutcome(result, guard)
+            result.onSuccess {
+                _pendingConsent.value = null
+                refreshStatus()
+            }.onFailure { err ->
+                _actionError.value = outcome.reasonOrNull ?: err.message ?: "Failed to submit sleep consent decision"
+                if (outcome !is SettingsOutcome.NotSubmitted) refreshStatus(preserveActionError = true)
+            }
+            return outcome
+        } catch (ce: CancellationException) {
+            _actionError.value = classifyCancellation(guard).reasonOrNull
+            throw ce
+        } finally {
+            _isSubmittingDecision.value = false
         }
-
-        result.onSuccess {
-            _pendingConsent.value = null
-            refreshStatus()
-        }.onFailure { err ->
-            _actionError.value = err.message ?: "Failed to submit sleep consent decision"
-            refreshStatus(preserveActionError = true)
-        }
-
-        _isSubmittingDecision.value = false
-        return result
     }
 
     fun clearConflicts() {

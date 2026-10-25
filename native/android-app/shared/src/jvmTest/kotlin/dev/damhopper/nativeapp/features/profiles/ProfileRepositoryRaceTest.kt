@@ -1,8 +1,15 @@
 package dev.damhopper.nativeapp.features.profiles
 
+import dev.damhopper.nativeapp.core.model.ConnectionErrorReason
+import dev.damhopper.nativeapp.core.model.ConnectionOwnerError
 import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.core.ownership.ConnectionRegistry
 import dev.damhopper.nativeapp.core.transport.ApiClient
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.*
 
@@ -83,5 +90,135 @@ class ProfileRepositoryRaceTest {
 
         // Status for deleted profile must not exist in authStatuses
         assertFalse(repo.authStatuses.value.containsKey(prof.id))
+    }
+
+    // ---- C2a1: pending/failed/canceled transitions fence creation and identity publication ----
+
+    private suspend fun seeded(repo: ProfileRepository): ServerProfile {
+        repo.initialize()
+        val profile = repo.addProfile("Prod", "https://a.example.com", "alice")
+        vault.storeToken(profile.id, profile.baseUrl, "tok-a")
+        return profile
+    }
+
+    @Test
+    fun pendingTransitionFencesClientCreationWithoutWaitingOrAllocatingGenerations() = runTest {
+        val repo = ProfileRepository(vault = vault, registry = registry)
+        val prof = seeded(repo)
+        val old = registry.getOrCreateConnection(prof.id)
+        val gate = CompletableDeferred<Unit>()
+        var entered = false
+        registry.addRetirementBarrier {
+            entered = true
+            gate.await()
+        }
+
+        // Retirement entered directly through the registry seam (no profile mutex involved).
+        val retire = async { registry.retireConnection(old) }
+        runCurrent()
+        assertTrue(entered)
+        assertEquals(
+            ConnectionErrorReason.OWNER_MISMATCH,
+            assertFailsWith<ConnectionOwnerError> { repo.getOrCreateApiClient(prof.id) }.reason,
+        )
+        assertFailsWith<ConnectionOwnerError> { repo.getOrCreateWsConnection(prof.id) }
+        assertFailsWith<ConnectionOwnerError> { repo.applyAuthenticatedSession(prof.id, AuthSession("jwt", "alice", "user", "2026-11-01T00:00:00Z"), null) }
+        assertEquals("tok-a", vault.getToken(prof.id, prof.baseUrl))
+        assertNull(repo.authStatuses.value[prof.id])
+
+        gate.complete(Unit)
+        val successor = retire.await()
+        assertEquals(2L, successor.generation) // creation attempts allocated nothing
+        assertEquals(successor, repo.getOrCreateApiClient(prof.id).connection)
+    }
+
+    @Test
+    fun canceledEndpointUpdateNeverPublishesIdentityAndLeavesTransitionFenced() = runTest {
+        val repo = ProfileRepository(vault = vault, registry = registry)
+        val prof = seeded(repo)
+        val old = registry.getOrCreateConnection(prof.id)
+        val gate = CompletableDeferred<Unit>()
+        var drainedCleanly = false
+        var entered = false
+        registry.addRetirementBarrier {
+            entered = true
+            gate.await()
+            drainedCleanly = true
+        }
+
+        var caught: CancellationException? = null
+        val caller = launch {
+            try {
+                repo.updateProfile(prof.id, "Prod", "https://b.example.com", "alice")
+            } catch (e: CancellationException) {
+                caught = e
+                throw e
+            }
+        }
+        runCurrent()
+        assertTrue(entered, "drain must be parked inside the barrier before cancelling")
+        caller.cancel()
+        gate.complete(Unit)
+        caller.join()
+
+        // Cleanup completed, but the canceled caller published nothing and the transition stays failed.
+        assertTrue(drainedCleanly)
+        assertNotNull(caught)
+        assertEquals("tok-a", vault.getToken(prof.id, prof.baseUrl))
+        assertEquals(prof.baseUrl, repo.profiles.value.single().baseUrl)
+        assertNull(repo.authStatuses.value[prof.id])
+        assertNull(registry.getCurrentConnection(prof.id))
+        assertFailsWith<ConnectionOwnerError> { repo.getOrCreateApiClient(prof.id) }
+
+        // Explicit recovery releases the successor; a later replacement is a separate uncanceled call.
+        registry.recoverRetirement(old)
+        assertEquals(prof.baseUrl, repo.getOrCreateApiClient(prof.id).normalizedBaseUrl)
+        val updated = repo.updateProfile(prof.id, "Prod", "https://b.example.com", "alice")
+        assertEquals(updated.baseUrl, repo.profiles.value.single().baseUrl)
+        assertNull(vault.getToken(prof.id, prof.baseUrl))
+    }
+
+    @Test
+    fun canceledSessionApplicationNeverStoresCredential() = runTest {
+        val repo = ProfileRepository(vault = vault, registry = registry)
+        val prof = seeded(repo)
+        registry.getOrCreateConnection(prof.id)
+        val gate = CompletableDeferred<Unit>()
+        var entered = false
+        registry.addRetirementBarrier {
+            entered = true
+            gate.await()
+        }
+
+        val caller = launch {
+            repo.applyAuthenticatedSession(prof.id, AuthSession("jwt-late", "alice", "user", "2026-11-01T00:00:00Z"), null)
+        }
+        runCurrent()
+        assertTrue(entered, "drain must be parked inside the barrier before cancelling")
+        caller.cancel()
+        gate.complete(Unit)
+        caller.join()
+
+        assertTrue(caller.isCancelled)
+        assertEquals("tok-a", vault.getToken(prof.id, prof.baseUrl))
+        assertNull(repo.authStatuses.value[prof.id])
+        assertNull(registry.getCurrentConnection(prof.id))
+    }
+
+    @Test
+    fun retirementObserverRunsAfterDrainWhileProfileMutexIsHeld() = runTest {
+        val repo = ProfileRepository(vault = vault, registry = registry)
+        val prof = seeded(repo)
+        registry.getOrCreateConnection(prof.id)
+        val order = mutableListOf<String>()
+        registry.addRetirementBarrier { order += "barrier" }
+        // Compliant observer: reads only non-locking state; calling the repository here would deadlock
+        // because the profile mutex is held for the whole retirement.
+        registry.addRetirementListener {
+            order += "observer:${repo.profiles.value.size}:${registry.connectionsState.value.containsKey(prof.id)}"
+        }
+
+        repo.applyAuthenticatedSession(prof.id, AuthSession("jwt", "alice", "user", "2026-11-01T00:00:00Z"), null)
+        assertEquals(listOf("barrier", "observer:1:false"), order)
     }
 }

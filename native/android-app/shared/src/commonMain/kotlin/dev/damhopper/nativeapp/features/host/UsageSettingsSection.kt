@@ -1,106 +1,190 @@
 package dev.damhopper.nativeapp.features.host
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import dev.damhopper.nativeapp.ui.theme.DamHopperColors
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 
+/** Receiver lifecycle as the web shows it: disabled / paused / active / unavailable (unknown until loaded). */
+enum class UsageReceiverState { UNKNOWN, DISABLED, PAUSED, ACTIVE, UNAVAILABLE }
+
+private fun JsonElement?.objectOrNull(key: String): JsonElement? = (this as? JsonObject)?.get(key)
+private fun JsonElement?.boolOrNull(): Boolean? =
+    (this as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+
+/** Derives the receiver state from the authoritative server setup/settings response (never from local guesses). */
+fun usageReceiverState(uiState: UsageUiState): UsageReceiverState {
+    val enabled = uiState.setup?.enabled ?: uiState.settings?.enabled ?: return UsageReceiverState.UNKNOWN
+    val paused = uiState.setup?.paused ?: uiState.settings?.paused ?: false
+    val runtime = uiState.setup?.runtime ?: uiState.settings?.runtime
+    return when {
+        !enabled -> UsageReceiverState.DISABLED
+        paused -> UsageReceiverState.PAUSED
+        runtime.objectOrNull("active").boolOrNull() == true -> UsageReceiverState.ACTIVE
+        else -> UsageReceiverState.UNAVAILABLE
+    }
+}
+
+/** The patch for the single primary receiver action of [state] (same semantics as the web Usage insights row). */
+sealed interface UsageReceiverAction {
+    val label: String
+
+    data class Setup(override val label: String, val patch: SetupPatchRequest) : UsageReceiverAction
+    data class Settings(override val label: String, val patch: SettingsPatchRequest) : UsageReceiverAction
+}
+
+fun usageReceiverPrimaryAction(state: UsageReceiverState): UsageReceiverAction? = when (state) {
+    UsageReceiverState.UNKNOWN -> null
+    UsageReceiverState.ACTIVE -> UsageReceiverAction.Setup("Disable", SetupPatchRequest(enabled = false))
+    UsageReceiverState.PAUSED -> UsageReceiverAction.Settings("Resume", SettingsPatchRequest(paused = false))
+    UsageReceiverState.UNAVAILABLE ->
+        UsageReceiverAction.Setup("Retry receiver", SetupPatchRequest(enabled = true, retryCollector = true))
+    UsageReceiverState.DISABLED -> UsageReceiverAction.Setup("Enable Codex Usage", SetupPatchRequest(enabled = true))
+}
+
+/**
+ * Native Usage controls for ONE selected target server (receiver enable/disable/resume/retry, Codex exporter
+ * setup toggle/status, retention and the usage-data destination). Every control is disabled with a visible
+ * reason when [readOnlyReason] is set (disconnected/read-only capability); the last remote outcome is always
+ * shown, including Unknown.
+ */
 @Composable
 fun UsageSettingsSection(
     uiState: UsageUiState,
-    onTogglePause: () -> Unit,
-    onUpdateSettings: (SettingsPatchRequest) -> Unit = {},
+    targetLabel: String,
+    readOnlyReason: String?,
+    busy: Boolean,
+    lastMessage: String?,
+    onUpdateSettings: (SettingsPatchRequest) -> Unit,
+    onUpdateSetup: (SetupPatchRequest) -> Unit,
+    onOpenData: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
-    val s = uiState.settings
-    val h = uiState.health
+    val state = usageReceiverState(uiState)
+    val setup = uiState.setup
+    val settings = uiState.settings
+    val exporter = setup?.collectorSetup?.codexExporter ?: settings?.collectorSetup?.codexExporter
+    val restartRequired = (setup?.collectorSetup?.restartRequired ?: settings?.collectorSetup?.restartRequired) == true
+    val enabledControls = readOnlyReason == null && !busy
+    val collectorError = (setup?.runtime ?: settings?.runtime).objectOrNull("collectorError")
+        .let { (it as? JsonPrimitive)?.contentOrNull }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(DamHopperColors.Surface)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("SETTINGS & HEALTH", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = DamHopperColors.TextSecondary)
-            val isPaused = s?.paused ?: h?.paused ?: false
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(if (isPaused) Color(0xFFF59E0B).copy(alpha = 0.2f) else DamHopperColors.Primary.copy(alpha = 0.2f))
-                    .clickable { onTogglePause() }
-                    .padding(horizontal = 8.dp, vertical = 3.dp)
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Codex Usage telemetry", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            Text("Server: $targetLabel", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (readOnlyReason != null) {
+                Text(readOnlyReason, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+            }
+            Text(
+                text = when (state) {
+                    UsageReceiverState.UNKNOWN -> "Receiver state is unknown until the server answers."
+                    UsageReceiverState.DISABLED -> "Codex Usage is off on this server."
+                    UsageReceiverState.PAUSED -> "Codex Usage is paused. Existing data remains available."
+                    UsageReceiverState.ACTIVE -> "Codex Usage is active on this server."
+                    UsageReceiverState.UNAVAILABLE -> "The Codex receiver is unavailable. Retry is explicit and manual."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (collectorError != null) {
+                Text("Receiver error: $collectorError", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                usageReceiverPrimaryAction(state)?.let { action ->
+                    Button(
+                        enabled = enabledControls,
+                        onClick = {
+                            when (action) {
+                                is UsageReceiverAction.Setup -> onUpdateSetup(action.patch)
+                                is UsageReceiverAction.Settings -> onUpdateSettings(action.patch)
+                            }
+                        },
+                    ) { Text(if (busy) "Updating…" else action.label) }
+                }
+                if (state == UsageReceiverState.ACTIVE) {
+                    OutlinedButton(
+                        enabled = enabledControls,
+                        onClick = { onUpdateSetup(SetupPatchRequest(enabled = true, retryCollector = true)) },
+                    ) { Text("Retry receiver") }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = if (isPaused) "Resume Collection" else "Pause Collection",
-                    fontSize = 11.sp,
-                    color = if (isPaused) Color(0xFFF59E0B) else DamHopperColors.Primary,
-                    fontWeight = FontWeight.SemiBold
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Codex exporter", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        text = when (exporter) {
+                            CodexExporterStatus.MANAGED -> "Managed by DamHopper"
+                            CodexExporterStatus.CONFLICT -> "Conflict: an unmanaged exporter is configured"
+                            CodexExporterStatus.NOT_CONFIGURED -> "Not configured"
+                            null -> "Unknown"
+                        } + if (restartRequired) " - Codex restart required" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = exporter == CodexExporterStatus.MANAGED,
+                    enabled = enabledControls && exporter != null,
+                    onCheckedChange = { on ->
+                        onUpdateSetup(
+                            if (on) SetupPatchRequest(enabled = true, codexExporter = true)
+                            else SetupPatchRequest(codexExporter = false),
+                        )
+                    },
                 )
             }
-        }
 
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            val isCollectorActive = s?.collectorEnabled ?: false
-            Text("Collector: ${if (isCollectorActive) "Active" else "Inactive"}", fontSize = 11.sp, color = Color.White)
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(DamHopperColors.SurfaceVariant)
-                    .clickable { onUpdateSettings(SettingsPatchRequest(enabled = !isCollectorActive)) }
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-            ) {
-                Text(if (isCollectorActive) "Disable" else "Enable", fontSize = 10.sp, color = DamHopperColors.Primary)
-            }
-            Text("Exporter: ${s?.collectorSetup?.codexExporter?.name ?: "--"}", fontSize = 11.sp, color = DamHopperColors.TextSecondary)
-        }
-
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Retention: ${s?.detailRetentionDays?.let { "${it}d" } ?: "--"}", fontSize = 11.sp, color = DamHopperColors.TextSecondary)
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                "Detail retention: ${settings?.detailRetentionDays?.let { "$it days" } ?: "unknown"}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf(7, 30, 90, 180).forEach { days ->
-                    val isCur = s?.detailRetentionDays == days
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(if (isCur) DamHopperColors.Primary.copy(alpha = 0.3f) else DamHopperColors.SurfaceVariant)
-                            .clickable { onUpdateSettings(SettingsPatchRequest(detailRetentionDays = days)) }
-                            .padding(horizontal = 5.dp, vertical = 2.dp)
-                    ) {
-                        Text("${days}d", fontSize = 9.sp, color = if (isCur) DamHopperColors.Primary else Color.White)
-                    }
+                    val current = settings?.detailRetentionDays == days
+                    OutlinedButton(
+                        enabled = enabledControls && settings != null && !current,
+                        onClick = { onUpdateSettings(SettingsPatchRequest(detailRetentionDays = days)) },
+                        colors = ButtonDefaults.outlinedButtonColors(),
+                    ) { Text("${days}d") }
                 }
             }
-            Text("Dropped: ${h?.collector?.dropped?.toString() ?: "--"}", fontSize = 11.sp, color = DamHopperColors.TextSecondary)
-        }
 
-        if ((h?.collector?.dropped ?: 0uL) > 0uL) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color(0xFFF59E0B).copy(alpha = 0.2f))
-                        .clickable { onUpdateSettings(SettingsPatchRequest(retryCollector = true)) }
-                        .padding(horizontal = 8.dp, vertical = 2.dp)
-                ) {
-                    Text("Retry Collector", fontSize = 10.sp, color = Color(0xFFF59E0B))
-                }
+            if (onOpenData != null) {
+                OutlinedButton(onClick = onOpenData) { Text("Open usage data and deletion") }
+            }
+            if (lastMessage != null) {
+                Text(lastMessage, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

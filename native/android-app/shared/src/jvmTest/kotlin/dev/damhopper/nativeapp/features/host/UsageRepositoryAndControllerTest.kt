@@ -10,6 +10,9 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import java.net.InetSocketAddress
 import kotlin.test.*
+import dev.damhopper.nativeapp.core.ownership.ConnectionRegistry
+import dev.damhopper.nativeapp.features.settings.SettingsOutcome
+import dev.damhopper.nativeapp.features.settings.TestGuard
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class UsageRepositoryAndControllerTest {
@@ -30,6 +33,117 @@ class UsageRepositoryAndControllerTest {
     @AfterTest
     fun tearDown() {
         server?.stop(0)
+    }
+
+    private fun guardedClient(profile: String = "dev-profile"): Pair<ConnectionRef, ApiClient> {
+        val registry = ConnectionRegistry()
+        val ref = kotlinx.coroutines.runBlocking { registry.getOrCreateConnection(profile) }
+        return ref to ApiClient(ref, "http://127.0.0.1:$serverPort", registry = registry)
+    }
+
+    private fun usageSettingsJson(paused: Boolean = false, retention: Int = 30) =
+        """{"enabled":true,"paused":$paused,"detailRetentionDays":$retention,"collectorEnabled":true,"collectorSetup":{"restartRequired":false,"codexExporter":"notConfigured","serverRestartRequired":false}}"""
+
+    @Test
+    fun testMutationOutcomesAreHonestAndPayloadsAreExact() {
+        val bodies = java.util.concurrent.CopyOnWriteArrayList<String>()
+        var mode = "ok"
+        server!!.createContext("/api/usage/settings") { exchange ->
+            if (exchange.requestMethod == "PATCH") {
+                bodies += exchange.requestBody.bufferedReader().readText()
+                when (mode) {
+                    "forbidden" -> { exchange.sendResponseHeaders(403, -1); exchange.close() }
+                    "broken" -> { exchange.sendResponseHeaders(502, -1); exchange.close() }
+                    "malformed" -> {
+                        val json = "<html>"
+                        exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+                        exchange.responseBody.use { it.write(json.toByteArray()) }
+                    }
+                    else -> {
+                        val json = usageSettingsJson(paused = false, retention = 90)
+                        exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+                        exchange.responseBody.use { it.write(json.toByteArray()) }
+                    }
+                }
+            } else {
+                val json = usageSettingsJson()
+                exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+                exchange.responseBody.use { it.write(json.toByteArray()) }
+            }
+        }
+        for (path in listOf("/api/usage/summary", "/api/usage/sessions", "/api/usage/setup", "/api/usage/health")) {
+            server!!.createContext(path) { exchange -> exchange.sendResponseHeaders(503, -1); exchange.close() }
+        }
+        val (ref, client) = guardedClient()
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
+        val controller = controllerFor(client, ref, scope)
+        try {
+            fun run(expectedMode: String): SettingsOutcome<UsageSettingsResponse> {
+                mode = expectedMode
+                var outcome: SettingsOutcome<UsageSettingsResponse>? = null
+                controller.updateSettings(SettingsPatchRequest(detailRetentionDays = 90), TestGuard()) { outcome = it }
+                val deadline = System.currentTimeMillis() + 3000
+                while (outcome == null && System.currentTimeMillis() < deadline) Thread.sleep(20)
+                return outcome!!
+            }
+            assertTrue(run("ok") is SettingsOutcome.Confirmed)
+            assertEquals(90, controller.uiState.value.settings?.detailRetentionDays)
+            assertTrue(run("forbidden") is SettingsOutcome.Rejected)
+            assertTrue(run("broken") is SettingsOutcome.Unknown)
+            assertTrue(run("malformed") is SettingsOutcome.Unknown, "malformed 2xx after admission is ambiguous")
+            assertEquals(4, bodies.size, "one request per explicit call, never replayed")
+            assertTrue(bodies.all { it == """{"detailRetentionDays":90}""" })
+        } finally {
+            controller.dispose()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun testSuspendedCredentialsThenRetirementSendsNoUsageMutation() {
+        val hits = java.util.concurrent.atomic.AtomicInteger()
+        for (path in listOf("/api/usage/settings", "/api/usage/setup")) {
+            server!!.createContext(path) { exchange ->
+                if (exchange.requestMethod != "GET") hits.incrementAndGet()
+                exchange.sendResponseHeaders(503, -1)
+                exchange.close()
+            }
+        }
+        for (path in listOf("/api/usage/summary", "/api/usage/sessions", "/api/usage/health")) {
+            server!!.createContext(path) { exchange -> exchange.sendResponseHeaders(503, -1); exchange.close() }
+        }
+        val registry = ConnectionRegistry()
+        val ref = kotlinx.coroutines.runBlocking { registry.getOrCreateConnection("dev-profile") }
+        val gate = java.util.concurrent.atomic.AtomicBoolean(false)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val client = ApiClient(ref, "http://127.0.0.1:$serverPort", {
+            if (gate.get()) {
+                entered.countDown()
+                release.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            }
+            "token"
+        }, registry)
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
+        val controller = controllerFor(client, ref, scope)
+        try {
+            Thread.sleep(300) // let the initial (unguarded) loads settle
+            gate.set(true)
+            val guard = TestGuard()
+            var outcome: SettingsOutcome<UsageSetupStatusResponse>? = null
+            controller.updateSetup(SetupPatchRequest(enabled = true), guard) { outcome = it }
+            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            kotlinx.coroutines.runBlocking { registry.retireConnection(ref) }
+            release.countDown()
+            val deadline = System.currentTimeMillis() + 3000
+            while (outcome == null && System.currentTimeMillis() < deadline) Thread.sleep(20)
+            assertTrue(outcome is SettingsOutcome.NotSubmitted, outcome.toString())
+            assertEquals(0, hits.get())
+            assertEquals(dev.damhopper.nativeapp.core.transport.RequestAdmissionState.REJECTED, guard.admission.value)
+        } finally {
+            controller.dispose()
+            scope.cancel()
+        }
     }
 
     @Test
@@ -148,16 +262,15 @@ class UsageRepositoryAndControllerTest {
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
 
-        val ref = ConnectionRef("dev-profile", 1L)
-        val apiClient = ApiClient(ref, "http://127.0.0.1:$serverPort")
+        val (ref, apiClient) = guardedClient()
         val repo = UsageRepository(apiClient)
         val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
         val controller = UsageController(ref, repo, scope)
 
         // 1. Invalid confirmation fails closed immediately without network request
         var failedCalled = false
-        controller.deleteUsage("invalid-confirmation") { success ->
-            assertFalse(success)
+        controller.deleteUsage("invalid-confirmation", guard = TestGuard()) { outcome ->
+            assertTrue(outcome is SettingsOutcome.NotSubmitted)
             failedCalled = true
         }
         assertTrue(failedCalled)
@@ -166,8 +279,8 @@ class UsageRepositoryAndControllerTest {
 
         // 2. Valid confirmation "delete-usage-data" wipes local state and sends request
         var successCalled = false
-        controller.deleteUsage("delete-usage-data") { success ->
-            successCalled = success
+        controller.deleteUsage("delete-usage-data", guard = TestGuard()) { outcome ->
+            successCalled = outcome is SettingsOutcome.Confirmed
         }
         val deadline = System.currentTimeMillis() + 3000
         while (!successCalled && System.currentTimeMillis() < deadline) {
@@ -185,7 +298,7 @@ class UsageRepositoryAndControllerTest {
             receivedDeleteBody = exchange.requestBody.bufferedReader().readText()
             exchange.sendResponseHeaders(204, -1); exchange.close()
         }
-        val repo = UsageRepository(ApiClient(ConnectionRef("dev-profile", 1L), "http://127.0.0.1:$serverPort"))
+        val repo = UsageRepository(guardedClient().second)
         val dayMs = UsageBoundsHelper.DAY_MS
 
         // Mid-day unaligned timestamp (2024-10-16 20:59:05.678 UTC)
@@ -203,7 +316,7 @@ class UsageRepositoryAndControllerTest {
         assertEquals(7L * dayMs, todayUtc - fromUtc, "Span must equal exact requested days in milliseconds")
         assertTrue(todayUtc <= unalignedNow, "To timestamp must be floored to start of UTC day")
 
-        repo.deleteUsage(DeleteUsageRequest(from = fromUtc, to = todayUtc)).getOrThrow()
+        repo.deleteUsage(DeleteUsageRequest(from = fromUtc, to = todayUtc), TestGuard()).getOrThrow()
         assertNotNull(receivedDeleteBody)
         val parsed = ProtocolJson.decodeFromString(DeleteUsageRequest.serializer(), receivedDeleteBody!!)
         assertEquals("delete-usage-data", parsed.confirmation)
@@ -255,8 +368,7 @@ class UsageRepositoryAndControllerTest {
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
 
-        val ref = ConnectionRef("dev-profile", 1L)
-        val apiClient = ApiClient(ref, "http://127.0.0.1:$serverPort")
+        val (ref, apiClient) = guardedClient()
         val repo = UsageRepository(apiClient)
         val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
         val controller = UsageController(ref, repo, scope)
@@ -274,14 +386,16 @@ class UsageRepositoryAndControllerTest {
 
             // Attempt 1: Server fails with 500
             var failureNotified: Boolean? = null
-            controller.deleteUsage("delete-usage-data") { success ->
-                failureNotified = success
+            var failureOutcome: SettingsOutcome<Unit>? = null
+            controller.deleteUsage("delete-usage-data", guard = TestGuard()) { outcome ->
+                failureOutcome = outcome
+                failureNotified = outcome is SettingsOutcome.Confirmed
             }
 
-            // Re-entrant call while isDeleting is active must fail closed immediately
+            // Re-entrant call while isDeleting is active must fail closed immediately (nothing submitted)
             var reentrantRejected: Boolean? = null
-            controller.deleteUsage("delete-usage-data") { reentrantSuccess ->
-                reentrantRejected = !reentrantSuccess
+            controller.deleteUsage("delete-usage-data", guard = TestGuard()) { reentrant ->
+                reentrantRejected = reentrant is SettingsOutcome.NotSubmitted
             }
             assertTrue(reentrantRejected == true, "Concurrent deleteUsage must be rejected while isDeleting is true")
 
@@ -291,6 +405,7 @@ class UsageRepositoryAndControllerTest {
             }
 
             assertEquals(false, failureNotified, "Delete callback must report failure")
+            assertTrue(failureOutcome is SettingsOutcome.Unknown, "an admitted 500 is ambiguous, never a retryable failure: $failureOutcome")
             assertFalse(controller.uiState.value.isDeleting, "isDeleting flag must reset to false on failure")
             assertNotNull(controller.uiState.value.deleteError, "deleteError must record failure reason")
             // Non-empty state must be PRESERVED across failure and reloaded
@@ -301,8 +416,8 @@ class UsageRepositoryAndControllerTest {
 
             // Attempt 2: Server succeeds with 204
             var successNotified: Boolean? = null
-            controller.deleteUsage("delete-usage-data") { success ->
-                successNotified = success
+            controller.deleteUsage("delete-usage-data", guard = TestGuard()) { outcome ->
+                successNotified = outcome is SettingsOutcome.Confirmed
             }
             val deadlineSuccess = System.currentTimeMillis() + 3000
             while (successNotified == null && System.currentTimeMillis() < deadlineSuccess) {
@@ -318,3 +433,6 @@ class UsageRepositoryAndControllerTest {
         }
     }
 }
+
+private fun controllerFor(client: ApiClient, ref: ConnectionRef, scope: kotlinx.coroutines.CoroutineScope) =
+    UsageController(ref, UsageRepository(client), scope)

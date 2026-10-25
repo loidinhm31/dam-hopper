@@ -29,6 +29,13 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,11 +51,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.features.workspace.ProjectSummary
 import dev.damhopper.nativeapp.features.workspace.WorkspaceRepository
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import kotlinx.coroutines.CancellationException
+import dev.damhopper.nativeapp.ui.components.TerminalAgentsContext
+import dev.damhopper.nativeapp.ui.components.TerminalAgentsTrigger
 
 /**
  * Mobile screen displaying workspace projects list.
@@ -69,6 +80,8 @@ fun ProjectListScreen(
     onNavigateProfiles: () -> Unit = {},
     onSelectProject: (projectName: String) -> Unit = {},
     onRefresh: (() -> Unit)? = null,
+    headerEntries: HeaderEntries? = null,
+    agents: TerminalAgentsContext? = null,
 ) {
     var refreshTrigger by remember(workspaceRepository) { mutableStateOf(0) }
     var repoProjects by remember(workspaceRepository) { mutableStateOf<List<ProjectSummary>?>(null) }
@@ -113,7 +126,9 @@ fun ProjectListScreen(
             serverUrl = serverUrl,
             isLoading = effectiveLoading,
             onNavigateProfiles = onNavigateProfiles,
-            onRefresh = handleRefresh
+            onRefresh = handleRefresh,
+            headerEntries = headerEntries,
+            agents = agents,
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -210,6 +225,8 @@ private fun ProjectListHeader(
     isLoading: Boolean,
     onNavigateProfiles: () -> Unit,
     onRefresh: () -> Unit,
+    headerEntries: HeaderEntries? = null,
+    agents: TerminalAgentsContext? = null,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -225,23 +242,27 @@ private fun ProjectListHeader(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = profileName?.ifBlank { null } ?: "Connected Workspace",
-                    color = DamHopperColors.TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-
-                if (!serverUrl.isNullOrBlank()) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    ProjectBadge(
-                        text = serverUrl,
-                        textColor = DamHopperColors.TextSecondary,
-                        isMonospace = true
+                Column(modifier = Modifier.weight(1f, fill = false)) {
+                    Text(
+                        text = profileName?.ifBlank { null } ?: "Connected Workspace",
+                        color = DamHopperColors.TextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
+                    if (!serverUrl.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        ProjectBadge(
+                            text = serverUrl,
+                            textColor = DamHopperColors.TextSecondary,
+                            isMonospace = true
+                        )
+                    }
+                }
+
+                headerEntries?.let {
+                    HeaderEntryButtons(it)
                 }
             }
 
@@ -249,30 +270,61 @@ private fun ProjectListHeader(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedButton(
-                    onClick = onNavigateProfiles,
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = DamHopperColors.Primary),
-                    border = BorderStroke(1.dp, DamHopperColors.Border),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text("Profiles / Switch", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Box {
+                    if (agents != null) {
+                        TerminalAgentsTrigger(agents)
+                    }
                 }
 
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Button(
-                    onClick = onRefresh,
-                    enabled = !isLoading,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = DamHopperColors.SurfaceVariant,
-                        contentColor = DamHopperColors.TextPrimary
-                    ),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Refresh", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    OutlinedButton(
+                        onClick = onNavigateProfiles,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = DamHopperColors.Primary),
+                        border = BorderStroke(1.dp, DamHopperColors.Border),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier.height(36.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = null,
+                            tint = DamHopperColors.Primary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Profiles", fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false)
+                    }
+
+                    IconButton(
+                        onClick = onRefresh,
+                        enabled = !isLoading,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(DamHopperColors.SurfaceVariant.copy(alpha = 0.7f))
+                            .border(BorderStroke(1.dp, DamHopperColors.Border), RoundedCornerShape(6.dp))
+                            .semantics { contentDescription = "Refresh" },
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = DamHopperColors.Primary,
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Refresh",
+                                tint = DamHopperColors.TextPrimary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
                 }
             }
         }

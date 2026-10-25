@@ -77,6 +77,19 @@ class FileRepository(
         return ProtocolJson.decodeFromString(ListResponseDto.serializer(), json).entries
     }
 
+    /**
+     * Bounded project-wide language scan (existing GET /api/fs/language-files) for exactly [target]: same
+     * project/worktree query and owner validation as [listDirectory]. The caller fences the result against
+     * its own target/filter/disposal state; a truncated response is explicitly partial.
+     */
+    suspend fun languageFiles(target: ProjectTargetRef): LanguageFilesResponse {
+        assertTargetMatchesOwner(target, "languageFiles")
+        val queryParams = mutableMapOf("project" to target.project)
+        target.worktreePath?.let { queryParams["worktreePath"] = it }
+        val json = apiClient.get("/api/fs/language-files", queryParams)
+        return ProtocolJson.decodeFromString(LanguageFilesResponse.serializer(), json)
+    }
+
     suspend fun stat(target: ProjectTargetRef, relativePath: String): FileStatDto {
         assertTargetMatchesOwner(target, "stat")
         val cleanPath = if (relativePath.isBlank() || relativePath == ".") "." else dev.damhopper.nativeapp.features.workspace.DocumentId.normalizeRelativePath(relativePath)

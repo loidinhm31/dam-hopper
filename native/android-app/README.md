@@ -1,6 +1,6 @@
 # DamHopper Android Native Client (`native/android-app`)
 
-**Status:** The active Android flow supports Profile Login → Project List → Focused Project Workspace (`ProjectWorkspaceScreen` with inline Terminal, Files, and Editor panel switcher). Native code editor integration uses pinned Sora Editor `0.23.4` (LGPL-2.1-or-later) and Java incremental syntax parsing. Phase 08 integrated qualification suites (`NativeEditorExplorerJourneys`, `NativeFileServerFixture`, `run-editor-explorer-journeys.sh`) and LGPL distribution artifacts (`assets/licenses/sora-editor.txt`, `plans/261023-1429-native-editor-file-explorer/distribution-qualification.md`) are established and verified on connected emulator `Medium_Phone_API_36` (16/16 instrumentation tests passing against live loopback server). Physical-device ARM64 and API 29 execution remain explicit qualification release gates.
+**Status:** The active Android flow supports Profile Login → Project List → focused Project Terminal workspace with retained Terminal, Files, and Editor surfaces; the Traditional terminal Agents sidebar is integrated in that workspace. Sora Editor `0.23.4` and Java incremental syntax parsing remain the native editor implementation. Phase 08 editor/explorer journeys were verified on `Medium_Phone_API_36` (16/16 instrumentation tests against a live loopback server); this does not qualify the Agents sidebar's current-server/device journeys, which remain open alongside physical ARM64 and API 29 release gates.
 **Architecture Document:** [Android Native Client Architecture](../../docs/architecture/android-native-client.md)  
 **Acceptance Ledger:** [Android Native Acceptance Ledger](../../docs/android-native-acceptance.md)  
 **Implementation Plan:** [Android Native App Plan](../../plans/261015-1647-android-native-app/plan.md)  
@@ -17,13 +17,13 @@ Unlike `apps/native/` (which hosts the desktop application using Tauri 2 and Web
 
 ## 2. Core Mobile Flow & Navigation Lifecycle
 
-The current app entry point is a guided three-screen flow:
+The current app entry point is a guided three-stage flow: Profile Login → Project List → Project Terminal workspace.
 
 | Stage | Screen | Behavior |
 | --- | --- | --- |
 | `PROFILE_LOGIN` | `ProfileLoginScreen` | Select or add a server profile, test reachability, authenticate (including MFA), or use Dev Login only after a server capability probe confirms development mode. |
 | `PROJECT_LIST` | `ProjectListScreen` | Load workspace projects with loading, error, and empty states; refresh the list or return to Profiles / Switch. Selecting a card sets the project target. |
-| `TERMINAL` | `ProjectTerminalScreen` | List and attach to PTY sessions for the selected project, reconcile replay with live output, and send commands from the inline input field. |
+| `TERMINAL` | `ProjectTerminalScreen` | Show the selected project's retained Traditional terminal and focused Files/Editor surfaces; the terminal toolbar also exposes the Agents sidebar. |
 
 `MainActivity` initializes `ProfileRepository`, creates `AppFlowNavigation`, and installs the platform `BackHandler`. `DamHopperMobileApp` renders the screen selected by `AppFlowState`, which tracks the stage, profile ID, project, and active session. It reconstructs the workspace and terminal repositories when the active profile, server URL, or connection generation changes, clearing the old references before constructing owner-scoped replacements.
 
@@ -31,7 +31,15 @@ Back navigation is hierarchical: Terminal → Project List → Profile Login. At
 
 Leaving Terminal deactivates input and disposes the screen's local terminal controllers, but does not kill or remove the server-owned PTY. Terminal font size is adjustable in-line from 10sp to 32sp (default 13sp, with line height `fontSize + 4`sp) via header controls (`A-`, `${terminalFontSize}sp`, `A+`) or two-finger pinch-to-zoom on the output area, persisted to local `PreferencesStore` and dynamically recalculating VT grid and PTY geometry without disconnecting or restarting the session. The terminal accessory controls are inline: command input with Send, Ctrl+C, Ctrl+D, Tab, Esc, Up, Down, Left, Right, Enter, and Clear. Clear affects only the local display buffer. The hosted screens contain no WebView or floating action button.
 
-The shared module still contains a separate 12-panel `WorkbenchScreen` / `PanelHost` shell. The current `DamHopperMobileApp` root does not mount that shell, so its other panel destinations are not reachable through this three-screen flow. The panel-shell contract below describes that retained subsystem, not the active app navigation.
+The shared module still contains a separate 12-panel `WorkbenchScreen` / `PanelHost` shell. The current `DamHopperMobileApp` root does not mount that shell; its other panel destinations are not reachable through the guided flow. The focused workspace and Traditional terminal Agents sidebar are active root surfaces, not entry points into that dormant shell.
+
+### Traditional terminal Agents sidebar
+
+The Terminal toolbar exposes a discoverable `Agents <count>` trigger. The sidebar pins to the left at 280dp on workspaces at least 600dp wide; narrower layouts use a dismissible modal sheet with a scrim. This terminal-scoped status navigator complements the existing File Tree sidebar used for editor file browsing; it is not a global navigation rail or another panel destination.
+
+The roster observes open, selectable Traditional terminal sessions already retained by registered workspaces on already-attached profile runtimes. It does not connect saved profiles, open new sockets, keep a runtime alive for observation, or replace Agent Store. It groups observed agents by workspace, status, and reason; the multi-select filter covers the seven presented statuses and counts are calculated before filtering. The filter is stored on-device in a dedicated Android preference, not synced with profiles or remote Settings.
+
+Selecting an agent group captures an exact qualified terminal target, checks it against current runtime/inventory metadata, and revalidates after any dirty-editor confirmation. Missing, stale, or contended instances are refused without selecting a replacement; observation availability alone is not task success. Manual navigation does not create notification attention. The sidebar's Settings action opens the retained Settings overlay at **Host administration (HOST) → Agents (AGENTS)** for the current workspace server (independent of the preference-source profile).
 
 ### Physical-device development over Wi-Fi
 
@@ -241,7 +249,7 @@ Phase 07 implements host-contract foundations for remote PTY lifecycle managemen
 3. **Server-Authoritative Agent Status Observation (`AgentStatusReducer`):**
    - Maintains an authoritative `AgentStatusState` coordinating live WebSocket events (`ServerMsg.AgentStatusChanged`, `ServerMsg.AgentStatusRemoved`, `ServerMsg.AgentStatusInvalidated`) with REST snapshots (`/api/agent-status/snapshot`).
    - Fences stale updates using `serverEpoch` and monotonic `revision` ordering. Epoch mismatches trigger a full snapshot reload hoisted outside non-reentrant mutex locks to prevent coroutine deadlocks.
-   - Tracks unread attention events with an in-memory LRU cache (`seenAttentionIds`, max 1,000 entries) to prevent duplicate alerts from replayed history.
+- Admits notification effects only for newly accepted live semantic attention after a silent owner/socket snapshot baseline. The reducer fences epoch, contiguous revision, row identity, and per-row attention revision; gaps, reconnect/reconciliation, replay, snapshots, and invalidation do not create alerts. The old `seenAttentionIds` LRU is not used.
 
 4. **Platform Input Bridging & Bracketed Paste (`TerminalInputController`):**
    - Bridges hardware keyboard events (`KeyEvent`), IME text commits, and clipboard paste to `TerminalSessionController`.
@@ -285,6 +293,22 @@ Phase 16 implements remote network port discovery, Cloudflared tunnel management
    - Diagnostics export (`POST /api/diagnostics/export`) defaulting to `includeTerminalOutput = false` and acknowledging server-daemon memory storage.
    - Single content area docking under `WorkbenchPanel.SSH_HOST` with zero FABs.
 ---
+
+### Active-runtime Settings and notifications (Phase 17 implementation)
+
+`DamHopperMobileApp` keeps Settings as an overlay on the guided Profile Login → Project List → Project Terminal flow; inline header entries expose Settings and the notification feed without mounting the separate 12-panel `WorkbenchScreen`. Returning from Settings restores its captured origin. The overlay retains the editor's dirty text/undo state, file sidebar, and remote PTY while suspending hidden-surface input.
+
+The retained `SettingsRepository` is the single reactive preference source for Settings and active screens. Android-applicable Settings cover independent preference-source and administrative-target selection; local/remote appearance and v2 notification policy; native accessory keyboard and command history; supported shortcuts; agent-path/integration management; usage and idle-suspend controls; global defaults and known workspaces; structured config; and local diagnostics plus bounded SAF TOML import/export. Only the approved Git, Ports, Fleet, and IDE-layout shortcut destinations are unavailable in this focused root. Request-local owner/selection guards reject stale pre-admission work; an admitted but unconfirmed mutation is `Unknown`, not retried or represented as canceled on the server. Reset clears PTYs/runtime state, not saved preferences.
+
+Preference changes update active consumers without replacing their owner state: theme/system text scaling, editor and terminal fonts/zoom, Files/sidebar hidden-file and language-family filtering, terminal scroll/accessory controls and project switching, supported shortcuts, and optional app-local command suggestions. The terminal scroll step is bounded to 1..50 (default 5). Language wire filters are `all`, `rust`, `javascript-typescript`, and `java`; migrated native `known`/`code`/`text` values display a non-equivalent local `all` fallback and are never silently synchronized.
+
+Connection retirement uses the C2a1 awaited barrier: revoke generation N and reserve but withhold N+1 while captured barriers drain and observers run; perform the drain outside the registry lock with cancellation-safe cleanup. Attempt every barrier, aggregate failure, and keep the profile unavailable on failure until one explicit bounded recovery succeeds. Register the retained runtime barrier before watchers/effects; do not allow callbacks to re-enter profile/registry ownership.
+
+Notifications are produced only from newly accepted live OMP or runtime-qualified Claude semantic attention; Codex is status-only. Epoch/revision gaps, snapshots, reconnects, invalidations and replay reconcile silently. History is process-local (50 records), transients are capped at 3, and marking/clearing history never resets reducer admission. Destination clicks use exact owner/terminal identity and guarded navigation; stale/unavailable targets show safe status instead of falling back to another profile.
+
+There are exactly three stable private Android channels: `channel_terminal_attention` (high importance), `channel_transfers` (low), and `channel_idle_suspend` (high). Generic public lock-screen text avoids alert details. API 29 needs no runtime permission; API 33+ requests it only after explicit user action. Foreground app audio uses configured pattern/volume while OS posts are silent; in background the OS channel alone controls sound. No delivery is promised after the process stops.
+
+Main reports 901 passing unit tests (725 `:shared:jvmTest`, 176 `:androidApp:testDebugUnitTest`) and a clean debug APK assembly; those reported results were not rerun for this documentation update. Live MainActivity/server journeys, API 29/API 33+ permission and channel behavior, physical ARM64/IME and visual checks remain open. Final source review reports unresolved readiness/mutation-lifetime and cancellation/audio cleanup findings; passing unit tests do not establish those unexercised paths. See the [Android acceptance ledger](../../docs/android-native-acceptance.md).
 
 ## 4. Verification & Build Commands
 
@@ -361,6 +385,6 @@ bash tests/test-phase-02-foundation.sh && bash tests/test-phase-03-transport.sh
 - **Phase 14:** Agent Store imports and memory *(Implementation baseline recorded; 99/99 static assertions; open limitations recorded)*
 - **Phase 15:** Host resources, fleet, and usage *(Implementation baseline recorded; 81/81 static assertions; qualification open)*
 - **Phase 16:** Ports, tunnels, idle consent, and host controls *(Implementation baseline recorded; 194/194 static assertions in tests/test-phase-16-ports-tunnels-host-controls.sh; dated QA report recorded 417 unit test executions, Cycle 2 review reported 350 unique tests; clean assembleDebug; review score 7/10 changes required / qualification open with 3 High implementation defects and live server/device qualification open; see [Acceptance Ledger](../docs/android-native-acceptance.md))*
-- **Phase 17:** Preferences, privacy, notifications, and lifecycle
+- **Phase 17:** Preferences, privacy, active-runtime notifications, Settings, and reactive consumers *(Implemented; main reports 901 unit tests passing and clean APK assembly; MainActivity/server and physical-device qualification remain open; see [Acceptance Ledger](../docs/android-native-acceptance.md))*
 - **Phase 18:** Integrated device security and performance qualification
-- **Phase 19:** Signed APK release and operational handoff (configured in .github/workflows/release-android.yml)
+- **Phase 19:** Signed APK release and operational handoff (see [.github/workflows/release-android.yml](../../.github/workflows/release-android.yml) and the [Android Release & Signing Setup Guide](../../docs/deployment-guide.md#5-android-native-client-release--github-actions-signing-setup))

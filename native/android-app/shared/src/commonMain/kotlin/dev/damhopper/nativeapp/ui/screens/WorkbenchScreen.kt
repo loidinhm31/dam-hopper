@@ -45,6 +45,10 @@ import dev.damhopper.nativeapp.features.settings.InMemoryPreferencesStore
 import dev.damhopper.nativeapp.features.settings.SettingsRepository
 import dev.damhopper.nativeapp.features.settings.SettingsScreens
 import dev.damhopper.nativeapp.features.settings.PreferencesStore
+import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.transport.RequestAdmissionGuard
+import dev.damhopper.nativeapp.features.settings.SettingsDiagnosticsInput
+import dev.damhopper.nativeapp.features.settings.SettingsScreenServices
 import dev.damhopper.nativeapp.core.notifications.NotificationSink
 import dev.damhopper.nativeapp.ui.components.CognitoOverlay
 import dev.damhopper.nativeapp.features.terminal.AgentKind
@@ -145,8 +149,13 @@ fun WorkbenchScreen(
     profileRepository: ProfileRepository? = null,
     targetStore: ProjectTargetStore = remember { ProjectTargetStore() },
     navigation: WorkbenchNavigation = remember { WorkbenchNavigation() },
-    preferencesStore: PreferencesStore = remember { InMemoryPreferencesStore() },
-    notificationSink: NotificationSink? = null,
+    settingsRepository: SettingsRepository,
+    settingsServices: SettingsScreenServices = SettingsScreenServices(),
+    diagnosticsInput: () -> SettingsDiagnosticsInput,
+    privacyController: PrivacyController = remember { PrivacyController() },
+    agentReducerFor: (ConnectionRef) -> AgentStatusReducer? = { null },
+    onAgentStatusRefresh: suspend (ConnectionRef) -> Unit = {},
+    invalidateRuntime: suspend (ConnectionRef) -> Unit = {},
     lifecycleCoordinator: LifecycleCoordinator = remember { LifecycleCoordinator() },
     modifier: Modifier = Modifier,
 ) {
@@ -168,9 +177,24 @@ fun WorkbenchScreen(
 
     var isSwitchingWorkspace by remember { mutableStateOf(false) }
     var workspaceRepo by remember { mutableStateOf<WorkspaceRepository?>(null) }
-    var configEditor by remember { mutableStateOf<RemoteConfigEditor?>(null) }
     var terminalRepo by remember { mutableStateOf<TerminalRepository?>(null) }
-    var agentReducer by remember { mutableStateOf<AgentStatusReducer?>(null) }
+    val allConnections by profileRepository?.registry?.connectionsState?.collectAsState() ?: remember { mutableStateOf(emptyMap()) }
+    // The retained owner's reducer for the active runtime (its single collector); Workbench never produces events.
+    val agentReducer: AgentStatusReducer? = activeProfileId?.let { allConnections[it] }?.let(agentReducerFor)
+
+    /** Runtime-only agent mutation: runtime readiness is revoked (awaited) first, then the request uses an explicit owner guard. */
+    suspend fun runAgentMutation(block: suspend (TerminalRepository, RequestAdmissionGuard) -> Unit) {
+        val repo = terminalRepo ?: return
+        val owner = repo.apiClient.connection
+        try {
+            invalidateRuntime(owner)
+            block(repo, RuntimeOwnerGuard(owner))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+        }
+        onAgentStatusRefresh(owner)
+    }
     val cryptoSessionManager = remember { dev.damhopper.nativeapp.core.security.CryptoSessionManager() }
     val terminalControllers = remember { mutableMapOf<String, TerminalSessionController>() }
     val terminalAttachQueues = remember { mutableMapOf<TerminalSessionController, TerminalAttachQueue>() }
@@ -187,7 +211,6 @@ fun WorkbenchScreen(
     }
     var sessionCounter by remember { mutableStateOf(1) }
     var settingsTab by remember { mutableStateOf(0) } // 0: Profiles, 1: Remote Config
-    val privacyController = remember { PrivacyController() }
     var activeApiClient by remember { mutableStateOf<ApiClient?>(null) }
     var fileRepo by remember { mutableStateOf<FileRepository?>(null) }
     var fileTreeState by remember { mutableStateOf<FileTreeState?>(null) }
@@ -208,12 +231,6 @@ fun WorkbenchScreen(
             map
         }
     )
-    val settingsRepository = remember(preferencesStore) {
-        SettingsRepository(
-            preferencesStore = preferencesStore,
-            clientProvider = { profileId -> currentClientMap[profileId] }
-        )
-    }
     var editorTabsState by remember { mutableStateOf<EditorTabsState?>(null) }
     var editorRepo by remember { mutableStateOf<EditorRepository?>(null) }
     var diffController by remember { mutableStateOf<DiffReviewController?>(null) }
@@ -279,17 +296,12 @@ fun WorkbenchScreen(
             try {
                 val client = profileRepository.getOrCreateApiClient(activeProfileId!!)
                 val wRepo = WorkspaceRepository(client, targetStore)
-                val cRepo = RemoteConfigRepository(client)
-                val cEditor = RemoteConfigEditor(cRepo)
                 val ws = try { profileRepository.getOrCreateWsConnection(activeProfileId!!) } catch (_: Exception) { null }
                 activeWsConnection = ws
                 val tRepo = TerminalRepository(client, ws)
-                val aReducer = AgentStatusReducer(tRepo)
                 workspaceRepo = wRepo
-                configEditor = cEditor
                 terminalRepo = tRepo
                 activeApiClient = client
-                agentReducer = aReducer
                 val fRepo = if (ws != null) FileRepository(client, ws, coroutineScope) else null
                 fileRepo = fRepo
                 editorTabsState?.closeAll()
@@ -457,13 +469,10 @@ fun WorkbenchScreen(
                 val kw = try { wRepo.listKnownWorkspaces() } catch (_: Exception) { null }
                 knownWorkspaces = kw?.workspaces ?: emptyList()
 
-                try { cEditor.load() } catch (_: Exception) {}
             } catch (_: Exception) {}
         } else {
             workspaceRepo = null
-            configEditor = null
             terminalRepo = null
-            agentReducer = null
             workspaceStatus = null
             projects = emptyList()
             currentWorktrees = emptyList()
@@ -659,11 +668,6 @@ fun WorkbenchScreen(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (_: Exception) {}
-        try {
-            agentReducer?.reloadSnapshot()
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (_: Exception) {}
     }
 
     // Listen to WebSocket events from TerminalRepository
@@ -717,21 +721,6 @@ fun WorkbenchScreen(
                     msg.restartCount,
                     msg.previousExitCode
                 )
-            }
-        }
-        launch {
-            repo.agentStatusChanged.collect { msg ->
-                agentReducer?.applyStatusChanged(msg)
-            }
-        }
-        launch {
-            repo.agentStatusRemoved.collect { msg ->
-                agentReducer?.applyStatusRemoved(msg)
-            }
-        }
-        launch {
-            repo.agentStatusInvalidated.collect { msg ->
-                agentReducer?.applyStatusInvalidated(msg)
             }
         }
         terminalListenersRepo = repo
@@ -930,7 +919,6 @@ fun WorkbenchScreen(
                 privacyController.reset()
             }
             override fun onOwnerRetired(profileId: String) {
-                notificationSink?.cancelNotificationsForProfile(profileId)
                 settingsRepository.onProfileRemoved(profileId)
                 val toRemove = terminalControllers.keys.filter { it.startsWith("$profileId:") }
                 toRemove.forEach { key ->
@@ -1103,7 +1091,14 @@ fun WorkbenchScreen(
                         },
                         onAddWorkspace = { path, name ->
                             coroutineScope.launch {
-                                workspaceRepo?.addKnownWorkspace(path, name)
+                                workspaceRepo?.let { repo ->
+                                    try {
+                                        repo.addKnownWorkspace(path, name, RuntimeOwnerGuard(repo.apiClient.connection))
+                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                    }
+                                }
                                 val kw = workspaceRepo?.listKnownWorkspaces()
                                 knownWorkspaces = kw?.workspaces ?: emptyList()
                             }
@@ -1301,32 +1296,20 @@ fun WorkbenchScreen(
                                     },
                                     onRefreshObservation = {
                                         coroutineScope.launch {
-                                            agentReducer?.reloadSnapshot()
+                                            terminalRepo?.apiClient?.connection?.let { onAgentStatusRefresh(it) }
                                         }
                                     },
                                     onInstallOmp = {
-                                        coroutineScope.launch {
-                                            try { terminalRepo?.installOmpExtension() } catch (_: Exception) {}
-                                            agentReducer?.reloadSnapshot()
-                                        }
+                                        coroutineScope.launch { runAgentMutation { repo, guard -> repo.installOmpExtension(guard = guard) } }
                                     },
                                     onUninstallOmp = {
-                                        coroutineScope.launch {
-                                            try { terminalRepo?.uninstallOmpExtension() } catch (_: Exception) {}
-                                            agentReducer?.reloadSnapshot()
-                                        }
+                                        coroutineScope.launch { runAgentMutation { repo, guard -> repo.uninstallOmpExtension(guard = guard) } }
                                     },
                                     onInstallNative = { agent ->
-                                        coroutineScope.launch {
-                                            try { terminalRepo?.installNativeIntegration(agent) } catch (_: Exception) {}
-                                            agentReducer?.reloadSnapshot()
-                                        }
+                                        coroutineScope.launch { runAgentMutation { repo, guard -> repo.installNativeIntegration(agent, guard = guard) } }
                                     },
                                     onUninstallNative = { agent ->
-                                        coroutineScope.launch {
-                                            try { terminalRepo?.uninstallNativeIntegration(agent) } catch (_: Exception) {}
-                                            agentReducer?.reloadSnapshot()
-                                        }
+                                        coroutineScope.launch { runAgentMutation { repo, guard -> repo.uninstallNativeIntegration(agent, guard = guard) } }
                                     },
                                     onActiveSubProductChanged = { agentsActiveSubProduct = it }
                                 )
@@ -1341,32 +1324,20 @@ fun WorkbenchScreen(
                                     },
                                     onRefresh = {
                                         coroutineScope.launch {
-                                            agentReducer?.reloadSnapshot()
+                                            terminalRepo?.apiClient?.connection?.let { onAgentStatusRefresh(it) }
                                         }
                                     },
                                     onInstallOmp = {
-                                        coroutineScope.launch {
-                                            try { terminalRepo?.installOmpExtension() } catch (_: Exception) {}
-                                            agentReducer?.reloadSnapshot()
-                                        }
+                                        coroutineScope.launch { runAgentMutation { repo, guard -> repo.installOmpExtension(guard = guard) } }
                                     },
                                     onUninstallOmp = {
-                                        coroutineScope.launch {
-                                            try { terminalRepo?.uninstallOmpExtension() } catch (_: Exception) {}
-                                            agentReducer?.reloadSnapshot()
-                                        }
+                                        coroutineScope.launch { runAgentMutation { repo, guard -> repo.uninstallOmpExtension(guard = guard) } }
                                     },
                                     onInstallNative = { agent ->
-                                        coroutineScope.launch {
-                                            try { terminalRepo?.installNativeIntegration(agent) } catch (_: Exception) {}
-                                            agentReducer?.reloadSnapshot()
-                                        }
+                                        coroutineScope.launch { runAgentMutation { repo, guard -> repo.installNativeIntegration(agent, guard = guard) } }
                                     },
                                     onUninstallNative = { agent ->
-                                        coroutineScope.launch {
-                                            try { terminalRepo?.uninstallNativeIntegration(agent) } catch (_: Exception) {}
-                                            agentReducer?.reloadSnapshot()
-                                        }
+                                        coroutineScope.launch { runAgentMutation { repo, guard -> repo.uninstallNativeIntegration(agent, guard = guard) } }
                                     }
                                 )
                             } else {
@@ -1476,12 +1447,19 @@ fun WorkbenchScreen(
                             SettingsScreens(
                                 settingsRepository = settingsRepository,
                                 privacyController = privacyController,
+                                services = settingsServices,
+                                // Dirty documents block a destructive reset instead of being discarded.
+                                departureGuard = { editorTabsState?.tabs?.value?.none { it.isDirty } ?: true },
+                                diagnosticsInput = diagnosticsInput,
+                                onTargetRevalidated = {},
+                                onResetConfirmed = { id ->
+                                    // Only a confirmed reset of the still-current server returns to workspace selection.
+                                    if (id == activeProfileId) navigation.openWorkspaceSwitcher()
+                                },
                                 availableProfiles = profiles,
                                 activeProfileId = activeProfileId,
                                 profileRepository = profileRepository,
                                 authStatuses = authStatuses,
-                                remoteConfigEditor = configEditor,
-                                notificationSink = notificationSink,
                                 onNavigateBack = { navigation.navigateTo(WorkbenchPanel.TERMINAL) },
                                 onOpenAuth = { id -> navigation.openAuth(id) },
                             )
@@ -1566,9 +1544,44 @@ private fun SleepConsentBannerHost(
             isSubmitting = isSubmittingConsent,
             onDecision = { decision ->
                 coroutineScope.launch {
-                    controller.submitConsent(decision)
+                    // Runtime-only consent: an explicit guard for exactly this controller's owner, never the Settings target.
+                    controller.submitConsent(decision, RuntimeOwnerGuard(controller.connection))
                 }
             }
         )
+    }
+}
+
+/**
+ * Explicit single-use admission for RUNTIME (non-Settings) mutations of this dormant shell: bound to exactly one
+ * [ConnectionRef] and admitted only inside the registry's `admitCurrentOwner` commit, so a pending/failed
+ * retirement or a replaced owner is rejected (NotSubmitted) and a Settings target is never consulted.
+ */
+internal class RuntimeOwnerGuard(private val owner: ConnectionRef) : RequestAdmissionGuard {
+    private val state = kotlinx.coroutines.flow.MutableStateFlow(dev.damhopper.nativeapp.core.transport.RequestAdmissionState.PENDING)
+    override val admission: kotlinx.coroutines.flow.StateFlow<dev.damhopper.nativeapp.core.transport.RequestAdmissionState> =
+        state
+
+    override suspend fun admit(
+        registry: dev.damhopper.nativeapp.core.ownership.ConnectionRegistry?,
+        connection: ConnectionRef,
+    ): Boolean {
+        val pending = dev.damhopper.nativeapp.core.transport.RequestAdmissionState.PENDING
+        val rejected = dev.damhopper.nativeapp.core.transport.RequestAdmissionState.REJECTED
+        val admittedState = dev.damhopper.nativeapp.core.transport.RequestAdmissionState.ADMITTED
+        if (registry == null || connection != owner) {
+            state.compareAndSet(pending, rejected)
+            return false
+        }
+        var committed = false
+        val admitted = registry.admitCurrentOwner(connection) {
+            committed = state.compareAndSet(pending, admittedState)
+            committed
+        }
+        if (!admitted || !committed) {
+            state.compareAndSet(pending, rejected)
+            return false
+        }
+        return true
     }
 }

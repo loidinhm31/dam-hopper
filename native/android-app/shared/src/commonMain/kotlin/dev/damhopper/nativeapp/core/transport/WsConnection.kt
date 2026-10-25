@@ -32,6 +32,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 
+/**
+ * Result of [WsConnection.tryAdmitCurrentSocket]: [BUSY] means the lifecycle gate was contended (never waited on),
+ * [STALE] means the expected socket is no longer the connected one or the commit declined.
+ */
+enum class WsSocketAdmission { COMMITTED, BUSY, STALE }
+
 
 /**
  * Live WebSocket client bound to a single ConnectionRef and socket instance lifecycle.
@@ -65,6 +71,26 @@ open class WsConnection(
     open val socketBoundMessages: SharedFlow<SocketBoundMessage> = _socketBoundMessages.asSharedFlow()
 
     open fun activeSocketRef(): SocketInstanceRef? = activeSocketRef
+
+    /**
+     * Non-suspending admission step of a manual terminal route: `tryLock`s the existing lifecycle mutex only
+     * (BUSY when contended, including same-coroutine reentry - the mutex is non-reentrant), then compares the private
+     * active socket and the Connected state of THIS captured object with [expected] (STALE when unequal) and runs
+     * [commit], the one known next admission step. The mutex is released in `finally`. [commit] must not suspend,
+     * connect/close this connection or run unknown callbacks; a false result commits nothing (STALE).
+     */
+    fun tryAdmitCurrentSocket(expected: SocketInstanceRef, commit: () -> Boolean): WsSocketAdmission {
+        if (!lifecycleMutex.tryLock()) return WsSocketAdmission.BUSY
+        try {
+            val connected = _state.value as? WsState.Connected
+            if (activeSocketRef != expected || connected == null || connected.socketRef != expected) {
+                return WsSocketAdmission.STALE
+            }
+            return if (commit()) WsSocketAdmission.COMMITTED else WsSocketAdmission.STALE
+        } finally {
+            lifecycleMutex.unlock()
+        }
+    }
 
 
     private val correlator = WsRequestCorrelator()

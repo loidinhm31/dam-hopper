@@ -12,6 +12,18 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import dev.damhopper.nativeapp.core.ownership.ConnectionRegistry
+import dev.damhopper.nativeapp.core.transport.RequestAdmissionState
+import dev.damhopper.nativeapp.core.transport.RequestNotSubmittedError
+import dev.damhopper.nativeapp.features.settings.TestGuard
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.test.assertFailsWith
 
 class WorkspaceRepositoryTest {
 
@@ -146,40 +158,107 @@ class WorkspaceRepositoryTest {
     }
 
     @Test
-    fun testKnownWorkspacesCrud() = runTest {
+    fun testKnownWorkspacesCrudSendsExactPayloadsThroughGuards() = runBlocking {
+        val posts = CopyOnWriteArrayList<String>()
+        val deletes = CopyOnWriteArrayList<String>()
         server!!.createContext("/api/workspace/known") { exchange ->
-            val method = exchange.requestMethod
-            when (method) {
+            when (exchange.requestMethod) {
                 "GET" -> {
                     val json = """{"workspaces":[{"path":"/ws/a","name":"Alpha"},{"path":"/ws/b","name":"Beta"}],"current":"/ws/a"}"""
                     exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
                     exchange.responseBody.use { it.write(json.toByteArray()) }
                 }
                 "POST" -> {
+                    posts += exchange.requestBody.bufferedReader().readText()
                     val json = """{"ok":true}"""
                     exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
                     exchange.responseBody.use { it.write(json.toByteArray()) }
                 }
                 "DELETE" -> {
-                    val body = exchange.requestBody.bufferedReader().readText()
-                    assertTrue(body.contains("/ws/b"))
+                    deletes += exchange.requestBody.bufferedReader().readText()
                     val json = """{"ok":true}"""
                     exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
                     exchange.responseBody.use { it.write(json.toByteArray()) }
                 }
-                else -> exchange.sendResponseHeaders(405, 0)
+                else -> exchange.sendResponseHeaders(405, -1)
             }
         }
 
-        val repo = createRepository()
+        val (repo, _) = createGuardedRepository()
         val list = repo.listKnownWorkspaces()
         assertEquals(2, list.workspaces.size)
         assertEquals("/ws/a", list.current)
 
-        val addOk = repo.addKnownWorkspace("/ws/c", "Gamma")
-        assertTrue(addOk)
+        assertTrue(repo.addKnownWorkspace("/ws/c", "Gamma", TestGuard()))
+        assertTrue(repo.addKnownWorkspace("/ws/d", guard = TestGuard()))
+        assertEquals(listOf("""{"path":"/ws/c","name":"Gamma"}""", """{"path":"/ws/d"}"""), posts.toList())
 
-        val delOk = repo.removeKnownWorkspace("/ws/b")
-        assertTrue(delOk)
+        assertTrue(repo.removeKnownWorkspace("/ws/b", TestGuard()))
+        assertEquals(listOf("""{"path":"/ws/b"}"""), deletes.toList())
+    }
+
+    @Test
+    fun testKnownWorkspaceFalseOkIsNotConfirmed() = runBlocking {
+        server!!.createContext("/api/workspace/known") { exchange ->
+            exchange.requestBody.readBytes()
+            val json = """{"ok":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        val (repo, _) = createGuardedRepository()
+        assertFalse(repo.addKnownWorkspace("/ws/x", guard = TestGuard()))
+        assertFalse(repo.removeKnownWorkspace("/ws/x", TestGuard()))
+    }
+
+    @Test
+    fun testSuspendedCredentialsThenRetirementSendsNothingAndGuardIsRejected() = runBlocking {
+        val hits = AtomicInteger()
+        server!!.createContext("/api/workspace/known") { exchange ->
+            hits.incrementAndGet()
+            exchange.requestBody.readBytes()
+            exchange.sendResponseHeaders(200, -1)
+            exchange.close()
+        }
+        val registry = ConnectionRegistry()
+        val ref = registry.getOrCreateConnection("test-profile")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val client = ApiClient(ref, "http://127.0.0.1:$serverPort", { entered.complete(Unit); release.await(); "t" }, registry)
+        val repo = WorkspaceRepository(client)
+        val guard = TestGuard()
+
+        val call = async(Dispatchers.IO) { runCatching { repo.addKnownWorkspace("/ws/z", guard = guard) } }
+        withTimeout(10_000) { entered.await() }
+        registry.retireConnection(ref)
+        release.complete(Unit)
+
+        assertTrue(withTimeout(10_000) { call.await() }.exceptionOrNull() is RequestNotSubmittedError)
+        assertEquals(0, hits.get())
+        assertEquals(RequestAdmissionState.REJECTED, guard.admission.value)
+    }
+
+    @Test
+    fun testReusedGuardCannotAuthorizeASecondMutation() = runBlocking {
+        val hits = AtomicInteger()
+        server!!.createContext("/api/workspace/known") { exchange ->
+            hits.incrementAndGet()
+            exchange.requestBody.readBytes()
+            val json = """{"ok":true}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        val (repo, _) = createGuardedRepository()
+        val guard = TestGuard()
+        assertTrue(repo.addKnownWorkspace("/ws/1", guard = guard))
+        assertFailsWith<RequestNotSubmittedError> { repo.removeKnownWorkspace("/ws/1", guard) }
+        assertEquals(1, hits.get())
+        assertEquals(RequestAdmissionState.ADMITTED, guard.admission.value)
+    }
+
+    private fun createGuardedRepository(): Pair<WorkspaceRepository, ConnectionRegistry> {
+        val registry = ConnectionRegistry()
+        val ref = runBlocking { registry.getOrCreateConnection("test-profile") }
+        val client = ApiClient(ref, "http://127.0.0.1:$serverPort", { "test-token" }, registry)
+        return WorkspaceRepository(client) to registry
     }
 }

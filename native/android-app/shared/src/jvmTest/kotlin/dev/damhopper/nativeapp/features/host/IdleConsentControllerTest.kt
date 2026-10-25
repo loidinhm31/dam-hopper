@@ -7,6 +7,9 @@ import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.core.transport.ServerMsg
 import dev.damhopper.nativeapp.core.transport.UiConnectionReceipt
 import kotlinx.coroutines.test.runTest
+import dev.damhopper.nativeapp.core.ownership.ConnectionRegistry
+import dev.damhopper.nativeapp.features.settings.SettingsOutcome
+import dev.damhopper.nativeapp.features.settings.TestGuard
 import java.net.InetSocketAddress
 import kotlin.test.*
 
@@ -93,55 +96,6 @@ class IdleConsentControllerTest {
     }
 
     @Test
-    fun testUpdateTimingBoundsAndConflict() = runTest {
-        server!!.createContext("/api/system/idle-suspend/v1/timing") { exchange ->
-            if (exchange.requestHeaders.getFirst("X-Simulate-Conflict") == "1") {
-                exchange.responseHeaders.set("Content-Type", "application/json")
-                exchange.sendResponseHeaders(409, 0)
-                exchange.responseBody.bufferedWriter().use { writer ->
-                    writer.write("""{"code": "idleSuspendHandoffInProgress", "error": "Handoff in progress"}""")
-                    writer.flush()
-                }
-            } else {
-                exchange.responseHeaders.set("Content-Type", "application/json")
-                exchange.sendResponseHeaders(200, 0)
-                exchange.responseBody.bufferedWriter().use { writer ->
-                    writer.write("""
-                        {
-                            "version": 1,
-                            "changed": true,
-                            "statusRevision": 13,
-                            "quietPeriodSeconds": 120,
-                            "wakeAfterSeconds": 300
-                        }
-                    """.trimIndent())
-                    writer.flush()
-                }
-            }
-        }
-
-        val ref = ConnectionRef("dev-profile", 1L)
-        val apiClient = ApiClient(ref, "http://127.0.0.1:$serverPort")
-        val repo = IdleSuspendRepository(apiClient)
-
-        // Lower bound violation: < 60 rejected locally
-        assertFailsWith<IllegalArgumentException> {
-            repo.updateTiming(59, 300).getOrThrow()
-        }
-
-        // Upper bound violation: > 86400 rejected locally
-        assertFailsWith<IllegalArgumentException> {
-            repo.updateTiming(300, 90000).getOrThrow()
-        }
-
-        // Valid bounds success
-        val successRes = repo.updateTiming(120, 300).getOrThrow()
-        assertEquals(13L, successRes.statusRevision)
-        assertEquals(120, successRes.quietPeriodSeconds)
-        assertEquals(300, successRes.wakeAfterSeconds)
-    }
-
-    @Test
     fun testForceSuspendNonRetryingConflicts() = runTest {
         var callCount = 0
         server!!.createContext("/api/system/idle-suspend/v1/force-suspend") { exchange ->
@@ -225,8 +179,9 @@ class IdleConsentControllerTest {
             }
         }
 
-        val ref = ConnectionRef("dev-profile", 1L)
-        val apiClient = ApiClient(ref, "http://127.0.0.1:$serverPort")
+        val registry = ConnectionRegistry()
+        val ref = registry.getOrCreateConnection("dev-profile")
+        val apiClient = ApiClient(ref, "http://127.0.0.1:$serverPort", { "token" }, registry)
         val repo = IdleSuspendRepository(apiClient)
         val controller = IdleConsentController(
             connection = ref,
@@ -234,8 +189,11 @@ class IdleConsentControllerTest {
             receiptProvider = { null }
         )
 
-        // 1. Success 202 Accepted
-        val admission = controller.requestForceSuspend(wakeAfterSeconds = 0, force = false).getOrThrow()
+        // The controller needs the latest status (bounds/capability) before it will submit anything.
+        controller.refreshStatus().getOrThrow()
+        val outcome = controller.requestForceSuspend(wakeAfterSeconds = 0, force = false, guard = TestGuard())
+        assertTrue(outcome is SettingsOutcome.Confirmed, outcome.toString())
+        val admission = (outcome as SettingsOutcome.Confirmed).value
         assertEquals("req-123", admission.requestId)
         assertEquals("handedOff", admission.state)
         assertEquals(1, callCount)
@@ -302,8 +260,9 @@ class IdleConsentControllerTest {
 
         var liveReceipt: UiConnectionReceipt? = null
 
-        val ref = ConnectionRef("dev-profile", 1L)
-        val apiClient = ApiClient(ref, "http://127.0.0.1:$serverPort")
+        val registry = ConnectionRegistry()
+        val ref = registry.getOrCreateConnection("dev-profile")
+        val apiClient = ApiClient(ref, "http://127.0.0.1:$serverPort", { "token" }, registry)
         val repo = IdleSuspendRepository(apiClient)
         val controller = IdleConsentController(
             connection = ref,
@@ -319,9 +278,9 @@ class IdleConsentControllerTest {
         assertEquals(SleepConsentState.PENDING, pending.state)
 
         // 2. Submit consent when live receipt is null -> MUST FAIL CLOSED
-        val failResult = controller.submitConsent(SleepConsentDecision.APPROVE)
-        assertTrue(failResult.isFailure)
-        assertTrue(failResult.exceptionOrNull()?.message?.contains("live WebSocket capability receipt not available") == true)
+        val failResult = controller.submitConsent(SleepConsentDecision.APPROVE, TestGuard())
+        assertTrue(failResult is SettingsOutcome.NotSubmitted)
+        assertTrue((failResult as SettingsOutcome.NotSubmitted).reason.contains("live WebSocket capability receipt not available"))
 
         // 3. Provide live receipt -> MUST SUCCEED with capability submitted
         val sockRef = SocketInstanceRef(ref, "socket-101")
@@ -332,8 +291,8 @@ class IdleConsentControllerTest {
             decisionCapability = "secret-token-xyz"
         )
 
-        val successResult = controller.submitConsent(SleepConsentDecision.APPROVE)
-        assertTrue(successResult.isSuccess)
+        val successResult = controller.submitConsent(SleepConsentDecision.APPROVE, TestGuard())
+        assertTrue(successResult is SettingsOutcome.Confirmed, successResult.toString())
         assertEquals("consent-uuid-1", submittedRequestId)
         assertEquals("secret-token-xyz", submittedCapability)
         assertEquals("approve", submittedDecision)

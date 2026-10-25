@@ -2,98 +2,102 @@ package dev.damhopper.nativeapp
 
 import dev.damhopper.nativeapp.core.lifecycle.LifecycleCoordinator
 import dev.damhopper.nativeapp.core.lifecycle.LifecycleState
-import dev.damhopper.nativeapp.core.notifications.NotificationChannelId
 import dev.damhopper.nativeapp.core.security.PrivacyController
+import dev.damhopper.nativeapp.features.settings.CognitoModeStyle
+import dev.damhopper.nativeapp.features.settings.ExplorerLanguageFilter
 import dev.damhopper.nativeapp.features.settings.MAX_CONFIG_IMPORT_BYTES
+import dev.damhopper.nativeapp.features.settings.NativePreferencesEnvelope
+import dev.damhopper.nativeapp.features.settings.SettingsImportDecode
 import dev.damhopper.nativeapp.features.settings.WorkbenchPreferences
-import dev.damhopper.nativeapp.model.WorkbenchPanel
-import dev.damhopper.nativeapp.platform.notifications.AndroidNotificationSink
-import dev.damhopper.nativeapp.platform.storage.AndroidPreferencesStore
-import dev.damhopper.nativeapp.ui.navigation.PanelRegistry
-import java.io.File
+import dev.damhopper.nativeapp.features.settings.decodeNativePreferences
+import dev.damhopper.nativeapp.features.settings.decodeSettingsImportResponse
+import dev.damhopper.nativeapp.features.settings.encodeNativePreferences
+import dev.damhopper.nativeapp.features.settings.InMemoryPreferencesStore
+import dev.damhopper.nativeapp.features.settings.PreferenceSourceStatus
+import dev.damhopper.nativeapp.features.settings.SettingsBinding
+import dev.damhopper.nativeapp.features.settings.SettingsOwnerResolver
+import dev.damhopper.nativeapp.features.settings.SettingsRepository
+import dev.damhopper.nativeapp.features.settings.SettingsSourceTargetState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+/**
+ * Behavior and boundary regressions of the persistence/privacy logic the Android store delegates to. These tests
+ * intentionally do not pin labels, channel ids, keys or source fragments.
+ */
 class SettingsPreferencesPhase17Test {
 
     @Test
-    fun testSettingsPanelRegisteredInAuthoritativeRegistry() {
-        val settingsDesc = PanelRegistry.get(WorkbenchPanel.SETTINGS)
-        assertEquals("Settings", settingsDesc.label)
-        assertEquals("SET", settingsDesc.shortCode)
-    }
-
-    @Test
-    fun testZeroFloatingActionButtonsInSettingsAndPrivacyUi() {
-        val settingsDir = File("../shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings")
-        assertTrue(settingsDir.exists(), "Settings features directory must exist")
-
-        val ktFiles = settingsDir.walk().filter { it.extension == "kt" }.toList()
-        assertTrue(ktFiles.isNotEmpty())
-
-        ktFiles.forEach { file ->
-            val text = file.readText()
-            assertFalse(
-                text.contains("FloatingActionButton") || text.contains("ExtendedFloatingActionButton"),
-                "File ${file.name} violates NAV01 invariant: zero FABs permitted in settings and preferences panels"
-            )
-        }
-    }
-
-    @Test
-    fun testZeroWebViewOrBrowserEngineInSettingsAndPrivacyUi() {
-        val settingsDir = File("../shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/settings")
-        val ktFiles = settingsDir.walk().filter { it.extension == "kt" }.toList()
-
-        ktFiles.forEach { file ->
-            val text = file.readText()
-            assertFalse(
-                text.contains("android.webkit.WebView") || text.contains("WebKit"),
-                "File ${file.name} violates B01/B02 invariant: zero WebView or browser engine permitted"
-            )
-        }
-    }
-
-    @Test
-    fun testEphemeralMemoryOnlyCognitoState() {
+    fun cognitoActivationIsMemoryOnlyAndNeverReachesPersistedPreferences() {
         val privacy = PrivacyController()
         assertFalse(privacy.isMaskActive.value)
         assertNull(privacy.activationChord.value)
 
-        // SharedPreferences store must not contain Cognito activation state
-        val androidStoreClass = AndroidPreferencesStore::class.java
-        val fieldNames = androidStoreClass.declaredFields.map { it.name }
-        assertFalse(fieldNames.any { it.contains("COGNITO_ACTIVE", ignoreCase = true) })
+        privacy.activate("mod+alt+keyb", CognitoModeStyle.BLACK_SCREEN)
+        assertTrue(privacy.isMaskActive.value)
 
-        // WorkbenchPreferences must only store shortcut and style, never active state
-        val prefProps = WorkbenchPreferences::class.java.declaredFields.map { it.name }
-        assertTrue(prefProps.contains("cognitoModeShortcut"))
-        assertTrue(prefProps.contains("cognitoModeStyle"))
-        assertFalse(prefProps.contains("isCognitoActive") || prefProps.contains("cognitoActive"))
+        val persisted = encodeNativePreferences(
+            NativePreferencesEnvelope(preferences = WorkbenchPreferences(cognitoModeStyle = CognitoModeStyle.BLACK_SCREEN)),
+        )
+        // The style/shortcut preference persists; the activation state does not exist in the stored shape.
+        val decoded = decodeNativePreferences(persisted).getOrThrow()
+        assertEquals(CognitoModeStyle.BLACK_SCREEN, decoded.preferences.cognitoModeStyle)
+        assertFalse(persisted.contains("MaskActive", ignoreCase = true))
+
+        privacy.deactivate()
+        assertFalse(privacy.isMaskActive.value)
+        assertNull(privacy.activationChord.value)
     }
 
     @Test
-    fun testMaxConfigImportBytesCeiling() {
-        assertEquals(1024L * 1024L, MAX_CONFIG_IMPORT_BYTES, "Config import ceiling must be exactly 1 MiB")
+    fun legacyUnversionedBytesMigrateToTheV2ShapeWithoutInventingEnabledAlerts() {
+        val legacy = """
+            {"theme":"dark","explorerLanguageFilter":"known","terminalScrollStep":20,
+             "terminalAgentNotifications":{"masterEnabled":false,"omp":{"enabled":true,"toast":true,"browser":true,"sound":true}}}
+        """.trimIndent()
+        val migrated = decodeNativePreferences(legacy).getOrThrow()
+        assertEquals(2, migrated.nativeVersion)
+        // `known` has no wire equivalent: local All fallback, original value kept as recovery metadata.
+        assertEquals(ExplorerLanguageFilter.ALL, migrated.preferences.explorerLanguageFilter)
+        assertEquals("known", migrated.legacyExplorerLanguageFilter)
+        // masterEnabled=false never becomes an enabled agent; browser/sound flags are preserved.
+        val omp = migrated.preferences.terminalAgentNotifications.agents.omp
+        assertFalse(omp.enabled)
+        assertTrue(omp.browser && omp.sound)
+        assertEquals(20, migrated.preferences.terminalScrollStep, "existing scroll step is preserved")
+
+        // Re-encoding and decoding the migrated value is stable (idempotent migration).
+        val again = decodeNativePreferences(encodeNativePreferences(migrated)).getOrThrow()
+        assertEquals(migrated, again)
     }
 
     @Test
-    fun testNotificationChannelsAndDeepLinkKeys() {
-        assertEquals("channel_terminal_attention", NotificationChannelId.TERMINAL_ATTENTION.id)
-        assertEquals("channel_transfers", NotificationChannelId.TRANSFERS.id)
-        assertEquals("channel_idle_suspend", NotificationChannelId.IDLE_SUSPEND.id)
-
-        assertEquals("dev.damhopper.target_profile_id", AndroidNotificationSink.EXTRA_TARGET_PROFILE_ID)
-        assertEquals("dev.damhopper.target_generation", AndroidNotificationSink.EXTRA_TARGET_GENERATION)
-        assertEquals("dev.damhopper.target_terminal_id", AndroidNotificationSink.EXTRA_TARGET_TERMINAL_ID)
-        assertEquals("dev.damhopper.target_incarnation", AndroidNotificationSink.EXTRA_TARGET_INCARNATION)
+    fun corruptOrUnknownBytesFailInsteadOfBecomingDefaults() {
+        assertTrue(decodeNativePreferences("{not json").isFailure)
+        assertTrue(decodeNativePreferences("""{"nativeVersion":3,"preferences":{}}""").isFailure)
+        assertTrue(decodeNativePreferences("""{"explorerLanguageFilter":"cobol"}""").isFailure)
     }
 
     @Test
-    fun testLifecycleTransitions() {
+    fun importCeilingAndAuthoritativeResponseBoundary() {
+        assertEquals(1024L * 1024L, MAX_CONFIG_IMPORT_BYTES)
+        // The obsolete `ok` discriminator can never confirm an import.
+        assertTrue(decodeSettingsImportResponse("""{"ok":true}""") is SettingsImportDecode.Malformed)
+        assertTrue(decodeSettingsImportResponse("""{"imported":false,"fileName":"a","backupFileName":"b"}""") is SettingsImportDecode.NotImported)
+        val confirmed = decodeSettingsImportResponse("""{"imported":true,"fileName":"a.toml","backupFileName":"a.toml.bak.1","workspaceName":null}""")
+        assertTrue(confirmed is SettingsImportDecode.Imported)
+        assertEquals("a.toml.bak.1", (confirmed as SettingsImportDecode.Imported).result.backupFileName)
+    }
+
+    @Test
+    fun lifecycleTransitions() {
         val lifecycle = LifecycleCoordinator()
         assertEquals(LifecycleState.INITIALIZED, lifecycle.state.value)
 
@@ -108,8 +112,34 @@ class SettingsPreferencesPhase17Test {
     }
 
     @Test
-    fun testAndroidPreferencesStoreKeys() {
-        assertEquals("damhopper_workbench_preferences", AndroidPreferencesStore.KEY_PREFERENCES)
-        assertEquals("damhopper_settings_source_target", AndroidPreferencesStore.KEY_SOURCE_TARGET)
+    fun agentSettingsTargetBPersistsWithoutTouchingPreferenceSourceAOrThePreferences() {
+        val scope = CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
+        try {
+            val preferences = WorkbenchPreferences(terminalFontSize = 17)
+            val store = InMemoryPreferencesStore(
+                initialPreferences = preferences,
+                initialSourceTargetState = SettingsSourceTargetState(
+                    preferencesProfileId = "A",
+                    preferencesStatus = PreferenceSourceStatus.ACTIVE,
+                    settingsProfileId = "A",
+                ),
+            )
+            val resolver = object : SettingsOwnerResolver {
+                override suspend fun current(profileId: String): SettingsBinding? = null
+                override fun currentSnapshot(profileId: String): SettingsBinding? = null
+            }
+            val repository = SettingsRepository(store, resolver, scope, debounceMillis = 20L, invalidateRuntime = {})
+
+            // Opening the contextual Agents settings queues the selected workspace server B as the Settings target.
+            repository.setSettingsTarget("B")
+
+            val persisted = store.loadSourceTargetState()
+            assertEquals("B", persisted.settingsProfileId)
+            assertEquals("A", persisted.preferencesProfileId, "preference source A is independent of target B")
+            assertEquals(17, store.loadPreferences().terminalFontSize, "no preference is rewritten by selecting a target")
+            assertEquals(17, repository.preferences.value.terminalFontSize)
+        } finally {
+            scope.cancel()
+        }
     }
 }

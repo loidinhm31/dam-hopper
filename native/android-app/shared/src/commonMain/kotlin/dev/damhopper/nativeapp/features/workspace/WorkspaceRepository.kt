@@ -2,6 +2,7 @@ package dev.damhopper.nativeapp.features.workspace
 
 import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.core.transport.ProtocolJson
+import dev.damhopper.nativeapp.core.transport.RequestAdmissionGuard
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
@@ -59,21 +60,26 @@ class WorkspaceRepository(
         return ProtocolJson.decodeFromString(KnownWorkspacesResponse.serializer(), text)
     }
 
-    suspend fun addKnownWorkspace(path: String, name: String? = null): Boolean {
+    /**
+     * Adds a known workspace path on the remote server. [guard] is the required request-local admission
+     * (C2b) forwarded unchanged to the transport; this method never retries or replays the request.
+     */
+    suspend fun addKnownWorkspace(path: String, name: String? = null, guard: RequestAdmissionGuard): Boolean {
         val body = buildJsonObject {
             put("path", path)
             if (name != null) put("name", name)
         }.toString()
-        val text = apiClient.postJson("/api/workspace/known", body)
+        val text = apiClient.postJson("/api/workspace/known", body, guard)
         val obj = ProtocolJson.decodeFromString(JsonObject.serializer(), text)
         return obj["ok"]?.jsonPrimitive?.booleanOrNull == true
     }
 
-    suspend fun removeKnownWorkspace(path: String): Boolean {
+    /** Removes a known workspace path; [guard] is required and forwarded unchanged (no replay). */
+    suspend fun removeKnownWorkspace(path: String, guard: RequestAdmissionGuard): Boolean {
         val body = buildJsonObject {
             put("path", path)
         }.toString()
-        val text = apiClient.deleteJson("/api/workspace/known", body)
+        val text = apiClient.deleteJson("/api/workspace/known", body, guard)
         val obj = ProtocolJson.decodeFromString(JsonObject.serializer(), text)
         return obj["ok"]?.jsonPrimitive?.booleanOrNull == true
     }

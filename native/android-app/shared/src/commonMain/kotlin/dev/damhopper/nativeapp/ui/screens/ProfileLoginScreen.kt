@@ -106,6 +106,7 @@ private fun isCleartextHttp(url: String): Boolean {
 fun ProfileLoginScreen(
     profileRepository: ProfileRepository,
     onAuthenticated: (profileId: String) -> Unit,
+    headerEntries: HeaderEntries? = null,
     modifier: Modifier = Modifier,
 ) {
     val profiles by profileRepository.profiles.collectAsState()
@@ -286,6 +287,8 @@ fun ProfileLoginScreen(
                         Text("+ New Profile", color = DamHopperColors.Primary, fontSize = 13.sp)
                     }
                 }
+
+                headerEntries?.let { HeaderEntryButtons(it) }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
