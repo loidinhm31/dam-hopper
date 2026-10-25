@@ -1544,6 +1544,7 @@ fun ProjectTerminalScreen(
         }
     }
 
+
     if (connectionRef != null) {
         TerminalDialogs(
             showDiagnosticsDialog = showDiagnosticsDialog,
