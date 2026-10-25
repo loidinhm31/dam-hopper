@@ -77,6 +77,7 @@ import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.core.logging.AppLogger
+import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.features.terminal.TerminalDiagnosticsDialog
 import dev.damhopper.nativeapp.features.profiles.ProfileRepository
 import dev.damhopper.nativeapp.features.settings.SettingsOwner
@@ -931,12 +932,11 @@ fun ProjectTerminalScreen(
         }
     }
 
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val pinned = agents != null && isTerminalAgentsPinned(maxWidth)
-        SideEffect { agents?.host?.setPinned(pinned) }
-        val pinnedOpen = agents != null && agents.host.open && pinned
-        val startPadding = if (pinnedOpen) TERMINAL_AGENTS_PINNED_WIDTH + 1.dp else 0.dp
+    val pinned = agents != null && agents.host.pinned == true
+    val pinnedOpen = agents != null && agents.host.open && pinned
+    val startPadding = if (pinnedOpen) TERMINAL_AGENTS_PINNED_WIDTH + 1.dp else 0.dp
 
+    Box(modifier = modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -944,258 +944,36 @@ fun ProjectTerminalScreen(
                 .background(DamHopperColors.Background)
                 .imePadding()
         ) {
-        // 1. Top Navigation & Project Header
-        if (showHeader) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DamHopperColors.Surface)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = "← Projects",
-                    color = DamHopperColors.Primary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable(enabled = agents?.host?.compactSheetOpen != true) {
-                            onBackToProjects()
-                        }
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
+            if (showHeader) {
+                TerminalTopHeader(
+                    projectName = projectName,
+                    terminalFontSize = terminalFontSize,
+                    canDecreaseFont = terminalFontSize > WorkbenchPreferences.FONT_MIN,
+                    canIncreaseFont = terminalFontSize < WorkbenchPreferences.FONT_MAX,
+                    updateTerminalFontSize = { updateTerminalFontSize(it) },
+                    onBackToProjects = onBackToProjects,
+                    onShowDiagnostics = { showDiagnosticsDialog = true },
+                    onShowCreate = { showCreateDialog = true },
+                    agents = agents,
                 )
-
-                Text(
-                    text = projectName,
-                    color = DamHopperColors.TextPrimary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(0.35f)
-                )
-
-                val canDecreaseFont = terminalFontSize > WorkbenchPreferences.FONT_MIN
-                val canIncreaseFont = terminalFontSize < WorkbenchPreferences.FONT_MAX
-                Row(
-                    modifier = Modifier
-                        .weight(0.65f, fill = false)
-                        .horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = "A-",
-                        color = if (canDecreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(DamHopperColors.SurfaceVariant)
-                            .semantics { contentDescription = "Decrease terminal font size" }
-                            .clickable(enabled = canDecreaseFont) {
-                                updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, -1))
-                            }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    )
-
-                    Text(
-                        text = "${terminalFontSize}sp",
-                        color = DamHopperColors.TextSecondary,
-                        fontSize = 12.sp,
-                        fontFamily = JetBrainsMonoFontFamily,
-                        modifier = Modifier
-                            .semantics { contentDescription = "Terminal font size ${terminalFontSize}sp" }
-                            .padding(horizontal = 2.dp, vertical = 6.dp)
-                    )
-
-                    Text(
-                        text = "A+",
-                        color = if (canIncreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(DamHopperColors.SurfaceVariant)
-                            .semantics { contentDescription = "Increase terminal font size" }
-                            .clickable(enabled = canIncreaseFont) {
-                                updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, 1))
-                            }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    )
-
-                    agents?.let { TerminalAgentsTrigger(it) }
-
-                    Text(
-                        text = "Diag",
-                        color = DamHopperColors.Warning,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(DamHopperColors.SurfaceVariant)
-                            .clickable { showDiagnosticsDialog = true }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    )
-
-                    Text(
-                        text = "+ New Terminal",
-                        color = DamHopperColors.Primary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(DamHopperColors.SurfaceVariant)
-                            .clickable { showCreateDialog = true }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                    )
-                }
-            }
-        } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DamHopperColors.Surface)
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                val canDecreaseFont = terminalFontSize > WorkbenchPreferences.FONT_MIN
-                val canIncreaseFont = terminalFontSize < WorkbenchPreferences.FONT_MAX
-                Text(
-                    text = "A-",
-                    color = if (canDecreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier
-                        .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(DamHopperColors.SurfaceVariant)
-                        .semantics { contentDescription = "Decrease terminal font size" }
-                        .clickable(enabled = canDecreaseFont) {
-                            updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, -1))
-                        }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                )
-
-                Text(
-                    text = "${terminalFontSize}sp",
-                    color = DamHopperColors.TextSecondary,
-                    fontSize = 12.sp,
-                    fontFamily = JetBrainsMonoFontFamily,
-                    modifier = Modifier
-                        .semantics { contentDescription = "Terminal font size ${terminalFontSize}sp" }
-                        .padding(horizontal = 2.dp, vertical = 6.dp)
-                )
-
-                Text(
-                    text = "A+",
-                    color = if (canIncreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier
-                        .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(DamHopperColors.SurfaceVariant)
-                        .semantics { contentDescription = "Increase terminal font size" }
-                        .clickable(enabled = canIncreaseFont) {
-                            updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, 1))
-                        }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                )
-
-                agents?.let { TerminalAgentsTrigger(it) }
-
-                Text(
-                    text = "Diag",
-                    color = DamHopperColors.Warning,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(DamHopperColors.SurfaceVariant)
-                        .clickable { showDiagnosticsDialog = true }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                )
-
-                Text(
-                    text = "+ New Terminal",
-                    color = DamHopperColors.Primary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(DamHopperColors.SurfaceVariant)
-                        .clickable { showCreateDialog = true }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
+            } else {
+                TerminalSubHeader(
+                    terminalFontSize = terminalFontSize,
+                    canDecreaseFont = terminalFontSize > WorkbenchPreferences.FONT_MIN,
+                    canIncreaseFont = terminalFontSize < WorkbenchPreferences.FONT_MAX,
+                    updateTerminalFontSize = { updateTerminalFontSize(it) },
+                    onShowDiagnostics = { showDiagnosticsDialog = true },
+                    onShowCreate = { showCreateDialog = true },
+                    agents = agents,
                 )
             }
-        }
 
-        // 2. Session Picker Tab Bar (strictly for this project's eligible sessions)
-        if (eligibleSessions.isNotEmpty()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DamHopperColors.SurfaceVariant)
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                eligibleSessions.forEach { session ->
-                    val isSelected = session.id == activeSessionId
-                    val statusColor = when {
-                        !session.alive -> DamHopperColors.Error
-                        session.restartCount > 0u -> DamHopperColors.Warning
-                        else -> DamHopperColors.Success
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(if (isSelected) DamHopperColors.PrimaryVariant else DamHopperColors.Surface)
-                            .clickable {
-                                selectSession(session.id)
-                            }
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .width(8.dp)
-                                .height(8.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(statusColor)
-                        )
-                        Text(
-                            text = session.displayName,
-                            color = if (isSelected) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
-                            fontSize = 12.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                        )
-                        if (isSelected) {
-                            Text(
-                                text = "✕",
-                                color = DamHopperColors.TextSecondary,
-                                fontSize = 11.sp,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .clickable { sessionToKill = session.id }
-                                    .padding(horizontal = 2.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
+            TerminalSessionTabs(
+                sessions = eligibleSessions,
+                activeSessionId = activeSessionId,
+                onSelectSession = { selectSession(it) },
+                onKillSession = { sessionToKill = it },
+            )
 
         // Exact manual-activation refusal: the required terminal is missing/restarted; never another terminal.
         requiredRefusal?.let { refusal ->
@@ -1733,18 +1511,6 @@ fun ProjectTerminalScreen(
         }
         // Strictly inline above IME, ZERO floating action buttons!
         if (activeController != null) {
-            NativeAccessoryKeyboard(
-                enabled = prefs.mobileCustomKeyboardEnabled,
-                inert = covered,
-                metrics = accessoryMetrics(prefs),
-                haptics = prefs.hapticFeedbackEnabled,
-                ctrlLatched = ctrlLatched,
-                altLatched = altLatched,
-                onAction = { onAccessoryAction(it) },
-            )
-
-            // App-local history suggestions: explicit native history scope, inserted into the draft only and never
-            // sent automatically; gone when the suggestions preference or the history consent is off.
             val suggestions = if (covered) {
                 emptyList()
             } else {
@@ -1752,240 +1518,93 @@ fun ProjectTerminalScreen(
                     terminalSuggestionsFor(prefs.terminalSuggestionsEnabled, history, historyScopeOwner, projectName, commandInput)
                 }
             }
-            if (suggestions.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(DamHopperColors.Surface)
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = "This device's history:",
-                        color = DamHopperColors.TextSecondary,
-                        fontSize = 11.sp,
-                    )
-                    suggestions.forEach { suggestion ->
-                        Box(
-                            modifier = Modifier
-                                .sizeIn(minHeight = 48.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(DamHopperColors.SurfaceVariant)
-                                .semantics { contentDescription = "Insert history command into draft" }
-                                .clickable { commandInput = suggestion }
-                                .padding(horizontal = 10.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = suggestion,
-                                color = DamHopperColors.TextPrimary,
-                                fontSize = 12.sp,
-                                fontFamily = JetBrainsMonoFontFamily,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+            TerminalAccessoryAndCommandBar(
+                commandInput = commandInput,
+                onCommandInputChange = { commandInput = it },
+                onSend = { sendCommand() },
+                onFocusChanged = { retainedState?.isCommandInputFocused?.value = it },
+                prefs = prefs,
+                covered = covered,
+                ctrlLatched = ctrlLatched,
+                altLatched = altLatched,
+                onAccessoryAction = { onAccessoryAction(it) },
+                suggestions = suggestions,
+                historyFailure = historyFailure,
+            )
+        }
+    }
+        if (agents != null && connectionRef != null) {
+            val activeInstance = eligibleSessions.firstOrNull { it.id == activeSessionId }
+                ?.let { TerminalAgentsInstanceKey(connectionRef.profileId, it.id, it.incarnation) }
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val isPinned = isTerminalAgentsPinned(maxWidth)
+                SideEffect { agents.host.setPinned(isPinned) }
+                TerminalAgentsSidebarOverlay(agents = agents, active = activeInstance, maxWidth = maxWidth)
+            }
+        }
+    }
+
+    if (connectionRef != null) {
+        TerminalDialogs(
+            showDiagnosticsDialog = showDiagnosticsDialog,
+            onDismissDiagnostics = { showDiagnosticsDialog = false },
+            showCreateDialog = showCreateDialog,
+            onDismissCreate = { showCreateDialog = false },
+            onCreateSession = { cmd, name ->
+                ownerScope.launch {
+                    try {
+                        val newId = withContext(Dispatchers.Default) {
+                            val id = "term-${Clock.System.now().toEpochMilliseconds()}"
+                            terminalRepo?.createSession(
+                                CreateSessionRequest(id = id, command = cmd, name = name, project = projectName)
                             )
+                            id
+                        }
+                        pendingReconciliationId = newId
+                        refreshSessions()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        uiErrorBanner = "Failed to create session: ${e.message}"
+                    }
+                }
+            },
+            sessionToKill = sessionToKill,
+            onDismissKill = { sessionToKill = null },
+            onConfirmKill = { targetId ->
+                if (isDestructiveOpInProgress) return@TerminalDialogs
+                sessionToKill = null
+                ownerScope.launch {
+                    isDestructiveOpInProgress = true
+                    destroyingSessionIds[targetId] = true
+                    controllers[targetId]?.isPanelActive = false
+                    bumpActiveSessionEpoch()
+                    try {
+                        withContext(Dispatchers.Default) {
+                            terminalRepo?.removeSession(targetId)
+                        }
+                        removeSessionLocal(targetId)
+                        sessions = sessions.filter { it.id != targetId }
+                        val next = sessions.filter { isSessionSelectable(it) }.firstOrNull()?.id
+                        if (activeSessionId == targetId) {
+                            selectSession(next)
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        uiErrorBanner = "Failed to remove session: ${e.message}"
+                    } finally {
+                        destroyingSessionIds.remove(targetId)
+                        isDestructiveOpInProgress = false
+                        val syncSuccess = refreshSessions()
+                        if (!syncSuccess && activeSessionId == targetId) {
+                            controllers[targetId]?.isPanelActive = isEligibleForInput(targetId)
                         }
                     }
                 }
-            }
-            historyFailure?.let { failure ->
-                Text(
-                    text = failure,
-                    color = DamHopperColors.Warning,
-                    fontSize = 11.sp,
-                    modifier = Modifier.fillMaxWidth().background(DamHopperColors.Surface).padding(horizontal = 12.dp, vertical = 2.dp),
-                )
-            }
-
-            // 6. Interactive Command Input Field
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DamHopperColors.Surface)
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    value = commandInput,
-                    onValueChange = { commandInput = it },
-                    placeholder = {
-                        Text(
-                            text = "Enter command (e.g. ls -la)...",
-                            fontSize = 12.sp,
-                            color = DamHopperColors.TextSecondary
-                        )
-                    },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { sendCommand() }),
-                    textStyle = TextStyle(
-                        fontFamily = JetBrainsMonoFontFamily,
-                        fontSize = 13.sp,
-                        color = DamHopperColors.TextPrimary
-                    ),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = DamHopperColors.Primary,
-                        unfocusedBorderColor = DamHopperColors.SurfaceVariant,
-                        focusedContainerColor = DamHopperColors.Background,
-                        unfocusedContainerColor = DamHopperColors.Background,
-                    ),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .onFocusChanged { retainedState?.isCommandInputFocused?.value = it.isFocused }
-                )
-
-                Button(
-                    onClick = { sendCommand() },
-                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary),
-                    shape = RoundedCornerShape(6.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-                    modifier = Modifier.height(44.dp)
-                ) {
-                    Text("Send", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
-    }
-        if (agents != null) {
-            val activeInstance = eligibleSessions.firstOrNull { it.id == activeSessionId }
-                ?.let { TerminalAgentsInstanceKey(connectionRef.profileId, it.id, it.incarnation) }
-            TerminalAgentsSidebarOverlay(agents = agents, active = activeInstance, maxWidth = maxWidth)
-        }
-    }
-    // Diagnostics Viewer Dialog
-    if (showDiagnosticsDialog) {
-        TerminalDiagnosticsDialog(
-            profileId = connectionRef.profileId,
-            generation = connectionRef.generation,
-            sessionId = activeSessionId,
-            onDismiss = { showDiagnosticsDialog = false }
-        )
-    }
-
-    // Create New Session Dialog
-    if (showCreateDialog) {
-        var commandText by remember { mutableStateOf("sh") }
-        var nameText by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showCreateDialog = false },
-            title = { Text("New Terminal Session", color = DamHopperColors.TextPrimary) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = nameText,
-                        onValueChange = { nameText = it },
-                        label = { Text("Session Name (optional)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = commandText,
-                        onValueChange = { commandText = it },
-                        label = { Text("Command") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
             },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showCreateDialog = false
-                        val finalCmd = if (commandText.isNotBlank()) commandText else "sh"
-                        val finalName = if (nameText.isNotBlank()) nameText else null
-                        ownerScope.launch {
-                            try {
-                                val newId = withContext(Dispatchers.Default) {
-                                    val id = "term-${Clock.System.now().toEpochMilliseconds()}"
-                                    terminalRepo.createSession(
-                                        CreateSessionRequest(
-                                            id = id,
-                                            command = finalCmd,
-                                            name = finalName,
-                                            project = projectName
-                                        )
-                                    )
-                                    id
-                                }
-                                pendingReconciliationId = newId
-                                refreshSessions()
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                uiErrorBanner = "Failed to create session: ${e.message}"
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary)
-                ) {
-                    Text("Create")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreateDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
-
-    // Kill / Close Session Dialog
-    if (sessionToKill != null) {
-        AlertDialog(
-            onDismissRequest = { sessionToKill = null },
-            title = { Text("Close Terminal Session", color = DamHopperColors.TextPrimary) },
-            text = { Text("Are you sure you want to close and remove this terminal session?") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (isDestructiveOpInProgress) return@Button
-                        val targetId = sessionToKill
-                        sessionToKill = null
-                        if (targetId != null) {
-                            ownerScope.launch {
-                                isDestructiveOpInProgress = true
-                                destroyingSessionIds[targetId] = true
-                                controllers[targetId]?.isPanelActive = false
-                                bumpActiveSessionEpoch()
-                                try {
-                                    withContext(Dispatchers.Default) {
-                                        terminalRepo.removeSession(targetId)
-                                    }
-                                    removeSessionLocal(targetId)
-                                    sessions = sessions.filter { it.id != targetId }
-                                    val next = sessions.filter { isSessionSelectable(it) }.firstOrNull()?.id
-                                    if (activeSessionId == targetId) {
-                                        selectSession(next)
-                                    }
-                                } catch (e: CancellationException) {
-                                    throw e
-                                } catch (e: Exception) {
-                                    uiErrorBanner = "Failed to remove session: ${e.message}"
-                                } finally {
-                                    destroyingSessionIds.remove(targetId)
-                                    isDestructiveOpInProgress = false
-                                    val syncSuccess = refreshSessions()
-                                    if (!syncSuccess && activeSessionId == targetId) {
-                                        controllers[targetId]?.isPanelActive = isEligibleForInput(targetId)
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Error)
-                ) {
-                    Text("Close Session")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { sessionToKill = null }) {
-                    Text("Cancel")
-                }
-            }
+            connectionRef = connectionRef,
+            activeSessionId = activeSessionId,
         )
     }
 }
@@ -2088,5 +1707,494 @@ private fun TerminalScrollControls(step: Int, onScroll: (TerminalScrollDirection
                 )
             }
         }
+    }
+}
+@Composable
+private fun TerminalTopHeader(
+    projectName: String,
+    terminalFontSize: Int,
+    canDecreaseFont: Boolean,
+    canIncreaseFont: Boolean,
+    updateTerminalFontSize: (Int) -> Unit,
+    onBackToProjects: () -> Unit,
+    onShowDiagnostics: () -> Unit,
+    onShowCreate: () -> Unit,
+    agents: TerminalAgentsContext?,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(DamHopperColors.Surface)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "← Projects",
+            color = DamHopperColors.Primary,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .clickable(enabled = agents?.host?.compactSheetOpen != true) {
+                    onBackToProjects()
+                }
+                .padding(horizontal = 6.dp, vertical = 4.dp)
+        )
+
+        Text(
+            text = projectName,
+            color = DamHopperColors.TextPrimary,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(0.35f)
+        )
+
+        Row(
+            modifier = Modifier
+                .weight(0.65f, fill = false)
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = "A-",
+                color = if (canDecreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(DamHopperColors.SurfaceVariant)
+                    .semantics { contentDescription = "Decrease terminal font size" }
+                    .clickable(enabled = canDecreaseFont) {
+                        updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, -1))
+                    }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            )
+
+            Text(
+                text = "${terminalFontSize}sp",
+                color = DamHopperColors.TextSecondary,
+                fontSize = 12.sp,
+                fontFamily = JetBrainsMonoFontFamily,
+                modifier = Modifier
+                    .semantics { contentDescription = "Terminal font size ${terminalFontSize}sp" }
+                    .padding(horizontal = 2.dp, vertical = 6.dp)
+            )
+
+            Text(
+                text = "A+",
+                color = if (canIncreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(DamHopperColors.SurfaceVariant)
+                    .semantics { contentDescription = "Increase terminal font size" }
+                    .clickable(enabled = canIncreaseFont) {
+                        updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, 1))
+                    }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            )
+
+            agents?.let { TerminalAgentsTrigger(it) }
+
+            Text(
+                text = "Diag",
+                color = DamHopperColors.Warning,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(DamHopperColors.SurfaceVariant)
+                    .clickable { onShowDiagnostics() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            )
+
+            Text(
+                text = "+ New Terminal",
+                color = DamHopperColors.Primary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(DamHopperColors.SurfaceVariant)
+                    .clickable { onShowCreate() }
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun TerminalSubHeader(
+    terminalFontSize: Int,
+    canDecreaseFont: Boolean,
+    canIncreaseFont: Boolean,
+    updateTerminalFontSize: (Int) -> Unit,
+    onShowDiagnostics: () -> Unit,
+    onShowCreate: () -> Unit,
+    agents: TerminalAgentsContext?,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(DamHopperColors.Surface)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = "A-",
+            color = if (canDecreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(DamHopperColors.SurfaceVariant)
+                .semantics { contentDescription = "Decrease terminal font size" }
+                .clickable(enabled = canDecreaseFont) {
+                    updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, -1))
+                }
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+        )
+
+        Text(
+            text = "${terminalFontSize}sp",
+            color = DamHopperColors.TextSecondary,
+            fontSize = 12.sp,
+            fontFamily = JetBrainsMonoFontFamily,
+            modifier = Modifier
+                .semantics { contentDescription = "Terminal font size ${terminalFontSize}sp" }
+                .padding(horizontal = 2.dp, vertical = 6.dp)
+        )
+
+        Text(
+            text = "A+",
+            color = if (canIncreaseFont) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(DamHopperColors.SurfaceVariant)
+                .semantics { contentDescription = "Increase terminal font size" }
+                .clickable(enabled = canIncreaseFont) {
+                    updateTerminalFontSize(stepTerminalFontSize(terminalFontSize, 1))
+                }
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+        )
+
+        agents?.let { TerminalAgentsTrigger(it) }
+
+        Text(
+            text = "Diag",
+            color = DamHopperColors.Warning,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .background(DamHopperColors.SurfaceVariant)
+                .clickable { onShowDiagnostics() }
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+        )
+
+        Text(
+            text = "+ New Terminal",
+            color = DamHopperColors.Primary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .background(DamHopperColors.SurfaceVariant)
+                .clickable { onShowCreate() }
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+        )
+    }
+}
+
+@Composable
+private fun TerminalSessionTabs(
+    sessions: List<TerminalSessionDetailed>,
+    activeSessionId: String?,
+    onSelectSession: (String) -> Unit,
+    onKillSession: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (sessions.isEmpty()) return
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(DamHopperColors.SurfaceVariant)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        sessions.forEach { session ->
+            val isSelected = session.id == activeSessionId
+            val statusColor = when {
+                !session.alive -> DamHopperColors.Error
+                session.restartCount > 0u -> DamHopperColors.Warning
+                else -> DamHopperColors.Success
+            }
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(if (isSelected) DamHopperColors.PrimaryVariant else DamHopperColors.Surface)
+                    .clickable { onSelectSession(session.id) }
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(8.dp)
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(statusColor)
+                )
+                Text(
+                    text = session.displayName,
+                    color = if (isSelected) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                )
+                if (isSelected) {
+                    Text(
+                        text = "✕",
+                        color = DamHopperColors.TextSecondary,
+                        fontSize = 11.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(2.dp))
+                            .clickable { onKillSession(session.id) }
+                            .padding(horizontal = 2.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TerminalAccessoryAndCommandBar(
+    commandInput: String,
+    onCommandInputChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onFocusChanged: (Boolean) -> Unit,
+    prefs: WorkbenchPreferences,
+    covered: Boolean,
+    ctrlLatched: Boolean,
+    altLatched: Boolean,
+    onAccessoryAction: (AccessoryAction) -> Unit,
+    suggestions: List<String>,
+    historyFailure: String?,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier) {
+        NativeAccessoryKeyboard(
+            enabled = prefs.mobileCustomKeyboardEnabled,
+            inert = covered,
+            metrics = accessoryMetrics(prefs),
+            haptics = prefs.hapticFeedbackEnabled,
+            ctrlLatched = ctrlLatched,
+            altLatched = altLatched,
+            onAction = onAccessoryAction,
+        )
+
+        if (suggestions.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Surface)
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "This device's history:",
+                    color = DamHopperColors.TextSecondary,
+                    fontSize = 11.sp,
+                )
+                suggestions.forEach { suggestion ->
+                    Box(
+                        modifier = Modifier
+                            .sizeIn(minHeight = 48.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(DamHopperColors.SurfaceVariant)
+                            .semantics { contentDescription = "Insert history command into draft" }
+                            .clickable { onCommandInputChange(suggestion) }
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = suggestion,
+                            color = DamHopperColors.TextPrimary,
+                            fontSize = 12.sp,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+        historyFailure?.let { failure ->
+            Text(
+                text = failure,
+                color = DamHopperColors.Warning,
+                fontSize = 11.sp,
+                modifier = Modifier.fillMaxWidth().background(DamHopperColors.Surface).padding(horizontal = 12.dp, vertical = 2.dp),
+            )
+        }
+
+        // Interactive Command Input Field
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(DamHopperColors.Surface)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = commandInput,
+                onValueChange = onCommandInputChange,
+                placeholder = {
+                    Text(
+                        text = "Enter command (e.g. ls -la)...",
+                        fontSize = 12.sp,
+                        color = DamHopperColors.TextSecondary
+                    )
+                },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { onSend() }),
+                textStyle = TextStyle(
+                    fontFamily = JetBrainsMonoFontFamily,
+                    fontSize = 13.sp,
+                    color = DamHopperColors.TextPrimary
+                ),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = DamHopperColors.Primary,
+                    unfocusedBorderColor = DamHopperColors.SurfaceVariant,
+                    focusedContainerColor = DamHopperColors.Background,
+                    unfocusedContainerColor = DamHopperColors.Background,
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .onFocusChanged { onFocusChanged(it.isFocused) }
+            )
+
+            Button(
+                onClick = onSend,
+                colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary),
+                shape = RoundedCornerShape(6.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                modifier = Modifier.height(44.dp)
+            ) {
+                Text("Send", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TerminalDialogs(
+    showDiagnosticsDialog: Boolean,
+    onDismissDiagnostics: () -> Unit,
+    showCreateDialog: Boolean,
+    onDismissCreate: () -> Unit,
+    onCreateSession: (command: String, name: String?) -> Unit,
+    sessionToKill: String?,
+    onDismissKill: () -> Unit,
+    onConfirmKill: (String) -> Unit,
+    connectionRef: ConnectionRef,
+    activeSessionId: String?,
+) {
+    if (showDiagnosticsDialog) {
+        TerminalDiagnosticsDialog(
+            profileId = connectionRef.profileId,
+            generation = connectionRef.generation,
+            sessionId = activeSessionId,
+            onDismiss = onDismissDiagnostics
+        )
+    }
+
+    if (showCreateDialog) {
+        var commandText by remember { mutableStateOf("sh") }
+        var nameText by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = onDismissCreate,
+            title = { Text("New Terminal Session", color = DamHopperColors.TextPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = nameText,
+                        onValueChange = { nameText = it },
+                        label = { Text("Session Name (optional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = commandText,
+                        onValueChange = { commandText = it },
+                        label = { Text("Command") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val finalCmd = if (commandText.isNotBlank()) commandText else "sh"
+                        val finalName = if (nameText.isNotBlank()) nameText else null
+                        onCreateSession(finalCmd, finalName)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary)
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissCreate) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (sessionToKill != null) {
+        AlertDialog(
+            onDismissRequest = onDismissKill,
+            title = { Text("Close Terminal Session", color = DamHopperColors.TextPrimary) },
+            text = { Text("Are you sure you want to close and remove this terminal session?") },
+            confirmButton = {
+                Button(
+                    onClick = { onConfirmKill(sessionToKill) },
+                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Error)
+                ) {
+                    Text("Close Session")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissKill) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
