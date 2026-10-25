@@ -229,11 +229,11 @@ fun TerminalAgentsTrigger(agents: TerminalAgentsContext, modifier: Modifier = Mo
  * sheet clamped to the available width with scrim, Escape, IME hiding and focus handling.
  */
 @Composable
-fun TerminalAgentsSidebarHost(
+fun TerminalAgentsSidebarOverlay(
     agents: TerminalAgentsContext,
     active: TerminalAgentsInstanceKey?,
+    maxWidth: Dp,
     modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
 ) {
     val host = agents.host
     val state by agents.service.state.collectAsState()
@@ -301,13 +301,10 @@ fun TerminalAgentsSidebarHost(
         onPopupVisibilityChanged = { host.setPopupVisible(it) },
     )
 
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val pinned = isTerminalAgentsPinned(maxWidth)
-        SideEffect { host.setPinned(pinned) }
-        val pinnedOpen = host.open && pinned
-        val startPadding = if (pinnedOpen) TERMINAL_AGENTS_PINNED_WIDTH + 1.dp else 0.dp
-        Box(modifier = Modifier.fillMaxSize().padding(start = startPadding)) { content() }
+    val pinned = isTerminalAgentsPinned(maxWidth)
+    val pinnedOpen = host.open && pinned
 
+    Box(modifier = modifier.fillMaxSize()) {
         if (pinnedOpen) {
             Box(modifier = Modifier.align(Alignment.CenterStart).fillMaxHeight().width(TERMINAL_AGENTS_PINNED_WIDTH)) {
                 TerminalAgentsSidebar(
@@ -328,13 +325,11 @@ fun TerminalAgentsSidebarHost(
         } else if (host.open) {
             val sheetFocus = remember { FocusRequester() }
             LaunchedEffect(Unit) {
-                // Modal sheet: drop the IME and any terminal focus, then focus the sheet.
                 keyboard?.hide()
                 focusManager.clearFocus(force = true)
                 try {
                     sheetFocus.requestFocus()
                 } catch (_: Throwable) {
-                    // Not attached yet; the scrim still covers and consumes input.
                 }
             }
             Box(
@@ -368,5 +363,24 @@ fun TerminalAgentsSidebarHost(
                 )
             }
         }
+    }
+}
+
+@Composable
+fun TerminalAgentsSidebarHost(
+    agents: TerminalAgentsContext,
+    active: TerminalAgentsInstanceKey?,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val host = agents.host
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val pinned = isTerminalAgentsPinned(maxWidth)
+        SideEffect { host.setPinned(pinned) }
+        val pinnedOpen = host.open && pinned
+        val startPadding = if (pinnedOpen) TERMINAL_AGENTS_PINNED_WIDTH + 1.dp else 0.dp
+        Box(modifier = Modifier.fillMaxSize().padding(start = startPadding)) { content() }
+
+        TerminalAgentsSidebarOverlay(agents = agents, active = active, maxWidth = maxWidth)
     }
 }

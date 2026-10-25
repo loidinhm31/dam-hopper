@@ -119,6 +119,9 @@ import dev.damhopper.nativeapp.features.terminal.TerminalAgentsRefreshReason
 import dev.damhopper.nativeapp.features.terminal.TerminalAgentsRuntimeKey
 import dev.damhopper.nativeapp.ui.components.TerminalAgentsContext
 import dev.damhopper.nativeapp.ui.components.TerminalAgentsSidebarHost
+import dev.damhopper.nativeapp.ui.components.TerminalAgentsSidebarOverlay
+import dev.damhopper.nativeapp.ui.components.isTerminalAgentsPinned
+import dev.damhopper.nativeapp.ui.components.TERMINAL_AGENTS_PINNED_WIDTH
 import dev.damhopper.nativeapp.ui.components.TerminalAgentsTrigger
 import androidx.compose.runtime.SideEffect
 
@@ -928,13 +931,19 @@ fun ProjectTerminalScreen(
         }
     }
 
-    val terminalBody: @Composable () -> Unit = {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(DamHopperColors.Background)
-            .imePadding()
-    ) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val pinned = agents != null && isTerminalAgentsPinned(maxWidth)
+        SideEffect { agents?.host?.setPinned(pinned) }
+        val pinnedOpen = agents != null && agents.host.open && pinned
+        val startPadding = if (pinnedOpen) TERMINAL_AGENTS_PINNED_WIDTH + 1.dp else 0.dp
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(start = startPadding)
+                .background(DamHopperColors.Background)
+                .imePadding()
+        ) {
         // 1. Top Navigation & Project Header
         if (showHeader) {
             Row(
@@ -1841,13 +1850,11 @@ fun ProjectTerminalScreen(
             }
         }
     }
-    }
-    if (agents != null) {
-        val activeInstance = eligibleSessions.firstOrNull { it.id == activeSessionId }
-            ?.let { TerminalAgentsInstanceKey(connectionRef.profileId, it.id, it.incarnation) }
-        TerminalAgentsSidebarHost(agents = agents, active = activeInstance, content = terminalBody)
-    } else {
-        terminalBody()
+        if (agents != null) {
+            val activeInstance = eligibleSessions.firstOrNull { it.id == activeSessionId }
+                ?.let { TerminalAgentsInstanceKey(connectionRef.profileId, it.id, it.incarnation) }
+            TerminalAgentsSidebarOverlay(agents = agents, active = activeInstance, maxWidth = maxWidth)
+        }
     }
     // Diagnostics Viewer Dialog
     if (showDiagnosticsDialog) {
