@@ -325,11 +325,13 @@ fun TerminalAgentsSidebarOverlay(
         } else if (host.open) {
             val sheetFocus = remember { FocusRequester() }
             LaunchedEffect(Unit) {
+
                 keyboard?.hide()
                 focusManager.clearFocus(force = true)
                 try {
                     sheetFocus.requestFocus()
                 } catch (_: Throwable) {
+
                 }
             }
             Box(
