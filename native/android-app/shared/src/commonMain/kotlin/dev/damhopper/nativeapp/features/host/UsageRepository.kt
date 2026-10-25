@@ -1,8 +1,16 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+
 package dev.damhopper.nativeapp.features.host
 
 import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.core.transport.ApiRequestError
 import dev.damhopper.nativeapp.core.transport.ProtocolJson
+import dev.damhopper.nativeapp.core.transport.RequestAdmissionGuard
+import kotlinx.serialization.json.Json
+
+private val PatchJson = Json(ProtocolJson) {
+    explicitNulls = false
+}
 
 /**
  * Result wrapper for telemetry availability.
@@ -74,9 +82,13 @@ class UsageRepository(
         }
     }
 
-    suspend fun patchSettings(patch: SettingsPatchRequest): Result<UsageSettingsResponse> = runCatching {
-        val body = ProtocolJson.encodeToString(SettingsPatchRequest.serializer(), patch)
-        val response = apiClient.patchJson("/api/usage/settings", body)
+    /** PATCH /api/usage/settings with the required request-local [guard]; cancellation always propagates. */
+    suspend fun patchSettings(
+        patch: SettingsPatchRequest,
+        guard: RequestAdmissionGuard,
+    ): Result<UsageSettingsResponse> = resultRethrowingCancellation {
+        val body = PatchJson.encodeToString(SettingsPatchRequest.serializer(), patch)
+        val response = apiClient.patchJson("/api/usage/settings", body, guard)
         ProtocolJson.decodeFromString(UsageSettingsResponse.serializer(), response)
     }
 
@@ -94,9 +106,13 @@ class UsageRepository(
         }
     }
 
-    suspend fun patchSetup(patch: SetupPatchRequest): Result<UsageSetupStatusResponse> = runCatching {
-        val body = ProtocolJson.encodeToString(SetupPatchRequest.serializer(), patch)
-        val response = apiClient.patchJson("/api/usage/setup", body)
+    /** PATCH /api/usage/setup with the required request-local [guard]. */
+    suspend fun patchSetup(
+        patch: SetupPatchRequest,
+        guard: RequestAdmissionGuard,
+    ): Result<UsageSetupStatusResponse> = resultRethrowingCancellation {
+        val body = PatchJson.encodeToString(SetupPatchRequest.serializer(), patch)
+        val response = apiClient.patchJson("/api/usage/setup", body, guard)
         ProtocolJson.decodeFromString(UsageSetupStatusResponse.serializer(), response)
     }
 
@@ -141,9 +157,11 @@ class UsageRepository(
         }
     }
 
-    suspend fun deleteUsage(request: DeleteUsageRequest): Result<Unit> = runCatching {
-        val body = ProtocolJson.encodeToString(DeleteUsageRequest.serializer(), request)
-        apiClient.deleteJson("/api/usage", body)
-        Unit
-    }
+    /** DELETE /api/usage (explicit confirmation string required by the request model); [guard] required. */
+    suspend fun deleteUsage(request: DeleteUsageRequest, guard: RequestAdmissionGuard): Result<Unit> =
+        resultRethrowingCancellation {
+            val body = ProtocolJson.encodeToString(DeleteUsageRequest.serializer(), request)
+            apiClient.deleteJson("/api/usage", body, guard)
+            Unit
+        }
 }

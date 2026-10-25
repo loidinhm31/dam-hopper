@@ -1,5 +1,7 @@
 package dev.damhopper.nativeapp.ui.screens
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -57,9 +59,8 @@ import dev.damhopper.nativeapp.features.editor.LocalNativeEditorSurfaceHost
 import dev.damhopper.nativeapp.features.editor.NativeEditorSurfaceHost
 import dev.damhopper.nativeapp.features.files.FileOperationOutcome
 import dev.damhopper.nativeapp.features.files.FocusedFilesExplorerScreen
-import dev.damhopper.nativeapp.features.settings.InMemoryPreferencesStore
-import dev.damhopper.nativeapp.features.settings.PreferencesStore
 import dev.damhopper.nativeapp.features.settings.WorkbenchPreferences
+import kotlinx.coroutines.flow.MutableStateFlow
 import dev.damhopper.nativeapp.features.terminal.TerminalRepository
 import dev.damhopper.nativeapp.features.terminal.stepTerminalFontSize
 import dev.damhopper.nativeapp.features.workspace.DocumentId
@@ -109,17 +110,28 @@ fun ProjectWorkspaceScreen(
     initialSessionId: String? = null,
     onSessionSelected: ((String?) -> Unit)? = null,
     profileId: String? = null,
-    preferencesStore: PreferencesStore = remember { InMemoryPreferencesStore() },
+    preferenceAccess: PreferenceAccess? = null,
+    languageFilterNotice: String? = null,
+    headerEntries: HeaderEntries? = null,
     nativeSurfaceHost: NativeEditorSurfaceHost? = LocalNativeEditorSurfaceHost.current,
 ) {
     val coroutineScope = rememberCoroutineScope()
     val activePanel by workspaceState.activePanel.collectAsState()
     val pendingDeparture by workspaceState.pendingDeparture.collectAsState()
+    val inputSuspended by workspaceState.isInputSuspended.collectAsState()
     val tabs by workspaceState.editorTabsState.tabs.collectAsState()
     val hasDirtyDocs = tabs.any { it.isDirty }
 
-
-
+    // One reactive preference truth (the retained repository); hidden files and the language family follow it live.
+    val prefAccess = preferenceAccess ?: workspaceState.preferenceAccess
+        ?: remember { PreferenceAccess(MutableStateFlow(WorkbenchPreferences()), {}) }
+    val prefs by prefAccess.preferences.collectAsState()
+    LaunchedEffect(workspaceState, prefs.explorerShowHidden) {
+        workspaceState.fileTreeState.setShowHidden(prefs.explorerShowHidden)
+    }
+    LaunchedEffect(workspaceState, prefs.explorerLanguageFilter) {
+        workspaceState.fileTreeState.setLanguageFilter(prefs.explorerLanguageFilter)
+    }
     LaunchedEffect(activePanel) {
         workspaceState.terminalState?.setPanelVisible(activePanel == WorkspacePanel.TERMINAL)
     }
@@ -154,48 +166,65 @@ fun ProjectWorkspaceScreen(
             .fillMaxSize()
             .background(DamHopperColors.Background)
     ) {
-        // 1. Shared Workspace Header & Inline Navigation Row
-        Row(
+        // 1. Shared Workspace Header & Inline Navigation
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(DamHopperColors.Surface)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text(
-                text = "← Projects",
-                color = DamHopperColors.Primary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .clickable {
-                        if (!navigation.handleBackPress()) {
-                            // Handled by system or departure guard
+            // Row 1: Compact Back button + Project Name + Global Actions (Alerts, Settings)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Compact Back Button
+                Box(
+                    modifier = Modifier
+                        .sizeIn(minWidth = 34.dp, minHeight = 32.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .border(BorderStroke(1.dp, DamHopperColors.Border), RoundedCornerShape(6.dp))
+                        .background(DamHopperColors.SurfaceVariant.copy(alpha = 0.7f))
+                        .clickable {
+                            if (!navigation.handleBackPress()) {
+                                // Handled by system or departure guard
+                            }
                         }
-                    }
-                    .padding(horizontal = 6.dp, vertical = 4.dp)
-            )
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .semantics { contentDescription = "Back to Projects" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "←",
+                        color = DamHopperColors.Primary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
 
-            Text(
-                text = projectName,
-                color = DamHopperColors.TextPrimary,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(0.3f)
-            )
+                // Dedicated Project Name (takes remaining space in middle)
+                Text(
+                    text = projectName,
+                    color = DamHopperColors.TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
 
-            // Inline panel tabs: Terminal | Files | Editor
+                headerEntries?.let { HeaderEntryButtons(it) }
+            }
+
+            // Row 2: Inline panel tabs (Terminal | Files | Editor) across full width
             Row(
                 modifier = Modifier
-                    .weight(0.7f, fill = false)
+                    .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 PanelTabButton(
                     label = "Terminal",
@@ -218,7 +247,6 @@ fun ProjectWorkspaceScreen(
                 )
             }
         }
-
         // 2. Active Focused Panel (Single content host)
         Box(
             modifier = Modifier
@@ -236,8 +264,10 @@ fun ProjectWorkspaceScreen(
                         initialSessionId = initialSessionId,
                         onSessionSelected = onSessionSelected,
                         profileId = profileId,
-                        preferencesStore = preferencesStore,
+                        preferenceAccess = prefAccess,
                         retainedState = workspaceState.terminalState,
+                        worktreePath = workspaceState.target.worktreePath,
+                        inputCovered = inputSuspended,
                         showHeader = false,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -247,6 +277,8 @@ fun ProjectWorkspaceScreen(
                     FocusedFilesExplorerScreen(
                         treeState = workspaceState.fileTreeState,
                         mutationCoordinator = workspaceState.fileMutationCoordinator,
+                        onSelectLanguageFilter = { prefAccess.selectLanguageFilter(it) },
+                        languageFilterNotice = languageFilterNotice,
                         onOpenFile = { target, path ->
                             coroutineScope.launch {
                                 workspaceState.editorTabsState.openTab(target, path)
@@ -282,6 +314,8 @@ fun ProjectWorkspaceScreen(
                                     FocusedFilesExplorerScreen(
                                         treeState = workspaceState.fileTreeState,
                                         mutationCoordinator = workspaceState.fileMutationCoordinator,
+                                        onSelectLanguageFilter = { prefAccess.selectLanguageFilter(it) },
+                                        languageFilterNotice = languageFilterNotice,
                                         onOpenFile = { target, path ->
                                             coroutineScope.launch {
                                                 workspaceState.editorTabsState.openTab(target, path)
@@ -303,7 +337,7 @@ fun ProjectWorkspaceScreen(
                                 nativeSurfaceHost = nativeSurfaceHost,
                                 onToggleSidebar = { workspaceState.toggleEditorSidebar() },
                                 isSidebarOpen = isSidebarOpen,
-                                isInputAllowed = isEditorInputAllowed(isSidebarOpen, isPinned),
+                                isInputAllowed = isEditorInputAllowed(isSidebarOpen, isPinned) && !inputSuspended,
                                 modifier = Modifier.weight(1f).fillMaxHeight(),
                             )
                         }
@@ -340,6 +374,8 @@ fun ProjectWorkspaceScreen(
                                 FocusedFilesExplorerScreen(
                                     treeState = workspaceState.fileTreeState,
                                     mutationCoordinator = workspaceState.fileMutationCoordinator,
+                                    onSelectLanguageFilter = { prefAccess.selectLanguageFilter(it) },
+                                    languageFilterNotice = languageFilterNotice,
                                     onOpenFile = { target, path ->
                                         coroutineScope.launch {
                                             workspaceState.editorTabsState.openTab(target, path)

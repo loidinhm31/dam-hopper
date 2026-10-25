@@ -145,6 +145,47 @@ class FileRepositoryTest {
     }
 
     @Test
+    fun testLanguageFilesUsesExistingScanEndpointWithProjectAndWorktreeQuery() = runTest {
+        var query: String? = null
+        server!!.createContext("/api/fs/language-files") { exchange ->
+            query = exchange.requestURI.rawQuery
+            val json = """{"files":[{"path":"src/main.rs","size":10,"mtime":1712577600,"language":"rust"},{"path":"web/app.ts","size":20,"mtime":1712577601,"language":"javascript-typescript"}],"truncated":true,"limit":20000}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+
+        val repo = createRepository(worktreePath = "/tmp/wt")
+        val response = repo.languageFiles(ProjectTargetRef(project = "demo-proj", worktreePath = "/tmp/wt"))
+
+        assertEquals(2, response.files.size)
+        assertEquals("src/main.rs", response.files[0].path)
+        assertEquals("rust", response.files[0].language)
+        assertEquals(10uL, response.files[0].size)
+        assertEquals(1712577600L, response.files[0].mtime)
+        assertEquals("javascript-typescript", response.files[1].language)
+        assertTrue(response.truncated)
+        assertEquals(20000L, response.limit)
+        val sent = query.orEmpty()
+        assertTrue(sent.contains("project=demo-proj"), sent)
+        assertTrue(sent.contains("worktreePath="), sent)
+    }
+
+    @Test
+    fun testLanguageFilesRejectsAnotherOwnersTargetBeforeAnyRequest() = runTest {
+        var requested = false
+        server!!.createContext("/api/fs/language-files") { exchange ->
+            requested = true
+            exchange.sendResponseHeaders(200, 2)
+            exchange.responseBody.use { it.write("{}".toByteArray()) }
+        }
+        val repo = createRepository(project = "demo-proj")
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            repo.languageFiles(ProjectTargetRef(project = "other-proj"))
+        }
+        assertFalse(requested, "owner validation happens before the request")
+    }
+
+    @Test
     fun testPathTraversalRejected() = runTest {
         val repo = createRepository(project = "demo-proj")
         val target = ProjectTargetRef(project = "demo-proj")

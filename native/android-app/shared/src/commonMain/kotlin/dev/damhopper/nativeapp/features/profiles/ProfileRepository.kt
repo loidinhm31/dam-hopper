@@ -1,8 +1,12 @@
 package dev.damhopper.nativeapp.features.profiles
 
+import dev.damhopper.nativeapp.core.model.ConnectionErrorReason
+import dev.damhopper.nativeapp.core.model.ConnectionOwnerError
 import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.core.ownership.ConnectionRegistry
 import dev.damhopper.nativeapp.core.transport.ApiClient
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -12,6 +16,16 @@ import kotlinx.coroutines.sync.withLock
 /**
  * Manages server profiles lifecycle, auth sessions, and credential custody.
  * Enforces generation retirement on edits/rotation/logout and monotonic attempt fencing.
+ *
+ * Identity/credential discipline (C2a/C2a1):
+ * - Endpoint/account/auth/credential changes first retire (or remove) the profile connection through
+ *   the registry's awaited drain, then replace credentials, then publish identity/auth state.
+ *   A failed or cancelled retirement leaves credentials and identity untouched.
+ * - The profile [mutex] may be held for the whole drain, so retirement barriers and observers MUST NOT
+ *   call back into this repository or the registry (transitive no-reentry).
+ * - API/WS client creation and every identity/auth commit are serialized under the same [mutex];
+ *   commits are applied only inside `registry.admitCurrentOwner(successor)`, after a caller-activity
+ *   check, so a cancelled caller or a superseded/pending/failed transition never publishes identity.
  */
 class ProfileRepository(
     val vault: CredentialVault,
@@ -67,43 +81,47 @@ class ProfileRepository(
         val oldProfile = _profiles.value.find { it.id == id }
             ?: throw IllegalArgumentException("Profile not found: $id")
 
+        val updatedProfile = oldProfile.copy(name = name.trim(), baseUrl = validatedUrl, username = username?.trim())
+        val updatedList = _profiles.value.map { if (it.id == id) updatedProfile else it }
         val endpointChanged = oldProfile.baseUrl != validatedUrl || oldProfile.username != username
+
         if (endpointChanged) {
             attemptTracker.invalidate(id)
+            // Drain first: nothing below runs when retirement fails or the caller is cancelled.
+            val successor = retireProfileConnection(id)
+            currentCoroutineContext().ensureActive()
             vault.clearToken(id, oldProfile.baseUrl)
-            retireProfileConnection(id)
-            val statusMap = _authStatuses.value.toMutableMap()
-            statusMap[id] = AuthStatus.LoginRequired(
-                code = AuthErrorCodes.AUTH_REQUIRED,
-                error = "Endpoint or account changed"
-            )
-            _authStatuses.value = statusMap
+            metadataStore.saveProfiles(updatedList)
+            commitIdentity(successor) {
+                _authStatuses.value = _authStatuses.value + (id to AuthStatus.LoginRequired(
+                    code = AuthErrorCodes.AUTH_REQUIRED,
+                    error = "Endpoint or account changed"
+                ))
+                _profiles.value = _profiles.value.map { if (it.id == id) updatedProfile else it }
+            }
+        } else {
+            metadataStore.saveProfiles(updatedList)
+            currentCoroutineContext().ensureActive()
+            _profiles.value = _profiles.value.map { if (it.id == id) updatedProfile else it }
         }
-
-        val updatedProfile = oldProfile.copy(name = name.trim(), baseUrl = validatedUrl, username = username?.trim())
-
-        val updatedList = _profiles.value.map { if (it.id == id) updatedProfile else it }
-        _profiles.value = updatedList
-        metadataStore.saveProfiles(updatedList)
         updatedProfile
     }
 
     suspend fun deleteProfile(id: String) = mutex.withLock {
         attemptTracker.invalidate(id)
-        retireProfileConnection(id)
+        // Awaited drain with removal disposition: no successor authority is ever published.
+        registry.removeProfile(id)
+        currentCoroutineContext().ensureActive()
         vault.clearAllForProfile(id)
 
         val updated = _profiles.value.filter { it.id != id }
-        _profiles.value = updated
         metadataStore.saveProfiles(updated)
-        if (_activeProfileId.value == id) {
-            val newActive = updated.firstOrNull()?.id
-            _activeProfileId.value = newActive
-            metadataStore.saveActiveProfileId(newActive)
-        }
-        val statusMap = _authStatuses.value.toMutableMap()
-        statusMap.remove(id)
-        _authStatuses.value = statusMap
+        val newActive = if (_activeProfileId.value == id) updated.firstOrNull()?.id else _activeProfileId.value
+        if (_activeProfileId.value == id) metadataStore.saveActiveProfileId(newActive)
+        currentCoroutineContext().ensureActive()
+        _profiles.value = updated
+        _activeProfileId.value = newActive
+        _authStatuses.value = _authStatuses.value - id
     }
 
     suspend fun selectProfile(id: String) = mutex.withLock {
@@ -112,20 +130,25 @@ class ProfileRepository(
         metadataStore.saveActiveProfileId(id)
     }
 
-    suspend fun getOrCreateApiClient(profileId: String): ApiClient {
+    /**
+     * Serialized with identity/auth commits. The profile snapshot and connection ref are read together
+     * under the profile mutex; a pending or failed retirement makes the registry throw OWNER_MISMATCH
+     * instead of waiting or allocating a new generation.
+     */
+    suspend fun getOrCreateApiClient(profileId: String): ApiClient = mutex.withLock {
         val profile = _profiles.value.find { it.id == profileId }
             ?: throw IllegalArgumentException("Profile not found: $profileId")
         val conn = registry.getOrCreateConnection(profileId)
-        return apiClientFactory(conn, profile.baseUrl) {
+        apiClientFactory(conn, profile.baseUrl) {
             vault.getToken(profileId, profile.baseUrl)
         }
     }
 
-    suspend fun getOrCreateWsConnection(profileId: String): dev.damhopper.nativeapp.core.transport.WsConnection {
+    suspend fun getOrCreateWsConnection(profileId: String): dev.damhopper.nativeapp.core.transport.WsConnection = mutex.withLock {
         val profile = _profiles.value.find { it.id == profileId }
             ?: throw IllegalArgumentException("Profile not found: $profileId")
         val conn = registry.getOrCreateConnection(profileId)
-        return dev.damhopper.nativeapp.core.transport.WsConnection(
+        dev.damhopper.nativeapp.core.transport.WsConnection(
             connection = conn,
             baseUrl = profile.baseUrl,
             authTokenProvider = {
@@ -149,12 +172,14 @@ class ProfileRepository(
         val profile = _profiles.value.find { it.id == profileId }
             ?: throw IllegalArgumentException("Profile not found: $profileId")
 
+        // Drain first, then replace credentials, then publish auth state.
+        val successor = retireProfileConnection(profileId)
+        currentCoroutineContext().ensureActive()
+        if (attempt != null) attemptTracker.assertActive(attempt)
         vault.storeToken(profileId, profile.baseUrl, session.token)
-        retireProfileConnection(profileId)
-
-        val statusMap = _authStatuses.value.toMutableMap()
-        statusMap[profileId] = AuthStatus.Authenticated(session)
-        _authStatuses.value = statusMap
+        commitIdentity(successor) {
+            _authStatuses.value = _authStatuses.value + (profileId to AuthStatus.Authenticated(session))
+        }
     }
 
     suspend fun logout(profileId: String) {
@@ -162,16 +187,18 @@ class ProfileRepository(
             attemptTracker.invalidate(profileId)
             val profile = _profiles.value.find { it.id == profileId }
             val token = profile?.let { vault.getToken(profileId, it.baseUrl) }
+            // Drain first: credential removal and auth-loss publication wait for it.
+            val successor = retireProfileConnection(profileId)
+            currentCoroutineContext().ensureActive()
             if (profile != null) {
                 vault.clearToken(profileId, profile.baseUrl)
             }
-            retireProfileConnection(profileId)
-            val statusMap = _authStatuses.value.toMutableMap()
-            statusMap[profileId] = AuthStatus.LoginRequired(
-                code = AuthErrorCodes.AUTH_REQUIRED,
-                error = "Logged out"
-            )
-            _authStatuses.value = statusMap
+            commitIdentity(successor) {
+                _authStatuses.value = _authStatuses.value + (profileId to AuthStatus.LoginRequired(
+                    code = AuthErrorCodes.AUTH_REQUIRED,
+                    error = "Logged out"
+                ))
+            }
             Pair(profile, token)
         }
 
@@ -180,6 +207,8 @@ class ProfileRepository(
                 val tempConn = registry.getCurrentConnection(profileId) ?: ConnectionRef(profileId, 0L)
                 val tempClient = apiClientFactory(tempConn, profileToRevoke.baseUrl) { tokenToRevoke }
                 AuthRepository(tempClient).logout()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (_: Exception) {
                 // Best effort remote revocation
             }
@@ -202,21 +231,48 @@ class ProfileRepository(
 
         mutex.withLock {
             val currentProfile = _profiles.value.find { it.id == profileId }
-            val currentConn = registry.getCurrentConnection(profileId)
-            if (currentProfile != null && currentConn?.generation == expectedGen) {
+            val expectedOwner = ConnectionRef(profileId, expectedGen)
+            // Pending/failed transitions and superseded generations make the registry deny this result.
+            if (currentProfile != null && registry.isCurrentOwner(expectedOwner)) {
                 if (status is AuthStatus.LoginRequired) {
                     vault.clearToken(profileId, currentProfile.baseUrl)
                 }
-                val statusMap = _authStatuses.value.toMutableMap()
-                statusMap[profileId] = status
-                _authStatuses.value = statusMap
+                currentCoroutineContext().ensureActive()
+                // false => owner superseded or in transition: the stale status result is discarded.
+                registry.admitCurrentOwner(expectedOwner) {
+                    _authStatuses.value = _authStatuses.value + (profileId to status)
+                    true
+                }
             }
+            Unit
         }
         return status
     }
 
-    private suspend fun retireProfileConnection(profileId: String) {
+    /**
+     * Retires the profile's connection through the registry's awaited drain and returns the real
+     * successor. Throws if the profile is in a pending/failed transition or the drain fails.
+     */
+    private suspend fun retireProfileConnection(profileId: String): ConnectionRef {
         val conn = registry.getCurrentConnection(profileId) ?: registry.getOrCreateConnection(profileId)
-        registry.retireConnection(conn)
+        return registry.retireConnection(conn)
+    }
+
+    /**
+     * Applies a non-suspending identity/auth publication only if [owner] is still the current
+     * available authority and the caller is still active; otherwise nothing is published.
+     */
+    private suspend fun commitIdentity(owner: ConnectionRef, commit: () -> Unit) {
+        currentCoroutineContext().ensureActive()
+        val committed = registry.admitCurrentOwner(owner) {
+            commit()
+            true
+        }
+        if (!committed) {
+            throw ConnectionOwnerError(
+                "Identity commit for $owner rejected: connection authority changed or is in transition",
+                ConnectionErrorReason.OWNER_MISMATCH,
+            )
+        }
     }
 }

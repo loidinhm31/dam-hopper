@@ -484,6 +484,33 @@ These findings describe the earlier Phase 08 review baseline and were not all re
 - Host-action routes may be unavailable by server design; show capability denial rather than implementing a privileged fallback.
 - Cognito remains ephemeral in-app masking/input isolation, not an OS screenshot guarantee. Native editor/terminal overlays, IME, accessibility and notification payloads need explicit proof.
 
+<a id="intended-increment-active-settings-and-notifications-not-implemented"></a>
+## Implemented active Settings and notifications
+
+The [Android notifications and Settings plan](../../plans/261024-2042-android-notifications-settings/plan.md) is the design record; this section describes the implemented focused-root integration. It does not mount the separate 12-panel `WorkbenchScreen`, and it does not imply device or live-server qualification.
+
+### Retained Settings and reactive consumers
+
+`DamHopperMobileApp` exposes Settings and the notification feed through inline entries in the existing login, project-list and workspace headers. Settings is a retained overlay with a captured origin, not a second navigation stack: Back returns to the same panel/document/session. The retained workspace, dirty editor/undo state, file sidebar and remote PTY survive while hidden-surface input is suspended. Settings services and preference state live above Compose screen lifetime.
+
+Settings covers Android-applicable preferences, profile/source and independent administrative-target selection, supported shortcut capture, native accessory keyboard and opt-in command history, agent integration/path configuration, usage and idle controls, global defaults/known workspaces, structured workspace/project configuration, maintenance/local diagnostics, and bounded SAF TOML import/export. Only Git, Ports, Fleet and IDE-layout shortcut destinations are unavailable in this focused root. All remote writes use exact owner/selection-bound request-local admission; before-admission stale work is not submitted, while post-admission cancellation, malformed success or lost response can be `Unknown`, never automatically retried or represented as socket/server cancellation. Defaults Set sends `{"defaults":{"workspace":path}}`; Clear sends `{"defaults":{}}`. TOML import is confirmed only by a valid response with `imported == true` and required `fileName` / `backupFileName`. Nuclear Reset destroys PTYs and runtime workspace state, not saved preferences. LOCAL diagnostics use an allowlist and omit credentials, paths, history, commands and terminal output.
+
+`SettingsRepository.preferences` is the active root's single reactive preference source. Theme/system text size, editor and terminal fonts/zoom, Files and sidebar hidden-file/language-family filters, terminal scroll controls/accessory keyboard, project auto-switch, supported shortcuts and app-local command suggestions/history consume its current values without replacing retained workspace ownership. Terminal scroll steps clamp to `1..50` lines (default `5`). Explorer wire filters are `all`, `rust`, `javascript-typescript`, and `java`; legacy `known`/`code`/`text` values migrate to a visible, non-equivalent local `all` fallback that is not dirty or automatically synchronized.
+
+### C2a1 awaited retirement
+
+`ConnectionRegistry` revokes generation N and reserves N+1 without publishing it as usable; it captures ordered awaited retirement barriers and observers. A drain runs outside the registry mutex in a cancellation-safe, non-cancellable cleanup phase, attempts every barrier and aggregates failures; observers run only after barriers finish, and successor/removal disposition is finalized afterward. During pending or failed retirement, the profile remains unavailable to lookup, creation, mutation admission and runtime publication. A failed drain remains latched until the explicit bounded recovery for that retired owner succeeds. The retained runtime registers its barrier before watchers/effects become eligible and drains before unregistering. Callbacks must not re-enter profile/registry ownership or await work that depends on those locks.
+
+### Active-runtime notification reducer and delivery
+
+`AgentStatusReducer` establishes an owner/socket-bound silent snapshot baseline and emits `AcceptedLiveAttention` only for a matching semantic event on a contiguous revision, above the row and retained per-agent high-water. Epoch/socket changes, gaps, snapshots, invalidation, stale or duplicate frames reconcile silently; replay does not generate catch-up alerts. OMP semantic attention and qualified Claude needs-attention can notify; Codex is status-only. The prior `seenAttentionIds` LRU is not the dedupe mechanism. Runtime-qualified readiness is checked again before history, audio or OS effects; preference source A or Settings target B cannot certify event runtime C.
+
+`NotificationCoordinator` keeps at most 50 process-local records and 3 foreground transients. Read/clear affects display history, not reducer high-water; permission denial and OS-channel blocking do not erase history. API 29 requires no runtime permission; API 33+ prompts only after the user explicitly requests it. The three stable private channels are `channel_terminal_attention` (high), `channel_transfers` (low), and `channel_idle_suspend` (high)—there is no health or per-policy fourth channel. Generic public notification text avoids lock-screen disclosure. Foreground OS posts are silent and optional in-app audio uses the selected pattern/volume; background delivery uses OS channel sound only. Android channel sound/importance remains user-controlled. No alert, feed update or keepalive is promised after process stop.
+
+Feed and OS clicks use collision-safe canonical identities and immutable explicit intents. The retained owner validates the current profile/generation and terminal identity, requiring matching authenticated account and active authority before guarded navigation. Stale, disconnected, cold-process or retired targets show safe status rather than selecting a fallback profile. Reading a record is independent from whether its destination remains valid.
+
+**Evidence and limits:** Main reports 905 passing unit tests (725 `:shared:jvmTest`, 180 `:androidApp:testDebugUnitTest`) and a successful debug APK assembly (`pnpm native-app:assembleDebug`). Live MainActivity/server journeys, API 29/API 33+ permission/channel presentation, physical ARM64, hardware keyboard/IME, lock-screen behavior and human visual review remain open qualification gates.
+
 ## Qualification and release boundary
 
 - All phases remain pending until their actual acceptance runs pass; no source/configuration-only success claims.

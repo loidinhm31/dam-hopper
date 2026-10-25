@@ -26,6 +26,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
@@ -78,9 +79,12 @@ import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.core.logging.AppLogger
 import dev.damhopper.nativeapp.features.terminal.TerminalDiagnosticsDialog
 import dev.damhopper.nativeapp.features.profiles.ProfileRepository
-import dev.damhopper.nativeapp.features.settings.InMemoryPreferencesStore
-import dev.damhopper.nativeapp.features.settings.PreferencesStore
+import dev.damhopper.nativeapp.features.settings.SettingsOwner
 import dev.damhopper.nativeapp.features.settings.WorkbenchPreferences
+import dev.damhopper.nativeapp.features.git.GitQueryRepository
+import dev.damhopper.nativeapp.ui.theme.UnscaledDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import kotlinx.coroutines.flow.MutableStateFlow
 import dev.damhopper.nativeapp.features.terminal.NativeTerminalSurface
 import dev.damhopper.nativeapp.features.terminal.VtTerminalSurface
 import dev.damhopper.nativeapp.features.terminal.CreateSessionRequest
@@ -107,6 +111,8 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Standalone Mobile Terminal Display & Input Screen for a selected project.
@@ -134,7 +140,11 @@ fun ProjectTerminalScreen(
     initialSessionId: String? = null,
     onSessionSelected: ((String?) -> Unit)? = null,
     profileId: String? = null,
-    preferencesStore: PreferencesStore = remember { InMemoryPreferencesStore() },
+    preferenceAccess: PreferenceAccess? = null,
+    commandHistory: ObservableCommandHistory? = null,
+    historyOwner: SettingsOwner? = null,
+    worktreePath: String? = null,
+    inputCovered: Boolean = false,
     retainedState: ProjectTerminalState? = null,
     showHeader: Boolean = true,
 ) {
@@ -221,20 +231,56 @@ fun ProjectTerminalScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     var directInputState by remember { mutableStateOf(TextFieldValue("")) }
     var cursorVisible by remember { mutableStateOf(true) }
-    var terminalFontSize by remember(preferencesStore, retainedState) {
-        mutableIntStateOf(
-            retainedState?.terminalFontSize
-                ?: WorkbenchPreferences.clampFont(preferencesStore.loadPreferences().terminalFontSize)
-        )
-    }
+    val prefAccess = preferenceAccess ?: retainedState?.preferenceAccess
+        ?: remember { PreferenceAccess(MutableStateFlow(WorkbenchPreferences()), {}) }
+    val prefs by prefAccess.preferences.collectAsState()
+    val terminalFontSize = prefs.terminalFontSize
     fun updateTerminalFontSize(newSize: Int) {
         val clamped = WorkbenchPreferences.clampFont(newSize)
-        if (clamped == terminalFontSize) return
-        terminalFontSize = clamped
-        retainedState?.updateTerminalFontSize(clamped)
-        preferencesStore.savePreferences(
-            preferencesStore.loadPreferences().copy(terminalFontSize = clamped)
-        )
+        if (clamped == prefAccess.current.terminalFontSize) return
+        prefAccess.update { it.copy(terminalFontSize = clamped) }
+    }
+
+    // Settings/history/privacy covering the terminal hides the inline controls and drops the IME.
+    val covered = inputCovered || retainedState?.isInputSuspended == true
+    val focusManager = LocalFocusManager.current
+    LaunchedEffect(covered) {
+        if (covered) {
+            keyboardController?.hide()
+            focusManager.clearFocus(force = true)
+        }
+    }
+
+    val history = retainedState?.commandHistory ?: commandHistory
+    val historyScopeOwner = retainedState?.historyOwner ?: historyOwner
+    val historyRevision by (history?.revision ?: NO_HISTORY_REVISION).collectAsState()
+    val historyEnabled by (history?.enabled ?: NO_HISTORY_ENABLED).collectAsState()
+    val historyFailure by (history?.failure ?: NO_HISTORY_FAILURE).collectAsState()
+    fun recordConfirmedCommand(command: String) {
+        val owner = historyScopeOwner ?: return
+        history?.record(owner, projectName, command)
+    }
+    var ctrlLatched by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
+    var altLatched by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
+
+    var commitStatus by remember(terminalRepo, connectionKey, worktreePath) { mutableStateOf<TerminalCommitStatus?>(null) }
+    LaunchedEffect(terminalRepo, connectionKey, worktreePath, prefs.terminalCommitStatusEnabled) {
+        if (!prefs.terminalCommitStatusEnabled) {
+            commitStatus = null
+            return@LaunchedEffect
+        }
+        try {
+            val git = GitQueryRepository(terminalRepo.apiClient)
+            val branch = git.listBranches(projectName, worktreePath).firstOrNull { it.isCurrent && !it.isRemote }?.name
+            val latest = git.getLog(projectName, worktreePath, limit = 1).firstOrNull()
+            if (terminalRepo.apiClient.connection == connectionRef) {
+                commitStatus = TerminalCommitStatus(branch, latest?.hash?.take(7), latest?.message)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            commitStatus = null
+        }
     }
 
     fun isEligibleForInput(sessionId: String): Boolean {
@@ -410,6 +456,8 @@ fun ProjectTerminalScreen(
                 incarnation = ctrl.incarnation.toLong(),
                 commandText = capturedCmd,
                 onResult = { success, isDeliveryUncertain, error ->
+                    // Only a transport-confirmed explicit submission is remembered; failed/uncertain never are.
+                    if (success && capturedCmd != null) recordConfirmedCommand(capturedCmd)
                     if (!success) {
                         if (error != null) {
                             uiErrorBanner = error
@@ -516,10 +564,11 @@ fun ProjectTerminalScreen(
                 }
             } else {
                 val currentActive = activeSessionId
-                if (currentActive == null || selectable.none { it.id == currentActive }) {
-                    val candidate = initialSessionId?.takeIf { initId -> selectable.any { it.id == initId } }
-                        ?: selectable.firstOrNull()?.id
-                    selectSession(candidate)
+                val requested = initialSessionId?.takeIf { initId -> selectable.any { it.id == initId } }
+                if (requested != null && (currentActive == null || currentActive != requested)) {
+                    selectSession(requested)
+                } else if (currentActive == null || selectable.none { it.id == currentActive }) {
+                    selectSession(selectable.firstOrNull()?.id)
                 }
                 isSyncFailure = false
             }
@@ -719,10 +768,48 @@ fun ProjectTerminalScreen(
         if (destroyingSessionIds[ctrl.sessionId] == true) return
         lastSubmittedCommandText = null
         lastSinkAdmitted = false
-        ctrl.toggleModifier(TerminalModifier.CTRL)
+        if (!ctrl.isModifierActive(TerminalModifier.CTRL)) ctrl.toggleModifier(TerminalModifier.CTRL)
         ctrl.sendInput(ctrl.encodeKey(char))
         if (!lastSinkAdmitted && uiErrorBanner == null) {
             uiErrorBanner = "Accessory key dropped: input queue full or inactive"
+        }
+    }
+
+    fun onAccessoryAction(action: AccessoryAction) {
+        when (action) {
+            is AccessoryAction.Special -> {
+                sendSpecialKey(action.name)
+                ctrlLatched = false
+                altLatched = false
+            }
+            is AccessoryAction.CtrlChar -> {
+                sendCtrlChar(action.char)
+                ctrlLatched = false
+                altLatched = false
+            }
+            AccessoryAction.ToggleCtrl -> {
+                activeController?.toggleModifier(TerminalModifier.CTRL)
+                ctrlLatched = !ctrlLatched
+            }
+            AccessoryAction.ToggleAlt -> {
+                activeController?.toggleModifier(TerminalModifier.ALT)
+                altLatched = !altLatched
+            }
+            AccessoryAction.ShowKeyboard -> {
+                terminalFocusRequester.requestFocus()
+                keyboardController?.show()
+            }
+            AccessoryAction.ClearLocalDisplay -> {
+                AppLogger.recordDiagnostic(
+                    type = "terminal",
+                    scope = "terminal-panel",
+                    message = "terminal.local_buffer_cleared",
+                    profileId = connectionRef.profileId,
+                    generation = connectionRef.generation,
+                    sessionId = activeSessionId
+                )
+                (activeSurface as? VtTerminalSurface)?.clearDisplayBuffer()
+            }
         }
     }
 
@@ -1081,6 +1168,22 @@ fun ProjectTerminalScreen(
             }
         }
 
+        commitStatus?.describe()?.let { line ->
+            Text(
+                text = line,
+                color = DamHopperColors.TextSecondary,
+                fontSize = 11.sp,
+                fontFamily = JetBrainsMonoFontFamily,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Surface)
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                    .semantics { contentDescription = "Latest commit $line" },
+            )
+        }
+
         // 3. Status & Exit Banner
         if (activeController?.isExited == true) {
             val exitCode = activeController.exitCode
@@ -1212,6 +1315,30 @@ fun ProjectTerminalScreen(
         val lineIds = snapshot.lineIds
         val readingState = readingStates.forController(activeController)
         TerminalViewportEffects(readingState, lineIds, snapshot.revision)
+        val scrollScope = rememberCoroutineScope()
+        fun scrollTerminal(direction: TerminalScrollDirection) {
+            val reading = readingState
+            val lastIndex = lineIds.lastIndex
+            scrollScope.launch {
+                reading.programmaticScroll = true
+                try {
+                    val target = terminalScrollTarget(
+                        reading.list.firstVisibleItemIndex, lastIndex, direction, prefs.terminalScrollStep,
+                    )
+                    reading.follow.beginUserScroll()
+                    reading.list.scrollToItem(target)
+                    reading.follow.observeUserScroll(
+                        atBottom = !reading.list.canScrollForward,
+                        firstRowId = lineIds.getOrNull(reading.list.firstVisibleItemIndex),
+                        offset = reading.list.firstVisibleItemScrollOffset,
+                    )
+                } finally {
+                    reading.programmaticScroll = false
+                }
+            }
+        }
+        // The terminal font is its own preference: keep it out of the system font-size scaling.
+        UnscaledDensity {
         val density = LocalDensity.current
         val terminalTextStyle = remember(terminalFontSize) {
             TextStyle(
@@ -1238,7 +1365,7 @@ fun ProjectTerminalScreen(
                 .weight(1f)
                 .fillMaxWidth()
                 .background(DamHopperColors.Background)
-                .pointerInput(preferencesStore) {
+                .pointerInput(prefAccess) {
                     awaitEachGesture {
                         awaitFirstDown(requireUnconsumed = false)
                         var segmentStartSp = 0
@@ -1305,6 +1432,7 @@ fun ProjectTerminalScreen(
             BasicTextField(
                 value = directInputState,
                 onValueChange = { newValue ->
+                    retainedState?.isImeComposing?.value = newValue.composition != null
                     val newText = newValue.text
                     val oldText = directInputState.text
                     if (newText.length > oldText.length) {
@@ -1313,7 +1441,15 @@ fun ProjectTerminalScreen(
                             if (ch == '\n') {
                                 activeController?.sendInput(byteArrayOf(0x0D))
                             } else {
-                                activeController?.sendInput(ch.toString().encodeToByteArray())
+                                activeController?.let { c ->
+                                    if (ctrlLatched || altLatched) {
+                                        c.sendInput(c.encodeKey(ch))
+                                        ctrlLatched = false
+                                        altLatched = false
+                                    } else {
+                                        c.sendInput(ch.toString().encodeToByteArray())
+                                    }
+                                }
                             }
                         }
                     } else if (newText.length < oldText.length) {
@@ -1338,6 +1474,9 @@ fun ProjectTerminalScreen(
                     .focusRequester(terminalFocusRequester)
                     .size(1.dp)
                     .alpha(0.01f)
+                    .onFocusChanged {
+                        if (!it.isFocused) retainedState?.isImeComposing?.value = false
+                    }
             )
             if (eligibleSessions.isEmpty() && !isLoadingSessions) {
                 Column(
@@ -1427,45 +1566,80 @@ fun ProjectTerminalScreen(
                 }
             }
         }
+        }
 
-        // 5. Inline Accessory Control Bar
+        // 5. Inline scroll controls (1..50 lines per step) and the native accessory keyboard.
+        if (activeController != null && prefs.terminalScrollButtonsEnabled && !covered) {
+            TerminalScrollControls(
+                step = clampTerminalScrollStep(prefs.terminalScrollStep),
+                onScroll = { scrollTerminal(it) },
+            )
+        }
         // Strictly inline above IME, ZERO floating action buttons!
         if (activeController != null) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DamHopperColors.Surface)
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                AccessoryKeyButton(label = "⌨", onClick = {
-                    terminalFocusRequester.requestFocus()
-                    keyboardController?.show()
-                })
-                AccessoryKeyButton(label = "Ctrl+C", onClick = { sendCtrlChar('c') })
-                AccessoryKeyButton(label = "Ctrl+D", onClick = { sendCtrlChar('d') })
-                AccessoryKeyButton(label = "Tab", onClick = { sendSpecialKey("TAB") })
-                AccessoryKeyButton(label = "Esc", onClick = { sendSpecialKey("ESC") })
-                AccessoryKeyButton(label = "▲", onClick = { sendSpecialKey("UP") })
-                AccessoryKeyButton(label = "▼", onClick = { sendSpecialKey("DOWN") })
-                AccessoryKeyButton(label = "◀", onClick = { sendSpecialKey("LEFT") })
-                AccessoryKeyButton(label = "▶", onClick = { sendSpecialKey("RIGHT") })
-                AccessoryKeyButton(label = "Enter", onClick = { sendSpecialKey("ENTER") })
-                AccessoryKeyButton(
-                    label = "Clear",
-                    onClick = {
-                        AppLogger.recordDiagnostic(
-                            type = "terminal",
-                            scope = "terminal-panel",
-                            message = "terminal.local_buffer_cleared",
-                            profileId = connectionRef.profileId,
-                            generation = connectionRef.generation,
-                            sessionId = activeSessionId
-                        )
-                        (activeSurface as? VtTerminalSurface)?.clearDisplayBuffer()
+            NativeAccessoryKeyboard(
+                enabled = prefs.mobileCustomKeyboardEnabled,
+                inert = covered,
+                metrics = accessoryMetrics(prefs),
+                haptics = prefs.hapticFeedbackEnabled,
+                ctrlLatched = ctrlLatched,
+                altLatched = altLatched,
+                onAction = { onAccessoryAction(it) },
+            )
+
+            // App-local history suggestions: explicit native history scope, inserted into the draft only and never
+            // sent automatically; gone when the suggestions preference or the history consent is off.
+            val suggestions = if (covered) {
+                emptyList()
+            } else {
+                remember(historyRevision, historyEnabled, commandInput, prefs.terminalSuggestionsEnabled, projectName, historyScopeOwner) {
+                    terminalSuggestionsFor(prefs.terminalSuggestionsEnabled, history, historyScopeOwner, projectName, commandInput)
+                }
+            }
+            if (suggestions.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DamHopperColors.Surface)
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "This device's history:",
+                        color = DamHopperColors.TextSecondary,
+                        fontSize = 11.sp,
+                    )
+                    suggestions.forEach { suggestion ->
+                        Box(
+                            modifier = Modifier
+                                .sizeIn(minHeight = 48.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(DamHopperColors.SurfaceVariant)
+                                .semantics { contentDescription = "Insert history command into draft" }
+                                .clickable { commandInput = suggestion }
+                                .padding(horizontal = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = suggestion,
+                                color = DamHopperColors.TextPrimary,
+                                fontSize = 12.sp,
+                                fontFamily = JetBrainsMonoFontFamily,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
+                }
+            }
+            historyFailure?.let { failure ->
+                Text(
+                    text = failure,
+                    color = DamHopperColors.Warning,
+                    fontSize = 11.sp,
+                    modifier = Modifier.fillMaxWidth().background(DamHopperColors.Surface).padding(horizontal = 12.dp, vertical = 2.dp),
                 )
             }
 
@@ -1505,6 +1679,7 @@ fun ProjectTerminalScreen(
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
+                        .onFocusChanged { retainedState?.isCommandInputFocused?.value = it.isFocused }
                 )
 
                 Button(
@@ -1665,7 +1840,7 @@ fun ProjectTerminalScreen(
     modifier: Modifier = Modifier,
     initialSessionId: String? = null,
     onSessionSelected: ((String?) -> Unit)? = null,
-    preferencesStore: PreferencesStore = remember { InMemoryPreferencesStore() },
+    preferenceAccess: PreferenceAccess? = null,
 ) {
     val profiles by profileRepository.profiles.collectAsState()
     val activeProfile = profiles.find { it.id == profileId }
@@ -1700,30 +1875,54 @@ fun ProjectTerminalScreen(
         initialSessionId = initialSessionId,
         onSessionSelected = onSessionSelected,
         profileId = profileId,
-        preferencesStore = preferencesStore,
+        preferenceAccess = preferenceAccess,
     )
 }
 
+private val NO_HISTORY_REVISION: StateFlow<Long> = MutableStateFlow(0L)
+private val NO_HISTORY_ENABLED: StateFlow<Boolean> = MutableStateFlow(false)
+private val NO_HISTORY_FAILURE: StateFlow<String?> = MutableStateFlow(null)
+
+/**
+ * Inline terminal scroll controls: up/down by the preferred [step] lines (1..50) and jumps to the top/bottom.
+ * Each control keeps a 48 dp touch target; they only move the local viewport, never the remote PTY.
+ */
 @Composable
-private fun AccessoryKeyButton(
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(DamHopperColors.SurfaceVariant)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        contentAlignment = Alignment.Center
+private fun TerminalScrollControls(step: Int, onScroll: (TerminalScrollDirection) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(DamHopperColors.Surface)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(
-            text = label,
-            color = DamHopperColors.TextPrimary,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            fontFamily = JetBrainsMonoFontFamily
-        )
+        listOf(
+            Triple("▲ $step", "Scroll up $step lines", TerminalScrollDirection.UP),
+            Triple("▼ $step", "Scroll down $step lines", TerminalScrollDirection.DOWN),
+            Triple("Top", "Jump to the top of the output", TerminalScrollDirection.TOP),
+            Triple("Bottom", "Jump to the latest output", TerminalScrollDirection.BOTTOM),
+        ).forEach { (label, description, direction) ->
+            Box(
+                modifier = Modifier
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .semantics { contentDescription = description }
+                    .clickable { onScroll(direction) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = label,
+                    color = DamHopperColors.TextPrimary,
+                    fontSize = 12.sp,
+                    fontFamily = JetBrainsMonoFontFamily,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(DamHopperColors.SurfaceVariant)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+        }
     }
 }

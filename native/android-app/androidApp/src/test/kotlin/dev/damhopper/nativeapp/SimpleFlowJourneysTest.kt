@@ -137,53 +137,29 @@ class SimpleFlowJourneysTest {
     }
 
     @Test
-    fun testTerminalFontSizeControlsAndPinchWiringStructuralGuard() {
-        val appFile = File("../shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/DamHopperMobileApp.kt")
-        assertTrue(appFile.exists(), "DamHopperMobileApp.kt must exist")
-        val appContent = appFile.readText()
-        assertTrue(
-            appContent.contains("preferencesStore = preferencesStore"),
-            "DamHopperMobileApp must pass preferencesStore to ProjectTerminalScreen"
-        )
+    fun testSettingsOverlayJourneyKeepsWorkspaceSelectionAndReturnsToOrigin() {
+        val nav = AppFlowNavigation()
+        nav.onProfileAuthenticated("prof-local")
+        nav.selectProject("dam-hopper")
+        nav.selectSession("term-1")
 
-        val terminalFile = File("../shared/src/commonMain/kotlin/dev/damhopper/nativeapp/ui/screens/ProjectTerminalScreen.kt")
-        assertTrue(terminalFile.exists(), "ProjectTerminalScreen.kt must exist")
-        val terminalContent = terminalFile.readText().replace("\r\n", "\n")
+        nav.openSettings(dev.damhopper.nativeapp.ui.flow.SettingsOrigin(AppFlowStage.TERMINAL, panel = "EDITOR", sessionId = "term-1"))
+        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals("term-1", nav.state.value.activeSessionId)
 
-        assertTrue(
-            terminalContent.contains("preferencesStore: PreferencesStore = remember { InMemoryPreferencesStore() }"),
-            "ProjectTerminalScreen must accept preferencesStore parameter"
-        )
-        assertTrue(
-            terminalContent.contains("WorkbenchPreferences.clampFont(preferencesStore.loadPreferences().terminalFontSize)"),
-            "ProjectTerminalScreen must initialize clamped terminalFontSize from preferencesStore"
-        )
-        val normalizedWhitespace = terminalContent.replace(Regex("\\s+"), " ")
-        assertTrue(
-            normalizedWhitespace.contains("preferencesStore.savePreferences( preferencesStore.loadPreferences().copy(terminalFontSize = clamped) )"),
-            "ProjectTerminalScreen must persist updated terminalFontSize via fresh load/copy/save"
-        )
+        assertTrue(nav.handleBackPress(), "Back closes Settings first")
+        assertEquals(null, nav.state.value.settings)
+        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals("dam-hopper", nav.state.value.activeProject)
+    }
 
-        val idxMinus = terminalContent.indexOf("text = \"A-\"")
-        val idxReadout = terminalContent.indexOf("text = \"\${terminalFontSize}sp\"")
-        val idxPlus = terminalContent.indexOf("text = \"A+\"")
-        val idxDiag = terminalContent.indexOf("text = \"Diag\"")
-        val idxNewTerm = terminalContent.indexOf("text = \"+ New Terminal\"")
-        assertTrue(idxMinus > 0 && idxMinus < idxReadout, "A- must precede font size readout")
-        assertTrue(idxReadout < idxPlus, "Font size readout must precede A+")
-        assertTrue(idxPlus < idxDiag, "A+ must precede Diag")
-        assertTrue(idxDiag < idxNewTerm, "Diag must precede + New Terminal")
-
-        assertTrue(
-            terminalContent.contains("val terminalTextStyle = remember(terminalFontSize)") &&
-                terminalContent.contains("fontSize = terminalFontSize.sp") &&
-                terminalContent.contains("lineHeight = terminalLineHeightSp(terminalFontSize).sp"),
-            "terminalTextStyle must be keyed by terminalFontSize and use terminalLineHeightSp"
-        )
-        assertTrue(
-            terminalContent.contains("if (pressedCount >= 2)") &&
-                terminalContent.contains("event.calculateZoom()"),
-            "Pinch zoom calculation must be gated by pressedCount >= 2"
-        )
+    @Test
+    fun testTerminalFontStepsGoThroughTheOneReactivePreferenceFlow() {
+        val flow = kotlinx.coroutines.flow.MutableStateFlow(dev.damhopper.nativeapp.features.settings.WorkbenchPreferences())
+        val access = dev.damhopper.nativeapp.ui.screens.PreferenceAccess(flow, { t -> flow.value = t(flow.value) })
+        val next = access.current.terminalFontSize + 1
+        access.update { it.copy(terminalFontSize = next) }
+        assertEquals(14, flow.value.terminalFontSize)
+        assertEquals(14, access.current.terminalFontSize)
     }
 }

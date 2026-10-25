@@ -37,7 +37,6 @@ class ProjectTerminalVisibilityTest {
         return ProjectTerminalState(
             projectName = projectName,
             connectionRef = connection,
-            preferencesStore = InMemoryPreferencesStore(),
             ownerScope = testScope,
         )
     }

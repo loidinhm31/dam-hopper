@@ -1,6 +1,12 @@
 package dev.damhopper.nativeapp.features.profiles
 
+import dev.damhopper.nativeapp.core.model.ConnectionErrorReason
+import dev.damhopper.nativeapp.core.model.ConnectionOwnerError
+import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.core.ownership.ConnectionRegistry
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.*
 
@@ -140,5 +146,214 @@ class ProfileRepositoryTest {
         val connAfterRotation = registry.getCurrentConnection(prof.id)
         assertEquals(3L, connAfterRotation?.generation)
         assertEquals("jwt-2-rotated", vault.getToken(prof.id, prof.baseUrl))
+    }
+
+    // ---- C2a1: retirement drain precedes credential/identity publication (real ProfileRepository) ----
+
+    private val rotated = AuthSession("jwt-new", "alice", "user", "2026-11-15T00:00:00Z")
+
+    private data class DrainSnapshot(
+        val token: String?,
+        val baseUrl: String?,
+        val status: AuthStatus?,
+        val registered: Boolean,
+        val ref: ConnectionRef,
+    )
+
+    /**
+     * Registers a compliant barrier (non-locking reads only: vault, StateFlow.value; no profile or
+     * registry calls) that records the world it sees and then parks on [gate].
+     */
+    private suspend fun parkingBarrier(profile: ServerProfile, gate: CompletableDeferred<Unit>): () -> DrainSnapshot? {
+        var snapshot: DrainSnapshot? = null
+        registry.addRetirementBarrier { ref ->
+            snapshot = DrainSnapshot(
+                token = vault.getToken(profile.id, profile.baseUrl),
+                baseUrl = repo.profiles.value.singleOrNull { it.id == profile.id }?.baseUrl,
+                status = repo.authStatuses.value[profile.id],
+                registered = registry.connectionsState.value.containsKey(profile.id),
+                ref = ref,
+            )
+            gate.await()
+        }
+        return { snapshot }
+    }
+
+    private suspend fun seededProfile(baseUrl: String = "https://a.example.com"): ServerProfile {
+        repo.initialize()
+        val profile = repo.addProfile("Prod", baseUrl, "alice")
+        vault.storeToken(profile.id, profile.baseUrl, "tok-a")
+        return profile
+    }
+
+    @Test
+    fun endpointUpdateAwaitsDrainBeforeCredentialClearAndIdentityPublication() = runTest {
+        val prof = seededProfile()
+        val old = registry.getOrCreateConnection(prof.id)
+        val gate = CompletableDeferred<Unit>()
+        val drained = parkingBarrier(prof, gate)
+
+        val update = async { repo.updateProfile(prof.id, "Prod", "https://b.example.com", "alice") }
+        runCurrent()
+        assertNotNull(drained(), "drain must be parked inside the barrier")
+
+        // While the drain is pending nothing has been replaced, and the profile is unavailable.
+        assertTrue(update.isActive)
+        assertEquals("tok-a", vault.getToken(prof.id, prof.baseUrl))
+        assertEquals(prof.baseUrl, repo.profiles.value.single().baseUrl)
+        assertNull(repo.authStatuses.value[prof.id])
+        assertNull(registry.getCurrentConnection(prof.id))
+
+        gate.complete(Unit)
+        val updated = update.await()
+        assertEquals(DrainSnapshot("tok-a", prof.baseUrl, null, false, old), drained())
+        assertNull(vault.getToken(prof.id, prof.baseUrl))
+        assertEquals(updated.baseUrl, repo.profiles.value.single().baseUrl)
+        assertTrue(repo.authStatuses.value[prof.id] is AuthStatus.LoginRequired)
+        assertEquals(ConnectionRef(prof.id, 2L), registry.getCurrentConnection(prof.id))
+    }
+
+    @Test
+    fun sessionApplicationAwaitsDrainBeforeCredentialStoreAndAuthPublication() = runTest {
+        val prof = seededProfile()
+        val old = registry.getOrCreateConnection(prof.id)
+        val gate = CompletableDeferred<Unit>()
+        val drained = parkingBarrier(prof, gate)
+
+        val apply = async { repo.applyAuthenticatedSession(prof.id, rotated, null) }
+        runCurrent()
+        assertNotNull(drained(), "drain must be parked inside the barrier")
+        assertTrue(apply.isActive)
+        assertEquals("tok-a", vault.getToken(prof.id, prof.baseUrl))
+        assertNull(repo.authStatuses.value[prof.id])
+
+        gate.complete(Unit)
+        apply.await()
+        assertEquals("tok-a", drained()?.token) // credential replaced only after the drain
+        assertEquals(old, drained()?.ref)
+        assertEquals("jwt-new", vault.getToken(prof.id, prof.baseUrl))
+        assertTrue(repo.authStatuses.value[prof.id] is AuthStatus.Authenticated)
+        assertEquals(2L, registry.getCurrentConnection(prof.id)?.generation)
+    }
+
+    @Test
+    fun logoutAwaitsDrainBeforeCredentialClearAndAuthLossPublication() = runTest {
+        // Loopback closed port: the best-effort remote revoke fails immediately.
+        val prof = seededProfile("http://127.0.0.1:1")
+        repo.applyAuthenticatedSession(prof.id, rotated, null)
+        val before = registry.getCurrentConnection(prof.id)
+        assertNotNull(before)
+        val gate = CompletableDeferred<Unit>()
+        val drained = parkingBarrier(prof, gate)
+
+        val logout = async { repo.logout(prof.id) }
+        runCurrent()
+        assertNotNull(drained(), "drain must be parked inside the barrier")
+        assertTrue(logout.isActive)
+        assertEquals("jwt-new", vault.getToken(prof.id, prof.baseUrl))
+        assertTrue(repo.authStatuses.value[prof.id] is AuthStatus.Authenticated)
+
+        gate.complete(Unit)
+        logout.await()
+        val seen = drained()
+        assertEquals("jwt-new", seen?.token)
+        assertTrue(seen?.status is AuthStatus.Authenticated)
+        assertEquals(before, seen?.ref)
+        assertNull(vault.getToken(prof.id, prof.baseUrl))
+        assertTrue(repo.authStatuses.value[prof.id] is AuthStatus.LoginRequired)
+    }
+
+    @Test
+    fun deleteAwaitsDrainBeforeCredentialLossAndLeavesNoSuccessorAuthority() = runTest {
+        val prof = seededProfile()
+        registry.getOrCreateConnection(prof.id)
+        val gate = CompletableDeferred<Unit>()
+        val drained = parkingBarrier(prof, gate)
+
+        val delete = async { repo.deleteProfile(prof.id) }
+        runCurrent()
+        assertNotNull(drained(), "drain must be parked inside the barrier")
+        assertTrue(delete.isActive)
+        assertEquals("tok-a", vault.getToken(prof.id, prof.baseUrl))
+        assertEquals(1, repo.profiles.value.size)
+
+        gate.complete(Unit)
+        delete.await()
+        assertEquals("tok-a", drained()?.token)
+        assertNull(vault.getToken(prof.id, prof.baseUrl))
+        assertTrue(repo.profiles.value.isEmpty())
+        assertNull(registry.getCurrentConnection(prof.id)) // removed, not replaced by a successor
+        assertFalse(registry.connectionsState.value.containsKey(prof.id))
+    }
+
+    @Test
+    fun clientCreationDuringRetirementWaitsAndNeverRelabelsOldIdentity() = runTest {
+        val prof = seededProfile()
+        registry.getOrCreateConnection(prof.id)
+        val gate = CompletableDeferred<Unit>()
+        val drained = parkingBarrier(prof, gate)
+
+        val update = async { repo.updateProfile(prof.id, "Prod", "https://b.example.com", "alice") }
+        runCurrent()
+        assertNotNull(drained(), "drain must be parked inside the barrier")
+        val apiCreation = async { repo.getOrCreateApiClient(prof.id) }
+        val wsCreation = async { repo.getOrCreateWsConnection(prof.id) }
+        runCurrent()
+        // Serialized behind the identity commit on the profile mutex; no pre-wait snapshot is taken.
+        assertTrue(apiCreation.isActive)
+        assertTrue(wsCreation.isActive)
+
+        gate.complete(Unit)
+        val updated = update.await()
+        val client = apiCreation.await()
+        val ws = wsCreation.await()
+        val successor = ConnectionRef(prof.id, 2L)
+        assertEquals(successor, client.connection)
+        assertEquals(successor, ws.connection)
+        assertEquals(updated.baseUrl, client.normalizedBaseUrl)
+        assertEquals(updated.baseUrl, ws.baseUrl)
+    }
+
+    @Test
+    fun failedRetirementLeavesCredentialsAndIdentityUntouchedAndFencesUntilRecovery() = runTest {
+        val prof = seededProfile()
+        val old = registry.getOrCreateConnection(prof.id)
+        var failing = true
+        var attempts = 0
+        registry.addRetirementBarrier {
+            attempts++
+            if (failing) throw IllegalStateException("cleanup failed")
+        }
+
+        assertFailsWith<ConnectionOwnerError> {
+            repo.updateProfile(prof.id, "Prod", "https://b.example.com", "alice")
+        }
+        assertEquals("tok-a", vault.getToken(prof.id, prof.baseUrl))
+        assertEquals(prof.baseUrl, repo.profiles.value.single().baseUrl)
+        assertNull(repo.authStatuses.value[prof.id])
+
+        // Failed transition fences every ordinary entry point without rerunning callbacks.
+        assertEquals(
+            ConnectionErrorReason.OWNER_MISMATCH,
+            assertFailsWith<ConnectionOwnerError> { repo.getOrCreateApiClient(prof.id) }.reason,
+        )
+        assertFailsWith<ConnectionOwnerError> { repo.getOrCreateWsConnection(prof.id) }
+        assertFailsWith<ConnectionOwnerError> { repo.applyAuthenticatedSession(prof.id, rotated, null) }
+        assertFailsWith<ConnectionOwnerError> { repo.logout(prof.id) }
+        assertFailsWith<ConnectionOwnerError> { repo.deleteProfile(prof.id) }
+        assertEquals("tok-a", vault.getToken(prof.id, prof.baseUrl))
+        assertEquals(1, repo.profiles.value.size)
+        assertNull(repo.authStatuses.value[prof.id])
+        assertEquals(1, attempts)
+
+        // Explicit bounded operator recovery releases only the original successor; no identity is invented.
+        failing = false
+        registry.recoverRetirement(old)
+        assertEquals(2, attempts)
+        val client = repo.getOrCreateApiClient(prof.id)
+        assertEquals(ConnectionRef(prof.id, 2L), client.connection)
+        assertEquals(prof.baseUrl, client.normalizedBaseUrl)
+        assertEquals("tok-a", vault.getToken(prof.id, prof.baseUrl))
+        assertEquals(prof.baseUrl, repo.profiles.value.single().baseUrl)
     }
 }

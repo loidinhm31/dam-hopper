@@ -241,7 +241,7 @@ Phase 07 implements host-contract foundations for remote PTY lifecycle managemen
 3. **Server-Authoritative Agent Status Observation (`AgentStatusReducer`):**
    - Maintains an authoritative `AgentStatusState` coordinating live WebSocket events (`ServerMsg.AgentStatusChanged`, `ServerMsg.AgentStatusRemoved`, `ServerMsg.AgentStatusInvalidated`) with REST snapshots (`/api/agent-status/snapshot`).
    - Fences stale updates using `serverEpoch` and monotonic `revision` ordering. Epoch mismatches trigger a full snapshot reload hoisted outside non-reentrant mutex locks to prevent coroutine deadlocks.
-   - Tracks unread attention events with an in-memory LRU cache (`seenAttentionIds`, max 1,000 entries) to prevent duplicate alerts from replayed history.
+- Admits notification effects only for newly accepted live semantic attention after a silent owner/socket snapshot baseline. The reducer fences epoch, contiguous revision, row identity, and per-row attention revision; gaps, reconnect/reconciliation, replay, snapshots, and invalidation do not create alerts. The old `seenAttentionIds` LRU is not used.
 
 4. **Platform Input Bridging & Bracketed Paste (`TerminalInputController`):**
    - Bridges hardware keyboard events (`KeyEvent`), IME text commits, and clipboard paste to `TerminalSessionController`.
@@ -285,6 +285,22 @@ Phase 16 implements remote network port discovery, Cloudflared tunnel management
    - Diagnostics export (`POST /api/diagnostics/export`) defaulting to `includeTerminalOutput = false` and acknowledging server-daemon memory storage.
    - Single content area docking under `WorkbenchPanel.SSH_HOST` with zero FABs.
 ---
+
+### Active-runtime Settings and notifications (Phase 17 implementation)
+
+`DamHopperMobileApp` keeps Settings as an overlay on the guided Profile Login → Project List → Project Terminal flow; inline header entries expose Settings and the notification feed without mounting the separate 12-panel `WorkbenchScreen`. Returning from Settings restores its captured origin. The overlay retains the editor's dirty text/undo state, file sidebar, and remote PTY while suspending hidden-surface input.
+
+The retained `SettingsRepository` is the single reactive preference source for Settings and active screens. Android-applicable Settings cover independent preference-source and administrative-target selection; local/remote appearance and v2 notification policy; native accessory keyboard and command history; supported shortcuts; agent-path/integration management; usage and idle-suspend controls; global defaults and known workspaces; structured config; and local diagnostics plus bounded SAF TOML import/export. Only the approved Git, Ports, Fleet, and IDE-layout shortcut destinations are unavailable in this focused root. Request-local owner/selection guards reject stale pre-admission work; an admitted but unconfirmed mutation is `Unknown`, not retried or represented as canceled on the server. Reset clears PTYs/runtime state, not saved preferences.
+
+Preference changes update active consumers without replacing their owner state: theme/system text scaling, editor and terminal fonts/zoom, Files/sidebar hidden-file and language-family filtering, terminal scroll/accessory controls and project switching, supported shortcuts, and optional app-local command suggestions. The terminal scroll step is bounded to 1..50 (default 5). Language wire filters are `all`, `rust`, `javascript-typescript`, and `java`; migrated native `known`/`code`/`text` values display a non-equivalent local `all` fallback and are never silently synchronized.
+
+Connection retirement uses the C2a1 awaited barrier: revoke generation N and reserve but withhold N+1 while captured barriers drain and observers run; perform the drain outside the registry lock with cancellation-safe cleanup. Attempt every barrier, aggregate failure, and keep the profile unavailable on failure until one explicit bounded recovery succeeds. Register the retained runtime barrier before watchers/effects; do not allow callbacks to re-enter profile/registry ownership.
+
+Notifications are produced only from newly accepted live OMP or runtime-qualified Claude semantic attention; Codex is status-only. Epoch/revision gaps, snapshots, reconnects, invalidations and replay reconcile silently. History is process-local (50 records), transients are capped at 3, and marking/clearing history never resets reducer admission. Destination clicks use exact owner/terminal identity and guarded navigation; stale/unavailable targets show safe status instead of falling back to another profile.
+
+There are exactly three stable private Android channels: `channel_terminal_attention` (high importance), `channel_transfers` (low), and `channel_idle_suspend` (high). Generic public lock-screen text avoids alert details. API 29 needs no runtime permission; API 33+ requests it only after explicit user action. Foreground app audio uses configured pattern/volume while OS posts are silent; in background the OS channel alone controls sound. No delivery is promised after the process stops.
+
+Main reports 901 passing unit tests (725 `:shared:jvmTest`, 176 `:androidApp:testDebugUnitTest`) and a clean debug APK assembly; those reported results were not rerun for this documentation update. Live MainActivity/server journeys, API 29/API 33+ permission and channel behavior, physical ARM64/IME and visual checks remain open. Final source review reports unresolved readiness/mutation-lifetime and cancellation/audio cleanup findings; passing unit tests do not establish those unexercised paths. See the [Android acceptance ledger](../../docs/android-native-acceptance.md).
 
 ## 4. Verification & Build Commands
 
@@ -361,6 +377,6 @@ bash tests/test-phase-02-foundation.sh && bash tests/test-phase-03-transport.sh
 - **Phase 14:** Agent Store imports and memory *(Implementation baseline recorded; 99/99 static assertions; open limitations recorded)*
 - **Phase 15:** Host resources, fleet, and usage *(Implementation baseline recorded; 81/81 static assertions; qualification open)*
 - **Phase 16:** Ports, tunnels, idle consent, and host controls *(Implementation baseline recorded; 194/194 static assertions in tests/test-phase-16-ports-tunnels-host-controls.sh; dated QA report recorded 417 unit test executions, Cycle 2 review reported 350 unique tests; clean assembleDebug; review score 7/10 changes required / qualification open with 3 High implementation defects and live server/device qualification open; see [Acceptance Ledger](../docs/android-native-acceptance.md))*
-- **Phase 17:** Preferences, privacy, notifications, and lifecycle
+- **Phase 17:** Preferences, privacy, active-runtime notifications, Settings, and reactive consumers *(Implemented; main reports 901 unit tests passing and clean APK assembly; MainActivity/server and physical-device qualification remain open; see [Acceptance Ledger](../docs/android-native-acceptance.md))*
 - **Phase 18:** Integrated device security and performance qualification
 - **Phase 19:** Signed APK release and operational handoff (see [.github/workflows/release-android.yml](../../.github/workflows/release-android.yml) and the [Android Release & Signing Setup Guide](../../docs/deployment-guide.md#5-android-native-client-release--github-actions-signing-setup))

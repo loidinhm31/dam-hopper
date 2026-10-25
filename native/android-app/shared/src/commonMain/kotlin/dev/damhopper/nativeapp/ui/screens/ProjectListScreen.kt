@@ -69,6 +69,7 @@ fun ProjectListScreen(
     onNavigateProfiles: () -> Unit = {},
     onSelectProject: (projectName: String) -> Unit = {},
     onRefresh: (() -> Unit)? = null,
+    headerEntries: HeaderEntries? = null,
 ) {
     var refreshTrigger by remember(workspaceRepository) { mutableStateOf(0) }
     var repoProjects by remember(workspaceRepository) { mutableStateOf<List<ProjectSummary>?>(null) }
@@ -113,7 +114,8 @@ fun ProjectListScreen(
             serverUrl = serverUrl,
             isLoading = effectiveLoading,
             onNavigateProfiles = onNavigateProfiles,
-            onRefresh = handleRefresh
+            onRefresh = handleRefresh,
+            headerEntries = headerEntries,
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -210,6 +212,7 @@ private fun ProjectListHeader(
     isLoading: Boolean,
     onNavigateProfiles: () -> Unit,
     onRefresh: () -> Unit,
+    headerEntries: HeaderEntries? = null,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -258,7 +261,7 @@ private fun ProjectListHeader(
                     border = BorderStroke(1.dp, DamHopperColors.Border),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                 ) {
-                    Text("Profiles / Switch", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    Text("Profiles", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                 }
 
                 Spacer(modifier = Modifier.width(8.dp))
@@ -273,6 +276,11 @@ private fun ProjectListHeader(
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                 ) {
                     Text("Refresh", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                }
+
+                headerEntries?.let {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    HeaderEntryButtons(it)
                 }
             }
         }

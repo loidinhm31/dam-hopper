@@ -1,6 +1,12 @@
 package dev.damhopper.nativeapp.features.host
 
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.transport.RequestAdmissionGuard
+import dev.damhopper.nativeapp.features.settings.SettingsOutcome
+import dev.damhopper.nativeapp.features.settings.classifyCancellation
+import dev.damhopper.nativeapp.features.settings.classifyFailure
+import dev.damhopper.nativeapp.features.settings.reasonOrNull
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +25,7 @@ class UsageController(
 
     private var summaryGeneration = 0L
     private var sessionsGeneration = 0L
+    private var settingsGeneration = 0L
     private var isForeground = true
     private var disposed = false
 
@@ -151,52 +158,112 @@ class UsageController(
     }
 
     fun loadSettingsAndSetup() {
+        val captured = ++settingsGeneration
         coroutineScope.launch {
-            (repository.getSettings().getOrNull() as? UsageResult.Available)?.let { res -> _uiState.update { it.copy(settings = res.data) } }
-            (repository.getSetup().getOrNull() as? UsageResult.Available)?.let { res -> _uiState.update { it.copy(setup = res.data) } }
-            (repository.getHealth().getOrNull() as? UsageResult.Available)?.let { res -> _uiState.update { it.copy(health = res.data) } }
+            val s = (repository.getSettings().getOrNull() as? UsageResult.Available)?.data
+            val su = (repository.getSetup().getOrNull() as? UsageResult.Available)?.data
+            val h = (repository.getHealth().getOrNull() as? UsageResult.Available)?.data
+            if (disposed || captured != settingsGeneration) return@launch
+            _uiState.update { it.copy(settings = s ?: it.settings, setup = su ?: it.setup, health = h ?: it.health) }
         }
     }
 
-    fun updateSettings(patch: SettingsPatchRequest, onDone: (Boolean) -> Unit = {}) {
+    /**
+     * Updates usage settings through the request-local [guard]. [onDone] receives an honest outcome
+     * (NotSubmitted / Rejected / Unknown / Confirmed) - never a Boolean; nothing is retried.
+     */
+    fun updateSettings(
+        patch: SettingsPatchRequest,
+        guard: RequestAdmissionGuard,
+        onDone: (SettingsOutcome<UsageSettingsResponse>) -> Unit = {},
+    ) {
+        val captured = ++settingsGeneration
         coroutineScope.launch {
-            repository.patchSettings(patch).onSuccess { res -> _uiState.update { it.copy(settings = res) }; onDone(true) }.onFailure { onDone(false) }
+            val outcome = guardedResult(guard, onDone) { repository.patchSettings(patch, guard) }
+            if (outcome is SettingsOutcome.Confirmed && !disposed && captured == settingsGeneration) {
+                _uiState.update { it.copy(settings = outcome.value) }
+            }
+            onDone(outcome)
         }
     }
 
-    fun updateSetup(patch: SetupPatchRequest, onDone: (Boolean) -> Unit = {}) {
+    fun updateSetup(
+        patch: SetupPatchRequest,
+        guard: RequestAdmissionGuard,
+        onDone: (SettingsOutcome<UsageSetupStatusResponse>) -> Unit = {},
+    ) {
+        val captured = ++settingsGeneration
         coroutineScope.launch {
-            repository.patchSetup(patch).onSuccess { res -> _uiState.update { it.copy(setup = res) }; onDone(true) }.onFailure { onDone(false) }
+            val outcome = guardedResult(guard, onDone) { repository.patchSetup(patch, guard) }
+            if (outcome is SettingsOutcome.Confirmed && !disposed && captured == settingsGeneration) {
+                _uiState.update { it.copy(setup = outcome.value) }
+            }
+            onDone(outcome)
         }
     }
 
-    fun deleteUsage(confirmation: String, from: Long? = null, to: Long? = null, onComplete: (Boolean) -> Unit = {}) {
+    private suspend fun <T> guardedResult(
+        guard: RequestAdmissionGuard,
+        onDone: (SettingsOutcome<T>) -> Unit,
+        request: suspend () -> Result<T>,
+    ): SettingsOutcome<T> {
+        if (disposed) return SettingsOutcome.NotSubmitted("Usage controller is disposed")
+        return try {
+            request().fold(
+                onSuccess = { SettingsOutcome.Confirmed(it) },
+                onFailure = { classifyFailure(guard, it) },
+            )
+        } catch (ce: CancellationException) {
+            onDone(classifyCancellation(guard))
+            throw ce
+        }
+    }
+
+    /**
+     * Deletes usage data after the explicit confirmation string, through the request-local [guard]. The
+     * summary/session caches are refreshed (read-only) afterwards; the delete itself is never retried.
+     */
+    fun deleteUsage(
+        confirmation: String,
+        from: Long? = null,
+        to: Long? = null,
+        guard: RequestAdmissionGuard,
+        onComplete: (SettingsOutcome<Unit>) -> Unit = {},
+    ) {
         if (disposed || _uiState.value.isDeleting) {
-            onComplete(false)
+            onComplete(SettingsOutcome.NotSubmitted("Usage controller is busy or disposed"))
             return
         }
         if (confirmation != "delete-usage-data") {
             _uiState.update { it.copy(deleteError = "Confirmation string 'delete-usage-data' required") }
-            onComplete(false)
+            onComplete(SettingsOutcome.NotSubmitted("Confirmation string 'delete-usage-data' required"))
             return
         }
         _uiState.update { it.copy(isDeleting = true, deleteError = null) }
         coroutineScope.launch {
-            val result = repository.deleteUsage(DeleteUsageRequest(confirmation, from, to))
-            if (disposed) return@launch
-            result.fold(
-                onSuccess = {
+            val outcome = try {
+                repository.deleteUsage(DeleteUsageRequest(confirmation, from, to), guard).fold(
+                    onSuccess = { SettingsOutcome.Confirmed(Unit) },
+                    onFailure = { classifyFailure(guard, it) },
+                )
+            } catch (ce: CancellationException) {
+                _uiState.update { it.copy(isDeleting = false, deleteError = classifyCancellation(guard).reasonOrNull) }
+                onComplete(classifyCancellation(guard))
+                throw ce
+            }
+            if (disposed) {
+                onComplete(outcome)
+                return@launch
+            }
+            when (outcome) {
+                is SettingsOutcome.Confirmed -> {
                     summaryGeneration++; sessionsGeneration++
                     _uiState.update { it.copy(isDeleting = false, summary = null, sessions = emptyList(), nextCursor = null, selectedSessionDetail = null) }
-                    reloadAll()
-                    onComplete(true)
-                },
-                onFailure = { err ->
-                    _uiState.update { it.copy(isDeleting = false, deleteError = err.message ?: "Deletion failed") }
-                    reloadAll()
-                    onComplete(false)
                 }
-            )
+                else -> _uiState.update { it.copy(isDeleting = false, deleteError = outcome.reasonOrNull ?: "Deletion failed") }
+            }
+            reloadAll()
+            onComplete(outcome)
         }
     }
 

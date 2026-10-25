@@ -1,22 +1,10 @@
 package dev.damhopper.nativeapp.features.settings
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -25,292 +13,125 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import dev.damhopper.nativeapp.ui.theme.DamHopperColors
-import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
+
+/** The literal the user must type to enable a nuclear reset. */
+const val NUCLEAR_RESET_CONFIRMATION = "RESET"
+
+/** True only for the exact (trimmed, case-insensitive) confirmation literal. */
+fun isNuclearResetConfirmed(typed: String): Boolean = typed.trim().uppercase() == NUCLEAR_RESET_CONFIRMATION
 
 /**
- * Two-phase confirmation dialog for importing workspace TOML.
- * Freezes target profile, URL, generation, and payload byte size at invocation.
+ * Confirmation for importing workspace TOML. It names the exact captured target and payload size; the server
+ * validates TOML, writes a timestamped backup and replaces the active configuration. The result is only
+ * reported from the server's authoritative response.
  */
 @Composable
 fun ImportTomlConfirmDialog(
-    targetProfileName: String,
-    targetProfileUrl: String,
-    targetGeneration: Long?,
+    targetLabel: String,
+    targetEndpoint: String,
     payloadBytes: Int,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            shape = RoundedCornerShape(8.dp),
-            colors = CardDefaults.cardColors(containerColor = DamHopperColors.Surface),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-                .border(1.dp, DamHopperColors.Border, RoundedCornerShape(8.dp)),
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Import workspace TOML?") },
+        text = {
+            Column {
+                Text("Target server: $targetLabel ($targetEndpoint)", style = MaterialTheme.typography.bodyMedium)
+                Text("File size: $payloadBytes bytes", style = MaterialTheme.typography.labelSmall)
                 Text(
-                    text = "Confirm Workspace TOML Import",
-                    style = DamHopperTypography.titleMedium,
-                    color = DamHopperColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
+                    "The server validates the file, writes a timestamped backup and replaces the active workspace configuration. " +
+                        "If the answer is lost or unclear the result is shown as unknown; nothing is retried automatically.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp),
                 )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Text(
-                    text = "Target Server: $targetProfileName ($targetProfileUrl)",
-                    style = DamHopperTypography.bodyMedium,
-                    color = DamHopperColors.Primary,
-                    fontWeight = FontWeight.SemiBold,
-                )
-
-                if (targetGeneration != null) {
-                    Text(
-                        text = "Connection Generation: #$targetGeneration",
-                        style = DamHopperTypography.labelSmall,
-                        color = DamHopperColors.TextSecondary,
-                    )
-                }
-
-                Text(
-                    text = "Payload Size: $payloadBytes bytes (${payloadBytes / 1024} KB)",
-                    style = DamHopperTypography.labelSmall,
-                    color = DamHopperColors.TextSecondary,
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Text(
-                    text = "The server will validate TOML syntax, write a timestamped backup file, and atomically update the active workspace configuration. Stale connections will be safely rejected.",
-                    style = DamHopperTypography.bodyMedium,
-                    color = DamHopperColors.TextSecondary,
-                    lineHeight = 18.sp,
-                )
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    TextButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
-                    ) {
-                        Text("Cancel", color = DamHopperColors.TextSecondary)
-                    }
-
-                    Button(
-                        onClick = onConfirm,
-                        colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.PrimaryVariant),
-                        modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
-                    ) {
-                        Text("Confirm & Apply", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                }
             }
-        }
-    }
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Import") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
-/**
- * Confirmation dialog for clearing server-side query and index caches.
- */
+/** Confirmation for clearing the selected target's server cache and re-validating its client queries. */
 @Composable
 fun ClearCacheConfirmDialog(
-    targetProfileName: String,
-    targetGeneration: Long? = null,
+    targetLabel: String,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            shape = RoundedCornerShape(8.dp),
-            colors = CardDefaults.cardColors(containerColor = DamHopperColors.Surface),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-                .border(1.dp, DamHopperColors.Border, RoundedCornerShape(8.dp)),
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Clear Server Cache",
-                    style = DamHopperTypography.titleMedium,
-                    color = DamHopperColors.Warning,
-                    fontWeight = FontWeight.Bold,
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = "Are you sure you want to clear server-side caches and query indexes on '$targetProfileName'?",
-                    style = DamHopperTypography.bodyMedium,
-                    color = DamHopperColors.TextPrimary,
-                )
-                if (targetGeneration != null) {
-                    Text(
-                        text = "Connection Generation: #$targetGeneration",
-                        style = DamHopperTypography.labelSmall,
-                        color = DamHopperColors.TextSecondary,
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Text(
-                    text = "Active terminal connections will remain connected, but temporary search indexes and cached query metadata will be rebuilt.",
-                    style = DamHopperTypography.labelSmall,
-                    color = DamHopperColors.TextSecondary,
-                )
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    TextButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
-                    ) {
-                        Text("Cancel", color = DamHopperColors.TextSecondary)
-                    }
-
-                    Button(
-                        onClick = onConfirm,
-                        colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Warning),
-                        modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
-                    ) {
-                        Text("Clear Cache", color = Color.Black, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Revalidate server cache?") },
+        text = {
+            Text(
+                "Asks '$targetLabel' to reload its configuration and drops its cached query data. Open terminals stay connected; " +
+                    "only this server's cached data is refetched.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Revalidate") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /**
- * Two-phase destructive confirmation dialog for Nuclear Reset.
- * Requires explicit typed "RESET" confirmation before allowing execution.
+ * Destructive confirmation for the nuclear reset. It states precisely what is destroyed (running terminals and
+ * live runtime workspace state on the server) and what is NOT (your saved preferences and credentials).
  */
 @Composable
 fun NuclearResetConfirmDialog(
-    targetProfileId: String = "",
-    targetProfileName: String,
-    targetProfileUrl: String,
-    targetGeneration: Long? = null,
+    targetLabel: String,
+    targetEndpoint: String,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var confirmationText by remember(targetProfileId, targetGeneration) { mutableStateOf("") }
-    val isConfirmed = confirmationText.trim().uppercase() == "RESET"
-
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            shape = RoundedCornerShape(8.dp),
-            colors = CardDefaults.cardColors(containerColor = DamHopperColors.Surface),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-                .border(1.dp, DamHopperColors.Error, RoundedCornerShape(8.dp)),
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+    var typed by remember(targetLabel, targetEndpoint) { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Reset server runtime state?", color = MaterialTheme.colorScheme.error) },
+        text = {
+            Column {
+                Text("Target server: $targetLabel ($targetEndpoint)", style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    text = "Destructive Action: Nuclear Reset",
-                    style = DamHopperTypography.titleMedium,
-                    color = DamHopperColors.Error,
-                    fontWeight = FontWeight.Bold,
+                    "This ends every running terminal process and clears the live runtime workspace state on that server. " +
+                        "Your saved preferences and stored credentials are NOT reset. It cannot be undone; if the answer is lost " +
+                        "the result is unknown and the reset is never repeated automatically.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp),
                 )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = "Target: $targetProfileName ($targetProfileUrl)",
-                    style = DamHopperTypography.bodyMedium,
-                    color = DamHopperColors.TextPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                )
-
-                if (targetGeneration != null) {
-                    Text(
-                        text = "Connection Generation: #$targetGeneration",
-                        style = DamHopperTypography.labelSmall,
-                        color = DamHopperColors.TextSecondary,
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Text(
-                    text = "Warning: This terminates all running terminal processes, unmounts managed sessions, and wipes active workspace runtime state on the server. Profile credentials in your local vault remain intact.",
-                    style = DamHopperTypography.bodyMedium,
-                    color = DamHopperColors.TextSecondary,
-                    lineHeight = 18.sp,
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Text(
-                    text = "Type 'RESET' below to confirm:",
-                    style = DamHopperTypography.labelSmall,
-                    color = DamHopperColors.Error,
-                    fontWeight = FontWeight.Bold,
-                )
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                OutlinedTextField(
-                    value = confirmationText,
-                    onValueChange = { confirmationText = it },
-                    placeholder = { Text("RESET", color = DamHopperColors.TextSecondary) },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = DamHopperColors.TextPrimary,
-                        unfocusedTextColor = DamHopperColors.TextPrimary,
-                        focusedBorderColor = DamHopperColors.Error,
-                        unfocusedBorderColor = DamHopperColors.Border,
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    TextButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
-                    ) {
-                        Text("Cancel", color = DamHopperColors.TextSecondary)
-                    }
-
-                    Button(
-                        onClick = onConfirm,
-                        enabled = isConfirmed,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = DamHopperColors.Error,
-                            disabledContainerColor = DamHopperColors.SurfaceVariant,
-                        ),
-                        modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
-                    ) {
-                        Text(
-                            "Execute Nuclear Reset",
-                            color = if (isConfirmed) Color.White else DamHopperColors.TextSecondary,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
+                Text("Type $NUCLEAR_RESET_CONFIRMATION to confirm:", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 8.dp))
+                OutlinedTextField(value = typed, onValueChange = { typed = it }, singleLine = true)
             }
-        }
-    }
+        },
+        confirmButton = {
+            TextButton(enabled = isNuclearResetConfirmed(typed), onClick = onConfirm) {
+                Text("Reset", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** Scope confirmation before saving the LOCAL diagnostics document. */
+@Composable
+fun DiagnosticsExportConfirmDialog(
+    scopeDescription: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Save local diagnostics?") },
+        text = {
+            Text(
+                "Saves a JSON file you choose with: $scopeDescription. It contains no tokens, passwords, private paths, " +
+                    "command history, raw commands or terminal output, and nothing is uploaded.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Choose file") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }

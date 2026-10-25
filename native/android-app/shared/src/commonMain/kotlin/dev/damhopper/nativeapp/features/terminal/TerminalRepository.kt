@@ -3,6 +3,7 @@ package dev.damhopper.nativeapp.features.terminal
 import dev.damhopper.nativeapp.core.logging.AppLogger
 import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.core.transport.ClientMsg
+import dev.damhopper.nativeapp.core.transport.RequestAdmissionGuard
 import dev.damhopper.nativeapp.core.transport.ServerMsg
 import dev.damhopper.nativeapp.core.transport.WsConnection
 import io.ktor.http.encodeURLPathPart
@@ -10,6 +11,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
  * Repository coordinating REST and WebSocket operations for terminal sessions and agent status.
@@ -118,45 +121,57 @@ class TerminalRepository(
     }
 
     /**
-     * Verifies OMP, Codex, and Claude directories from GET /api/agent-status/paths.
+     * Verifies OMP, Codex, and Claude directories from GET /api/agent-status/paths. Reads may pass an
+     * optional [guard]; publication is always fenced by the caller.
      */
     suspend fun getAgentPathsVerification(
         agentDir: String? = null,
         codexDir: String? = null,
         claudeDir: String? = null,
+        guard: RequestAdmissionGuard? = null,
     ): AgentPathsVerification {
         val query = mutableMapOf<String, String>()
         agentDir?.let { query["agentDir"] = it }
         codexDir?.let { query["codexDir"] = it }
         claudeDir?.let { query["claudeDir"] = it }
-        val response = apiClient.get("/api/agent-status/paths", query)
+        val response = apiClient.get("/api/agent-status/paths", query, guard)
         return json.decodeFromString(response)
     }
 
     /**
      * Inspects status of managed OMP extension from GET /api/agent-status/omp/extension.
      */
-    suspend fun getOmpExtensionStatus(agentDir: String? = null): ExtensionStatusReport {
+    suspend fun getOmpExtensionStatus(
+        agentDir: String? = null,
+        guard: RequestAdmissionGuard? = null,
+    ): ExtensionStatusReport {
         val query = agentDir?.let { mapOf("agentDir" to it) } ?: emptyMap()
-        val response = apiClient.get("/api/agent-status/omp/extension", query)
+        val response = apiClient.get("/api/agent-status/omp/extension", query, guard)
         return json.decodeFromString(response)
     }
 
     /**
      * Installs or upgrades managed OMP extension via POST /api/agent-status/omp/extension/install.
+     * [guard] is the required request-local admission; the body is built with a structured serializer so
+     * quotes, backslashes and Unicode in [agentDir] round-trip exactly.
      */
-    suspend fun installOmpExtension(agentDir: String? = null): ExtensionStatusReport {
-        val body = agentDir?.let { """{"agentDir":"$it"}""" } ?: "{}"
-        val response = apiClient.postJson("/api/agent-status/omp/extension/install", body)
+    suspend fun installOmpExtension(
+        agentDir: String? = null,
+        guard: RequestAdmissionGuard,
+    ): ExtensionStatusReport {
+        val response = apiClient.postJson("/api/agent-status/omp/extension/install", agentDirBody(agentDir), guard)
         return json.decodeFromString(response)
     }
 
     /**
-     * Uninstalls managed OMP extension via DELETE /api/agent-status/omp/extension.
+     * Uninstalls managed OMP extension via DELETE /api/agent-status/omp/extension ([guard] required).
      */
-    suspend fun uninstallOmpExtension(agentDir: String? = null): ExtensionStatusReport {
+    suspend fun uninstallOmpExtension(
+        agentDir: String? = null,
+        guard: RequestAdmissionGuard,
+    ): ExtensionStatusReport {
         val query = agentDir?.let { mapOf("agentDir" to it) } ?: emptyMap()
-        val response = apiClient.delete("/api/agent-status/omp/extension", query)
+        val response = apiClient.delete("/api/agent-status/omp/extension", query, guard)
         return json.decodeFromString(response)
     }
 
@@ -166,38 +181,45 @@ class TerminalRepository(
     suspend fun getNativeIntegrationStatus(
         agent: AgentKind,
         agentDir: String? = null,
+        guard: RequestAdmissionGuard? = null,
     ): NativeIntegrationStatusReport {
         val query = agentDir?.let { mapOf("agentDir" to it) } ?: emptyMap()
         val path = "/api/agent-status/integrations/${agent.name.lowercase()}"
-        val response = apiClient.get(path, query)
+        val response = apiClient.get(path, query, guard)
         return json.decodeFromString(response)
     }
 
     /**
-     * Installs native integration (Codex, Claude) via POST /api/agent-status/integrations/:agent.
+     * Installs native integration (Codex, Claude) via POST /api/agent-status/integrations/:agent
+     * ([guard] required, structured JSON body).
      */
     suspend fun installNativeIntegration(
         agent: AgentKind,
         agentDir: String? = null,
+        guard: RequestAdmissionGuard,
     ): NativeIntegrationStatusReport {
-        val body = agentDir?.let { """{"agentDir":"$it"}""" } ?: "{}"
         val path = "/api/agent-status/integrations/${agent.name.lowercase()}"
-        val response = apiClient.postJson(path, body)
+        val response = apiClient.postJson(path, agentDirBody(agentDir), guard)
         return json.decodeFromString(response)
     }
 
     /**
-     * Uninstalls native integration via DELETE /api/agent-status/integrations/:agent.
+     * Uninstalls native integration via DELETE /api/agent-status/integrations/:agent ([guard] required).
      */
     suspend fun uninstallNativeIntegration(
         agent: AgentKind,
         agentDir: String? = null,
+        guard: RequestAdmissionGuard,
     ): NativeIntegrationStatusReport {
         val query = agentDir?.let { mapOf("agentDir" to it) } ?: emptyMap()
         val path = "/api/agent-status/integrations/${agent.name.lowercase()}"
-        val response = apiClient.delete(path, query)
+        val response = apiClient.delete(path, query, guard)
         return json.decodeFromString(response)
     }
+
+    private fun agentDirBody(agentDir: String?): String = buildJsonObject {
+        agentDir?.let { put("agentDir", it) }
+    }.toString()
 
     // ---------------------------------------------------------------------------
     // WebSocket Terminal Operations & Streams

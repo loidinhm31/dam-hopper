@@ -17,26 +17,52 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.damhopper.nativeapp.features.settings.HostMutationAuthority
+import dev.damhopper.nativeapp.features.settings.HostMutationTicket
+import dev.damhopper.nativeapp.features.settings.SettingsOutcome
+import dev.damhopper.nativeapp.features.settings.describe
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
+import kotlinx.coroutines.launch
 
 @Composable
 fun UsageScreens(
     controller: UsageController,
     modifier: Modifier = Modifier,
+    /** Null keeps every mutation disabled (read-only); there is never an unguarded fallback. */
+    mutationAuthority: HostMutationAuthority? = null,
+    targetLabel: String = controller.owner.profileId,
 ) {
     val uiState by controller.uiState.collectAsState()
+    val scope = rememberCoroutineScope()
     var showDeleteDialog by remember { mutableStateOf(false) }
-
+    var deleteTicket by remember { mutableStateOf<HostMutationTicket?>(null) }
+    var deleteMessage by remember { mutableStateOf<String?>(null) }
     if (showDeleteDialog) {
         UsageDeleteDialog(
             isDeleting = uiState.isDeleting,
-            errorMessage = uiState.deleteError,
+            errorMessage = uiState.deleteError ?: deleteMessage,
             onConfirm = { conf, from, to ->
-                controller.deleteUsage(conf, from, to) { success ->
-                    if (success) showDeleteDialog = false
+                val ticket = deleteTicket
+                if (ticket == null) {
+                    deleteMessage = "Read-only: deletion needs the selected Settings server."
+                } else {
+                    // The SAME captured operation routes the confirmation: a target change while the dialog
+                    // was open makes admission fail instead of deleting on another server.
+                    controller.deleteUsage(conf, from, to, ticket.newGuard()) { outcome ->
+                        if (outcome is SettingsOutcome.Confirmed) {
+                            showDeleteDialog = false
+                            deleteTicket = null
+                            deleteMessage = null
+                        } else {
+                            deleteMessage = outcome.describe("Usage deletion")
+                        }
+                    }
                 }
             },
-            onDismiss = { showDeleteDialog = false }
+            onDismiss = {
+                showDeleteDialog = false
+                deleteTicket = null
+            }
         )
     }
 
@@ -111,7 +137,14 @@ fun UsageScreens(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
                         .background(Color(0xFFEF4444).copy(alpha = 0.2f))
-                        .clickable { showDeleteDialog = true }
+                        .clickable {
+                            scope.launch {
+                                val ticket = mutationAuthority?.capture(controller.owner)
+                                deleteTicket = ticket
+                                deleteMessage = if (ticket == null) "Read-only: deletion needs the selected Settings server." else null
+                                showDeleteDialog = true
+                            }
+                        }
                         .padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
                     Text("Delete Telemetry", fontSize = 11.sp, color = Color(0xFFEF4444), fontWeight = FontWeight.SemiBold)
@@ -140,17 +173,13 @@ fun UsageScreens(
             }
         }
 
-        // Settings & Health Section
+        // Settings & Health Section (all mutations capture the selected Settings target first)
         item {
-            UsageSettingsSection(
-                uiState = uiState,
-                onTogglePause = {
-                    val curPaused = uiState.settings?.paused ?: false
-                    controller.updateSettings(SettingsPatchRequest(paused = !curPaused))
-                },
-                onUpdateSettings = { patch ->
-                    controller.updateSettings(patch)
-                }
+            UsageSettingsPanel(
+                controller = controller,
+                mutationAuthority = mutationAuthority,
+                targetLabel = targetLabel,
+                onOpenData = null,
             )
         }
 
@@ -204,4 +233,57 @@ fun UsageScreens(
             }
         }
     }
+}
+
+/**
+ * Usage settings of ONE selected Settings target. Every mutation first captures the exact selected target
+ * (no active-profile fallback); [mutationAuthority] == null keeps all controls read-only with a visible reason.
+ */
+@Composable
+fun UsageSettingsPanel(
+    controller: UsageController,
+    mutationAuthority: HostMutationAuthority?,
+    targetLabel: String,
+    onOpenData: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val uiState by controller.uiState.collectAsState()
+    val scope = rememberCoroutineScope()
+    var busy by remember(controller) { mutableStateOf(false) }
+    var message by remember(controller) { mutableStateOf<String?>(null) }
+    val readOnlyReason = if (mutationAuthority == null) "Read-only: no Settings authority is attached to this server." else null
+
+    fun mutate(label: String, send: (HostMutationTicket, (SettingsOutcome<*>) -> Unit) -> Unit) {
+        val authority = mutationAuthority ?: return
+        busy = true
+        message = null
+        scope.launch {
+            val ticket = authority.capture(controller.owner)
+            if (ticket == null) {
+                busy = false
+                message = SettingsOutcome.NotSubmitted("The selected Settings server changed or is not connected.").describe(label)
+                return@launch
+            }
+            send(ticket) { outcome ->
+                busy = false
+                message = outcome.describe(label)
+            }
+        }
+    }
+
+    UsageSettingsSection(
+        uiState = uiState,
+        targetLabel = targetLabel,
+        readOnlyReason = readOnlyReason,
+        busy = busy,
+        lastMessage = message,
+        onUpdateSettings = { patch ->
+            mutate("Usage settings update") { ticket, done -> controller.updateSettings(patch, ticket.newGuard(), done) }
+        },
+        onUpdateSetup = { patch ->
+            mutate("Usage setup update") { ticket, done -> controller.updateSetup(patch, ticket.newGuard(), done) }
+        },
+        onOpenData = onOpenData,
+        modifier = modifier,
+    )
 }

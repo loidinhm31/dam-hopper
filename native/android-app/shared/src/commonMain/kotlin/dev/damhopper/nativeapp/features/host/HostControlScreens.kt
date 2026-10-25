@@ -17,6 +17,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
+import dev.damhopper.nativeapp.features.settings.HostMutationAuthority
+import dev.damhopper.nativeapp.features.settings.HostMutationTicket
+import dev.damhopper.nativeapp.features.settings.SettingsOutcome
+import dev.damhopper.nativeapp.features.settings.describe
 import kotlinx.coroutines.launch
 
 @Composable
@@ -24,7 +28,9 @@ fun HostControlScreens(
     idleConsentController: IdleConsentController,
     sshRepository: SshRepository,
     hostControlRepository: HostControlRepository,
-    diagnosticsRepository: DiagnosticsRepository
+    diagnosticsRepository: DiagnosticsRepository,
+    /** Null keeps idle timing/force-suspend disabled (read-only); there is never an unguarded fallback. */
+    mutationAuthority: HostMutationAuthority? = null,
 ) {
     var selectedTab by remember { mutableStateOf(0) }
     val tabs = listOf("Idle Suspend", "SSH Credentials", "Diagnostics & Actions")
@@ -62,7 +68,10 @@ fun HostControlScreens(
         }
 
         when (selectedTab) {
-            0 -> IdleSuspendTabScreen(idleConsentController = idleConsentController)
+            0 -> IdleSuspendTabScreen(
+                idleConsentController = idleConsentController,
+                mutationAuthority = mutationAuthority,
+            )
             1 -> SshCredentialsTabScreen(sshRepository = sshRepository)
             2 -> DiagnosticsAndActionsTabScreen(
                 hostControlRepository = hostControlRepository,
@@ -73,8 +82,12 @@ fun HostControlScreens(
 }
 
 @Composable
-private fun IdleSuspendTabScreen(
-    idleConsentController: IdleConsentController
+/** Idle-suspend status, atomic timing pair and manual force suspend of ONE target (H09-H12). */
+fun IdleSuspendTabScreen(
+    idleConsentController: IdleConsentController,
+    mutationAuthority: HostMutationAuthority?,
+    /** Non-null when the server cannot accept idle mutations (e.g. no-auth/dev mode): nothing is submitted. */
+    submissionBlockedReason: String? = null,
 ) {
     val coroutineScope = rememberCoroutineScope()
     val status by idleConsentController.status.collectAsState()
@@ -85,9 +98,10 @@ private fun IdleSuspendTabScreen(
     val lastAdmission by idleConsentController.lastForceSuspendAdmission.collectAsState()
     val isSubmittingForce by idleConsentController.isSubmittingForceSuspend.collectAsState()
 
-    var showForceDialog by remember { mutableStateOf(false) }
+    var forceDialogTicket by remember { mutableStateOf<HostMutationTicket?>(null) }
     var quietSecText by remember { mutableStateOf("300") }
     var wakeSecText by remember { mutableStateOf("600") }
+    var timingNote by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(status) {
         status?.let {
@@ -100,12 +114,6 @@ private fun IdleSuspendTabScreen(
         idleConsentController.refreshStatus()
     }
 
-    // Auto-open force dialog if conflict arises from submission
-    LaunchedEffect(activeFleetConflict, fleetChangedConflict) {
-        if (activeFleetConflict != null || fleetChangedConflict != null) {
-            showForceDialog = true
-        }
-    }
 
     LazyColumn(
         modifier = Modifier
@@ -259,11 +267,27 @@ private fun IdleSuspendTabScreen(
                     color = DamHopperColors.TextPrimary
                 )
 
-                if (s?.timingMutable == false) {
+                val blockReason = if (mutationAuthority == null) {
+                    "Read-only: timing needs the selected Settings server."
+                } else {
+                    submissionBlockedReason ?: idleTimingBlockReason(s)
+                }
+                if (blockReason != null) {
                     Text(
-                        text = "Timing is currently locked: ${s.timingMutableReason ?: "coordinator policy"}",
+                        text = blockReason,
                         fontSize = 11.sp,
                         color = DamHopperColors.Warning
+                    )
+                }
+
+                // Agent-free uses a fixed server-owned quiet interval; it stays read-only (and is submitted unchanged).
+                val quietFixed = s?.automaticPolicy == AutomaticPolicy.AGENT_FREE
+                val fieldsEnabled = blockReason == null
+                if (quietFixed) {
+                    Text(
+                        text = "Agent-free policy: the quiet interval is fixed by the server (3 hours). Only the wake timer can change.",
+                        fontSize = 11.sp,
+                        color = DamHopperColors.TextSecondary
                     )
                 }
 
@@ -274,34 +298,55 @@ private fun IdleSuspendTabScreen(
                     OutlinedTextField(
                         value = quietSecText,
                         onValueChange = { quietSecText = it.filter { ch -> ch.isDigit() } },
-                        label = { Text("Quiet sec (${s?.minQuietPeriodSeconds ?: 60}-${s?.maxQuietPeriodSeconds ?: 86400})", fontSize = 10.sp) },
+                        label = {
+                            Text(
+                                if (s == null) "Quiet sec (unknown)" else "Quiet sec (${s.minQuietPeriodSeconds}-${s.maxQuietPeriodSeconds})",
+                                fontSize = 10.sp,
+                            )
+                        },
                         singleLine = true,
-                        enabled = s?.timingMutable == true,
+                        enabled = fieldsEnabled && !quietFixed,
                         modifier = Modifier.weight(1f)
                     )
 
                     OutlinedTextField(
                         value = wakeSecText,
                         onValueChange = { wakeSecText = it.filter { ch -> ch.isDigit() } },
-                        label = { Text("Wake sec (${s?.minWakeAfterSeconds ?: 60}-${s?.maxWakeAfterSeconds ?: 86400})", fontSize = 10.sp) },
+                        label = {
+                            Text(
+                                if (s == null) "Wake sec (unknown)" else "Wake sec (${s.minWakeAfterSeconds}-${s.maxWakeAfterSeconds})",
+                                fontSize = 10.sp,
+                            )
+                        },
                         singleLine = true,
-                        enabled = s?.timingMutable == true,
+                        enabled = fieldsEnabled,
                         modifier = Modifier.weight(1f)
                     )
                 }
 
-                val qVal = quietSecText.toIntOrNull()
+                val qVal = if (quietFixed) s?.quietPeriodSeconds else quietSecText.toIntOrNull()
                 val wVal = wakeSecText.toIntOrNull()
-                val isTimingValid = qVal != null && qVal in 60..86400 && wVal != null && wVal in 60..86400
+                val timingError = if (qVal == null || wVal == null) "Enter whole seconds." else validateIdleTiming(s, qVal, wVal)
+                val canSubmit = fieldsEnabled && timingError == null
+                if (fieldsEnabled && timingError != null) {
+                    Text(text = timingError, fontSize = 11.sp, color = DamHopperColors.Error)
+                }
 
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
-                        .background(if (isTimingValid && s?.timingMutable == true) DamHopperColors.Primary else DamHopperColors.SurfaceVariant)
-                        .clickable(enabled = isTimingValid && s?.timingMutable == true) {
+                        .background(if (canSubmit) DamHopperColors.Primary else DamHopperColors.SurfaceVariant)
+                        .clickable(enabled = canSubmit) {
                             if (qVal != null && wVal != null) {
                                 coroutineScope.launch {
-                                    idleConsentController.updateTiming(qVal, wVal)
+                                    val ticket = mutationAuthority?.capture(idleConsentController.connection)
+                                    if (ticket == null) {
+                                        timingNote = "Not sent: the selected Settings server is unavailable or read-only."
+                                        return@launch
+                                    }
+                                    // One atomic pair under one captured guard; never retried.
+                                    val outcome = idleConsentController.updateTiming(qVal, wVal, ticket.newGuard())
+                                    timingNote = outcome.describe("Timing update")
                                 }
                             }
                         }
@@ -311,8 +356,11 @@ private fun IdleSuspendTabScreen(
                         text = "Update Timing Pair",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = if (isTimingValid && s?.timingMutable == true) Color.White else DamHopperColors.TextSecondary
+                        color = if (canSubmit) Color.White else DamHopperColors.TextSecondary
                     )
+                }
+                timingNote?.let {
+                    Text(text = it, fontSize = 11.sp, color = DamHopperColors.TextSecondary)
                 }
             }
         }
@@ -360,7 +408,16 @@ private fun IdleSuspendTabScreen(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .background(DamHopperColors.Error.copy(alpha = 0.2f))
-                        .clickable { showForceDialog = true }
+                        .clickable(enabled = mutationAuthority != null && submissionBlockedReason == null) {
+                            coroutineScope.launch {
+                                val ticket = mutationAuthority?.capture(idleConsentController.connection)
+                                if (ticket == null) {
+                                    timingNote = "Not sent: the selected Settings server is unavailable or read-only."
+                                } else {
+                                    forceDialogTicket = ticket
+                                }
+                            }
+                        }
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
                     Text(
@@ -374,20 +431,23 @@ private fun IdleSuspendTabScreen(
         }
     }
 
-    if (showForceDialog) {
+    forceDialogTicket?.let { ticket ->
         ManualForceSuspendDialog(
             isSubmitting = isSubmittingForce,
+            minWakeSeconds = status?.minWakeAfterSeconds ?: 0,
+            maxWakeSeconds = status?.maxWakeAfterSeconds ?: 0,
             activeFleetConflict = activeFleetConflict,
             fleetChangedConflict = fleetChangedConflict,
             onDismiss = {
-                showForceDialog = false
+                forceDialogTicket = null
                 idleConsentController.clearConflicts()
             },
             onConfirm = { wakeSec, force ->
                 coroutineScope.launch {
-                    val res = idleConsentController.requestForceSuspend(wakeSec, force)
-                    if (res.isSuccess) {
-                        showForceDialog = false
+                    val res = idleConsentController.requestForceSuspend(wakeSec, force, ticket.newGuard())
+                    timingNote = res.describe("Force suspend")
+                    if (res is SettingsOutcome.Confirmed) {
+                        forceDialogTicket = null
                     }
                 }
             }

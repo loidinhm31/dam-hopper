@@ -15,6 +15,9 @@ import dev.damhopper.nativeapp.features.files.FileMutationCoordinator
 import dev.damhopper.nativeapp.features.files.FileOperationOutcome
 import dev.damhopper.nativeapp.features.files.FileRepository
 import dev.damhopper.nativeapp.features.files.FileTreeState
+import dev.damhopper.nativeapp.features.settings.SettingsOwner
+import dev.damhopper.nativeapp.ui.screens.ObservableCommandHistory
+import dev.damhopper.nativeapp.ui.screens.PreferenceAccess
 import dev.damhopper.nativeapp.ui.screens.ProjectTerminalState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -97,6 +100,9 @@ class ProjectWorkspaceState(
     /** Whether the editor-panel file-tree sidebar is open (split view when wide, slide-over when compact). */
     val isEditorSidebarOpen = MutableStateFlow(false)
 
+
+    /** Whether the terminal's command text input currently has user focus. */
+    val isCommandInputFocused = MutableStateFlow(false)
     fun toggleEditorSidebar() {
         isEditorSidebarOpen.value = !isEditorSidebarOpen.value
     }
@@ -324,7 +330,41 @@ class ProjectWorkspaceState(
     }
 
     fun isInteractiveEditAllowed(): Boolean {
-        return _isForeground.value && !_isAuthorityRetired.value && _activePanel.value == WorkspacePanel.EDITOR
+        return _isForeground.value && !_isAuthorityRetired.value && !_inputSuspended.value &&
+            _activePanel.value == WorkspacePanel.EDITOR
+    }
+
+    private val _inputSuspended = MutableStateFlow(false)
+
+    /** True while Settings/history/privacy covers the workspace: widget input is hidden, nothing is closed. */
+    val isInputSuspended: StateFlow<Boolean> = _inputSuspended.asStateFlow()
+
+    /**
+     * Hides terminal and editor widget input behind Settings (or another cover) without closing dirty documents,
+     * undo history, PTYs or the sidebar; lifting it restores exactly the previous state.
+     */
+    fun setInputSuspended(suspended: Boolean) {
+        _inputSuspended.value = suspended
+        terminalState?.setInputSuspended(suspended)
+    }
+
+    /** The one reactive preference truth this workspace's consumers (terminal font, files, editor) read. */
+    var preferenceAccess: PreferenceAccess? = null
+        private set
+
+    /**
+     * Binds (or rebinds after reconnection) the retained preference/history services. Idempotent; nothing here
+     * creates a second copy of any preference.
+     */
+    fun bindPreferenceConsumers(
+        access: PreferenceAccess?,
+        history: ObservableCommandHistory?,
+        historyOwner: SettingsOwner?,
+    ) {
+        preferenceAccess = access
+        terminalState?.preferenceAccess = access
+        terminalState?.commandHistory = history
+        terminalState?.historyOwner = historyOwner
     }
 
     /**
@@ -353,6 +393,9 @@ class ProjectWorkspaceState(
             documentFactory: EditorDocumentFactory? = null,
             coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Main.immediate),
             lifecycleCoordinator: LifecycleCoordinator? = null,
+            preferenceAccess: PreferenceAccess? = null,
+            commandHistory: ObservableCommandHistory? = null,
+            historyOwner: SettingsOwner? = null,
         ): ProjectWorkspaceState {
             val tabsState = EditorTabsState(
                 profileId = owner.profileId ?: "default",
@@ -374,7 +417,6 @@ class ProjectWorkspaceState(
             val termState = ProjectTerminalState(
                 projectName = target.project,
                 connectionRef = fileRepository.apiClient.connection,
-                preferencesStore = null,
                 ownerScope = coroutineScope,
             )
             val created = ProjectWorkspaceState(
@@ -390,6 +432,7 @@ class ProjectWorkspaceState(
                 lifecycleCoordinator = lifecycleCoordinator,
             )
             lifecycleCoordinator?.register(created)
+            created.bindPreferenceConsumers(preferenceAccess, commandHistory, historyOwner)
             return created
         }
     }

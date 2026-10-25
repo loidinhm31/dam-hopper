@@ -9,8 +9,12 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import dev.damhopper.nativeapp.core.logging.AppLogger
 import dev.damhopper.nativeapp.core.model.ConnectionRef
-import dev.damhopper.nativeapp.features.settings.PreferencesStore
+import dev.damhopper.nativeapp.features.settings.CommandHistoryStore
+import dev.damhopper.nativeapp.features.settings.SettingsOwner
 import dev.damhopper.nativeapp.features.settings.WorkbenchPreferences
+import dev.damhopper.nativeapp.features.settings.ExplorerLanguageFilter
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import dev.damhopper.nativeapp.features.terminal.NativeTerminalSurface
 import dev.damhopper.nativeapp.features.terminal.TerminalAttachQueue
 import dev.damhopper.nativeapp.features.terminal.TerminalReadingStates
@@ -62,7 +66,6 @@ data class QueuedWrite(
 class ProjectTerminalState(
     val projectName: String,
     val connectionRef: ConnectionRef,
-    val preferencesStore: PreferencesStore? = null,
     val ownerScope: CoroutineScope = CoroutineScope(Dispatchers.Main.immediate),
 ) : AutoCloseable {
 
@@ -94,12 +97,18 @@ class ProjectTerminalState(
     private var _isAuthorityRetired by mutableStateOf(false)
     val isAuthorityRetired: Boolean get() = _isAuthorityRetired
 
-    var terminalFontSize: Int by mutableStateOf(
-        preferencesStore?.let {
-            WorkbenchPreferences.clampFont(it.loadPreferences().terminalFontSize)
-        } ?: 14
-    )
-        private set
+    private var _inputSuspended by mutableStateOf(false)
+
+    val isCommandInputFocused: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    val isImeComposing: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    /** The retained reactive preferences (set by the owner of the workspace; null in isolated tests). */
+    var preferenceAccess: PreferenceAccess? = null
+
+    /** Opt-in local command history of this device (null when no store is attached). */
+    var commandHistory: ObservableCommandHistory? = null
+
+    /** Exact owner the history scope derives from; set together with [commandHistory]. */
+    var historyOwner: SettingsOwner? = null
 
     init {
         updateAllControllersInputPolicy()
@@ -135,19 +144,34 @@ class ProjectTerminalState(
         return true
     }
 
+    /**
+     * Writes the terminal font through the one reactive preference truth. There is no local copy: screens read
+     * [PreferenceAccess.preferences], so the pinch/step controls and Settings always agree.
+     */
     fun updateTerminalFontSize(newSize: Int) {
         val clamped = WorkbenchPreferences.clampFont(newSize)
-        if (clamped == terminalFontSize) return
-        terminalFontSize = clamped
-        preferencesStore?.let { store ->
-            store.savePreferences(store.loadPreferences().copy(terminalFontSize = clamped))
-        }
+        val access = preferenceAccess ?: return
+        if (clamped == access.current.terminalFontSize) return
+        access.update { it.copy(terminalFontSize = clamped) }
     }
+
+    /**
+     * Hides terminal input without closing PTYs, drafts or surfaces (Settings, history or privacy covering it);
+     * lifting it restores exactly the previous eligibility.
+     */
+    fun setInputSuspended(suspended: Boolean) {
+        if (_inputSuspended == suspended) return
+        _inputSuspended = suspended
+        updateAllControllersInputPolicy()
+    }
+
+    val isInputSuspended: Boolean get() = _inputSuspended
 
     fun isInputAllowedForSession(sessionId: String): Boolean {
         return _isPanelVisible &&
             _isForeground &&
             !_isAuthorityRetired &&
+            !_inputSuspended &&
             sessionId == activeSessionId &&
             destroyingSessionIds[sessionId] != true
     }
@@ -247,5 +271,92 @@ class ProjectTerminalState(
         destroyingSessionIds.clear()
         failedRecords.clear()
         sessionDrafts.clear()
+    }
+}
+
+/**
+ * The single reactive preference truth for active-root consumers: the retained `SettingsRepository`
+ * preferences flow plus its ordered updater. Consumers collect [preferences] and write through [update]; there is
+ * no snapshot load/save copy anywhere in the terminal, workspace or file consumers.
+ */
+class PreferenceAccess(
+    val preferences: StateFlow<WorkbenchPreferences>,
+    private val updater: ((WorkbenchPreferences) -> WorkbenchPreferences) -> Unit,
+    private val languageSelector: ((ExplorerLanguageFilter) -> Unit)? = null,
+) {
+    val current: WorkbenchPreferences get() = preferences.value
+
+    fun update(transform: (WorkbenchPreferences) -> WorkbenchPreferences) = updater(transform)
+
+    /**
+     * Explicit user choice of an Explorer language family: always writes the real wire value (even when it equals
+     * a legacy local fallback), unlike an ordinary preference update.
+     */
+    fun selectLanguageFilter(filter: ExplorerLanguageFilter) {
+        val selector = languageSelector
+        if (selector != null) selector(filter) else update { it.copy(explorerLanguageFilter = filter) }
+    }
+}
+
+/** [CommandHistoryStore] that also reports a persistence failure and a content revision for live suggestions. */
+interface ObservableCommandHistory : CommandHistoryStore {
+    /** Non-null once recording stopped because storage failed; shown to the user, never retried silently. */
+    val failure: StateFlow<String?>
+
+    /** Advances whenever stored content or consent changes, so suggestions can be recomputed. */
+    val revision: StateFlow<Long>
+}
+
+/** Allowed range of the terminal scroll-step preference (C1: 1..50). */
+const val TERMINAL_SCROLL_STEP_MIN = 1
+const val TERMINAL_SCROLL_STEP_MAX = 50
+
+fun clampTerminalScrollStep(step: Int): Int = step.coerceIn(TERMINAL_SCROLL_STEP_MIN, TERMINAL_SCROLL_STEP_MAX)
+
+enum class TerminalScrollDirection { UP, DOWN, TOP, BOTTOM }
+
+/**
+ * Target line index of an inline scroll control. UP/DOWN move by the clamped [step] lines (never past either end);
+ * TOP/BOTTOM jump. An empty buffer always targets 0.
+ */
+fun terminalScrollTarget(currentIndex: Int, lastIndex: Int, direction: TerminalScrollDirection, step: Int): Int {
+    if (lastIndex <= 0) return 0
+    val s = clampTerminalScrollStep(step)
+    return when (direction) {
+        TerminalScrollDirection.UP -> (currentIndex - s).coerceIn(0, lastIndex)
+        TerminalScrollDirection.DOWN -> (currentIndex + s).coerceIn(0, lastIndex)
+        TerminalScrollDirection.TOP -> 0
+        TerminalScrollDirection.BOTTOM -> lastIndex
+    }
+}
+
+/**
+ * Authoritative project of a session for the auto-switch preference: only a session the server assigned to a
+ * project different from [currentProject] can switch it, and only when [autoSwitchEnabled]. A free terminal
+ * (no project) and a same-project session preserve the current project.
+ */
+fun autoSwitchProjectFor(autoSwitchEnabled: Boolean, currentProject: String, sessionProject: String?): String? {
+    if (!autoSwitchEnabled) return null
+    val assigned = sessionProject?.takeIf { it.isNotBlank() } ?: return null
+    return if (assigned == currentProject) null else assigned
+}
+
+/** App-local history suggestions for [draft]: none unless suggestions are enabled and the draft is non-blank. */
+fun terminalSuggestionsFor(
+    enabled: Boolean,
+    history: CommandHistoryStore?,
+    owner: SettingsOwner?,
+    project: String,
+    draft: String,
+): List<String> {
+    if (!enabled || history == null || owner == null || !history.enabled.value || draft.isBlank()) return emptyList()
+    return history.suggestions(owner, project, draft)
+}
+
+/** Latest commit/branch line of the terminal header (existing target-qualified Git read APIs, no Git page). */
+data class TerminalCommitStatus(val branch: String?, val shortHash: String?, val summary: String?) {
+    fun describe(): String? {
+        val parts = listOfNotNull(branch, shortHash, summary?.lineSequence()?.firstOrNull()?.take(60)).filter { it.isNotBlank() }
+        return if (parts.isEmpty()) null else parts.joinToString(" · ")
     }
 }

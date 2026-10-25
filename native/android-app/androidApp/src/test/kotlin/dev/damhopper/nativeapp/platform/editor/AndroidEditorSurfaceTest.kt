@@ -660,4 +660,16 @@ class AndroidEditorSurfaceTest {
         assertIs<EmptyLanguage>(gate.reassess())
         doc.close()
     }
+
+    @Test
+    fun testLiveFontChangeIsAppliedOncePerChangeWithoutTouchingTheDocument() {
+        assertNull(editorFontSizeToApply(applied = 14, requested = 14), "an unchanged size causes no relayout")
+        assertEquals(16, editorFontSizeToApply(applied = 14, requested = 16))
+        assertEquals(14, editorFontSizeToApply(applied = -1, requested = 14), "first application after attach")
+        val doc = AndroidEditorDocument(id = testDocId("a.kt"), initialText = "val x = 1", initialMtime = 1L)
+        val revision = doc.revision.value
+        editorFontSizeToApply(applied = 14, requested = 20)
+        assertEquals(revision, doc.revision.value, "a font change never edits or recreates the document")
+        doc.close()
+    }
 }

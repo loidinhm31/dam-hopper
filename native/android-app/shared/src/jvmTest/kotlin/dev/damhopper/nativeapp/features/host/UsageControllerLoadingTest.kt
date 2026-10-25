@@ -3,6 +3,9 @@ package dev.damhopper.nativeapp.features.host
 import com.sun.net.httpserver.HttpServer
 import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.core.transport.ApiClient
+import dev.damhopper.nativeapp.core.ownership.ConnectionRegistry
+import dev.damhopper.nativeapp.features.settings.SettingsOutcome
+import dev.damhopper.nativeapp.features.settings.TestGuard
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import java.net.InetSocketAddress
@@ -85,14 +88,17 @@ class UsageControllerLoadingTest {
                 exchange.responseBody.use { it.write(json.toByteArray()) }
             }
         }
+        var receivedSetupPatch: String? = null
         server!!.createContext("/api/usage/setup") { exchange ->
-            val json = """{"enabled":true,"paused":false,"collectorEnabled":true,"collectorSetup":{"codexExporter":"notConfigured","restartRequired":false,"serverRestartRequired":false}}"""
+            if (exchange.requestMethod == "PATCH") receivedSetupPatch = exchange.requestBody.bufferedReader().readText()
+            val json = """{"enabled":true,"paused":false,"collectorEnabled":true,"collectorSetup":{"codexExporter":"managed","restartRequired":false,"serverRestartRequired":false}}"""
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
 
-        val ref = ConnectionRef("dev-profile", 1L)
-        val apiClient = ApiClient(ref, "http://127.0.0.1:$serverPort")
+        val registry = ConnectionRegistry()
+        val ref = kotlinx.coroutines.runBlocking { registry.getOrCreateConnection("dev-profile") }
+        val apiClient = ApiClient(ref, "http://127.0.0.1:$serverPort", registry = registry)
         val repo = UsageRepository(apiClient)
         val scope = CoroutineScope(Dispatchers.Default)
         val controller = UsageController(ref, repo, scope)
@@ -104,8 +110,8 @@ class UsageControllerLoadingTest {
         assertEquals(false, controller.uiState.value.settings?.paused)
 
         var patchDone = false
-        controller.updateSettings(SettingsPatchRequest(paused = true, detailRetentionDays = 14)) { success ->
-            patchDone = success
+        controller.updateSettings(SettingsPatchRequest(paused = true, detailRetentionDays = 14), TestGuard()) { outcome ->
+            patchDone = outcome is SettingsOutcome.Confirmed
         }
 
         val deadline = System.currentTimeMillis() + 3000
@@ -118,6 +124,17 @@ class UsageControllerLoadingTest {
         assertTrue(receivedPatch!!.contains("\"paused\":true"))
         assertEquals(true, controller.uiState.value.settings?.paused)
         assertEquals(14, controller.uiState.value.settings?.detailRetentionDays)
+
+        var setupDone = false
+        controller.updateSetup(SetupPatchRequest(enabled = true, codexExporter = true), TestGuard()) { outcome ->
+            setupDone = outcome is SettingsOutcome.Confirmed
+        }
+        val setupDeadline = System.currentTimeMillis() + 3000
+        while (!setupDone && System.currentTimeMillis() < setupDeadline) {
+            Thread.sleep(20)
+        }
+        assertTrue(setupDone, "Setup patch must complete successfully")
+        assertEquals("""{"enabled":true,"codexExporter":true}""", receivedSetupPatch)
     }
 
     @Test

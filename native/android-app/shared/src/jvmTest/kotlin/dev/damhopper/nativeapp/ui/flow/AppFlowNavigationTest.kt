@@ -183,4 +183,130 @@ class AppFlowNavigationTest {
         assertTrue(handled)
         assertEquals(AppFlowStage.PROJECT_LIST, nav.state.value.stage)
     }
+
+    private fun workspaceNav(): AppFlowNavigation {
+        val nav = AppFlowNavigation()
+        nav.onProfileAuthenticated("server-A")
+        nav.selectProject("proj-1")
+        nav.selectSession("term-7")
+        return nav
+    }
+
+    @Test
+    fun testSettingsIsARetainedOverlayThatNeverMovesSelection() {
+        val nav = workspaceNav()
+        val before = nav.state.value
+        nav.openSettings(SettingsOrigin(AppFlowStage.TERMINAL, panel = "EDITOR", document = "file:a.kt", sessionId = "term-7"))
+        val open = nav.state.value
+        assertEquals(AppFlowStage.TERMINAL, open.stage, "Settings is an overlay, not a stage")
+        assertEquals(before.activeProject, open.activeProject)
+        assertEquals(before.activeSessionId, open.activeSessionId)
+        assertEquals("EDITOR", open.settings?.origin?.panel)
+        assertEquals("file:a.kt", open.settings?.origin?.document)
+
+        // A second open never replaces the captured origin (the overlay never nests).
+        nav.openSettings(SettingsOrigin(AppFlowStage.TERMINAL, panel = "FILES"))
+        assertEquals("EDITOR", nav.state.value.settings?.origin?.panel)
+
+        nav.setSettingsSubSection("NOTIFICATIONS")
+        assertEquals("NOTIFICATIONS", nav.state.value.settings?.subSection)
+    }
+
+    @Test
+    fun testBackClosesSettingsThenFeedThenUnwindsStagesAndReturnsTheOrigin() {
+        val nav = workspaceNav()
+        nav.openSettings(SettingsOrigin(AppFlowStage.TERMINAL, panel = "TERMINAL", sessionId = "term-7"))
+        // Newer interceptors (e.g. the sidebar) must not swallow the Back meant for Settings.
+        var interceptorCalls = 0
+        nav.registerBackInterceptor { interceptorCalls++; true }
+
+        assertTrue(nav.handleBackPress())
+        assertNull(nav.state.value.settings)
+        assertEquals(0, interceptorCalls)
+        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals("term-7", nav.state.value.activeSessionId, "exact session preserved")
+
+        nav.toggleNotifications()
+        assertTrue(nav.state.value.notificationsOpen)
+        assertTrue(nav.handleBackPress())
+        assertFalse(nav.state.value.notificationsOpen)
+        assertEquals(0, interceptorCalls)
+
+        assertTrue(nav.handleBackPress()) // now the interceptor owns it
+        assertEquals(1, interceptorCalls)
+        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+    }
+
+    @Test
+    fun testCloseSettingsReturnsOriginAndIsIdempotent() {
+        val nav = workspaceNav()
+        assertNull(nav.closeSettings())
+        nav.openSettings(SettingsOrigin(AppFlowStage.TERMINAL, panel = "FILES"))
+        assertEquals("FILES", nav.closeSettings()?.panel)
+        assertNull(nav.closeSettings())
+    }
+
+    @Test
+    fun testStageChangesDropTheOverlayBecauseItsOriginNoLongerExists() {
+        val nav = workspaceNav()
+        nav.openSettings(SettingsOrigin(AppFlowStage.TERMINAL))
+        nav.navigateToProfiles()
+        assertNull(nav.state.value.settings)
+
+        nav.onProfileAuthenticated("server-A")
+        nav.openSettings(SettingsOrigin(AppFlowStage.PROJECT_LIST))
+        nav.onProfileAuthenticated("server-B")
+        assertNull(nav.state.value.settings)
+        assertNull(nav.state.value.activeProject)
+    }
+
+    @Test
+    fun testConfirmedResetLeavesForWorkspaceSelectionWithoutKeepingStaleSelection() {
+        val nav = workspaceNav()
+        nav.openSettings(SettingsOrigin(AppFlowStage.TERMINAL))
+        nav.completeResetToWorkspaceSelection()
+        val state = nav.state.value
+        assertEquals(AppFlowStage.PROJECT_LIST, state.stage)
+        assertEquals("server-A", state.activeProfileId)
+        assertNull(state.activeProject)
+        assertNull(state.activeSessionId)
+        assertNull(state.settings)
+    }
+
+    @Test
+    fun testNotificationRouteRevalidatesImmediatelyBeforeCommitAndHonorsTheDepartureGuard() {
+        val nav = workspaceNav()
+        // Refused outright when the target is no longer live at the first check.
+        assertFalse(nav.routeToTerminal("server-A", "proj-2", null, "term-9", revalidate = { false }))
+        assertEquals("proj-1", nav.state.value.activeProject)
+
+        // The departure guard defers a cross-project route; revalidation runs again at commit time.
+        var deferred: (() -> Unit)? = null
+        nav.departureGuard = { _, proceed -> deferred = proceed; true }
+        var live = true
+        var committed = false
+        assertTrue(nav.routeToTerminal("server-A", "proj-2", "/wt", "term-9", revalidate = { live }, onCommitted = { committed = true }))
+        assertEquals("proj-1", nav.state.value.activeProject, "deferred behind the guard")
+        live = false // the owner changed while the user answered the dialog
+        deferred?.invoke()
+        assertEquals("proj-1", nav.state.value.activeProject, "stale click must not navigate")
+        assertFalse(committed)
+
+        live = true
+        assertTrue(nav.routeToTerminal("server-A", "proj-2", "/wt", "term-9", revalidate = { live }, onCommitted = { committed = true }))
+        deferred?.invoke()
+        val state = nav.state.value
+        assertEquals("proj-2", state.activeProject)
+        assertEquals("/wt", state.activeWorktreePath)
+        assertEquals("term-9", state.activeSessionId)
+        assertTrue(committed)
+    }
+
+    @Test
+    fun testRouteWithinTheSameWorkspaceNeedsNoDepartureGuard() {
+        val nav = workspaceNav()
+        nav.departureGuard = { _, _ -> error("same workspace must not run the departure guard") }
+        assertTrue(nav.routeToTerminal("server-A", "proj-1", null, "term-8"))
+        assertEquals("term-8", nav.state.value.activeSessionId)
+    }
 }
