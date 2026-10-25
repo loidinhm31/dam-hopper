@@ -101,6 +101,8 @@ jobs:
     if: needs.validate-version.outputs.is_debug_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
       - name: Checkout Tagged Commit
         uses: actions/checkout@v4
@@ -136,6 +138,48 @@ jobs:
 
       - name: Grant Execute Permissions to Gradle Wrapper
         run: chmod +x native/android-app/gradlew
+      - name: Enforce Release Signing Custody and Keystore Preflight
+        env:
+          KEYSTORE_BASE64: ${{ secrets.DAMHOPPER_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.DAMHOPPER_KEY_ALIAS }}
+          STORE_PASSWORD: ${{ secrets.DAMHOPPER_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.DAMHOPPER_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEY_ALIAS" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "::error::Release build requires signing custody. Required repository secrets: DAMHOPPER_KEYSTORE_BASE64, DAMHOPPER_KEY_ALIAS, DAMHOPPER_STORE_PASSWORD, DAMHOPPER_KEY_PASSWORD."
+            exit 1
+          fi
+
+          KEYSTORE_PATH="${RUNNER_TEMP}/damhopper-release.jks"
+          ( umask 077 && echo "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH" )
+          chmod 600 "$KEYSTORE_PATH"
+
+          echo "=== Inspecting Release Keystore Entries ==="
+          STORE_PASSWORD="$STORE_PASSWORD" keytool -list \
+            -keystore "$KEYSTORE_PATH" \
+            -storepass:env STORE_PASSWORD || {
+            echo "::error::Failed to open keystore with DAMHOPPER_STORE_PASSWORD."
+            exit 1
+          }
+
+          if ! STORE_PASSWORD="$STORE_PASSWORD" keytool -list \
+            -keystore "$KEYSTORE_PATH" \
+            -alias "$KEY_ALIAS" \
+            -storepass:env STORE_PASSWORD >/dev/null 2>&1; then
+            echo "::error::Release signing preflight failed: Key alias '$KEY_ALIAS' not found in keystore."
+            exit 1
+          fi
+
+          if ! STORE_PASSWORD="$STORE_PASSWORD" KEY_PASSWORD="$KEY_PASSWORD" keytool -certreq \
+            -keystore "$KEYSTORE_PATH" \
+            -alias "$KEY_ALIAS" \
+            -storepass:env STORE_PASSWORD \
+            -keypass:env KEY_PASSWORD >/dev/null 2>&1; then
+            echo "::error::Release signing preflight failed: private key recovery failed with DAMHOPPER_KEY_PASSWORD."
+            exit 1
+          fi
+
+          echo "Release signing credentials and key alias preflight verified successfully."
 
       - name: Install Rust Toolchain for Android ABIs
         uses: dtolnay/rust-toolchain@stable
@@ -158,31 +202,19 @@ jobs:
           cd native/android-app/crypto-bridge
           cargo ndk -t arm64-v8a -t x86_64 -o ../androidApp/src/main/jniLibs build --release
 
-      - name: Enforce Release Signing Custody
-        env:
-          KEYSTORE_BASE64: ${{ secrets.DAMHOPPER_KEYSTORE_BASE64 }}
-          KEY_ALIAS: ${{ secrets.DAMHOPPER_KEY_ALIAS }}
-          STORE_PASSWORD: ${{ secrets.DAMHOPPER_STORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.DAMHOPPER_KEY_PASSWORD }}
-        run: |
-          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEY_ALIAS" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then
-            echo "::error::Release build requires signing custody. Required repository secrets: DAMHOPPER_KEYSTORE_BASE64, DAMHOPPER_KEY_ALIAS, DAMHOPPER_STORE_PASSWORD, DAMHOPPER_KEY_PASSWORD."
-            exit 1
-          fi
-          echo "Release signing credentials verified present in repository secrets."
-
       - name: Assemble Signed Android Release APK
         env:
           VERSION: ${{ needs.validate-version.outputs.version }}
           VERSION_CODE: ${{ needs.validate-version.outputs.version_code }}
-          KEYSTORE_BASE64: ${{ secrets.DAMHOPPER_KEYSTORE_BASE64 }}
           KEY_ALIAS: ${{ secrets.DAMHOPPER_KEY_ALIAS }}
           STORE_PASSWORD: ${{ secrets.DAMHOPPER_STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.DAMHOPPER_KEY_PASSWORD }}
         run: |
           KEYSTORE_PATH="${RUNNER_TEMP}/damhopper-release.jks"
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-          chmod 600 "$KEYSTORE_PATH"
+          if [ ! -f "$KEYSTORE_PATH" ]; then
+            echo "::error::Release keystore missing at $KEYSTORE_PATH"
+            exit 1
+          fi
 
           cd native/android-app
           DAMHOPPER_KEYSTORE="$KEYSTORE_PATH" \
@@ -229,13 +261,54 @@ jobs:
           echo "Staged Android Release APK:"
           ls -lh final-android/
 
-      - name: Upload Android Release APK
+      - name: Upload Android Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: damhopper-android-release-apk
           path: final-android/*.apk
           if-no-files-found: error
           retention-days: 7
+
+      - name: Attach Android Release APK to GitHub Release
+        if: (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/android-v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')) && needs.validate-version.outputs.is_debug_only != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.validate-version.outputs.tag_name }}
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "No release tag resolved, skipping release attachment."
+            exit 0
+          fi
+
+          echo "Target release tag: $TAG"
+
+          # If this is a unified repository release (v*), wait for release-linux workflow to finish publishing
+          if [[ "$TAG" == v* ]]; then
+            echo "Waiting for release-linux companion workflow to publish release $TAG..."
+            for i in {1..40}; do
+              RUN_STATUS=$(gh run list --workflow release-linux.yml --commit "${GITHUB_SHA}" --json status,conclusion --jq '.[0] | select(.status == "completed" and .conclusion == "success") | .status' 2>/dev/null || echo "")
+              if [ "$RUN_STATUS" = "completed" ]; then
+                echo "release-linux companion workflow completed successfully!"
+                break
+              fi
+              echo "release-linux is still in progress, waiting 30s (attempt $i/40)..."
+              sleep 30
+            done
+          fi
+
+          # If release does not exist yet (e.g. android-v* tag), create it
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG does not exist. Creating release for $TAG..."
+            gh release create "$TAG" final-android/*.apk \
+              --title "DamHopper Android $TAG" \
+              --notes "DamHopper Android Native App release for $TAG."
+          else
+            echo "Uploading APK to release $TAG..."
+            gh release upload "$TAG" final-android/*.apk --clobber
+          fi
+
+          echo "✓ Successfully attached Android Release APK to GitHub release $TAG:"
+          gh release view "$TAG" --json assets --jq '.assets[] | select(.name | endswith(".apk")) | {name, size, url}'
 
   build-android-debug:
     name: Build Un-signed Android Debug APK (Diagnostic)
