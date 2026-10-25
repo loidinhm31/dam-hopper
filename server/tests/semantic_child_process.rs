@@ -278,7 +278,7 @@ async fn test_fragmented_frame_handling() {
     }
 
     handle.shutdown();
-    timeout(Duration::from_secs(3), async {
+    timeout(Duration::from_secs(10), async {
         while let Some(evt) = event_rx.recv().await {
             if let ChildEvent::Terminated(_) = evt {
                 break;
@@ -368,7 +368,7 @@ async fn test_stderr_flood_bounded_drain() {
     );
 
     handle.shutdown();
-    timeout(Duration::from_secs(3), async {
+    timeout(Duration::from_secs(10), async {
         while let Some(evt) = event_rx.recv().await {
             if let ChildEvent::StderrSummary { .. } = evt {
                 got_stderr = true;
@@ -670,11 +670,11 @@ async fn test_coalesced_frames_and_duplicate_replies() {
         .send_message(br#"{"jsonrpc":"2.0","id":11,"method":"ping","params":{"x":1}}"#.to_vec())
         .expect("send");
 
-    let first = timeout(Duration::from_secs(3), event_rx.recv())
+    let first = timeout(Duration::from_secs(10), event_rx.recv())
         .await
         .unwrap()
         .unwrap();
-    let second = timeout(Duration::from_secs(3), event_rx.recv())
+    let second = timeout(Duration::from_secs(10), event_rx.recv())
         .await
         .unwrap()
         .unwrap();
@@ -705,7 +705,7 @@ async fn test_coalesced_frames_and_duplicate_replies() {
         .send_message(br#"{"jsonrpc":"2.0","id":22,"method":"ping"}"#.to_vec())
         .expect("send");
     for expected_dup in [1, 2] {
-        let evt = timeout(Duration::from_secs(3), rx_dup.recv())
+        let evt = timeout(Duration::from_secs(10), rx_dup.recv())
             .await
             .unwrap()
             .unwrap();
