@@ -157,16 +157,17 @@ class WorkspaceDepartureTest {
         assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
 
         // Install departure guard hook (as ProjectWorkspaceScreen does)
-        nav.departureGuard = { targetStage, onProceed ->
+        nav.departureGuard = { request ->
             if (workspaceState.hasDirtyDocuments() && !workspaceState.isAuthorityRetired.value) {
                 val dirtyIds = workspaceState.getDirtyDocumentIds()
                 val dirtyRevs = workspaceState.getDirtyRevisions()
                 workspaceState.setPendingDeparture(
                     WorkspaceDepartureIntent.WorkspaceLeave(
-                        targetStageName = targetStage.name,
+                        targetStageName = request.targetStage.name,
                         dirtyDocuments = dirtyIds,
                         dirtyRevisions = dirtyRevs,
-                        onConfirmed = onProceed,
+                        onConfirmed = request.onProceed,
+                        onCancelled = request.onCancelled,
                     )
                 )
                 true // Intercept!
@@ -239,7 +240,7 @@ class WorkspaceDepartureTest {
         val pending = state.pendingDeparture.value as WorkspaceDepartureIntent.WorkspaceLeave
 
         // User clicks Discard & Leave
-        state.clearPendingDeparture()
+        state.completePendingDeparture(pending)
         pending.onConfirmed()
 
         assertEquals(AppFlowStage.PROJECT_LIST, nav.state.value.stage)
@@ -352,5 +353,95 @@ class WorkspaceDepartureTest {
         val committed = state.commitDepartureSave(departure)
         assertFalse(committed, "Intervening edit must fail the production departure commit transaction")
         assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+    }
+
+    private fun leave(state: ProjectWorkspaceState, log: MutableList<String>, tag: String = "") =
+        WorkspaceDepartureIntent.WorkspaceLeave(
+            targetStageName = "TERMINAL",
+            dirtyDocuments = state.getDirtyDocumentIds(),
+            dirtyRevisions = state.getDirtyRevisions(),
+            onConfirmed = { log += "${tag}confirmed" },
+            onCancelled = { log += "${tag}cancelled" },
+        )
+
+    private suspend fun makeDirty(state: ProjectWorkspaceState) {
+        state.editorTabsState.openTab(state.target, "doc.txt")
+        val doc = state.editorTabsState.getDocument(state.editorTabsState.activeTabId.value!!)
+        doc!!.applyEdit(1, 1, 1, 1, "dirty edit\n")
+    }
+
+    @Test
+    fun testCancelInvokesCancellationExactlyOnceWhileDiscardNeverCancelsItsOwnContinuation() = runTest {
+        val (state, _) = createFixture()
+        makeDirty(state)
+        val log = mutableListOf<String>()
+
+        val cancelled = leave(state, log)
+        state.setPendingDeparture(cancelled)
+        state.clearPendingDeparture()
+        state.clearPendingDeparture()
+        assertEquals(listOf("cancelled"), log, "cancel/dismiss notifies once")
+        assertNull(state.pendingDeparture.value)
+
+        log.clear()
+        val discarded = leave(state, log)
+        state.setPendingDeparture(discarded)
+        state.completePendingDeparture(discarded)
+        discarded.onConfirmed()
+        assertEquals(listOf("confirmed"), log, "successful completion is not a cancellation")
+        assertNull(state.pendingDeparture.value)
+    }
+
+    @Test
+    fun testCoalescedRequestIsCancelledAndNeverHijacksTheFirstPrompt() = runTest {
+        val (state, _) = createFixture()
+        makeDirty(state)
+        val log = mutableListOf<String>()
+        val first = leave(state, log, "first-")
+        val second = leave(state, log, "second-")
+
+        state.setPendingDeparture(first)
+        state.setPendingDeparture(second)
+        assertEquals(listOf("second-cancelled"), log)
+        assertTrue(state.pendingDeparture.value === first, "the active prompt is never overwritten")
+
+        state.clearPendingDeparture()
+        assertEquals(listOf("second-cancelled", "first-cancelled"), log)
+    }
+
+    @Test
+    fun testFailedSaveSpendsTheRequestButKeepsThePromptAndNeverCancelsTwice() = runTest {
+        val (state, _) = createFixture()
+        makeDirty(state)
+        val log = mutableListOf<String>()
+        val intent = leave(state, log)
+        state.setPendingDeparture(intent)
+
+        wsConnection.shouldSaveFail = true
+        assertFalse(state.commitDepartureSave(intent), "a rejected save fails the departure")
+        assertTrue(state.pendingDeparture.value === intent, "the dirty prompt and its error UI stay")
+        assertNotNull(state.departureError)
+        assertEquals(listOf("cancelled"), log, "the roster-style continuation is spent by the failed save")
+
+        // A second failed attempt and the user's Cancel never notify again.
+        assertFalse(state.commitDepartureSave(intent))
+        state.clearPendingDeparture()
+        assertEquals(listOf("cancelled"), log)
+        assertTrue(state.hasDirtyDocuments(), "the draft is retained")
+    }
+
+    @Test
+    fun testAuthorityRetirementSpendsTheContinuationButKeepsTheDirtyPrompt() = runTest {
+        val (state, _) = createFixture()
+        makeDirty(state)
+        val log = mutableListOf<String>()
+        val intent = leave(state, log)
+        state.setPendingDeparture(intent)
+
+        state.revokeAuthority()
+        assertEquals(listOf("cancelled"), log)
+        assertTrue(state.pendingDeparture.value === intent, "dirty data stays protected by the prompt")
+        state.clearPendingDeparture()
+        assertEquals(listOf("cancelled"), log)
     }
 }

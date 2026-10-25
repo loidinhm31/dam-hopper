@@ -1,5 +1,7 @@
 package dev.damhopper.nativeapp.ui.flow
 
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
+import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,9 +32,17 @@ class AppFlowNavigation(
 
     /**
      * Interception hook for departure guards (e.g. dirty documents in workspace).
-     * If returning true, navigation is intercepted and deferred until user confirms.
+     * If returning true, navigation is intercepted and the guard owns exactly one later call of the request's
+     * `onProceed` (user confirmed) or `onCancelled` (prompt cancelled/rejected/superseded/retired).
      */
-    var departureGuard: ((targetStage: AppFlowStage, onProceed: () -> Unit) -> Boolean)? = null
+    var departureGuard: ((DepartureRequest) -> Boolean)? = null
+
+    /**
+     * Called when ordinary navigation (profiles, project, back, notification route, reset) is REQUESTED, before any
+     * departure guard runs, so a pending retained Agents activation is spent immediately and every captured
+     * continuation of it becomes permanently inert. The verified manual route never calls it.
+     */
+    var onOrdinaryNavigationRequested: (() -> Unit)? = null
 
     /**
      * Owned UI back interceptors (e.g. slide-over sidebars). Main-thread only.
@@ -49,6 +59,10 @@ class AppFlowNavigation(
         return { backInterceptors.remove(interceptor) }
     }
 
+    private fun ordinaryNavigationRequested() {
+        onOrdinaryNavigationRequested?.invoke()
+    }
+
     // ---- Settings overlay and inline feed ----
 
     /**
@@ -62,11 +76,47 @@ class AppFlowNavigation(
         }
     }
 
+    /**
+     * Opens the existing Host administration -> Agents Settings section for the captured target workspace server
+     * [targetProfileId] (B, independent of preference source A). Already open keeps the first origin but replaces the
+     * intent deterministically (advancing [SettingsOverlay.intent]).
+     */
+    fun openAgentSettings(origin: SettingsOrigin, targetProfileId: String?) {
+        _state.update { current ->
+            val existing = current.settings
+            val next = if (existing == null) {
+                SettingsOverlay(
+                    origin = origin.copy(stage = current.stage),
+                    subSection = AGENT_SETTINGS_SUB_SECTION,
+                    hostSection = AGENT_SETTINGS_HOST_SECTION,
+                    targetProfileId = targetProfileId,
+                    intent = 1L,
+                )
+            } else {
+                existing.copy(
+                    subSection = AGENT_SETTINGS_SUB_SECTION,
+                    hostSection = AGENT_SETTINGS_HOST_SECTION,
+                    targetProfileId = targetProfileId,
+                    intent = existing.intent + 1L,
+                )
+            }
+            current.copy(settings = next, notificationsOpen = false)
+        }
+    }
+
     /** Remembers the shown Settings sub-section so a configuration change restores it. */
     fun setSettingsSubSection(name: String) {
         _state.update { current ->
             val overlay = current.settings ?: return@update current
             if (overlay.subSection == name) current else current.copy(settings = overlay.copy(subSection = name))
+        }
+    }
+
+    /** Remembers the shown Host administration section so a configuration change restores it. */
+    fun setSettingsHostSection(name: String) {
+        _state.update { current ->
+            val overlay = current.settings ?: return@update current
+            if (overlay.hostSection == name) current else current.copy(settings = overlay.copy(hostSection = name))
         }
     }
 
@@ -96,8 +146,9 @@ class AppFlowNavigation(
      * Navigates back to the profile authentication stage.
      */
     fun navigateToProfiles() {
+        ordinaryNavigationRequested()
         val guard = departureGuard
-        if (guard != null && guard(AppFlowStage.PROFILE_LOGIN) { directNavigateToProfiles() }) {
+        if (guard != null && guard(DepartureRequest(AppFlowStage.PROFILE_LOGIN, { directNavigateToProfiles() }, {}))) {
             return
         }
         directNavigateToProfiles()
@@ -105,7 +156,13 @@ class AppFlowNavigation(
 
     private fun directNavigateToProfiles() {
         _state.update {
-            it.copy(stage = AppFlowStage.PROFILE_LOGIN, activeSessionId = null, settings = null, notificationsOpen = false)
+            it.copy(
+                stage = AppFlowStage.PROFILE_LOGIN,
+                activeSessionId = null,
+                settings = null,
+                notificationsOpen = false,
+                requiredTerminalInstance = null,
+            )
         }
     }
 
@@ -116,6 +173,7 @@ class AppFlowNavigation(
      * @param profileId Authenticated server profile identifier.
      */
     fun onProfileAuthenticated(profileId: String) {
+        ordinaryNavigationRequested()
         _state.update { current ->
             val profileChanged = current.activeProfileId != profileId
             current.copy(
@@ -126,6 +184,7 @@ class AppFlowNavigation(
                 activeWorktreePath = if (profileChanged) null else current.activeWorktreePath,
                 settings = null,
                 notificationsOpen = false,
+                requiredTerminalInstance = null,
             )
         }
     }
@@ -137,8 +196,9 @@ class AppFlowNavigation(
      * @param projectName Selected project name or workspace path.
      */
     fun selectProject(projectName: String) {
+        ordinaryNavigationRequested()
         val guard = departureGuard
-        if (guard != null && guard(AppFlowStage.TERMINAL) { directSelectProject(projectName) }) {
+        if (guard != null && guard(DepartureRequest(AppFlowStage.TERMINAL, { directSelectProject(projectName) }, {}))) {
             return
         }
         directSelectProject(projectName)
@@ -154,18 +214,23 @@ class AppFlowNavigation(
                 activeWorktreePath = if (projectChanged) null else current.activeWorktreePath,
                 settings = null,
                 notificationsOpen = false,
+                requiredTerminalInstance = null,
             )
         }
     }
 
     /**
-     * Updates the active terminal session ID for the current project.
+     * Updates the active terminal session ID for the current project. An exact required instance survives a
+     * same-terminal report (attachment callbacks) and is cleared by a deliberately different session.
      *
      * @param sessionId Active terminal session ID, or null to clear.
      */
     fun selectSession(sessionId: String?) {
         _state.update {
-            it.copy(activeSessionId = sessionId)
+            it.copy(
+                activeSessionId = sessionId,
+                requiredTerminalInstance = it.requiredTerminalInstance?.takeIf { required -> required.terminalId == sessionId },
+            )
         }
     }
 
@@ -175,6 +240,7 @@ class AppFlowNavigation(
      * still-current target; uncertain or cancelled resets never reach it.
      */
     fun completeResetToWorkspaceSelection() {
+        ordinaryNavigationRequested()
         _state.update { current ->
             current.copy(
                 stage = if (current.activeProfileId != null) AppFlowStage.PROJECT_LIST else AppFlowStage.PROFILE_LOGIN,
@@ -183,6 +249,7 @@ class AppFlowNavigation(
                 activeWorktreePath = null,
                 settings = null,
                 notificationsOpen = false,
+                requiredTerminalInstance = null,
             )
         }
     }
@@ -203,29 +270,94 @@ class AppFlowNavigation(
     ): Boolean {
         val commit = {
             if (revalidate()) {
-                _state.update {
-                    it.copy(
-                        stage = AppFlowStage.TERMINAL,
-                        activeProfileId = profileId,
-                        activeProject = project,
-                        activeWorktreePath = worktreePath,
-                        activeSessionId = sessionId,
-                        settings = null,
-                        notificationsOpen = false,
-                        notificationRouteActive = true,
-                    )
-                }
+                commitRouteState(
+                    profileId = profileId,
+                    project = project,
+                    worktreePath = worktreePath,
+                    sessionId = sessionId,
+                    required = null,
+                    notificationRouteActive = true,
+                )
                 onCommitted()
             }
         }
         if (!revalidate()) return false
-        val current = _state.value
-        val sameWorkspace = current.stage == AppFlowStage.TERMINAL && current.activeProfileId == profileId &&
-            current.activeProject == project && current.activeWorktreePath == worktreePath
+        ordinaryNavigationRequested()
         val guard = departureGuard
-        if (!sameWorkspace && guard != null && guard(AppFlowStage.TERMINAL, commit)) return true
+        if (!isSameWorkspace(profileId, project, worktreePath) &&
+            guard != null && guard(DepartureRequest(AppFlowStage.TERMINAL, commit, {}))
+        ) {
+            return true
+        }
         commit()
         return true
+    }
+
+    /**
+     * First step of a verified manual route (retained Agents activation): the exact same workspace proceeds; any
+     * other workspace asks the existing departure guard. Never mutates route, profile or session. Returns
+     * [TerminalRouteGate.DEFERRED] only when the guard intercepted, in which case exactly one of [onProceed] (after
+     * the user confirms) or [onCancelled] is invoked later and the caller must launch its own fresh validation then.
+     */
+    fun requestVerifiedTerminalRoute(
+        route: VerifiedTerminalRoute,
+        onProceed: () -> Unit,
+        onCancelled: () -> Unit,
+    ): TerminalRouteGate {
+        if (isSameWorkspace(route.profileId, route.project, route.worktreePath)) return TerminalRouteGate.PROCEED
+        val guard = departureGuard ?: return TerminalRouteGate.PROCEED
+        return if (guard(DepartureRequest(AppFlowStage.TERMINAL, onProceed, onCancelled))) {
+            TerminalRouteGate.DEFERRED
+        } else {
+            TerminalRouteGate.PROCEED
+        }
+    }
+
+    /**
+     * Admitted, non-suspending, mutation-only entry into the SAME private route-state commit the notification route
+     * uses. The caller must hold every authority gate of the local admission protocol; this method does not
+     * revalidate, invoke user callbacks, cancel its own request, log, launch jobs, persist or attach controllers, and
+     * it does not call the ordinary-navigation invalidator. It records the exact required terminal instance.
+     */
+    fun commitVerifiedTerminalRoute(route: VerifiedTerminalRoute) {
+        commitRouteState(
+            profileId = route.profileId,
+            project = route.project,
+            worktreePath = route.worktreePath,
+            sessionId = route.sessionId,
+            required = TerminalAgentsInstanceKey(route.profileId, route.sessionId, route.incarnation),
+            notificationRouteActive = route.notificationRouteActive,
+        )
+    }
+
+    private fun isSameWorkspace(profileId: String, project: String, worktreePath: String?): Boolean {
+        val current = _state.value
+        return current.stage == AppFlowStage.TERMINAL && current.activeProfileId == profileId &&
+            current.activeProject == project &&
+            WorkspaceFileOwner.normalizeWorktree(current.activeWorktreePath) == WorkspaceFileOwner.normalizeWorktree(worktreePath)
+    }
+
+    private fun commitRouteState(
+        profileId: String,
+        project: String,
+        worktreePath: String?,
+        sessionId: String?,
+        required: TerminalAgentsInstanceKey?,
+        notificationRouteActive: Boolean,
+    ) {
+        _state.update {
+            it.copy(
+                stage = AppFlowStage.TERMINAL,
+                activeProfileId = profileId,
+                activeProject = project,
+                activeWorktreePath = worktreePath,
+                activeSessionId = sessionId,
+                settings = null,
+                notificationsOpen = false,
+                notificationRouteActive = notificationRouteActive,
+                requiredTerminalInstance = required,
+            )
+        }
     }
 
     fun consumeNotificationRoute() {
@@ -264,8 +396,9 @@ class AppFlowNavigation(
         }
         if (targetStage == null) return false
 
+        ordinaryNavigationRequested()
         val guard = departureGuard
-        if (guard != null && guard(targetStage) { directProceedBack(targetStage) }) {
+        if (guard != null && guard(DepartureRequest(targetStage, { directProceedBack(targetStage) }, {}))) {
             return true
         }
         return directProceedBack(targetStage)
@@ -273,8 +406,18 @@ class AppFlowNavigation(
 
     private fun directProceedBack(targetStage: AppFlowStage): Boolean {
         _state.update { current ->
-            current.copy(stage = targetStage, settings = null, notificationsOpen = false)
+            current.copy(
+                stage = targetStage,
+                settings = null,
+                notificationsOpen = false,
+                requiredTerminalInstance = null,
+            )
         }
         return true
+    }
+
+    private companion object {
+        const val AGENT_SETTINGS_SUB_SECTION = "HOST"
+        const val AGENT_SETTINGS_HOST_SECTION = "AGENTS"
     }
 }

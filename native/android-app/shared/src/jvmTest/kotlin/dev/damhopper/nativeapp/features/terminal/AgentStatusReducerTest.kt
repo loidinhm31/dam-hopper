@@ -528,4 +528,113 @@ class AgentStatusReducerTest {
         assertEquals(1, reducer.state.value.filteredAgents.size)
         assertEquals("t-idle", reducer.state.value.filteredAgents[0].id)
     }
+
+    @Test
+    fun routeAuthorityRevisionAdvancesForAuthorityChangesOnly() = runSuspending {
+        val reducer = AgentStatusReducer()
+        assertEquals(0L, reducer.state.value.routeAuthorityRevision)
+        val row = makeAgentRow("term-1", 1uL, AgentState.WORKING)
+        assertTrue(reducer.install(snapshot(10uL, 1uL, AgentStatusAvailability.READY, row)))
+        val installed = reducer.state.value.routeAuthorityRevision
+        assertTrue(installed > 0L)
+
+        // An ordinary same-baseline row update never creates a new route fence.
+        reducer.status(changed(11uL, makeAgentRow("term-1", 1uL, AgentState.IDLE)))
+        assertEquals(installed, reducer.state.value.routeAuthorityRevision)
+
+        // Invalidation closes the baseline, starting a capture loads it, installing it replaces it: each is a fence.
+        reducer.applyStatusInvalidated(owner, socket, ServerMsg.AgentStatusInvalidated(1uL, 12uL))
+        val closed = reducer.state.value.routeAuthorityRevision
+        assertTrue(closed > installed)
+        val capture = assertNotNull(reducer.captureSnapshot(owner, socket))
+        val loading = reducer.state.value.routeAuthorityRevision
+        assertTrue(loading > closed)
+        assertTrue(reducer.applySnapshot(capture, snapshot(12uL, 1uL, AgentStatusAvailability.READY, row)))
+        val reinstalled = reducer.state.value.routeAuthorityRevision
+        assertTrue(reinstalled > loading)
+
+        // Rebinding to another socket (even an equal-looking replacement) is a binding fence.
+        assertTrue(reducer.bindRuntime(owner, SocketInstanceRef(owner, "sock-2")))
+        assertTrue(reducer.state.value.routeAuthorityRevision > reinstalled)
+    }
+
+    @Test
+    fun tryAdmitTerminalAgentsRouteDistinguishesBusyFromStaleAndAlwaysReleases() = runSuspending {
+        val reducer = AgentStatusReducer()
+        assertTrue(reducer.install(snapshot(10uL, 7uL, AgentStatusAvailability.READY, makeAgentRow("term-1", 1uL))))
+        val revision = reducer.state.value.routeAuthorityRevision
+        var ran = 0
+        assertEquals(
+            AgentRouteAdmission.COMMITTED,
+            reducer.tryAdmitTerminalAgentsRoute(owner, socket, 7uL, revision) { ran++; true },
+        )
+        assertEquals(1, ran)
+
+        // Wrong socket, epoch, missing epoch or a different authority revision are STALE and never run the leaf.
+        val other = SocketInstanceRef(owner, "sock-2")
+        assertEquals(AgentRouteAdmission.STALE, reducer.tryAdmitTerminalAgentsRoute(owner, other, 7uL, revision) { ran++; true })
+        assertEquals(AgentRouteAdmission.STALE, reducer.tryAdmitTerminalAgentsRoute(owner, socket, 8uL, revision) { ran++; true })
+        assertEquals(AgentRouteAdmission.STALE, reducer.tryAdmitTerminalAgentsRoute(owner, socket, null, revision) { ran++; true })
+        assertEquals(AgentRouteAdmission.STALE, reducer.tryAdmitTerminalAgentsRoute(owner, socket, 7uL, revision - 1L) { ran++; true })
+        assertEquals(1, ran)
+        // A declined commit is STALE too.
+        assertEquals(AgentRouteAdmission.STALE, reducer.tryAdmitTerminalAgentsRoute(owner, socket, 7uL, revision) { false })
+
+        // Same-thread reentry sees the held mutex: the inner call is BUSY (never waits); the outer keeps it.
+        var inner: AgentRouteAdmission? = null
+        val outer = reducer.tryAdmitTerminalAgentsRoute(owner, socket, 7uL, revision) {
+            inner = reducer.tryAdmitTerminalAgentsRoute(owner, socket, 7uL, revision) { true }
+            false
+        }
+        assertEquals(AgentRouteAdmission.BUSY, inner)
+        assertEquals(AgentRouteAdmission.STALE, outer)
+
+        // The mutex is released in finally even when the leaf throws.
+        kotlin.test.assertFailsWith<IllegalStateException> {
+            reducer.tryAdmitTerminalAgentsRoute(owner, socket, 7uL, revision) { error("boom") }
+        }
+        assertEquals(AgentRouteAdmission.COMMITTED, reducer.tryAdmitTerminalAgentsRoute(owner, socket, 7uL, revision) { true })
+    }
+
+    @Test
+    fun manualRouteAdmissionDoesNotRequireReadyOrAdmissionOpen() = runSuspending {
+        val reducer = AgentStatusReducer()
+        assertTrue(reducer.install(snapshot(10uL, 7uL, AgentStatusAvailability.UNAVAILABLE)))
+        assertFalse(reducer.state.value.admissionOpen)
+        val revision = reducer.state.value.routeAuthorityRevision
+        assertEquals(
+            AgentRouteAdmission.COMMITTED,
+            reducer.tryAdmitTerminalAgentsRoute(owner, socket, 7uL, revision) { true },
+        )
+    }
+
+    @Test
+    fun typedSnapshotFailureIsCaptureQualifiedAndClearedBySuccess() = runSuspending {
+        val reducer = AgentStatusReducer()
+        assertTrue(reducer.bindRuntime(owner, socket))
+        val first = assertNotNull(reducer.captureSnapshot(owner, socket))
+        reducer.abandonSnapshot(first, "HTTP 404", TerminalAgentsSnapshotFailure.HTTP_NOT_FOUND)
+        assertEquals(TerminalAgentsSnapshotFailure.HTTP_NOT_FOUND, reducer.state.value.snapshotFailure)
+        assertEquals("HTTP 404", reducer.state.value.lastError) // human text kept, never parsed
+        // Notification baseline/admission/high-water are untouched by a typed failure.
+        assertFalse(reducer.state.value.baselineInstalled)
+        assertFalse(reducer.state.value.admissionOpen)
+        assertTrue(reducer.state.value.unreadAttentions.isEmpty())
+
+        // A successor capture closes the old typed failure while loading; the superseded capture's delayed failure is
+        // rejected and cannot alter the successor.
+        val second = assertNotNull(reducer.captureSnapshot(owner, socket))
+        assertNull(reducer.state.value.snapshotFailure)
+        val third = assertNotNull(reducer.captureSnapshot(owner, socket))
+        reducer.abandonSnapshot(second, "late", TerminalAgentsSnapshotFailure.HTTP_NOT_FOUND)
+        assertNull(reducer.state.value.snapshotFailure)
+        assertTrue(reducer.state.value.isSnapshotLoading)
+
+        // A successful current snapshot clears typed failure; OTHER failures stay OTHER.
+        assertTrue(reducer.applySnapshot(third, snapshot(10uL, 1uL, AgentStatusAvailability.READY)))
+        assertNull(reducer.state.value.snapshotFailure)
+        val fourth = assertNotNull(reducer.captureSnapshot(owner, socket))
+        reducer.abandonSnapshot(fourth, "boom", TerminalAgentsSnapshotFailure.OTHER)
+        assertEquals(TerminalAgentsSnapshotFailure.OTHER, reducer.state.value.snapshotFailure)
+    }
 }

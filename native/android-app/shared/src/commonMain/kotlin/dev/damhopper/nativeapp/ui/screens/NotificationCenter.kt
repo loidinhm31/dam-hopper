@@ -14,6 +14,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -78,12 +83,13 @@ fun HeaderEntryButtons(entries: HeaderEntries, modifier: Modifier = Modifier) {
         val alertsBorder = if (alertsOpen) DamHopperColors.Primary else DamHopperColors.Border
         Box(
             modifier = Modifier
-                .sizeIn(minWidth = 48.dp, minHeight = 36.dp)
+                .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
+                .height(36.dp)
                 .clip(RoundedCornerShape(6.dp))
                 .border(BorderStroke(1.dp, alertsBorder), RoundedCornerShape(6.dp))
                 .background(alertsBg)
                 .clickable(onClick = entries.onToggleNotifications)
-                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .padding(horizontal = 8.dp)
                 .semantics {
                     contentDescription = if (hasUnread) "Notifications, ${entries.unreadNotifications} unread" else "Notifications"
                 },
@@ -93,11 +99,11 @@ fun HeaderEntryButtons(entries: HeaderEntries, modifier: Modifier = Modifier) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text(
-                    text = "Alerts",
-                    color = if (alertsOpen) DamHopperColors.Primary else DamHopperColors.TextPrimary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
+                Icon(
+                    imageVector = Icons.Default.Notifications,
+                    contentDescription = "Alerts",
+                    tint = if (alertsOpen) DamHopperColors.Primary else DamHopperColors.TextPrimary,
+                    modifier = Modifier.size(18.dp),
                 )
                 if (hasUnread) {
                     Box(
@@ -120,20 +126,19 @@ fun HeaderEntryButtons(entries: HeaderEntries, modifier: Modifier = Modifier) {
         // Settings button
         Box(
             modifier = Modifier
-                .sizeIn(minWidth = 48.dp, minHeight = 36.dp)
+                .size(36.dp)
                 .clip(RoundedCornerShape(6.dp))
                 .border(BorderStroke(1.dp, DamHopperColors.Border), RoundedCornerShape(6.dp))
                 .background(DamHopperColors.SurfaceVariant.copy(alpha = 0.7f))
                 .clickable(onClick = entries.onOpenSettings)
-                .padding(horizontal = 10.dp, vertical = 6.dp)
                 .semantics { contentDescription = "Settings" },
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = "Settings",
-                color = DamHopperColors.Primary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
+            Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = "Settings",
+                tint = DamHopperColors.Primary,
+                modifier = Modifier.size(18.dp),
             )
         }
     }

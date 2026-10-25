@@ -16,6 +16,7 @@ import dev.damhopper.nativeapp.features.settings.ExplorerLanguageFilter
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import dev.damhopper.nativeapp.features.terminal.NativeTerminalSurface
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
 import dev.damhopper.nativeapp.features.terminal.TerminalAttachQueue
 import dev.damhopper.nativeapp.features.terminal.TerminalReadingStates
 import dev.damhopper.nativeapp.features.terminal.TerminalRepository
@@ -99,6 +100,13 @@ class ProjectTerminalState(
 
     private var _inputSuspended by mutableStateOf(false)
 
+    /**
+     * Live effective-cover predicate installed by the root (privacy, Settings, search, pending departure, local
+     * terminal modals, sidebar popup, compact Agents). It is consulted at the actual input boundary so a send that was
+     * already queued when a cover appeared is dropped; it never owns or resets another surface's cover.
+     */
+    var coverPredicate: () -> Boolean = { false }
+
     val isCommandInputFocused: MutableStateFlow<Boolean> = MutableStateFlow(false)
     val isImeComposing: MutableStateFlow<Boolean> = MutableStateFlow(false)
     /** The retained reactive preferences (set by the owner of the workspace; null in isolated tests). */
@@ -173,7 +181,19 @@ class ProjectTerminalState(
             !_isAuthorityRetired &&
             !_inputSuspended &&
             sessionId == activeSessionId &&
-            destroyingSessionIds[sessionId] != true
+            destroyingSessionIds[sessionId] != true &&
+            !coverPredicate()
+    }
+
+    /**
+     * Mutation-only write of an already prevalidated exact selection (retained Agents activation): active ID and
+     * selection epoch only - no logger, caller callback, attach/controller creation, input-policy work or IO. Callable
+     * only from the admitted leaf; [updateAllControllersInputPolicy] runs afterwards.
+     */
+    fun commitVerifiedSelection(instance: TerminalAgentsInstanceKey) {
+        if (activeSessionId == instance.terminalId) return
+        activeSessionEpoch++
+        activeSessionId = instance.terminalId
     }
 
     fun updateAllControllersInputPolicy() {
@@ -360,3 +380,45 @@ data class TerminalCommitStatus(val branch: String?, val shortHash: String?, val
         return if (parts.isEmpty()) null else parts.joinToString(" · ")
     }
 }
+
+/** Outcome of reconciling a terminal screen's selectable sessions with an exact required terminal instance. */
+sealed interface RequiredTerminalSelection {
+    /** No exact intent applies: ordinary project-only selection policy. */
+    data object NotRequired : RequiredTerminalSelection
+
+    /** The exact ID + incarnation is selectable on this screen's server: select it. */
+    data class Select(val terminalId: String) : RequiredTerminalSelection
+
+    /** Missing, restarted or belonging to another server: explicit refusal; NEVER fall back to another terminal. */
+    data class Refused(val reason: String) : RequiredTerminalSelection
+}
+
+/**
+ * Exact-selection policy of a verified manual Agents activation. With a [required] instance only that terminal ID and
+ * incarnation of this screen's [profileId] may be selected; a missing or restarted instance is an explicit refusal
+ * and the ordinary `selectable.firstOrNull()` fallback never runs. Without one the ordinary policy applies unchanged.
+ */
+fun resolveRequiredTerminalSelection(
+    required: TerminalAgentsInstanceKey?,
+    profileId: String?,
+    selectable: List<TerminalSessionDetailed>,
+): RequiredTerminalSelection {
+    if (required == null) return RequiredTerminalSelection.NotRequired
+    if (profileId == null || required.profileId != profileId) {
+        return RequiredTerminalSelection.Refused("The requested terminal belongs to another server.")
+    }
+    val exact = selectable.firstOrNull { it.id == required.terminalId && it.incarnation == required.incarnation }
+    if (exact != null) return RequiredTerminalSelection.Select(exact.id)
+    val restarted = selectable.any { it.id == required.terminalId }
+    return RequiredTerminalSelection.Refused(
+        if (restarted) {
+            "The requested terminal was restarted. Refresh Agents and choose it again."
+        } else {
+            "The requested terminal is no longer available. Refresh Agents and choose it again."
+        },
+    )
+}
+
+/** True when [session] may be attached for the screen: an exact required instance only matches its own incarnation. */
+fun isSessionAttachableForRequired(required: TerminalAgentsInstanceKey?, session: TerminalSessionDetailed): Boolean =
+    required == null || required.terminalId != session.id || required.incarnation == session.incarnation

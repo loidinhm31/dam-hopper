@@ -59,6 +59,13 @@ import dev.damhopper.nativeapp.features.terminal.IntegrationReadinessProvider
 import dev.damhopper.nativeapp.features.terminal.IntegrationReadinessState
 import dev.damhopper.nativeapp.features.terminal.NativeIntegrationStatusReport
 import dev.damhopper.nativeapp.features.terminal.TerminalRepository
+import dev.damhopper.nativeapp.core.lifecycle.LifecycleState
+import dev.damhopper.nativeapp.features.terminal.DefaultTerminalAgentsFilterCodec
+import dev.damhopper.nativeapp.features.terminal.DefaultTerminalAgentsProjector
+import dev.damhopper.nativeapp.features.terminal.RetainedTerminalAgentsService
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsRefreshReason
+import dev.damhopper.nativeapp.platform.storage.AndroidTerminalAgentsFilterStore
 import dev.damhopper.nativeapp.features.workspace.ProjectTargetStore
 import dev.damhopper.nativeapp.features.workspace.ProjectWorkspaceState
 import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
@@ -498,6 +505,8 @@ class AgentRuntime internal constructor(
     internal val job: Job get() = scope.coroutineContext[Job]!!
     internal var reconcileJob: Job? = null
     internal var refreshJob: Job? = null
+    /** The roster attachment of THIS connection object (new incarnation for every replaced object). */
+    internal var agents: TerminalAgentsAttachment? = null
 }
 
 /**
@@ -516,6 +525,7 @@ class AgentRuntimeHost(
     private val coordinator: () -> NotificationCoordinator,
     private val isEligible: () -> Boolean,
     private val onOwned: (ConnectionRef) -> Unit,
+    private val inventory: TerminalAgentsInventoryCoordinator,
 ) {
     private val lock = Mutex()
 
@@ -536,23 +546,51 @@ class AgentRuntimeHost(
         if (ws.connection != owner) return false
         return lock.withLock {
             val existing = runtimes[owner.profileId]
-            if (existing != null && existing.ws === ws && existing.owner == owner) return@withLock true
+            if (existing != null && existing.ws === ws && existing.owner == owner && existing.accountId == accountId) return@withLock true
             if (existing != null) stopLocked(existing)
             if (!isEligible()) return@withLock false
             val runtimeScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
+            val terminalRepository = TerminalRepository(client, ws)
+            val reducer = AgentStatusReducer(terminalRepository)
+            val listing = TerminalRepository(client, null)
             val runtime = AgentRuntime(
                 owner = owner,
                 client = client,
                 ws = ws,
                 endpoint = client.normalizedBaseUrl,
                 accountId = accountId,
-                reducer = AgentStatusReducer(TerminalRepository(client, ws)),
+                reducer = reducer,
                 scope = runtimeScope,
+            )
+            // The roster's attachment token is allocated for THIS connection object before any collector exists.
+            runtime.agents = inventory.attach(
+                TerminalAgentsRuntimeBinding(
+                    owner = owner,
+                    endpoint = client.normalizedBaseUrl,
+                    accountUser = accountId,
+                    ws = ws,
+                    reducer = reducer,
+                    scope = runtimeScope,
+                    listDetailed = { listing.listDetailed() },
+                ),
             )
             onOwned(owner)
             runtimes = runtimes + (owner.profileId to runtime)
             runtimeScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 launch(start = CoroutineStart.UNDISPATCHED) { ws.socketBoundMessages.collect { handle(runtime, it) } }
+                launch {
+                    ws.state.collect { state ->
+                        val attachment = runtime.agents
+                        if (attachment != null) {
+                            val socket = (state as? WsState.Connected)?.socketRef
+                            inventory.onSocketState(
+                                attachment,
+                                socket,
+                                if (socket != null) TerminalAgentsRefreshReason.CONNECTED else TerminalAgentsRefreshReason.TERMINAL_LIFECYCLE,
+                            )
+                        }
+                    }
+                }
                 launch { ws.state.collect { state -> if (state is WsState.Connected) onConnected(runtime, state.socketRef) } }
             }
             true
@@ -561,6 +599,8 @@ class AgentRuntimeHost(
 
     /** Stops exactly [owner]'s runtime (collectors, reducer authority); another generation is untouched. */
     suspend fun retire(owner: ConnectionRef) {
+        // Identity loss first: revoke roster authority + purge the display cache under the short roster gate only.
+        inventory.retireIdentity(owner)
         lock.withLock {
             val rt = runtimes[owner.profileId] ?: return@withLock
             if (rt.owner == owner) stopLocked(rt)
@@ -582,6 +622,8 @@ class AgentRuntimeHost(
 
     private suspend fun stopLocked(rt: AgentRuntime) {
         runtimes = runtimes - rt.owner.profileId
+        // Revoke this attachment under the roster gate BEFORE awaiting the children (never held across the drain).
+        rt.agents?.let { inventory.detach(it) }
         val failures = ArrayList<suspend () -> Unit>()
         failures += { rt.job.cancelAndJoin() }
         failures += { rt.reducer.retireOwner(rt.owner) }
@@ -605,6 +647,8 @@ class AgentRuntimeHost(
     private suspend fun handle(rt: AgentRuntime, bound: SocketBoundMessage) {
         val socket = bound.socketRef
         if (socket.connection != rt.owner || !isEligible()) return
+        // Roster callbacks only act for the live attachment of THIS object and its currently connected socket.
+        val attachment = rt.agents?.takeIf { inventory.isCurrentSocket(it, socket) }
         when (val msg = bound.message) {
             is ServerMsg.AgentStatusChanged -> {
                 // Frame capture BEFORE the reducer can suspend.
@@ -615,10 +659,21 @@ class AgentRuntimeHost(
                     AgentAdmission.Silent -> Unit
                 }
             }
-            is ServerMsg.AgentStatusRemoved ->
-                if (rt.reducer.applyStatusRemoved(rt.owner, socket, msg) == AgentAdmission.Reconcile) reconcile(rt, socket)
-            is ServerMsg.AgentStatusInvalidated ->
-                if (rt.reducer.applyStatusInvalidated(rt.owner, socket, msg) == AgentAdmission.Reconcile) reconcile(rt, socket)
+            is ServerMsg.AgentStatusRemoved -> {
+                val admission = rt.reducer.applyStatusRemoved(rt.owner, socket, msg)
+                if (attachment != null) inventory.invalidate(attachment, TerminalAgentsRefreshReason.AGENT_MEMBERSHIP_CHANGED)
+                if (admission == AgentAdmission.Reconcile) reconcile(rt, socket)
+            }
+            is ServerMsg.AgentStatusInvalidated -> {
+                val admission = rt.reducer.applyStatusInvalidated(rt.owner, socket, msg)
+                if (attachment != null) inventory.invalidate(attachment, TerminalAgentsRefreshReason.AGENT_MEMBERSHIP_CHANGED)
+                if (admission == AgentAdmission.Reconcile) reconcile(rt, socket)
+            }
+            // Lifecycle/restart only invalidate inventory; an exact non-null exit may also prune its own instance.
+            is ServerMsg.TerminalLifecycle, is ServerMsg.ProcessRestarted ->
+                if (attachment != null) inventory.invalidate(attachment, TerminalAgentsRefreshReason.TERMINAL_LIFECYCLE)
+            is ServerMsg.TermExit ->
+                if (attachment != null) inventory.onTerminalExit(attachment, msg.id, msg.incarnation, msg.willRestart)
             else -> Unit
         }
     }
@@ -905,6 +960,7 @@ class NativeWorkspaceViewModel(
         retireOwner = { old ->
             attemptAllSuspending(
                 listOf(
+                    { agents.cancelPendingActivations("The server connection was retired.") },
                     { runtimes.retire(old) },
                     { coordinator.retire(old) },
                     { bindings.unpublish(old) },
@@ -944,12 +1000,64 @@ class NativeWorkspaceViewModel(
         nowMs = { System.currentTimeMillis() },
     )
 
+    private val agentsCodec = DefaultTerminalAgentsFilterCodec()
+
+    /** Roster identity authority: registry-current owner, authenticated account and the profile's normalized endpoint. */
+    private val agentsInventory: TerminalAgentsInventoryCoordinator = TerminalAgentsInventoryCoordinator(
+        isCurrentIdentity = { connection, endpoint, account ->
+            val profile = profileRepository.profiles.value.firstOrNull { it.id == connection.profileId }
+            val status = profileRepository.authStatuses.value[connection.profileId] as? AuthStatus.Authenticated
+            val expectedUser = status?.session?.user
+            registry.connectionsState.value[connection.profileId] == connection &&
+                profile != null && WorkspaceFileOwner.normalizeBaseUrl(profile.baseUrl) == endpoint &&
+                expectedUser != null && expectedUser == account
+        },
+    )
+
+    /** Retained panel/session seam of an admitted manual route (mutation-only inside the gates). */
+    private val agentsSelection = object : TerminalAgentsSelectionPort {
+        override fun canCommit(owner: WorkspaceFileOwner, instance: TerminalAgentsInstanceKey): Boolean {
+            val state = workspaceStates[owner] ?: return true
+            val terminal = state.terminalState ?: return true
+            return !state.isAuthorityRetired.value && terminal.destroyingSessionIds[instance.terminalId] != true
+        }
+
+        override fun commit(owner: WorkspaceFileOwner, instance: TerminalAgentsInstanceKey) {
+            workspaceStates[owner]?.commitVerifiedTerminalSelection(instance)
+        }
+
+        override fun afterCommit(owner: WorkspaceFileOwner, instance: TerminalAgentsInstanceKey) {
+            workspaceStates[owner]?.applyVerifiedSelectionEffects()
+        }
+    }
+
+    private val agentsActivation: TerminalAgentsActivationCoordinator = TerminalAgentsActivationCoordinator(
+        scope = runtimeScope,
+        inventory = agentsInventory,
+        flow = flowNavigation,
+        profiles = profileRepository,
+        selection = agentsSelection,
+        mainContext = Dispatchers.Main.immediate,
+    )
+
+    /** The ONE retained Agents service of this process-retained owner. */
+    private val agents: RetainedTerminalAgentsCoordinator = RetainedTerminalAgentsCoordinator(
+        scope = runtimeScope,
+        inventory = agentsInventory,
+        activation = agentsActivation,
+        projector = DefaultTerminalAgentsProjector(agentsCodec),
+        filterStore = AndroidTerminalAgentsFilterStore(application.applicationContext, agentsCodec),
+        codec = agentsCodec,
+        profileLabels = { profileRepository.profiles.value.associate { it.id to it.name } },
+    )
+
     private val runtimes: AgentRuntimeHost = AgentRuntimeHost(
         scope = runtimeScope,
         provider = readiness,
         coordinator = { coordinator },
         isEligible = { lifetime.eligible },
         onOwned = { lifetime.own(it) },
+        inventory = agentsInventory,
     )
 
     private val routeResolver: NotificationRouteResolver = NotificationRouteResolver(registry, runtimes, ProcessInstance.id)
@@ -969,6 +1077,11 @@ class NativeWorkspaceViewModel(
     }
 
     private val teardownStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    init {
+        // Ordinary navigation spends any pending Agents activation immediately; the verified route never calls this.
+        flowNavigation.onOrdinaryNavigationRequested = { agents.cancelPendingActivations("Superseded by navigation.") }
+    }
 
     init {
         // Register BEFORE anything becomes eligible: bindings, runtimes, readiness and effects wait for it.
@@ -997,6 +1110,16 @@ class NativeWorkspaceViewModel(
         // Local-only history consent follows the one local preference (default off).
         runtimeScope.launch {
             settingsRepository.preferences.map { it.commandHistoryEnabled }.distinctUntilChanged().collect { commandHistory.setEnabled(it) }
+        }
+        // Foreground resume refreshes the roster inventory of every existing attached runtime (no polling).
+        runtimeScope.launch {
+            var previous = lifecycleCoordinator.state.value
+            lifecycleCoordinator.state.collect { current ->
+                if (previous == LifecycleState.BACKGROUND && current == LifecycleState.FOREGROUND) {
+                    agents.refreshAll(TerminalAgentsRefreshReason.FOREGROUND)
+                }
+                previous = current
+            }
         }
         // Path/config edits re-verify every existing runtime after the edit settled.
         runtimeScope.launch {
@@ -1260,6 +1383,10 @@ class NativeWorkspaceViewModel(
         runtimes.refresh(profileId)
     }
 
+    override val terminalAgents: RetainedTerminalAgentsService get() = agents
+
+    override fun refreshTerminalAgents(reason: TerminalAgentsRefreshReason) = agents.refreshAll(reason)
+
     /** Records a click request as consumed; false when this process already handled it (rotation replay). */
     fun consumeNotificationClick(key: String): Boolean = synchronized(consumedClicks) {
         if (consumedClicks.containsKey(key)) false else {
@@ -1347,6 +1474,7 @@ class NativeWorkspaceViewModel(
         workspaceStates.values.forEach { it.close() }
         workspaceStates.clear()
         lifecycleCoordinator.onDestroy()
+        agents.close()
         if (!teardownStarted.compareAndSet(false, true)) return
         // Disable producers, drain every owned ref NonCancellable (including pending/failed refs), and only after a
         // successful drain remove the barrier token and release resources. A failed drain keeps the barrier fenced.

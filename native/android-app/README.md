@@ -1,6 +1,6 @@
 # DamHopper Android Native Client (`native/android-app`)
 
-**Status:** The active Android flow supports Profile Login → Project List → Focused Project Workspace (`ProjectWorkspaceScreen` with inline Terminal, Files, and Editor panel switcher). Native code editor integration uses pinned Sora Editor `0.23.4` (LGPL-2.1-or-later) and Java incremental syntax parsing. Phase 08 integrated qualification suites (`NativeEditorExplorerJourneys`, `NativeFileServerFixture`, `run-editor-explorer-journeys.sh`) and LGPL distribution artifacts (`assets/licenses/sora-editor.txt`, `plans/261023-1429-native-editor-file-explorer/distribution-qualification.md`) are established and verified on connected emulator `Medium_Phone_API_36` (16/16 instrumentation tests passing against live loopback server). Physical-device ARM64 and API 29 execution remain explicit qualification release gates.
+**Status:** The active Android flow supports Profile Login → Project List → focused Project Terminal workspace with retained Terminal, Files, and Editor surfaces; the Traditional terminal Agents sidebar is integrated in that workspace. Sora Editor `0.23.4` and Java incremental syntax parsing remain the native editor implementation. Phase 08 editor/explorer journeys were verified on `Medium_Phone_API_36` (16/16 instrumentation tests against a live loopback server); this does not qualify the Agents sidebar's current-server/device journeys, which remain open alongside physical ARM64 and API 29 release gates.
 **Architecture Document:** [Android Native Client Architecture](../../docs/architecture/android-native-client.md)  
 **Acceptance Ledger:** [Android Native Acceptance Ledger](../../docs/android-native-acceptance.md)  
 **Implementation Plan:** [Android Native App Plan](../../plans/261015-1647-android-native-app/plan.md)  
@@ -17,13 +17,13 @@ Unlike `apps/native/` (which hosts the desktop application using Tauri 2 and Web
 
 ## 2. Core Mobile Flow & Navigation Lifecycle
 
-The current app entry point is a guided three-screen flow:
+The current app entry point is a guided three-stage flow: Profile Login → Project List → Project Terminal workspace.
 
 | Stage | Screen | Behavior |
 | --- | --- | --- |
 | `PROFILE_LOGIN` | `ProfileLoginScreen` | Select or add a server profile, test reachability, authenticate (including MFA), or use Dev Login only after a server capability probe confirms development mode. |
 | `PROJECT_LIST` | `ProjectListScreen` | Load workspace projects with loading, error, and empty states; refresh the list or return to Profiles / Switch. Selecting a card sets the project target. |
-| `TERMINAL` | `ProjectTerminalScreen` | List and attach to PTY sessions for the selected project, reconcile replay with live output, and send commands from the inline input field. |
+| `TERMINAL` | `ProjectTerminalScreen` | Show the selected project's retained Traditional terminal and focused Files/Editor surfaces; the terminal toolbar also exposes the Agents sidebar. |
 
 `MainActivity` initializes `ProfileRepository`, creates `AppFlowNavigation`, and installs the platform `BackHandler`. `DamHopperMobileApp` renders the screen selected by `AppFlowState`, which tracks the stage, profile ID, project, and active session. It reconstructs the workspace and terminal repositories when the active profile, server URL, or connection generation changes, clearing the old references before constructing owner-scoped replacements.
 
@@ -31,7 +31,15 @@ Back navigation is hierarchical: Terminal → Project List → Profile Login. At
 
 Leaving Terminal deactivates input and disposes the screen's local terminal controllers, but does not kill or remove the server-owned PTY. Terminal font size is adjustable in-line from 10sp to 32sp (default 13sp, with line height `fontSize + 4`sp) via header controls (`A-`, `${terminalFontSize}sp`, `A+`) or two-finger pinch-to-zoom on the output area, persisted to local `PreferencesStore` and dynamically recalculating VT grid and PTY geometry without disconnecting or restarting the session. The terminal accessory controls are inline: command input with Send, Ctrl+C, Ctrl+D, Tab, Esc, Up, Down, Left, Right, Enter, and Clear. Clear affects only the local display buffer. The hosted screens contain no WebView or floating action button.
 
-The shared module still contains a separate 12-panel `WorkbenchScreen` / `PanelHost` shell. The current `DamHopperMobileApp` root does not mount that shell, so its other panel destinations are not reachable through this three-screen flow. The panel-shell contract below describes that retained subsystem, not the active app navigation.
+The shared module still contains a separate 12-panel `WorkbenchScreen` / `PanelHost` shell. The current `DamHopperMobileApp` root does not mount that shell; its other panel destinations are not reachable through the guided flow. The focused workspace and Traditional terminal Agents sidebar are active root surfaces, not entry points into that dormant shell.
+
+### Traditional terminal Agents sidebar
+
+The Terminal toolbar exposes a discoverable `Agents <count>` trigger. The sidebar pins to the left at 280dp on workspaces at least 600dp wide; narrower layouts use a dismissible modal sheet with a scrim. This terminal-scoped status navigator complements the existing File Tree sidebar used for editor file browsing; it is not a global navigation rail or another panel destination.
+
+The roster observes open, selectable Traditional terminal sessions already retained by registered workspaces on already-attached profile runtimes. It does not connect saved profiles, open new sockets, keep a runtime alive for observation, or replace Agent Store. It groups observed agents by workspace, status, and reason; the multi-select filter covers the seven presented statuses and counts are calculated before filtering. The filter is stored on-device in a dedicated Android preference, not synced with profiles or remote Settings.
+
+Selecting an agent group captures an exact qualified terminal target, checks it against current runtime/inventory metadata, and revalidates after any dirty-editor confirmation. Missing, stale, or contended instances are refused without selecting a replacement; observation availability alone is not task success. Manual navigation does not create notification attention. The sidebar's Settings action opens the retained Settings overlay at **Host administration (HOST) → Agents (AGENTS)** for the current workspace server (independent of the preference-source profile).
 
 ### Physical-device development over Wi-Fi
 

@@ -113,6 +113,14 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.flow.StateFlow
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInventoryReceipt
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsRefreshReason
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsRuntimeKey
+import dev.damhopper.nativeapp.ui.components.TerminalAgentsContext
+import dev.damhopper.nativeapp.ui.components.TerminalAgentsSidebarHost
+import dev.damhopper.nativeapp.ui.components.TerminalAgentsTrigger
+import androidx.compose.runtime.SideEffect
 
 /**
  * Standalone Mobile Terminal Display & Input Screen for a selected project.
@@ -147,6 +155,12 @@ fun ProjectTerminalScreen(
     inputCovered: Boolean = false,
     retainedState: ProjectTerminalState? = null,
     showHeader: Boolean = true,
+    /** Exact manual-activation intent: only this ID + incarnation may be selected; never `selectable.firstOrNull()`. */
+    requiredTerminalInstance: TerminalAgentsInstanceKey? = null,
+    /** Retained Agents roster participation (null: no sidebar, no inventory consumption). */
+    agents: TerminalAgentsContext? = null,
+    /** Reports the OR of this screen's own local modals/popups to the root (owner-token source). */
+    onLocalCoverChanged: (Boolean) -> Unit = {},
 ) {
     // Resolve authoritative connection reference
     val connectionRef = terminalRepo?.apiClient?.connection
@@ -188,6 +202,10 @@ fun ProjectTerminalScreen(
     var showCreateDialog by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
     var showDiagnosticsDialog by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
     var sessionToKill by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
+    var requiredRefusal by remember(terminalRepo, connectionKey, requiredTerminalInstance) { mutableStateOf<String?>(null) }
+    var appliedInventoryRuntime by remember(terminalRepo, connectionKey) { mutableStateOf<TerminalAgentsRuntimeKey?>(null) }
+    var appliedInventoryTicket by remember(terminalRepo, connectionKey) { mutableStateOf<Long?>(null) }
+    var lastAgentsRuntime by remember(terminalRepo, connectionKey) { mutableStateOf<TerminalAgentsRuntimeKey?>(null) }
     var commandInput by remember(terminalRepo, connectionKey) { mutableStateOf("") }
     var uiErrorBanner by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
     var attachError by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
@@ -523,10 +541,35 @@ fun ProjectTerminalScreen(
         return ctrl
     }
 
-    suspend fun refreshSessions(): Boolean {
+    suspend fun refreshSessions(
+        prefetched: TerminalAgentsInventoryReceipt? = null,
+        bumpAttachment: Boolean = true,
+    ): Boolean {
         return try {
-            val detailed = withContext(Dispatchers.Default) {
-                terminalRepo.listDetailed()
+            var acceptedReceipt: TerminalAgentsInventoryReceipt? = prefetched
+            val detailed = if (prefetched != null) {
+                prefetched.sessions
+            } else {
+                // Roster participants consume the ONE shared coalesced inventory instead of a per-screen full list.
+                val service = agents?.service
+                val runtimeKey = lastAgentsRuntime
+                if (service != null && runtimeKey != null) {
+                    val shared = service.refreshInventory(runtimeKey, TerminalAgentsRefreshReason.TERMINAL_LIFECYCLE)
+                    if (shared == null) {
+                        // Inventory unavailable or failed: preserve existing sessions, do not wipe
+                        return false
+                    }
+                    acceptedReceipt = shared
+                    shared.sessions
+                } else if (agents == null) {
+                    // Nonparticipating screen (no retained agents service attached): own list request.
+                    withContext(Dispatchers.Default) {
+                        terminalRepo.listDetailed()
+                    }
+                } else {
+                    // Participating screen awaiting runtime attachment: preserve existing sessions
+                    return false
+                }
             }
             if (terminalRepo.apiClient.connection != connectionRef) return false
 
@@ -564,16 +607,31 @@ fun ProjectTerminalScreen(
                 }
             } else {
                 val currentActive = activeSessionId
-                val requested = initialSessionId?.takeIf { initId -> selectable.any { it.id == initId } }
-                if (requested != null && (currentActive == null || currentActive != requested)) {
-                    selectSession(requested)
-                } else if (currentActive == null || selectable.none { it.id == currentActive }) {
-                    selectSession(selectable.firstOrNull()?.id)
+                when (val exact = resolveRequiredTerminalSelection(requiredTerminalInstance, connectionRef.profileId, selectable)) {
+                    is RequiredTerminalSelection.Select -> {
+                        requiredRefusal = null
+                        if (currentActiveSessionId() != exact.terminalId) selectSession(exact.terminalId)
+                    }
+                    // Exact intent: explicit refusal, never the first selectable terminal.
+                    is RequiredTerminalSelection.Refused -> requiredRefusal = exact.reason
+                    RequiredTerminalSelection.NotRequired -> {
+                        requiredRefusal = null
+                        val requested = initialSessionId?.takeIf { initId -> selectable.any { it.id == initId } }
+                        if (requested != null && (currentActive == null || currentActive != requested)) {
+                            selectSession(requested)
+                        } else if (currentActive == null || selectable.none { it.id == currentActive }) {
+                            selectSession(selectable.firstOrNull()?.id)
+                        }
+                    }
                 }
                 isSyncFailure = false
             }
 
-            if (retainedState != null) retainedState.attachmentRevision++ else fallbackAttachmentRevision++
+            if (bumpAttachment) {
+                if (retainedState != null) retainedState.attachmentRevision++ else fallbackAttachmentRevision++
+            }
+            appliedInventoryRuntime = acceptedReceipt?.runtime
+            appliedInventoryTicket = acceptedReceipt?.requestTicket
             true
         } catch (e: CancellationException) {
             throw e
@@ -637,11 +695,45 @@ fun ProjectTerminalScreen(
         refreshSessions()
     }
 
+    // Shared inventory consumption: the exact current receipt of this screen's runtime updates the composition-local
+    // sessions without any per-screen request; each receipt is applied once (ticket dedupe, no echo loop).
+    val agentInventories by (agents?.service?.inventories ?: NO_AGENT_INVENTORIES).collectAsState()
+    val currentReceipt = agentInventories.values.firstOrNull { it.runtime.connection == connectionRef }
+    LaunchedEffect(currentReceipt?.runtime, currentReceipt?.requestTicket) {
+        val receipt = currentReceipt ?: return@LaunchedEffect
+        lastAgentsRuntime = receipt.runtime
+        if (appliedInventoryRuntime != receipt.runtime || appliedInventoryTicket != receipt.requestTicket) {
+            refreshSessions(prefetched = receipt, bumpAttachment = false)
+        }
+    }
+
     val eligibleSessions = remember(sessions, projectName, destroyingSessionIds.size) {
         sessions.filter { isSessionSelectable(it) }
     }
 
-    val activeSession = eligibleSessions.find { it.id == activeSessionId }
+    val activeSession = eligibleSessions.find {
+        it.id == activeSessionId && isSessionAttachableForRequired(requiredTerminalInstance, it)
+    }
+
+    // Publish the accepted selectable tabs + explicit exclusions of the exact applied receipt (never initiates a fetch).
+    val agentsRegistration = agents?.registration
+    val destroyingKeys = destroyingSessionIds.keys.toSet()
+    LaunchedEffect(
+        agentsRegistration,
+        currentReceipt?.runtime,
+        currentReceipt?.requestTicket,
+        currentReceipt?.invalidationRevision,
+        appliedInventoryRuntime,
+        appliedInventoryTicket,
+        eligibleSessions,
+        destroyingKeys,
+    ) {
+        val service = agents?.service ?: return@LaunchedEffect
+        val receipt = currentReceipt ?: return@LaunchedEffect
+        if (agentsRegistration != null && appliedInventoryRuntime == receipt.runtime && appliedInventoryTicket == receipt.requestTicket) {
+            service.publishWorkspaceTabs(agentsRegistration, receipt, eligibleSessions, destroyingKeys)
+        }
+    }
 
     // This effect does not own the send job: per-controller ordering survives effect replacement.
     LaunchedEffect(activeSessionId, activeSession?.incarnation, attachmentRevision, terminalRepo, connectionKey) {
@@ -813,6 +905,30 @@ fun ProjectTerminalScreen(
         }
     }
 
+    // Cover reporting: this screen's local modals are ONE source (owner token); disposal clears only this source.
+    val coverOwner = remember { Any() }
+    val localModalOpen = showCreateDialog || showDiagnosticsDialog || sessionToKill != null
+    val agentsHost = agents?.host
+    val currentOnLocalCoverChanged by rememberUpdatedState(onLocalCoverChanged)
+    SideEffect {
+        agentsHost?.setLocalCover(coverOwner, localModalOpen)
+        currentOnLocalCoverChanged(localModalOpen)
+    }
+    DisposableEffect(coverOwner, agentsHost) {
+        onDispose {
+            agentsHost?.setLocalCover(coverOwner, false)
+            currentOnLocalCoverChanged(false)
+        }
+    }
+    // The live effective cover is also consulted at the actual input boundary (queued sends, accessory, hardware).
+    DisposableEffect(retainedState, agentsHost) {
+        if (retainedState != null && agentsHost != null) retainedState.coverPredicate = { agentsHost.effectiveCover }
+        onDispose {
+            if (retainedState != null && agentsHost != null) retainedState.coverPredicate = { false }
+        }
+    }
+
+    val terminalBody: @Composable () -> Unit = {
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -837,7 +953,7 @@ fun ProjectTerminalScreen(
                     maxLines = 1,
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
-                        .clickable {
+                        .clickable(enabled = agents?.host?.compactSheetOpen != true) {
                             onBackToProjects()
                         }
                         .padding(horizontal = 6.dp, vertical = 4.dp)
@@ -903,6 +1019,8 @@ fun ProjectTerminalScreen(
                             }
                             .padding(horizontal = 8.dp, vertical = 6.dp)
                     )
+
+                    agents?.let { TerminalAgentsTrigger(it) }
 
                     Text(
                         text = "Diag",
@@ -982,6 +1100,8 @@ fun ProjectTerminalScreen(
                         }
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                 )
+
+                agents?.let { TerminalAgentsTrigger(it) }
 
                 Text(
                     text = "Diag",
@@ -1065,6 +1185,33 @@ fun ProjectTerminalScreen(
                         }
                     }
                 }
+            }
+        }
+
+        // Exact manual-activation refusal: the required terminal is missing/restarted; never another terminal.
+        requiredRefusal?.let { refusal ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Warning)
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = refusal,
+                    color = DamHopperColors.Background,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "Refresh",
+                    color = DamHopperColors.Background,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable { ownerScope.launch { refreshSessions() } }
+                )
             }
         }
 
@@ -1694,6 +1841,14 @@ fun ProjectTerminalScreen(
             }
         }
     }
+    }
+    if (agents != null) {
+        val activeInstance = eligibleSessions.firstOrNull { it.id == activeSessionId }
+            ?.let { TerminalAgentsInstanceKey(connectionRef.profileId, it.id, it.incarnation) }
+        TerminalAgentsSidebarHost(agents = agents, active = activeInstance, content = terminalBody)
+    } else {
+        terminalBody()
+    }
     // Diagnostics Viewer Dialog
     if (showDiagnosticsDialog) {
         TerminalDiagnosticsDialog(
@@ -1882,6 +2037,8 @@ fun ProjectTerminalScreen(
 private val NO_HISTORY_REVISION: StateFlow<Long> = MutableStateFlow(0L)
 private val NO_HISTORY_ENABLED: StateFlow<Boolean> = MutableStateFlow(false)
 private val NO_HISTORY_FAILURE: StateFlow<String?> = MutableStateFlow(null)
+private val NO_AGENT_INVENTORIES: StateFlow<Map<TerminalAgentsRuntimeKey, TerminalAgentsInventoryReceipt>> =
+    MutableStateFlow(emptyMap())
 
 /**
  * Inline terminal scroll controls: up/down by the preferred [step] lines (1..50) and jumps to the top/bottom.

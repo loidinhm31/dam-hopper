@@ -12,6 +12,7 @@ import dev.damhopper.nativeapp.features.terminal.ExtensionStatusReport
 import dev.damhopper.nativeapp.features.terminal.IntegrationOwner
 import dev.damhopper.nativeapp.features.terminal.IntegrationReadinessState
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -220,5 +221,43 @@ class RuntimeIntegrationReadinessTest {
 
         val freshOwner = ownerOf(ref, provider.revisionOf("p"))
         assertTrue(provider.publish(evaluateReadiness(freshOwner, AgentKind.OMP, paths, omp, null)))
+    }
+
+    @Test
+    fun runtimeHostAllocatesANewMonotonicAttachmentIncarnationForEveryReplacedConnectionObject() = runBlocking {
+        val registry = ConnectionRegistry()
+        val ref = registry.getOrCreateConnection("p")
+        val inventory = TerminalAgentsInventoryCoordinator()
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        val provider = RuntimeReadinessProvider { mapOf("p" to ref) }
+        val host = AgentRuntimeHost(
+            scope = scope,
+            provider = provider,
+            coordinator = { error("no notification effects in this test") },
+            isEligible = { true },
+            onOwned = {},
+            inventory = inventory,
+        )
+        val baseUrl = "http://127.0.0.1:1"
+        val client = dev.damhopper.nativeapp.core.transport.ApiClient(ref, baseUrl, { null })
+        val ws1 = dev.damhopper.nativeapp.core.transport.WsConnection(ref, baseUrl)
+        val ws2 = dev.damhopper.nativeapp.core.transport.WsConnection(ref, baseUrl)
+
+        assertTrue(host.attach(client, ws1, "alice"))
+        val first = assertNotNull(host.current("p")?.agents)
+        assertTrue(host.attach(client, ws1, "alice"))
+        assertTrue(host.current("p")?.agents === first, "the same object is idempotent and keeps its token")
+
+        // Same ConnectionRef, same generation, new connection OBJECT (equal sock-1 values): a distinct token.
+        assertTrue(host.attach(client, ws2, "alice"))
+        val second = assertNotNull(host.current("p")?.agents)
+        assertEquals(first.incarnation + 1, second.incarnation)
+        assertTrue(first.revoked, "the replaced attachment's roster authority is revoked first")
+        assertFalse(second.revoked)
+
+        host.retire(ref)
+        assertTrue(second.revoked)
+        assertNull(host.current("p"))
+        scope.cancel()
     }
 }

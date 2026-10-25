@@ -58,6 +58,8 @@ import dev.damhopper.nativeapp.features.editor.EditorPanelScreen
 import dev.damhopper.nativeapp.features.editor.LocalNativeEditorSurfaceHost
 import dev.damhopper.nativeapp.features.editor.NativeEditorSurfaceHost
 import dev.damhopper.nativeapp.features.files.FileOperationOutcome
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
+import dev.damhopper.nativeapp.ui.components.TerminalAgentsContext
 import dev.damhopper.nativeapp.features.files.FocusedFilesExplorerScreen
 import dev.damhopper.nativeapp.features.settings.WorkbenchPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -114,6 +116,10 @@ fun ProjectWorkspaceScreen(
     languageFilterNotice: String? = null,
     headerEntries: HeaderEntries? = null,
     nativeSurfaceHost: NativeEditorSurfaceHost? = LocalNativeEditorSurfaceHost.current,
+    /** Exact manual-activation intent forwarded to the terminal panel (never a first-terminal fallback). */
+    requiredTerminalInstance: TerminalAgentsInstanceKey? = null,
+    /** Retained Agents roster participation of this workspace (null: no Agents sidebar). */
+    agents: TerminalAgentsContext? = null,
 ) {
     val coroutineScope = rememberCoroutineScope()
     val activePanel by workspaceState.activePanel.collectAsState()
@@ -136,18 +142,22 @@ fun ProjectWorkspaceScreen(
         workspaceState.terminalState?.setPanelVisible(activePanel == WorkspacePanel.TERMINAL)
     }
 
+    // A compact Agents sheet consumes route controls: nothing routes under it.
+    val routeLocked = agents?.host?.compactSheetOpen == true
+
     // Register departure guard with flow navigation
     DisposableEffect(navigation, workspaceState) {
-        navigation.departureGuard = { targetStage, onProceed ->
+        navigation.departureGuard = { request ->
             if (workspaceState.hasDirtyDocuments() && !workspaceState.isAuthorityRetired.value) {
                 val dirtyIds = workspaceState.getDirtyDocumentIds()
                 val dirtyRevs = workspaceState.getDirtyRevisions()
                 workspaceState.setPendingDeparture(
                     WorkspaceDepartureIntent.WorkspaceLeave(
-                        targetStageName = targetStage.name,
+                        targetStageName = request.targetStage.name,
                         dirtyDocuments = dirtyIds,
                         dirtyRevisions = dirtyRevs,
-                        onConfirmed = onProceed,
+                        onConfirmed = request.onProceed,
+                        onCancelled = request.onCancelled,
                     )
                 )
                 true // Intercept navigation!
@@ -188,7 +198,7 @@ fun ProjectWorkspaceScreen(
                         .border(BorderStroke(1.dp, DamHopperColors.Border), RoundedCornerShape(6.dp))
                         .background(DamHopperColors.SurfaceVariant.copy(alpha = 0.7f))
                         .clickable {
-                            if (!navigation.handleBackPress()) {
+                            if (!routeLocked && !navigation.handleBackPress()) {
                                 // Handled by system or departure guard
                             }
                         }
@@ -229,13 +239,13 @@ fun ProjectWorkspaceScreen(
                 PanelTabButton(
                     label = "Terminal",
                     isSelected = activePanel == WorkspacePanel.TERMINAL,
-                    onClick = { workspaceState.selectPanel(WorkspacePanel.TERMINAL) }
+                    onClick = { if (!routeLocked) workspaceState.selectPanel(WorkspacePanel.TERMINAL) }
                 )
 
                 PanelTabButton(
                     label = "Files",
                     isSelected = activePanel == WorkspacePanel.FILES,
-                    onClick = { workspaceState.selectPanel(WorkspacePanel.FILES) }
+                    onClick = { if (!routeLocked) workspaceState.selectPanel(WorkspacePanel.FILES) }
                 )
 
                 val editorLabel = if (hasDirtyDocs) "Editor *" else "Editor"
@@ -243,7 +253,7 @@ fun ProjectWorkspaceScreen(
                     label = editorLabel,
                     isSelected = activePanel == WorkspacePanel.EDITOR,
                     badgeCount = tabs.size,
-                    onClick = { workspaceState.selectPanel(WorkspacePanel.EDITOR) }
+                    onClick = { if (!routeLocked) workspaceState.selectPanel(WorkspacePanel.EDITOR) }
                 )
             }
         }
@@ -266,6 +276,8 @@ fun ProjectWorkspaceScreen(
                         profileId = profileId,
                         preferenceAccess = prefAccess,
                         retainedState = workspaceState.terminalState,
+                        requiredTerminalInstance = requiredTerminalInstance,
+                        agents = agents,
                         worktreePath = workspaceState.target.worktreePath,
                         inputCovered = inputSuspended,
                         showHeader = false,
@@ -455,7 +467,7 @@ fun ProjectWorkspaceScreen(
                             TextButton(
                                 enabled = !workspaceState.isSavingDeparture,
                                 onClick = {
-                                    workspaceState.clearPendingDeparture()
+                                    workspaceState.completePendingDeparture(departure)
                                     departure.onConfirmed()
                                 }
                             ) {

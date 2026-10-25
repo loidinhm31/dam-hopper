@@ -7,11 +7,15 @@ import dev.damhopper.nativeapp.core.ownership.ConnectionRegistry
 import dev.damhopper.nativeapp.core.transport.ApiClient
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+/** Result of the final profile/registry-qualified admission of a manual Agents route. */
+enum class ProfileRouteAdmission { COMMITTED, BUSY, STALE }
 
 /**
  * Manages server profiles lifecycle, auth sessions, and credential custody.
@@ -128,6 +132,46 @@ class ProfileRepository(
         require(_profiles.value.any { it.id == id }) { "Profile does not exist: $id" }
         _activeProfileId.value = id
         metadataStore.saveActiveProfileId(id)
+    }
+
+    /**
+     * Persistence-only follow-up of a committed manual route: saves [id] as the persisted active profile iff it is
+     * still the published active profile, so a late write can never resurrect an older destination after newer
+     * navigation or another profile choice.
+     */
+    suspend fun persistActiveProfileIfCurrent(id: String): Boolean = mutex.withLock {
+        if (_activeProfileId.value != id || _profiles.value.none { it.id == id }) return@withLock false
+        metadataStore.saveActiveProfileId(id)
+        true
+    }
+
+    /**
+     * First two awaited gates of the manual Agents route admission: the existing profile [mutex], an exact
+     * profile/endpoint/authenticated-account check, then the registry's `admitCurrentOwner`. [admitRoute] is
+     * exclusively the private known roster -> socket -> reducer try-gate chain (never a user callback); it receives
+     * the fixed non-suspending `publishActiveProfile` which MUST be called from the deepest admitted leaf only. A
+     * registry denial before [admitRoute] runs is [ProfileRouteAdmission.STALE]; a BUSY from the chain is returned as is.
+     */
+    suspend fun commitExistingProfileRoute(
+        connection: ConnectionRef,
+        endpoint: String,
+        accountUser: String,
+        admitRoute: (publishActiveProfile: () -> Unit) -> ProfileRouteAdmission,
+    ): ProfileRouteAdmission = mutex.withLock {
+        val profileId = connection.profileId
+        val profile = _profiles.value.find { it.id == profileId } ?: return@withLock ProfileRouteAdmission.STALE
+        if (WorkspaceFileOwner.normalizeBaseUrl(profile.baseUrl) != WorkspaceFileOwner.normalizeBaseUrl(endpoint)) {
+            return@withLock ProfileRouteAdmission.STALE
+        }
+        val auth = _authStatuses.value[profileId] as? AuthStatus.Authenticated
+            ?: return@withLock ProfileRouteAdmission.STALE
+        if (auth.session.user != accountUser) return@withLock ProfileRouteAdmission.STALE
+        var result = ProfileRouteAdmission.STALE
+        registry.admitCurrentOwner(connection) {
+            result = admitRoute { _activeProfileId.value = profileId }
+            result == ProfileRouteAdmission.COMMITTED
+        }
+        result
     }
 
     /**

@@ -16,6 +16,7 @@ import dev.damhopper.nativeapp.features.files.FileMutationCoordinator
 import dev.damhopper.nativeapp.features.files.FileOperationArbiter
 import dev.damhopper.nativeapp.features.files.FileRepository
 import dev.damhopper.nativeapp.features.files.FileTreeState
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -240,5 +241,22 @@ class ProjectWorkspaceStateTest {
         state.close()
         assertTrue(state.isAuthorityRetired.value)
         assertEquals(0, state.editorTabsState.tabs.value.size)
+    }
+
+    @Test
+    fun testVerifiedTerminalSelectionShowsTheTerminalPanelAndSelectsExactlyThatTerminal() {
+        val state = createWorkspaceState()
+        val terminal = assertNotNull(state.terminalState)
+        state.selectPanel(WorkspacePanel.FILES)
+        assertFalse(terminal.isPanelVisible)
+
+        state.commitVerifiedTerminalSelection(TerminalAgentsInstanceKey("prof-test", "term-9", 4uL))
+        assertEquals(WorkspacePanel.TERMINAL, state.activePanel.value)
+        assertEquals("term-9", terminal.activeSessionId)
+        // Mutation only: widget visibility/input policy follow through the post-release effects.
+        assertFalse(terminal.isPanelVisible)
+        state.applyVerifiedSelectionEffects()
+        assertTrue(terminal.isPanelVisible)
+        assertEquals("term-9", terminal.activeSessionId)
     }
 }

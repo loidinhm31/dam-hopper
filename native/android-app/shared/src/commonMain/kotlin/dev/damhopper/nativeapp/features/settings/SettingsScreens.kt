@@ -86,6 +86,8 @@ fun SettingsScreens(
     onActiveSubSectionChanged: (SettingsSubSection) -> Unit = {},
     onNavigateBack: (() -> Unit)? = null,
     onOpenAuth: ((profileId: String) -> Unit)? = null,
+    initialHostSection: HostSettingsSection = HostSettingsSection.IDLE,
+    onHostSectionChanged: (HostSettingsSection) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var activeSubSection by remember { mutableStateOf(initialSubSection) }
@@ -156,6 +158,8 @@ fun SettingsScreens(
                             sourceLabel = sourceLabel,
                             adminBlockedReason = blocked,
                             idleBlockedReason = noAuth,
+                            initialSection = initialHostSection,
+                            onSectionChanged = onHostSectionChanged,
                         )
                     }
 

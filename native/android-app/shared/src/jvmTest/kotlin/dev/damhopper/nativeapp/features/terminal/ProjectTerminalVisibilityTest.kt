@@ -230,4 +230,51 @@ class ProjectTerminalVisibilityTest {
         assertTrue(state.isInputAllowedForSession("sess-2"))
         assertFalse(state.isInputAllowedForSession("sess-1"))
     }
+
+    @Test
+    fun testVerifiedSelectionIsMutationOnlyUntilPolicyEffectsRun() {
+        val state = createTerminalState()
+        val ctrl1 = state.getOrCreateController("sess-1", 1L) { id, inc -> TerminalSessionController(id, inc, connection) }
+        val ctrl2 = state.getOrCreateController("sess-2", 2L) { id, inc -> TerminalSessionController(id, inc, connection) }
+        state.setPanelVisible(true)
+        state.selectSession("sess-1")
+        assertTrue(ctrl1.isPanelActive)
+        val epoch = state.activeSessionEpoch
+
+        val instance = TerminalAgentsInstanceKey("prof-term-1", "sess-2", 2uL)
+        state.commitVerifiedSelection(instance)
+        assertEquals("sess-2", state.activeSessionId)
+        assertEquals(epoch + 1, state.activeSessionEpoch)
+        // Mutation only: controller activity flags are untouched until the post-release policy effects run...
+        assertTrue(ctrl1.isPanelActive)
+        assertFalse(ctrl2.isPanelActive)
+        // ...while the dynamic input predicate already follows the exact selection.
+        assertTrue(state.isInputAllowedForSession("sess-2"))
+        assertFalse(state.isInputAllowedForSession("sess-1"))
+        state.updateAllControllersInputPolicy()
+        assertFalse(ctrl1.isPanelActive)
+        assertTrue(ctrl2.isPanelActive)
+
+        // Re-committing the already selected terminal changes nothing (same-target callbacks are harmless).
+        state.commitVerifiedSelection(instance)
+        assertEquals(epoch + 1, state.activeSessionEpoch)
+    }
+
+    @Test
+    fun testLiveCoverPredicateGatesInputAtTheInputBoundary() {
+        val state = createTerminalState()
+        val ctrl = state.getOrCreateController("sess-1", 1L) { id, inc -> TerminalSessionController(id, inc, connection) }
+        state.selectSession("sess-1")
+        state.setPanelVisible(true)
+        assertTrue(state.isInputAllowedForSession("sess-1"))
+        assertTrue(ctrl.isInputAllowed())
+
+        var covered = false
+        state.coverPredicate = { covered }
+        covered = true
+        assertFalse(state.isInputAllowedForSession("sess-1"))
+        assertFalse(ctrl.isInputAllowed(), "an already queued send consults the live cover, not a stale flag")
+        covered = false
+        assertTrue(ctrl.isInputAllowed())
+    }
 }

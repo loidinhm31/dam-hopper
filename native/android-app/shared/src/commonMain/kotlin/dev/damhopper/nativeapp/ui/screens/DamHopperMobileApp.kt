@@ -75,6 +75,19 @@ import dev.damhopper.nativeapp.features.workspace.WorkspaceDepartureIntent
 import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 import dev.damhopper.nativeapp.features.workspace.WorkspacePanel
 import dev.damhopper.nativeapp.features.workspace.WorkspaceRepository
+import dev.damhopper.nativeapp.ui.flow.targetServicesReady
+import androidx.compose.runtime.rememberUpdatedState
+import dev.damhopper.nativeapp.features.settings.HostSettingsSection
+import dev.damhopper.nativeapp.features.terminal.RetainedTerminalAgentsService
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsRefreshReason
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsMembership
+import dev.damhopper.nativeapp.ui.components.TerminalAgentsContext
+import dev.damhopper.nativeapp.ui.components.TerminalAgentsSidebarHost
+import dev.damhopper.nativeapp.ui.components.TerminalAgentsHostState
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
+import androidx.compose.runtime.saveable.Saver
 import dev.damhopper.nativeapp.ui.components.CognitoOverlay
 import dev.damhopper.nativeapp.ui.flow.AppFlowNavigation
 import dev.damhopper.nativeapp.ui.flow.AppFlowStage
@@ -119,6 +132,12 @@ interface RetainedRootServices {
 
     fun diagnosticsInput(): SettingsDiagnosticsInput
     fun onTargetRevalidated(profileId: String)
+
+    /** The ONE retained Agents roster service of the retained owner (inventory, activation, filter). */
+    val terminalAgents: RetainedTerminalAgentsService
+
+    /** Refreshes every attached connected runtime's roster inventory (sidebar open, retry); never connects. */
+    fun refreshTerminalAgents(reason: TerminalAgentsRefreshReason)
 }
 
 /**
@@ -270,12 +289,15 @@ private fun RootContent(
     }
 
     // Hand the already-created runtime to the retained owner (one collector per runtime, no extra connection).
-    val authenticatedUser = (currentAuthStatus as? AuthStatus.Authenticated)?.session?.user
-    LaunchedEffect(apiClient, wsConnection, authenticatedUser) {
+    val effectiveAccountUser = (currentAuthStatus as? AuthStatus.Authenticated)?.session?.user
+    LaunchedEffect(apiClient, wsConnection, effectiveAccountUser) {
         val client = apiClient
         val ws = wsConnection
-        val user = authenticatedUser
-        if (services != null && client != null && ws != null && user != null) services.attachRuntime(client, ws, user)
+        val user = effectiveAccountUser
+        if (services != null && client != null && ws != null && user != null) {
+            services.attachRuntime(client, ws, user)
+            services.refreshTerminalAgents(TerminalAgentsRefreshReason.CONNECTED)
+        }
     }
 
     // Startup session restoration: validate stored session for active profile on initial launch
@@ -328,6 +350,86 @@ private fun RootContent(
         } else null
     }
 
+    // Retained Agents roster registration: only for a real authenticated server-returned account (never the fallback
+    // display labels above) and only while the focused workspace stage is shown. Idempotent per logical owner.
+    val agentsService = services?.terminalAgents
+    val agentsAccount = effectiveAccountUser
+    val agentsRegistration = remember(
+        agentsService, flowState.stage, activeProfileId, currentProfile?.baseUrl, agentsAccount, selectedProj, flowState.activeWorktreePath,
+    ) {
+        val profId = activeProfileId
+        val prof = currentProfile
+        val project = selectedProj
+        if (agentsService != null && flowState.stage == AppFlowStage.TERMINAL && profId != null && prof != null &&
+            agentsAccount != null && project != null && project.isNotBlank()
+        ) {
+            agentsService.registerWorkspace(
+                WorkspaceFileOwner(
+                    profileId = profId,
+                    baseUrl = prof.baseUrl,
+                    accountUser = agentsAccount,
+                    project = project,
+                    worktreePath = flowState.activeWorktreePath,
+                ),
+            )
+        } else {
+            null
+        }
+    }
+
+    val agentInventories by (agentsService?.inventories ?: remember { MutableStateFlow(emptyMap()) }).collectAsState()
+    val currentReceipt = activeProfileId?.let { profId -> agentInventories.values.firstOrNull { it.runtime.connection.profileId == profId } }
+
+    LaunchedEffect(currentReceipt, agentsService, activeProfileId, currentProfile, effectiveAccountUser, currentConn) {
+        val service = agentsService ?: return@LaunchedEffect
+        val receipt = currentReceipt ?: return@LaunchedEffect
+        val profId = activeProfileId ?: return@LaunchedEffect
+        val prof = currentProfile ?: return@LaunchedEffect
+        val account = effectiveAccountUser ?: return@LaunchedEffect
+        val conn = currentConn ?: return@LaunchedEffect
+        if (receipt.runtime.connection != conn ||
+            receipt.runtime.endpoint != WorkspaceFileOwner.normalizeBaseUrl(prof.baseUrl) ||
+            receipt.runtime.accountUser != account
+        ) {
+            return@LaunchedEffect
+        }
+        val projects = receipt.sessions.filter { !it.project.isNullOrBlank() }
+            .map { it.project!! to it.worktreePath }
+            .distinct()
+        for ((project, worktreePath) in projects) {
+            val owner = WorkspaceFileOwner(
+                profileId = profId,
+                baseUrl = prof.baseUrl,
+                accountUser = account,
+                project = project,
+                worktreePath = worktreePath,
+            )
+            val reg = service.registerWorkspace(owner)
+            val normWt = WorkspaceFileOwner.normalizeWorktree(worktreePath)
+            val activeWt = WorkspaceFileOwner.normalizeWorktree(flowState.activeWorktreePath)
+            if (flowState.stage != AppFlowStage.TERMINAL || project != selectedProj || normWt != activeWt) {
+                val matchingSessions = receipt.sessions.filter {
+                    TerminalAgentsMembership.isTraditionalType(it.sessionType) && it.alive && !it.targetUnavailable &&
+                        it.project == project && WorkspaceFileOwner.normalizeWorktree(it.worktreePath) == normWt
+                }
+                service.publishWorkspaceTabs(reg, receipt, matchingSessions, emptySet())
+            }
+        }
+    }
+
+    LaunchedEffect(flowState.activeProject, flowState.activeWorktreePath) {
+        val proj = flowState.activeProject
+        if (proj != null && activeProfileId != null) {
+            targetStore.selectTarget(
+                profileId = activeProfileId,
+                workspaceConfigPath = null,
+                project = proj,
+                worktreePath = flowState.activeWorktreePath,
+            )
+        }
+    }
+    val agentsHost = rememberSaveable(saver = AgentsHostStateSaver) { TerminalAgentsHostState() }
+
     // Auto-advance or redirect based on the repository's active profile authentication
     LaunchedEffect(repoActiveProfileId, repoAuthStatus) {
         val profId = repoActiveProfileId
@@ -367,6 +469,43 @@ private fun RootContent(
     }
     LaunchedEffect(activeWorkspaceState) { searchMode = null }
 
+    // ONE effective cover, derived synchronously in composition from the owned sources: privacy, Settings, search,
+    // pending departure + the host-owned local terminal modals, sidebar popup and compact Agents.
+    val departurePending by remember(activeWorkspaceState) {
+        activeWorkspaceState?.pendingDeparture ?: MutableStateFlow<WorkspaceDepartureIntent?>(null)
+    }.collectAsState()
+    val externalCover = masked || settingsOpen || searchMode != null || departurePending != null
+    SideEffect { agentsHost.setExternalCover(externalCover) }
+    val effectiveCover = externalCover || agentsHost.localCover || agentsHost.popupVisible || agentsHost.compactSheetOpen
+
+    // Search owns Back dismissal while open.
+    DisposableEffect(navigation, searchMode) {
+        val unregister = if (searchMode != null) {
+            navigation.registerBackInterceptor {
+                searchMode = null
+                true
+            }
+        } else {
+            {}
+        }
+        onDispose { unregister() }
+    }
+
+    // Back closes the compact sheet before any route Back, only while it is itself the topmost visible surface.
+    val sheetIsTopmost = agentsHost.compactSheetOpen && !externalCover
+    DisposableEffect(navigation, sheetIsTopmost) {
+        val unregister = if (sheetIsTopmost) {
+            navigation.registerBackInterceptor { agentsHost.closeCompactSheet() }
+        } else {
+            {}
+        }
+        onDispose { unregister() }
+    }
+    // The Agents host only exists on the Terminal stage: leaving it can never strand a cover without its surface.
+    LaunchedEffect(flowState.stage) {
+        if (flowState.stage != AppFlowStage.TERMINAL && flowState.stage != AppFlowStage.PROJECT_LIST) agentsHost.close()
+    }
+
     // Back returns to the captured origin: restore the workspace panel the user left (state itself never moved).
     var lastOrigin by remember { mutableStateOf<SettingsOrigin?>(null) }
     LaunchedEffect(flowState.settings) {
@@ -393,6 +532,30 @@ private fun RootContent(
         document = activeWorkspaceState?.editorTabsState?.activeTabKey?.value,
         sessionId = flowState.activeSessionId,
     )
+
+    // Contextual Agents settings: the selected/current workspace server B (independent of preference source A) is
+    // queued as the Settings target; the retained overlay opens the existing Host administration -> Agents section.
+    val openAgentSettings: () -> Unit = {
+        val target = activeProfileId
+        if (services != null && target != null) {
+            services.settingsRepository.setSettingsTarget(target)
+            navigation.openAgentSettings(captureOrigin(), target)
+        }
+    }
+    val latestOpenAgentSettings by rememberUpdatedState(openAgentSettings)
+    val agentsContext = remember(agentsService, agentsRegistration, agentsHost, services) {
+        if (agentsService != null && services != null) {
+            TerminalAgentsContext(
+                service = agentsService,
+                registration = agentsRegistration,
+                host = agentsHost,
+                refreshAll = { reason -> services.refreshTerminalAgents(reason) },
+                onOpenSettings = { latestOpenAgentSettings() },
+            )
+        } else {
+            null
+        }
+    }
 
     val headerEntries = services?.let {
         HeaderEntries(
@@ -422,6 +585,8 @@ private fun RootContent(
             dirtyDocuments = ws.getDirtyDocumentIds(),
             dirtyRevisions = ws.getDirtyRevisions(),
             onConfirmed = { decision.complete(true) },
+            // Cancellation is observed through the pending-prompt watcher below; a failed Save keeps the prompt open.
+            onCancelled = {},
         )
         ws.setPendingDeparture(intent)
         if (ws.pendingDeparture.value !== intent) return false
@@ -453,6 +618,8 @@ private fun RootContent(
     }
 
     fun runShortcut(action: ShortcutAction): Boolean {
+        // A compact Agents sheet consumes search/panel/Projects shortcuts: nothing routes under it.
+        if (agentsSheetConsumesShortcut(agentsHost.compactSheetOpen, action)) return true
         val ws = activeWorkspaceState
         val inWorkspace = flowState.stage == AppFlowStage.TERMINAL && ws != null
         return when (action) {
@@ -573,25 +740,55 @@ private fun RootContent(
                         }
 
                         AppFlowStage.PROJECT_LIST -> {
-                            ProjectListScreen(
-                                profileName = currentProfile?.name ?: "Server",
-                                serverUrl = currentProfile?.baseUrl,
-                                workspaceRepository = workspaceRepo,
-                                onNavigateProfiles = {
-                                    navigation.navigateToProfiles()
-                                },
-                                onSelectProject = { projectName ->
-                                    targetStore.selectTarget(
-                                        profileId = activeProfileId,
-                                        workspaceConfigPath = null,
-                                        project = projectName,
-                                        worktreePath = null,
+                            if (agentsContext != null) {
+                                TerminalAgentsSidebarHost(
+                                    agents = agentsContext,
+                                    active = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                ) {
+                                    ProjectListScreen(
+                                        profileName = currentProfile?.name ?: "Server",
+                                        serverUrl = currentProfile?.baseUrl,
+                                        workspaceRepository = workspaceRepo,
+                                        onNavigateProfiles = {
+                                            navigation.navigateToProfiles()
+                                        },
+                                        onSelectProject = { projectName ->
+                                            targetStore.selectTarget(
+                                                profileId = activeProfileId,
+                                                workspaceConfigPath = null,
+                                                project = projectName,
+                                                worktreePath = null,
+                                            )
+                                            navigation.selectProject(projectName)
+                                        },
+                                        headerEntries = headerEntries,
+                                        agents = agentsContext,
+                                        modifier = Modifier.fillMaxSize(),
                                     )
-                                    navigation.selectProject(projectName)
-                                },
-                                headerEntries = headerEntries,
-                                modifier = Modifier.fillMaxSize(),
-                            )
+                                }
+                            } else {
+                                ProjectListScreen(
+                                    profileName = currentProfile?.name ?: "Server",
+                                    serverUrl = currentProfile?.baseUrl,
+                                    workspaceRepository = workspaceRepo,
+                                    onNavigateProfiles = {
+                                        navigation.navigateToProfiles()
+                                    },
+                                    onSelectProject = { projectName ->
+                                        targetStore.selectTarget(
+                                            profileId = activeProfileId,
+                                            workspaceConfigPath = null,
+                                            project = projectName,
+                                            worktreePath = null,
+                                        )
+                                        navigation.selectProject(projectName)
+                                    },
+                                    headerEntries = headerEntries,
+                                    agents = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            }
                         }
 
                         AppFlowStage.TERMINAL -> {
@@ -614,6 +811,8 @@ private fun RootContent(
                                     preferenceAccess = prefAccess,
                                     languageFilterNotice = languageNotice,
                                     headerEntries = headerEntries,
+                                    requiredTerminalInstance = flowState.requiredTerminalInstance,
+                                    agents = agentsContext,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                             } else {
@@ -629,7 +828,9 @@ private fun RootContent(
                                     },
                                     profileId = activeProfileId,
                                     preferenceAccess = prefAccess,
-                                    inputCovered = settingsOpen || masked,
+                                    inputCovered = settingsOpen || masked || effectiveCover,
+                                    requiredTerminalInstance = flowState.requiredTerminalInstance,
+                                    agents = agentsContext,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                             }
@@ -660,6 +861,32 @@ private fun RootContent(
 
                     val overlay = flowState.settings
                     if (overlay != null && services != null) {
+                        // The captured Settings target B must be the selected target AND its exact retained service
+                        // owner; otherwise target services stay blocked (no ambient fallback to another server).
+                        val intendedTarget = overlay.targetProfileId
+                        val sourceTarget by services.settingsRepository.sourceTargetState.collectAsState()
+                        val targetOwner = settingsServices.targetServices?.owner
+                        val targetReady = overlay.targetServicesReady(
+                            selectedTargetProfileId = sourceTarget.settingsProfileId,
+                            serviceOwnerConnection = targetOwner?.connection,
+                            serviceOwnerAccount = targetOwner?.accountId,
+                            currentConnection = intendedTarget?.let { connections[it] },
+                            currentAccount = intendedTarget?.let { (authStatuses[it] as? AuthStatus.Authenticated)?.session?.user },
+                        )
+                        val shownServices = if (targetReady) {
+                            settingsServices
+                        } else {
+                            SettingsScreenServices(
+                                targetServices = null,
+                                commandHistory = settingsServices.commandHistory,
+                                documentWorkflow = settingsServices.documentWorkflow,
+                                notificationPlatform = settingsServices.notificationPlatform,
+                                notificationAudio = settingsServices.notificationAudio,
+                                integrationReadiness = settingsServices.integrationReadiness,
+                            )
+                        }
+                        // A new Agents settings intent re-keys the content so remembered sections update deterministically.
+                        key(overlay.intent) {
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -682,7 +909,7 @@ private fun RootContent(
                             SettingsScreens(
                                 settingsRepository = services.settingsRepository,
                                 privacyController = services.privacyController,
-                                services = settingsServices,
+                                services = shownServices,
                                 departureGuard = { guardDeparture() },
                                 diagnosticsInput = { services.diagnosticsInput() },
                                 onTargetRevalidated = { profileId ->
@@ -700,6 +927,9 @@ private fun RootContent(
                                 initialSubSection = SettingsSubSection.entries.firstOrNull { it.name == overlay.subSection }
                                     ?: SettingsSubSection.PREFERENCES,
                                 onActiveSubSectionChanged = { navigation.setSettingsSubSection(it.name) },
+                                initialHostSection = HostSettingsSection.entries.firstOrNull { it.name == overlay.hostSection }
+                                    ?: HostSettingsSection.IDLE,
+                                onHostSectionChanged = { navigation.setSettingsHostSection(it.name) },
                                 onNavigateBack = { navigation.closeSettings() },
                                 onOpenAuth = {
                                     navigation.closeSettings()
@@ -707,6 +937,7 @@ private fun RootContent(
                                 },
                                 modifier = Modifier.weight(1f),
                             )
+                        }
                         }
                     }
                 }
@@ -720,3 +951,24 @@ private fun RootContent(
         body()
     }
 }
+
+private val AgentsHostStateSaver: Saver<TerminalAgentsHostState, Boolean> = Saver(
+    save = { it.open },
+    restore = { TerminalAgentsHostState(initialOpen = it) },
+)
+
+/** Route shortcuts a compact Agents sheet consumes (nothing routes under the sheet); privacy/Settings still win. */
+private val AGENTS_SHEET_SUPPRESSED_SHORTCUTS: Set<ShortcutAction> = setOf(
+    ShortcutAction.SEARCH_TEXT,
+    ShortcutAction.SEARCH_FILENAME,
+    ShortcutAction.FILE_PANEL,
+    ShortcutAction.REVEAL_ACTIVE_FILE,
+    ShortcutAction.PROJECT_PANEL,
+)
+
+/**
+ * True when an open compact Agents sheet consumes [action]: search/panel/Projects routes never run under the sheet,
+ * while font and privacy (emergency dismissal) shortcuts still work.
+ */
+internal fun agentsSheetConsumesShortcut(compactSheetOpen: Boolean, action: ShortcutAction): Boolean =
+    compactSheetOpen && action in AGENTS_SHEET_SUPPRESSED_SHORTCUTS

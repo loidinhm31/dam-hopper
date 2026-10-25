@@ -12,6 +12,16 @@ import dev.damhopper.nativeapp.features.settings.WorkbenchPreferences
 import dev.damhopper.nativeapp.features.settings.decodeNativePreferences
 import dev.damhopper.nativeapp.features.settings.decodeSettingsImportResponse
 import dev.damhopper.nativeapp.features.settings.encodeNativePreferences
+import dev.damhopper.nativeapp.features.settings.InMemoryPreferencesStore
+import dev.damhopper.nativeapp.features.settings.PreferenceSourceStatus
+import dev.damhopper.nativeapp.features.settings.SettingsBinding
+import dev.damhopper.nativeapp.features.settings.SettingsOwnerResolver
+import dev.damhopper.nativeapp.features.settings.SettingsRepository
+import dev.damhopper.nativeapp.features.settings.SettingsSourceTargetState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -99,5 +109,37 @@ class SettingsPreferencesPhase17Test {
 
         lifecycle.onDestroy()
         assertEquals(LifecycleState.DESTROYED, lifecycle.state.value)
+    }
+
+    @Test
+    fun agentSettingsTargetBPersistsWithoutTouchingPreferenceSourceAOrThePreferences() {
+        val scope = CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
+        try {
+            val preferences = WorkbenchPreferences(terminalFontSize = 17)
+            val store = InMemoryPreferencesStore(
+                initialPreferences = preferences,
+                initialSourceTargetState = SettingsSourceTargetState(
+                    preferencesProfileId = "A",
+                    preferencesStatus = PreferenceSourceStatus.ACTIVE,
+                    settingsProfileId = "A",
+                ),
+            )
+            val resolver = object : SettingsOwnerResolver {
+                override suspend fun current(profileId: String): SettingsBinding? = null
+                override fun currentSnapshot(profileId: String): SettingsBinding? = null
+            }
+            val repository = SettingsRepository(store, resolver, scope, debounceMillis = 20L, invalidateRuntime = {})
+
+            // Opening the contextual Agents settings queues the selected workspace server B as the Settings target.
+            repository.setSettingsTarget("B")
+
+            val persisted = store.loadSourceTargetState()
+            assertEquals("B", persisted.settingsProfileId)
+            assertEquals("A", persisted.preferencesProfileId, "preference source A is independent of target B")
+            assertEquals(17, store.loadPreferences().terminalFontSize, "no preference is rewritten by selecting a target")
+            assertEquals(17, repository.preferences.value.terminalFontSize)
+        } finally {
+            scope.cancel()
+        }
     }
 }

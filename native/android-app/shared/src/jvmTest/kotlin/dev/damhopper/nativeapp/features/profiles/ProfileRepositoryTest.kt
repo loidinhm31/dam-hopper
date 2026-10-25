@@ -356,4 +356,88 @@ class ProfileRepositoryTest {
         assertEquals("tok-a", vault.getToken(prof.id, prof.baseUrl))
         assertEquals(prof.baseUrl, repo.profiles.value.single().baseUrl)
     }
+
+    private suspend fun authenticated(name: String, url: String, user: String): Pair<ServerProfile, ConnectionRef> {
+        val prof = repo.addProfile(name, url, user)
+        repo.applyAuthenticatedSession(prof.id, AuthSession("jwt-$name", user, "user", "2026-11-01T00:00:00Z"), null)
+        return prof to assertNotNull(registry.getCurrentConnection(prof.id))
+    }
+
+    @Test
+    fun commitExistingProfileRoutePublishesTheActiveProfileOnlyInsideTheAdmittedLeaf() = runTest {
+        repo.initialize()
+        val (a, _) = authenticated("A", "https://a.example.com", "alice")
+        val (b, connB) = authenticated("B", "https://b.example.com", "bob")
+        assertEquals(a.id, repo.activeProfileId.value)
+
+        var leafRuns = 0
+        val result = repo.commitExistingProfileRoute(connB, b.baseUrl + "/", "bob") { publish ->
+            leafRuns++
+            assertEquals(a.id, repo.activeProfileId.value, "nothing is published before the leaf calls the fixed setter")
+            publish()
+            ProfileRouteAdmission.COMMITTED
+        }
+        assertEquals(ProfileRouteAdmission.COMMITTED, result)
+        assertEquals(1, leafRuns)
+        assertEquals(b.id, repo.activeProfileId.value)
+    }
+
+    @Test
+    fun commitExistingProfileRouteRefusesStaleIdentityAndPropagatesBusyWithoutPublishing() = runTest {
+        repo.initialize()
+        val (a, _) = authenticated("A", "https://a.example.com", "alice")
+        val (b, connB) = authenticated("B", "https://b.example.com", "bob")
+        var leafRuns = 0
+        suspend fun attempt(
+            connection: ConnectionRef,
+            endpoint: String,
+            account: String,
+            leaf: (() -> Unit) -> ProfileRouteAdmission = { publish -> publish(); ProfileRouteAdmission.COMMITTED },
+        ) = repo.commitExistingProfileRoute(connection, endpoint, account) { publish -> leafRuns++; leaf(publish) }
+
+        assertEquals(ProfileRouteAdmission.STALE, attempt(connB, b.baseUrl, "mallory"))
+        assertEquals(ProfileRouteAdmission.STALE, attempt(connB, "https://evil.example.com", "bob"))
+        assertEquals(ProfileRouteAdmission.STALE, attempt(ConnectionRef(b.id, connB.generation + 1L), b.baseUrl, "bob"))
+        assertEquals(ProfileRouteAdmission.STALE, attempt(ConnectionRef("missing", 1L), b.baseUrl, "bob"))
+        assertEquals(0, leafRuns, "a denied identity never reaches the admitted leaf")
+        assertEquals(a.id, repo.activeProfileId.value)
+
+        // BUSY from the nested chain is returned as is and nothing was published.
+        assertEquals(ProfileRouteAdmission.BUSY, attempt(connB, b.baseUrl, "bob") { ProfileRouteAdmission.BUSY })
+        assertEquals(1, leafRuns)
+        assertEquals(a.id, repo.activeProfileId.value)
+    }
+
+    @Test
+    fun commitExistingProfileRouteAwaitsTheProfileMutexAndLosesToAnEndpointChange() = runTest {
+        repo.initialize()
+        val (a, connA) = authenticated("A", "https://a.example.com", "alice")
+        val gate = CompletableDeferred<Unit>()
+        registry.addRetirementBarrier { gate.await() }
+        // The endpoint edit holds the profile mutex across its awaited registry drain.
+        val edit = async { repo.updateProfile(a.id, "A", "https://a2.example.com", "alice") }
+        runCurrent()
+        var leafRuns = 0
+        val commit = async {
+            repo.commitExistingProfileRoute(connA, a.baseUrl, "alice") { publish -> leafRuns++; publish(); ProfileRouteAdmission.COMMITTED }
+        }
+        runCurrent()
+        assertFalse(commit.isCompleted, "the admission awaits the profile mutex instead of racing it")
+        gate.complete(Unit)
+        edit.await()
+        assertEquals(ProfileRouteAdmission.STALE, commit.await())
+        assertEquals(0, leafRuns)
+    }
+
+    @Test
+    fun persistActiveProfileIfCurrentNeverResurrectsAnOlderDestination() = runTest {
+        repo.initialize()
+        val a = repo.addProfile("A", "https://a.example.com", "alice")
+        val b = repo.addProfile("B", "https://b.example.com", "bob")
+        assertTrue(repo.persistActiveProfileIfCurrent(a.id))
+        repo.selectProfile(b.id)
+        assertFalse(repo.persistActiveProfileIfCurrent(a.id), "a late persistence of the older route is dropped")
+        assertEquals(b.id, repo.activeProfileId.value)
+        assertFalse(repo.persistActiveProfileIfCurrent("missing"))
+    }
 }

@@ -7,6 +7,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -133,5 +135,83 @@ class NativeWorkspaceViewModelTest {
         healthy = true
         assertTrue(lifetime.recoverClose())
         assertNull(lifetime.registeredToken)
+    }
+
+    private fun rosterBinding(
+        ref: ConnectionRef,
+        scope: kotlinx.coroutines.CoroutineScope,
+    ) = TerminalAgentsRuntimeBinding(
+        owner = ref,
+        endpoint = "http://127.0.0.1:1",
+        accountUser = "alice",
+        ws = dev.damhopper.nativeapp.core.transport.WsConnection(ref, "http://127.0.0.1:1"),
+        reducer = dev.damhopper.nativeapp.features.terminal.AgentStatusReducer(),
+        scope = scope,
+        listDetailed = {
+            listOf(
+                dev.damhopper.nativeapp.features.terminal.TerminalSessionDetailed(
+                    id = "t1", incarnation = 1uL, project = "proj", command = "sh", cwd = "/w",
+                ),
+            )
+        },
+    )
+
+    @Test
+    fun retirementBarrierRevokesRosterAuthorityUnderItsOwnGateAndReleasesItBeforeDrainingChildren() = runBlocking {
+        val registry = ConnectionRegistry()
+        val old = registry.getOrCreateConnection("p")
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        val inventory = TerminalAgentsInventoryCoordinator()
+        val attachment = inventory.attach(rosterBinding(old, scope))
+        inventory.onSocketState(
+            attachment,
+            dev.damhopper.nativeapp.core.model.SocketInstanceRef(old, "sock-1"),
+            dev.damhopper.nativeapp.features.terminal.TerminalAgentsRefreshReason.CONNECTED,
+        )
+        withTimeout(10_000) { while (inventory.inventories.value.isEmpty()) delay(10) }
+
+        val gateHeldWhileDraining = java.util.concurrent.atomic.AtomicBoolean(true)
+        val childFinished = CompletableDeferred<Unit>()
+        val lifetime = RetirementLifetime(registry, retireOwner = { ref ->
+            // Revoke under the roster's own short gate, which must be released BEFORE the children are awaited.
+            inventory.retireIdentity(ref)
+            gateHeldWhileDraining.set(inventory.rosterLock.isHeldByCurrentThread)
+            // A child of the old runtime that itself needs the roster gate must be able to finish (no held gate).
+            val child = scope.launch(kotlinx.coroutines.Dispatchers.Default) {
+                inventory.underRosterGate { }
+                childFinished.complete(Unit)
+            }
+            child.join()
+        })
+        assertTrue(lifetime.register())
+
+        val successor = withTimeout(10_000) { registry.retireConnection(old) }
+        assertEquals(old.generation + 1, successor.generation)
+        assertFalse(gateHeldWhileDraining.get(), "the roster gate is released before awaiting children")
+        assertTrue(childFinished.isCompleted)
+        assertTrue(attachment.revoked)
+        assertTrue(inventory.inventories.value.isEmpty(), "attachment/receipt authority was revoked first")
+        scope.cancel()
+    }
+
+    @Test
+    fun aRetiredGenerationCannotRevokeOrPurgeASuccessorAttachment() = runBlocking {
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        val inventory = TerminalAgentsInventoryCoordinator()
+        val old = ConnectionRef("p", 1L)
+        val successor = ConnectionRef("p", 2L)
+        inventory.attach(rosterBinding(old, scope))
+        val live = inventory.attach(rosterBinding(successor, scope))
+        inventory.onSocketState(
+            live,
+            dev.damhopper.nativeapp.core.model.SocketInstanceRef(successor, "sock-1"),
+            dev.damhopper.nativeapp.features.terminal.TerminalAgentsRefreshReason.CONNECTED,
+        )
+        withTimeout(10_000) { while (inventory.inventories.value.isEmpty()) delay(10) }
+
+        inventory.retireIdentity(old) // late retirement of the old generation
+        assertFalse(live.revoked, "the successor generation is untouched")
+        assertEquals(1, inventory.inventories.value.size)
+        scope.cancel()
     }
 }

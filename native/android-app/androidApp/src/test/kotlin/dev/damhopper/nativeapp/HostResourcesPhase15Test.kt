@@ -79,9 +79,8 @@ class HostResourcesPhase15Test {
     @Test
     fun testResourcesSubProducts() {
         val entries = ResourcesSubProduct.entries
-        assertEquals(2, entries.size)
+        assertEquals(1, entries.size)
         assertEquals("Host Resources", ResourcesSubProduct.FLEET.label)
-        assertEquals("Usage Insights", ResourcesSubProduct.USAGE.label)
     }
 
     @Test

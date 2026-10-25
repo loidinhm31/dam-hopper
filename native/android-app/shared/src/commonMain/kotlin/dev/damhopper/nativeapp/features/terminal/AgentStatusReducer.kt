@@ -3,6 +3,7 @@ package dev.damhopper.nativeapp.features.terminal
 import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.core.model.SocketInstanceRef
 import dev.damhopper.nativeapp.core.notifications.toServerSafeLongOrNull
+import dev.damhopper.nativeapp.core.transport.ApiRequestError
 import dev.damhopper.nativeapp.core.transport.ServerMsg
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -15,6 +16,11 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+
+/** Result of the non-suspending manual-route admission against the reducer authority. */
+enum class AgentRouteAdmission { COMMITTED, BUSY, STALE }
+
+private const val HTTP_NOT_FOUND = 404
 
 /**
  * Filter options for displaying agents in the UI.
@@ -45,6 +51,14 @@ data class AgentStatusState(
     val lastError: String? = null,
     val baselineInstalled: Boolean = false,
     val admissionOpen: Boolean = false,
+    /** Typed failure of the current capture's snapshot request (HTTP 404 vs other); cleared by a success/new capture. */
+    val snapshotFailure: TerminalAgentsSnapshotFailure? = null,
+    /**
+     * Fence for manual route admission: advances under the reducer mutex whenever binding/retirement, epoch,
+     * baseline installation/loading/closure/invalidation or typed snapshot-failure authority changes. Ordinary
+     * same-baseline status-row updates never change it.
+     */
+    val routeAuthorityRevision: Long = 0L,
 ) {
     /**
      * Filtered list of agents according to [activeFilter].
@@ -131,6 +145,8 @@ class AgentStatusReducer(
     private var cursor = 0uL
     private var hasCursor = false
     private var ticket = 0L
+    private var routeRevision = 0L
+    private var snapshotFailureField: TerminalAgentsSnapshotFailure? = null
     private var inFlightTicket: Long? = null
     private val highWater = HashMap<Identity, Long>()
     private val removedFloor = HashMap<String, Long>()
@@ -202,6 +218,7 @@ class AgentStatusReducer(
             if (bound != Binding(owner, socket)) return@withLock null
             ticket++
             inFlightTicket = ticket
+            snapshotFailureField = null
             publishFlags()
             SnapshotCapture(owner, socket, ticket)
         }
@@ -254,6 +271,7 @@ class AgentStatusReducer(
                     lastError = null,
                 )
             }
+            snapshotFailureField = null
             publishFlags()
             true
         }
@@ -262,11 +280,17 @@ class AgentStatusReducer(
      * Ends a failed/cancelled fetch. Admission stays closed (baseline dropped) and the capture is spent, so
      * a later retry captures again and a stray late result cannot install.
      */
-    suspend fun abandonSnapshot(capture: SnapshotCapture, error: String? = null) = mutex.withLock {
+    suspend fun abandonSnapshot(
+        capture: SnapshotCapture,
+        error: String? = null,
+        failure: TerminalAgentsSnapshotFailure? = null,
+    ) = mutex.withLock {
+        // Capture-qualified: a superseded capture's failure (e.g. a delayed HTTP 404) never reaches its successor.
         if (inFlightTicket != capture.ticket || ticket != capture.ticket) return@withLock
         inFlightTicket = null
         baselineInstalled = false
         ticket++
+        snapshotFailureField = failure
         _state.update { it.copy(lastError = error ?: it.lastError) }
         publishFlags()
     }
@@ -379,6 +403,7 @@ class AgentStatusReducer(
         highWater.clear()
         removedFloor.clear()
         _state.update { it.copy(agents = emptyMap(), unreadAttentions = emptyList()) }
+        snapshotFailureField = null
         publishFlags()
         AgentAdmission.Reconcile
     }
@@ -395,11 +420,46 @@ class AgentStatusReducer(
         } catch (e: CancellationException) {
             withContext(NonCancellable) { abandonSnapshot(capture, null) }
             throw e
+        } catch (e: ApiRequestError) {
+            val failure = if (e.status == HTTP_NOT_FOUND) {
+                TerminalAgentsSnapshotFailure.HTTP_NOT_FOUND
+            } else {
+                TerminalAgentsSnapshotFailure.OTHER
+            }
+            abandonSnapshot(capture, e.message ?: "Failed to load agent status snapshot", failure)
+            return false
         } catch (e: Exception) {
-            abandonSnapshot(capture, e.message ?: "Failed to load agent status snapshot")
+            abandonSnapshot(capture, e.message ?: "Failed to load agent status snapshot", TerminalAgentsSnapshotFailure.OTHER)
             return false
         }
         return applySnapshot(capture, snapshot)
+    }
+
+    /**
+     * Non-suspending final admission of a manual Agents route. Tries the existing reducer mutex only: BUSY on
+     * contention (never waits), STALE unless the bound owner+socket, the actual known epoch (null before an installed
+     * baseline) and [AgentStatusState.routeAuthorityRevision] still equal the captured values. READY/admissionOpen are
+     * deliberately NOT required: manual selection is not notification admission. [commit] is the one known mutation
+     * leaf and must not suspend, call back into this reducer or run unknown callbacks; the mutex is always released
+     * in `finally`.
+     */
+    fun tryAdmitTerminalAgentsRoute(
+        owner: ConnectionRef,
+        socket: SocketInstanceRef,
+        expectedEpoch: ULong?,
+        expectedAuthorityRevision: Long,
+        commit: () -> Boolean,
+    ): AgentRouteAdmission {
+        if (!mutex.tryLock()) return AgentRouteAdmission.BUSY
+        try {
+            if (bound != Binding(owner, socket)) return AgentRouteAdmission.STALE
+            val actualEpoch: ULong? = if (baselineInstalled) epoch else null
+            if (actualEpoch != expectedEpoch) return AgentRouteAdmission.STALE
+            if (routeRevision != expectedAuthorityRevision) return AgentRouteAdmission.STALE
+            return if (commit()) AgentRouteAdmission.COMMITTED else AgentRouteAdmission.STALE
+        } finally {
+            mutex.unlock()
+        }
     }
 
     // ---- internals (all callers hold [mutex]) ----
@@ -456,6 +516,7 @@ class AgentStatusReducer(
                 unreadAttentions = emptyList(),
             )
         }
+        snapshotFailureField = null
         publishFlags()
     }
 
@@ -476,13 +537,19 @@ class AgentStatusReducer(
     }
 
     private fun publishFlags() {
+        // Every caller changes route authority (binding, baseline, epoch, loading or typed failure).
+        routeRevision++
         val installed = baselineInstalled
         val loading = inFlightTicket != null
+        val failure = snapshotFailureField
+        val revision = routeRevision
         _state.update {
             it.copy(
                 baselineInstalled = installed,
                 admissionOpen = installed && !loading && it.availability == AgentStatusAvailability.READY,
                 isSnapshotLoading = loading,
+                snapshotFailure = failure,
+                routeAuthorityRevision = revision,
             )
         }
     }

@@ -18,7 +18,6 @@ import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 
 enum class ResourcesSubProduct(val label: String) {
     FLEET("Host Resources"),
-    USAGE("Usage Insights"),
 }
 
 @Composable
@@ -70,19 +69,9 @@ fun ResourcesUnifiedPanelScreen(
         }
 
         // Selected Sub-Product View
-        when (activeSubProduct) {
-            ResourcesSubProduct.FLEET -> {
-                FleetScreens(
-                    controller = hostController,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            ResourcesSubProduct.USAGE -> {
-                UsageScreens(
-                    controller = usageController,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
+        FleetScreens(
+            controller = hostController,
+            modifier = Modifier.weight(1f)
+        )
     }
 }

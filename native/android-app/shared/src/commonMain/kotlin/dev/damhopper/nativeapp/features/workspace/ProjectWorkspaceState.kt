@@ -15,6 +15,7 @@ import dev.damhopper.nativeapp.features.files.FileMutationCoordinator
 import dev.damhopper.nativeapp.features.files.FileOperationOutcome
 import dev.damhopper.nativeapp.features.files.FileRepository
 import dev.damhopper.nativeapp.features.files.FileTreeState
+import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
 import dev.damhopper.nativeapp.features.settings.SettingsOwner
 import dev.damhopper.nativeapp.ui.screens.ObservableCommandHistory
 import dev.damhopper.nativeapp.ui.screens.PreferenceAccess
@@ -50,6 +51,12 @@ sealed class WorkspaceDepartureIntent {
         val dirtyDocuments: List<DocumentId>,
         val dirtyRevisions: Map<DocumentId, Long>,
         val onConfirmed: () -> Unit,
+        /**
+         * Invoked exactly once when this prompt is cancelled, dismissed, rejected by coalescing, superseded, its
+         * authority retires or a Save fails (the dirty prompt then stays but this request's continuation is spent).
+         * Never invoked after a successful Save/Discard completion.
+         */
+        val onCancelled: () -> Unit,
     ) : WorkspaceDepartureIntent()
 }
 
@@ -127,6 +134,23 @@ class ProjectWorkspaceState(
         updateInputGate()
     }
 
+    /**
+     * Mutation-only commit of a verified exact terminal selection (retained Agents activation): shows the TERMINAL
+     * panel and writes the prevalidated exact terminal ID/selection epoch. No logging, callbacks, attach, controller
+     * creation, IO or input-policy work; those run via [applyVerifiedSelectionEffects] after the admission gates
+     * released. Callable only from the admitted leaf.
+     */
+    fun commitVerifiedTerminalSelection(instance: TerminalAgentsInstanceKey) {
+        _activePanel.value = WorkspacePanel.TERMINAL
+        terminalState?.commitVerifiedSelection(instance)
+    }
+
+    /** Ordinary panel/input-policy effects of a committed verified selection; runs after the gates released. */
+    fun applyVerifiedSelectionEffects() {
+        selectPanel(WorkspacePanel.TERMINAL)
+        terminalState?.updateAllControllersInputPolicy()
+    }
+
     override fun onForeground() {
         onAppForeground()
     }
@@ -181,6 +205,7 @@ class ProjectWorkspaceState(
     fun revokeAuthority() {
         _isAuthorityRetired.value = true
         terminalState?.revokeAuthority()
+        spendPendingDeparture()
         updateInputGate()
     }
 
@@ -234,13 +259,41 @@ class ProjectWorkspaceState(
      */
     fun setPendingDeparture(intent: WorkspaceDepartureIntent?) {
         if (intent != null && _pendingDeparture.value != null) {
-            return // Coalesce: do not overwrite active departure prompt
+            // Coalesce: never overwrite the active prompt; the coalesced request is cancelled, not hijacked.
+            (intent as? WorkspaceDepartureIntent.WorkspaceLeave)?.onCancelled?.invoke()
+            return
         }
+        pendingCancelNotified = false
         _pendingDeparture.value = intent
     }
 
+    private var pendingCancelNotified = false
+
+    /** Spends the pending [WorkspaceDepartureIntent.WorkspaceLeave] continuation once; the prompt itself stays. */
+    private fun spendPendingDeparture() {
+        val current = _pendingDeparture.value as? WorkspaceDepartureIntent.WorkspaceLeave ?: return
+        if (pendingCancelNotified) return
+        pendingCancelNotified = true
+        current.onCancelled()
+    }
+
+    /** Cancels the pending departure prompt: the request's `onCancelled` runs exactly once for a workspace leave. */
     fun clearPendingDeparture() {
+        val current = _pendingDeparture.value
+        val alreadySpent = pendingCancelNotified
         _pendingDeparture.value = null
+        pendingCancelNotified = false
+        if (current is WorkspaceDepartureIntent.WorkspaceLeave && !alreadySpent) current.onCancelled()
+    }
+
+    /**
+     * Successful completion (Save/Discard) of [intent]: clears the prompt WITHOUT cancelling its own continuation.
+     * A different or already replaced intent is left untouched.
+     */
+    fun completePendingDeparture(intent: WorkspaceDepartureIntent) {
+        if (_pendingDeparture.value !== intent) return
+        _pendingDeparture.value = null
+        pendingCancelNotified = false
     }
 
     /**
@@ -249,6 +302,13 @@ class ProjectWorkspaceState(
      * during save, and no other documents became dirty before committing navigation.
      */
     suspend fun commitDepartureSave(intent: WorkspaceDepartureIntent.WorkspaceLeave): Boolean {
+        val committed = attemptDepartureSave(intent)
+        // A failed Save keeps the dirty prompt and its error UI but spends this request's continuation.
+        if (!committed && _pendingDeparture.value === intent) spendPendingDeparture()
+        return committed
+    }
+
+    private suspend fun attemptDepartureSave(intent: WorkspaceDepartureIntent.WorkspaceLeave): Boolean {
         if (_isAuthorityRetired.value) {
             departureError = "Authority is retired; cannot commit save"
             return false
@@ -283,7 +343,7 @@ class ProjectWorkspaceState(
                 departureError = "Workspace still has unsaved changes"
                 return false
             }
-            clearPendingDeparture()
+            completePendingDeparture(intent)
             intent.onConfirmed()
             return true
         } catch (e: Exception) {
@@ -373,6 +433,7 @@ class ProjectWorkspaceState(
      */
     fun close() {
         _isAuthorityRetired.value = true
+        clearPendingDeparture()
         updateInputGate()
         lifecycleCoordinator?.unregister(this)
         terminalState?.close()

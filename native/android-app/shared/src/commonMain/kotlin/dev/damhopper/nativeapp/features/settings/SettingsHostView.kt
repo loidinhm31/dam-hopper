@@ -23,8 +23,6 @@ import androidx.compose.ui.unit.dp
 import dev.damhopper.nativeapp.features.host.IdleConsentController
 import dev.damhopper.nativeapp.features.host.IdleSuspendTabScreen
 import dev.damhopper.nativeapp.features.host.UsageController
-import dev.damhopper.nativeapp.features.host.UsageScreens
-import dev.damhopper.nativeapp.features.host.UsageSettingsPanel
 import dev.damhopper.nativeapp.features.workspace.WorkspaceRepository
 
 /**
@@ -43,7 +41,6 @@ class SettingsTargetServices(
 )
 
 enum class HostSettingsSection(val title: String) {
-    USAGE("Usage"),
     IDLE("Idle suspend"),
     GLOBAL("Global"),
     CONFIG("Config"),
@@ -64,12 +61,11 @@ fun SettingsHostView(
     adminBlockedReason: String? = null,
     /** Why idle-suspend mutations cannot be submitted (e.g. no-auth/dev-mode server); null when allowed. */
     idleBlockedReason: String? = null,
-    initialSection: HostSettingsSection = HostSettingsSection.USAGE,
+    initialSection: HostSettingsSection = HostSettingsSection.IDLE,
     onSectionChanged: (HostSettingsSection) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var section by remember { mutableStateOf(initialSection) }
-    var showUsageData by remember(services) { mutableStateOf(false) }
     val authority = services?.mutationAuthority?.takeIf { adminBlockedReason == null }
     val label = targetLabel ?: "No server selected"
 
@@ -82,7 +78,6 @@ fun SettingsHostView(
                     selected = entry == section,
                     onClick = {
                         section = entry
-                        showUsageData = false
                         onSectionChanged(entry)
                     },
                     label = { Text(entry.title) },
@@ -103,21 +98,10 @@ fun SettingsHostView(
         }
 
         // Lazy lists (idle, usage data) must not sit inside a vertical scroll container.
-        val lazySection = section == HostSettingsSection.IDLE || (section == HostSettingsSection.USAGE && showUsageData)
+        val lazySection = section == HostSettingsSection.IDLE
         val sectionModifier = Modifier.fillMaxWidth().weight(1f)
         Column(modifier = if (lazySection) sectionModifier else sectionModifier.verticalScroll(rememberScrollState())) {
             when (section) {
-                HostSettingsSection.USAGE -> {
-                    val usage = services.usageController
-                    when {
-                        usage == null -> Text("Usage telemetry is unavailable on this server.", style = MaterialTheme.typography.bodyMedium)
-                        showUsageData -> {
-                            OutlinedButton(onClick = { showUsageData = false }) { Text("Back to Settings") }
-                            UsageScreens(usage, Modifier.weight(1f), authority, label)
-                        }
-                        else -> UsageSettingsPanel(usage, authority, label, onOpenData = { showUsageData = true })
-                    }
-                }
                 HostSettingsSection.IDLE -> {
                     val idle = services.idleController
                     if (idle == null) {
