@@ -15,6 +15,7 @@ OUTPUT_DIR="${REPO_ROOT}/artifacts/release"
 EPOCH="${SOURCE_DATE_EPOCH:-}"
 SEMANTIC_ENGINE_DIR="${SEMANTIC_ENGINE_DIR:-}"
 STAGE_SEMANTIC_ENGINE=0
+ALLOW_OMITTED_ENGINE=0
 
 usage() {
     cat <<EOF
@@ -28,6 +29,7 @@ Options:
   --source-date-epoch <n> Deterministic Unix timestamp for file mtimes
   --semantic-engine-dir <dir> Staged directory containing lib/semantic-engine payload
   --stage-semantic-engine     Stage and verify bundled semantic engine from pinned provenance
+  --allow-omitted-engine  Permit archive assembly without bundled semantic engine (diagnostic only)
   -h, --help              Show this help message
 EOF
     exit 1
@@ -61,6 +63,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --stage-semantic-engine)
             STAGE_SEMANTIC_ENGINE=1
+            shift
+            ;;
+        --allow-omitted-engine)
+            ALLOW_OMITTED_ENGINE=1
             shift
             ;;
         -h|--help)
@@ -227,6 +233,9 @@ elif [[ -n "${SEMANTIC_ENGINE_DIR}" ]]; then
     for req_sem in \
         "node" \
         "tsls/package.json" \
+        "tsls/pnpm-lock.yaml" \
+        "tsls/LICENSES.txt" \
+        "tsls/provenance.json" \
         "tsls/node_modules/typescript-language-server/lib/cli.mjs" \
         "tsls/node_modules/typescript/lib/tsserver.js" \
         "tsls/node_modules/typescript/lib/_tsserver.js" \
@@ -241,6 +250,9 @@ elif [[ -n "${SEMANTIC_ENGINE_DIR}" ]]; then
     mkdir -p "${TMP_STAGE}/lib/semantic-engine"
     # Dereference symlinks so release archive contains only regular files and directories
     cp -rL "${SEMANTIC_ENGINE_DIR}/." "${TMP_STAGE}/lib/semantic-engine/"
+elif [[ "${ALLOW_OMITTED_ENGINE}" -ne 1 ]]; then
+    echo "Error: Semantic engine is required for Linux release archive. Pass --semantic-engine-dir <dir> or --stage-semantic-engine (or --allow-omitted-engine for diagnostic testing)." >&2
+    exit 1
 fi
 
 # Fix directory and file permissions throughout

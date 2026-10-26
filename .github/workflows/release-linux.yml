@@ -198,6 +198,14 @@ jobs:
         run: |
           chmod +x artifacts/bin/dam-hopper artifacts/bin/dam-hopper-server artifacts/bin/dam-hopper-web artifacts/bin/dam-hopper-idle-suspend-helper
 
+      - name: Stage verified pinned semantic engine
+        run: |
+          node deploy/release/semantic-engine/stage-semantic-engine.mjs \
+            --output-dir artifacts/staged-engine \
+            --retrieve-pinned
+          node deploy/release/semantic-engine/stage-semantic-engine.mjs \
+            --verify-only artifacts/staged-engine
+
       - name: Package archive twice and validate exact release subjects
         env:
           SOURCE_DATE_EPOCH: 1700000000
@@ -207,6 +215,7 @@ jobs:
             --version "${{ needs.validate-metadata.outputs.release_tag }}" \
             --target-dir "artifacts/bin" \
             --web-dist "apps/web/dist" \
+            --semantic-engine-dir "artifacts/staged-engine" \
             --output-dir "artifacts/final"
 
       - name: Upload final Linux release assets

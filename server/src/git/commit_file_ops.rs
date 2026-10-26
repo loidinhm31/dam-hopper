@@ -94,6 +94,30 @@ async fn selected_patch(
     hash: &str,
     paths: &[&str],
 ) -> Result<String, AppError> {
+    let name_output = Command::new("git")
+        .args(["-c", "safe.directory=*"])
+        .args(["diff", "--no-renames", "--name-only", "-z", parent, hash, "--"])
+        .args(paths)
+        .current_dir(project_path)
+        .output()
+        .await
+        .map_err(|e| AppError::Git(format!("Failed to spawn git diff: {e}")))?;
+    if !name_output.status.success() {
+        return Err(AppError::Fs(crate::fs::FsError::MutationRefused(
+            "Protected config check failed during patch inspection".into(),
+        )));
+    }
+    for p in String::from_utf8_lossy(&name_output.stdout).split('\0') {
+        if p.is_empty() {
+            continue;
+        }
+        let abs = project_path.join(p);
+        if crate::fs::secure_path::is_protected_global_config_path(&abs) {
+            return Err(AppError::Fs(crate::fs::FsError::MutationRefused(
+                "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+            )));
+        }
+    }
     let mut output = Command::new("git");
     output
         .current_dir(project_path)
@@ -230,6 +254,14 @@ pub async fn cherry_pick_commit_files(
         .try_acquire_for_repo(&repo_lock, project_path)
         .map_err(|e| AppError::Unavailable(e.to_string()))?;
     let path_refs = validate_paths(paths)?;
+    for p in paths {
+        let abs = project_path.join(p);
+        if crate::fs::secure_path::is_protected_global_config_path(&abs) {
+            return Err(AppError::Fs(crate::fs::FsError::MutationRefused(
+                "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+            )));
+        }
+    }
     let parent = {
         let repo = git2::Repository::open(project_path)
             .map_err(|e| AppError::Git(e.message().to_string()))?;
@@ -328,6 +360,9 @@ pub async fn drop_commit_files(
     if patch.trim().is_empty() {
         return Ok(GitActionResult::ok("No selected changes to drop"));
     }
+
+    cli_fallback::check_worktree_dirty_protected_config(project_path).await?;
+    cli_fallback::check_diff_touches_protected_config(project_path, &["HEAD", hash]).await?;
 
     cli_fallback::run_git(&["checkout", "--detach", hash], project_path).await?;
     if let Err(err) = apply_patch(project_path, &patch, true, true).await {
@@ -453,6 +488,10 @@ pub async fn drop_commit(project_path: &Path, hash: &str) -> Result<GitActionRes
     let head = cli_fallback::head_hash(project_path).await?;
     let parent = cli_fallback::first_parent(project_path, hash).await?;
 
+    cli_fallback::check_diff_touches_protected_config(project_path, &[&parent, hash]).await?;
+    if head != hash {
+        cli_fallback::check_diff_touches_protected_config(project_path, &[hash, &branch]).await?;
+    }
     let result = if head == hash {
         cli_fallback::run_git(&["reset", "--hard", &parent], project_path).await
     } else {
@@ -516,6 +555,7 @@ pub async fn revert_commit(project_path: &Path, hash: &str) -> Result<GitActionR
         return Ok(blocked);
     }
 
+    cli_fallback::check_diff_touches_protected_config(project_path, &[&format!("{hash}^!")]).await?;
     // The API does not provide an interactive commit-message editor. Keep the
     // operation non-interactive so tests and headless/server callers cannot
     // inherit a terminal and stop inside `git commit -e`.

@@ -450,6 +450,19 @@ pub async fn remove_worktree_route(
                     ),
                 )));
             }
+            let worktree_dir = std::path::Path::new(&worktree.path);
+            let repo_path = std::path::Path::new(&worktree.repository_path);
+            let req_path = std::path::Path::new(&body.path);
+            if crate::fs::secure_path::is_protected_global_config_path(worktree_dir)
+                || crate::fs::secure_path::is_protected_global_config_path(repo_path)
+                || crate::fs::secure_path::is_protected_global_config_path(req_path)
+            {
+                return Err(ApiError::from_app(crate::error::AppError::Fs(
+                    crate::fs::FsError::MutationRefused(
+                        "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+                    ),
+                )));
+            }
             let retiring = state
                 .semantic_supervisor
                 .prepare_invalidate_target(&project, Some(&worktree.path))
@@ -492,6 +505,19 @@ pub async fn remove_worktree_route(
                 if candidate.is_locked {
                     return Err(ApiError::from_app(crate::error::AppError::InvalidInput(
                         "Cannot remove locked worktree".to_string(),
+                    )));
+                }
+                let candidate_dir = std::path::Path::new(&candidate.path);
+                let repo_path = std::path::Path::new(&candidate.repository_path);
+                let req_path = std::path::Path::new(&body.path);
+                if crate::fs::secure_path::is_protected_global_config_path(candidate_dir)
+                    || crate::fs::secure_path::is_protected_global_config_path(repo_path)
+                    || crate::fs::secure_path::is_protected_global_config_path(req_path)
+                {
+                    return Err(ApiError::from_app(crate::error::AppError::Fs(
+                        crate::fs::FsError::MutationRefused(
+                            "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+                        ),
                     )));
                 }
                 let retiring = state

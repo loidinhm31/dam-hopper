@@ -1530,32 +1530,37 @@ pub(crate) async fn persist_temp(
 /// Check if a path refers to the server's canonical global config file or an alias/hardlink to it.
 pub fn is_protected_global_config_path(path: &Path) -> bool {
     let global_path = crate::config::global_config_path();
-    // 1. Direct path equivalence (canonicalized if existing, or lexical if new)
-    if let (Ok(can_a), Ok(can_b)) = (dunce::canonicalize(path), dunce::canonicalize(&global_path)) {
-        if can_a == can_b {
-            return true;
-        }
-    } else if path == global_path {
+    let registry_path = crate::config::global_registry_path();
+    let config_dir = crate::config::dam_hopper_config_dir();
+
+    // Check direct lexical match
+    if path == global_path || path == registry_path || path == config_dir {
+        return true;
+    }
+    // Check if path is an ancestor directory containing config
+    if global_path.starts_with(path)
+        || registry_path.starts_with(path)
+        || config_dir.starts_with(path)
+    {
         return true;
     }
 
-    // Check parent directory and filename if target does not exist yet
-    if let (Some(parent_a), Some(parent_b)) = (path.parent(), global_path.parent()) {
-        if let (Ok(can_pa), Ok(can_pb)) =
-            (dunce::canonicalize(parent_a), dunce::canonicalize(parent_b))
-        {
-            if can_pa == can_pb && path.file_name() == global_path.file_name() {
+    // 1. Direct path equivalence (canonicalized if existing, or lexical if new)
+    for target in [&global_path, &registry_path, &config_dir] {
+        if let (Ok(can_a), Ok(can_b)) = (dunce::canonicalize(path), dunce::canonicalize(target)) {
+            // Match if paths are identical or if candidate is an ancestor directory containing target
+            if can_a == can_b || can_b.starts_with(&can_a) {
                 return true;
             }
         }
-    }
-
-    // Moving or removing a containing directory also moves/removes the protected
-    // file. Resolve both directories so symlinked ancestors cannot bypass this.
-    if let (Ok(candidate), Some(parent)) = (dunce::canonicalize(path), global_path.parent()) {
-        if let Ok(config_parent) = dunce::canonicalize(parent) {
-            if config_parent.starts_with(&candidate) {
-                return true;
+        // Check parent directory and filename if target does not exist yet
+        if let (Some(parent_a), Some(parent_b)) = (path.parent(), target.parent()) {
+            if let (Ok(can_pa), Ok(can_pb)) =
+                (dunce::canonicalize(parent_a), dunce::canonicalize(parent_b))
+            {
+                if can_pa == can_pb && path.file_name() == target.file_name() {
+                    return true;
+                }
             }
         }
     }
@@ -1564,21 +1569,25 @@ pub fn is_protected_global_config_path(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if let (Ok(meta_a), Ok(meta_b)) = (std::fs::metadata(path), std::fs::metadata(&global_path))
-        {
-            if meta_a.dev() == meta_b.dev() && meta_a.ino() == meta_b.ino() {
-                return true;
+        if let Ok(meta_a) = std::fs::metadata(path) {
+            for target in [&global_path, &registry_path] {
+                if let Ok(meta_b) = std::fs::metadata(target) {
+                    if meta_a.dev() == meta_b.dev() && meta_a.ino() == meta_b.ino() {
+                        return true;
+                    }
+                }
             }
         }
     }
     #[cfg(windows)]
     {
-        if let (Ok(id_a), Ok(id_b)) = (
-            crate::utils::fs::windows_file_identity(path),
-            crate::utils::fs::windows_file_identity(&global_path),
-        ) {
-            if id_a.volume_serial == id_b.volume_serial && id_a.file_index == id_b.file_index {
-                return true;
+        if let Ok(id_a) = crate::utils::fs::windows_file_identity(path) {
+            for target in [&global_path, &registry_path] {
+                if let Ok(id_b) = crate::utils::fs::windows_file_identity(target) {
+                    if id_a.volume_serial == id_b.volume_serial && id_a.file_index == id_b.file_index {
+                        return true;
+                    }
+                }
             }
         }
     }

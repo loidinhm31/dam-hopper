@@ -54,6 +54,23 @@ pub(crate) async fn run_git(args: &[&str], cwd: &Path) -> Result<String, AppErro
     }
 }
 
+pub(crate) async fn run_git_bytes(args: &[&str], cwd: &Path) -> Result<Vec<u8>, AppError> {
+    let output = Command::new("git")
+        .args(["-c", "safe.directory=*"])
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .await
+        .map_err(|e| AppError::Git(format!("Failed to spawn git {args:?}: {e}")))?;
+
+    if !output.status.success() {
+        return Err(AppError::Git(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(output.stdout)
+}
+
 pub(crate) async fn repository_root(cwd: &Path) -> Result<PathBuf, AppError> {
     let root = match run_git(&["rev-parse", "--show-toplevel"], cwd).await {
         Ok(output) => PathBuf::from(output.trim()),
@@ -197,6 +214,20 @@ pub async fn pull_ff_only(
     let start = Instant::now();
     emit_started(progress, project_name, "pull", "Pulling...");
 
+    if let Err(e) = check_diff_touches_protected_config(project_path, &["HEAD", "@{u}"]).await {
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let msg = format!("Pull rejected: {e}");
+        emit_failed(progress, project_name, "pull", &msg);
+        return GitOperationResult {
+            project_name: project_name.to_string(),
+            operation: GitOperation::Pull,
+            success: false,
+            summary: None,
+            error: Some(msg),
+            duration_ms,
+        };
+    }
+
     match run_git(&["pull", "--ff-only"], project_path).await {
         Ok(stdout) => {
             let duration_ms = start.elapsed().as_millis() as u64;
@@ -323,6 +354,102 @@ pub async fn remove_worktree(
 
 pub async fn prune_worktrees(project_path: &Path) -> Result<(), AppError> {
     run_git(&["worktree", "prune"], project_path).await?;
+    Ok(())
+}
+
+/// Check if any uncommitted (dirty, staged, untracked) file in the working tree touches the protected global config.
+pub async fn check_worktree_dirty_protected_config(project_path: &Path) -> Result<(), AppError> {
+    let output = run_git(&["status", "--porcelain=v1", "-z"], project_path).await?;
+    let bytes = output.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 3 >= bytes.len() {
+            break;
+        }
+        let xy0 = bytes[i];
+        let xy1 = bytes[i + 1];
+        i += 3; // skip XY and space
+        let start = i;
+        while i < bytes.len() && bytes[i] != 0 {
+            i += 1;
+        }
+        let rel_path = String::from_utf8_lossy(&bytes[start..i]);
+        if i < bytes.len() && bytes[i] == 0 {
+            i += 1;
+        }
+        let abs = project_path.join(rel_path.as_ref());
+        if crate::fs::secure_path::is_protected_global_config_path(&abs) {
+            return Err(AppError::Fs(crate::fs::FsError::MutationRefused(
+                "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+            )));
+        }
+        // If rename or copy, next field is target path
+        if xy0 == b'R' || xy0 == b'C' || xy1 == b'R' || xy1 == b'C' {
+            let start2 = i;
+            while i < bytes.len() && bytes[i] != 0 {
+                i += 1;
+            }
+            let rel_path2 = String::from_utf8_lossy(&bytes[start2..i]);
+            if i < bytes.len() && bytes[i] == 0 {
+                i += 1;
+            }
+            let abs2 = project_path.join(rel_path2.as_ref());
+            if crate::fs::secure_path::is_protected_global_config_path(&abs2) {
+                return Err(AppError::Fs(crate::fs::FsError::MutationRefused(
+                    "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+                )));
+            }
+        }
+    }
+    // In addition to status --porcelain, directly compare on-disk bytes of any tracked protected files
+    // against their HEAD blobs to ensure assume-unchanged / skip-worktree flags cannot hide modifications:
+    if let Ok(output) = run_git(&["ls-files", "-z"], project_path).await {
+        for p in output.split('\0') {
+            if p.is_empty() {
+                continue;
+            }
+            let abs = project_path.join(p);
+            if crate::fs::secure_path::is_protected_global_config_path(&abs) {
+                if let Ok(disk_bytes) = tokio::fs::read(&abs).await {
+                    if let Ok(head_bytes) = run_git_bytes(&["cat-file", "-p", &format!("HEAD:{p}")], project_path).await {
+                        if disk_bytes != head_bytes {
+                            return Err(AppError::Fs(crate::fs::FsError::MutationRefused(
+                                "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Check if a diff command touches any protected global config path. Fails closed on command error.
+pub async fn check_diff_touches_protected_config(project_path: &Path, diff_args: &[&str]) -> Result<(), AppError> {
+    let mut args = vec!["diff", "--no-renames", "--name-only", "-z"];
+    args.extend_from_slice(diff_args);
+    let output = match run_git(&args, project_path).await {
+        Ok(out) => out,
+        Err(_) => {
+            // If diff failed (e.g. invalid ref or error), fail closed
+            return Err(AppError::Fs(crate::fs::FsError::MutationRefused(
+                "Protected config check failed during diff inspection; operation refused for safety".into(),
+            )));
+        }
+    };
+
+    for path_str in output.split('\0') {
+        if path_str.is_empty() {
+            continue;
+        }
+        let abs = project_path.join(path_str);
+        if crate::fs::secure_path::is_protected_global_config_path(&abs) {
+            return Err(AppError::Fs(crate::fs::FsError::MutationRefused(
+                "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+            )));
+        }
+    }
     Ok(())
 }
 

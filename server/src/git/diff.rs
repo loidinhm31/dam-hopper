@@ -735,11 +735,34 @@ pub fn unstage_files(project_path: &Path, paths: &[&str]) -> Result<(), AppError
 
 /// Discard all workdir changes to a file — restore to HEAD.
 pub fn discard_file(project_path: &Path, rel_path: &str) -> Result<(), AppError> {
-    safe_join(project_path, rel_path)?;
     let repo = open_repo(project_path)?;
     let _guard = GLOBAL_MUTATION_COORDINATOR
         .try_acquire_for_repo(&repo, project_path)
         .map_err(|e| AppError::Unavailable(e.to_string()))?;
+
+    let abs_path = safe_join(project_path, rel_path)?;
+    if crate::fs::secure_path::is_protected_global_config_path(&abs_path) {
+        return Err(AppError::Fs(crate::fs::FsError::MutationRefused(
+            "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+        )));
+    }
+    if rel_path.contains('*') || rel_path.contains('?') || rel_path.contains('[') {
+        let output = std::process::Command::new("git")
+            .args(["-c", "safe.directory=*"])
+            .args(["diff", "--no-renames", "--name-only", "-z", "HEAD", "--", rel_path])
+            .current_dir(project_path)
+            .output()
+            .map_err(|e| AppError::Git(format!("Failed to spawn git diff: {e}")))?;
+        if output.status.success() {
+            for p in String::from_utf8_lossy(&output.stdout).split('\0') {
+                if !p.is_empty() && crate::fs::secure_path::is_protected_global_config_path(&project_path.join(p)) {
+                    return Err(AppError::Fs(crate::fs::FsError::MutationRefused(
+                        "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+                    )));
+                }
+            }
+        }
+    }
     let mut cb = git2::build::CheckoutBuilder::new();
     cb.path(rel_path).force();
     repo.checkout_head(Some(&mut cb))
@@ -765,11 +788,16 @@ pub fn discard_hunk(
     rel_path: &str,
     hunk_index: usize,
 ) -> Result<(), AppError> {
-    let abs_path = safe_join(project_path, rel_path)?;
     let repo = open_repo(project_path)?;
     let _guard = GLOBAL_MUTATION_COORDINATOR
         .try_acquire_for_repo(&repo, project_path)
         .map_err(|e| AppError::Unavailable(e.to_string()))?;
+    let abs_path = safe_join(project_path, rel_path)?;
+    if crate::fs::secure_path::is_protected_global_config_path(&abs_path) {
+        return Err(AppError::Fs(crate::fs::FsError::MutationRefused(
+            "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+        )));
+    }
     // HEAD blob
     let original_bytes = read_head_blob(&repo, rel_path)?
         .ok_or_else(|| AppError::Git(format!("no HEAD blob for {rel_path}")))?;

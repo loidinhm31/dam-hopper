@@ -9,6 +9,8 @@ TARGET_DIR=""
 WEB_DIST=""
 OUTPUT_DIR="${REPO_ROOT}/artifacts/package-twice"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1700000000}"
+SEMANTIC_ENGINE_DIR="${SEMANTIC_ENGINE_DIR:-}"
+ALLOW_OMITTED_ENGINE=0
 
 usage() {
     cat <<'EOF'
@@ -20,6 +22,8 @@ Options:
   --web-dist <dir>        Built apps/web/dist directory
   --output-dir <dir>      Destination for the verified four release assets
   --source-date-epoch <n> Deterministic archive timestamp
+  --semantic-engine-dir <dir> Staged directory containing lib/semantic-engine payload
+  --allow-omitted-engine  Permit packaging without semantic engine (diagnostic only)
 EOF
     exit 2
 }
@@ -32,6 +36,8 @@ while [[ $# -gt 0 ]]; do
         --web-dist) WEB_DIST="${2:?missing value for --web-dist}"; shift 2 ;;
         --output-dir) OUTPUT_DIR="${2:?missing value for --output-dir}"; shift 2 ;;
         --source-date-epoch) SOURCE_DATE_EPOCH="${2:?missing value for --source-date-epoch}"; shift 2 ;;
+        --semantic-engine-dir) SEMANTIC_ENGINE_DIR="${2:?missing value for --semantic-engine-dir}"; shift 2 ;;
+        --allow-omitted-engine) ALLOW_OMITTED_ENGINE=1; shift ;;
         -h|--help) usage ;;
         *) printf 'Unknown argument: %s\n' "$1" >&2; usage ;;
     esac
@@ -39,6 +45,10 @@ done
 
 if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     printf 'Error: --version must be a stable vMAJOR.MINOR.PATCH tag\n' >&2
+    exit 1
+fi
+if [[ -z "$SEMANTIC_ENGINE_DIR" && "$ALLOW_OMITTED_ENGINE" -eq 0 ]]; then
+    printf 'Error: --semantic-engine-dir <dir> is required for Linux package-twice\n' >&2
     exit 1
 fi
 
@@ -68,12 +78,20 @@ trap 'rm -rf -- "$TEST_ROOT"' EXIT
 
 build_archive() {
     local run_dir="$1"
+    local extra_args=()
+    if [[ -n "$SEMANTIC_ENGINE_DIR" ]]; then
+        extra_args+=(--semantic-engine-dir "$SEMANTIC_ENGINE_DIR")
+    fi
+    if [[ "$ALLOW_OMITTED_ENGINE" -eq 1 ]]; then
+        extra_args+=(--allow-omitted-engine)
+    fi
     bash "$REPO_ROOT/deploy/release/build-release-archive.sh" \
         --version "$VERSION" \
         --target-dir "$TARGET_DIR" \
         --web-dist "$WEB_DIST" \
         --output-dir "$run_dir" \
-        --source-date-epoch "$SOURCE_DATE_EPOCH"
+        --source-date-epoch "$SOURCE_DATE_EPOCH" \
+        "${extra_args[@]}"
 }
 
 build_archive "$TEST_ROOT/run1"
@@ -104,10 +122,15 @@ node "$REPO_ROOT/deploy/release/generate-release-manifest.mjs" \
     --output-dir "$FINAL_DIR"
 cp -- "$REPO_ROOT/deploy/release/dam-hopper-install.sh" "$FINAL_DIR/"
 chmod 0755 "$FINAL_DIR/dam-hopper-install.sh"
-node "$REPO_ROOT/deploy/release/check-release-assets.mjs" \
-    --profile linux \
-    --tag "$VERSION" \
+check_args=(
+    --profile linux
+    --tag "$VERSION"
     --dir "$FINAL_DIR"
+)
+if [[ -n "$SEMANTIC_ENGINE_DIR" ]]; then
+    check_args+=(--require-semantic-engine)
+fi
+node "$REPO_ROOT/deploy/release/check-release-assets.mjs" "${check_args[@]}"
 
 mkdir -p "$OUTPUT_DIR"
 cp -- "$FINAL_DIR"/* "$OUTPUT_DIR/"

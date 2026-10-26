@@ -18,13 +18,60 @@ import {
   lstatSync,
   openSync,
   readSync,
+  readFileSync,
   readdirSync,
   realpathSync,
 } from "node:fs";
 import { resolve, basename, dirname, isAbsolute, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { inflateRawSync } from "node:zlib";
+
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(SCRIPT_DIR, "../..");
+
+let cachedProvenance = null;
+function getProvenance() {
+  if (cachedProvenance) return cachedProvenance;
+  const provPath = process.env.DAM_HOPPER_PROVENANCE_PATH
+    ? resolve(process.env.DAM_HOPPER_PROVENANCE_PATH)
+    : resolve(REPO_ROOT, "deploy/release/semantic-engine/provenance.json");
+  if (existsSync(provPath)) {
+    try {
+      cachedProvenance = JSON.parse(readFileSync(provPath, "utf8"));
+    } catch {}
+  }
+  return cachedProvenance;
+}
+
+function streamMemberSha256(archivePath, rawMemberName) {
+  return new Promise((resolveMember, rejectMember) => {
+    const hash = createHash("sha256");
+    const child = spawn("tar", ["-zxf", archivePath, "-O", rawMemberName], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.stdout.on("data", (chunk) => {
+      hash.update(chunk);
+    });
+    child.on("error", rejectMember);
+    child.on("close", (code) => {
+      if (code !== 0) {
+        rejectMember(
+          new Error(
+            `Failed to extract member '${rawMemberName}' from '${archivePath}' (exit code ${code}): ${stderr.trim()}`,
+          ),
+        );
+      } else {
+        resolveMember(hash.digest("hex"));
+      }
+    });
+  });
+}
 const TAG_REGEX = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const VERSION_REGEX = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const COMMIT_SHA_REGEX = /^[0-9a-f]{40}$/;
@@ -65,6 +112,18 @@ const REQUIRED_INVENTORY_PATHS = Object.freeze([
   "systemd/dam-hopper-recovery.service",
   "sysusers.d/dam-hopper-web.conf",
   "tmpfiles.d/dam-hopper-runtime.conf",
+]);
+
+const REQUIRED_SEMANTIC_ENGINE_PATHS = Object.freeze([
+  "lib/semantic-engine/node",
+  "lib/semantic-engine/tsls/package.json",
+  "lib/semantic-engine/tsls/pnpm-lock.yaml",
+  "lib/semantic-engine/tsls/LICENSES.txt",
+  "lib/semantic-engine/tsls/provenance.json",
+  "lib/semantic-engine/tsls/node_modules/typescript-language-server/lib/cli.mjs",
+  "lib/semantic-engine/tsls/node_modules/typescript/lib/tsserver.js",
+  "lib/semantic-engine/tsls/node_modules/typescript/lib/_tsserver.js",
+  "lib/semantic-engine/tsls/node_modules/typescript/lib/typescript.js",
 ]);
 
 const DISALLOWED_INVENTORY_NAMES = new Set([
@@ -195,7 +254,7 @@ function validateInventoryPath(value, label) {
   return value;
 }
 
-function validateInventory(inventory, label) {
+function validateInventory(inventory, label, requireSemanticEngine = false) {
   if (
     !Array.isArray(inventory) ||
     inventory.length === 0 ||
@@ -303,8 +362,8 @@ function validateInventory(inventory, label) {
           if (path !== "lib" && path !== "lib/semantic-engine" && !path.startsWith("lib/semantic-engine/")) {
             failMigration(`${entryLabel} is an unapproved lib path '${path}'`);
           }
-          if (!entry.roles.includes("server")) {
-            failMigration(`${entryLabel} must belong to the server role`);
+          if (entry.roles.length !== 1 || entry.roles[0] !== "server") {
+            failMigration(`${entryLabel} must belong to the server role only: ['server']`);
           }
           if ((entry.mode & 0o022) !== 0) {
             failMigration(`${entryLabel} has unsafe group/world-writable mode`);
@@ -312,6 +371,18 @@ function validateInventory(inventory, label) {
           if (path === "lib/semantic-engine/node") {
             if (!isFile || (entry.mode & 0o111) === 0) {
               failMigration(`${entryLabel} must be an executable regular file`);
+            }
+          }
+          if (requireSemanticEngine && path.startsWith("lib/semantic-engine/") && isFile) {
+            const relToEngine = path.slice("lib/semantic-engine/".length);
+            const prov = getProvenance();
+            if (prov && prov.transitivePayloadDigests && prov.transitivePayloadDigests[relToEngine]) {
+              const expectedSha = prov.transitivePayloadDigests[relToEngine];
+              if (entry.sha256.toLowerCase() !== expectedSha.toLowerCase()) {
+                failMigration(
+                  `${entryLabel} digest mismatch: expected ${expectedSha}, got ${entry.sha256}`,
+                );
+              }
             }
           }
         }
@@ -325,9 +396,27 @@ function validateInventory(inventory, label) {
     ];
     failMigration(`${label} is missing required paths: ${missing.join(", ")}`);
   }
+  const foundEnginePaths = new Set(
+    inventory
+      .map((e) => e.path)
+      .filter((p) => p.startsWith("lib/semantic-engine/")),
+  );
+  if (requireSemanticEngine) {
+    if (requireSemanticEngine && foundEnginePaths.size === 0) {
+      failMigration(`${label} is missing required semantic engine payload`);
+    }
+    const missingEngine = REQUIRED_SEMANTIC_ENGINE_PATHS.filter(
+      (p) => !foundEnginePaths.has(p),
+    );
+    if (missingEngine.length > 0) {
+      failMigration(
+        `${label} is missing required semantic engine paths: ${missingEngine.join(", ")}`,
+      );
+    }
+  }
 }
 
-function validateManifestShape(manifest, label) {
+function validateManifestShape(manifest, label, requireSemanticEngine = false) {
   assertExactKeys(
     manifest,
     [
@@ -395,7 +484,7 @@ function validateManifestShape(manifest, label) {
     requireVersion(value.version, `${label}.components.${component}.version`);
   }
 
-  validateInventory(manifest.inventory, `${label}.inventory`);
+  validateInventory(manifest.inventory, `${label}.inventory`, requireSemanticEngine);
 
   const expectedServices = ["api", "web"];
   if (manifest.services.runner) {
@@ -998,7 +1087,7 @@ function parseArgs() {
   let allowUnverifiedPublish =
     process.env.ALLOW_UNVERIFIED_PUBLISH === "true" ||
     process.env.ALLOW_UNVERIFIED_PUBLISH === "1";
-
+  let requireSemanticEngine = process.env.REQUIRE_SEMANTIC_ENGINE === "1";
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--tag" && i + 1 < args.length) {
@@ -1020,6 +1109,8 @@ function parseArgs() {
       requireMigrationGate = true;
     } else if (arg === "--allow-unverified-publish") {
       allowUnverifiedPublish = true;
+    } else if (arg === "--require-semantic-engine") {
+      requireSemanticEngine = true;
     } else if (!arg.startsWith("--") && !dir) {
       dir = arg;
     } else {
@@ -1065,6 +1156,7 @@ function parseArgs() {
       : null,
     requireMigrationGate,
     allowUnverifiedPublish,
+    requireSemanticEngine,
   };
 }
 
@@ -1099,7 +1191,7 @@ function getExpectedAssetNames(tag, profile = "linux") {
   throw new Error(`Unknown profile: ${profile}`);
 }
 
-function validateLinuxAssetSet(dir, tag, digests, expectedNames) {
+async function validateLinuxAssetSet(dir, tag, digests, expectedNames, requireSemanticEngine = false) {
   const manifestBytes = readBoundedFile(
     resolve(dir, "release-manifest.json"),
     "release manifest",
@@ -1111,7 +1203,7 @@ function validateLinuxAssetSet(dir, tag, digests, expectedNames) {
     "release manifest",
     failAsset,
   );
-  validateManifestShape(manifest, "release manifest");
+  validateManifestShape(manifest, "release manifest", requireSemanticEngine);
   if (manifest.release.tag !== tag) {
     throw new Error(
       `Manifest release.tag '${manifest.release.tag}' does not match expected '${tag}'`,
@@ -1165,6 +1257,99 @@ function validateLinuxAssetSet(dir, tag, digests, expectedNames) {
   if (sbom.spdxVersion !== "SPDX-2.3") {
     throw new Error(`SBOM spdxVersion '${sbom.spdxVersion}' is not SPDX-2.3`);
   }
+  if (requireSemanticEngine) {
+    const archivePath = resolve(dir, archiveName);
+    const tarOutput = execFileSync("tar", ["-ztvf", archivePath], {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    const memberLines = tarOutput.trim().split("\n");
+    const foundMembers = new Map();
+    const seenPaths = new Set();
+    for (const line of memberLines) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length >= 6) {
+        const modeStr = parts[0];
+        const rawMemberName = parts[parts.length - 1];
+        const memberPath = rawMemberName.replace(/^\.\//, "").replace(/\/$/, "");
+        if (seenPaths.has(memberPath)) {
+          throw new Error(
+            `Release archive '${archiveName}' contains duplicate member: '${memberPath}'`,
+          );
+        }
+        seenPaths.add(memberPath);
+        foundMembers.set(memberPath, { modeStr, rawMemberName });
+      }
+    }
+    const prov = getProvenance();
+    if (requireSemanticEngine && (!prov || !prov.transitivePayloadDigests)) {
+      throw new Error("Semantic engine provenance is missing or unparseable; validation refused");
+    }
+    const manifestInventoryMap = new Map();
+    for (const entry of manifest.inventory) {
+      manifestInventoryMap.set(entry.path, entry);
+    }
+
+    for (const req of REQUIRED_SEMANTIC_ENGINE_PATHS) {
+      if (!foundMembers.has(req)) {
+        throw new Error(
+          `Release archive '${archiveName}' is missing essential semantic engine payload: '${req}'`,
+        );
+      }
+      const { modeStr, rawMemberName } = foundMembers.get(req);
+      if (!modeStr.startsWith("-")) {
+        throw new Error(
+          `Release archive member '${req}' must be a regular file: ${modeStr}`,
+        );
+      }
+      if (modeStr.includes("w") && (modeStr[5] === "w" || modeStr[8] === "w")) {
+        throw new Error(
+          `Release archive member '${req}' has unsafe group/world-writable permissions: ${modeStr}`,
+        );
+      }
+      if (req === "lib/semantic-engine/node") {
+        if (!modeStr.includes("x")) {
+          throw new Error(
+            `Release archive member '${req}' must be an executable regular file: ${modeStr}`,
+          );
+        }
+      }
+
+      const actualSha = await streamMemberSha256(archivePath, rawMemberName);
+      if (req === "lib/semantic-engine/tsls/provenance.json") {
+        const provPath = process.env.DAM_HOPPER_PROVENANCE_PATH
+          ? resolve(process.env.DAM_HOPPER_PROVENANCE_PATH)
+          : resolve(REPO_ROOT, "deploy/release/semantic-engine/provenance.json");
+        const trustedBytes = readFileSync(provPath);
+        const trustedSha = createHash("sha256").update(trustedBytes).digest("hex");
+        if (actualSha.toLowerCase() !== trustedSha.toLowerCase()) {
+          throw new Error(
+            `Release archive member '${req}' SHA-256 (${actualSha}) does not match trusted provenance (${trustedSha})`,
+          );
+        }
+      }
+
+      const invEntry = manifestInventoryMap.get(req);
+      if (!invEntry) {
+        throw new Error(`Manifest inventory missing entry for essential path '${req}'`);
+      }
+      if (invEntry.sha256.toLowerCase() !== actualSha.toLowerCase()) {
+        throw new Error(
+          `Release archive member '${req}' SHA-256 (${actualSha}) does not match manifest inventory (${invEntry.sha256})`,
+        );
+      }
+
+      const relToEngine = req.slice("lib/semantic-engine/".length);
+      if (prov && prov.transitivePayloadDigests && prov.transitivePayloadDigests[relToEngine]) {
+        const expectedSha = prov.transitivePayloadDigests[relToEngine];
+        if (actualSha.toLowerCase() !== expectedSha.toLowerCase()) {
+          throw new Error(
+            `Release archive member '${req}' SHA-256 (${actualSha}) does not match pinned provenance (${expectedSha})`,
+          );
+        }
+      }
+    }
+  }
 }
 
 function validateWindowsAssetSet(dir, tag, digests, expectedNames) {
@@ -1176,7 +1361,7 @@ function validateWindowsAssetSet(dir, tag, digests, expectedNames) {
   inspectWindowsReleaseZip(zipPath, tag);
 }
 
-function checkLocalDirectory(dir, tag, expectedNames, profile = "linux") {
+async function checkLocalDirectory(dir, tag, expectedNames, profile = "linux", requireSemanticEngine = false) {
   if (!existsSync(dir)) {
     throw new Error(`Asset directory does not exist: ${dir}`);
   }
@@ -1240,7 +1425,7 @@ function checkLocalDirectory(dir, tag, expectedNames, profile = "linux") {
   }
 
   if (profile === "linux" || profile === "all") {
-    validateLinuxAssetSet(dir, tag, digests, expectedNames);
+    await validateLinuxAssetSet(dir, tag, digests, expectedNames, requireSemanticEngine);
   }
   if (profile === "windows" || profile === "all") {
     validateWindowsAssetSet(dir, tag, digests, expectedNames);
@@ -1774,7 +1959,7 @@ function isStablePublishJob(tag, allowUnverifiedPublish = false) {
   );
 }
 
-function main() {
+async function main() {
   const {
     tag,
     profile,
@@ -1786,6 +1971,7 @@ function main() {
     migrationEvidencePath,
     requireMigrationGate,
     allowUnverifiedPublish,
+    requireSemanticEngine,
   } = parseArgs();
   const expectedNames = getExpectedAssetNames(tag, profile);
 
@@ -1811,7 +1997,7 @@ function main() {
 
   let localDigests = null;
   if (dir) {
-    localDigests = checkLocalDirectory(dir, tag, expectedNames, profile);
+    localDigests = await checkLocalDirectory(dir, tag, expectedNames, profile, requireSemanticEngine);
   }
 
   if (profile === "linux" || profile === "all") {
@@ -1842,4 +2028,4 @@ function main() {
   }
 }
 
-main();
+await main();

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
+import { profileQueryKey } from "./query-client.js";
 import {
   gitCommitMessageQueryKey,
   gitHistoryQueryPrefixes,
@@ -8,6 +9,7 @@ import {
   normalizeGitMessageQuery,
   resolveGitPushTarget,
   usageSessionPollInterval,
+  resolveTargetOwner,
 } from "./queries.js";
 import {
   __setConnectionSnapshotForTests,
@@ -334,5 +336,36 @@ describe("consumer-visible cache isolation and search query variants", () => {
 
     expect(qc.getQueryCache().find({ queryKey: keyMain })?.isStale()).toBe(true);
     expect(qc.getQueryCache().find({ queryKey: keyFeature })?.isStale()).toBe(true);
+  });
+});
+
+describe("semantic settings query keys and owner resolution", () => {
+  it("resolves owner-scoped and global semantic query keys with generation fencing", () => {
+    const globalKey = ["semantic", "settings"] as const;
+    const ownerA = { profileId: "prof-a", generation: 1 };
+    const ownerB = { profileId: "prof-a", generation: 2 };
+    const ownerC = { profileId: "prof-b", generation: 1 };
+
+    const keyA = profileQueryKey(ownerA, "semantic", "settings");
+    const keyB = profileQueryKey(ownerB, "semantic", "settings");
+    const keyC = profileQueryKey(ownerC, "semantic", "settings");
+
+    expect(keyA).toEqual(["profile", "prof-a", 1, "semantic", "settings"]);
+    expect(keyB).toEqual(["profile", "prof-a", 2, "semantic", "settings"]);
+    expect(keyC).toEqual(["profile", "prof-b", 1, "semantic", "settings"]);
+
+    expect(keyA).not.toEqual(keyB);
+    expect(keyA).not.toEqual(keyC);
+    expect(keyA).not.toEqual(globalKey);
+  });
+
+  it("resolves target owner from ConnectionRef or ProfileId input", () => {
+    const ref = { profileId: "prof-1", generation: 3 };
+    expect(resolveTargetOwner(ref)).toEqual(ref);
+    expect(resolveTargetOwner({ profileId: "prof-2", generation: 1 })).toEqual({
+      profileId: "prof-2",
+      generation: 1,
+    });
+    expect(resolveTargetOwner(undefined)).toBeUndefined();
   });
 });

@@ -6,7 +6,7 @@
 - Original phases 03/06/10/11 overlap publisher, protected configuration and qualification; original plan and historical release evidence remain untouched.
 
 ## Overview
-Date: 2026-10-25. Priority: P1. Status: pending, 0%. Owners: publisher, Git-boundary and settings implementers have independent writable slices; final integration coordinator serializes docs/evidence after all thirteen repairs.
+Status: DONE (accepted with deferred issues 2026-10-26 14:35:00 +07:00). Owners: publisher, Git-boundary and settings implementers have independent writable slices; final integration coordinator serializes docs/evidence after all thirteen repairs.
 
 ## Key Insights
 - F2: Archive builder engine inclusion is optional; normal publisher/package-twice does not opt in. Existing stage helper already supports verified `--retrieve-pinned`; use that path rather than developer-local inputs.
@@ -202,10 +202,10 @@ Paths rooted at `/home/loidinh/WS/worktrees/dam-hopper-lsp-server-integration/`;
   }
 ]
 ```
-- [ ] <!-- evcrate-task:ship-verified-release-engine --> Ship verified publisher engine.
-- [ ] <!-- evcrate-task:guard-git-protected-config-effects --> Guard Git config effects.
-- [ ] <!-- evcrate-task:refresh-failed-off-status --> Refresh failed OFF status.
-- [ ] <!-- evcrate-task:integrate-remediation-evidence --> Integrate evidence and documentation.
+- [x] <!-- evcrate-task:ship-verified-release-engine --> Ship verified publisher engine.
+- [x] <!-- evcrate-task:guard-git-protected-config-effects --> Guard Git config effects.
+- [x] <!-- evcrate-task:refresh-failed-off-status --> Refresh failed OFF status.
+- [x] <!-- evcrate-task:integrate-remediation-evidence --> Integrate evidence and documentation (accepted with deferred issues: compiled release qualification, Playwright container execution, and human visual sign-off deferred to staging/CI gate).
 
 ## Success Criteria
 Planned only, from repository root; future tester supplies RELEASE_TAG and absolute disposable BIN_DIR, WEB_DIST, ENGINE_DIR, OUT_DIR, with real compiled inputs. No installs/probes run by this author.
@@ -224,7 +224,7 @@ Git CLI effects can be broader than changed tracked paths; first deliverable sin
 Keep semantic default-OFF/fresh-admin settings control; ordinary users retain unrelated Git access. Staging network access is build-time only under existing pinned provenance; do not execute workspace plugins/install scripts. Only the disposable config under test is deliberately inside the destructive target; harness credentials, auth DB, engine and unrelated configuration stay outside it. Clean up all fixture material. Final reports must not contain tokens, private code buffers or credentials.
 
 ## Next steps
-Parent owns final review synthesis, risk-gated plan review and optional prompt-mode interview/user approval. Only an explicitly approved implementation run may execute these tasks; no active-plan setter or task hydration in this review assignment.
+Phase 04 implementation and remediation accepted by user approval following Code Review Cycle 3 (score 8/10, 0 critical). Technical qualification gates (full container Playwright E2E execution, compiled release loopback qualification, human visual review in review.md) deferred to staging/CI qualification. Release hold maintained on branch `feat/lsp-server-integration-reassess`.
 
 ## Unresolved questions
-No unresolved product decision required for this proposal. Actual compiled-release qualification, complete Git effect enforcement evidence, full-app failed-OFF evidence, independent remediation review and implementation approval remain pending gates, not authoring blockers.
+None requiring a user choice. Phase 04 closed and accepted with deferred qualification gates (compiled release qualification, Playwright container execution, and human visual sign-off) under the active release hold.

@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import {
@@ -2366,23 +2366,47 @@ export function useSemanticSettings(options?: OwnerInput) {
   });
 }
 
+export interface SemanticSettingsMutationContext {
+  mutationOwner: ConnectionRef | undefined;
+  queryKey: readonly unknown[];
+}
+
+export type UpdateSemanticSettingsMutation = UseMutationResult<
+  SemanticSettingsResponse,
+  Error,
+  PatchSemanticSettingsRequest,
+  SemanticSettingsMutationContext
+>;
 export function useUpdateSemanticSettings(options?: OwnerInput) {
   const qc = useQueryClient();
   const owner = resolveTargetOwner(options);
   return useMutation<
     SemanticSettingsResponse,
     Error,
-    PatchSemanticSettingsRequest
+    PatchSemanticSettingsRequest,
+    SemanticSettingsMutationContext
   >({
     mutationFn: (patch: PatchSemanticSettingsRequest) =>
       getBoundApiClient(owner).semantic.updateSettings(patch),
     retry: false,
-    onSuccess: () => {
-      void qc.invalidateQueries({
-        queryKey: owner
+    onMutate: () => {
+      const mutationOwner = resolveTargetOwner(options);
+      const queryKey = mutationOwner
+        ? profileQueryKey(mutationOwner, "semantic", "settings")
+        : (["semantic", "settings"] as const);
+      return { mutationOwner, queryKey };
+    },
+    onSettled: (_data, _error, _variables, context) => {
+      const targetKey =
+        context?.queryKey ??
+        (owner
           ? profileQueryKey(owner, "semantic", "settings")
-          : (["semantic", "settings"] as const),
-      });
+          : (["semantic", "settings"] as const));
+      void qc.invalidateQueries({
+        queryKey: targetKey,
+        exact: true,
+        refetchType: "active",
+      }).catch(() => {});
     },
   });
 }

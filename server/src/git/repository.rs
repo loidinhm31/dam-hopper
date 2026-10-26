@@ -922,6 +922,50 @@ pub async fn pull(
             ..fetch_result
         };
     }
+    let repo_lock = match open_repo(project_path) {
+        Ok(r) => r,
+        Err(e) => {
+            let msg = format!("Failed to open repository: {e}");
+            emit_failed(progress, project_name, "pull", &msg);
+            return GitOperationResult {
+                project_name: project_name.to_string(),
+                operation: GitOperation::Pull,
+                success: false,
+                summary: None,
+                error: Some(msg),
+                duration_ms: 0,
+            };
+        }
+    };
+    let _guard = match crate::git::mutation_coordination::GLOBAL_MUTATION_COORDINATOR
+        .try_acquire_for_repo(&repo_lock, project_path)
+    {
+        Ok(g) => g,
+        Err(e) => {
+            let msg = format!("Repository lock unavailable: {e}");
+            emit_failed(progress, project_name, "pull", &msg);
+            return GitOperationResult {
+                project_name: project_name.to_string(),
+                operation: GitOperation::Pull,
+                success: false,
+                summary: None,
+                error: Some(msg),
+                duration_ms: 0,
+            };
+        }
+    };
+    if let Err(e) = cli_fallback::check_worktree_dirty_protected_config(project_path).await {
+        let msg = format!("Pull rejected: {e}");
+        emit_failed(progress, project_name, "pull", &msg);
+        return GitOperationResult {
+            project_name: project_name.to_string(),
+            operation: GitOperation::Pull,
+            success: false,
+            summary: None,
+            error: Some(msg),
+            duration_ms: 0,
+        };
+    }
 
     let start = Instant::now();
     emit_started(progress, project_name, "pull", "Merging...");
@@ -945,6 +989,18 @@ pub async fn pull(
                 success: true,
                 summary: Some(summary),
                 error: None,
+                duration_ms,
+            }
+        }
+        Ok(Err(AppError::Fs(crate::fs::FsError::MutationRefused(msg)))) => {
+            let err_msg = format!("Pull rejected: {msg}");
+            emit_failed(progress, project_name, "pull", &err_msg);
+            GitOperationResult {
+                project_name: project_name.to_string(),
+                operation: GitOperation::Pull,
+                success: false,
+                summary: None,
+                error: Some(err_msg),
                 duration_ms,
             }
         }
@@ -1056,6 +1112,26 @@ fn try_fast_forward_merge(project_path: &Path, _project_name: &str) -> Result<St
 
     if !analysis.is_fast_forward() {
         return Err(AppError::Git("non-fast-forward".to_string()));
+    }
+    let local_tree = local_commit.tree().map_err(|e| AppError::Git(e.message().to_string()))?;
+    let upstream_tree = upstream_commit.tree().map_err(|e| AppError::Git(e.message().to_string()))?;
+    let diff = repo.diff_tree_to_tree(Some(&local_tree), Some(&upstream_tree), None)
+        .map_err(|e| AppError::Git(e.message().to_string()))?;
+    for delta in diff.deltas() {
+        if let Some(old_p) = delta.old_file().path() {
+            if crate::fs::secure_path::is_protected_global_config_path(&project_path.join(old_p)) {
+                return Err(AppError::Fs(crate::fs::FsError::MutationRefused(
+                    "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+                )));
+            }
+        }
+        if let Some(new_p) = delta.new_file().path() {
+            if crate::fs::secure_path::is_protected_global_config_path(&project_path.join(new_p)) {
+                return Err(AppError::Fs(crate::fs::FsError::MutationRefused(
+                    "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+                )));
+            }
+        }
     }
     let mut branch_ref = repo
         .find_reference(&format!("refs/heads/{branch_name}"))
@@ -1394,6 +1470,19 @@ pub async fn checkout_branch(
             ..Default::default()
         });
     }
+    if strategy == CheckoutStrategy::Force || strategy == CheckoutStrategy::Stash {
+        cli_fallback::check_worktree_dirty_protected_config(project_path).await?;
+    }
+    let target_ref = if create {
+        start_point.unwrap_or("HEAD")
+    } else if target_branch != branch {
+        branch
+    } else {
+        target_branch.as_str()
+    };
+    if target_ref != "HEAD" {
+        cli_fallback::check_diff_touches_protected_config(project_path, &["HEAD", target_ref]).await?;
+    }
 
     let mut stashed = false;
     if has_dirty_worktree && strategy == CheckoutStrategy::Stash {
@@ -1482,6 +1571,7 @@ pub async fn cherry_pick(project_path: &Path, hash: &str) -> Result<GitActionRes
         .try_acquire_for_repo(&repo, project_path)
         .map_err(|e| AppError::Unavailable(e.to_string()))?;
 
+    cli_fallback::check_diff_touches_protected_config(project_path, &[&format!("{hash}^!")]).await?;
     match cli_fallback::run_git(&["cherry-pick", hash], project_path).await {
         Ok(_) => Ok(GitActionResult {
             ok: true,
@@ -1540,6 +1630,12 @@ pub async fn reset_to_commit(
         ResetMode::Hard => "--hard",
         ResetMode::Keep => "--keep",
     };
+    if mode == ResetMode::Hard {
+        cli_fallback::check_worktree_dirty_protected_config(project_path).await?;
+    }
+    if mode == ResetMode::Hard || mode == ResetMode::Keep {
+        cli_fallback::check_diff_touches_protected_config(project_path, &["HEAD", hash]).await?;
+    }
     cli_fallback::run_git(&["reset", mode_flag, hash], project_path).await?;
 
     Ok(GitActionResult {
@@ -1606,6 +1702,7 @@ pub async fn undo_last_commit(project_path: &Path) -> Result<GitActionResult, Ap
         return Ok(blocked);
     }
 
+    cli_fallback::check_diff_touches_protected_config(project_path, &["HEAD^!"]).await?;
     cli_fallback::run_git(&["reset", "--mixed", "HEAD~1"], project_path).await?;
 
     Ok(GitActionResult {

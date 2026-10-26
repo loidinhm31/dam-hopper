@@ -1,7 +1,7 @@
 # Authenticated Semantic WebSocket Gateway Architecture
 
 **Authority:** Server Semantic Subsystem (`server/src/api/semantic_ws.rs`, `server/src/semantic/gateway.rs`, `server/src/semantic/uri.rs`)  
-**Status:** Maintained Architecture Specification (Phase 09 Qualified for Portable-Only Linux x64 Server + Web; PR #74 Remediation: Phase 01 Passed, Phases 02 & 03 Accepted with Deferred Issues; Release Hold Maintained)
+**Status:** Maintained Architecture Specification (Phase 09 Qualified for Portable-Only Linux x64 Server + Web; PR #74 Remediation: Phases 01–04 Implemented; Release Hold Maintained)
 
 ## Scope and Subsystem Boundary
 
@@ -481,9 +481,9 @@ Phase 09 resolved and qualified all tracked boundaries carried forward from Phas
 - **W5 (Git Route Worktree Invalidation):** Git mutation routes enforce target-scoped worktree invalidation rather than project-wide disruption.
 - **G5 / Phase 07 W-1 (Destination Freshness Proof):** Destination coordinate-to-content freshness validates file content and pins unopened destinations before cross-tab reveal.
 - **G8 / Phase 07 C-2 (Real Browser Monaco Qualification):** 21-step fixed union qualification executed in real Chromium against live Axum server and packaged TSLS. Verified 0 stale reveals, stable model retention, and clean provider restoration on OFF. Full end-to-end multi-tab user journey visual sign-off is governed by Phase 10.
-## PR74 Remediation Contracts (Phases 01–03 Implemented; Phase 04 Proposed Design)
+## PR74 Remediation Contracts (Phases 01–04 Implemented)
 
-> **Notice:** The following section documents architectural contracts and remediation designs for findings F1–F13 (PR #74 review remediation). Phase 01–03 mechanisms (F1, F3, F5, F6, F7, F8, F9, F10, F11, F13) are implemented in client and server source code with unit and integration test coverage, with remaining integration qualification gaps (W1, W2, W3) tracked for Phase 04 under active release hold. Phase 04 specifications represent proposed designs undergoing implementation.
+> **Notice:** The following section documents architectural contracts and remediation designs for findings F1–F13 (PR #74 review remediation). Phases 01–04 mechanisms (F1–F13) are implemented in client and server source code with unit and integration test coverage, with remaining integration qualification gaps (W1, W2, W3) tracked under active release hold.
 ### 1. Editor Content Integrity & Representation (Phase 01 Implemented: F1, F5, F6, F7)
 
 - **F1 — Clean Reload Reconciliation & Model Identity:**
@@ -573,12 +573,39 @@ Phase 09 resolved and qualified all tracked boundaries carried forward from Phas
   - **Two-Second Timeout Bound:** Pre-upgrade JWT claims verification in `semantic_ws_handler` bounds `state.auth_service.evaluate_claims(&claims)` using `tokio::time::timeout(AUTH_STORE_LOOKUP_TIMEOUT, ...)`, configured to 2.0 seconds (`AUTH_STORE_LOOKUP_TIMEOUT = 2s`).
   - **Fail-Closed Rejection Before Presence Reservation:** If evaluation times out or encounters store unavailability, the handler immediately fails closed with HTTP 503 Service Unavailable (`AUTH_UNAVAILABLE`). Crucially, this bound executes *strictly prior* to client presence slot reservation (`reserve_pending_upgrade`), preventing slow or stalled auth lookups from exhausting server presence budgets or leaking connection tracking state.
   - **Async Preemption vs SQLite Blocking Workers:** On timeout, the claims-evaluation future is dropped and the handler returns HTTP 503 `AUTH_UNAVAILABLE`. Two seconds is the configured asynchronous timeout deadline, subject to Tokio scheduling jitter. Already-started SQLite database queries dispatched to Tokio's blocking threadpool (`spawn_blocking`) cannot be preemptively aborted and will execute to completion on the worker thread.
-### 4. Release Packaging & Configuration Boundaries (Phase 04 Proposed: F2, F4, F12)
+### 4. Release Packaging & Configuration Boundaries (Phase 04 Implemented: F2, F4, F12)
 
-- **F2 — Bundled Toolchain Packaging:** Packaging pipeline bundles and verifies the exact pinned engine tuple (Node 24.16.0, TypeScript 5.9.3, TSLS 6.0.2) with cryptographic manifest validation.
-- **F4 — Canonical Git Protected Configuration:** Canonical config guards protect configuration paths across reachable Git mutations; semantics OFF does not contain F4.
-- **F12 — Hot Toggle Error Refresh:** Failed administrative toggle-OFF operations refresh captured owner status and surface descriptive error diagnostics to operators.
+- **F2 — Pinned Release Engine Packaging & Asset Gate:**
+  - **Deterministic Staging Prerequisite:** Clean publisher invocations require and stage the verified pinned engine tuple (`lib/semantic-engine` with Node 24.16.0, TypeScript 5.9.3, TSLS 6.0.2) via `stage-semantic-engine.mjs --retrieve-pinned`.
+  - **Publisher Forwarding & Packaging Invariant:** `linux-release-package-twice.sh` requires `--semantic-engine-dir <dir>` (or `--allow-omitted-engine` for diagnostic testing only) and forwards that exact staged directory to both packaging runs. `build-release-archive.sh` sets `ALLOW_OMITTED_ENGINE=0` by default, failing closed if the semantic engine is omitted.
+  - **Streaming Archive Verification (`check-release-assets.mjs`):** The release asset gate validates archive integrity using child process streaming extraction (`streamMemberSha256` via `tar -zxf <archive> -O <rawMemberName>`) piped directly into `crypto.createHash("sha256")`, computing individual member SHA-256 digests on demand without buffering full member payloads into Node memory.
+  - **Fail-Closed Child Process Handling:** The extractor listens to child `error` and `close` events; any non-zero exit code (`code !== 0`) or process spawning failure immediately rejects with captured child stderr, halting asset verification.
+  - **Provenance Validation & Integrity Invariants:** Validates presence of essential engine files (`node`, `tsls/package.json`, `tsls/pnpm-lock.yaml`, `tsls/LICENSES.txt`, `tsls/provenance.json`, `tsls/node_modules/typescript-language-server/lib/cli.mjs`, `tsls/node_modules/typescript/lib/tsserver.js`, `tsls/node_modules/typescript/lib/_tsserver.js`, `tsls/node_modules/typescript/lib/typescript.js`). Verifies that `tsls/provenance.json` matches the trusted source provenance on disk (`DAM_HOPPER_PROVENANCE_PATH` or `deploy/release/semantic-engine/provenance.json`), and that all essential engine file digests match `transitivePayloadDigests` in `provenance.json` as well as release manifest inventory (`invEntry.sha256`).
+  - **File Mode & Role Attributes:** Verifies regular file attributes (`modeStr.startsWith("-")`), rejects group/world-writable permissions (`modeStr[5] !== 'w' && modeStr[8] !== 'w'`), requires executable permissions on `node` (`modeStr.includes("x")`), and requires strict single-role assignment (`['server']`). Missing, altered, or tampered assets fail closed during release publication checks.
 
+- **F4 — Canonical Git Protected Configuration:**
+  - **Canonical Path Protection Identity (`is_protected_global_config_path`):** Evaluates canonical configuration paths (`config.toml`, `dam-hopper.toml`, `registry.json`, `dam_hopper_config_dir` `~/.config/dam-hopper`) via four defense layers:
+    1. Lexical equivalence and ancestor directory containment (`starts_with`).
+    2. Canonical path equivalence via `dunce::canonicalize` on candidate and protected targets.
+    3. Pre-creation parent directory canonicalization with filename match (protecting targets prior to first creation).
+    4. Inode/device hardlink identity checks on existing files (Unix `dev` + `ino`, Windows `volume_serial` + `file_index`).
+  - **Comprehensive Git Sink Coverage:** Enforces mutation refusal across all reachable Git mutation surfaces:
+    - *Worktree removal* (`remove_worktree_route`): validates canonical path guards on candidate worktree, repository, and requested paths across both active and stale targets before executing worktree deletion.
+    - *Checkout* (`checkout_branch`): checks `check_worktree_dirty_protected_config` on force or stash checkouts, and validates `check_diff_touches_protected_config` against target branches/refs.
+    - *Reset* (`reset_to_commit`, `undo_last_commit`): checks `check_worktree_dirty_protected_config` on hard reset, and validates `check_diff_touches_protected_config` on hard/keep resets against `HEAD..hash` and `HEAD^!`.
+    - *Squash, Cherry-pick & Revert* (`squash_commits`, `cherry_pick`, `cherry_pick_commit_files`, `revert_commit`, `drop_commit`, `drop_commit_files`): checks candidate paths and diff deltas (`hash^!`).
+    - *Pull* (`pull`, `pull_ff_only`): inspects diff against upstream (`HEAD..@{u}`) and libgit2 tree-to-tree fast-forward deltas prior to merge execution.
+    - *Discard & Unstage* (`discard_file_changes`, `discard_hunk`, `unstage_files`): checks candidate paths before file truncation or patch reversion.
+    - *Conflict Resolution* (`apply_conflict_resolution`): refuses file writes and unlinks touching protected config paths.
+  - **Anti-Evasion Index & Assume-Unchanged Inspection (`check_worktree_dirty_protected_config`):** Parses `git status --porcelain=v1 -z` including rename/copy targets (`R`/`C`), AND explicitly inspects tracked files via `git ls-files -z`. For any tracked protected path, directly compares on-disk bytes against `git cat-file -p HEAD:{p}` blobs to defeat `assume-unchanged` or `skip-worktree` index evasion flags. Any detected dirty state or diff mutation touching protected paths fails closed with HTTP 403 `MutationRefused`.
+  - **Pre-Mutation & Pre-Invalidation Fencing:** Every reachable Git mutation boundary enforces `is_protected_global_config_path` before mutation and *strictly before* semantic target invalidation (`prepare_invalidate_target`), leaving target admission, session actors, and config bytes intact. Unrelated Git operations, index operations, and positive controls on non-config repositories remain unhindered.
+  - **External Operator Race Limitation:** Application mutexes serialize server API endpoints against internal race conditions. They do not eliminate external filesystem races from host operators concurrently issuing external `rm` or `git` commands against server configuration directories outside the daemon process.
+
+- **F12 — Settings Status Refresh on Settlement:**
+  - **Captured-Owner Mutation Context:** `useUpdateSemanticSettings` disables retries (`retry: false`) and captures exact `mutationOwner` and `queryKey` in mutation context during `onMutate` (`profileQueryKey(owner, "semantic", "settings")` or `["semantic", "settings"]`).
+  - **Single Exact Query Invalidation & Settlement Refetch:** On settlement (`onSettled`), executes single exact query invalidation with active refetch (`qc.invalidateQueries({ queryKey: targetKey, exact: true, refetchType: "active" })`) targeting strictly the captured owner key.
+  - **Background Error Containment & Presentation:** When the query is active, a successful refetch renders the fresh "Configuration / Runtime Mismatch" banner and safe-disabled runtime state alongside the retained mutation action error without requiring manual page reload, focus loss, or component remount. If background refetch fails, the error is safely caught and swallowed (`.catch(() => {})`) to avoid unhandled rejections while preserving the mutation's action error and owner query isolation.
+  - **Generation & Profile Isolation:** Guarantees settlement updates exclusively the captured owner/generation's query cache, preventing cache invalidation or status updates from leaking into sibling profiles or replacement generations during concurrent profile switches.
 ## Related Documentation
 
 - [WebSocket API](../api/websocket.md) — Endpoint overview and core `/ws` protocol comparison.

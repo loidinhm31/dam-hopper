@@ -273,6 +273,11 @@ pub fn apply_conflict_resolution(
             });
         }
     };
+    if crate::fs::secure_path::is_protected_global_config_path(&safe_disk_path) {
+        return Ok(ResolveOutcome::Unsupported {
+            reason: "Direct mutation of global config file is forbidden; use dedicated PATCH /api/semantic/settings or config API".into(),
+        });
+    }
 
     // 2. Open repository and acquire mutation coordination
     let repo = open_repo(&canonical_root)?;
