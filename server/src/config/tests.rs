@@ -990,6 +990,7 @@ fn global_config_roundtrip() {
         }]),
         ui: None,
         server: crate::config::ServerConfig::default(),
+        semantic: None,
     };
 
     write_global_config_at(&cfg_path, &cfg).unwrap();
@@ -1034,6 +1035,7 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
             workflow_stale_after_hours: 24,
             idle_suspend: Default::default(),
         },
+        semantic: None,
     };
 
     write_global_config_at(&cfg_path, &cfg).unwrap();
@@ -1508,6 +1510,7 @@ fn ui_config_serde_roundtrip() {
             cognito_mode_style: CognitoModeStyle::HeavyBlur,
         }),
         server: crate::config::ServerConfig::default(),
+        semantic: None,
     };
 
     let json = serde_json::to_value(cfg.ui.as_ref().unwrap()).unwrap();
@@ -2308,4 +2311,92 @@ enabled = true
     let written = std::fs::read_to_string(&config_path).unwrap();
     assert!(!written.contains("[server.advisor]"));
     assert!(!written.contains("advisor"));
+}
+
+#[test]
+fn semantic_config_default_off_when_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    std::fs::write(&config_path, "").unwrap();
+
+    let cfg = read_global_config_at(&config_path).unwrap().unwrap_or_default();
+    assert!(cfg.semantic.is_none());
+    let is_enabled = cfg.semantic.as_ref().map(|s| s.enabled).unwrap_or(false);
+    assert!(!is_enabled);
+}
+
+#[test]
+fn semantic_config_roundtrips_enabled_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+
+    let mut cfg = GlobalConfig::default();
+    cfg.semantic = Some(crate::config::schema::SemanticConfig { enabled: true });
+    write_global_config_at(&config_path, &cfg).unwrap();
+
+    let written = std::fs::read_to_string(&config_path).unwrap();
+    assert!(written.contains("[semantic]"));
+    assert!(written.contains("enabled = true"));
+
+    let loaded = read_global_config_at(&config_path).unwrap().unwrap();
+    assert_eq!(
+        loaded.semantic,
+        Some(crate::config::schema::SemanticConfig { enabled: true })
+    );
+}
+
+#[test]
+fn semantic_config_denies_unknown_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[semantic]
+enabled = true
+command = "node /custom/entrypoint.js"
+"#,
+    )
+    .unwrap();
+
+    // Corrupted global config with unknown fields under [semantic] returns Ok(None)
+    let loaded = read_global_config_at(&config_path).unwrap();
+    assert!(loaded.is_none());
+
+    // Direct toml deserialization explicitly produces an error
+    let err = toml::from_str::<GlobalConfig>(
+        r#"
+[semantic]
+enabled = true
+custom_arg = "foo"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("unknown field `custom_arg`"));
+}
+
+#[test]
+fn workspace_config_rejects_misplaced_semantic() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+
+    let toml_root = r#"
+[workspace]
+name = "workspace-semantic-root"
+
+[semantic]
+enabled = true
+"#;
+    let err_root = super::parser::parse_config_str_at_path(toml_root, &config_path).unwrap_err();
+    assert!(err_root.to_string().contains("Semantic configuration is server-global only"));
+
+    let toml_server = r#"
+[workspace]
+name = "workspace-semantic-server"
+
+[server.semantic]
+enabled = true
+"#;
+    let err_server = super::parser::parse_config_str_at_path(toml_server, &config_path).unwrap_err();
+    assert!(err_server.to_string().contains("Semantic configuration is server-global only"));
 }

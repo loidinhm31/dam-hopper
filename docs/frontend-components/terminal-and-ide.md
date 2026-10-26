@@ -440,7 +440,6 @@ interface TerminalPanelProps {
 
 **Behavior:** The server's three-hour `reminderDue` snapshot and `tunnel:reminder` event drive profile/port/URL reminders, not a browser timer. Dismiss persists per profile/tunnel in browser sessionStorage without stopping the connector. Stop captures the rendered connection generation, reports failure with Retry, and cannot rebind after reconnect. Cognito hides reminders; stacked reminders scroll within a bounded area and route shells consume the remaining viewport.
 
-
 ### PaneContainer
 
 **Location:** `packages/ui/src/components/organisms/PaneContainer.tsx`
@@ -481,8 +480,8 @@ interface TerminalPanelProps {
 
 **Purpose:** Primary Git workspace view for branch management, history browsing, and local change review.
 
-
 > **Git Conflict Resolution:** For interactive 3-way merge conflict resolution across terminal and IDE workspaces, see the floating [ConflictResolverPanel](./workbench.md#floating-git-conflict-resolver-panel), which mounts above workspace shells with unified panel stacking, scoped keyboard arbitration, and responsive narrow layout.
+
 ### WorkspaceGitPanel
 
 **Location:** `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx`
@@ -674,7 +673,17 @@ snapshot.
 - **Storage & Hydration:** View state is part of persisted editor tab state under `dam-hopper:editor-state` in `localStorage`. Hydrated tabs retain view state across `loadContent` invocations so opening the file restores line and column positions.
 - **Race-Safe State Capture:** `MonacoHost` captures the originating tab's view state prior to switching active `tabKey` using `prevTabKeyRef` and on unmount, passing `targetKey` explicitly to prevent view states from polluting newly selected tabs.
 
+### Monaco Semantic Navigation Integration
 
+**Locations:** `packages/ui/src/components/organisms/MonacoHost.tsx`, `packages/ui/src/components/organisms/EditorTabs.tsx`, `packages/ui/src/components/organisms/EditorStatusBar.tsx`, `packages/ui/src/api/semantic-client.ts`, `packages/ui/src/lib/semantic-model-uri.ts`, `packages/ui/src/lib/semantic-monaco.ts`, `packages/ui/src/stores/semantic-navigation.ts`
+
+**Purpose:** Integrates model-scoped TypeScript and JavaScript LSP Definition and Implementation navigation into Monaco editor without mutating model identity or discarding dirty state, with active status visibility and resilient fault recovery.
+
+- **Stable Identity Mapping:** `MonacoHost` binds models to `SemanticModelRegistry` using local `inmemory://dam-hopper/...` URIs. Reconnects and profile generation updates preserve local dirty text, view state, and undo stacks.
+- **Active Model Status:** `EditorStatusBar` renders live semantic status for the active file (`ready`, `starting`, `error`, `disconnected`, `unsupported`) with color-coded indicators and descriptive tooltips.
+- **Dynamic Resolution & Lifecycle:** `MonacoHost` resolves `SemanticClient` at call time via `findClientForTab(tabKey)` on keystrokes and document close notifications. Clients are reference-counted (`releaseClient`) across editor tabs and panes, with profile-scoped enablement (`setProfileSemanticEnabled`).
+- **Adaptive Wire Sync & Recovery:** Pushes edits via 64 KiB adaptive sync, cancels slow queries via `$/cancelRequest`, recovers from version divergence via full `didChange` resync (`-32003`), and handles admission invalidation via auto-reconnect backoff (`-32005`).
+- **Reveal Coordination:** Ephemeral `NavigationRevealIntent` coordinates cross-file navigation jumps, consumed atomically upon destination editor mount. See [Semantic WebSocket Gateway Architecture](../architecture/semantic-websocket-gateway.md#lifecycle-invalidation-and-client-recovery-phase-08).
 ### Git Blame Annotations in Editor
 
 **Locations:** `packages/ui/src/components/organisms/EditorGitBlameGutter.tsx`, `EditorGitBlameContextMenu.tsx`, `packages/ui/src/components/molecules/EditorGitBlameRow.tsx`, `packages/ui/src/hooks/use-editor-git-blame.ts`, `packages/ui/src/stores/editor.ts`
@@ -686,6 +695,7 @@ snapshot.
 - **Buffer Edits & Dynamic Invalidation:** Keystrokes immediately wipe stale attribution, debounce 250ms, and query in-memory buffer blame. Unsaved buffer additions display as "Uncommitted" while retaining unchanged neighboring line attributions.
 - **Workspace Git Commit Reveal:** Right-clicking an attributed row or line number exposes "Show Commit in Git". Clicking reveals the exact commit in the Workspace Git panel in read-only inspection mode (`mode: "inspect"`), displaying the full multiline commit body, author metadata, and changed files without mutation controls.
 - **Host Lifecycle & Tier Gating:** Blame operations pause and cancel during inactive tabs, minimized panels, or Markdown/HTML Preview modes, resuming when returning to active Edit or Split modes. Binary, diff, image, video, and large files (≥5 MiB) are excluded from blame.
+
 ### Files, editor, and search ownership
 
 The IDE surfaces consume one qualified target:

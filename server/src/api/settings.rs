@@ -13,23 +13,34 @@ use super::error::ApiError;
 pub async fn cache_clear(State(state): State<AppState>) -> impl IntoResponse {
     // In the Rust server there's no in-process cache beyond RwLock fields.
     // Re-reading config is the closest equivalent.
-    let _workspace_context = state.workspace_context_guard.write().await;
-    let config_path = state.config.read().await.config_path.clone();
-    match read_config(&config_path) {
-        Ok(mut cfg) => {
-            {
-                let timing = state.idle_suspend_timing.read().await;
-                state.idle_suspend_policy.apply_to_config(&mut cfg, &timing);
+    let (detached, res) = {
+        let _workspace_context = state.workspace_context_guard.write().await;
+        let config_path = state.config.read().await.config_path.clone();
+        match read_config(&config_path) {
+            Ok(mut cfg) => {
+                let handles = state.semantic_supervisor.prepare_invalidate_all().await;
+                {
+                    let timing = state.idle_suspend_timing.read().await;
+                    state.idle_suspend_policy.apply_to_config(&mut cfg, &timing);
+                }
+                state.media_tickets.revoke_all();
+                state.fs.reinit_sandbox(project_roots_from_config(&cfg));
+                state.workspace_target_resolver.invalidate_all().await;
+                state
+                    .host_resource_monitor
+                    .reconfigure(cfg.server.host_resources.clone())
+                    .await;
+                *state.config.write().await = cfg;
+                (Some(handles), Ok(()))
             }
-            state.media_tickets.revoke_all();
-            state.fs.reinit_sandbox(project_roots_from_config(&cfg));
-            state
-                .host_resource_monitor
-                .reconfigure(cfg.server.host_resources.clone())
-                .await;
-            *state.config.write().await = cfg;
-            Json(serde_json::json!({ "ok": true })).into_response()
+            Err(e) => (None, Err(e)),
         }
+    };
+    if let Some(handles) = detached {
+        state.semantic_supervisor.reap_sessions(handles).await;
+    }
+    match res {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -242,27 +253,35 @@ pub async fn import_workspace_settings(
         return Err(ApiError::from_app(write_err));
     }
 
-    if let Err(reload_err) = crate::api::config::reload_config_locked(&state).await {
-        let restore_res = crate::utils::fs::atomic_write_bytes(&current_path, &old_bytes);
-        let reload_restore_res = crate::api::config::reload_config_locked(&state).await;
-        let parent = current_path.parent().unwrap_or(std::path::Path::new("."));
-        let backup_path = parent.join(&backup_file_name);
-        if restore_res.is_ok() && reload_restore_res.is_ok() {
-            let _ = std::fs::remove_file(&backup_path);
-            return Err(ApiError::from_app(crate::error::AppError::Internal(format!(
-                "Failed to reload imported config, restored previous configuration: {}",
-                reload_err.0
-            ))));
-        } else {
-            return Err(ApiError::from_app(crate::error::AppError::Internal(format!(
-                "Failed to reload imported config and automatic recovery failed (disk: {}, runtime: {}). Backup retained at {}: {}",
-                restore_res.is_ok(),
-                reload_restore_res.is_ok(),
-                backup_file_name,
-                reload_err.0
-            ))));
+    let semantic_to_reap = match crate::api::config::reload_config_locked(&state).await {
+        Ok(handles) => handles,
+        Err(reload_err) => {
+            let restore_res = crate::utils::fs::atomic_write_bytes(&current_path, &old_bytes);
+            let reload_restore_res = crate::api::config::reload_config_locked(&state).await;
+            if let Ok(handles) = &reload_restore_res {
+                state.semantic_supervisor.spawn_reap_sessions(handles.clone());
+            }
+            let parent = current_path.parent().unwrap_or(std::path::Path::new("."));
+            let backup_path = parent.join(&backup_file_name);
+            if restore_res.is_ok() && reload_restore_res.is_ok() {
+                let _ = std::fs::remove_file(&backup_path);
+                return Err(ApiError::from_app(crate::error::AppError::Internal(format!(
+                    "Failed to reload imported config, restored previous configuration: {}",
+                    reload_err.0
+                ))));
+            } else {
+                return Err(ApiError::from_app(crate::error::AppError::Internal(format!(
+                    "Failed to reload imported config and automatic recovery failed (disk: {}, runtime: {}). Backup retained at {}: {}",
+                    restore_res.is_ok(),
+                    reload_restore_res.is_ok(),
+                    backup_file_name,
+                    reload_err.0
+                ))));
+            }
         }
-    }
+    };
+    drop(_workspace_guard);
+    state.semantic_supervisor.reap_sessions(semantic_to_reap).await;
 
     let parent = current_path.parent().unwrap_or(std::path::Path::new("."));
     prune_backups(parent);

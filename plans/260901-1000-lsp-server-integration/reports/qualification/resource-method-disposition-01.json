@@ -1,0 +1,9 @@
+{
+  "status": "MEASUREMENT_INCOMPLETE",
+  "candidateThresholdBytes": 65536,
+  "sourceReport": "attempts/2026-10-24T00-34-18-479Z-pid3688830-exploratory-65536.json",
+  "functionalObservations": "Real browser fixed union 21 steps completed, zero stale reveals; direct actors and concurrent core/terminal schedules completed with zero unexpected navigation/restart outcomes or post-reap accounting residuals.",
+  "resourceGap": "Resource report has zero browser-phase observations despite real browser navigation. No browser whole-tree resource qualification accepted from this run.",
+  "suspectedCause": "Leader-thread-only /proc task children enumeration misses children spawned by Tokio worker threads; causal correction and rerun required. Phase attribution and CPU interval discovery accounting also under investigation.",
+  "policy": "Preserve original aggregate and numerical budgets. Freeze corrected observation method before fresh OFF/candidate/final comparisons. No finalPolicy selected."
+}

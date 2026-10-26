@@ -21,6 +21,7 @@ export interface SeedTreeConfig {
   mfaKeyHex?: string;
   seedPlans?: boolean;
   idleSuspendPolicy?: "agent-free";
+  seedSemanticFixtures?: boolean;
 }
 
 export interface SeedTreeResult {
@@ -105,6 +106,79 @@ export async function createSeedTree(
 
   if (seedPlans) {
     await seedPlanFixtures(projectDir, secondaryProjectDir);
+  }
+  if (config.seedSemanticFixtures) {
+
+    await fs.writeFile(
+      path.join(projectDir, "tsconfig.json"),
+      JSON.stringify(
+        {
+          compilerOptions: {
+            target: "ES2022",
+            module: "NodeNext",
+            moduleResolution: "NodeNext",
+            jsx: "react-jsx",
+            strict: true,
+          },
+          include: ["*"],
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+
+    await fs.writeFile(
+      path.join(projectDir, "types.ts"),
+      `export interface SemanticItem {\n  id: string;\n  name: string;\n  getValue(): number;\n}\n\nexport function computeItemValue(item: SemanticItem): number {\n  return item.getValue() * 2;\n}\n`,
+    );
+
+    await fs.writeFile(
+      path.join(projectDir, "impl.ts"),
+      `import type { SemanticItem } from "./types.js";\n\nexport class StandardSemanticItem implements SemanticItem {\n  constructor(\n    public id: string,\n    public name: string,\n    private value: number,\n  ) {}\n\n  getValue(): number {\n    return this.value;\n  }\n}\n`,
+    );
+
+    await fs.writeFile(
+      path.join(projectDir, "widget.tsx"),
+      `import React from "react";\nimport { StandardSemanticItem } from "./impl.js";\n\nexport function SemanticWidget({ title }: { title: string }) {\n  const item = new StandardSemanticItem("w1", title, 42);\n  return <div className="semantic-widget">{item.name}</div>;\n}\n`,
+    );
+
+    await fs.writeFile(
+      path.join(projectDir, "helper.js"),
+      `export function formatSemanticName(prefix, name) {\n  return \`\${prefix}: \${name}\`;\n}\n`,
+    );
+
+    await fs.writeFile(
+      path.join(projectDir, "card.jsx"),
+      `import React from "react";\nimport { formatSemanticName } from "./helper.js";\n\nexport function SemanticCard({ label }) {\n  const formatted = formatSemanticName("Card", label);\n  return <span>{formatted}</span>;\n}\n`,
+    );
+
+    await fs.writeFile(
+      path.join(projectDir, "unicode.ts"),
+      `// Non-BMP UTF-16 surrogate pairs (🌍 = U+1F30E, 🚀 = U+1F680)\nexport const BANNER = "Welcome 🌍 to DamHopper 🚀!";\n\nexport const PREFIXED_BANNER = "Prefix 🌍🚀 " + BANNER;\n\nexport function getUnicodeBanner(): string {\n  return PREFIXED_BANNER;\n}\n`,
+    );
+
+    await fs.writeFile(
+      path.join(projectDir, "multi_def.ts"),
+      `export interface MultiTargetConfig {\n  core: boolean;\n}\n\nexport interface MultiTargetConfig {\n  extended: boolean;\n}\n\nexport const activeConfig: MultiTargetConfig = {\n  core: true,\n  extended: true,\n};\n`,
+    );
+
+    // Generate adaptive sync file sized ~61,700 bytes (under 64 KiB threshold)
+    const paddingLine = "// Padding line ensuring stable byte size for adaptive sync qualification tests\n";
+    const padRepeat = 760; // 760 * 81 chars = 61,560 bytes
+    const adaptiveSyncContent = `export function adaptiveThresholdBase(): string {\n  return "baseline-value";\n}\n\n` +
+      paddingLine.repeat(padRepeat) +
+      `\nexport function adaptiveThresholdTail(): string {\n  return adaptiveThresholdBase();\n}\n`;
+    await fs.writeFile(path.join(projectDir, "adaptive_sync.ts"), adaptiveSyncContent);
+
+    await fs.writeFile(
+      path.join(projectDir, "unsupported.rs"),
+      `pub fn unsupported_semantic() -> bool {\n    true\n}\n`,
+    );
+
+    await fs.writeFile(
+      path.join(secondaryProjectDir, "secondary.ts"),
+      `export const SECONDARY_ROOT_CONST = "isolated-target";\n`,
+    );
   }
 
   // 6. Root dam-hopper.toml for the container

@@ -1,0 +1,1250 @@
+{
+  "stage": "exploratory",
+  "requestedMode": "portable",
+  "requestedThresholdBytes": 131072,
+  "sourceIdentity": {
+    "gitHeadSha": "20887bf511a52ec1eccbae0679f2f832606065ef",
+    "gitWorktreeDirty": true,
+    "compiledProductionThresholdBytes": 131072,
+    "fileDigests": {
+      "resourcesRsSha256": "8e0124c031bccd5b8499461de1ddea25a119339a745f0bbc5bc2f32b71b7dd0b",
+      "semanticClientTsSha256": "5df776ed88a5590acd121f553584443008fede986caa542b5f87cc47affa3212",
+      "semanticMonacoTsSha256": "75f72952f164fa51aeae62620762d5d5d43d8504e940e62771175ae3842966b5",
+      "semanticModelUriTsSha256": "60b2b72b46063e9e9600818b41bd06c4b89d207f157b5cbc8dd739647af7a3ca",
+      "editorStoreTsSha256": "c9f51c2b34f811f1e7d0e54eb7637bb4fbeabdec21d2b5c6e76aea56d645f505",
+      "backendQualificationRsSha256": "eb7eca1fbb79869ab8b72c0dea132898e507a77e6b0aa30036b6ba8adcc784ec",
+      "browserQualificationTsSha256": "d866014f3fa38c8d1b297f04531590d6b04d1a380e14c87e27a8b8b7028f700b",
+      "runnerMjsSha256": "65a6233ca06a8191b034579c566ee898f7a9014fadeeabfd52d90997587adc18"
+    }
+  },
+  "compiledProductionThresholdBytes": 131072,
+  "tupleIdentity": {
+    "tupleId": "node-24.16.0-ts-5.9.3-tsls-6.0.2-linux-x64",
+    "nodeSha256": "b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd",
+    "packageJsonSha256": "1aebb20f4c8d8b699745853542ecce7f1e7e42c85f97843bfd8064f9efdc3f7c",
+    "lockfileSha256": "003c24ed03f9491035a8f2a3a956d7e83f10def028b028987bdc5d618c2fdcbd",
+    "tslsEntrypointSha256": "192638f1fa62c907fd54c0b55b12dd3dff01325a1a0ed5973907efca1c57b5eb",
+    "tsserverSha256": "e3ccfeec65ec5c470b8ffc5611878a31182650c7e8a062c38a719f83b523edcb"
+  },
+  "fixtureIdentity": {
+    "fixtureSeed": 24301,
+    "smallCorpusDigest": "ddf1171cbfcebb7b7dbf50dad98736cd09925e9406c499e185e3f448e652afd2",
+    "mediumCorpusDigest": "639781a79371a14658cf5c8581bb64ead5f54112c940497799a83d7b286f1151",
+    "largeCorpusDigest": "28b75ee4299e8b2840bc47b60c091fd3fde7ea1a4a6cce2e3ffd8fe01262243f"
+  },
+  "status": "MEASURED",
+  "effectiveMode": "portable-only",
+  "hardCgroupAvailable": false,
+  "supervisorCgroupAdapterWired": false,
+  "portableChildMonitorIntervalMs": 200,
+  "qualificationObservationIntervalMs": 100,
+  "adaptiveSyncThresholdBytes": 131072,
+  "repetitions": 1,
+  "warmupSamples": 5,
+  "warmSamples": 20,
+  "coldSessionsPerWorkload": 4,
+  "coreSamplesPerEndpointPerCondition": 20,
+  "tupleDigests": {
+    "nodeSha256": "b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd",
+    "tslsEntrypointSha256": "192638f1fa62c907fd54c0b55b12dd3dff01325a1a0ed5973907efca1c57b5eb",
+    "tsserverSha256": "e3ccfeec65ec5c470b8ffc5611878a31182650c7e8a062c38a719f83b523edcb",
+    "tsserverImplSha256": "0efcc88cdf0593cc1dcc8b6afd605c7bed9eca6f648c70c8f0df8695114bf6d7",
+    "typescriptCoreSha256": "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675",
+    "packageJsonSha256": "1aebb20f4c8d8b699745853542ecce7f1e7e42c85f97843bfd8064f9efdc3f7c",
+    "lockfileSha256": "003c24ed03f9491035a8f2a3a956d7e83f10def028b028987bdc5d618c2fdcbd",
+    "qualificationBinarySha256": "fa1f7f25530e459cf4421e85e1f06969559971ecf2068acd4d87cdb45f7e0984",
+    "qualificationBuildProfile": "release"
+  },
+  "coldReadyP50Ms": 763.677844,
+  "coldReadyP95Ms": 1121.306824,
+  "tiers": {
+    "small": {
+      "sampleCount": 20,
+      "warmNavMinMs": 5.565475999999999,
+      "warmNavP50Ms": 7.768737000000001,
+      "warmNavP95Ms": 10.872273,
+      "warmNavMaxMs": 11.369582,
+      "coreAndTerminal": {
+        "sampleCount": 100,
+        "minMs": 0.057346,
+        "p50Ms": 0.34837399999999996,
+        "p95Ms": 40.723861,
+        "maxMs": 41.971947
+      },
+      "perEndpoint": {
+        "health": {
+          "sampleCount": 20,
+          "minMs": 0.057346,
+          "p50Ms": 0.14713199999999999,
+          "p95Ms": 0.377197,
+          "maxMs": 1.463565
+        },
+        "workspaceStatus": {
+          "sampleCount": 20,
+          "minMs": 0.162861,
+          "p50Ms": 0.34837399999999996,
+          "p95Ms": 1.517354,
+          "maxMs": 1.73679
+        },
+        "fsList": {
+          "sampleCount": 20,
+          "minMs": 0.26411799999999996,
+          "p50Ms": 0.330952,
+          "p95Ms": 0.57374,
+          "maxMs": 0.596622
+        },
+        "gitRoots": {
+          "sampleCount": 20,
+          "minMs": 2.6254120000000003,
+          "p50Ms": 3.145032,
+          "p95Ms": 4.1439889999999995,
+          "maxMs": 6.660119
+        },
+        "ptyRoundTrip": {
+          "sampleCount": 20,
+          "minMs": 0.172068,
+          "p50Ms": 0.343345,
+          "p95Ms": 41.760977,
+          "maxMs": 41.971947
+        }
+      },
+      "overlap": {
+        "barrierSynchronized": true,
+        "totalOverlapDurationMs": 503.0814649999999,
+        "minRepOverlapDurationMs": 503.0814649999999,
+        "observedNavigationsDuringCoreWindow": 87,
+        "observedCoreProbesDuringNavWindow": 100
+      },
+      "repetitions": [
+        {
+          "repetition": 0,
+          "barrierSynchronized": true,
+          "overlapDurationMs": 503.0814649999999,
+          "warmNavigationSampleCount": 20,
+          "sustainedTotalNavigations": 87,
+          "observedNavigationsDuringCoreWindow": 87,
+          "completedCoreRounds": 20,
+          "observedCoreProbesDuringNavWindow": 100,
+          "warmNav": {
+            "sampleCount": 20,
+            "minMs": 5.565475999999999,
+            "p50Ms": 7.768737000000001,
+            "p95Ms": 10.872273,
+            "maxMs": 11.369582
+          },
+          "coreAndTerminal": {
+            "sampleCount": 100,
+            "minMs": 0.057346,
+            "p50Ms": 0.34837399999999996,
+            "p95Ms": 40.723861,
+            "maxMs": 41.971947
+          },
+          "perEndpoint": {
+            "health": {
+              "sampleCount": 20,
+              "minMs": 0.057346,
+              "p50Ms": 0.14713199999999999,
+              "p95Ms": 0.377197,
+              "maxMs": 1.463565
+            },
+            "workspaceStatus": {
+              "sampleCount": 20,
+              "minMs": 0.162861,
+              "p50Ms": 0.34837399999999996,
+              "p95Ms": 1.517354,
+              "maxMs": 1.73679
+            },
+            "fsList": {
+              "sampleCount": 20,
+              "minMs": 0.26411799999999996,
+              "p50Ms": 0.330952,
+              "p95Ms": 0.57374,
+              "maxMs": 0.596622
+            },
+            "gitRoots": {
+              "sampleCount": 20,
+              "minMs": 2.6254120000000003,
+              "p50Ms": 3.145032,
+              "p95Ms": 4.1439889999999995,
+              "maxMs": 6.660119
+            },
+            "ptyRoundTrip": {
+              "sampleCount": 20,
+              "minMs": 0.172068,
+              "p50Ms": 0.343345,
+              "p95Ms": 41.760977,
+              "maxMs": 41.971947
+            }
+          },
+          "terminalDrops": 0
+        }
+      ]
+    },
+    "medium": {
+      "sampleCount": 20,
+      "warmNavMinMs": 6.234051,
+      "warmNavP50Ms": 8.806084,
+      "warmNavP95Ms": 16.277261000000003,
+      "warmNavMaxMs": 19.031011,
+      "coreAndTerminal": {
+        "sampleCount": 100,
+        "minMs": 0.07132200000000001,
+        "p50Ms": 0.331463,
+        "p95Ms": 40.962932,
+        "maxMs": 41.686089
+      },
+      "perEndpoint": {
+        "health": {
+          "sampleCount": 20,
+          "minMs": 0.07132200000000001,
+          "p50Ms": 0.137364,
+          "p95Ms": 0.244151,
+          "maxMs": 0.393267
+        },
+        "workspaceStatus": {
+          "sampleCount": 20,
+          "minMs": 0.190181,
+          "p50Ms": 0.32998,
+          "p95Ms": 0.457806,
+          "maxMs": 0.46117199999999997
+        },
+        "fsList": {
+          "sampleCount": 20,
+          "minMs": 0.205149,
+          "p50Ms": 0.316676,
+          "p95Ms": 0.5310710000000001,
+          "maxMs": 0.531112
+        },
+        "gitRoots": {
+          "sampleCount": 20,
+          "minMs": 2.340525,
+          "p50Ms": 3.065345,
+          "p95Ms": 3.528772,
+          "maxMs": 3.770529
+        },
+        "ptyRoundTrip": {
+          "sampleCount": 20,
+          "minMs": 0.15689,
+          "p50Ms": 0.482922,
+          "p95Ms": 41.544757000000004,
+          "maxMs": 41.686089
+        }
+      },
+      "overlap": {
+        "barrierSynchronized": true,
+        "totalOverlapDurationMs": 491.722644,
+        "minRepOverlapDurationMs": 491.722644,
+        "observedNavigationsDuringCoreWindow": 53,
+        "observedCoreProbesDuringNavWindow": 100
+      },
+      "repetitions": [
+        {
+          "repetition": 0,
+          "barrierSynchronized": true,
+          "overlapDurationMs": 491.722644,
+          "warmNavigationSampleCount": 20,
+          "sustainedTotalNavigations": 53,
+          "observedNavigationsDuringCoreWindow": 53,
+          "completedCoreRounds": 20,
+          "observedCoreProbesDuringNavWindow": 100,
+          "warmNav": {
+            "sampleCount": 20,
+            "minMs": 6.234051,
+            "p50Ms": 8.806084,
+            "p95Ms": 16.277261000000003,
+            "maxMs": 19.031011
+          },
+          "coreAndTerminal": {
+            "sampleCount": 100,
+            "minMs": 0.07132200000000001,
+            "p50Ms": 0.331463,
+            "p95Ms": 40.962932,
+            "maxMs": 41.686089
+          },
+          "perEndpoint": {
+            "health": {
+              "sampleCount": 20,
+              "minMs": 0.07132200000000001,
+              "p50Ms": 0.137364,
+              "p95Ms": 0.244151,
+              "maxMs": 0.393267
+            },
+            "workspaceStatus": {
+              "sampleCount": 20,
+              "minMs": 0.190181,
+              "p50Ms": 0.32998,
+              "p95Ms": 0.457806,
+              "maxMs": 0.46117199999999997
+            },
+            "fsList": {
+              "sampleCount": 20,
+              "minMs": 0.205149,
+              "p50Ms": 0.316676,
+              "p95Ms": 0.5310710000000001,
+              "maxMs": 0.531112
+            },
+            "gitRoots": {
+              "sampleCount": 20,
+              "minMs": 2.340525,
+              "p50Ms": 3.065345,
+              "p95Ms": 3.528772,
+              "maxMs": 3.770529
+            },
+            "ptyRoundTrip": {
+              "sampleCount": 20,
+              "minMs": 0.15689,
+              "p50Ms": 0.482922,
+              "p95Ms": 41.544757000000004,
+              "maxMs": 41.686089
+            }
+          },
+          "terminalDrops": 0
+        }
+      ]
+    },
+    "large": {
+      "sampleCount": 20,
+      "warmNavMinMs": 10.531654,
+      "warmNavP50Ms": 17.513706,
+      "warmNavP95Ms": 40.649453,
+      "warmNavMaxMs": 57.136,
+      "coreAndTerminal": {
+        "sampleCount": 100,
+        "minMs": 0.069668,
+        "p50Ms": 0.32319800000000004,
+        "p95Ms": 40.406534,
+        "maxMs": 42.101947
+      },
+      "perEndpoint": {
+        "health": {
+          "sampleCount": 20,
+          "minMs": 0.069668,
+          "p50Ms": 0.11982200000000001,
+          "p95Ms": 0.253538,
+          "maxMs": 0.5330349999999999
+        },
+        "workspaceStatus": {
+          "sampleCount": 20,
+          "minMs": 0.21368499999999999,
+          "p50Ms": 0.307438,
+          "p95Ms": 0.454269,
+          "maxMs": 0.49043600000000004
+        },
+        "fsList": {
+          "sampleCount": 20,
+          "minMs": 0.24212699999999998,
+          "p50Ms": 0.306226,
+          "p95Ms": 0.524229,
+          "maxMs": 0.6842239999999999
+        },
+        "gitRoots": {
+          "sampleCount": 20,
+          "minMs": 2.385288,
+          "p50Ms": 3.288838,
+          "p95Ms": 4.052699,
+          "maxMs": 4.178052
+        },
+        "ptyRoundTrip": {
+          "sampleCount": 20,
+          "minMs": 0.142203,
+          "p50Ms": 0.396823,
+          "p95Ms": 41.397686,
+          "maxMs": 42.101947
+        }
+      },
+      "overlap": {
+        "barrierSynchronized": true,
+        "totalOverlapDurationMs": 452.486804,
+        "minRepOverlapDurationMs": 452.486804,
+        "observedNavigationsDuringCoreWindow": 22,
+        "observedCoreProbesDuringNavWindow": 100
+      },
+      "repetitions": [
+        {
+          "repetition": 0,
+          "barrierSynchronized": true,
+          "overlapDurationMs": 452.486804,
+          "warmNavigationSampleCount": 20,
+          "sustainedTotalNavigations": 22,
+          "observedNavigationsDuringCoreWindow": 22,
+          "completedCoreRounds": 20,
+          "observedCoreProbesDuringNavWindow": 100,
+          "warmNav": {
+            "sampleCount": 20,
+            "minMs": 10.531654,
+            "p50Ms": 17.513706,
+            "p95Ms": 40.649453,
+            "maxMs": 57.136
+          },
+          "coreAndTerminal": {
+            "sampleCount": 100,
+            "minMs": 0.069668,
+            "p50Ms": 0.32319800000000004,
+            "p95Ms": 40.406534,
+            "maxMs": 42.101947
+          },
+          "perEndpoint": {
+            "health": {
+              "sampleCount": 20,
+              "minMs": 0.069668,
+              "p50Ms": 0.11982200000000001,
+              "p95Ms": 0.253538,
+              "maxMs": 0.5330349999999999
+            },
+            "workspaceStatus": {
+              "sampleCount": 20,
+              "minMs": 0.21368499999999999,
+              "p50Ms": 0.307438,
+              "p95Ms": 0.454269,
+              "maxMs": 0.49043600000000004
+            },
+            "fsList": {
+              "sampleCount": 20,
+              "minMs": 0.24212699999999998,
+              "p50Ms": 0.306226,
+              "p95Ms": 0.524229,
+              "maxMs": 0.6842239999999999
+            },
+            "gitRoots": {
+              "sampleCount": 20,
+              "minMs": 2.385288,
+              "p50Ms": 3.288838,
+              "p95Ms": 4.052699,
+              "maxMs": 4.178052
+            },
+            "ptyRoundTrip": {
+              "sampleCount": 20,
+              "minMs": 0.142203,
+              "p50Ms": 0.396823,
+              "p95Ms": 41.397686,
+              "maxMs": 42.101947
+            }
+          },
+          "terminalDrops": 0
+        }
+      ]
+    }
+  },
+  "coreAndTerminalP50Ms": 0.34088,
+  "coreAndTerminalP95Ms": 40.730162,
+  "corePerEndpoint": {
+    "health": {
+      "sampleCount": 60,
+      "minMs": 0.057346,
+      "p50Ms": 0.14155099999999998,
+      "p95Ms": 0.377197,
+      "maxMs": 1.463565
+    },
+    "workspaceStatus": {
+      "sampleCount": 60,
+      "minMs": 0.162861,
+      "p50Ms": 0.32998,
+      "p95Ms": 1.435122,
+      "maxMs": 1.73679
+    },
+    "fsList": {
+      "sampleCount": 60,
+      "minMs": 0.205149,
+      "p50Ms": 0.327525,
+      "p95Ms": 0.531112,
+      "maxMs": 0.6842239999999999
+    },
+    "gitRoots": {
+      "sampleCount": 60,
+      "minMs": 2.340525,
+      "p50Ms": 3.159339,
+      "p95Ms": 4.093786000000001,
+      "maxMs": 6.660119
+    },
+    "ptyRoundTrip": {
+      "sampleCount": 60,
+      "minMs": 0.142203,
+      "p50Ms": 0.464448,
+      "p95Ms": 41.686089,
+      "maxMs": 42.101947
+    }
+  },
+  "coreScheduleOverlap": {
+    "allTiersOverlapped": true,
+    "barrierSynchronized": true,
+    "tiersCovered": [
+      "small",
+      "medium",
+      "large"
+    ],
+    "totalOverlapDurationMs": 1447.2909129999998,
+    "observedNavigationsDuringCoreWindow": 162,
+    "observedCoreProbesDuringNavWindow": 300
+  },
+  "resources": {
+    "sampleCount": 253,
+    "phaseSampleCounts": {
+      "startup": 91,
+      "warm": 34,
+      "browser": 16,
+      "reap": 118
+    },
+    "perPhaseObservations": {
+      "startup": {
+        "samples": 115,
+        "liveSamples": 91,
+        "zeroSamples": 24
+      },
+      "warm": {
+        "samples": 34,
+        "liveSamples": 34,
+        "zeroSamples": 0
+      },
+      "browser": {
+        "samples": 67,
+        "liveSamples": 16,
+        "zeroSamples": 51
+      },
+      "reap": {
+        "samples": 118,
+        "liveSamples": 113,
+        "zeroSamples": 5
+      }
+    },
+    "postCleanupZeroObservations": 1,
+    "peakTreeRssBytes": 775786496,
+    "p50TreeRssBytes": 292806656,
+    "p95TreeRssBytes": 694857728,
+    "maxObservedProcessesAcrossTrees": 4,
+    "p95ObservedProcessesAcrossTrees": 4,
+    "totalCpuDeltaMs": 34870,
+    "intervalCpuDeltaMsP50": 100,
+    "intervalCpuDeltaMsP95": 410,
+    "intervalCpuDeltaMsMax": 520,
+    "intervalCpuPctP50": 99.9177586919982,
+    "intervalCpuPctP95": 409.7050164851809,
+    "intervalCpuPctMax": 518.5887178491325,
+    "measuredScope": {
+      "scope": "whole-semantic-child-tree-descendants-of-supervisor",
+      "phasesCovered": [
+        "startup",
+        "warm",
+        "browser",
+        "reap"
+      ],
+      "samplingIntervalMs": 100,
+      "clockTicksPerSecond": 100,
+      "cpuAccounting": "cumulative totalCpuDeltaMs sums latest observed lifetime ticks (utime + stime) per (pid, starttime) across all discovered semantic trees as a sampled lower bound; intervalCpuDeltaMs measures delta ticks across consecutive ~100ms intervals with newly discovered processes baselined on first observation to avoid charging multi-second startup work to single sample rate denominators; intervalCpuPct is defined as (intervalCpuDeltaMs / elapsedMs) * 100.0 where 100% equals 1 logical CPU core",
+      "rssAccounting": "procfs /proc/<pid>/statm resident pages * _SC_PAGESIZE for non-zombie live processes across discovered semantic trees"
+    }
+  },
+  "clientThresholdQualification": {
+    "status": "MEASURED",
+    "expectedThresholdBytes": 131072,
+    "negotiatedThresholdBytes": 131072,
+    "candidateThresholdsTested": [
+      32768,
+      65536,
+      131072
+    ],
+    "fixedUnionStepCount": 21,
+    "fixedUnionSteps": [
+      {
+        "stepIndex": 1,
+        "thresholdGroup": 32768,
+        "label": "32768_below_ascii",
+        "crossingKind": "below",
+        "multibyte": false,
+        "postEditUtf8Bytes": 32767,
+        "postEditUtf16Units": 32767,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 32975,
+        "contentChangesBytes": 32803,
+        "serializationMs": 0,
+        "didChangeSyncMs": 0.9000000059604645,
+        "navigationMs": 458.59999999403954,
+        "documentVersion": 2,
+        "verifiedLine19Utf16Col": 39
+      },
+      {
+        "stepIndex": 2,
+        "thresholdGroup": 32768,
+        "label": "32768_below_multibyte",
+        "crossingKind": "below",
+        "multibyte": true,
+        "postEditUtf8Bytes": 32767,
+        "postEditUtf16Units": 16747,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 32975,
+        "contentChangesBytes": 32803,
+        "serializationMs": 0.20000001788139343,
+        "didChangeSyncMs": 1.2000000178813934,
+        "navigationMs": 12.099999994039536,
+        "documentVersion": 3,
+        "verifiedLine19Utf16Col": 45
+      },
+      {
+        "stepIndex": 3,
+        "thresholdGroup": 32768,
+        "label": "32768_cross_up_to_equal",
+        "crossingKind": "upward_to_equal",
+        "multibyte": true,
+        "postEditUtf8Bytes": 32768,
+        "postEditUtf16Units": 16748,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 32976,
+        "contentChangesBytes": 32804,
+        "serializationMs": 0.19999998807907104,
+        "didChangeSyncMs": 1.5,
+        "navigationMs": 7.800000011920929,
+        "documentVersion": 4,
+        "verifiedLine19Utf16Col": 45
+      },
+      {
+        "stepIndex": 4,
+        "thresholdGroup": 32768,
+        "label": "32768_cross_up_to_above",
+        "crossingKind": "upward_to_above",
+        "multibyte": true,
+        "postEditUtf8Bytes": 32769,
+        "postEditUtf16Units": 16749,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 32977,
+        "contentChangesBytes": 32805,
+        "serializationMs": 0,
+        "didChangeSyncMs": 0.8999999761581421,
+        "navigationMs": 7.0999999940395355,
+        "documentVersion": 5,
+        "verifiedLine19Utf16Col": 45
+      },
+      {
+        "stepIndex": 5,
+        "thresholdGroup": 32768,
+        "label": "32768_above_multibyte",
+        "crossingKind": "sustained_above",
+        "multibyte": true,
+        "postEditUtf8Bytes": 32832,
+        "postEditUtf16Units": 16782,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 33040,
+        "contentChangesBytes": 32868,
+        "serializationMs": 0.19999998807907104,
+        "didChangeSyncMs": 1.4000000059604645,
+        "navigationMs": 7.0999999940395355,
+        "documentVersion": 6,
+        "verifiedLine19Utf16Col": 45
+      },
+      {
+        "stepIndex": 6,
+        "thresholdGroup": 32768,
+        "label": "32768_cross_down_to_equal",
+        "crossingKind": "downward_to_equal",
+        "multibyte": true,
+        "postEditUtf8Bytes": 32768,
+        "postEditUtf16Units": 16748,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 32976,
+        "contentChangesBytes": 32804,
+        "serializationMs": 0.09999999403953552,
+        "didChangeSyncMs": 1.0999999940395355,
+        "navigationMs": 8,
+        "documentVersion": 7,
+        "verifiedLine19Utf16Col": 45
+      },
+      {
+        "stepIndex": 7,
+        "thresholdGroup": 32768,
+        "label": "32768_cross_down_to_below",
+        "crossingKind": "downward_to_below",
+        "multibyte": false,
+        "postEditUtf8Bytes": 32767,
+        "postEditUtf16Units": 32767,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 32975,
+        "contentChangesBytes": 32803,
+        "serializationMs": 0.09999999403953552,
+        "didChangeSyncMs": 0.7000000178813934,
+        "navigationMs": 6.0999999940395355,
+        "documentVersion": 8,
+        "verifiedLine19Utf16Col": 39
+      },
+      {
+        "stepIndex": 8,
+        "thresholdGroup": 65536,
+        "label": "65536_below_ascii",
+        "crossingKind": "below",
+        "multibyte": false,
+        "postEditUtf8Bytes": 65535,
+        "postEditUtf16Units": 65535,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 65743,
+        "contentChangesBytes": 65571,
+        "serializationMs": 0,
+        "didChangeSyncMs": 0.9000000059604645,
+        "navigationMs": 7.899999976158142,
+        "documentVersion": 9,
+        "verifiedLine19Utf16Col": 39
+      },
+      {
+        "stepIndex": 9,
+        "thresholdGroup": 65536,
+        "label": "65536_below_multibyte",
+        "crossingKind": "below",
+        "multibyte": true,
+        "postEditUtf8Bytes": 65535,
+        "postEditUtf16Units": 33130,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 65744,
+        "contentChangesBytes": 65571,
+        "serializationMs": 0.09999999403953552,
+        "didChangeSyncMs": 1.0999999940395355,
+        "navigationMs": 7,
+        "documentVersion": 10,
+        "verifiedLine19Utf16Col": 45
+      },
+      {
+        "stepIndex": 10,
+        "thresholdGroup": 65536,
+        "label": "65536_cross_up_to_equal",
+        "crossingKind": "upward_to_equal",
+        "multibyte": true,
+        "postEditUtf8Bytes": 65536,
+        "postEditUtf16Units": 33131,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 65745,
+        "contentChangesBytes": 65572,
+        "serializationMs": 0.19999998807907104,
+        "didChangeSyncMs": 1.2999999821186066,
+        "navigationMs": 6.0999999940395355,
+        "documentVersion": 11,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 11,
+        "thresholdGroup": 65536,
+        "label": "65536_cross_up_to_above",
+        "crossingKind": "upward_to_above",
+        "multibyte": true,
+        "postEditUtf8Bytes": 65537,
+        "postEditUtf16Units": 33132,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 65746,
+        "contentChangesBytes": 65573,
+        "serializationMs": 0.20000001788139343,
+        "didChangeSyncMs": 1.300000011920929,
+        "navigationMs": 6.699999988079071,
+        "documentVersion": 12,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 12,
+        "thresholdGroup": 65536,
+        "label": "65536_above_multibyte",
+        "crossingKind": "sustained_above",
+        "multibyte": true,
+        "postEditUtf8Bytes": 65600,
+        "postEditUtf16Units": 33165,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 65809,
+        "contentChangesBytes": 65636,
+        "serializationMs": 0.30000001192092896,
+        "didChangeSyncMs": 1.2999999821186066,
+        "navigationMs": 6.600000023841858,
+        "documentVersion": 13,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 13,
+        "thresholdGroup": 65536,
+        "label": "65536_cross_down_to_equal",
+        "crossingKind": "downward_to_equal",
+        "multibyte": true,
+        "postEditUtf8Bytes": 65536,
+        "postEditUtf16Units": 33131,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 65745,
+        "contentChangesBytes": 65572,
+        "serializationMs": 0,
+        "didChangeSyncMs": 1,
+        "navigationMs": 6.799999982118607,
+        "documentVersion": 14,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 14,
+        "thresholdGroup": 65536,
+        "label": "65536_cross_down_to_below",
+        "crossingKind": "downward_to_below",
+        "multibyte": false,
+        "postEditUtf8Bytes": 65535,
+        "postEditUtf16Units": 65535,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 65744,
+        "contentChangesBytes": 65571,
+        "serializationMs": 0.09999999403953552,
+        "didChangeSyncMs": 1,
+        "navigationMs": 7.200000017881393,
+        "documentVersion": 15,
+        "verifiedLine19Utf16Col": 40
+      },
+      {
+        "stepIndex": 15,
+        "thresholdGroup": 131072,
+        "label": "131072_below_ascii",
+        "crossingKind": "below",
+        "multibyte": false,
+        "postEditUtf8Bytes": 131071,
+        "postEditUtf16Units": 131071,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 131280,
+        "contentChangesBytes": 131107,
+        "serializationMs": 0.29999998211860657,
+        "didChangeSyncMs": 1.5999999940395355,
+        "navigationMs": 9.099999994039536,
+        "documentVersion": 16,
+        "verifiedLine19Utf16Col": 40
+      },
+      {
+        "stepIndex": 16,
+        "thresholdGroup": 131072,
+        "label": "131072_below_multibyte",
+        "crossingKind": "below",
+        "multibyte": true,
+        "postEditUtf8Bytes": 131071,
+        "postEditUtf16Units": 65901,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 131280,
+        "contentChangesBytes": 131107,
+        "serializationMs": 0.3999999761581421,
+        "didChangeSyncMs": 2,
+        "navigationMs": 9.800000011920927,
+        "documentVersion": 17,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 17,
+        "thresholdGroup": 131072,
+        "label": "131072_cross_up_to_equal",
+        "crossingKind": "upward_to_equal",
+        "multibyte": true,
+        "postEditUtf8Bytes": 131072,
+        "postEditUtf16Units": 65902,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 130774,
+        "contentChangesBytes": 130601,
+        "serializationMs": 0.20000001788139343,
+        "didChangeSyncMs": 2.5999999940395355,
+        "navigationMs": 8.699999988079071,
+        "documentVersion": 18,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 18,
+        "thresholdGroup": 131072,
+        "label": "131072_cross_up_to_above",
+        "crossingKind": "upward_to_above",
+        "multibyte": true,
+        "postEditUtf8Bytes": 131073,
+        "postEditUtf16Units": 65903,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 130775,
+        "contentChangesBytes": 130602,
+        "serializationMs": 0.19999998807907104,
+        "didChangeSyncMs": 1.7999999821186066,
+        "navigationMs": 8.400000005960464,
+        "documentVersion": 19,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 19,
+        "thresholdGroup": 131072,
+        "label": "131072_above_multibyte",
+        "crossingKind": "sustained_above",
+        "multibyte": true,
+        "postEditUtf8Bytes": 131136,
+        "postEditUtf16Units": 65931,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 130838,
+        "contentChangesBytes": 130665,
+        "serializationMs": 0.20000001788139343,
+        "didChangeSyncMs": 2.199999988079071,
+        "navigationMs": 10.200000017881392,
+        "documentVersion": 20,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 20,
+        "thresholdGroup": 131072,
+        "label": "131072_cross_down_to_equal",
+        "crossingKind": "downward_to_equal",
+        "multibyte": true,
+        "postEditUtf8Bytes": 131072,
+        "postEditUtf16Units": 65902,
+        "expectedSyncMode": "incremental",
+        "observedSyncMode": "incremental",
+        "wireFrameBytes": 130774,
+        "contentChangesBytes": 130601,
+        "serializationMs": 0.30000001192092896,
+        "didChangeSyncMs": 2.5,
+        "navigationMs": 11.800000011920927,
+        "documentVersion": 21,
+        "verifiedLine19Utf16Col": 46
+      },
+      {
+        "stepIndex": 21,
+        "thresholdGroup": 131072,
+        "label": "131072_cross_down_to_below",
+        "crossingKind": "downward_to_below",
+        "multibyte": false,
+        "postEditUtf8Bytes": 131071,
+        "postEditUtf16Units": 131071,
+        "expectedSyncMode": "full",
+        "observedSyncMode": "full",
+        "wireFrameBytes": 131280,
+        "contentChangesBytes": 131107,
+        "serializationMs": 0.09999999403953552,
+        "didChangeSyncMs": 1.800000011920929,
+        "navigationMs": 10.099999994039536,
+        "documentVersion": 22,
+        "verifiedLine19Utf16Col": 40
+      }
+    ],
+    "thresholdCrossings": {
+      "32768": {
+        "belowBytes": 32767,
+        "equalBytes": 32768,
+        "aboveBytes": 32769,
+        "stepCount": 7,
+        "observedModes": [
+          {
+            "label": "32768_below_ascii",
+            "bytes": 32767,
+            "syncMode": "full",
+            "wireFrameBytes": 32975
+          },
+          {
+            "label": "32768_below_multibyte",
+            "bytes": 32767,
+            "syncMode": "full",
+            "wireFrameBytes": 32975
+          },
+          {
+            "label": "32768_cross_up_to_equal",
+            "bytes": 32768,
+            "syncMode": "full",
+            "wireFrameBytes": 32976
+          },
+          {
+            "label": "32768_cross_up_to_above",
+            "bytes": 32769,
+            "syncMode": "full",
+            "wireFrameBytes": 32977
+          },
+          {
+            "label": "32768_above_multibyte",
+            "bytes": 32832,
+            "syncMode": "full",
+            "wireFrameBytes": 33040
+          },
+          {
+            "label": "32768_cross_down_to_equal",
+            "bytes": 32768,
+            "syncMode": "full",
+            "wireFrameBytes": 32976
+          },
+          {
+            "label": "32768_cross_down_to_below",
+            "bytes": 32767,
+            "syncMode": "full",
+            "wireFrameBytes": 32975
+          }
+        ]
+      },
+      "65536": {
+        "belowBytes": 65535,
+        "equalBytes": 65536,
+        "aboveBytes": 65537,
+        "stepCount": 7,
+        "observedModes": [
+          {
+            "label": "65536_below_ascii",
+            "bytes": 65535,
+            "syncMode": "full",
+            "wireFrameBytes": 65743
+          },
+          {
+            "label": "65536_below_multibyte",
+            "bytes": 65535,
+            "syncMode": "full",
+            "wireFrameBytes": 65744
+          },
+          {
+            "label": "65536_cross_up_to_equal",
+            "bytes": 65536,
+            "syncMode": "full",
+            "wireFrameBytes": 65745
+          },
+          {
+            "label": "65536_cross_up_to_above",
+            "bytes": 65537,
+            "syncMode": "full",
+            "wireFrameBytes": 65746
+          },
+          {
+            "label": "65536_above_multibyte",
+            "bytes": 65600,
+            "syncMode": "full",
+            "wireFrameBytes": 65809
+          },
+          {
+            "label": "65536_cross_down_to_equal",
+            "bytes": 65536,
+            "syncMode": "full",
+            "wireFrameBytes": 65745
+          },
+          {
+            "label": "65536_cross_down_to_below",
+            "bytes": 65535,
+            "syncMode": "full",
+            "wireFrameBytes": 65744
+          }
+        ]
+      },
+      "131072": {
+        "belowBytes": 131071,
+        "equalBytes": 131072,
+        "aboveBytes": 131073,
+        "stepCount": 7,
+        "observedModes": [
+          {
+            "label": "131072_below_ascii",
+            "bytes": 131071,
+            "syncMode": "full",
+            "wireFrameBytes": 131280
+          },
+          {
+            "label": "131072_below_multibyte",
+            "bytes": 131071,
+            "syncMode": "full",
+            "wireFrameBytes": 131280
+          },
+          {
+            "label": "131072_cross_up_to_equal",
+            "bytes": 131072,
+            "syncMode": "incremental",
+            "wireFrameBytes": 130774
+          },
+          {
+            "label": "131072_cross_up_to_above",
+            "bytes": 131073,
+            "syncMode": "incremental",
+            "wireFrameBytes": 130775
+          },
+          {
+            "label": "131072_above_multibyte",
+            "bytes": 131136,
+            "syncMode": "incremental",
+            "wireFrameBytes": 130838
+          },
+          {
+            "label": "131072_cross_down_to_equal",
+            "bytes": 131072,
+            "syncMode": "incremental",
+            "wireFrameBytes": 130774
+          },
+          {
+            "label": "131072_cross_down_to_below",
+            "bytes": 131071,
+            "syncMode": "full",
+            "wireFrameBytes": 131280
+          }
+        ]
+      }
+    },
+    "bySyncMode": {
+      "full": {
+        "stepCount": 17,
+        "wireFrameBytes": {
+          "sampleCount": 17,
+          "min": 32975,
+          "p50": 65744,
+          "p95": 131280,
+          "max": 131280
+        },
+        "serializationMs": {
+          "sampleCount": 17,
+          "min": 0,
+          "p50": 0.09999999403953552,
+          "p95": 0.3999999761581421,
+          "max": 0.3999999761581421
+        },
+        "didChangeSyncMs": {
+          "sampleCount": 17,
+          "min": 0.7000000178813934,
+          "p50": 1.2000000178813934,
+          "p95": 2,
+          "max": 2
+        },
+        "navigationMs": {
+          "sampleCount": 17,
+          "min": 6.0999999940395355,
+          "p50": 7.200000017881393,
+          "p95": 458.59999999403954,
+          "max": 458.59999999403954
+        }
+      },
+      "incremental": {
+        "stepCount": 4,
+        "wireFrameBytes": {
+          "sampleCount": 4,
+          "min": 130774,
+          "p50": 130774,
+          "p95": 130838,
+          "max": 130838
+        },
+        "serializationMs": {
+          "sampleCount": 4,
+          "min": 0.19999998807907104,
+          "p50": 0.20000001788139343,
+          "p95": 0.30000001192092896,
+          "max": 0.30000001192092896
+        },
+        "didChangeSyncMs": {
+          "sampleCount": 4,
+          "min": 1.7999999821186066,
+          "p50": 2.199999988079071,
+          "p95": 2.5999999940395355,
+          "max": 2.5999999940395355
+        },
+        "navigationMs": {
+          "sampleCount": 4,
+          "min": 8.400000005960464,
+          "p50": 8.699999988079071,
+          "p95": 11.800000011920927,
+          "max": 11.800000011920927
+        }
+      }
+    },
+    "overallDistributions": {
+      "serializationMs": {
+        "sampleCount": 21,
+        "min": 0,
+        "p50": 0.19999998807907104,
+        "p95": 0.30000001192092896,
+        "max": 0.3999999761581421
+      },
+      "didChangeSyncMs": {
+        "sampleCount": 21,
+        "min": 0.7000000178813934,
+        "p50": 1.2999999821186066,
+        "p95": 2.5,
+        "max": 2.5999999940395355
+      },
+      "navigationMs": {
+        "sampleCount": 21,
+        "min": 6.0999999940395355,
+        "p50": 7.899999976158142,
+        "p95": 12.099999994039536,
+        "max": 458.59999999403954
+      }
+    },
+    "staleReveals": 0,
+    "error": null,
+    "totalWirePayloadBytes": 1608171
+  },
+  "reapDurationP95Ms": 1081.845858,
+  "reapDurationMaxMs": 1081.845858,
+  "terminalDrops": 0,
+  "staleReveals": 0,
+  "staleRevealsStatus": "MEASURED_FROM_REAL_BROWSER_SEMANTIC_CLIENT_WS",
+  "unauthorizedOrOutsideTargetDisclosures": 0,
+  "projectCodeCanaryExecutionsInDeniedRuns": 0,
+  "orphanProcesses": 0,
+  "failureReason": null,
+  "sessionPressureDiagnostics": {
+    "measuredScope": {
+      "inspectedActorHandles": "cold, warm_main, warm_peer, hostile (directly held SemanticSessionHandle instances)",
+      "browserWsSessions": null,
+      "browserWsSessionStatus": "UNMEASURED (browser WS-created sessions not directly held as session handles in harness; explicitly unmeasured, not fake 0)",
+      "queueSlotSemantics": "occupied and reserved slots in bounded mpsc channels, excluding active writer in write syscall",
+      "childOutboundBytesSemantics": "child outbound buffered/reserved payload bytes, excluding active writer in write syscall",
+      "inspectedSessionCount": 19,
+      "sampledConcurrentPeakSemantics": "completion-boundary sequential handle observations during sustained loop, not atomic concurrent hardware snapshot; authoritative transition highwaters are preserved per-session in maxPerSessionPeaks"
+    },
+    "maxPerSessionPeaks": {
+      "inFlightRequests": 1,
+      "commandQueueSlots": 3,
+      "childOutboundQueueSlots": 5,
+      "childOutboundBytes": 138505,
+      "openDocuments": 8,
+      "overlayBytes": 262350
+    },
+    "sampledConcurrentPeaks": {
+      "inFlightRequests": 0,
+      "commandQueueSlots": 0,
+      "childOutboundQueueSlots": 0,
+      "childOutboundBytes": 0,
+      "openDocuments": 9,
+      "overlayBytes": 266446
+    },
+    "postReapCleanup": {
+      "reapedSessionCount": 19,
+      "allClean": true,
+      "maxResidualOverlayBytes": 0,
+      "maxResidualOpenDocuments": 0,
+      "maxResidualInFlightRequests": 0,
+      "maxResidualCommandQueueSlots": 0,
+      "maxResidualChildOutboundQueueSlots": 0,
+      "maxResidualChildOutboundBytes": 0
+    },
+    "lifetimeTotals": {
+      "spawnAttempts": 19,
+      "successfulSpawns": 19,
+      "restartAttempts": 0,
+      "successfulRestarts": 0
+    },
+    "unexpectedErrorCounters": {
+      "navigationTimeouts": 0,
+      "navigationCancellations": 0,
+      "navigationOverloads": 0,
+      "staleResults": 0
+    }
+  },
+  "hostNoise": {
+    "before": {
+      "scope": "whole-host context, not isolated workload CPU",
+      "loadAverage1m5m15m": [
+        4.22,
+        3.72,
+        2.54
+      ],
+      "memoryAvailableBytes": 15542194176
+    },
+    "after": {
+      "scope": "whole-host context, not isolated workload CPU",
+      "loadAverage1m5m15m": [
+        4.68,
+        3.87,
+        2.63
+      ],
+      "memoryAvailableBytes": 15331733504
+    }
+  },
+  "lastOperation": "project-loading-denial",
+  "cargoExitStatus": 0,
+  "cargoSignal": null
+}

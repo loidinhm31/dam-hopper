@@ -4,7 +4,7 @@ This index routes server-owned settings and operator tasks to focused references
 
 ## Contents
 
-- [Runtime and service settings](./server-runtime-settings.md) — session persistence, telemetry, and diagnostics.
+- [Runtime and service settings](./server-runtime-settings.md) — session persistence, semantic navigation, telemetry, and diagnostics.
 - [Environment and authentication](./server-environment-auth.md) — global defaults, environment variables, server tokens, and MFA.
 - [Deployment and transport](./server-deployment.md) — launch modes, deployment, CORS, media, and host-resource SSE.
 - [Operations and troubleshooting](./server-operations.md) — SSH key loading, smoke checks, Windows setup, and OMP integration.

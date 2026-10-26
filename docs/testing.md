@@ -40,6 +40,45 @@ Dam-Hopper maintains strict quality gates across backend, shared libraries, and 
 - **Exclusion of legacy `.e2e.tsx`:** Old `.e2e.tsx` pseudo-harnesses are completely retired and excluded from all runners.
 - **Typecheck Isolation:** `packages/ui/tsconfig.e2e.json` typechecks E2E specs and fixtures without altering production compiler options (`pnpm --filter @dam-hopper/ui test:e2e:typecheck`).
 
+### Semantic navigation qualification
+
+`node scripts/qualify-semantic-navigation.mjs` runs `verify-inputs`, `off-baseline`,
+`exploratory`, or `final`. Use `--output` outside the checkout for disposable raw
+artifacts. The predeclared method and budgets live in
+`plans/260901-1000-lsp-server-integration/reports/phase-09-qualification-budget-v1.json`.
+Exploration selects one `--candidate-threshold` matching the compiled server
+constant; it cannot override runtime policy. Freeze `finalPolicy` only after
+candidate evidence; final runs require optimized builds and retain failures.
+
+`node --test scripts/qualify-semantic-navigation.test.mjs` checks fail-closed
+verdicts: numerical boundaries, missing measurements, hidden restarts, residual
+storage, incomplete overlap, and stale reveals. These policy tests do not replace
+runtime measurements.
+
+Pressure reports distinguish transition-maintained per-session high-water marks
+from sampled concurrent observations. Directly held actor handles are inspected;
+browser-created WebSocket session pressure remains explicitly unmeasured. Queue
+slot/byte gauges exclude dequeued active writes. Numeric diagnostics survive
+retirement so post-reap zeros cannot be inferred from a revocation facade.
+
+
+The ignored Rust qualification owns authenticated SQLite/Axum sessions and the
+packaged engine. Its private loopback helper launches the focused browser client
+measurement across a fixed UTF-8 threshold union. That suite skips outside the
+owned harness; a skip is not qualification. It measures production synchronization
+and actual Monaco command freshness, not the complete application shell.
+`semantic-navigation.browser.tsx` independently checks native Monaco provider
+coexistence with a controlled backend collaborator.
+
+Phase 10 provides full application qualification via `packages/ui/e2e/semantic-navigation/semantic-navigation.spec.ts`.
+This Playwright suite tests the actual built web SPA (`apps/web/dist`) against an authenticated
+containerized Linux Rust backend with dynamically staged immutable semantic engine artifacts
+(`/opt/dam-hopper/lib/semantic-engine`), verifying default-OFF startup, admin hot toggle, non-admin
+PATCH 403 rejection, Monaco Go to Definition across `.ts`, `.tsx`, `.js`, `.jsx`, non-BMP UTF-16
+astral emoji coordinates, multi-result peek, in-memory dirty buffer navigation with container disk
+byte isolation, 64 KiB adaptive sync crossings, socket loss reconnect recovery with dirty buffer replay,
+complete zero-child teardown on disable, and 6 full-viewport visual checkpoints under `review.md` governance.
+
 ---
 
 ## 3. Running Tests
@@ -97,6 +136,10 @@ pnpm --filter @dam-hopper/ui exec vitest run src/api/auth-client.test.ts
 pnpm --filter @dam-hopper/ui exec vitest run src/components/organisms/LoginDevicesSection.test.tsx src/components/organisms/ServerSettingsDialog.test.tsx src/components/organisms/login-devices-connections.test.tsx
 pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/login-devices.browser.tsx
 E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e device-login-management/device-login-management.spec.ts
+
+# Feature: Semantic Navigation Application E2E Qualification (Phase 10)
+pnpm --filter @dam-hopper/ui test:e2e:typecheck
+E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e semantic-navigation/semantic-navigation.spec.ts
 ```
 ---
 
@@ -117,6 +160,11 @@ Application E2E tests interact with authentic production binaries rather than sy
   - The application container enforces `HOME=/e2e/home` and controlled container `/etc`.
   - Runner workstation `$HOME` and user personal settings are never mounted, protecting against host configuration leakage or poisoning.
 
+- **Bundled Semantic Engine Staging (`config.semanticEngine`):**
+  - Copies verified bundled semantic engine assets (`ensureVerifiedSemanticEngineStaged`) into the application container at `/opt/dam-hopper/lib/semantic-engine/` (`node`, `tsls`, `package.json`), reflecting production deployment layout with pinned SHA-256 digests.
+  - When `config.seedSemanticFixtures` is enabled, `createSeedTree` seeds deterministic TypeScript and JavaScript fixtures (`tsconfig.json`, `types.ts`, `impl.ts`, `widget.tsx`, `helper.js`, `card.jsx`, `unicode.ts`, `multi_def.ts`, `unsupported.rs`, `adaptive_sync.ts`).
+  - Container-level user roles (`config.userRoles`) configure database-level role claims (`"admin"` vs `"user"`), allowing E2E tests to exercise fresh current-admin authorization and non-admin mutation rejection.
+  - Suites inspect live container process tables and filesystem state using `appServices.execInContainer(command, env)`.
 ### Deterministic Auth Seeding
 - The `application_e2e_seed` binary initializes the selected auth backend (MongoDB collections by default, or SQLite via `--sqlite-path` / `DAM_HOPPER_AUTH_SQLITE_PATH`), creates an enabled `admin` user and active session, and signs V2 token claims using the fixture server token.
 - Playwright browser contexts are pre-seeded via `storageState` with production `localStorage` keys:
@@ -154,6 +202,22 @@ Application E2E journeys validate end-to-end user workflows across containerized
    - Revokes another session and verifies immediate rejection of revoked credentials for protected HTTP and WebSocket endpoints while current session remains authenticated.
    - Tests self-revocation from Server Settings dialog, confirming local profile credential clearing, no unintended cookie mutation, and draft Save protection.
    - Captures full-viewport visual evidence across desktop (1440x900) and narrow viewports (320x667). Automated runs initialize `review.md` to `PENDING_HUMAN_REVIEW` pending operator visual inspection.
+4. **Semantic Navigation Qualification (`packages/ui/e2e/semantic-navigation/semantic-navigation.spec.ts` — Phase 10):**
+   - Starts isolated application services with `authBackend: "mongo"`, `semanticEngine: true`, and `seedSemanticFixtures: true`, seeding an `admin` and an ordinary `normaluser` (`userRoles: { normaluser: "user" }`).
+   - Verifies default-OFF settings via `GET /api/semantic/settings` (`configuredEnabled: false`, `runtimeEnabled: false`, `policyCapability: "portable-only"`, `canMutate: true`), corroborates zero language server processes in the container, and verifies non-admin `PATCH /api/semantic/settings` with `{ enabled: true }` returns HTTP 403 Forbidden.
+   - Navigates to `/settings`, verifies the Semantic Navigation accordion toggle is unchecked, and captures Checkpoint 1 (`default-off.png`).
+   - Toggles semantic navigation ON in the UI as Admin; verifies instant hot enablement without daemon restart, confirms zero child processes in idle state, and captures Checkpoint 2 (`admin-enabled-portable.png`) showing the advisory portable resource limits warning banner.
+   - Navigates to `/workspace` and verifies Monaco Go to Definition jumps across:
+     - TypeScript (`impl.ts` -> `types.ts`, positioning at line 1 and displaying `TS/JS Ready`), capturing Checkpoint 3 (`definition-jump.png`).
+     - TSX (`widget.tsx` -> `impl.ts`).
+     - JSX (`card.jsx` -> `helper.js`).
+     - Non-BMP UTF-16 coordinates (`unicode.ts` with emoji strings `Prefix 🌍🚀 `, verifying cursor offset calculation).
+     - Multi-result peek widget for merged interface/type declarations (`multi_def.ts`), capturing Checkpoint 4 (`multi-result-selection.png`).
+     - Unsupported languages (`unsupported.rs`, confirming zero language server requests and no `TS/JS Ready` badge).
+   - In-memory dirty edit verification: edits `impl.ts` in-memory (adding `getUnsavedValue` and `testDirtyCall`), asserts `data-dirty="true"` on the tab, triggers definition to `getUnsavedValue`, and verifies container filesystem content omits unsaved edits (`readContainerFile` does not contain `getUnsavedValue`), capturing Checkpoint 5 (`threshold-dirty-edit.png`).
+   - Adaptive wire sync crossings: exercises `adaptive_sync.ts` below 64 KiB (~61.7 KiB), inserts padding lines crossing above 64 KiB (>69 KiB) to switch wire sync to ranged incremental edits, undoes padding to cross back below 64 KiB, and verifies definition navigation remains functional at each step.
+   - Reconnect recovery: triggers `forceSocketLoss()` on the active `SemanticClient`, asserts auto-reconnect backoff, restores `TS/JS Ready` status, verifies in-memory dirty buffer text continuity, and navigates definition on restored session.
+   - Admin disable and complete teardown: toggles semantic navigation OFF in `/settings`, asserts "Semantic navigation disabled", verifies strictly 0 orphan language server processes (`typescript-language-server`, `tsserver`) remain in the container via procfs scan, returns to `/workspace`, and captures Checkpoint 6 (`narrow-layout-dock.png`) recording `dockWidth: 320` metadata convention within the 1440x900 viewport.
 ---
 
 ## 6. Visual Evidence Authenticity & Governance
@@ -161,6 +225,13 @@ Application E2E journeys validate end-to-end user workflows across containerized
 ### Full Application Viewport Capture
 - Screenshots must capture the **complete viewport** (1440x900 default, 320px narrow dock checkpoint).
 - Regional snippets, element-only crops, and synthetic HTML captures are forbidden because they conceal layout clipping, z-index bugs, and viewport overflow.
+- **Semantic Navigation Visual Checkpoints (Phase 10):**
+  - `default-off.png` (1440x900): Settings page showing toggle default-OFF, zero child processes in container, and non-admin mutation rejected.
+  - `admin-enabled-portable.png` (1440x900): Settings page showing toggle enabled by Admin with visible Advisory Portable Resource Limits warning banner and zero child processes on idle.
+  - `definition-jump.png` (1440x900): Workspace editor showing definition jump from `impl.ts` to `types.ts`, cursor/selection on `export interface SemanticItem`, and `TS/JS Ready` status.
+  - `multi-result-selection.png` (1440x900): Workspace editor displaying multi-result Definition peek widget for `MultiTargetConfig` in `multi_def.ts`.
+  - `threshold-dirty-edit.png` (1440x900): Workspace editor displaying in-memory dirty buffer freshness navigation to unsaved method `getUnsavedValue` with container disk content untouched.
+  - `narrow-layout-dock.png` (1440x900): Workspace editor in narrow dock layout (320px dock convention) with `impl.ts` open, Semantic Navigation disabled, and strictly zero child processes remaining in container.
 
 ### Colocated Evidence Artifacts
 - All evidence artifacts are colocated beside the test in `packages/ui/e2e/<case-name>/`:
@@ -233,7 +304,7 @@ Application E2E journeys validate end-to-end user workflows across containerized
 
 ### Baseline Rollout Classification
 
-The table below records the baseline suite classification from the initial 4-tier runner rollout (PR #44); subsequent feature deliveries add targeted journeys (including `editor-git-blame/editor-git-blame.spec.ts` and `sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`):
+The table below records the baseline suite classification from the initial 4-tier runner rollout (PR #44); subsequent feature deliveries add targeted journeys (including `editor-git-blame/editor-git-blame.spec.ts`, `sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`, and `semantic-navigation/semantic-navigation.spec.ts`):
 
 | Category | Suite Count | Declared Tests | Test Type | Status |
 |---|---|---|---|---|

@@ -10,7 +10,7 @@ DamHopper is a multi-profile development workbench for web and desktop. An Axum/
 - Real-time agent status (OMP loopback WebSocket; Codex and Claude protected Unix sockets), workflow tracking, Agent Store distribution, browser debugging, and host-resource monitoring.
 - Optional Linux terminal idle suspend with privileged RTC wake helper, and encrypted file uploads via OPAQUE PAKE. Cognito Mode is an in-browser visual privacy mask, not authentication or content redaction.
 - Native desktop local SSH port forwarding (supported strictly on Windows desktop; non-Windows native desktop enforces exact same-origin profile URLs).
-
+- Fast, secure TypeScript and JavaScript semantic code navigation (Go to Definition, Go to Implementation) in Monaco Editor on Linux x64 servers + web clients, backed by an isolated WebSocket gateway (`/ws/semantic/v1`) and an immutable bundled toolchain (`lib/semantic-engine`). Shipped default-OFF with fresh current-admin hot toggling, authoritative in-memory overlays, adaptive wire sync, trusted workspace boundaries, and zero host Node.js dependencies. Native desktop (Linux Tauri, Windows, Android) is deferred and unqualified.
 ## Repository Map
 
 | Path | Responsibility |
@@ -102,6 +102,7 @@ Start at [the documentation index](./docs/README.md). Key references:
 - [Project Roadmap](./docs/project-roadmap.md)
 - [Configuration Guide](./docs/configuration/index.md)
 - [API Reference](./docs/api-reference.md)
+- [Semantic LSP Protocol Guide](./docs/semantic-lsp-protocol-guide.md)
 - [Server Environment and Authentication](./docs/configuration/server-environment-auth.md)
 - [Authentication API](./docs/api/authentication.md)
 - [Linux Systemd Operations](./docs/linux-systemd.md)

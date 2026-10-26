@@ -1345,6 +1345,16 @@ impl UiConfig {
     }
 }
 
+/// Server-global semantic navigation configuration.
+/// Denies any custom executable, arguments, environment, or command override fields.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticConfig {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalConfig {
@@ -1354,4 +1364,6 @@ pub struct GlobalConfig {
     pub ui: Option<UiConfig>,
     #[serde(default)]
     pub server: ServerConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic: Option<SemanticConfig>,
 }

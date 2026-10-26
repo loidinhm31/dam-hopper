@@ -888,6 +888,40 @@ async fn main() -> anyhow::Result<()> {
     )?
     .with_workflow_store(workflow_store.clone())
     .with_agent_status(agent_status_runtime.clone());
+    let semantic_configured_enabled = state
+        .global_config
+        .read()
+        .await
+        .semantic
+        .as_ref()
+        .map(|s| s.enabled)
+        .unwrap_or(false);
+
+    if semantic_configured_enabled {
+        match state.semantic_supervisor.prepare_enable().await {
+            Ok(()) => {
+                state.semantic_supervisor.commit_enable().await;
+                tracing::info!(
+                    "Semantic navigation initialized as enabled from configuration (0 child processes until first active session)"
+                );
+            }
+            Err(e) => {
+                state
+                    .semantic_supervisor
+                    .record_disable_failure(format!("Startup toolchain verification failed: {e}"))
+                    .await;
+                tracing::warn!(
+                    error = %e,
+                    "Semantic navigation configured enabled but passive toolchain integrity check failed; falling back to safe-disabled"
+                );
+            }
+        }
+    } else {
+        tracing::info!(
+            status = ?state.semantic_supervisor.tool_integrity_status(),
+            "Semantic toolchain passive integrity status loaded (subsystem disabled by default)"
+        );
+    }
     if let Some(workflow_store_for_obs) = workflow_store.clone() {
         let (recorder, _dropped, _worker_handle) =
             dam_hopper_server::workflow::observation::start_observation_worker_with_diagnostics(
@@ -1031,7 +1065,7 @@ async fn main() -> anyhow::Result<()> {
         ForceCloseListener::new(listener, force_close_token).tap_io(|_: &mut ForceCloseIo| {});
 
     let host_resource_events_shutdown = state.host_resource_events.clone();
-
+    let semantic_supervisor_shutdown_early = state.semantic_supervisor.clone();
     #[cfg(unix)]
     let shutdown_signal = async move {
         use tokio::signal::unix::{signal, SignalKind};
@@ -1044,7 +1078,7 @@ async fn main() -> anyhow::Result<()> {
             _ = sigterm.recv() => {},
         }
         tracing::info!("Received shutdown signal, beginning graceful shutdown");
-
+        semantic_supervisor_shutdown_early.revoke_admission();
         let force = force_close_token_for_shutdown;
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
@@ -1062,7 +1096,7 @@ async fn main() -> anyhow::Result<()> {
     let shutdown_signal = async move {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("Received shutdown signal, beginning graceful shutdown");
-
+        semantic_supervisor_shutdown_early.revoke_admission();
         let force = force_close_token_for_shutdown;
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
@@ -1084,6 +1118,7 @@ async fn main() -> anyhow::Result<()> {
     .await;
 
     state.shutdown_idle_suspend_coordinator().await;
+    state.semantic_supervisor.shutdown().await;
     host_resource_monitor_shutdown.shutdown().await;
     // Reap all tunnel children before exit — no orphaned cloudflared processes.
     tunnel_manager_shutdown.dispose_all().await;

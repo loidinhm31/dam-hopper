@@ -48,9 +48,10 @@ function checkDisallowedPath(relPath) {
     lower.endsWith(".sqlite") ||
     lower.endsWith(".sqlite-wal") ||
     lower.endsWith(".sqlite-shm") ||
-    lower.endsWith(".db")
+    lower.endsWith(".db") ||
+    lower.endsWith(".tsbuildinfo")
   ) {
-    throw new Error(`Prohibited database file in release archive: ${relPath}`);
+    throw new Error(`Prohibited database or transient build file in release archive: ${relPath}`);
   }
 }
 
@@ -129,6 +130,13 @@ function assignRoles(relPath) {
   if (relPath === "tmpfiles.d/dam-hopper-runtime.conf") return ["server"];
   if (relPath === "LICENSE" || relPath === "NOTICES") return ["common"];
   if (relPath === "web" || relPath.startsWith("web/")) return ["web"];
+  if (
+    relPath === "lib" ||
+    relPath === "lib/semantic-engine" ||
+    relPath.startsWith("lib/semantic-engine/")
+  ) {
+    return ["server"];
+  }
   throw new Error(
     `Unrecognized release entry has no assigned role: '${relPath}'`,
   );
@@ -323,6 +331,133 @@ function main() {
     );
 
     // Generate SPDX 2.3 JSON SBOM
+    const hasSemanticEngine = inventory.some((entry) =>
+      entry.path.startsWith("lib/semantic-engine/"),
+    );
+
+    const packages = [
+      {
+        name: "dam-hopper",
+        SPDXID: "SPDXRef-Package-dam-hopper",
+        versionInfo: version,
+        packageFileName: archiveName,
+        downloadLocation: `https://github.com/${process.env.GITHUB_REPOSITORY || "loidinhm31/dam-hopper"}/releases/download/${tag}/${archiveName}`,
+        filesAnalyzed: true,
+        licenseConcluded: "MIT",
+        licenseDeclared: "MIT",
+        checksums: [
+          {
+            algorithm: "SHA256",
+            checksumValue: archiveSha256,
+          },
+        ],
+      },
+    ];
+
+    const relationships = [
+      {
+        spdxElementId: "SPDXRef-DOCUMENT",
+        relationshipType: "DESCRIBES",
+        relatedSpdxElement: "SPDXRef-Package-dam-hopper",
+      },
+    ];
+
+    if (hasSemanticEngine) {
+      let provenance = null;
+      const provPath = resolve(REPO_ROOT, "deploy/release/semantic-engine/provenance.json");
+      if (existsSync(provPath)) {
+        try {
+          provenance = JSON.parse(readFileSync(provPath, "utf8"));
+        } catch {}
+      }
+
+      const tsVer = provenance?.components?.typescript?.version || "5.9.3";
+      const tslsVer = provenance?.components?.typescriptLanguageServer?.version || "6.0.2";
+      const nodeVer = provenance?.components?.node?.version || "v24.16.0";
+      const nodeSource = provenance?.components?.node?.source || `https://nodejs.org/dist/${nodeVer}/node-${nodeVer}-linux-x64.tar.gz`;
+      // npm integrity identifies the downloaded package archive, not its entrypoint.
+      const archiveChecksum = (integrity) => {
+        if (typeof integrity !== "string" || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity)) {
+          throw new Error("Semantic package archive SHA512 integrity is missing");
+        }
+        const digest = Buffer.from(integrity.slice(7), "base64");
+        if (digest.length !== 64) throw new Error("Invalid semantic package archive SHA512 integrity");
+        return [{ algorithm: "SHA512", checksumValue: digest.toString("hex") }];
+      };
+
+      packages.push(
+        {
+          name: "typescript",
+          SPDXID: "SPDXRef-Package-typescript",
+          versionInfo: tsVer,
+          downloadLocation: `https://registry.npmjs.org/typescript/-/typescript-${tsVer}.tgz`,
+          filesAnalyzed: false,
+          licenseConcluded: "Apache-2.0",
+          licenseDeclared: "Apache-2.0",
+          checksums: archiveChecksum(provenance?.components?.typescript?.integrity),
+        },
+        {
+          name: "typescript-language-server",
+          SPDXID: "SPDXRef-Package-typescript-language-server",
+          versionInfo: tslsVer,
+          downloadLocation: `https://registry.npmjs.org/typescript-language-server/-/typescript-language-server-${tslsVer}.tgz`,
+          filesAnalyzed: false,
+          licenseConcluded: "Apache-2.0",
+          licenseDeclared: "Apache-2.0",
+          checksums: archiveChecksum(provenance?.components?.typescriptLanguageServer?.integrity),
+        },
+        {
+          name: "nodejs",
+          SPDXID: "SPDXRef-Package-nodejs",
+          versionInfo: nodeVer,
+          downloadLocation: nodeSource,
+          filesAnalyzed: false,
+          licenseConcluded: "MIT",
+          licenseDeclared: "MIT",
+        },
+      );
+      relationships.push(
+        {
+          spdxElementId: "SPDXRef-Package-dam-hopper",
+          relationshipType: "CONTAINS",
+          relatedSpdxElement: "SPDXRef-Package-typescript",
+        },
+        {
+          spdxElementId: "SPDXRef-Package-dam-hopper",
+          relationshipType: "CONTAINS",
+          relatedSpdxElement: "SPDXRef-Package-typescript-language-server",
+        },
+        {
+          spdxElementId: "SPDXRef-Package-dam-hopper",
+          relationshipType: "CONTAINS",
+          relatedSpdxElement: "SPDXRef-Package-nodejs",
+        },
+      );
+    }
+
+    const files = inventory
+      .filter((entry) => entry.kind === "file")
+      .map((entry, idx) => {
+        let license = "MIT";
+        if (
+          entry.path.startsWith("lib/semantic-engine/tsls/node_modules/typescript/") ||
+          entry.path.startsWith("lib/semantic-engine/tsls/node_modules/typescript-language-server/")
+        ) {
+          license = "Apache-2.0";
+        }
+        return {
+          fileName: entry.path,
+          SPDXID: `SPDXRef-File-${idx}-${entry.path.replace(/[^a-zA-Z0-9.-]/g, "-")}`,
+          checksums: [
+            {
+              algorithm: "SHA256",
+              checksumValue: entry.sha256,
+            },
+          ],
+          licenseConcluded: license,
+        };
+      });
+
     const sbom = {
       spdxVersion: "SPDX-2.3",
       dataLicense: "CC0-1.0",
@@ -340,44 +475,9 @@ function main() {
           "Organization: DamHopper",
         ],
       },
-      packages: [
-        {
-          name: "dam-hopper",
-          SPDXID: "SPDXRef-Package-dam-hopper",
-          versionInfo: version,
-          packageFileName: archiveName,
-          downloadLocation: `https://github.com/${process.env.GITHUB_REPOSITORY || "loidinhm31/dam-hopper"}/releases/download/${tag}/${archiveName}`,
-          filesAnalyzed: true,
-          licenseConcluded: "MIT",
-          licenseDeclared: "MIT",
-          checksums: [
-            {
-              algorithm: "SHA256",
-              checksumValue: archiveSha256,
-            },
-          ],
-        },
-      ],
-      files: inventory
-        .filter((entry) => entry.kind === "file")
-        .map((entry) => ({
-          fileName: entry.path,
-          SPDXID: `SPDXRef-File-${entry.path.replace(/[^a-zA-Z0-9.-]/g, "-")}`,
-          checksums: [
-            {
-              algorithm: "SHA256",
-              checksumValue: entry.sha256,
-            },
-          ],
-          licenseConcluded: "MIT",
-        })),
-      relationships: [
-        {
-          spdxElementId: "SPDXRef-DOCUMENT",
-          relationshipType: "DESCRIBES",
-          relatedSpdxElement: "SPDXRef-Package-dam-hopper",
-        },
-      ],
+      packages,
+      files,
+      relationships,
     };
 
     const sbomName = archiveName.replace(/\.tar\.gz$/, ".spdx.json");

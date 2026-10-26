@@ -122,6 +122,13 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Stage semantic engine tuple for E2E qualification
+        run: |
+          node deploy/release/semantic-engine/stage-semantic-engine.mjs \
+            --output-dir artifacts/semantic-qualification/staged-engine \
+            --retrieve-pinned
+          node deploy/release/semantic-engine/stage-semantic-engine.mjs \
+            --verify-only artifacts/semantic-qualification/staged-engine
       - name: Install Chromium
         run: pnpm --filter @dam-hopper/ui exec playwright install --with-deps chromium
       - name: Prefetch MongoDB image
@@ -168,6 +175,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: server
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - name: Stage semantic engine tuple for Linux qualification
+        run: |
+          node deploy/release/semantic-engine/stage-semantic-engine.mjs \
+            --output-dir artifacts/semantic-qualification/staged-engine \
+            --retrieve-pinned
+          node deploy/release/semantic-engine/stage-semantic-engine.mjs \
+            --verify-only artifacts/semantic-qualification/staged-engine
       - name: Check changed server Rust formatting
         shell: bash
         run: |
@@ -180,6 +201,8 @@ jobs:
       - name: Clippy production targets
         run: cargo clippy --manifest-path server/Cargo.toml --lib --bins
       - name: Server tests
+        env:
+          DAM_HOPPER_TEST_SEMANTIC_ENGINE_DIR: ${{ github.workspace }}/artifacts/semantic-qualification/staged-engine
         run: cargo test --manifest-path server/Cargo.toml
 
   server_windows:

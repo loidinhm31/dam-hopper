@@ -45,3 +45,4 @@ native/android-app/*.apk
 native/android-app/*.aab
 native/android-app/.idea/
 .omp
+artifacts/

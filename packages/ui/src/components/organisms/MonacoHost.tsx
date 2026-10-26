@@ -39,7 +39,14 @@ import {
 } from "@/hooks/use-editor-git-blame.js";
 import { EditorGitBlameGutter } from "./EditorGitBlameGutter.js";
 import { EditorGitBlameContextMenu } from "./EditorGitBlameContextMenu.js";
-
+import {
+  isSupportedSemanticPath,
+  defaultSemanticModelRegistry,
+  monacoPositionToLsp,
+  buildLocalModelUri,
+  computeUtf8Sha256Hex,
+} from "@/lib/semantic-model-uri.js";
+import { useSemanticNavigationStore } from "@/stores/semantic-navigation.js";
 interface MonacoHostProps {
   tabKey: string;
   path?: string;
@@ -171,6 +178,89 @@ export function MonacoHost({
     }
   }, [onRefreshBlame, hookResult]);
 
+  const tabProfileId = effectiveTab?.target?.profileId;
+  const semanticEnabled = useSemanticNavigationStore(
+    (s) => tabProfileId ? s.isSemanticEnabledForProfile(tabProfileId) : s.globalSemanticEnabled,
+  );
+  const clientStatuses = useSemanticNavigationStore((s) => s.clientStatuses);
+
+  useEffect(() => {
+    if (
+      effectiveTab?.loading || effectiveTab?.hydrated ||
+      !effectiveTab ||
+      !effectiveTab.target?.profileId ||
+      !isSupportedSemanticPath(effectiveTab.path)
+      || !effectiveTab.semanticProvenance
+    ) {
+      return;
+    }
+
+    defaultSemanticModelRegistry.registerModel({
+      tabKey,
+      profileId: effectiveTab.target.profileId,
+      project: effectiveTab.project,
+      targetKey: effectiveTab.targetKey,
+      relativePath: effectiveTab.path,
+      provenance: effectiveTab.semanticProvenance,
+    });
+
+    const client = useSemanticNavigationStore
+      .getState()
+      .findClientForTab(tabKey);
+    if (semanticEnabled && client?.canAccessModel(tabKey) && client.getStatus() === "ready") {
+      void client.notifyDidOpen(tabKey, content);
+    }
+  }, [
+    semanticEnabled,
+    tabKey,
+    effectiveTab?.path,
+    effectiveTab?.project,
+    effectiveTab?.targetKey,
+    effectiveTab?.target?.profileId,
+    effectiveTab?.semanticProvenance,
+    effectiveTab?.loading,
+    effectiveTab?.hydrated,
+    clientStatuses,
+  ]);
+
+  const activeRevealIntent = useSemanticNavigationStore(
+    (s) => s.activeRevealIntent,
+  );
+  useEffect(() => {
+    const intent = activeRevealIntent;
+    if (!intent || !effectiveTab || !editorInstance || !effectiveTab.target?.profileId ||
+        intent.profileId !== effectiveTab.target.profileId || intent.project !== effectiveTab.project ||
+        intent.targetKey !== effectiveTab.targetKey || intent.relativePath !== effectiveTab.path ||
+        !/^[a-f0-9]{64}$/.test(intent.destinationContentSha256 ?? "")) return;
+    const model = editorInstance.getModel();
+    const registered = defaultSemanticModelRegistry.getByTabKey(tabKey);
+    const client = useSemanticNavigationStore.getState().findClientForTab(tabKey);
+    if (!model || !registered || !client?.canAccessModel(tabKey) || client.getStatus() !== "ready" ||
+        model.uri.toString() !== monacoInstance?.Uri.parse(buildLocalModelUri(tabKey)).toString()) return;
+    const modelVersion = model.getVersionId();
+    const binding = registered.wireBinding;
+    const wireVersion = binding?.wireVersion;
+    let cancelled = false;
+    void computeUtf8Sha256Hex(model.getValue()).then((hash) => {
+      if (cancelled || model.isDisposed() || editorInstance.getModel() !== model ||
+          model.getVersionId() !== modelVersion || hash !== intent.destinationContentSha256 ||
+          defaultSemanticModelRegistry.getByTabKey(tabKey) !== registered ||
+          registered.wireBinding !== binding || binding?.wireVersion !== wireVersion ||
+          !client.canAccessModel(tabKey) || client.getStatus() !== "ready" || client.getTargetId() !== intent.targetId ||
+          useSemanticNavigationStore.getState().findClientForTab(tabKey) !== client ||
+          (intent.destinationVersion != null && registered.wireBinding?.wireVersion !== intent.destinationVersion) ||
+          intent.isCurrent?.() === false ||
+          useSemanticNavigationStore.getState().activeRevealIntent !== intent) return;
+      const consumed = useSemanticNavigationStore.getState().consumeRevealIntent(
+        effectiveTab.target.profileId!, effectiveTab.project, effectiveTab.targetKey, effectiveTab.path, intent,
+      );
+      if (consumed !== intent) return;
+      editorInstance.revealRangeInCenter(intent.range);
+      editorInstance.setSelection(intent.range);
+      editorInstance.focus();
+    });
+    return () => { cancelled = true; };
+  }, [activeRevealIntent, effectiveTab, editorInstance, monacoInstance, tabKey]);
   useEffect(() => {
     effectiveBlameDataRef.current = effectiveBlameData;
     effectiveBlameStatusRef.current = effectiveBlameStatus;
@@ -524,12 +614,37 @@ export function MonacoHost({
       <div className="monaco-host-editor-container flex-1 min-w-0 h-full overflow-hidden">
         <Editor
           path={`inmemory://dam-hopper/${encodeURIComponent(tabKey)}`}
+          keepCurrentModel={!!effectiveTab?.semanticProvenance && isSupportedSemanticPath(effectiveTab.path)}
           value={content}
           language={language}
           theme="vs-dark"
-          onChange={(val) => {
-            if (!isAndroidChromeNativeInputSuppressed && !readOnly)
-              onChange(val ?? "");
+          onChange={(val, ev) => {
+            if (!isAndroidChromeNativeInputSuppressed && !readOnly) {
+              const newText = val ?? "";
+              onChange(newText);
+              if (effectiveTab && isSupportedSemanticPath(effectiveTab.path)) {
+                const changes = (ev?.changes ?? []).map((change) => ({
+                  range: {
+                    start: monacoPositionToLsp({
+                      lineNumber: change.range.startLineNumber,
+                      column: change.range.startColumn,
+                    }),
+                    end: monacoPositionToLsp({
+                      lineNumber: change.range.endLineNumber,
+                      column: change.range.endColumn,
+                    }),
+                  },
+                  rangeLength: change.rangeLength,
+                  text: change.text,
+                }));
+                const client = useSemanticNavigationStore
+                  .getState()
+                  .findClientForTab(tabKey);
+                if (semanticEnabled && effectiveTab.targetAvailable !== false && client?.canAccessModel(tabKey)) {
+                  void client.notifyDidChange(tabKey, newText, changes.length > 0 ? changes : undefined);
+                }
+              }
+            }
           }}
           onMount={handleMount}
           options={{

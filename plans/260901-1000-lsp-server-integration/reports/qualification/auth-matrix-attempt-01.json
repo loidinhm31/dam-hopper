@@ -1,0 +1,288 @@
+{
+  "status": "FAILED",
+  "cause": "Fixture advanced sixteen minutes although MFA validity is ten days; one-hour session could not reach independent MFA deadline. Corrected verification timestamp near actual policy deadline before rerun; production policy unchanged.",
+  "rows": [
+    {
+      "backend": "mongo",
+      "trigger": "DisableAccount",
+      "qualified": true,
+      "blockedAtCutoffMs": 899,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 2,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 506
+      },
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 16124,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "RevokeSession",
+      "qualified": true,
+      "blockedAtCutoffMs": 899,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 2,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 508
+      },
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 16120,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "BumpUserAuthVersion",
+      "qualified": true,
+      "blockedAtCutoffMs": 903,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 1,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 507
+      },
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 16137,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "BumpSessionCredentialVersion",
+      "qualified": true,
+      "blockedAtCutoffMs": 901,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 2,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 507
+      },
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 16116,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "DeleteSession",
+      "qualified": true,
+      "blockedAtCutoffMs": 902,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 2,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 508
+      },
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 16120,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "DeleteAccount",
+      "qualified": true,
+      "blockedAtCutoffMs": 892,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 1,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 506
+      },
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 16113,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "MfaDeadlineDue",
+      "qualified": false,
+      "blockedAtCutoffMs": null,
+      "cutoff": null,
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 24500,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "DisableAccount",
+      "qualified": true,
+      "blockedAtCutoffMs": 901,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 0,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 506
+      },
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 16111,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "RevokeSession",
+      "qualified": true,
+      "blockedAtCutoffMs": 897,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 0,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 507
+      },
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 16117,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "BumpUserAuthVersion",
+      "qualified": true,
+      "blockedAtCutoffMs": 900,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 1,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 508
+      },
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 16113,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "BumpSessionCredentialVersion",
+      "qualified": true,
+      "blockedAtCutoffMs": 898,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 0,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 506
+      },
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 16112,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "DeleteSession",
+      "qualified": true,
+      "blockedAtCutoffMs": 894,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 0,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 507
+      },
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 16116,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "DeleteAccount",
+      "qualified": true,
+      "blockedAtCutoffMs": 899,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 0,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 506
+      },
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 16113,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    }
+    ,{
+      "backend": "sqlite",
+      "trigger": "MfaDeadlineDue",
+      "qualified": false,
+      "blockedAtCutoffMs": null,
+      "cutoff": null,
+      "maxReservedOutputBytes": 1048747,
+      "finalAccounting": {
+        "elapsedMs": 24500,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    }
+  ]
+}

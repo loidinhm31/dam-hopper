@@ -12,7 +12,7 @@ pub(crate) mod media_ticket;
 pub mod mutate;
 pub mod ops;
 pub mod sandbox;
-pub(crate) mod secure_path;
+pub mod secure_path;
 pub mod upload;
 pub mod video_ticket;
 pub mod watcher;

@@ -46,6 +46,8 @@ pub struct AppState {
     pub config: Arc<RwLock<DamHopperConfig>>,
     /// Global config (known workspaces, defaults).
     pub global_config: Arc<RwLock<GlobalConfig>>,
+    /// Serializes global configuration read-modify-write mutations.
+    pub global_config_mutation_lock: Arc<tokio::sync::Mutex<()>>,
     /// PTY session manager — internally Arc<Mutex<Inner>>, Clone is cheap.
     pub pty_manager: PtySessionManager,
     /// Central agent store service.
@@ -123,8 +125,7 @@ pub struct AppState {
     pub idle_suspend_coordinator:
         Arc<RwLock<Option<Arc<crate::idle_suspend::IdleSuspendCoordinator>>>>,
     /// Authoritative event writer for canonical server semantic events.
-    pub idle_suspend_event_writer:
-        Option<Arc<crate::idle_suspend::IdleSuspendEventWriter>>,
+    pub idle_suspend_event_writer: Option<Arc<crate::idle_suspend::IdleSuspendEventWriter>>,
     /// Monotonic timestamp for idle suspend fallback warning onset.
     pub fallback_warning_onset_ms: u64,
     /// Bounded in-memory registry for public WebSocket presence, liveness, and session binding.
@@ -137,6 +138,8 @@ pub struct AppState {
     pub git_blame_semaphore: Arc<tokio::sync::Semaphore>,
     /// Shared in-memory LRU cache retaining historical git blame baselines.
     pub git_blame_cache: Arc<crate::git::blame_cache::BlameBaselineCache>,
+    /// Semantic session supervisor coordinating isolated language server sessions.
+    pub semantic_supervisor: Arc<crate::semantic::supervisor::SemanticSupervisor>,
 }
 
 impl AppState {
@@ -184,6 +187,8 @@ impl AppState {
             .await
     }
 
+    /// Invalidate discovery metadata only. Identity-changing callers must revoke
+    /// the exact semantic target before publishing their filesystem mutation.
     pub async fn invalidate_project_worktrees(&self, project_root: &std::path::Path) {
         self.workspace_target_resolver
             .invalidate(project_root)
@@ -272,9 +277,9 @@ impl AppState {
             event_sink.clone(),
             config.server.host_resources.clone(),
         );
-        let host_resource_events = Arc::new(
-            crate::api::resource_events::HostResourceEvents::new(host_resource_monitor.clone()),
-        );
+        let host_resource_events = Arc::new(crate::api::resource_events::HostResourceEvents::new(
+            host_resource_monitor.clone(),
+        ));
         let host_action_config_dir = config
             .config_path
             .parent()
@@ -352,21 +357,25 @@ impl AppState {
             .log_path()
             .parent()
             .map(|p| p.join("idle-suspend-events-v1.jsonl"))
-            .and_then(|path| match crate::idle_suspend::IdleSuspendEventWriter::new(path) {
-                Ok(writer) => Some(Arc::new(writer)),
-                Err(err) => {
-                    let mut fields = std::collections::BTreeMap::new();
-                    fields.insert("error".to_string(), err.to_string());
-                    diagnostics.record_event(crate::diagnostics::DiagnosticEvent {
-                        timestamp_ms: crate::idle_suspend::status::IdleSuspendStatusV1::now_ms(),
-                        level: "WARN".to_string(),
-                        source: "idle_suspend::event_writer".to_string(),
-                        message: "Failed to initialize idle suspend canonical event writer".to_string(),
-                        fields,
-                    });
-                    None
-                }
-            });
+            .and_then(
+                |path| match crate::idle_suspend::IdleSuspendEventWriter::new(path) {
+                    Ok(writer) => Some(Arc::new(writer)),
+                    Err(err) => {
+                        let mut fields = std::collections::BTreeMap::new();
+                        fields.insert("error".to_string(), err.to_string());
+                        diagnostics.record_event(crate::diagnostics::DiagnosticEvent {
+                            timestamp_ms: crate::idle_suspend::status::IdleSuspendStatusV1::now_ms(
+                            ),
+                            level: "WARN".to_string(),
+                            source: "idle_suspend::event_writer".to_string(),
+                            message: "Failed to initialize idle suspend canonical event writer"
+                                .to_string(),
+                            fields,
+                        });
+                        None
+                    }
+                },
+            );
         let mfa_key = if let Ok(key_path) = std::env::var("DAM_HOPPER_MFA_KEY_FILE") {
             let key = crate::auth::MfaEncryptionKey::from_file(&key_path)
                 .map_err(|e| anyhow::anyhow!("Failed to load MFA key from {key_path}: {e}"))?;
@@ -380,7 +389,9 @@ impl AppState {
         };
         // The selected store is the only authentication authority: without one the
         // service reports authentication unavailable rather than inventing an account.
-        let auth_service = Arc::new(crate::auth::AuthService::with_system_clock(auth_store, mfa_key));
+        let auth_service = Arc::new(crate::auth::AuthService::with_system_clock(
+            auth_store, mfa_key,
+        ));
 
         Ok(Self {
             workspace_dir,
@@ -397,6 +408,7 @@ impl AppState {
             video_stream_tickets,
             image_stream_tickets,
             workspace_context_guard: Arc::new(RwLock::new(())),
+            global_config_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
             no_auth,
             cors_origins: Arc::new(Vec::new()),
             tunnel_manager,
@@ -427,11 +439,22 @@ impl AppState {
             agent_status: crate::agent_status::AgentStatusRuntime::platform_unqualified(),
             git_blame_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
             git_blame_cache: Arc::new(crate::git::blame_cache::BlameBaselineCache::new()),
+            semantic_supervisor: Arc::new(crate::semantic::supervisor::SemanticSupervisor::new(
+                Some(crate::semantic::tool_profile::SemanticToolProfile::discover()),
+            )),
         })
     }
     /// Override the auth service handle (used for testing or custom clock injection).
     pub fn with_auth_service(mut self, auth_service: Arc<crate::auth::AuthService>) -> Self {
         self.auth_service = auth_service;
+        self
+    }
+    /// Override the semantic supervisor handle (used for testing or custom tool profile injection).
+    pub fn with_semantic_supervisor(
+        mut self,
+        semantic_supervisor: Arc<crate::semantic::supervisor::SemanticSupervisor>,
+    ) -> Self {
+        self.semantic_supervisor = semantic_supervisor;
         self
     }
     /// Override the client presence registry handle (used for testing or custom capacity injection).
@@ -532,6 +555,29 @@ impl AppState {
             .telemetry
             .write()
             .expect("telemetry state lock poisoned") = telemetry;
+    }
+
+    /// Execute a serialized read-modify-write mutation on the global configuration.
+    /// Under the `global_config_mutation_lock`, reads the current on-disk global config
+    /// (falling back to in-memory state if unreadable), passes it to `mutate_fn`, writes the
+    /// modified config atomically to disk, and updates the in-memory `global_config`.
+    pub async fn mutate_global_config<F, R>(
+        &self,
+        mutate_fn: F,
+    ) -> Result<R, crate::error::AppError>
+    where
+        F: FnOnce(&mut crate::config::schema::GlobalConfig) -> Result<R, crate::error::AppError>,
+    {
+        let _guard = self.global_config_mutation_lock.lock().await;
+        let gc_path = crate::config::global_config_path();
+        let mut gc = match crate::config::read_global_config_at(&gc_path)? {
+            Some(c) => c,
+            None => self.global_config.read().await.clone(),
+        };
+        let result = mutate_fn(&mut gc)?;
+        crate::config::write_global_config_at(&gc_path, &gc)?;
+        *self.global_config.write().await = gc;
+        Ok(result)
     }
 }
 

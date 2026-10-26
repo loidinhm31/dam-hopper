@@ -35,6 +35,14 @@ pub async fn update_config(
     State(state): State<AppState>,
     Json(mut body): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if body.get("semantic").is_some()
+        || body.get("server").and_then(|s| s.get("semantic")).is_some()
+    {
+        return Err(ApiError::from_app(AppError::InvalidInput(
+            "Semantic configuration is server-global only and forbidden in workspace configuration"
+                .to_string(),
+        )));
+    }
     let current = state.config.read().await.clone();
     preserve_and_reject_telemetry_mutation(&mut body, &current)?;
     preserve_and_reject_idle_suspend_mutation(&mut body, &current)?;
@@ -217,20 +225,23 @@ pub async fn update_global_defaults(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let gc_path = global_config_path();
-    let mut gc = read_global_config_at(&gc_path)
-        .map_err(ApiError::from_app)?
-        .unwrap_or_default();
-
-    if let Some(defaults_val) = body.get("defaults") {
-        let new_defaults: crate::config::schema::GlobalDefaults =
-            serde_json::from_value(defaults_val.clone())
-                .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
-        gc.defaults = Some(new_defaults);
+    if body.get("semantic").is_some() {
+        return Err(ApiError::from_app(AppError::InvalidInput(
+            "Semantic configuration must be updated via PATCH /api/semantic/settings".to_string(),
+        )));
     }
-
-    write_global_config_at(&gc_path, &gc).map_err(ApiError::from_app)?;
-    *state.global_config.write().await = gc;
+    state
+        .mutate_global_config(|gc| {
+            if let Some(defaults_val) = body.get("defaults") {
+                let new_defaults: crate::config::schema::GlobalDefaults =
+                    serde_json::from_value(defaults_val.clone())
+                        .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+                gc.defaults = Some(new_defaults);
+            }
+            Ok(())
+        })
+        .await
+        .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({ "updated": true })))
 }
 
@@ -242,6 +253,11 @@ pub async fn update_global_ui(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if body.get("semantic").is_some() {
+        return Err(ApiError::from_app(AppError::InvalidInput(
+            "Semantic configuration must be updated via PATCH /api/semantic/settings".to_string(),
+        )));
+    }
     let gc_path = global_config_path();
     update_global_ui_at_path(&state, &gc_path, body.get("ui"))
         .await
@@ -315,7 +331,21 @@ pub(crate) async fn update_global_ui_at_path(
     gc_path: &FsPath,
     incoming_ui: Option<&Value>,
 ) -> Result<(), AppError> {
-    let mut gc = read_global_config_at(gc_path)?.unwrap_or_default();
+    let _guard = if gc_path == &global_config_path() {
+        Some(state.global_config_mutation_lock.lock().await)
+    } else {
+        None
+    };
+    let mut gc = match read_global_config_at(gc_path)? {
+        Some(c) => c,
+        None => {
+            if gc_path.exists() {
+                state.global_config.read().await.clone()
+            } else {
+                crate::config::schema::GlobalConfig::default()
+            }
+        }
+    };
 
     if let Some(ui_val) = incoming_ui {
         gc.ui = Some(merge_global_ui_config(gc.ui.clone(), ui_val)?);
@@ -328,7 +358,11 @@ pub(crate) async fn update_global_ui_at_path(
 
         // Validate agentSettingsPaths if provided
         if let Some(paths) = ui.agent_settings_paths.as_ref() {
-            if let Some(omp_dir) = paths.omp_agent_dir.as_deref().filter(|s| !s.trim().is_empty()) {
+            if let Some(omp_dir) = paths
+                .omp_agent_dir
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+            {
                 crate::api::agent_status::expand_and_validate_path(omp_dir, Some(&home))
                     .map_err(|e| AppError::Config(format!("Invalid OMP agent directory: {e}")))?;
             }
@@ -404,9 +438,7 @@ pub(crate) async fn update_global_ui_at_path(
             let claude_dir = match configured_claude_dir.filter(|s| !s.trim().is_empty()) {
                 Some(explicit) => {
                     crate::api::agent_status::expand_and_validate_path(explicit, Some(&home))
-                        .map_err(|e| {
-                            AppError::Config(format!("Invalid Claude directory: {e}"))
-                        })?
+                        .map_err(|e| AppError::Config(format!("Invalid Claude directory: {e}")))?
                 }
                 None => claude_notification_dir.clone(),
             };
@@ -694,13 +726,38 @@ fn json_to_toml(v: &Value) -> Option<toml::Value> {
 }
 
 pub(crate) async fn reload_config(state: &AppState) -> Result<(), ApiError> {
-    let _workspace_context = state.workspace_context_guard.write().await;
-    reload_config_locked(state).await
+    let handles = {
+        let _workspace_context = state.workspace_context_guard.write().await;
+        reload_config_locked(state).await?
+    };
+    state.semantic_supervisor.reap_sessions(handles).await;
+    Ok(())
 }
 
-pub(crate) async fn reload_config_locked(state: &AppState) -> Result<(), ApiError> {
+pub(crate) async fn reload_config_locked(
+    state: &AppState,
+) -> Result<Vec<crate::semantic::session::SemanticSessionHandle>, ApiError> {
     let config_path = state.config.read().await.config_path.clone();
     let mut new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
+    let old_projects: std::collections::HashSet<_> = state
+        .config
+        .read()
+        .await
+        .projects
+        .iter()
+        .map(|p| (p.name.clone(), p.path.clone()))
+        .collect();
+    let new_projects: std::collections::HashSet<_> = new_cfg
+        .projects
+        .iter()
+        .map(|p| (p.name.clone(), p.path.clone()))
+        .collect();
+
+    let semantic_handles = if old_projects != new_projects {
+        state.semantic_supervisor.prepare_invalidate_all().await
+    } else {
+        Vec::new()
+    };
     {
         let timing = state.idle_suspend_timing.read().await;
         state
@@ -715,5 +772,5 @@ pub(crate) async fn reload_config_locked(state: &AppState) -> Result<(), ApiErro
         .reconfigure(new_cfg.server.host_resources.clone())
         .await;
     *state.config.write().await = new_cfg;
-    Ok(())
+    Ok(semantic_handles)
 }

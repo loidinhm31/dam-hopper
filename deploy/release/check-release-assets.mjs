@@ -299,6 +299,21 @@ function validateInventory(inventory, label) {
             failMigration(`${entryLabel} must belong to the web role`);
           }
           hasWebPayload = true;
+        } else if (path === "lib" || path.startsWith("lib/")) {
+          if (path !== "lib" && path !== "lib/semantic-engine" && !path.startsWith("lib/semantic-engine/")) {
+            failMigration(`${entryLabel} is an unapproved lib path '${path}'`);
+          }
+          if (!entry.roles.includes("server")) {
+            failMigration(`${entryLabel} must belong to the server role`);
+          }
+          if ((entry.mode & 0o022) !== 0) {
+            failMigration(`${entryLabel} has unsafe group/world-writable mode`);
+          }
+          if (path === "lib/semantic-engine/node") {
+            if (!isFile || (entry.mode & 0o111) === 0) {
+              failMigration(`${entryLabel} must be an executable regular file`);
+            }
+          }
         }
     }
   }

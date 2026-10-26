@@ -1,0 +1,60 @@
+{
+  "runId": "2026-10-23T22-58-45-485Z-pid2669879",
+  "status": "VERIFIED",
+  "budgetPath": "plans/260901-1000-lsp-server-integration/reports/phase-09-qualification-budget-v1.json",
+  "sourceIdentity": {
+    "gitHeadSha": "20887bf511a52ec1eccbae0679f2f832606065ef",
+    "gitWorktreeDirty": true,
+    "compiledProductionThresholdBytes": 65536,
+    "fileDigests": {
+      "resourcesRsSha256": "d4acdd0f2e3c80f479e3428367d8bbcede3224da4b9600cd7572d8f54beea87f",
+      "semanticClientTsSha256": "5df776ed88a5590acd121f553584443008fede986caa542b5f87cc47affa3212",
+      "semanticMonacoTsSha256": "75f72952f164fa51aeae62620762d5d5d43d8504e940e62771175ae3842966b5",
+      "semanticModelUriTsSha256": "60b2b72b46063e9e9600818b41bd06c4b89d207f157b5cbc8dd739647af7a3ca",
+      "editorStoreTsSha256": "c9f51c2b34f811f1e7d0e54eb7637bb4fbeabdec21d2b5c6e76aea56d645f505",
+      "backendQualificationRsSha256": "653f0d04718645e4d811b8c858cf6edf2bc3f2ef9f36754868b27a105dae89ba",
+      "browserQualificationTsSha256": "ef0c9612e9e68373371459d6ad409de5fb7e27be4e0fee0b4d7aa5fb7e4790ef",
+      "runnerMjsSha256": "39f3ae640839a4344a80f8128fb27da8c40b9068b8245f611ed2bb8529a2e7de"
+    }
+  },
+  "compiledProductionThresholdBytes": 65536,
+  "tupleIdentity": {
+    "tupleId": "node-24.16.0-ts-5.9.3-tsls-6.0.2-linux-x64",
+    "nodeSha256": "b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd",
+    "packageJsonSha256": "1aebb20f4c8d8b699745853542ecce7f1e7e42c85f97843bfd8064f9efdc3f7c",
+    "lockfileSha256": "003c24ed03f9491035a8f2a3a956d7e83f10def028b028987bdc5d618c2fdcbd",
+    "tslsEntrypointSha256": "192638f1fa62c907fd54c0b55b12dd3dff01325a1a0ed5973907efca1c57b5eb",
+    "tsserverSha256": "e3ccfeec65ec5c470b8ffc5611878a31182650c7e8a062c38a719f83b523edcb"
+  },
+  "fixtureIdentity": {
+    "fixtureSeed": 24301,
+    "tiers": {
+      "small": {
+        "fileCount": 8,
+        "bytesPerFile": 4096,
+        "totalBytes": 32768,
+        "corpusDigest": "ddf1171cbfcebb7b7dbf50dad98736cd09925e9406c499e185e3f448e652afd2"
+      },
+      "medium": {
+        "fileCount": 64,
+        "bytesPerFile": 16384,
+        "totalBytes": 1048576,
+        "corpusDigest": "639781a79371a14658cf5c8581bb64ead5f54112c940497799a83d7b286f1151"
+      },
+      "large": {
+        "fileCount": 256,
+        "bytesPerFile": 32768,
+        "totalBytes": 8388608,
+        "corpusDigest": "28b75ee4299e8b2840bc47b60c091fd3fde7ea1a4a6cce2e3ffd8fe01262243f"
+      }
+    }
+  },
+  "host": {
+    "kernel": "7.1.10-200.fc44.x86_64",
+    "cpuCount": 16,
+    "hardCgroupV2": {
+      "available": false,
+      "reason": "Current process cgroup directory is not writable (test -w exit 1)"
+    }
+  }
+}

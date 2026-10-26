@@ -1,0 +1,13 @@
+{
+  "name": "dam-hopper-hostile-workspace-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "preinstall": "node ./npm-hook-canary.cjs",
+    "install": "node ./npm-hook-canary.cjs",
+    "postinstall": "node ./npm-hook-canary.cjs"
+  },
+  "dependencies": {
+    "untyped-package-triggering-ata-probe": "1.0.0"
+  }
+}

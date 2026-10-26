@@ -23,9 +23,9 @@ flowchart LR
 
 ### Code Boundaries
 
-- `server/src/api/` registers protected HTTP, REST-backed client operations, and authenticated WebSocket routes. `server/src/state.rs` contains shared application state.
-- `server/src/` domains include `auth`, `config`, `crypto`, `fs`, `git`, `pty`, `workflow`, `agent_status`, `agent_store`, `telemetry`, `idle_suspend`, `linux_release`, `port_forward`, and `tunnel`.
-- `packages/ui/src/` owns the shared React application, owner-bound API clients, transports, query keys, stores, and feature components (canonical entry `packages/ui/src/embed/dam-hopper-app.tsx`).
+- `server/src/api/` registers protected HTTP, REST-backed client operations, the core multiplexed WebSocket (`/ws`), the dedicated authenticated semantic gateway (`/ws/semantic/v1`), and semantic settings routes (`/api/semantic/settings`). `server/src/state.rs` contains shared application state.
+- `server/src/` domains include `auth`, `config` (global and workspace schema, serialized read-modify-write), `crypto`, `fs` (sandboxed operations, canonical config protection), `git`, `pty`, `workflow`, `agent_status`, `agent_store`, `telemetry`, `idle_suspend`, `linux_release`, `port_forward`, `tunnel`, and `semantic` (language server session supervision, process tree reaper, Linux cgroups, adaptive overlays, filtered JSON-RPC gateway, cancellation handling, and global admin hot toggle; see [Semantic WebSocket Gateway Architecture](./architecture/semantic-websocket-gateway.md)).
+- `packages/ui/src/` owns the shared React application, owner-bound API clients (including dedicated semantic language server client), transports, query keys, stores, Monaco semantic navigation, and feature components (canonical entry `packages/ui/src/embed/dam-hopper-app.tsx`).
 - `apps/web/` is the Vite browser host; `apps/native/` is the Tauri 2 desktop host. `packages/shared/` contains shared utilities; `packages/browser-bridge/` contains browser-debug runtime protocol v1.
 - `native/android-app/` is the native Android workbench implementation using Kotlin Multiplatform (`:shared` for core models, connection registry, and live transports; `:androidApp` for Jetpack Compose UI, `MainActivity`, and Android platform OkHttp network factory).
 - The former DamHopper plugin platform, runner, SDK, plugin APIs, and plugin iframe bridge are retired.
@@ -277,10 +277,10 @@ Development progresses under the [Git conflict resolver plan](../plans/261019-15
     `[profileId, generation, serverUrl, configuredRoot, project, worktreePath, root, repositoryRoot, worktreeRoot, fullIndexFingerprint, conflictId, snapshotVersion]`.
     Separates persistent repository target identity from active connection-generation fencing (`isOwnerActive`). Requests, callbacks, and draft subscriptions capture `{ profileId, generation }` and fail closed on profile switch or reconnection, preventing cross-profile, cross-server, or cross-worktree draft bleed and fencing out stale asynchronous callbacks or replays.
   - **Measured Capacity Boundaries & Eviction Rules:** Enforced by `packages/ui/src/lib/conflict-draft-capacity.ts` using accounted UTF-8 text bytes via `TextEncoder` (measuring string payload bytes rather than JavaScript object heap overhead).
-    - *Tracked byte metrics:* `sourceBytes` (stages 1–3 + worktree file content), `resultBytes` (resolved text), `historyBytes` (past/future history entries text), and `recoveryBytes` (`recoveryText`).
-    - *Default limits:* `DEFAULT_MAX_TOTAL_BYTES` = 10 MiB (10,485,760 bytes) across all drafts in the registry, `DEFAULT_MAX_DRAFT_BYTES` = 2 MiB (2,097,152 bytes) per individual draft, and `DEFAULT_MAX_DIRTY_DRAFTS` = 10 dirty drafts per registry instance.
-    - *Admission & Eviction (`canAdmitDraft`):* When admitting new drafts under memory pressure, clean drafts (not dirty, not in recovery, not in flight) are evicted oldest-first. Dirty and recovery drafts are never silently evicted; admission fails closed with `"Memory capacity exceeded"` if dirty drafts saturate capacity.
-    - *Prospective Edit Growth (`checkProspectiveEditGrowth`):* Inspects proposed text updates and history creation before mutating draft text. Edits exceeding per-draft (2 MiB) or registry total (10 MiB) limits are rejected fail-closed. Typing edits within 1,000ms coalesce into a single history entry to bound history growth.
+    - _Tracked byte metrics:_ `sourceBytes` (stages 1–3 + worktree file content), `resultBytes` (resolved text), `historyBytes` (past/future history entries text), and `recoveryBytes` (`recoveryText`).
+    - _Default limits:_ `DEFAULT_MAX_TOTAL_BYTES` = 10 MiB (10,485,760 bytes) across all drafts in the registry, `DEFAULT_MAX_DRAFT_BYTES` = 2 MiB (2,097,152 bytes) per individual draft, and `DEFAULT_MAX_DIRTY_DRAFTS` = 10 dirty drafts per registry instance.
+    - _Admission & Eviction (`canAdmitDraft`):_ When admitting new drafts under memory pressure, clean drafts (not dirty, not in recovery, not in flight) are evicted oldest-first. Dirty and recovery drafts are never silently evicted; admission fails closed with `"Memory capacity exceeded"` if dirty drafts saturate capacity.
+    - _Prospective Edit Growth (`checkProspectiveEditGrowth`):_ Inspects proposed text updates and history creation before mutating draft text. Edits exceeding per-draft (2 MiB) or registry total (10 MiB) limits are rejected fail-closed. Typing edits within 1,000ms coalesce into a single history entry to bound history growth.
   - **Stale Snapshot Drift & Recovery Import Flow:** When `loadSnapshot` receives an updated snapshot version or altered index fingerprint for a conflict with uncommitted edits (`isDirty`, `isRecovery`, or `isResolving`), the existing draft transitions to `isRecovery = true` with `requiresReview = true` and `recoveryReason: "Conflict snapshot changed; import into a fresh snapshot and review"`. Direct resolve and automatic replaying are blocked. `importRecoveryDraft(recoveryId, freshDraftId)` enforces:
     1. Source draft is in recovery (`isRecovery: true`) with valid `recoveryText`.
     2. Target draft is an unrecovered, clean baseline snapshot (`!fresh.isRecovery`, `!fresh.isDirty`, empty history).
@@ -293,25 +293,25 @@ Development progresses under the [Git conflict resolver plan](../plans/261019-15
   - **Lossless Line Tokenization (`conflict-tokenization.ts`):** `tokenizeLosslessLines` splits UTF-8 text into line tokens preserving raw terminators (`\r\n`, `\n`, lone `\r`) and missing final newlines exactly with 100% roundtrip fidelity (`rejoinLosslessLines(tokens) === text`). Line ending classification (`detectLineEnding`) reports dominant `crlf`, `lf`, `mixed`, or `none` based on CRLF and LF presence; standalone `\r` is preserved in tokens without altering dominant classification.
   - **Git Conflict Marker Parser (`conflict-marker-parser.ts`):** `parseResultMarkerBlocks` scans result text for completed, balanced Git conflict blocks (`<<<<<<<`, optional `|||||||` diff3 base separator, `=======`, `>>>>>>>`). Extracts stage token slices, 1-based line spans, and character offsets. Note: Requires completed balanced marker blocks; unterminated or malformed markers are treated as plain text.
   - **Conservative 3-Way Region Mapping (`conflict-region-mapper.ts`):** Runs pinned `node-diff3@3.2.1` (`diff3MergeRegions`) on stage tokens to construct source regions (`SourceConflictRegion[]`). Note: Proposed main-thread execution budget ($\le$ 5,000 lines or $\le$ 500 KB) and worst-case diff complexity bounds remain unqualified; tokenization bounds alone do not establish safe diff3 execution bounds. Maps source regions to result text conservatively:
-    1. *Strategy 1A (Count & Token Alignment):* When parsed marker count matches conflict region count and token contents align, assigns exact line and offset ranges.
-    2. *Strategy 1B (Unique Token Match):* Matches isolated marker blocks by unique content, verifying non-overlapping line ranges.
-    3. *Resolved Content Search:* When conflict markers are absent, searches result lines for accepted side content (`ours`, `theirs`, or both in order). Ambiguous multiple occurrences flag `confidence: "ambiguous"`; unmapped regions flag `confidence: "unmapped"`.
-    4. *Manual Edit Review Downgrade:* When `applyManualResultTextEdit` updates result text, `ambiguous` and `unmapped` regions are downgraded to `manualReview: "needs-review"` and `decision: "pending"`.
+    1. _Strategy 1A (Count & Token Alignment):_ When parsed marker count matches conflict region count and token contents align, assigns exact line and offset ranges.
+    2. _Strategy 1B (Unique Token Match):_ Matches isolated marker blocks by unique content, verifying non-overlapping line ranges.
+    3. _Resolved Content Search:_ When conflict markers are absent, searches result lines for accepted side content (`ours`, `theirs`, or both in order). Ambiguous multiple occurrences flag `confidence: "ambiguous"`; unmapped regions flag `confidence: "unmapped"`.
+    4. _Manual Edit Review Downgrade:_ When `applyManualResultTextEdit` updates result text, `ambiguous` and `unmapped` regions are downgraded to `manualReview: "needs-review"` and `decision: "pending"`.
   - **Readiness Evaluation (`computeConflictReadiness`):** Aggregates conflict counts (`totalConflicts`, `resolvedConflicts`, `unresolvedConflicts`, `needsReviewConflicts`, `ambiguousRegions`, `hasMarkers`, `unresolvedReasons`). Evaluates `parseResultMarkerBlocks(resultText)`; permits `isReady = true` when unresolved conflicts = 0, ambiguous regions = 0, and all conflict regions have `manualReview === "reviewed"` (note: if a file has malformed/unterminated markers not parsed into blocks, or contains zero conflict regions, the "all regions reviewed" check can be vacuously satisfied).
 - **Draft Store Decision History & Model Actions (Phase 06):**
   - **Model Actions:** `acceptRegionSide`, `ignoreRegionSide`, `acceptRegionBoth` (`ours-then-theirs` | `theirs-then-ours`), `markRegionReviewed`, whole-file previews (`previewAcceptAllOurs`, `previewAcceptAllTheirs`, `previewRebuildClean`), and `confirmWholeFileAction`.
   - **Decision-Aware History in `ConflictDraftRegistry`:** Draft entries track `mergeModel` and history entries with `decisions` snapshots (`draft.history.past` and `future`), enabling atomic undo/redo of both text and region decisions. Supports undo/redo of identical-text accept actions (records decision transition even when result text is unchanged, enabling clean undo/redo of acceptance).
   - **Open Correctness Defects & Boundary Realities:**
-    - *Open Defect — Capacity Accounting Bypass:* Metadata-only store actions (`ignoreSide`, `markReviewed`, and identical-text accept) push full text snapshots into history with a fixed 100-entry stack cap, but bypass `checkProspectiveEditGrowth` and do not increment `historyBytes` metrics, contradicting the hard-capacity invariant.
-    - *Open Defect — Redo Dirtiness Invariant:* On redo of an identical-text accept, `applyDraftRedo` computes `isDirty` strictly against initial text, meaning decision-only changes do not register as dirty after redo and risk premature clean eviction under memory pressure or missed recovery.
-    - *Open Defect — Typing Coalescing Sequence:* In text-changing store actions, `draft.canCoalesceHistory = false` is assigned after `updateResult`, so typing edits immediately preceding an accept action within 1000ms may coalesce unless explicitly interrupted.
-    - *Open Gate — BOM Re-application Boundary:* Store actions serialize via `getModelSerializedResult`, while manual Monaco edits return un-BOM'd strings from `getValue()`; downstream Phase 07/08 wiring will reconcile the single authority for BOM re-attachment prior to backend staging.
+    - _Open Defect — Capacity Accounting Bypass:_ Metadata-only store actions (`ignoreSide`, `markReviewed`, and identical-text accept) push full text snapshots into history with a fixed 100-entry stack cap, but bypass `checkProspectiveEditGrowth` and do not increment `historyBytes` metrics, contradicting the hard-capacity invariant.
+    - _Open Defect — Redo Dirtiness Invariant:_ On redo of an identical-text accept, `applyDraftRedo` computes `isDirty` strictly against initial text, meaning decision-only changes do not register as dirty after redo and risk premature clean eviction under memory pressure or missed recovery.
+    - _Open Defect — Typing Coalescing Sequence:_ In text-changing store actions, `draft.canCoalesceHistory = false` is assigned after `updateResult`, so typing edits immediately preceding an accept action within 1000ms may coalesce unless explicitly interrupted.
+    - _Open Gate — BOM Re-application Boundary:_ Store actions serialize via `getModelSerializedResult`, while manual Monaco edits return un-BOM'd strings from `getValue()`; downstream Phase 07/08 wiring will reconcile the single authority for BOM re-attachment prior to backend staging.
 - **Joint History Authority (`JointHistoryAuthority`):**
   - Located at `packages/ui/src/lib/joint-history-authority.ts`.
   - Standalone controller wrapping Monaco editor public APIs (`model.onDidChangeContent`, `editor.addCommand`, `editor.addAction`) to intercept `Ctrl+Z`, `Ctrl+Shift+Z`, and `Ctrl+Y`, and register context-menu Undo/Redo actions.
   - Records atomic transactions (`JointTransaction`: text, metadata, or combined atomic text+decisions) with `maxDepth` bounding (default 100) and branch-clears-redo semantics.
   - Supports `getSnapshot()` / `restoreSnapshot()` across Monaco editor remounts.
-  - *Open Qualification & Integration Gates:* `JointHistoryAuthority` is verified in isolated unit tests and headless Chromium browser tests (`conflict-monaco-history.browser.tsx`), but operates as a separate controller alongside `ConflictDraftRegistry`'s internal `draft.history`. Phase 01 native-history and Monaco byte-fidelity gates remain open, and unification into a single integrated history authority wired to `MergeConflictEditor` remains tracked under Phase 09 qualification.
+  - _Open Qualification & Integration Gates:_ `JointHistoryAuthority` is verified in isolated unit tests and headless Chromium browser tests (`conflict-monaco-history.browser.tsx`), but operates as a separate controller alongside `ConflictDraftRegistry`'s internal `draft.history`. Phase 01 native-history and Monaco byte-fidelity gates remain open, and unification into a single integrated history authority wired to `MergeConflictEditor` remains tracked under Phase 09 qualification.
 - **Floating Monaco Surface, Unified Stacking & Responsive Narrow Mode (Phase 07):**
   - **Shared Floating Host (`ConflictResolverPanel` & `ConflictResolverToolbar`):** Mounted in `WorkspacePage` above `IdeShell`, `TerminalWorkspaceShell`, and `MobileWorkspaceShell` when `conflictResolver.isPanelVisible` is true. Keeps draft model and history ownership strictly outside frame visibility so hiding and reopening retains in-progress draft text and decision states in memory (while unified Monaco-level command undo/redo remains an open Phase 09 gate). When unmerged conflicts exist and the panel is hidden, a floating conflict pill button (`bottom-4 right-4 z-40`) displays conflict counts and provides one-click panel reopening.
   - **Unified Floating Panel Stacking Identity (`terminal-workspace-panel.ts`):** Extends `TerminalFloatingPanelId` to `"files" | "tool" | "resolver"`. Employs `updateFloatingPanelStack`, `resolveFloatingPanelStackZIndex` (`TERMINAL_FLOATING_PANEL_BASE_Z_INDEX = 20`, with +2 per stack depth), and `isTopmostFloatingPanel` across both `WorkspacePage` and `TerminalWorkspaceShell` to coordinate logical stack ordering across panels, provided compatible ancestor CSS stacking contexts are maintained.
@@ -319,7 +319,7 @@ Development progresses under the [Git conflict resolver plan](../plans/261019-15
     1. The resolver panel is the topmost floating panel (`isTopmost === true`).
     2. Focus is inside the panel DOM subtree or at document body.
     3. No active Monaco overlay widget or menu is visible (`.suggest-widget.visible`, `.find-widget.visible`, `.monaco-menu-container`), allowing Monaco widgets to consume Escape before panel dismissal.
-    When hiding, calls `stopImmediatePropagation()`, `stopPropagation()`, and `preventDefault()` to prevent keystrokes from leaking into underlying terminal PTY sessions or closing background panels.
+       When hiding, calls `stopImmediatePropagation()`, `stopPropagation()`, and `preventDefault()` to prevent keystrokes from leaking into underlying terminal PTY sessions or closing background panels.
   - **Panel Geometry & Clamping (`use-floating-panel-geometry.ts`, `conflict-resolver-panel-state.ts`):** Manages floating frame position and dimensions (default `1040x700`, min `480x360`, 12px margins) clamped via `clampResolverPanelLayout` on window resize and maximize toggle (`isMaximized`). Supports dragging via title toolbar handle and corner resizing via `Grip` control.
   - **Responsive Narrow Layout (768px Container Breakpoint):** In `MergeConflictEditor.tsx`, a `ResizeObserver` observing the editor container node (`containerNode`) dynamically switches between wide multi-column layout ($\ge 768\text{px}$) and narrow tabbed layout ($< 768\text{px}$). Wide layout renders `Theirs` (readonly), `Result` (editable), `Ours` (readonly), and an optional 4th `Base` column (`showBaseInWide`). Narrow layout provides an accessible tablist with `Theirs`, `Result*`, `Ours`, and optional `Base` tabs. Switching tabs changes visible editor view without unmounting or resetting the underlying draft model or in-progress edits.
   - **In-Memory Model URI Routing & Open Target Gap:** Monaco editor instances mount to dedicated URIs: `inmemory://${projectName}/${filePath}/theirs`, `/result`, `/ours`, and `/base`, configured with `keepCurrentModel: true`. Note: Current URI routing encodes project name and file path, but lacks profile ID, connection generation, or worktree path; full owner-qualified URI scoping remains an open isolation gate for multi-target environments.
@@ -342,6 +342,7 @@ Development progresses under the [Git conflict resolver plan](../plans/261019-15
       - **Live Daemon Smoke Verification:** `scripts/qualify-git-conflict-resolver.mjs` verifies functional lifecycle across 54 assertions in primary and nested repositories (operation status, conflict inventory, snapshots, CUT1 staging rejection, CUT2 legacy rejection, stale preconditions, text resolution, guarded continue, commit-message editor sentinel handoff, nested repository target isolation, and confirmed abort). Linked-worktree isolation is independently verified by integration tests in `server/tests/git_conflict_operation_lifecycle.rs`.
       - **Preserved Open Deferrals & Review Items:** Joint history authority unification, draft capacity accounting on metadata actions, decision-only redo dirtiness evaluation, owner-qualified Monaco URIs, aggregate nested-root operation-banner parity, multi-panel layout test depth across all simultaneous panes, and Monaco view-zones/marker-parser cleanup deferral tracking remain documented under [plan.md](../plans/261019-1505-git-conflict-resolver/plan.md) and [phase-09](../plans/261019-1505-git-conflict-resolver/phase-09-qualification-and-documentation.md).
       - **Release Gating & Platform Status:** Production release remains blocked pending AC12 actual Linux-native host launch, fresh local captures, human visual review, and authoritative disposition of remaining Cycle 2 review items. Windows-native client qualification remains separately pending and explicitly unqualified.
+
 ## Cognito Privacy Mode
 
 <a id="cognito-mode"></a>
@@ -359,6 +360,7 @@ Current CSS in `packages/ui/src/index.css` sets Heavy Blur to `blur(16px) satura
 - The shared logger redacts sensitive metadata. Agent status carries lifecycle facts only, never conversation content.
 
 <a id="login-device-management-design"></a>
+
 ### Device Login Sessions Architecture (Delivered)
 
 Device login session management operates across the entire selected server for the authenticated user account, spanning all projects rather than per-project ACLs or physical device identities.
@@ -375,6 +377,7 @@ Device login session management operates across the entire selected server for t
 - **Frontend UI & Owner Fencing:** `LoginDevicesSection` within `ServerSettingsDialog` enforces HTTPS or loopback HTTP (`credentials: "omit"`). Requests, subscriptions, and self-revocation cleanup capture profile ID, URL, credential, and connection generation (`{ profileId, generation }`); stale responses or superseded generations cannot clear replacement credentials, leak into newer login drafts, or affect another profile. Acknowledging self-revocation marks the dialog credential draft as revoked; subsequent dialog saves will not re-save the dead token or overwrite newer replacement credentials.
 - **No-Auth Mode:** Both endpoints return HTTP 409 `DEVICE_SESSIONS_UNAVAILABLE` under `--no-auth`.
 - **Visual Evidence Governance:** Full-application Chromium Playwright journeys (`device-login-management.spec.ts`) exercise same-account and foreign session isolation, bearer-only DELETE denial, real-time revocation, narrow-viewport layout, and atomic evidence generation. Automated runs initialize `review.md` in `packages/ui/e2e/device-login-management/` to `PENDING_HUMAN_REVIEW` (retained as Pending); green automated test execution validates functional assertions only and does not substitute for human visual inspection.
+
 ## Idle Suspend and Deployment
 
 <a id="server-authoritative-terminal-idle-suspend-architecture"></a>
@@ -486,6 +489,311 @@ Phase 01 through Phase 06 are fully implemented and certified, including end-to-
   - Asynchronous authentication, database verification, and fresh process sampling complete before acquiring the final admission fence; only monotonic session/revocation epochs and fleet/semantic revisions are checked under the fence.
 
 `deploy/release/` provides release packaging, installers, and service templates. Host-resource SSE streams deep Linux metrics under capped subscriber leases (max 32 global, 4 per subject). See [Host-Resource SSE Architecture](./architecture/host-resource-sse.md).
+
+## TypeScript and JavaScript LSP Semantic Navigation
+
+<a id="lsp-semantic-navigation-architecture"></a>
+Development progresses under the [LSP server integration plan](../plans/260901-1000-lsp-server-integration/plan.md). The semantic navigation subsystem is designed to provide high-performance, secure code navigation (Go to Definition, Go to Implementation) for TypeScript and JavaScript within Monaco Editor without IDE bloat, cloud dependencies, or unvetted third-party services.
+
+The Phase 01 feasibility spike (`scripts/spike-lsp-test.mjs`, `plans/260901-1000-lsp-server-integration/reports/`) empirically verified feasibility gates G0–G7 on real operating-system processes, with Gate G8 tracked for in-browser qualification in Phases 07 and 10.
+
+### Feasibility Spike Empirical Findings (Phase 01)
+
+- **Real-Process Latency & Handshake (G3):** Measured real-process `initialize`/`initialized` handshake in 66.98 ms against pinned Node v24.16.0 / TS 5.9.3 / TSLS 6.0.2. Capabilities advertised and parsed include `textDocumentSync: 2` (Incremental), `definitionProvider: true`, and `implementationProvider: true`.
+- **Single-Kind Adaptive Sync Verification (G4):** Confirmed that TSLS operates under a single negotiated `textDocumentSync: 2` (Incremental) mode and natively accepts range-less full-document text updates (`{ text: newContent }`) below 64 KiB without protocol errors. Verified bidirectional 64 KiB threshold crossing (<64 KiB -> >=64 KiB -> <64 KiB), empty document lifecycle (`""` didOpen -> edit -> didClose -> reopen), and exact same-line UTF-16 code unit offset alignment across non-BMP characters (astral emoji `🚀`, 2 UTF-16 code units / 4 UTF-8 bytes).
+- **Version Fencing & Unopened File Navigation (G5):** Proved FIFO stdio ordering and verified that definition queries resolve symbols imported from unopened on-disk files (`UNOPENED_SYMBOL`), returning accurate `file://` URIs without requiring prior `didOpen` calls.
+- **Hostile Hook & Plugin Suppression Controls (G6):** Active positive controls verified that canary scripts execute when directly invoked by Node. When spawned against a hostile workspace containing malicious tsconfig plugins and a local `node_modules/typescript` decoy, supervisor settings (`"plugins": []`, `"disableAutomaticTypingAcquisition": true`, absolute `--tsserver-path`, and stripped `NODE_OPTIONS`/`NODE_PATH`) completely bypassed local decoys and suppressed tsconfig plugin execution.
+- **Process Tree Observation & Reaping (G7):** Pre-recorded descendant audits in `scripts/spike-lsp-test.mjs` observed multi-process trees (`tsserver.js` + `typingsWorker.js`) under the child PGID. Both graceful RPC shutdown (`shutdown` -> `exit`) and forced signal escalation (`kill(-pgid, SIGTERM)` -> `kill(-pgid, SIGKILL)`) resulted in 0 surviving descendants and 0 zombie processes in the OS process table in the tested Linux x86_64 environment.
+- **Vite Web Bundle Baseline (G2):** Evaluated pinned `vscode-ws-jsonrpc@3.5.0` + `vscode-jsonrpc@8.2.1`. Vite build benchmark demonstrated that Monaco's lazy chunk boundary is preserved: 0 bytes added to the initial application chunk (`index.js`), with ~14.2 KiB gzip impact (+0.34%) measured on the dynamic `monaco.js` chunk.
+- **Web Provider Coexistence Boundary (G8):** Evaluated initially in the Phase 01 spike as pending live browser DOM execution. Provider coexistence with Monaco's built-in TypeScript worker was subsequently implemented in Phase 07, verified in Chromium browser component tests (`semantic-navigation.browser.tsx`), and fully qualified in the containerized web application E2E suite under Phase 10 (with visual human review governance in `review.md`).
+
+### Implemented Primitives: Phase 02 Child Process Owner, LSP Framing Codec & Reaper Controls
+
+Phase 02 delivers the backend foundation for isolated child language servers (`server/src/semantic/`), accompanied by a deterministic Node.js test harness (`server/tests/fixtures/lsp-test-server.mjs`, `server/tests/semantic_child_process.rs`):
+
+- **LSP Stdio Framing Codec (`server/src/semantic/framing.rs`):**
+  - Implements the standard JSON-RPC 2.0 framing format: `Content-Length: <len>\r\n\r\n<payload>`.
+  - Enforces `MAX_HEADER_SIZE = 8 * 1024` (8 KiB) to guard against unbounded memory growth from malformed or delimiter-less header streams.
+  - Enforces `MAX_BODY_SIZE = 4 * 1024 * 1024` (4 MiB) on frame payloads, matching gateway transmission policies.
+  - Validates UTF-8 encoding and valid JSON syntax before publishing extracted frame bytes; rejects duplicate or missing `Content-Length` headers, negative or non-digit values, and malformed header lines via typed `FramingError`.
+  - `AsyncLspReader<R>`: asynchronous streaming reader wrapping `AsyncRead` with 8 KiB chunk reads and an internal buffer ceiling (`MAX_HEADER_SIZE + MAX_BODY_SIZE + 1024`), returning `Ok(None)` on clean EOF when empty or `UnexpectedEof` on truncated streams.
+  - `AsyncLspWriter<W>`: asynchronous streaming writer wrapping `AsyncWrite` that encodes payloads and ensures complete writes and flushes.
+
+- **Bounded Buffer Accounting & Queue Limits (`server/src/semantic/types.rs`):**
+  - `ByteBudgetCounter`: atomic byte tracking using a compare-and-swap (CAS) loop with `try_reserve(bytes)` and `release(bytes)` up to `MAX_QUEUE_BYTES = 4 * 1024 * 1024` (4 MiB).
+  - `BoundedMessage`: RAII byte-accounting guard wrapping payload bytes that automatically releases reserved bytes from `ByteBudgetCounter` on drop or explicit `into_bytes()`.
+  - Queue limits and timeouts:
+    - Outbound mpsc channel bound: `MAX_QUEUE_COUNT = 32`.
+    - Inbound and outbound byte accounting ceiling: `MAX_QUEUE_BYTES = 4 * 1024 * 1024` (4 MiB). Outbound reservation is claimed on submission and released as the message is dequeued for writing; inbound reservation is claimed by the reader before channel send. These limits provide channel backpressure and payload accounting; they do not place an absolute ceiling on total process memory.
+    - Stderr ring buffer ceiling: `MAX_STDERR_RING_BYTES = 64 * 1024` (64 KiB).
+    - Timeout invariants: `STDIN_WRITE_TIMEOUT = 2,000 ms`, `GRACEFUL_SHUTDOWN_TIMEOUT = 2,000 ms`, `FORCED_KILL_GRACE = 3,000 ms`.
+  - Typed event stream: `ChildEvent::Message(BoundedMessage)`, `ChildEvent::StderrSummary { total_lines, total_bytes, recent_snippet }`, `ChildEvent::Terminated(ChildStatus)`.
+  - Lifecycle statuses: `ChildStatus::Starting`, `Running`, `ShuttingDown`, `Exited(Option<i32>)`, `Crashed(String)`.
+
+- **Bundled Launch Specification (`server/src/semantic/launch.rs`):**
+  - `BundledLaunchSpec`: strictly verified invocation parameters: absolute executable path (verified as existing file; zero `PATH` resolution), absolute entrypoint script path, existing working directory, and existing home directory.
+  - V8 heap cap configured via `--max-old-space-size=<mb>` (default 256 MiB).
+  - Sanitized execution environment: `env_clear()` strips all inherited environment variables; minimal allowlist configures `PATH="/usr/bin:/bin"`, `HOME`, and `NODE_ENV="production"`, stripping `NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`, and `LD_LIBRARY_PATH`.
+  - Subprocess isolation: `process_group(0)` on Unix isolates the child into a new process group (`pgid = pid`); stdio streams are piped; `kill_on_drop(true)` serves as an emergency fallback guard.
+
+- **Process Tree Reaper Controls (`server/src/semantic/reaper.rs`):**
+  - Addresses multi-process descendant tracking for background child processes spawned by language servers (such as `typingsWorker.js`) via snapshot-based `/proc` discovery and group signal escalation:
+  - Linux `/proc/<pid>/task/<pid>/children` discovery: `get_proc_children(pid)` and recursive BFS traversal `get_all_descendants(root_pid)` snapshot known descendant PIDs before teardown begins.
+  - Group signal dispatch: `signal_pgid(pgid, signal)` targets `-pgid` via POSIX `kill`.
+  - Process group emptiness verification: `is_pgid_empty(pgid)` verifies `kill(-pgid, 0)` returns `ESRCH`.
+  - `terminate_and_reap_tree(child, pgid, term_grace, kill_grace)`:
+    1. Sends `SIGTERM` to `-pgid` and recorded descendant PIDs; awaits direct child exit within `term_grace`.
+    2. If processes persist, escalates with `SIGKILL` to `-pgid` and recorded descendant PIDs; awaits direct child exit with fallback `child.kill()`.
+    3. Verifies process group emptiness and deceased PIDs within `kill_grace` (`verify_pgid_reaped`), returning `ReaperError::DescendantLeak(pgid)` if surviving descendants are detected.
+
+- **Process Tree Owner & Lifecycle Actor (`server/src/semantic/child.rs`):**
+  - `SemanticChildOwner::spawn(&BundledLaunchSpec)` spawns the child and starts three concurrent Tokio tasks:
+    1. _Stderr Drain Task:_ reads stderr bytes non-blocking into a `VecDeque` circular buffer capped at 64 KiB (`MAX_STDERR_RING_BYTES`), counts lines and bytes, applies keyword-based redaction (`sanitize_text` redacting lines containing `authorization`, `bearer`, `token`, `password`), and emits a single `ChildEvent::StderrSummary` upon EOF without blocking stdout/stdin pipelines.
+    2. _Stdout Reader Task:_ reads framed messages via `AsyncLspReader`, reserves inbound byte budget via `ByteBudgetCounter`, packages frames as `BoundedMessage`, and forwards `ChildEvent::Message` over the event channel; emits internal signals (`StdoutEof`, `StdoutError`, `InboundFull`) on EOF, framing errors, or budget exhaustion.
+    3. _Owner Actor Task:_ single authority managing the child process lifecycle using `tokio::select!`:
+       - Biased selection prioritizes stop signals and internal stream failure signals over pending outbound commands.
+       - Dispatches outbound commands from `cmd_rx` to child stdin via `AsyncLspWriter` with a 2,000 ms write timeout (`STDIN_WRITE_TIMEOUT`), releasing the byte reservation upon dequeue.
+       - Spontaneous child exit: `child.wait()` detects termination, dispatches fallback group cleanup, and publishes `ChildEvent::Terminated(ChildStatus)`.
+       - Teardown sequencing: governed by a 5,000 ms teardown-operation budget (`TOTAL_TEARDOWN_BUDGET`), followed by bounded final cleanup and notification. When graceful, sends LSP `shutdown` RPC (300 ms timeout), waits for voluntary exit (500 ms), sends LSP `exit` notification (200 ms), and waits for exit (300 ms). If the child persists, escalates to `terminate_and_reap_tree` (800 ms term grace, 1,200 ms kill grace). An unconditional `SIGKILL` to `-pgid` and up to 500 ms PGID verification run outside the teardown timeout as final safety.
+       - Attempts bounded publication of `ChildEvent::Terminated(status)` (with a 500 ms timeout; send failure or receiver drop does not prevent shutdown) and marks `terminal_published` atomically (`is_terminated()` reflects owner task completion rather than verified client receipt).
+  - `SemanticChildHandle`: exposes `send_message(payload)`, `shutdown()`, and `is_terminated()`, with `Drop` invoking `shutdown()` for clean handle drop semantics.
+
+### Implemented Primitives: Phase 03 Pinned Tool Provisioning and Resource Controls
+
+Phase 03 establishes immutable tool provisioning, passive zero-child integrity verification, centralized resource policy definitions, Linux child-only cgroups attachment with honest portable degradation, and SPDX 2.3 SBOM generation (`server/src/semantic/tool_profile.rs`, `resources.rs`, `resources/linux.rs`, `deploy/release/`):
+
+- **Immutable Bundled Toolchain Layout (`lib/semantic-engine`):**
+  - Canonical layout resides at `<release-root>/lib/semantic-engine/` (default `/opt/dam-hopper/lib/semantic-engine`).
+  - Contains the pinned Linux x64 Node.js runtime (`node`, v24.16.0, pinned SHA-256 `b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd`), `tsls/package.json` (`1aebb20f4c8d8b699745853542ecce7f1e7e42c85f97843bfd8064f9efdc3f7c`), `tsls/node_modules/typescript-language-server/lib/cli.mjs` (v6.0.2, pinned SHA-256 `192638f1fa62c907fd54c0b55b12dd3dff01325a1a0ed5973907efca1c57b5eb`), and `tsls/node_modules/typescript/lib/tsserver.js` (v5.9.3, pinned SHA-256 `e3ccfeec65ec5c470b8ffc5611878a31182650c7e8a062c38a719f83b523edcb`).
+  - Staging in `deploy/release/build-release-archive.sh` uses `--semantic-engine-dir <dir>` and dereferences symlinks via `cp -rL`, guaranteeing the release archive contains only regular files and directories.
+  - Release manifest generator (`deploy/release/generate-release-manifest.mjs`) and release validator (`server/src/linux_release/inventory_validation.rs`) recognize `lib/semantic-engine` entries, require role `server` (omitted from `web`-only installations), prohibit group/world-writable bits (`mode & 0o022 == 0`), and enforce execute permissions on `lib/semantic-engine/node` (`mode & 0o111 != 0`).
+  - Filesystem permissions and ownership prevent workspace tampering; the daemon never resolves Node or language servers from `PATH`, global `npm`/`pnpm`/`npx`, workspace `node_modules`, or environment overrides.
+
+- **Passive Zero-Child Integrity Verification (`server/src/semantic/tool_profile.rs`):**
+  - `SemanticToolProfile`: Built-in descriptor bound to the active release root (`from_release_root`, `discover`). Discovers installation root relative to the running server binary (`dam-hopper-server`) or falls back to `/opt/dam-hopper`.
+  - `verify_integrity(&self) -> ToolIntegrityStatus`: Purely passive filesystem check that spawns zero child processes (`node`, `npm`, or shell commands are never invoked). Verifies directory existence, checks each component via `symlink_metadata` to enforce regular-file kind and strictly reject symlinks, validates permission bits (Node executable `mode 0755`, no group/world-writable files), and streams 64 KiB chunks to verify SHA-256 digests against `PinnedDigests`.
+  - Strict boundary separation: Passive artifact integrity readiness is strictly decoupled from executable protocol qualification. Integrity validation verifies on-disk layout and checksums at configuration time without running the binary; protocol compatibility is lazily verified inside the managed child owner on first session use.
+  - Language support boundaries: Only TypeScript and JavaScript (`ts`, `tsx`, `js`, `jsx`) are supported; unsupported language queries (such as Rust or Java) fail immediately with `ToolProfileError::UnsupportedLanguage` without third-party plugin search.
+
+- **Centralized Resource Policy Constants (`server/src/semantic/resources.rs`):**
+  - Centralizes the finite production policy constants selected in Phase 01 into `ResourcePolicy` (version `RESOURCE_POLICY_VERSION = "1.0.0"`).
+  - _Directly wired constants:_ Protocol and queue constants are imported by `framing.rs` and `types.rs`: `MAX_STDIO_HEADER_BYTES = 8 KiB`, `MAX_FRAME_BODY_BYTES = 4 MiB`, `MAX_QUEUED_MESSAGES = 32`, `MAX_QUEUED_BYTES = 4 MiB`, `MAX_RETAINED_STDERR_BYTES = 64 KiB`, `GRACEFUL_SHUTDOWN_TIMEOUT = 2,000 ms`, `FORCE_KILL_REAP_BUDGET = 3,000 ms`, `TOTAL_TEARDOWN_BUDGET = 5,000 ms`.
+  - _Wired supervisor and gateway constants:_ Defined centrally with validation helpers (`validate_document_size`, `validate_frame_size`, `validate_header_size`, `is_incremental_sync_recommended`) and wired across supervisor, gateway, and session actors: concurrency (`MAX_GLOBAL_SEMANTIC_TREES = 2`, `MAX_TREES_PER_CONNECTION = 1`, `MAX_PROCESSES_PER_TREE = 8`, `MAX_IN_FLIGHT_REQUESTS = 8`), rate limits (`MESSAGE_RATE_PER_SEC = 40`, `MESSAGE_RATE_BURST = 80`), document/overlay budgets (`ADAPTIVE_SYNC_THRESHOLD_BYTES = 64 KiB`, `MAX_DOCUMENT_BYTES = 1 MiB`, `MAX_OPEN_DOCUMENTS_PER_SESSION = 16`, `MAX_SESSION_OVERLAY_BYTES = 4 MiB`, `MAX_GLOBAL_OVERLAY_BYTES = 8 MiB`), timeouts (`STARTUP_TIMEOUT = 30s`, `NAVIGATION_REQUEST_TIMEOUT = 10s`, `IDLE_SHUTDOWN_TIMEOUT = 60s`, `SOCKET_SEND_TIMEOUT = 2s`, `AUTH_STORE_LOOKUP_TIMEOUT = 2s`), restart backoff (`MAX_RESTARTS_PER_WINDOW = 2` within `RESTART_WINDOW = 300s`, backoffs 1s / 3s), and V8 old space hint (`V8_MAX_OLD_SPACE_MB = 256`).
+- **Linux Child-Only Cgroup Primitives & Unqualified Status (`server/src/semantic/resources/linux.rs` & `launch.rs`):**
+  - _Candidate Cgroup Primitives:_ Implements candidate Linux cgroup v2 controller attachment logic in `resources/linux.rs` targeting child subcgroups (`dam-hopper-semantic-<session_id>`) in `pre_exec` (`cgroup.procs`).
+  - _Unqualified Host Status:_ Production sessions do not wire these controllers; Linux cgroup v2 mode is explicitly unqualified (`status: "NOT_SELECTED"`). Current production sessions run strictly under portable application limits (`PASS_PORTABLE_ONLY`) with in-memory byte accounting, document caps, tree limits, V8 heap bounds (`--max-old-space-size=256`), and sampled procfs RSS monitoring.
+  - _Honest Boundary:_ Portable caps are application-level limits and sampled termination thresholds; they do not provide hard kernel RSS/CPU containment or OS filesystem sandboxing, and no core service starvation guarantees are claimed.
+
+- **SPDX 2.3 SBOM Integration & Provenance (`deploy/release/generate-release-manifest.mjs` & `provenance.json`):**
+  - Release metadata and cryptographic digests are recorded in `deploy/release/semantic-engine/provenance.json` (components: `node`, `typescript`, `typescriptLanguageServer`, `packageJson`).
+  - During Linux release packaging, `generate-release-manifest.mjs` detects `lib/semantic-engine/` in the inventory and generates a formal SPDX 2.3 JSON Software Bill of Materials (`dam-hopper-<tag>.spdx.json`).
+  - Defines package entries: `dam-hopper` (MIT), `typescript` (Apache-2.0, v5.9.3), `typescript-language-server` (Apache-2.0, v6.0.2), and `nodejs` (MIT, v24.16.0 with source URL and SHA-256).
+  - Records SPDX package relationships: `SPDXRef-DOCUMENT DESCRIBES SPDXRef-Package-dam-hopper`, and `SPDXRef-Package-dam-hopper CONTAINS SPDXRef-Package-typescript`, `CONTAINS SPDXRef-Package-typescript-language-server`, `CONTAINS SPDXRef-Package-nodejs`.
+  - Classifies inventory file licenses: files within `lib/semantic-engine/tsls/node_modules/typescript*` are assigned `Apache-2.0`; core files remain `MIT`.
+
+### Implemented Primitives: Phase 04 Semantic Session Supervisor
+
+Phase 04 implements the session supervision layer, isolated per-connection session actors, in-memory authoritative overlay tracking with adaptive synchronization, sliding-window crash recovery with replay, and complete-tree teardown (`server/src/semantic/supervisor.rs`, `session.rs`, `overlay.rs`, `protocol.rs`, `state.rs`, `main.rs`):
+
+- **AppState-Owned Supervisor & Lifecycle Integration (`server/src/semantic/supervisor.rs`, `server/src/state.rs`, `server/src/main.rs`):**
+  - `SemanticSupervisor` is owned directly by `AppState` (`state.semantic_supervisor`), initialized in disabled state (`is_enabled() == false`) without spawning child processes.
+  - Daemon startup logs passive toolchain integrity (`tool_integrity_status()`) without launching Node or executing shell probes.
+  - Toolchain SHA-256 integrity is verified off-thread via `verify_integrity_off_thread` under an asynchronous permit on each enable and child launch/restart; cached readiness is strictly diagnostic and never authorizes child execution.
+  - Server graceful shutdown (`server/src/main.rs`) calls `state.semantic_supervisor.shutdown().await` after idle-suspend teardown, terminating all active sessions. Setting `set_enabled(false)` similarly drains and reaps all active sessions.
+
+- **Session Admission & Multi-Tier Capacity Limits:**
+  - Enforces finite resource limits defined in `resources.rs`: global tree concurrency (`MAX_GLOBAL_SEMANTIC_TREES = 2`), per-connection concurrency (`MAX_TREES_PER_CONNECTION = 1`), global overlay memory (`MAX_GLOBAL_OVERLAY_BYTES = 8 MiB`), per-session overlay memory (`MAX_SESSION_OVERLAY_BYTES = 4 MiB`), and open document count (`MAX_OPEN_DOCUMENTS_PER_SESSION = 16`).
+  - Pre-admission queries active session overlay byte counts across existing handles before permitting a new session; write-lock acquisition rechecks `enabled`, key uniqueness, and global tree capacity to protect against concurrent creation races.
+
+- **Isolated Target-Scoped Session Actor (`server/src/semantic/session.rs`, `protocol.rs`):**
+  - Each session is keyed by `SessionKey(connection_id, project, worktree)` and isolated within a dedicated `SemanticSessionActor` task spawned via `SemanticSessionActor::spawn(...)`.
+  - External communication passes through `SemanticSessionHandle` over a bounded mpsc channel (`cmd_tx`). Dropping all handles closes `cmd_rx`, causing the actor run loop to break and trigger teardown.
+  - Tracks composite identity fences (`SessionIdentityFence`): `connection_id`, `connection_generation`, `project`, `worktree`, `target_generation`, `session_generation`, and `child_incarnation`.
+  - Client-to-child communication maintains strict FIFO ordering. Child-initiated `workspace/configuration` requests are intercepted by the actor and immediately resolved with `[{}]` to satisfy TSLS initialization without deadlocks or environment leakage.
+  - In-flight navigation requests are capped (`MAX_IN_FLIGHT_REQUESTS = 8`) with a 10-second server deadline ticker (`NAVIGATION_REQUEST_TIMEOUT = 10s`) sweeping expired requests, distinct from the client's 5-second query cancellation timeout.
+
+- **Authoritative In-Memory SessionOverlayMap & Adaptive Synchronization (`server/src/semantic/overlay.rs`):**
+  - `SessionOverlayMap` maintains authoritative in-memory document buffers, tracking aggregate bytes against `MAX_SESSION_OVERLAY_BYTES` (4 MiB) and per-document size limits (`MAX_DOCUMENT_BYTES = 1 MiB`).
+  - UTF-16 code unit position translation: `position_to_byte_offset` converts LSP line and UTF-16 character offsets to UTF-8 byte offsets, strictly validating line bounds, CRLF stripping, and surrogate pair boundaries.
+  - Speculative atomic multi-change batch editing: `apply_changes` clones document state before applying change events sequentially (`apply_ranged_edit_internal`, `apply_full_replacement_internal`), validating monotonic versions and byte budgets before committing atomically, preserving prior state on any edit failure.
+  - Adaptive wire sync: checks threshold `ADAPTIVE_SYNC_THRESHOLD_BYTES = 64 KiB`. Below 64 KiB, forwards range-less full text replacements (`{ range: None, text }`); at or above 64 KiB, forwards the incoming change batch directly without re-synthesizing ranged edits.
+
+- **Freshness Validation & Document-Scoped Invalidation:**
+  - Source freshness validates both document `open_incarnation` and `version` before resolving navigation responses, returning `Value::Null` if the document was modified or closed while in flight.
+  - Destination freshness takes a snapshot of open overlay versions at request dispatch and verifies that destination overlays have not advanced, discarding stale cross-file navigation responses.
+  - Closing a document (`textDocument/didClose`) immediately evicts the overlay, recovers its byte budget, cancels and resolves all pending navigation requests for that URI with `Value::Null`, and forwards `didClose` to TSLS.
+
+- **Crash Resilience, Bounded Restart & Document Replay:**
+  - Detects child exit (`ChildEvent::Terminated`) and transitions session state to `SemanticState::Crashed`, failing in-flight requests immediately with `SessionError::ChildCrashed`.
+  - Enforces restart budget: maximum 2 restarts (`MAX_RESTARTS_PER_WINDOW = 2`) within a 300-second sliding window (`RESTART_WINDOW = 300s` / 5 minutes) with two-stage exponential backoff (`RESTART_BACKOFF_STAGE1 = 1s`, `RESTART_BACKOFF_STAGE2 = 3s`).
+  - Upon successful child respawn and handshake re-initialization, initiates bounded restart attempts with best-effort full-text `didOpen` replay of all tracked open document overlays (`SessionOverlayMap::all_documents()`).
+
+- **Process Group Teardown, Descendant Reaping & Idle Eviction:**
+  - Distinguishes child teardown budget (`TOTAL_TEARDOWN_BUDGET = 5.0s`, where `reaper.rs` escalates SIGTERM to SIGKILL against process group `-pgid` and procfs-discovered descendants) from the session actor wait allowance (5.5s timeout awaiting child termination).
+  - Teardown is triggered uniformly by explicit `close_session`, server shutdown, session invalidation, or dropping all `SemanticSessionHandle` references (shutdown sequentially awaits handles with unstarted children bounded by `STARTUP_TIMEOUT = 30s`; child reap operations apply SIGTERM then SIGKILL to `-pgid` and procfs descendants within `TOTAL_TEARDOWN_BUDGET = 5.0s` per session actor, with reap-error status recorded for supervisor failure handling).
+  - Background idle session eviction: when open document count and in-flight requests both drop to zero, an idle timer token schedules an eviction notification after 60s (`IDLE_SHUTDOWN_TIMEOUT = 60s`); if still idle, the supervisor reaps the session.
+
+### Implemented Primitives: Phase 05 Authenticated Semantic WebSocket Gateway
+
+Phase 05 establishes a dedicated, isolated transport gateway for language server JSON-RPC traffic (`server/src/api/semantic_ws.rs`, `server/src/semantic/gateway.rs`, `server/src/semantic/uri.rs`):
+
+- **Dedicated Route & Subprotocol Isolation:** Exposed strictly at `/ws/semantic/v1` with mandatory subprotocol `dam-hopper.semantic.lsp.v1`. Operates on independent reader/writer tasks, sharing zero channel budgets or message queues with core `/ws`. Upgrades enforce Origin allowlist parity (`websocket_origin_allowed`) and reserve presence slots (`reserve_pending_upgrade`).
+- **Cancellation-First Live Auth Invalidation:** Live authentication is monitored every 5 seconds with a bounded 2-second store lookup. Upon credential invalidation or expiration, supervisor admission is immediately revoked and the child process tree reaped before socket close delivery, preventing stalled clients from pinning resources.
+- **Framing, Rate Limiting & In-Flight Bounds:** Axum WebSocket frames are capped at 4 MiB (`MAX_FRAME_BODY_BYTES`). Incoming traffic is metered by a token-bucket rate limiter (40 tokens/s refill, burst 80 tokens, cost 1 token/message; exceeding limits returns JSON-RPC `-32004 RATE_LIMIT_EXCEEDED`). In-flight navigation requests are capped at 8 (`MAX_IN_FLIGHT_REQUESTS`).
+- **Filtered JSON-RPC Profile & Configuration Replies (G3):** Enforces a strict method allowlist (`damHopper/attachTarget`, `initialize`, `initialized`, `textDocument/didOpen`, `textDocument/didChange`, `textDocument/didClose`, `textDocument/definition`, `textDocument/implementation`, `$/cancelRequest`, `shutdown`, `exit`). Intercepts child-initiated `workspace/configuration` requests and replies immediately with safe empty configurations (`[{}]`), resolving TSLS without deadlock or client environment leakage.
+- **FIFO Ordering, Version Fencing & Document Freshness (G5):** Serialized stdio dispatch ensures document changes reach TSLS before subsequent queries. Navigation requests require the `damHopperDocumentVersion` extension matching the in-memory overlay version (stripped before stdio dispatch), and the gateway discards late child responses if the client document version has advanced.
+- **Hostile Plugin & Decoy Suppression (G6):** Pinned launch specifications force `initializationOptions` with `"plugins": []` and `"disableAutomaticTypingAcquisition": true`, use absolute `--tsserver-path` to bypass workspace `node_modules` replacement decoys, and sanitize the execution environment by stripping `NODE_OPTIONS` and `NODE_PATH`.
+- **Bidirectional Virtual URI Containment:** Client URIs use `dam-hopper://semantic/<target-id>/<encoded-path>` grammar. Paths are split before decoding, percent-decoded once, and checked against target root boundaries lexically and via `dunce::canonicalize`. Results outside target roots return `{ "outsideTarget": true }`, preventing host path disclosure.
+
+### Implemented Primitives: Phase 06 Admin-Only Global Hot Toggle and Configuration Protection
+
+Phase 06 delivers server-global administrative enablement without daemon restart, serialized config mutation boundaries, and canonical config file protection (`server/src/api/semantic_settings.rs`, `server/src/config/schema.rs`, `server/src/fs/secure_path.rs`, `packages/ui/src/components/organisms/SettingsSemanticNavigationSection.tsx`):
+
+- **Dedicated REST Endpoints (`server/src/api/semantic_settings.rs`):**
+  - `GET /api/semantic/settings`: Safe inspection of configured intent (`configuredEnabled`), effective runtime admission (`runtimeEnabled`, `runtimeState`), passive toolchain verification (`toolchainReady`, `integrityStatus`), engine tuple (`tupleIdentifier`), resource capability (`policyCapability`, `resourceWarning`), active trees, open documents, total overlay bytes, runtime generation, transition errors, and caller mutation authority (`canMutate`). Accessible by any authenticated caller or development session.
+  - `PATCH /api/semantic/settings`: Accepts typed `{ "enabled": bool }` to hot-toggle semantic navigation. Strictly requires signed administrator credentials and fresh role evaluation; `--no-auth` and non-admin dev/user accounts are rejected with stable 403.
+- **Strict Schema & Tampering Prevention (`server/src/config/schema.rs`, `parser.rs`):**
+  - Global configuration persists `GlobalConfig.semantic.enabled` (default `false`) with `#[serde(deny_unknown_fields)]`. Custom commands, arguments, environment variables, paths, or shadow workspace sections are strictly denied.
+  - Workspace configurations (`dam-hopper.toml`) and project imports reject any misplaced `[semantic]` or `[server.semantic]` sections.
+- **Bounded Fresh Current-Admin Authorization (`server/src/api/auth.rs`):**
+  - `evaluate_current_admin` evaluates `AuthService.evaluate_claims` within a bounded 2-second store timeout (`AUTH_STORE_LOOKUP_TIMEOUT`) against active session and user store state.
+  - Rejects `state.no_auth`, `CredentialMechanism::NoAuthDev`, missing verified claims, actor/claim mismatches, demoted users, or non-admin roles with stable 403.
+  - Evaluates authority first before taking locks, and re-evaluates immediately before durable disk/runtime commit (especially post-teardown or post-integrity I/O). If demotion occurs during teardown, the system fails closed into a safe-disabled state with an explicit configuration/runtime mismatch.
+- **Dual-Layer Serialized Transitions & Invariant Lock Ordering:**
+  - Mutating global semantic settings requires acquiring `global_config_mutation_lock` followed by `transition_lock`. No reverse acquisition is permitted.
+  - Serialized read-modify-write patterns (`mutate_global_config`) preserve unrelated global configuration keys and current semantic intent across concurrent writers.
+- **Passive Zero-Child ON vs Complete-Tree OFF Teardown:**
+  - _Transitioning ON:_ Validates bundled toolchain integrity passively (`verify_integrity`, zero child processes spawned), re-evaluates current-admin authority immediately prior to commit, atomically persists `enabled: true`, and commits enabled status on the supervisor. Startup sync initializes runtime state according to persisted intent with zero children.
+  - _Transitioning OFF:_ Supervisor revokes admission, drains sessions, and reaps child process groups within teardown budgets (`TOTAL_TEARDOWN_BUDGET = 5.0s` per session actor). Upon successful cleanup, re-verifies admin authority immediately preceding commit, atomically persists `enabled: false`, and publishes disabled status with zero children. If teardown fails, failed handles are retained, safe-disabled status is recorded with transition error, durable false intent is withheld, and re-enable is blocked until clean.
+- **Canonical Config Protection Across Raw FS Mutation Sinks (`server/src/fs/`):**
+  - `is_protected_global_config_path` resolves canonical paths, parent directory and filename equivalence, and dev/inode hardlinks on Unix.
+  - Guarded sinks: `fs::ops::atomic_write_with_check`, `atomic_persist_with_check`, `fs::secure_path::persist_temp`, `persist_temp_sync`, `write_bytes`, `fs::mutate::assert_safe_mutation` (create, rename, move, delete), and WebSocket chunked upload (`fs:write_commit`). All refuse direct mutation of the global config file, directing operators to authorized configuration and semantic settings APIs.
+- **Shared React Settings UI (`packages/ui/src/components/pages/SettingsPage.tsx`):**
+  - Mounts `SettingsSemanticNavigationSection` under `SettingsSectionAccordion` ("Semantic Navigation").
+  - Admin sessions render an actionable switch with pending lockout and global-impact explanation.
+  - Non-admin and development sessions render a read-only state with an informative explanation of admin requirements.
+  - Advisory portable mode banner alerts operators when Linux cgroup v2 controllers are missing, confirming fallback to portable resource limits.
+  - Configuration / runtime mismatch alert displays if configured intent differs from runtime state or if the runtime entered safe-disabled mode following a transition failure.
+
+### Implemented Primitives: Phase 07 Shared Monaco Semantic Client and Navigation
+
+Phase 07 delivers the frontend Monaco editor integration for TypeScript and JavaScript semantic navigation (`packages/ui/src/api/semantic-client.ts`, `packages/ui/src/lib/semantic-model-uri.ts`, `packages/ui/src/lib/semantic-monaco.ts`, `packages/ui/src/stores/semantic-navigation.ts`, `packages/ui/src/components/organisms/MonacoHost.tsx`, `packages/ui/src/components/organisms/EditorTabs.tsx`), alongside backend gateway cancellation and desync hardening (`server/src/semantic/gateway.rs`, `server/src/semantic/session.rs`):
+
+- **Stable Local Model Identity & Replaceable Wire Bindings (`packages/ui/src/lib/semantic-model-uri.ts`):**
+  - Decouples stable local Monaco model identity (`StableModelIdentity`: `profileId`, `project`, `targetKey`, `relativePath`, `tabKey`, `localModelUri`, `incarnation`) from session-scoped wire bindings (`SemanticWireBinding`: `targetId`, `relativePath`, `wireUri`, `connectionGeneration`, `targetGeneration`, `sessionGeneration`, `languageDescriptor`, `wireVersion`).
+  - Local models adhere to Monaco's in-memory convention `inmemory://dam-hopper/${encodeURIComponent(tabKey)}`; wire bindings use RFC 3986 virtual URIs `dam-hopper://semantic/<target-id>/<encoded-relative-path>`.
+  - `SemanticModelRegistry` maps local models to wire URIs without mutating Monaco model objects or rekeying tabs on socket reconnect, retaining dirty buffer text, view state, and undo stacks on the local model object (subsequent edit routing to replaced clients is governed by dynamic client resolution at call time via `findClientForTab`, remediating Phase 07 C-1 in Phase 08). Incarnation counters fence late callbacks and closed document updates.
+- **Owner-Bound Semantic Client & Adaptive Synchronization (`packages/ui/src/api/semantic-client.ts`):**
+  - Dedicated WebSocket client connecting to `/ws/semantic/v1` with mandatory subprotocol `dam-hopper.semantic.lsp.v1`.
+  - Enforces strict lifecycle state progression: `disconnected` -> `connecting` -> `attaching` (`damHopper/attachTarget`) -> `initializing` (`initialize`) -> `replaying` (`initialized`, `replayMatchingModels`) -> `ready`.
+  - Single-capability adaptive sync at `ADAPTIVE_SYNC_THRESHOLD_BYTES = 64 KiB`: computes exact post-edit UTF-8 byte length via `TextEncoder`. Changes below 64 KiB transmit range-less full-text replacement (`{ text }`); changes at or above 64 KiB forward incremental UTF-16 edit ranges directly.
+  - Monotonic wire version tracking (`wireVersion++`) per edit; serialized per-document promise queues (`documentQueues`) prevent out-of-order delivery.
+  - Request timeouts (`NAVIGATION_TIMEOUT_MS = 5000`) and client cancellation via `$/cancelRequest`; intercepts child `workspace/configuration` requests and replies with safe defaults (`[{}]`).
+  - Backend gateway integration: client cancellation via `$/cancelRequest` completes the original in-flight request echoing its original request ID with `RPC_ERR_REQUEST_CANCELLED = -32800` (`REQUEST_CANCELLED`), and closes documents upon malformed `contentChange` items to protect against desynchronization.
+- **Model-Scoped Monaco Provider Integration (`packages/ui/src/lib/semantic-monaco.ts`):**
+  - Registers Monaco `DefinitionProvider` and `ImplementationProvider` for `typescript` and `javascript` (`.ts`, `.tsx`, `.js`, `.jsx`).
+  - Strict model-scoping: resolves only registered, semantic-bound models through `SemanticClient`; non-semantic models (diffs, scratchpads, non-project files) route to Monaco's built-in TypeScript worker (`getTypeScriptWorker` / `getJavaScriptWorker`).
+  - Translates coordinates between Monaco 1-based line/column (`IRange`, `IPosition`) and LSP 0-based UTF-16 code units (`monacoPositionToLsp`, `lspRangeToMonaco`).
+  - Registers custom editor opener via `monaco.editor.registerEditorOpener` for cross-document navigation. Clean deactivation restores default Monaco TypeScript/JavaScript mode configuration (`definitions: true, implementations: true`).
+- **Ephemeral Reveal Coordination & Editor Lifecycle (`packages/ui/src/stores/semantic-navigation.ts`, `EditorTabs.tsx`, `MonacoHost.tsx`):**
+  - The ephemeral semantic navigation store (`useSemanticNavigationStore`) tracks reveal intents in memory (intents and document content are never persisted to `localStorage`; tab metadata persistence is governed independently by the editor store).
+  - Cross-file navigation dispatches `NavigationRevealIntent` (`targetId`, `profileId`, `project`, `targetKey`, `relativePath`, `range`, `createdAt`) with a 10-second TTL, consumed atomically when the destination editor tab mounts.
+  - `EditorTabs` synchronizes runtime settings via `useSemanticSettings`, manages `SemanticClient` creation/destruction for active connected targets, and cleans up client instances on generation changes or unmount.
+  - `MonacoHost` binds models to `defaultSemanticModelRegistry` on mount and pushes content edits via `notifyDidChange`. `editor.ts` notifies document closure (`notifyDidClose`) on tab close.
+- **Browser Qualification & Coexistence Status (G8 Gate):**
+  - Headless Chromium browser tests (`semantic-navigation.browser.tsx`) verified provider registration, model-scoped routing, coexistence with non-semantic models (diff editors and scratchpads), and dirty buffer preservation across socket reconnection.
+  - Live web application multi-model qualification was subsequently executed in Phase 10 via Playwright E2E testing against containerized backend staging, capturing visual evidence for Definition jumps, multi-result peek widgets, and restored tab styling.
+
+### Implemented Primitives: Phase 08 Lifecycle Invalidation and Recovery
+
+Phase 08 implements scoped lifecycle invalidation and resilient client recovery across the backend supervisor and frontend Monaco integration (`server/src/semantic/supervisor.rs`, `server/src/semantic/session.rs`, `server/src/semantic/gateway.rs`, `server/src/api/workspace.rs`, `server/src/api/config.rs`, `server/src/api/settings.rs`, `server/src/state.rs`, `server/src/main.rs`, `packages/ui/src/api/semantic-client.ts`, `packages/ui/src/stores/semantic-navigation.ts`, `packages/ui/src/components/organisms/EditorStatusBar.tsx`, `packages/ui/src/components/organisms/EditorTabs.tsx`, `packages/ui/src/components/organisms/MonacoHost.tsx`):
+
+- **Two-Phase Scoped Invalidation (`server/src/semantic/supervisor.rs`):**
+  - Distinguishes admission cutoff from asynchronous process tree teardown:
+    - _Phase 1 (Admission Revocation & Detachment):_ Executed synchronously while holding `workspace_context_guard.write()`. Methods `prepare_invalidate_all()`, `prepare_invalidate_project(project)`, and `prepare_invalidate_target(target)` remove session handles from the supervisor registry under write lock, detaching them and enqueuing actor invalidation commands failing in-flight requests.
+    - _Phase 2 (Non-Blocking Process Tree Reaping):_ Executed outside inner configuration/workspace locks via `spawn_reap_sessions(handles)` (background Tokio task) or caller-driven `reap_sessions(handles)` using `futures::future::join_all`. Escalates SIGTERM to SIGKILL against process groups `-pgid` and procfs descendants without stalling API callers or holding workspace locks.
+
+- **Lifecycle Invalidation Boundaries & Triggers:**
+  - _Workspace Switch & Init (`server/src/api/workspace.rs`):_ `init_workspace` and `switch_workspace` prepare invalidation of all active semantic sessions under the write lock, then spawn background tree reaping.
+  - _Config Reload with Project Diffing (`server/src/api/config.rs`):_ `reload_config_locked` performs set-difference analysis (`old_projects` vs `new_projects`). Only removed project roots trigger `prepare_invalidate_project`, preserving unaffected project sessions.
+  - _Cache Clear & Settings Restore (`server/src/api/settings.rs`):_ `clear_cache` prepares full session invalidation; `import_workspace_settings` reaps detached handles on reload and restores on rollback.
+  - _Worktree Removal & Target Refresh (`server/src/state.rs`):_ `invalidate_project_root` resolves project identity and prepares scoped invalidation.
+  - _Early Daemon Shutdown Cutoff (`server/src/main.rs`):_ Sets `admission_revoked: AtomicBool` immediately in the SIGINT/SIGTERM handler (`revoke_admission`), rejecting new WebSocket handshakes before socket draining or service exit.
+- **Gateway Invalidation Mapping & Teardown Hardening (`server/src/semantic/gateway.rs`, `server/src/api/semantic_ws.rs`):**
+  - When a session actor returns `Err(SessionError::Invalidated)` during request processing, the gateway removes internal ID mappings and returns JSON-RPC `-32005` (`AUTH_REVOKED`).
+  - Bounded writer task join with timeout (`SOCKET_SEND_TIMEOUT = 2s`) explicitly aborts the writer task if it does not exit within the timeout window.
+- **Client-Side Recovery & Lifetime Management (`packages/ui/src/api/semantic-client.ts`, `packages/ui/src/stores/semantic-navigation.ts`):**
+  - _Query Cancellation:_ Navigation queries support `AbortSignal` and client timeouts; sends `$/cancelRequest` and locally discards `-32800` (`REQUEST_CANCELLED`) without UI errors.
+  - _Full Resync on Version Divergence:_ Receiving `-32003` (`STALE_VERSION`) triggers `resyncDocument(tabKey, text)`, bumping the wire version and transmitting a full `didChange` notification to realign server overlays with current editor text.
+  - _Auto-Reconnect:_ Receiving `-32005` (`AUTH_REVOKED`) transitions the client to `disconnected` and schedules a single auto-reconnection attempt after 1,000 ms. Reconnection enforces strict provenance matching across endpoint, configured root, actor, profile, and target before dirty model replay. Permanent terminal states (removed target, disabled subsystem, revoked auth) fail closed.
+  - _Reference-Counted Client Lifetimes & Profile Enablement:_ `clientRefCounts` tracks active pane and tab consumers; `releaseClient(scopeKey)` disconnects only when all consumers unmount. Disabling a profile via `setProfileSemanticEnabled` disconnects only that profile's clients.
+
+  - _Dynamic Client Resolution:_ Remediates Phase 07 C-1 by resolving `findClientForTab(tabKey)` dynamically at call time in `MonacoHost.tsx` (`onChange`, `notifyDidClose`), preventing edits from routing to stale cached references.
+- **Active Model Status Presentation (`packages/ui/src/components/organisms/EditorStatusBar.tsx`):**
+  - Renders live semantic status for the active editor model (`ready`, `starting`, `error`, `disconnected`, `unsupported`) with color-coded status dots and descriptive tooltips in the editor status bar.
+- **Phase 08 Review Item Dispositions:**
+  - Open review items from Phase 08 Cycle 2 (`plans/reports/code-reviewer-261023-2250-phase-08-lifecycle-cycle-2.md`) were formally verified and resolved in Phase 09: C2 (synchronous session revocation token fencing lock-free before writer delivery), R1 (provenance matching on reconnect before dirty replay), W2 (handshake isolation), W3 (target derivation across worktrees), R2 (`worktreePath` wire alignment), R3 (terminal child exit non-blocking reap), and W5 (target-scoped git route invalidation).
+
+### Implemented Primitives: Phase 09 Security, Real-Process Tests, and Performance Qualification
+
+Phase 09 executed comprehensive real-process security, lifecycle invalidation, backpressure resilience, and fixed-method performance qualification against live SQLite and MongoDB backends (`server/src/semantic/`, `server/tests/`):
+
+- **Adversarial Code Loading Denial:**
+  - Pinned TSLS launches in a strictly sanitized execution environment: `PATH=/usr/bin:/bin`, `NODE_ENV=production`, `NODE_OPTIONS` and `NODE_PATH` stripped; descendant `NODE_PATH` set strictly to bundled `node_modules`.
+  - Arguments strictly enforce `--disableAutomaticTypingAcquisition`, no `--allowLocalPluginLoads`, no `--globalPlugins`, and no `--pluginProbeLocations`.
+  - Active positive controls confirmed canary scripts execute when directly invoked; in production, 0 canary executions occurred across tsconfig plugins (V1), workspace SDK decoys (V2), preload/import hooks (V3), and ATA shims (V4).
+- **Settings & All-Write-Path Authorization:**
+  - Enforces a 2-second admission deadline on settings routes. Safe status inspection (`GET /api/semantic/settings`) is available to all authenticated callers and development sessions, truthfully returning `canMutate: false` when non-admin. Settings mutation (`PATCH /api/semantic/settings`) strictly requires fresh current-Admin verification; non-admin roles, `--no-auth` dev sessions, unauthenticated actors, or demoted admins fail closed with HTTP 403 Forbidden.
+  - Canonical configuration (`dam-hopper.toml` and hardlinks) is protected against raw filesystem write sinks (`atomic_write_with_check`, `persist_temp`, WebSocket chunk uploads). Workspace configuration sections (`[semantic]`, `[server.semantic]`) and raw imports attempting to mutate semantic settings fail closed with HTTP 400.
+- **Cancellation-First Live Auth Invalidation under Saturated Consumers:**
+  - Verified across 20/20 non-reading socket test cases against real SQLite and MongoDB stores.
+  - Under unread sockets and saturated outbound backpressure, admission cutoff is immediate, session revocation tokens revoke shared gateway handles lock-free (0 awaits) before writer delivery, and physical child process tree reap completes in 506–510 ms out-of-band under the 5.0-second teardown budget (`TOTAL_TEARDOWN_BUDGET`).
+  - Real store timeout checks (SQLite WAL reader locks and MongoDB network timeouts) sustained exactly 2,001 ms before failing closed with HTTP 503 / close code 1013 (`CLOSE_AUTH_UNAVAILABLE`).
+- **Frozen Final Resource Policy (`server/src/semantic/resources.rs`):**
+  - Frozen single adaptive wire sync threshold at 64 KiB (`ADAPTIVE_SYNC_THRESHOLD_BYTES = 65,536 bytes`).
+  - Single document text capped at 1 MiB (`MAX_DOCUMENT_BYTES`), session overlay budget at 4 MiB, global overlay budget at 8 MiB, concurrent in-flight requests at 8, and live auth admission lookup timeout at 2.0s (`AUTH_STORE_LOOKUP_TIMEOUT`).
+- **Deterministic Fault Matrix & Child Lifecycle:**
+  - Verified handling of fragmented/coalesced frames, malformed/oversized headers, duplicate replies, stderr ring buffer saturation (64 KiB cap), child crash restart with didOpen replay, stubborn descendant SIGKILL escalation, and non-leader worker-thread child discovery via procfs task scanning.
+- **Performance Acceptance Margins:**
+  - Satisfies all canonical predeclared qualification budgets with wide margins: cold ready p95 1.14s (budget <= 15s), small warm nav p95 10.08 ms (budget <= 500 ms), medium warm nav p95 18.73 ms (budget <= 1,500 ms), large warm nav p95 40.42 ms (budget <= 3,000 ms), core/terminal p95 relative ceiling 40.74 ms (budget <= 121.87 ms relative ceiling; baseline 40.62 ms), 0 terminal drops, 0 stale Monaco reveals, 0 outside-target path disclosures, 0 orphan processes.
+- **Evaluated Scope & Limitations:**
+  - Evaluated status is `PASS_PORTABLE_ONLY`. Linux cgroup v2 mode is explicitly unqualified (`status: "NOT_SELECTED"`); portable application caps and sampled procfs termination are enforced without hard OS RSS/CPU guarantees. Trusted workspaces only (child runs under daemon account OS authority). Native desktop hosts (Tauri, Windows, Android) and non-TS/JS engines remain unqualified and non-blocking.
+
+### Implemented Primitives: Phase 10 Linux Server and Actual Web Application Qualification
+
+Phase 10 qualifies the shipped built web SPA (`apps/web`) against an authenticated containerized Linux x64 server (`dam-hopper-server`) with real MongoDB authentication and pinned bundled engine (`packages/ui/e2e/semantic-navigation/semantic-navigation.spec.ts`):
+
+- **Transport-Only Client Bundle & Lazy Chunk Partitioning Gate (G2):**
+  - Pinned `vscode-ws-jsonrpc@3.5.0` and `vscode-jsonrpc@8.2.1`. Semantic client code must remain isolated to the dynamic lazy Monaco chunk (`monaco.js`), with 0 bytes delta added to the initial entry chunk (`index.js`) and Monaco lazy chunk impact below the 50 KiB gzip delta ceiling.
+- **Isolated Container Staging & Bundled Engine Deployment (`application-services.ts`):**
+  - Test harness dynamically copies pre-staged, digest-verified semantic engine artifacts into `/opt/dam-hopper/lib/semantic-engine` (`node`, `tsls`, `package.json`).
+  - Container-level user role management provisions distinct `admin` and `user` accounts with real MFA/session state; non-admin mutation attempts (`PATCH /api/semantic/settings`) fail closed with HTTP 403 Forbidden.
+- **Full Monaco Application Journeys across Extensions & Encodings:**
+  - Real browser DOM navigation exercises Go to Definition across `.ts`, `.tsx`, `.js`, and `.jsx` fixtures.
+  - Verifies UTF-16 code unit cursor alignment for astral non-BMP characters (`unicode.ts`), and renders the Monaco peek widget for multi-result declarations (`multi_def.ts`).
+  - Unsupported languages (`unsupported.rs`) fail fast with no active semantic status and zero language server interactions.
+- **In-Memory Dirty Buffer Freshness & Adaptive Sync Crossings:**
+  - In-memory unsaved edits (`StandardSemanticItem.getUnsavedValue`) navigate successfully while verifying container disk files omit unsaved edits (`not.toContain('getUnsavedValue')`). Tab dirtiness is indicated via `data-dirty="true"`.
+  - Exercises Go to Definition navigation in `adaptive_sync.ts` across threshold boundaries (below 64 KiB at ~61.7 KiB, above 64 KiB by inserting ~8 KiB padding comments, and returning below 64 KiB upon undo).
+  - WebSocket loss recovery (`forceSocketLoss`) verifies automatic backoff reconnection, dirty buffer replay, and restored `TS/JS Ready` navigation on the replacement wire session.
+- **Lifecycle Teardown & Six Full-Viewport Visual Checkpoints:**
+  - Admin hot-disable revokes runtime admission and drains sessions, confirming strictly 0 orphan language server processes (`typescript-language-server`, `tsserver`) via container procfs scan.
+  - Captures 6 full-viewport (1440x900) checkpoints (`default-off`, `admin-enabled-portable`, `definition-jump`, `multi-result-selection`, `threshold-dirty-edit`, `narrow-layout-dock`) with PNG IHDR verification, machine-readable `evidence.json`, and human review governance in `review.md`. Narrow dock checkpoint records `dockWidth: 320` convention metadata.
+  - Automated runs initialize `review.md` to `PENDING_HUMAN_REVIEW`; human visual acceptance is required before release sign-off.
+  - All native platforms (Linux Tauri, Windows native/desktop, Android) remain explicitly unqualified, deferred, and non-blocking.
+
+### Implemented Primitives: Phase 11 Documentation, Roadmap, Changelog, and Release Cleanup
+
+Phase 11 completes the formal documentation, roadmap reconciliation, and release hygiene across repository publications:
+
+- **Authoritative Protocol Specification:** Published the dedicated [Semantic LSP Protocol Guide](./semantic-lsp-protocol-guide.md) detailing the isolated `/ws/semantic/v1` gateway, `dam-hopper.semantic.lsp.v1` subprotocol, single Incremental sync mode with frozen 64 KiB adaptive wire sync threshold, canonical virtual URI grammar (`dam-hopper://semantic/<target-id>/<encoded-path>`), `damHopperDocumentVersion` extension fence, FIFO stdio sequencing, live auth watcher cancellation-first teardown, and close/error taxonomies.
+- **Claim & Evidence Reconciliation:** Synchronized `README.md`, `system-architecture.md`, `codebase-summary.md`, `code-standards.md`, and `project-overview-pdr.md` to reflect measured, delivered capabilities: supported Linux x64 server + built web TS/JS Definition/Implementation only; release-default OFF; current Admin-only mutation across all write paths (with `--no-auth` dev mode denied); zero-child startup and idle states; and bundled toolchain updates requiring server release updates and normal daemon restarts.
+- **Honest Boundary and Limitation Governance:**
+  - *Trusted Workspaces Only:* Explicitly documented that child language server processes retain daemon OS user authority; virtual URI containment prevents client path escape, but does not provide an OS filesystem sandbox.
+  - *Portable-Only Qualified:* Documented that production operates under `PASS_PORTABLE_ONLY` with portable application limits, sampled procfs process termination, and V8 heap limits, while Linux cgroup v2 controller mode is explicitly unqualified (`status: "NOT_SELECTED"`). No hard kernel RSS/CPU guarantees are made.
+  - *Visual Review Governance:* Preserved visual review governance in `packages/ui/e2e/semantic-navigation/review.md` initialized to `PENDING_HUMAN_REVIEW`. Green automated tests confirm functional assertions only and cannot synthesize human visual acceptance.
+  - *Deferred Platforms & Future Languages:* Native desktop platforms (Linux Tauri, Windows native/desktop, Android) remain explicitly unqualified and non-blocking. Rust is unsupported; future language additions (e.g. Java, Rust) require complete separate integration, security, resource, and platform qualification before inclusion.
+- **Release Packaging Consistency & Cleanup:** Verified release archive builder (`deploy/release/build-release-archive.sh`) and manifest generator (`deploy/release/generate-release-manifest.mjs`) for deterministic bundling of the immutable `lib/semantic-engine` toolchain with SPDX 2.3 SBOM generation, while reconciling documentation, removing obsolete generic LSP documentation sections, and preserving deterministic test fixtures and visual review evidence.
 
 ## Android Native Client Architecture
 

@@ -298,6 +298,11 @@ vi.mock("@/api/queries.js", () => ({
   },
   normalizeGitMessageQuery: (term: unknown) =>
     typeof term === "string" ? term.trim() || undefined : undefined,
+  useSemanticSettings: () => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+  }),
 }));
 vi.mock("@/api/client.js", () => ({
   api: testState.api,

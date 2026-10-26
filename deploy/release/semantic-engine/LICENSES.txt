@@ -1,0 +1,65 @@
+DamHopper Bundled Semantic Engine — Third-Party Software Notices and Licenses
+Tuple ID: node-24.16.0-ts-5.9.3-tsls-6.0.2-linux-x64
+
+================================================================================
+1. Node.js Runtime (v24.16.0, Linux x64)
+Source: https://nodejs.org/dist/v24.16.0/node-v24.16.0-linux-x64.tar.gz
+Binary SHA-256: b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd
+License: MIT
+================================================================================
+
+Copyright Node.js contributors. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to
+deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+IN THE SOFTWARE.
+
+================================================================================
+2. TypeScript (v5.9.3)
+Source: https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz
+Integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==
+Copyright (c) Microsoft Corp.
+License: Apache-2.0
+================================================================================
+
+Apache License
+Version 2.0, January 2004
+http://www.apache.org/licenses/
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+================================================================================
+3. typescript-language-server (v6.0.2)
+Source: https://registry.npmjs.org/typescript-language-server/-/typescript-language-server-6.0.2.tgz
+Integrity: sha512-Ph7Ql+xkUJvMamnkh1h+aKP6HxLR7lrWIYkPn9/LZBkJdJZgtIj7OoVhkDYtQ7zFPTPmqZHOVXaUKGyz9M2q1Q==
+Copyright (c) TypeFox and others; portions Copyright (c) 2015 - present Microsoft Corporation (MIT)
+License: Apache-2.0 AND MIT
+================================================================================
+
+Parts of the code copied from https://github.com/microsoft/vscode are licensed
+under the MIT License (Copyright (c) 2015 - present Microsoft Corporation).
+The rest of the code is licensed under the Apache License, Version 2.0.

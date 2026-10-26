@@ -1451,6 +1451,14 @@ function channelToEndpoint(
         url: "/api/system/idle-suspend/v1/consent/decision",
         body: data,
       };
+    case "semantic:settings":
+      return { method: "GET", url: "/api/semantic/settings" };
+    case "semantic:updateSettings":
+      return {
+        method: "PATCH",
+        url: "/api/semantic/settings",
+        body: data,
+      };
 
     // Usage analytics (REST only; never sent to the terminal WebSocket).
     case "usage:summary": {

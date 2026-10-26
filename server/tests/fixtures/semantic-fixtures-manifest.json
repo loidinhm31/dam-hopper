@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "fixtureSeed": 24301,
+  "generator": "server/tests/fixtures/generate-semantic-large.mjs",
+  "tiers": {
+    "small": {
+      "fileCount": 8,
+      "bytesPerFile": 4096,
+      "totalBytes": 32768,
+      "corpusDigest": "ddf1171cbfcebb7b7dbf50dad98736cd09925e9406c499e185e3f448e652afd2"
+    },
+    "medium": {
+      "fileCount": 64,
+      "bytesPerFile": 16384,
+      "totalBytes": 1048576,
+      "corpusDigest": "639781a79371a14658cf5c8581bb64ead5f54112c940497799a83d7b286f1151"
+    },
+    "large": {
+      "fileCount": 256,
+      "bytesPerFile": 32768,
+      "totalBytes": 8388608,
+      "corpusDigest": "28b75ee4299e8b2840bc47b60c091fd3fde7ea1a4a6cce2e3ffd8fe01262243f"
+    }
+  }
+}

@@ -32,6 +32,13 @@ import {
   type ProjectTargetRef,
 } from "@/api/client.js";
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
+import {
+  defaultSemanticModelRegistry,
+  captureSemanticProvenance,
+  matchesSemanticProvenance,
+  type SemanticProvenance,
+} from "@/lib/semantic-model-uri.js";
+import { useSemanticNavigationStore } from "@/stores/semantic-navigation.js";
 export type FileTier = FT | "diff";
 
 const EDITOR_PERSIST_VERSION = 2;
@@ -179,6 +186,8 @@ export interface Tab {
   previewRevision?: number;
   /** Connection and endpoint binding metadata. */
   resourceBinding?: ResourceBinding;
+  /** Ephemeral authority of the accepted source text. Never recaptured for retained drafts. */
+  semanticProvenance?: SemanticProvenance | null;
   /** Session-only flag for Git blame line annotation gutter (excluded from persistence). */
   blameEnabled?: boolean;
 }
@@ -326,10 +335,12 @@ function persistedTarget(
         : null;
   return normalizeProjectTarget(
     worktreePath == null
-      ? (profileId ? { profileId, project } : { project })
-      : (profileId
-          ? { profileId, project, worktreePath }
-          : { project, worktreePath }),
+      ? profileId
+        ? { profileId, project }
+        : { project }
+      : profileId
+        ? { profileId, project, worktreePath }
+        : { project, worktreePath },
   );
 }
 function persistedTab(value: unknown, keyMap: Map<string, string>): Tab | null {
@@ -489,6 +500,19 @@ export const useEditorStore = create<EditorState>()(
           state.requestGenerations[key] === generation &&
           state.tabs.some((tab) => tab.key === key)
         );
+      };
+
+      const retireSemanticModel = (key: string) => {
+        const registered = defaultSemanticModelRegistry.getByTabKey(key);
+        useSemanticNavigationStore.getState().findClientForTab(key)?.notifyDidClose(key);
+        defaultSemanticModelRegistry.unregisterModel(key);
+        if (!registered) return;
+        // MonacoHost retains supported models on pane unmount. Only an actual
+        // document close retires the model; a close/reopen must not dispose its successor.
+        void import("monaco-editor").then((monaco) => {
+          if (get().tabs.some((tab) => tab.key === key) || defaultSemanticModelRegistry.getByTabKey(key)) return;
+          monaco.editor.getModel(monaco.Uri.parse(registered.identity.localModelUri))?.dispose();
+        });
       };
 
       return {
@@ -656,11 +680,17 @@ export const useEditorStore = create<EditorState>()(
           }
 
           const requestGeneration = beginRequest(key);
-          const { transport: t, connectionRef } = resolveTabTransport({ target: targetRef });
+          const { transport: t, connectionRef } = resolveTabTransport({
+            target: targetRef,
+          });
+          const semanticProvenance = captureSemanticProvenance(targetRef);
           try {
             const result = await t.fsRead(targetRef, node.id);
             if (!isCurrentRequest(key, requestGeneration)) return;
             if (connectionRef && !isCurrentConnection(connectionRef)) return;
+            if (semanticProvenance && !matchesSemanticProvenance(semanticProvenance, captureSemanticProvenance(targetRef))) {
+              throw new Error("Source binding changed while loading");
+            }
             if (!result.ok && result.code === "TOO_LARGE") {
               const tl = result as {
                 ok: false;
@@ -724,6 +754,7 @@ export const useEditorStore = create<EditorState>()(
                       size: result.size,
                       content: decoded,
                       savedContent: decoded,
+                      semanticProvenance,
                       binaryBase64,
                     }
                   : t,
@@ -756,9 +787,11 @@ export const useEditorStore = create<EditorState>()(
         // close
         // ---------------------------------------------------------------------------
         close: (key: string) => {
+          let wasRemoved = false;
           set((s) => {
             const tab = s.tabs.find((t) => t.key === key);
             if (!tab) return s;
+            wasRemoved = true;
             const project = tab.project;
             const target = targetForTab(tab);
             const scopeKey = editorTargetScopeKey(target);
@@ -783,16 +816,20 @@ export const useEditorStore = create<EditorState>()(
               requestGenerations,
             };
           });
+          if (wasRemoved) {
+            retireSemanticModel(key);
+          }
         },
 
         closeOthers: (project: string, key: string) => {
+          let removedKeys: string[] = [];
           set((s) => {
             const keepTab = s.tabs.find(
               (tab) => tab.project === project && tab.key === key,
             );
             if (!keepTab) return s;
             const scopeKey = editorTargetScopeKey(targetForTab(keepTab));
-            const removedKeys = s.tabs
+            removedKeys = s.tabs
               .filter(
                 (tab) =>
                   tab.project === project &&
@@ -805,7 +842,6 @@ export const useEditorStore = create<EditorState>()(
               requestGenerations[removedKey] =
                 (requestGenerations[removedKey] ?? 0) + 1;
             }
-
             return {
               tabs: s.tabs.filter(
                 (tab) =>
@@ -817,12 +853,16 @@ export const useEditorStore = create<EditorState>()(
               requestGenerations,
             };
           });
+          for (const removedKey of removedKeys) {
+            retireSemanticModel(removedKey);
+          }
         },
 
         closeAll: (project: string, target?: ProjectTargetInput) => {
+          let removedKeys: string[] = [];
           set((s) => {
             if (target == null) {
-              const removedKeys = s.tabs
+              removedKeys = s.tabs
                 .filter((tab) => tab.project === project)
                 .map((tab) => tab.key);
               const requestGenerations = { ...s.requestGenerations };
@@ -843,7 +883,7 @@ export const useEditorStore = create<EditorState>()(
               };
             }
             const scopeKey = editorTargetScopeKey(target);
-            const removedKeys = s.tabs
+            removedKeys = s.tabs
               .filter(
                 (tab) =>
                   tab.project === project &&
@@ -865,6 +905,9 @@ export const useEditorStore = create<EditorState>()(
               requestGenerations,
             };
           });
+          for (const removedKey of removedKeys) {
+            retireSemanticModel(removedKey);
+          }
         },
 
         setActive: (target: ProjectTargetInput, key: string | null) =>
@@ -1153,6 +1196,7 @@ export const useEditorStore = create<EditorState>()(
           const requestGeneration = beginRequest(key);
           const { transport: tabTransport, connectionRef } =
             resolveTabTransport(tab);
+          const semanticProvenance = captureSemanticProvenance(tab.target);
 
           set((s) => ({
             tabs: s.tabs.map((t) =>
@@ -1164,6 +1208,9 @@ export const useEditorStore = create<EditorState>()(
             const result = await tabTransport.fsRead(tab.target, tab.path);
             if (!isCurrentRequest(key, requestGeneration)) return;
             if (connectionRef && !isCurrentConnection(connectionRef)) return;
+            if (semanticProvenance && !matchesSemanticProvenance(semanticProvenance, captureSemanticProvenance(tab.target))) {
+              throw new Error("Source binding changed while loading");
+            }
             if (!result.ok) {
               const targetUnavailable = targetUnavailableForError(
                 tab.target,
@@ -1199,9 +1246,9 @@ export const useEditorStore = create<EditorState>()(
                   loading: false,
                   content: decoded,
                   savedContent: decoded,
+                  semanticProvenance,
                   mtime: result.mtime,
-                  size:
-                    typeof result.size === "number" ? result.size : t.size,
+                  size: typeof result.size === "number" ? result.size : t.size,
                   dirty: false,
                   stale: false,
                   binaryBase64: result.binary ? result.content : undefined,
@@ -1386,6 +1433,7 @@ export const useEditorStore = create<EditorState>()(
           const requestGeneration = beginRequest(key);
           const { transport: tabTransport, connectionRef } =
             resolveTabTransport(tab);
+          const semanticProvenance = captureSemanticProvenance(tab.target);
 
           set((s) => ({
             tabs: s.tabs.map((t) =>
@@ -1397,6 +1445,9 @@ export const useEditorStore = create<EditorState>()(
             const result = await tabTransport.fsRead(tab.target, tab.path);
             if (!isCurrentRequest(key, requestGeneration)) return;
             if (connectionRef && !isCurrentConnection(connectionRef)) return;
+            if (semanticProvenance && !matchesSemanticProvenance(semanticProvenance, captureSemanticProvenance(tab.target))) {
+              throw new Error("Source binding changed while loading");
+            }
 
             if (!result.ok && result.code === "TOO_LARGE") {
               const tl = result as {
@@ -1471,6 +1522,7 @@ export const useEditorStore = create<EditorState>()(
                   size: result.size,
                   content: decoded,
                   savedContent: decoded,
+                  semanticProvenance,
                   binaryBase64,
                   hydrated: false,
                   dirty: false,
@@ -1589,9 +1641,7 @@ export const useEditorStore = create<EditorState>()(
           if (!snapshot || snapshot.status !== "connected") return;
           const tabs = get().tabs.filter(
             (t) =>
-              t.target.profileId === profileId &&
-              !t.dirty &&
-              t.targetAvailable,
+              t.target.profileId === profileId && !t.dirty && t.targetAvailable,
           );
           for (const tab of tabs) {
             if (
@@ -1653,3 +1703,6 @@ export const useEditorStore = create<EditorState>()(
     },
   ),
 );
+if (typeof window !== "undefined") {
+  (window as unknown as { __dam_hopper_editor_store?: unknown }).__dam_hopper_editor_store = useEditorStore;
+}

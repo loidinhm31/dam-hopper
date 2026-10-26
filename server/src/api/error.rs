@@ -54,6 +54,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
         let status = match self.0.status_code() {
             400 => StatusCode::BAD_REQUEST,
+            401 => StatusCode::UNAUTHORIZED,
             403 => StatusCode::FORBIDDEN,
             404 => StatusCode::NOT_FOUND,
             409 => StatusCode::CONFLICT,

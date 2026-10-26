@@ -1,0 +1,261 @@
+{
+  "runId": "2026-10-24T00-57-54-571Z-pid3940142",
+  "stage": "off-baseline",
+  "requestedMode": "portable",
+  "requestedThresholdBytes": 65536,
+  "sourceIdentity": {
+    "gitHeadSha": "20887bf511a52ec1eccbae0679f2f832606065ef",
+    "gitWorktreeDirty": true,
+    "compiledProductionThresholdBytes": 65536,
+    "fileDigests": {
+      "resourcesRsSha256": "d4acdd0f2e3c80f479e3428367d8bbcede3224da4b9600cd7572d8f54beea87f",
+      "semanticClientTsSha256": "5df776ed88a5590acd121f553584443008fede986caa542b5f87cc47affa3212",
+      "semanticMonacoTsSha256": "75f72952f164fa51aeae62620762d5d5d43d8504e940e62771175ae3842966b5",
+      "semanticModelUriTsSha256": "60b2b72b46063e9e9600818b41bd06c4b89d207f157b5cbc8dd739647af7a3ca",
+      "editorStoreTsSha256": "c9f51c2b34f811f1e7d0e54eb7637bb4fbeabdec21d2b5c6e76aea56d645f505",
+      "backendQualificationRsSha256": "eb7eca1fbb79869ab8b72c0dea132898e507a77e6b0aa30036b6ba8adcc784ec",
+      "browserQualificationTsSha256": "d866014f3fa38c8d1b297f04531590d6b04d1a380e14c87e27a8b8b7028f700b",
+      "runnerMjsSha256": "65a6233ca06a8191b034579c566ee898f7a9014fadeeabfd52d90997587adc18"
+    }
+  },
+  "compiledProductionThresholdBytes": 65536,
+  "tupleIdentity": {
+    "tupleId": "node-24.16.0-ts-5.9.3-tsls-6.0.2-linux-x64",
+    "nodeSha256": "b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd",
+    "packageJsonSha256": "1aebb20f4c8d8b699745853542ecce7f1e7e42c85f97843bfd8064f9efdc3f7c",
+    "lockfileSha256": "003c24ed03f9491035a8f2a3a956d7e83f10def028b028987bdc5d618c2fdcbd",
+    "tslsEntrypointSha256": "192638f1fa62c907fd54c0b55b12dd3dff01325a1a0ed5973907efca1c57b5eb",
+    "tsserverSha256": "e3ccfeec65ec5c470b8ffc5611878a31182650c7e8a062c38a719f83b523edcb"
+  },
+  "fixtureIdentity": {
+    "fixtureSeed": 24301,
+    "smallCorpusDigest": "ddf1171cbfcebb7b7dbf50dad98736cd09925e9406c499e185e3f448e652afd2",
+    "mediumCorpusDigest": "639781a79371a14658cf5c8581bb64ead5f54112c940497799a83d7b286f1151",
+    "largeCorpusDigest": "28b75ee4299e8b2840bc47b60c091fd3fde7ea1a4a6cce2e3ffd8fe01262243f"
+  },
+  "status": "MEASURED",
+  "semanticsEnabled": false,
+  "activeTrees": 0,
+  "sessionPressureDiagnostics": null,
+  "tupleDigests": {
+    "nodeSha256": "b2959781cc5a74c357ffa02367efa8a0330cbb1c9cb347732fdfaaaca381cbcd",
+    "tslsEntrypointSha256": "192638f1fa62c907fd54c0b55b12dd3dff01325a1a0ed5973907efca1c57b5eb",
+    "tsserverSha256": "e3ccfeec65ec5c470b8ffc5611878a31182650c7e8a062c38a719f83b523edcb",
+    "tsserverImplSha256": "0efcc88cdf0593cc1dcc8b6afd605c7bed9eca6f648c70c8f0df8695114bf6d7",
+    "typescriptCoreSha256": "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675",
+    "packageJsonSha256": "1aebb20f4c8d8b699745853542ecce7f1e7e42c85f97843bfd8064f9efdc3f7c",
+    "lockfileSha256": "003c24ed03f9491035a8f2a3a956d7e83f10def028b028987bdc5d618c2fdcbd",
+    "qualificationBinarySha256": "05b249ecd9c2d0567e813e831b09d94fd8073a8c8d3b5d60c01abc4a98b94db8",
+    "qualificationBuildProfile": "release"
+  },
+  "repetitions": 3,
+  "coreSamplesPerEndpointPerCondition": 100,
+  "coreAndTerminalP50Ms": 0.30478299999999997,
+  "coreAndTerminalP95Ms": 40.579933,
+  "corePerEndpoint": {
+    "health": {
+      "sampleCount": 300,
+      "minMs": 0.038431,
+      "p50Ms": 0.120482,
+      "p95Ms": 0.25993,
+      "maxMs": 0.37704699999999997
+    },
+    "workspaceStatus": {
+      "sampleCount": 300,
+      "minMs": 0.089926,
+      "p50Ms": 0.301637,
+      "p95Ms": 0.676029,
+      "maxMs": 1.126702
+    },
+    "fsList": {
+      "sampleCount": 300,
+      "minMs": 0.12772599999999998,
+      "p50Ms": 0.33280499999999996,
+      "p95Ms": 0.855561,
+      "maxMs": 1.114039
+    },
+    "gitRoots": {
+      "sampleCount": 300,
+      "minMs": 1.4961149999999999,
+      "p50Ms": 2.996438,
+      "p95Ms": 4.244093,
+      "maxMs": 5.513289
+    },
+    "ptyRoundTrip": {
+      "sampleCount": 300,
+      "minMs": 0.066884,
+      "p50Ms": 0.25942,
+      "p95Ms": 41.488332,
+      "maxMs": 42.084143
+    }
+  },
+  "repetitionDistributions": [
+    {
+      "repetition": 0,
+      "coreAndTerminal": {
+        "sampleCount": 500,
+        "minMs": 0.040584999999999996,
+        "p50Ms": 0.289465,
+        "p95Ms": 40.401582999999995,
+        "maxMs": 42.054257
+      },
+      "perEndpoint": {
+        "health": {
+          "sampleCount": 100,
+          "minMs": 0.040584999999999996,
+          "p50Ms": 0.11167600000000001,
+          "p95Ms": 0.25970000000000004,
+          "maxMs": 0.37704699999999997
+        },
+        "workspaceStatus": {
+          "sampleCount": 100,
+          "minMs": 0.089926,
+          "p50Ms": 0.270209,
+          "p95Ms": 0.664057,
+          "maxMs": 0.789389
+        },
+        "fsList": {
+          "sampleCount": 100,
+          "minMs": 0.12772599999999998,
+          "p50Ms": 0.311015,
+          "p95Ms": 0.756638,
+          "maxMs": 0.93041
+        },
+        "gitRoots": {
+          "sampleCount": 100,
+          "minMs": 1.502336,
+          "p50Ms": 2.984325,
+          "p95Ms": 4.219558,
+          "maxMs": 4.75099
+        },
+        "ptyRoundTrip": {
+          "sampleCount": 100,
+          "minMs": 0.072584,
+          "p50Ms": 0.234153,
+          "p95Ms": 41.051405,
+          "maxMs": 42.054257
+        }
+      },
+      "terminalDrops": 0
+    },
+    {
+      "repetition": 1,
+      "coreAndTerminal": {
+        "sampleCount": 500,
+        "minMs": 0.040144,
+        "p50Ms": 0.304613,
+        "p95Ms": 40.751881,
+        "maxMs": 42.084143
+      },
+      "perEndpoint": {
+        "health": {
+          "sampleCount": 100,
+          "minMs": 0.040144,
+          "p50Ms": 0.126153,
+          "p95Ms": 0.268266,
+          "maxMs": 0.329639
+        },
+        "workspaceStatus": {
+          "sampleCount": 100,
+          "minMs": 0.099003,
+          "p50Ms": 0.294675,
+          "p95Ms": 0.703851,
+          "maxMs": 1.126702
+        },
+        "fsList": {
+          "sampleCount": 100,
+          "minMs": 0.150037,
+          "p50Ms": 0.316205,
+          "p95Ms": 0.835364,
+          "maxMs": 1.044259
+        },
+        "gitRoots": {
+          "sampleCount": 100,
+          "minMs": 1.4961149999999999,
+          "p50Ms": 2.780328,
+          "p95Ms": 4.244093,
+          "maxMs": 4.454060999999999
+        },
+        "ptyRoundTrip": {
+          "sampleCount": 100,
+          "minMs": 0.066884,
+          "p50Ms": 0.239523,
+          "p95Ms": 41.728215,
+          "maxMs": 42.084143
+        }
+      },
+      "terminalDrops": 0
+    },
+    {
+      "repetition": 2,
+      "coreAndTerminal": {
+        "sampleCount": 500,
+        "minMs": 0.038431,
+        "p50Ms": 0.334198,
+        "p95Ms": 40.704253,
+        "maxMs": 41.989178
+      },
+      "perEndpoint": {
+        "health": {
+          "sampleCount": 100,
+          "minMs": 0.038431,
+          "p50Ms": 0.12405900000000002,
+          "p95Ms": 0.259199,
+          "maxMs": 0.292891
+        },
+        "workspaceStatus": {
+          "sampleCount": 100,
+          "minMs": 0.112498,
+          "p50Ms": 0.310524,
+          "p95Ms": 0.639803,
+          "maxMs": 0.828341
+        },
+        "fsList": {
+          "sampleCount": 100,
+          "minMs": 0.14468799999999998,
+          "p50Ms": 0.37308,
+          "p95Ms": 0.862143,
+          "maxMs": 1.114039
+        },
+        "gitRoots": {
+          "sampleCount": 100,
+          "minMs": 1.52071,
+          "p50Ms": 3.235389,
+          "p95Ms": 4.238022,
+          "maxMs": 5.513289
+        },
+        "ptyRoundTrip": {
+          "sampleCount": 100,
+          "minMs": 0.078826,
+          "p50Ms": 0.277223,
+          "p95Ms": 41.460249999999995,
+          "maxMs": 41.989178
+        }
+      },
+      "terminalDrops": 0
+    }
+  ],
+  "terminalDrops": 0,
+  "hostNoise": {
+    "before": {
+      "scope": "whole-host context, not isolated workload CPU",
+      "loadAverage1m5m15m": [
+        1.76,
+        1.79,
+        1.44
+      ],
+      "memoryAvailableBytes": 15637925888
+    },
+    "after": {
+      "scope": "whole-host context, not isolated workload CPU",
+      "loadAverage1m5m15m": [
+        1.62,
+        1.76,
+        1.43
+      ],
+      "memoryAvailableBytes": 15593291776
+    }
+  },
+  "cargoExitStatus": 0,
+  "cargoSignal": null
+}

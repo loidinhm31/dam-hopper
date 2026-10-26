@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type * as monacoNs from "monaco-editor";
 import type { GitFileState } from "@/lib/git-file-state.js";
+import type { SemanticClientStatus } from "@/api/semantic-client.js";
 import {
   gitStateTitle,
   gitStatusClassName,
@@ -13,6 +14,7 @@ interface EditorStatusBarProps {
   language: string;
   gitState?: GitFileState;
   onGitIndicatorClick?: () => void;
+  semanticStatus?: SemanticClientStatus | null;
 }
 
 export function EditorStatusBar({
@@ -20,6 +22,7 @@ export function EditorStatusBar({
   language,
   gitState,
   onGitIndicatorClick,
+  semanticStatus,
 }: EditorStatusBarProps) {
   const [position, setPosition] = useState(() => {
     if (editor) {
@@ -86,6 +89,41 @@ export function EditorStatusBar({
       )}
       <span className="opacity-40">•</span>
       <span>{language}</span>
+      {semanticStatus && (
+        <>
+          <span className="opacity-40">•</span>
+          <span
+            className="flex items-center gap-1.5"
+            title={`TypeScript/JavaScript Semantic: ${semanticStatus}`}
+          >
+            <span
+              className={cn(
+                "inline-block w-1.5 h-1.5 rounded-full",
+                semanticStatus === "ready" && "bg-emerald-400",
+                (semanticStatus === "connecting" ||
+                  semanticStatus === "attaching" ||
+                  semanticStatus === "initializing" ||
+                  semanticStatus === "replaying") &&
+                  "bg-amber-400 animate-pulse",
+                semanticStatus === "error" && "bg-red-400",
+                semanticStatus === "disconnected" && "bg-neutral-500",
+                semanticStatus === "unsupported" && "bg-neutral-500",
+              )}
+            />
+            <span className="capitalize">
+              {semanticStatus === "ready"
+                ? "TS/JS Ready"
+                : semanticStatus === "error"
+                  ? "TS/JS Error"
+                  : semanticStatus === "disconnected"
+                    ? "TS/JS Disconnected"
+                    : semanticStatus === "unsupported"
+                      ? "TS/JS Unsupported"
+                      : "TS/JS Starting"}
+            </span>
+          </span>
+        </>
+      )}
       {gitState && (
         <>
           <span className="opacity-40">•</span>

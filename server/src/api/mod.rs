@@ -26,6 +26,8 @@ pub mod plans;
 pub mod port_forward;
 pub mod resource_events;
 pub mod router;
+pub mod semantic_ws;
+pub mod semantic_settings;
 pub mod settings;
 pub mod ssh;
 pub mod system;

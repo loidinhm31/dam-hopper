@@ -1,0 +1,11 @@
+{
+  "name": "@dam-hopper/semantic-engine-bundle",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned Linux x64 TypeScript and TSLS semantic engine bundle for DamHopper",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "typescript": "5.9.3",
+    "typescript-language-server": "6.0.2"
+  }
+}

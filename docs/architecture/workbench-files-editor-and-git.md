@@ -1,7 +1,7 @@
 # Workbench Files, Editor, Search, and Git Architecture
 
 **Authority:** Workbench Core (`packages/ui/src/`, `server/src/fs/`, `server/src/git/`)  
-**Status:** Maintained Architecture Specification  
+**Status:** Maintained Architecture Specification
 
 The profile-qualified IDE workbench operates on top of the unified shell. Files, editor tabs, search results, replace operations, previews, and Git mutations all retain the server profile and optional Git worktree that owns the resource. This ensures identical project names or paths on two servers never share state or collide.
 
@@ -27,14 +27,14 @@ The target store keeps root and worktree selection separately for every profile/
 
 The selected target is passed to every file operation:
 
-| Surface | Contract |
-| --- | --- |
-| List/stat/read | REST or owner-bound transport with `project`, optional `worktreePath`, and project-relative path. Range reads accept `offset` and `len`. |
-| Write | `fs:write_begin` → chunk frames → `fs:write_commit`; the server checks the expected mtime and returns a conflict instead of overwriting newer content. |
-| CRUD | `fs:op` supports `create_file`, `create_dir`, `rename`, `delete`, and `move`; `new_path` is used for rename/move. |
-| Watch | `fs:subscribe_tree` returns a subscription ID; `fs:event` applies safe deltas or triggers a target-scoped refetch; cleanup sends `fs:unsubscribe_tree`. |
-| Upload | `fs:upload_begin` → acknowledged binary chunks → `fs:upload_commit`, with bounded in-flight chunks and progress reporting. |
-| Download | Target-qualified download/ticket requests; an unavailable owner or target produces an explicit error rather than a root/profile fallback. |
+| Surface        | Contract                                                                                                                                                |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| List/stat/read | REST or owner-bound transport with `project`, optional `worktreePath`, and project-relative path. Range reads accept `offset` and `len`.                |
+| Write          | `fs:write_begin` → chunk frames → `fs:write_commit`; the server checks the expected mtime and returns a conflict instead of overwriting newer content.  |
+| CRUD           | `fs:op` supports `create_file`, `create_dir`, `rename`, `delete`, and `move`; `new_path` is used for rename/move.                                       |
+| Watch          | `fs:subscribe_tree` returns a subscription ID; `fs:event` applies safe deltas or triggers a target-scoped refetch; cleanup sends `fs:unsubscribe_tree`. |
+| Upload         | `fs:upload_begin` → acknowledged binary chunks → `fs:upload_commit`, with bounded in-flight chunks and progress reporting.                              |
+| Download       | Target-qualified download/ticket requests; an unavailable owner or target produces an explicit error rather than a root/profile fallback.               |
 
 The tree cache and persisted folder expansion include profile and target keys. File events update only the matching target. A create, rename, or move that cannot be applied safely causes a scoped refetch; it never mutates another profile's tree.
 
@@ -65,6 +65,17 @@ Editor behavior is intentionally conservative:
 
 Git mutations invalidate only the affected profile/target caches and reconcile only tabs belonging to that target. Project root and worktree tabs remain independent even when their relative paths match.
 
+### Monaco Semantic Navigation Integration
+
+TypeScript and JavaScript semantic navigation (`Definition` and `Implementation`) is integrated into Monaco Editor without compromising editor model stability or local state:
+
+- **Model Identity Separation:** `MonacoHost` mounts models with local in-memory URIs (`inmemory://dam-hopper/${encodeURIComponent(tabKey)}`). `SemanticModelRegistry` (`packages/ui/src/lib/semantic-model-uri.ts`) maps this stable identity to the replaceable wire URI (`dam-hopper://semantic/<target-id>/<encoded-relative-path>`).
+- **Dirty Model & Undo Retention:** On WebSocket reconnects or server generation shifts, local Monaco models are never disposed or rekeyed. The model object, dirty buffer text, undo stack, and view state are preserved; only the wire binding is re-established, replaying live text before navigation requests resume. Subsequent keystroke routing to replaced clients is governed by dynamic client resolution at call time via `findClientForTab` (remediating Phase 07 C-1).
+- **Dynamic Client Resolution & Status Visibility:** `MonacoHost` queries `findClientForTab(tabKey)` dynamically on keystrokes and document close notifications. `EditorStatusBar` renders the active model's semantic status (`ready`, `starting`, `error`, `disconnected`, `unsupported`) with color-coded status dots and descriptive tooltips.
+- **Fault Recovery & Reference-Counted Lifetimes:** Version divergence triggers full `didChange` resync (`-32003`); admission invalidation triggers reconnect (`-32005`). Retained draft replay requires matching endpoint/root/credential provenance and exact current-generation project authority. Semantic clients remain reference-counted across panes; a retiring socket attempt cannot clean a replacement attempt's bindings.
+- **Model-Scoped Delegation:** Registered semantic models query `SemanticClient`; non-semantic models (such as diff editors and scratchpads) fall back to Monaco's built-in TypeScript worker, preventing duplicate results in peek widgets.
+- **Cross-Document Reveals:** Cross-file navigation dispatches ephemeral `NavigationRevealIntent` records (10s TTL) consumed atomically by destination editor tabs on mount. See [Semantic WebSocket Gateway Architecture](./semantic-websocket-gateway.md#lifecycle-invalidation-and-client-recovery-phase-08) for protocol and recovery contracts.
+
 ### Git Blame Annotation Architecture and Client Lifecycle
 
 Git blame annotations provide inline line-by-line attribution within the Monaco editor gutter without mutating repository references, the index, or working-tree files. The client architecture binds native `git2` blame computation (`POST /api/git/{project}/blame`) to the active Monaco editor model lifecycle, enforcing profile-qualified owner gating, buffer size safety thresholds, keystroke edit debouncing, single-flight concurrency, and event-driven invalidation.
@@ -85,7 +96,7 @@ Blame operations strictly adhere to profile-qualified target ownership:
   5. Model version matches (`freshModel.getVersionId() === currentModelVersion`).
   6. Buffer edit epoch matches (`localEpochRef.current === currentLocalEpoch`).
   7. Repository refresh epoch matches (`repositoryRefreshEpochRef.current === currentRefreshEpoch`).
-  Stale, mismatched, or out-of-order responses are discarded immediately without applying state.
+     Stale, mismatched, or out-of-order responses are discarded immediately without applying state.
 
 #### Tab Eligibility and Ephemeral Store State
 
@@ -159,10 +170,11 @@ Dual-layer caching optimizes "Annotate with Git blame" by eliminating repeated h
 - **Zero-Context Projection:** In-memory dirty buffers project against the cached historical baseline using zero-context diff, avoiding repeated `repo.blame_file` graph traversals. Admission retains the global 2-permit semaphore and verifies HEAD stability before and after computation.
 - **Client Query Cache:** TanStack Query-backed completed attribution cache in `@dam-hopper/ui` (bounded LRU: 64 entries, 32 MiB total weight ceiling, 5-minute TanStack Query GC, SHA-256 buffer fingerprint via `@noble/hashes` with Monaco `WeakMap` memoization). Synchronously restores `status: "ready"` on tab remount/reopen when owner, target, root, HEAD, and buffer fingerprint match, eliminating the "Loading blame…" spinner frame and avoiding HTTP requests.
 - **Shared Invalidation & Epoch Separation:**
-  - *Local edit epoch*: Buffer keystrokes advance local edit epoch and clear annotations (250 ms debounce), preserving cache entries for instant undo-to-cache reuse.
-  - *Shared target epoch*: Advanced by Git mutations (commit, checkout, stash, pull) and SSE events, invalidating cached entries across all unmounted editors.
-  - *Refresh escape hatch*: Context-menu "Refresh Annotations" forces cache bypass (`bypassCache: true`) and advances target epoch.
-  - *Owner retirement*: Profile disconnection cleans up client cache entries, request leases, and listeners.
+  - _Local edit epoch_: Buffer keystrokes advance local edit epoch and clear annotations (250 ms debounce), preserving cache entries for instant undo-to-cache reuse.
+  - _Shared target epoch_: Advanced by Git mutations (commit, checkout, stash, pull) and SSE events, invalidating cached entries across all unmounted editors.
+  - _Refresh escape hatch_: Context-menu "Refresh Annotations" forces cache bypass (`bypassCache: true`) and advances target epoch.
+  - _Owner retirement_: Profile disconnection cleans up client cache entries, request leases, and listeners.
+
 #### Gutter UI and Geometry Contract
 
 - **Gutter Presentation:** Line-number gutter context menu toggles dedicated annotations and exposes Refresh Annotations while enabled; existing markers and left-click diff remain separate. Whole editor-wrapper width ≥640px uses 220px author/date; narrower panes use author-only `min(120px, wrapperWidth / 3)`, with full date/timezone/hash/subject on hover/focus. Wide viewport does not prevent a narrow source Split from compacting.
@@ -303,6 +315,7 @@ Publishing rewritten history is a separate, user-confirmed action shared by the 
 ### Inactive Local Branch Rewrites and UI Surface Parity
 
 Both the compact `WorkspaceGitPanel` and standalone `GitPage` history views support commit-message editing and parent-contiguous squash operations on inactive local branches as well as the active branch:
+
 - **Local branch eligibility**: History actions check `historyView.isViewingLocalBranch` (any discovered `refs/heads/*` branch). When viewing an inactive local branch, commit-message editing and squash checkboxes are fully enabled. Destructive working-tree actions (`reset`, `drop`, `undoLastCommit`) remain strictly guarded by `historyView.isViewingActiveBranch`.
 - **Branch banner synchronization**: When viewing an inactive branch, the banner displays: `Viewing {branchLabel}. Cherry-pick and revert apply to checked-out branch {activeBranch}.` Warnings restricting rewrite actions to the active branch are removed.
 - **Context menu accessibility**: In `GitLogTree`, disabled "Edit Commit Message" menu items (e.g. when viewing remote branches or detached `HEAD`) provide a unique `useId()` description ID via `aria-describedby`, paired with mouse `title` tooltip fallback and non-interactive `<p>` description text (`"Edit Commit Message is only available for local branches"`). Keyboard navigation through the Radix menu remains fully accessible.
@@ -327,6 +340,7 @@ Git operations stay bound to the selected profile, project/worktree, and VCS roo
 ### Git Conflict Resolver Workspace Cutover and Staging Bypass Closures
 
 Phase 08 integrates the floating conflict resolver across the workspace and closes all bypass paths:
+
 - **Cross-Shell Floating Host Mount:** Mounted conditionally in `WorkspacePage` above `IdeShell`, `TerminalWorkspaceShell`, and `MobileWorkspaceShell` when `conflictResolver.isPanelVisible` is true. Retains in-progress draft text and region decisions for the matching `DraftKey` in `ConflictDraftRegistry` outside component lifecycle (while Monaco-specific view states like scroll position and local undo command stacks reset on remount).
 - **Reveal Intent Routing (`ConflictRevealIntent`):** Changed Files conflict row click emits typed `{ nonce, filePath, root }` via `buildConflictRevealIntent`, invoking `handleOpenConflictResolver(selection)` instead of calling `onSelectFile`. `openChangedFileDiff` returns immediately when `selection.status === "conflicted"`, preventing editor tab opening or diff invocation. In aggregate and multi-root views, the entry's actual worktree root (`selection.gitRootId !== "." ? selection.gitRootId : undefined`) is derived rather than assuming the project root.
 - **Active Operation Entry Banner & Conflict Pill:** `ChangedFilesList` renders a prominent `GitMerge` status banner when `useGitOperationStatus` detects an active operation (`merge`, `rebase`, `cherry-pick`, `revert`), displaying stopped reasons (`conflicts`, `messageEditRequired`) and providing an "Open Resolver" button. A floating conflict pill also mounts when conflicts exist or an active operation is stopped while the panel is hidden.

@@ -45,7 +45,36 @@ future approved design, but authentication, re-authentication, helper
 enrollment, lifecycle/audit, IPC, and host mutation are deferred together. Do
 not configure or call those deferred routes for monitoring; no current setting
 enables them.
+### Semantic Navigation Configuration
 
+Server-global TypeScript and JavaScript semantic definition and implementation settings live under the `[semantic]` table in the global configuration file (`~/.config/dam-hopper/config.toml` or `$XDG_CONFIG_HOME/dam-hopper/config.toml`).
+
+Semantic navigation is opt-in and disabled by default:
+
+```toml
+[semantic]
+enabled = false
+```
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `enabled` | bool | `false` | Master toggle for server-global language server navigation. |
+
+**Configuration Invariants:**
+
+- **Strict Schema (`deny_unknown_fields`):** The `[semantic]` section accepts only `enabled`. Custom executables, launch arguments, environment variables, custom paths, or external engine selectors are strictly rejected by the parser.
+- **Server-Global Scope Only:** Semantic navigation is server-global. Placing `[semantic]` or `[server.semantic]` inside project workspace files (`dam-hopper.toml`) or workspace imports is forbidden and fails parsing with `InvalidInput`.
+- **Hot Toggle Without Daemon Restart:** Server administrators can toggle semantic navigation dynamically at runtime via `PATCH /api/semantic/settings` without restarting the server daemon.
+- **Raw Filesystem Protection:** The server actively protects the canonical global configuration file (and hardlinks) against raw filesystem writes, chunked WebSocket uploads, renames, and deletions. Configuration updates must occur through authorized configuration APIs.
+- **Passive Zero-Child Initialization:** When `enabled = true` on server startup, the server validates release-bundled toolchain integrity passively (checking SHA-256 digests and permissions without spawning Node, npm, or shell processes). Child language servers are spawned lazily per active connection and target workspace only when an authorized client attaches.
+- **Cheap Diagnostic Status:** Status reads report the last passive check, initially `Unverified`; they do not hash the engine on Tokio worker threads. Enable and every child launch/restart perform fresh serialized verification off-thread.
+- **Trusted Workspace Boundary:** The language process retains the server account's filesystem authority. Application virtual URI containment prevents client path traversal and host path disclosure, but does not provide an OS kernel filesystem sandbox against arbitrary child reads.
+- **Admin-Only Mutation & Dev Rejection:** Server-global settings mutations (`PATCH /api/semantic/settings`) require signed credentials and fresh `Admin` verification re-evaluated against the live authentication store within a 2-second timeout before locking, after locking, and before disk commit. Requests from non-admin accounts or development `--no-auth` mode (which operates as `User`) fail closed with HTTP 403 Forbidden. Admitted transitions survive client drops.
+- **Frozen Runtime Policy (Phase 09 Qualified):**
+  - **Adaptive Wire Sync:** 64 KiB (`ADAPTIVE_SYNC_THRESHOLD_BYTES = 65,536 bytes`). Documents below 64 KiB send full-text replacements; documents at or above 64 KiB send ranged incremental change batches.
+  - **Document & Overlay Limits:** Single document text capped at 1 MiB (`MAX_DOCUMENT_BYTES = 1,048,576 bytes`); max 16 open documents per session; 4 MiB session overlay budget; 8 MiB server-wide overlay budget.
+  - **Live Auth Admission & Invalidation Policies:** Handshakes and live session checks enforce a 2-second lookup timeout (`AUTH_STORE_LOOKUP_TIMEOUT = 2s`), failing closed (HTTP 503 `AUTH_UNAVAILABLE` on stalled locks). Background live watcher polls on a 5.0-second interval; on invalidation, cancellation-first teardown revokes the admission epoch, revokes the shared session token lock-free, and reaps the child process tree under a 5.0-second teardown budget (`TOTAL_TEARDOWN_BUDGET`). (Phase 09 automated test environments observed child tree reap completing in 506–510 ms under saturated backpressure; transport scheduling and socket flush are not zero-latency guarantees.)
+  - **Platform & Resource Scope:** Qualified for Linux x64 server and web host in portable-only mode (`PASS_PORTABLE_ONLY`). Hard cgroup v2 controls remain explicitly unqualified on the host (`status: "NOT_SELECTED"`); portable application caps and sampled procfs termination are enforced without hard RSS or OS memory guarantees. Native desktop hosts (Tauri, Windows, Android) and non-TS/JS engines remain unqualified and non-blocking.
 ### Telemetry Configuration
 
 Telemetry is opt-in and disabled by default. The settings live under `[server.telemetry]` in

@@ -21,7 +21,9 @@ DamHopper publishes immutable, SHA-256 attested release bundles for Linux x86_64
 
 - Linux x86_64 with systemd (glibc &ge; 2.39, systemd &ge; 245)
 - Standard utilities: `curl`, `tar`, `sha256sum`, `sudo`
-- Optional: GitHub CLI (`gh`) for artifact attestation verification
+- **Zero Node.js runtime dependency on host:** When installed with `server` or `both` roles, the archive includes the immutable bundled toolchain (`lib/semantic-engine`) containing pinned Node.js v24.16.0, TypeScript 5.9.3, and typescript-language-server 6.0.2. Once the release archive is staged or installed, semantic tooling requires no additional runtime or package downloads on the host.
+- **Qualified Portable-Only Resource Mode:** In production, the semantic language server runs under qualified portable-only mode (`PASS_PORTABLE_ONLY`). Linux cgroup v2 controller mode is explicitly unqualified (`status: "NOT_SELECTED"`). Portable application limits, sampled procfs process termination, and V8 heap limits (`--max-old-space-size=256`) are enforced without hard OS RSS/CPU guarantees.
+- **Engine Update & Restart Lifecycle:** Updating bundled language server engines occurs exclusively through server release packages, which restart the daemon during activation. In contrast, ordinary navigation and administrator runtime hot-toggles (`PATCH /api/semantic/settings`) require zero daemon restarts. Custom executable overrides via flags, environment variables, PATH, host configuration, or workspace files are strictly rejected.
 
 ### Step 1: Download Bootstrap Installer
 
@@ -125,6 +127,13 @@ The `start` command installs concrete systemd units, reloads `systemd`, starts c
 **First-Account Provisioning (Post-Activation):** DamHopper never creates a default administrator or auto-promotes the first registrant. `POST /api/auth/register` creates a disabled `user` account (`auth_version = 0`) that returns `401 ACCOUNT_DISABLED` on login until an operator approves it. After `sudo dam-hopper start` succeeds, follow the **Deployment profile** in the canonical [Operator Account Approval and Role Promotion Runbook](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook) to register from the API host against `http://127.0.0.1:4801`, approve and promote the account via `sqlite3` (or `mongosh`), and complete TOTP MFA enrollment ([Authentication API](./api/authentication.md)). Never use the server's `server-token` signing secret as a client credential.
 ### Rollback and Recovery
 
+Before rolling back an active installation where semantic navigation has been in use, operators should perform graceful quiescence:
+
+1. **Quiesce Semantic Sessions:** An administrator disables semantic navigation via the Settings UI or `PATCH http://127.0.0.1:4801/api/semantic/settings` with payload `{ "enabled": false }`.
+2. **Verify Quiescence:** Inspect `GET http://127.0.0.1:4801/api/semantic/settings` ensuring `runtimeEnabled: false`, `activeTrees: 0`, and `openDocuments: 0`.
+3. **Rollback Failure Stop:** If `runtimeEnabled` remains `true`, `activeTrees > 0`, `openDocuments > 0`, or a `transitionError` is returned in the settings response (or if the HTTP GET/PATCH request fails with a connection, non-200, or unreadable response), **STOP the rollback sequence immediately**. The server reports a safe-disabled state (indicating new session admission is disabled, not that surviving child processes have necessarily been reaped) and withholds durable false intent if session teardown fails. Inspect daemon logs (`journalctl -u dam-hopper-api`) to resolve unkillable or hung child processes; do not proceed with rollback while active child processes, unclosed documents, or uncommitted transitions remain.
+4. **Execute Rollback:**
+
 ```bash
 # Roll back to the previous active release
 sudo dam-hopper rollback
@@ -133,8 +142,9 @@ sudo dam-hopper rollback
 sudo dam-hopper recover
 ```
 
-For complete unit definitions, runtime sandboxing (`ProtectSystem=strict`, `PrivateTmp=true`), and cgroup controls, see the [Linux systemd guide](./linux-systemd.md).
+**Atomic Semantic Engine Rollback:** Executing `dam-hopper rollback` restores the previously active release's immutable bundled toolchain (`<release-root>/lib/semantic-engine`), server binary, and web assets in a single atomic transaction. If the prior release was also a `server` or `both` role, the restored daemon launches against the exact verified tool digests of that prior release without runtime downloads or fallback to ambient host packages.
 
+For complete unit definitions, runtime sandboxing (`ProtectSystem=strict`, `PrivateTmp=true`), and cgroup controls, see the [Linux systemd guide](./linux-systemd.md).
 ---
 
 ## 2. Windows Release Installer (x86_64 Direct Server)

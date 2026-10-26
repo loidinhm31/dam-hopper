@@ -52,6 +52,7 @@ export const EditorTab = forwardRef<HTMLDivElement, EditorTabProps>(
         ref={ref}
         role="tab"
         aria-selected={active}
+        data-dirty={dirty ? "true" : undefined}
         tabIndex={active ? 0 : -1}
         className={cn(
           "flex items-center gap-1.5 px-3 py-1 text-xs cursor-pointer select-none shrink-0",

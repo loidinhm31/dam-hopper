@@ -74,6 +74,27 @@ vi.mock("@/api/queries.js", () => ({
     data: [],
     isLoading: false,
   }),
+  useSemanticSettings: () => ({
+    data: {
+      configuredEnabled: false,
+      runtimeEnabled: false,
+      runtimeState: "disabled",
+      toolchainReady: true,
+      tupleIdentifier: "node-24.16.0-ts-5.9.3-tsls-6.0.2-linux-x64",
+      policyCapability: "cgroup-v2",
+      activeTrees: 0,
+      openDocuments: 0,
+      totalOverlayBytes: 0,
+      generation: 1,
+      canMutate: true,
+    },
+    isLoading: false,
+    isError: false,
+  }),
+  useUpdateSemanticSettings: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
 }));
 
 vi.mock("@/components/templates/AppLayout.js", () => ({
@@ -369,12 +390,12 @@ describe("SettingsPage accordion collapse behavior", () => {
     "Keyboard Shortcuts",
     "Usage insights",
     "Terminal Idle Suspend",
+    "Semantic Navigation",
     "Global Settings",
     "Workspace Config",
     "Maintenance",
     "Import / Export Settings",
   ];
-
   it("renders all sections collapsed by default", () => {
     act(() => {
       root.render(<SettingsPage />);

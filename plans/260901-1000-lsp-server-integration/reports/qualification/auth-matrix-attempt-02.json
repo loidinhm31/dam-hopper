@@ -1,0 +1,446 @@
+{
+  "status": "PASS",
+  "scope": "Real temporary SQLite and owned loopback MongoDB; 10 invalidation cases per backend; real socket Pending overlap, cancellation-first teardown, independent physical tree/accounting cleanup. No source, credentials, host paths, raw process logs or connection identifiers published.",
+  "cases": [
+    {
+      "backend": "mongo",
+      "trigger": "DisableAccount",
+      "qualified": true,
+      "blockedAtCutoffMs": 901,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 2,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 507
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16138,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "RevokeSession",
+      "qualified": true,
+      "blockedAtCutoffMs": 903,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 2,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 507
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16114,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "BumpUserAuthVersion",
+      "qualified": true,
+      "blockedAtCutoffMs": 905,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 1,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 505
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16117,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "BumpSessionCredentialVersion",
+      "qualified": true,
+      "blockedAtCutoffMs": 900,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 1,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 505
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16109,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "DeleteSession",
+      "qualified": true,
+      "blockedAtCutoffMs": 903,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 2,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 507
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16123,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "DeleteAccount",
+      "qualified": true,
+      "blockedAtCutoffMs": 902,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 2,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 508
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16124,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "MfaDeadlineDue",
+      "qualified": true,
+      "blockedAtCutoffMs": 897,
+      "cutoff": {
+        "closeCode": 4403,
+        "storeCheckDurationMs": 0,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 507
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16110,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "SessionExpired",
+      "qualified": true,
+      "blockedAtCutoffMs": 901,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 0,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 506
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16116,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "BackendQueryFailure",
+      "qualified": true,
+      "blockedAtCutoffMs": 901,
+      "cutoff": {
+        "closeCode": 1013,
+        "storeCheckDurationMs": 1,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 508
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16126,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "mongo",
+      "trigger": "BackendStoreTimeout",
+      "qualified": true,
+      "blockedAtCutoffMs": 892,
+      "cutoff": {
+        "closeCode": 1013,
+        "storeCheckDurationMs": 2001,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 509
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 18112,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "DisableAccount",
+      "qualified": true,
+      "blockedAtCutoffMs": 902,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 0,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 507
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16114,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "RevokeSession",
+      "qualified": true,
+      "blockedAtCutoffMs": 898,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 0,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 507
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16109,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "BumpUserAuthVersion",
+      "qualified": true,
+      "blockedAtCutoffMs": 902,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 1,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 510
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16125,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "BumpSessionCredentialVersion",
+      "qualified": true,
+      "blockedAtCutoffMs": 904,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 1,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 506
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16111,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "DeleteSession",
+      "qualified": true,
+      "blockedAtCutoffMs": 898,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 0,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 506
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16127,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "DeleteAccount",
+      "qualified": true,
+      "blockedAtCutoffMs": 894,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 1,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 509
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16116,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "MfaDeadlineDue",
+      "qualified": true,
+      "blockedAtCutoffMs": 899,
+      "cutoff": {
+        "closeCode": 4403,
+        "storeCheckDurationMs": 0,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 508
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16110,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "SessionExpired",
+      "qualified": true,
+      "blockedAtCutoffMs": 896,
+      "cutoff": {
+        "closeCode": 4401,
+        "storeCheckDurationMs": 0,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 506
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16122,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "BackendStoreTimeout",
+      "qualified": true,
+      "blockedAtCutoffMs": 900,
+      "cutoff": {
+        "closeCode": 1013,
+        "storeCheckDurationMs": 2001,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 507
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 18217,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    },
+    {
+      "backend": "sqlite",
+      "trigger": "BackendQueryFailure",
+      "qualified": true,
+      "blockedAtCutoffMs": 901,
+      "cutoff": {
+        "closeCode": 1013,
+        "storeCheckDurationMs": 0,
+        "admissionCutoffDurationMs": 0,
+        "cancelSignalDurationMs": 0,
+        "reapCompletedDurationMs": 506
+      },
+      "maxReservedOutputBytes": 1048747,
+      "producerOutcome": "sendBackpressured",
+      "finalAccounting": {
+        "elapsedMs": 16114,
+        "activeSessions": 0,
+        "activeTrees": 0,
+        "openDocuments": 0,
+        "overlayBytes": 0
+      }
+    }
+  ]
+}
