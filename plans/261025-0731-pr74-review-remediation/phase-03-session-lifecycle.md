@@ -6,7 +6,7 @@
 - Original phases 04/05/08 overlap actor/recovery/auth; no activation or edits to that plan.
 
 ## Overview
-Date: 2026-10-25. Priority: P2. Status: pending, 0%. Owner: actor implementer for recovery/idle; upgrade implementer may work independently on disjoint paths; one integration coordinator.
+Date: 2026-10-25. Completed: 2026-10-26 08:35:00 +07:00 (DONE — accepted with deferred issues tracked for Phase 04 integrated qualification; work cycle closed by user approval with technical acceptance open pending Phase 04 integrated qualification). Priority: P2. Status: complete, 100% (accepted with deferred issues tracked for Phase 04; work cycle closed by user approval with technical acceptance open pending Phase 04 integrated qualification). Owner: actor implementer for recovery/idle; upgrade implementer may work independently on disjoint paths; one integration coordinator.
 
 ## Key Insights
 - F10: `do_did_open` initializes whenever `child_handle` is absent, including after budget exhaustion; retained actor overlays do not prove a replacement child received them.
@@ -135,12 +135,28 @@ Paths rooted at `/home/loidinh/WS/worktrees/dam-hopper-lsp-server-integration/`.
   }
 ]
 ```
-- [ ] <!-- evcrate-task:enforce-budgeted-child-replay --> Enforce budgeted complete child replay.
-- [ ] <!-- evcrate-task:evict-initialized-empty-sessions --> Evict initialized empty sessions.
-- [ ] <!-- evcrate-task:bound-semantic-upgrade-auth --> Bound upgrade authentication.
+- [x] <!-- evcrate-task:enforce-budgeted-child-replay --> Enforce budgeted complete child replay. (Completed 2026-10-26)
+- [x] <!-- evcrate-task:evict-initialized-empty-sessions --> Evict initialized empty sessions. (Completed 2026-10-26)
+- [x] <!-- evcrate-task:bound-semantic-upgrade-auth --> Bound upgrade authentication. (Completed 2026-10-26)
 
-## Success Criteria
-Task commands are planned only; no runs by this author. Require actual replacement-child contents, elapsed idle capacity release under Ping, and delayed-upgrade HTTP response evidence. Existing restart-count and watcher tests alone are insufficient. Final integration runs scoped Rust compile once and repeats real Linux-server/web reconnect without losing dirty state; supplemental parent evidence may strengthen triage but cannot prove an unimplemented fix.
+## Success Criteria (Original Planned Specification)
+Original planned specification: require actual replacement-child contents, elapsed idle capacity release under Ping, and delayed-upgrade HTTP response evidence. Existing restart-count and watcher tests alone are insufficient. Final integration runs scoped Rust compile once and repeats real Linux-server/web reconnect without losing dirty state; supplemental parent evidence may strengthen triage but cannot prove an unimplemented fix.
+
+### Completion and Verification Record
+- **Completed:** 2026-10-26 08:35:00 +07:00
+- **Status:** DONE (accepted with deferred issues tracked for Phase 04 integrated qualification; work cycle closed by user approval; technical acceptance remains open pending Phase 04 integrated qualification; release hold maintained)
+- **Reported Verification Evidence:**
+  - Supervisor Unit & Integration Tests: 38 reported passed in Cycle 3 tester output (`cargo test --manifest-path server/Cargo.toml --test semantic_supervisor`)
+  - Lifecycle Replay Real-Tuple Tests: 2 reported passed in Cycle 3 tester output (`cargo test --manifest-path server/Cargo.toml --test semantic_lifecycle_replay`)
+  - Pre-Upgrade Auth Containment Test: 1 reported passed in Cycle 3 tester output (`TEST_MONGODB_URI="mongodb://127.0.0.1:36121" cargo test --manifest-path server/Cargo.toml --test semantic_ws_auth_containment test_pre_upgrade_auth_evaluation_timeout_fails_closed`)
+  - Total: 41/41 targeted tests passed
+- **Review Outcome (Cycle 3):**
+  - Report: `agent://Phase03ReviewerCycle3` (Score 8/10, 0 critical issues, 3 medium warnings tracked for Phase 04 integrated qualification).
+  - User explicitly approved closure with deferred items on 2026-10-26 08:35:00 +07:00.
+- **Auditable Downstream Carryovers (Tracked for Phase 04):**
+  - **W1 (Medium — Replay backpressure retry efficiency):** In `server/src/semantic/session.rs`, retry loop clones complete serialized message and `send_message` reparses into `serde_json::Value` before discovering queue saturation; large documents incur repeated megabyte-scale copy/allocation across retry window. Phase 04 qualification/hardening should reserve bounded child-channel byte/message capacity asynchronously and move already-validated payload once, or preserve payload ownership on `QueueFull`.
+  - **W2 (Medium — Multi-document stdin stress testing):** Real-tuple test had single document A open during replacement (B opened later on fresh session); existing queue-saturation coverage targets actor command queue, not replacement child stdin replay pressure. Phase 04 integrated qualification should add multi-document replay stress under `QueueFull`, cancellation, or replay-write failure to verify child-observed contents, order, and prompt replacement reap on failure.
+  - **W3 (Medium — Ping keepalive precision):** `semantic_lifecycle_replay.rs` ping eviction test discards ping results; disconnection-triggered teardown could produce zero trees; nominal 64s loop sleeps in 20s increments (~80s). Phase 04 should assert explicit keepalive exchange and live session occupancy before expiry, with explicit deadlines and bounded post-expiry observation window.
 
 ## Risk Assessment
 Replay may await backpressured stdin; retain current finite startup/write/reap bounds and cancellation checks. Arming idle too early can race initialization/replay; arm only complete Ready with no documents/requests/pins and use identity-fenced cleanup. Never relax restart limits to make tests pass. Rollback via OFF/prior release, not bypassing crash budget or reconstructing server sessions after failed OFF.
@@ -152,4 +168,4 @@ Kill only recorded fixture-owned child groups; no host-wide process matching. Pr
 Phase 04 integrated acceptance depends on all three tasks and Phase 01 socket recovery. Parent retains supplemental runtime-result synthesis and any plan review/interview.
 
 ## Unresolved questions
-No design interview required: this proposal selects terminal exhausted actors and the existing 60-second empty-session deadline. Supplemental actor evidence is collected; future fixed-behavior acceptance and fixture Mongo availability remain pending gates, not assumed passes.
+No design interview required: Phase 03 implementation and testing completed with 41/41 targeted tests passing. Cycle 3 code review scored 8/10 with 0 critical issues; 3 medium warnings (W1, W2, W3) tracked for Phase 04 integrated qualification. User explicitly approved closure on 2026-10-26 08:35:00 +07:00. Downstream Phase 04 implementation and release hold remain active.

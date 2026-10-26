@@ -256,8 +256,27 @@ pub async fn semantic_ws_handler(
             )
                 .into_response();
         };
+        // Bound pre-upgrade claims evaluation to guarantee fail-closed behavior before client presence admission.
+        // Note: tokio::time::timeout bounds the async future before presence reservation or session allocation,
+        // failing closed with HTTP 503 AUTH_UNAVAILABLE near 2s. Any underlying blocking SQLite store task already
+        // submitted to spawn_blocking cannot be preemptively cancelled and may run to completion.
+        let eval_res = tokio::time::timeout(
+            AUTH_STORE_LOOKUP_TIMEOUT,
+            state.auth_service.evaluate_claims(&claims),
+        )
+        .await;
 
-        match state.auth_service.evaluate_claims(&claims).await {
+        let decision = match eval_res {
+            Ok(d) => d,
+            Err(_) => {
+                warn!("Pre-upgrade claims evaluation timed out; failing closed");
+                crate::auth::model::AuthDecision::Unavailable {
+                    reason: "Pre-upgrade evaluation timed out".to_string(),
+                }
+            }
+        };
+
+        match decision {
             crate::auth::model::AuthDecision::Authenticated { session, user } => {
                 let expires_at = crate::auth::model::bson_to_chrono(session.expires_at);
                 let mfa_verified_at = crate::auth::model::bson_to_chrono(session.mfa_verified_at);

@@ -26,7 +26,8 @@ use super::resources::{
     MAX_TREES_PER_CONNECTION, RESOURCE_POLICY_VERSION, TOTAL_TEARDOWN_BUDGET,
 };
 use super::session::{
-    RevocationToken, SemanticSessionActor, SemanticSessionHandle, SessionCommand, SessionError,
+    IdleEvictionNotice, RevocationToken, SemanticSessionActor, SemanticSessionHandle,
+    SessionCommand, SessionError,
 };
 use super::tool_profile::{SemanticToolProfile, ToolIntegrityStatus};
 
@@ -109,6 +110,8 @@ impl RetiringSessionEntry {
             Arc::clone(&self.actor_done),
             Arc::clone(&self.current_pgid),
             Arc::clone(&self.counters),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicBool::new(false)),
         ))
     }
 }
@@ -189,7 +192,7 @@ struct SupervisorInner {
     connection_epochs: RwLock<HashMap<ConnectionId, Option<u64>>>,
     sessions: RwLock<HashMap<SessionKey, SemanticSessionHandle>>,
     retiring_sessions: StdMutex<HashMap<u64, RetiringSessionEntry>>,
-    idle_notify_tx: mpsc::Sender<SessionKey>,
+    idle_notify_tx: mpsc::Sender<IdleEvictionNotice>,
     session_generation_counter: AtomicU64,
     transition_lock: tokio::sync::Mutex<()>,
     safe_disabled: AtomicBool,
@@ -206,7 +209,7 @@ impl SemanticSupervisor {
     /// Create a new disabled supervisor with optional passive toolchain verification.
     /// Does NOT spawn any child processes.
     pub fn new(tool_profile: Option<SemanticToolProfile>) -> Self {
-        let (idle_notify_tx, mut idle_notify_rx) = mpsc::channel::<SessionKey>(32);
+        let (idle_notify_tx, mut idle_notify_rx) = mpsc::channel::<IdleEvictionNotice>(32);
         let verifier = tool_profile.map(ToolchainVerifier::new);
 
         let inner = Arc::new(SupervisorInner {
@@ -231,10 +234,10 @@ impl SemanticSupervisor {
         // Background worker to reap idle sessions (holds Weak reference to avoid Arc cycle)
         let weak_inner = Arc::downgrade(&supervisor.inner);
         tokio::spawn(async move {
-            while let Some(key) = idle_notify_rx.recv().await {
+            while let Some(notice) = idle_notify_rx.recv().await {
                 if let Some(inner) = weak_inner.upgrade() {
                     let sup = SemanticSupervisor { inner };
-                    sup.handle_idle_session(key).await;
+                    sup.handle_idle_session(notice).await;
                 } else {
                     break;
                 }
@@ -890,10 +893,34 @@ impl SemanticSupervisor {
         guard.get(key).cloned()
     }
 
-    /// Close and reap a specific session.
-    pub async fn close_session(&self, key: &SessionKey) {
+    /// Retrieve all active child process group IDs across all running sessions.
+    pub async fn get_all_pgids(&self) -> Vec<u32> {
+        let handles: Vec<SemanticSessionHandle> = {
+            let guard = self.inner.sessions.read().await;
+            guard.values().cloned().collect()
+        };
+        let mut pgids = Vec::with_capacity(handles.len());
+        for h in handles {
+            if let Some(pgid) = h.get_pgid().await {
+                pgids.push(pgid);
+            }
+        }
+        pgids
+    }
+
+    /// Close and reap a specific session, optionally checking that the session generation matches.
+    pub async fn close_session_if_generation(
+        &self,
+        key: &SessionKey,
+        expected_gen: Option<u64>,
+    ) {
         let handle_opt = {
             let mut guard = self.inner.sessions.write().await;
+            if let Some(gen) = expected_gen {
+                if guard.get(key).map(|h| h.fence.session_generation) != Some(gen) {
+                    return;
+                }
+            }
             let removed = guard.remove(key);
             if let Some(h) = &removed {
                 self.detach_and_register_retiring(std::slice::from_ref(h));
@@ -904,6 +931,11 @@ impl SemanticSupervisor {
         if let Some(handle) = handle_opt {
             let _ = self.reap_single_handle(handle).await;
         }
+    }
+
+    /// Close and reap a specific session.
+    pub async fn close_session(&self, key: &SessionKey) {
+        self.close_session_if_generation(key, None).await;
     }
 
     /// Invalidate and reap all sessions associated with a specific connection.
@@ -1096,16 +1128,19 @@ impl SemanticSupervisor {
     }
 
     /// Handle background idle eviction notification for a session.
-    async fn handle_idle_session(&self, key: SessionKey) {
+    async fn handle_idle_session(&self, notice: IdleEvictionNotice) {
         let handle_opt = {
             let guard = self.inner.sessions.read().await;
-            guard.get(&key).cloned()
+            guard.get(&notice.key).cloned()
         };
 
         if let Some(handle) = handle_opt {
-            let diag = handle.diagnostics();
-            if diag.open_documents == 0 && diag.in_flight_requests == 0 {
-                self.close_session(&key).await;
+            if handle.fence.session_generation != notice.session_generation {
+                return;
+            }
+            if handle.retire_if_idle(notice.idle_token).await {
+                self.close_session_if_generation(&notice.key, Some(notice.session_generation))
+                    .await;
             }
         }
     }

@@ -2276,3 +2276,391 @@ async fn test_diagnostics_barrier_file_release_and_response() {
 
     supervisor.shutdown().await;
 }
+
+#[tokio::test]
+async fn test_crash_budget_exhaustion_rejects_did_open_and_initialize_revival() {
+    use dam_hopper_server::semantic::session::SessionError;
+
+    let toolchain = TestToolchain::new();
+    let profile = toolchain.tool_profile();
+    let supervisor = SemanticSupervisor::new(Some(profile));
+    supervisor.set_enabled(true).await;
+
+    let target_dir = tempfile::tempdir().unwrap();
+    let conn = ConnectionId("conn-crash-budget".into());
+    let ep = supervisor.register_connection(&conn).await;
+    let session = supervisor
+        .get_or_create_session(
+            conn,
+            "project-crash-budget",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
+        .await
+        .expect("create session");
+
+    session
+        .did_open(
+            "file:///crash.ts".into(),
+            "typescript".into(),
+            1,
+            "const preserveMe = true;".into(),
+        )
+        .await
+        .expect("open");
+
+    assert_eq!(session.get_state().await, SemanticState::Ready);
+    let pgid1 = session.get_pgid().await.expect("child PGID 1 must exist");
+
+    // Crash 1: consumes restart attempt 1, backoff 1s
+    let _ = dam_hopper_server::semantic::reaper::signal_pgid(
+        pgid1,
+        Some(nix::sys::signal::Signal::SIGKILL),
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    assert_eq!(session.get_state().await, SemanticState::Ready);
+    let pgid2 = session.get_pgid().await.expect("child PGID 2 must exist");
+    assert_ne!(pgid1, pgid2);
+
+    // Crash 2: consumes restart attempt 2, backoff 2s
+    let _ = dam_hopper_server::semantic::reaper::signal_pgid(
+        pgid2,
+        Some(nix::sys::signal::Signal::SIGKILL),
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    assert_eq!(session.get_state().await, SemanticState::Ready);
+    let pgid3 = session.get_pgid().await.expect("child PGID 3 must exist");
+    assert_ne!(pgid2, pgid3);
+
+    // Crash 3: budget exhausted (max 2 restarts in window) -> must NOT restart
+    let _ = dam_hopper_server::semantic::reaper::signal_pgid(
+        pgid3,
+        Some(nix::sys::signal::Signal::SIGKILL),
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // Actor must remain terminal Crashed
+    assert_eq!(session.get_state().await, SemanticState::Crashed);
+
+    // Attempting did_open on exhausted actor must fail and NOT spawn a replacement child
+    let open_res = session
+        .did_open(
+            "file:///another.ts".into(),
+            "typescript".into(),
+            1,
+            "const x = 1;".into(),
+        )
+        .await;
+    assert!(matches!(open_res, Err(SessionError::NotReady(SemanticState::Crashed))));
+
+    // Attempting initialize on exhausted actor must also fail and NOT spawn a replacement child
+    let init_res = session.initialize().await;
+    assert!(matches!(init_res, Err(SessionError::NotReady(SemanticState::Crashed))));
+
+    // Diagnostics must reflect 0 running child
+    let current_pgid = session.get_pgid().await;
+    assert_eq!(current_pgid, None);
+
+    supervisor.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_idle_session_retirement_and_stale_token_rejection() {
+    let toolchain = TestToolchain::new();
+    let profile = toolchain.tool_profile();
+    let supervisor = SemanticSupervisor::new(Some(profile));
+    supervisor.set_enabled(true).await;
+
+    let target_dir = tempfile::tempdir().unwrap();
+    let conn = ConnectionId("conn-idle-test".into());
+    let ep = supervisor.register_connection(&conn).await;
+    let session = supervisor
+        .get_or_create_session(
+            conn.clone(),
+            "project-idle-test",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
+        .await
+        .expect("create session");
+
+    // 1. Initial empty initialize: actor becomes Ready, overlays=0
+    session.initialize().await.expect("initialize empty session");
+    assert_eq!(session.get_state().await, SemanticState::Ready);
+
+    // Idle retirement with matching token succeeds when session is genuinely empty
+    let retired = session.retire_if_idle(1).await;
+    assert!(retired, "retire_if_idle should succeed for empty initialized session");
+    assert_eq!(session.get_state().await, SemanticState::Invalidated);
+
+    // 2. Test activity cancels idle retirement
+    let conn2 = ConnectionId("conn-idle-active".into());
+    let ep2 = supervisor.register_connection(&conn2).await;
+    let session2 = supervisor
+        .get_or_create_session(
+            conn2.clone(),
+            "project-idle-active",
+            None,
+            target_dir.path().to_path_buf(),
+            ep2,
+        )
+        .await
+        .expect("create session 2");
+
+    session2.initialize().await.expect("init session 2");
+    // Open a document: cancels idle timer and adds overlay
+    session2
+        .did_open(
+            "file:///active.ts".into(),
+            "typescript".into(),
+            1,
+            "const a = 1;".into(),
+        )
+        .await
+        .expect("open document");
+
+    // Retirement must return false because document is open
+    let retired_while_active = session2.retire_if_idle(1).await;
+    assert!(!retired_while_active, "retire_if_idle must fail when document is open");
+    assert_eq!(session2.get_state().await, SemanticState::Ready);
+
+    // Close the document: transitions back to empty, scheduling a new idle token (token 2)
+    session2
+        .did_close("file:///active.ts".into())
+        .await
+        .expect("close document");
+
+    // A stale idle token (1) must be rejected
+    let retired_stale = session2.retire_if_idle(1).await;
+    assert!(!retired_stale, "stale idle token must not retire session");
+
+    // The fresh idle token succeeds
+    let token_fresh = session2.current_idle_token();
+    let retired_fresh = session2.retire_if_idle(token_fresh).await;
+    assert!(retired_fresh, "current idle token must retire empty session");
+    // 3. Generational safety in supervisor
+    let key = session2.key.clone();
+    supervisor
+        .close_session_if_generation(&key, Some(999_999))
+        .await;
+    assert!(
+        supervisor.get_session(&key).await.is_some(),
+        "close_session_if_generation with mismatched generation must NOT remove session"
+    );
+
+    supervisor
+        .close_session_if_generation(&key, Some(session2.fence.session_generation))
+        .await;
+    assert!(
+        supervisor.get_session(&key).await.is_none(),
+        "close_session_if_generation with matching generation must remove session"
+    );
+
+    supervisor.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_retired_session_rejects_subsequent_document_admission() {
+    use dam_hopper_server::semantic::session::SessionError;
+
+    let toolchain = TestToolchain::new();
+    let profile = toolchain.tool_profile();
+    let supervisor = SemanticSupervisor::new(Some(profile));
+    supervisor.set_enabled(true).await;
+
+    let target_dir = tempfile::tempdir().unwrap();
+    let conn = ConnectionId("conn-retire-reject".into());
+    let ep = supervisor.register_connection(&conn).await;
+    let session = supervisor
+        .get_or_create_session(
+            conn,
+            "project-retire-reject",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
+        .await
+        .expect("create session");
+
+    session.initialize().await.expect("initialize empty session");
+    assert_eq!(session.get_state().await, SemanticState::Ready);
+
+    // Retire the empty session: must commit irreversible admission cutoff
+    let retired = session.retire_if_idle(1).await;
+    assert!(retired, "retire_if_idle should succeed");
+
+    // Any subsequent did_open must be rejected immediately without admitting new work
+    let open_res = session
+        .did_open(
+            "file:///late.ts".into(),
+            "typescript".into(),
+            1,
+            "const late = true;".into(),
+        )
+        .await;
+    assert!(
+        matches!(open_res, Err(SessionError::Invalidated)),
+        "Subsequent did_open on retired session must fail with Invalidated, got: {open_res:?}"
+    );
+
+    // Any subsequent initialize must also be rejected
+    let init_res = session.initialize().await;
+    assert!(
+        matches!(init_res, Err(SessionError::Invalidated)),
+        "Subsequent initialize on retired session must fail with Invalidated"
+    );
+
+    supervisor.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_lazy_startup_idle_timer_lifecycle_and_rearm_after_close() {
+    let toolchain = TestToolchain::new();
+    let profile = toolchain.tool_profile();
+    let supervisor = SemanticSupervisor::new(Some(profile));
+    supervisor.set_enabled(true).await;
+
+    let target_dir = tempfile::tempdir().unwrap();
+    let conn = ConnectionId("conn-lazy-timer".into());
+    let ep = supervisor.register_connection(&conn).await;
+    let session = supervisor
+        .get_or_create_session(
+            conn,
+            "project-lazy-timer",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
+        .await
+        .expect("create session");
+
+    // 1. First-use did_open (lazy initialization without explicit initialize())
+    session
+        .did_open(
+            "file:///lazy.ts".into(),
+            "typescript".into(),
+            1,
+            "const lazy = 1;".into(),
+        )
+        .await
+        .expect("lazy did_open");
+    assert_eq!(session.get_state().await, SemanticState::Ready);
+    assert!(!session.is_idle_timer_scheduled(), "Idle timer must not be scheduled while document is open");
+
+    // Idle retirement must fail because a document is open
+    let retired_while_open = session.retire_if_idle(1).await;
+    assert!(!retired_while_open, "retire_if_idle must fail while lazy document is open");
+    assert_eq!(session.get_state().await, SemanticState::Ready);
+
+    // 2. Close the document: transitions back to empty and arms a fresh idle timer
+    session
+        .did_close("file:///lazy.ts".into())
+        .await
+        .expect("did_close");
+    assert!(session.is_idle_timer_scheduled(), "Idle timer must be scheduled after closing document");
+
+    // Stale/wrong token must fail
+    let cur_token = session.current_idle_token();
+    assert!(!session.retire_if_idle(cur_token.wrapping_add(99)).await, "stale token must be rejected");
+
+    // Fresh token succeeds
+    let retired_after_close = session.retire_if_idle(cur_token).await;
+    assert!(retired_after_close, "fresh idle token must retire session after document is closed");
+    assert!(!session.is_idle_timer_scheduled(), "Idle timer must be cleared after retirement");
+    supervisor.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_replay_to_empty_session_arms_idle_timer() {
+    let toolchain = TestToolchain::new();
+    let profile = toolchain.tool_profile();
+    let supervisor = SemanticSupervisor::new(Some(profile));
+    supervisor.set_enabled(true).await;
+
+    let target_dir = tempfile::tempdir().unwrap();
+    let conn = ConnectionId("conn-replay-empty".into());
+    let ep = supervisor.register_connection(&conn).await;
+    let session = supervisor
+        .get_or_create_session(
+            conn,
+            "project-replay-empty",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
+        .await
+        .expect("create session");
+
+    // Initialize session with 0 documents
+    session.initialize().await.expect("initialize empty session");
+    let pgid1 = session.get_pgid().await.expect("pgid 1");
+
+    // Kill child
+    let _ = dam_hopper_server::semantic::reaper::signal_pgid(
+        pgid1,
+        Some(nix::sys::signal::Signal::SIGKILL),
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+    // Replacement child has started and replayed 0 documents -> arms idle timer
+    assert_eq!(session.get_state().await, SemanticState::Ready);
+    let pgid2 = session.get_pgid().await.expect("pgid 2");
+    assert_ne!(pgid1, pgid2);
+    assert!(session.is_idle_timer_scheduled(), "Replay-to-empty must arm idle timer");
+
+    // After replay-to-empty, retirement with fresh token succeeds
+    let token_empty = session.current_idle_token();
+    assert!(!session.retire_if_idle(token_empty.wrapping_add(99)).await);
+    let retired = session.retire_if_idle(token_empty).await;
+    assert!(retired, "replay-to-empty must arm idle timer and permit retirement");
+    assert!(!session.is_idle_timer_scheduled());
+
+    supervisor.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_oversized_open_failure_rearms_idle_timer() {
+    let toolchain = TestToolchain::new();
+    let profile = toolchain.tool_profile();
+    let supervisor = SemanticSupervisor::new(Some(profile));
+    supervisor.set_enabled(true).await;
+
+    let target_dir = tempfile::tempdir().unwrap();
+    let conn = ConnectionId("conn-oversized".into());
+    let ep = supervisor.register_connection(&conn).await;
+    let session = supervisor
+        .get_or_create_session(
+            conn,
+            "project-oversized",
+            None,
+            target_dir.path().to_path_buf(),
+            ep,
+        )
+        .await
+        .expect("create session");
+
+    // Attempt to open a document exceeding 1 MiB limit (> MAX_DOCUMENT_BYTES)
+    let oversized_text = "x".repeat(1024 * 1024 + 100);
+    let open_err = session
+        .did_open(
+            "file:///huge.ts".into(),
+            "typescript".into(),
+            1,
+            oversized_text,
+        )
+        .await;
+    assert!(open_err.is_err(), "Opening oversized document must fail");
+    assert_eq!(session.get_state().await, SemanticState::Ready);
+    assert!(
+        session.is_idle_timer_scheduled(),
+        "Idle timer must be re-armed after failed open attempt"
+    );
+
+    let token = session.current_idle_token();
+    let retired = session.retire_if_idle(token).await;
+    assert!(retired, "Session must be eligible for idle retirement");
+
+    supervisor.shutdown().await;
+}

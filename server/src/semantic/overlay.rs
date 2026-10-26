@@ -426,6 +426,16 @@ impl SessionOverlayMap {
     pub fn all_documents(&self) -> Vec<OverlayDocument> {
         self.documents.values().cloned().collect()
     }
+    /// Returns sorted document URIs in FIFO open order without cloning document texts.
+    pub fn ordered_document_uris(&self) -> Vec<String> {
+        let mut entries: Vec<(&String, u64)> = self
+            .documents
+            .iter()
+            .map(|(uri, doc)| (uri, doc.open_incarnation))
+            .collect();
+        entries.sort_by_key(|&(_, inc)| inc);
+        entries.into_iter().map(|(uri, _)| uri.clone()).collect()
+    }
     /// Version-only snapshot of all currently open overlays avoiding text cloning.
     pub fn document_versions_snapshot(&self) -> HashMap<String, i64> {
         self.documents

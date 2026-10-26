@@ -1,7 +1,7 @@
 # Authenticated Semantic WebSocket Gateway Architecture
 
 **Authority:** Server Semantic Subsystem (`server/src/api/semantic_ws.rs`, `server/src/semantic/gateway.rs`, `server/src/semantic/uri.rs`)  
-**Status:** Maintained Architecture Specification (Phase 09 Qualified for Portable-Only Linux x64 Server + Web; PR #74 Remediation: Phase 01 Passed, Phase 02 Accepted with Deferred Issues; Release Hold Maintained)
+**Status:** Maintained Architecture Specification (Phase 09 Qualified for Portable-Only Linux x64 Server + Web; PR #74 Remediation: Phase 01 Passed, Phases 02 & 03 Accepted with Deferred Issues; Release Hold Maintained)
 
 ## Scope and Subsystem Boundary
 
@@ -57,13 +57,24 @@ Authentication token extraction checks query parameters first, falling back to t
 token = query.get("token") || cookieJar.get("dam_hopper_auth")
 ```
 
-When `--no-auth` is inactive, tokens must decode as valid V2 `AuthClaims` matching `jwt_secret`. The handler then evaluates claims via `state.auth_service.evaluate_claims(&claims)`:
+When `--no-auth` is inactive, tokens must decode as valid V2 `AuthClaims` matching `jwt_secret`. The handler then evaluates claims via `state.auth_service.evaluate_claims(&claims)` bounded by an asynchronous timeout:
 
-- `AuthDecision::Authenticated`: Captures `AuthenticatedActor` with session ID, auth version, credential version, and calculated MFA deadline.
-- `AuthDecision::MfaRequired`: Returns HTTP 401 Unauthorized (`MFA_REQUIRED`).
-- `AuthDecision::FullLoginRequired`: Returns HTTP 401 Unauthorized (`SESSION_EXPIRED`, `SESSION_REVOKED`, `ACCOUNT_DISABLED`, or `AUTH_REQUIRED`).
-- `AuthDecision::Unavailable`: Returns HTTP 503 Service Unavailable (`AUTH_UNAVAILABLE`).
+```rust
+let eval_res = tokio::time::timeout(
+    AUTH_STORE_LOOKUP_TIMEOUT,
+    state.auth_service.evaluate_claims(&claims),
+)
+.await;
+```
 
+- **Pre-Upgrade Timeout & Fail-Closed Behavior:** Bounded by `AUTH_STORE_LOOKUP_TIMEOUT` (2.0 seconds). If persistent claims lookup times out or backend is unavailable, claims evaluation fails closed with HTTP 503 Service Unavailable (`AUTH_UNAVAILABLE`).
+- **Presence Budget Protection:** Pre-upgrade evaluation executes *strictly prior* to presence reservation (`reserve_pending_upgrade`). Unauthenticated or timed-out requests are rejected before reserving client presence capacity or allocating session actors.
+- **SQLite Blocking Worker Limitation:** On timeout, the claims-evaluation future is dropped and the handler returns HTTP 503 `AUTH_UNAVAILABLE`. Two seconds is the configured asynchronous timeout deadline (`AUTH_STORE_LOOKUP_TIMEOUT = 2s`), subject to Tokio scheduling jitter; already-started SQLite database queries dispatched to `tokio::task::spawn_blocking` cannot be preemptively aborted and will execute to completion on the worker thread.
+- **Decision Outcomes:**
+  - `AuthDecision::Authenticated`: Captures `AuthenticatedActor` with session ID, auth version, credential version, and calculated MFA deadline.
+  - `AuthDecision::MfaRequired`: Returns HTTP 401 Unauthorized (`MFA_REQUIRED`).
+  - `AuthDecision::FullLoginRequired`: Returns HTTP 401 Unauthorized (`SESSION_EXPIRED`, `SESSION_REVOKED`, `ACCOUNT_DISABLED`, or `AUTH_REQUIRED`).
+  - `AuthDecision::Unavailable`: Returns HTTP 503 Service Unavailable (`AUTH_UNAVAILABLE`).
 ### 4. Client Presence Admission
 
 Before socket upgrade completes, the connection reserves a slot in the server's presence registry:
@@ -470,10 +481,9 @@ Phase 09 resolved and qualified all tracked boundaries carried forward from Phas
 - **W5 (Git Route Worktree Invalidation):** Git mutation routes enforce target-scoped worktree invalidation rather than project-wide disruption.
 - **G5 / Phase 07 W-1 (Destination Freshness Proof):** Destination coordinate-to-content freshness validates file content and pins unopened destinations before cross-tab reveal.
 - **G8 / Phase 07 C-2 (Real Browser Monaco Qualification):** 21-step fixed union qualification executed in real Chromium against live Axum server and packaged TSLS. Verified 0 stale reveals, stable model retention, and clean provider restoration on OFF. Full end-to-end multi-tab user journey visual sign-off is governed by Phase 10.
-## PR74 Remediation Contracts (Phase 01 Implemented; Phases 02–04 Proposed Design)
+## PR74 Remediation Contracts (Phases 01–03 Implemented; Phase 04 Proposed Design)
 
-> **Notice:** The following section documents architectural contracts and remediation designs for findings F1–F13 (PR #74 review remediation). Phase 01 mechanisms (F1, F5, F6, F7) are implemented in client and server source code with scoped unit/component test coverage, while full live-TSLS and containerized browser qualification remain open until Phase 04 integration under active release hold. Phases 02–04 specifications represent proposed future designs currently undergoing staged implementation.
-
+> **Notice:** The following section documents architectural contracts and remediation designs for findings F1–F13 (PR #74 review remediation). Phase 01–03 mechanisms (F1, F3, F5, F6, F7, F8, F9, F10, F11, F13) are implemented in client and server source code with unit and integration test coverage, with remaining integration qualification gaps (W1, W2, W3) tracked for Phase 04 under active release hold. Phase 04 specifications represent proposed designs undergoing implementation.
 ### 1. Editor Content Integrity & Representation (Phase 01 Implemented: F1, F5, F6, F7)
 
 - **F1 — Clean Reload Reconciliation & Model Identity:**
@@ -529,18 +539,40 @@ Phase 09 resolved and qualified all tracked boundaries carried forward from Phas
     - Exact UTF-8 byte hashing: `computeUtf8Sha256Hex` hashes exact UTF-8 bytes of projected semantic text.
     - Coordinate mapping: Zero-based UTF-16 line and column coordinates are validated and resolved against canonical projected text.
     - Event mapping: Incremental model changes are projected. Flush and EOL-only changes fallback to bounded full replacement. Deprecated raw `rangeLength` is omitted when unmappable.
-### 2. Gateway Coordinate Proofs & Cancellation (Phase 02 Proposed: F3, F8, F9)
+### 2. Gateway Coordinate Proofs & Cancellation (Phase 02 Implemented: F3, F8, F9)
 
 - **F3 — Immutable Query Snapshot Proof:** Destination coordinates, text SHA, version, and open incarnation are captured from an exact immutable query snapshot, never by live relabeling or racing callbacks.
 - **F8 — UTF-16 Coordinate Mapping Proofs:** Mathematical equivalence of line/UTF-16 coordinates and edit commutation ($P(\text{applyModelChanges}(M, \Delta)) = \text{applyWireChanges}(P(M), P(\Delta))$) across all BOM and EOL fixture variations.
 - **F9 — Unified Logical Navigation Cancellation:** Client-side cancellation spans both supervisor queuing and language-server processing stages without orphaned tasks.
 
-### 3. Session Lifecycle & Idle Management (Phase 03 Proposed: F10, F11, F13)
+### 3. Session Lifecycle & Idle Management (Phase 03 Implemented: F10, F11, F13)
 
-- **F10 — Supervisor Process Tree Reaping & Restart Budget:** Replacement child processes strictly adhere to bounded restart budgets and replay accepted overlays before reaching `ready`. Exhausted supervisor actors cannot revive from `didOpen`.
-- **F11 — Server-Authoritative Idle Session Eviction:** Empty sessions with zero open documents evict after a 60-second idle deadline under real WebSocket Pings.
-- **F13 — Two-Second Token Claims Evaluation Deadline:** Semantic WebSocket token authentication rechecks evaluate against a strict two-second fail-closed deadline.
+- **F10 — First-Start Lazy Initialization vs Budgeted Recovery:**
+  - **Zero-Child Default Lifecycle & Lazy Startup:** Newly acquired session actors instantiate in `SemanticState::Idle` with zero child processes spawned (`initial_start_completed = false`). Child process spawning is deferred until the first explicit `initialize` request or first document `didOpen`.
+  - **Startup Fence (`initial_start_completed`):** The `initial_start_completed` flag is set to `true` immediately before initiating the first child spawn attempt. This fence strictly prevents `initialize` or `didOpen` from retrying a failed initial launch or reviving a crashed child process, enforcing that lifecycle recovery proceeds exclusively through the supervisor's budgeted crash recovery path.
+  - **Bounded Crash Restart Budget:** When unexpected child process termination is detected via `ChildEvent::Terminated` or channel disconnection, in-flight requests are immediately drained with `SessionError::ChildCrashed`, and the session enters `SemanticState::Crashed`. The actor maintains a rolling restart history (`restarts_in_window`), retaining timestamps within a 60-second window (`RESTART_WINDOW = 60s`). A maximum of 2 restarts is permitted per window (`MAX_RESTARTS_PER_WINDOW = 2`).
+  - **Cancellation-Aware Restart Backoff:** If within budget, the actor applies two-stage restart backoff (100 ms for initial restart, 500 ms for subsequent restart) while selecting against session revocation (`revocation.cancelled()`). If admission is revoked during backoff, the restart aborts and resources are reclaimed out-of-band.
+  - **FIFO Overlay Replay Ordered by Open Incarnation:** Upon launching the replacement child process, the actor iterates all active document overlays sorted strictly in ascending order of their initial opening incarnation (`ordered_document_uris()` mapped from `doc.open_incarnation`). It re-enqueues full-text `didOpen` notifications into the replacement child's stdin stream with backpressure (`send_child_json_with_backpressure`, retrying with 5 ms intervals up to a 5-second deadline).
+  - **Transition to `Ready` vs Asynchronous Processing:** The session actor transitions to `SemanticState::Ready` once all accepted overlay notifications are successfully enqueued into child stdin. Note that LSP `didOpen` is a one-way notification without RPC acknowledgment; subsequent queries rely on strict stdio FIFO ordering for child language server processing.
+  - **Terminal `Crashed` State:** If restart budget is exhausted or if replacement child launch or replay fails, the actor transitions to terminal `SemanticState::Crashed` and reaps the child process tree. The actor will not revive on subsequent requests, and does not automatically revive when the rolling 60s window expires; new admissions require a fresh session registration.
 
+- **F11 — Server-Authoritative Idle Session Eviction:**
+  - **60-Second Eviction Deadline:** Empty sessions with zero open documents (`overlays.document_count() == 0`), zero temporary disk pins (`temp_pins.is_empty()`), and zero in-flight requests schedule an idle eviction deadline of 60 seconds (`IDLE_SHUTDOWN_TIMEOUT = 60s`).
+  - **Empty Transition Evaluation:** The idle timer check (`check_schedule_idle_timer()`) is evaluated deterministically across all empty state transitions:
+    - Session initialization completed with zero open documents.
+    - Document closed (`didClose`) leaving zero remaining open documents and zero pins.
+    - In-flight navigation request completed leaving zero active requests.
+    - Document open rejected (e.g. unsupported language or overlay quota exceeded) rearming idle evaluation.
+    - Child crash restart replaying zero documents.
+  - **Monotonic Token Tracking & Cancellation:** Scheduling generates a monotonic `idle_timer_token` (`AtomicU64`) and sets `idle_timer_scheduled = true`. Opening any document or receiving new work immediately cancels the timer (`cancel_idle_timer()`), clearing the scheduled flag and bumping the token counter to invalidate pending timer callbacks.
+  - **Actor-Serialized `RetireIfIdle` Verification:** When the 60s timer expires with matching token, an `IdleEvictionNotice` (`{ key, session_generation, idle_token }`) is delivered to the supervisor. The supervisor validates the session generation and submits `SessionCommand::RetireIfIdle` through the session actor's serialized command channel. The actor confirms in its message loop that the session is still in `Ready` state, has zero open documents, zero pins, zero in-flight requests, and the current token matches before executing retirement.
+  - **Atomic Invalidation Cutoff:** Upon successful retirement verification, the actor executes `apply_invalidation()`, immediately revoking admission tokens lock-free, marking the state `Invalidated`, and reaping the child process tree. Subsequent operations targeting the retired session fail closed with `SessionError::Invalidated`. The supervisor then cleanly removes the session handle via `close_session_if_generation`.
+  - **Independence from Transport Socket Pings:** Transport-level WebSocket Ping/Pong keepalive frames are processed exclusively in the `semantic_ws.rs` split-socket loop and never reach the session actor. Consequently, active WebSocket keepalives do NOT touch idle tokens or prevent idle session eviction; idle sessions reliably evict after 60 seconds of zero document activity regardless of continuous ping traffic.
+
+- **F13 — Bounded Pre-Upgrade Claims Evaluation:**
+  - **Two-Second Timeout Bound:** Pre-upgrade JWT claims verification in `semantic_ws_handler` bounds `state.auth_service.evaluate_claims(&claims)` using `tokio::time::timeout(AUTH_STORE_LOOKUP_TIMEOUT, ...)`, configured to 2.0 seconds (`AUTH_STORE_LOOKUP_TIMEOUT = 2s`).
+  - **Fail-Closed Rejection Before Presence Reservation:** If evaluation times out or encounters store unavailability, the handler immediately fails closed with HTTP 503 Service Unavailable (`AUTH_UNAVAILABLE`). Crucially, this bound executes *strictly prior* to client presence slot reservation (`reserve_pending_upgrade`), preventing slow or stalled auth lookups from exhausting server presence budgets or leaking connection tracking state.
+  - **Async Preemption vs SQLite Blocking Workers:** On timeout, the claims-evaluation future is dropped and the handler returns HTTP 503 `AUTH_UNAVAILABLE`. Two seconds is the configured asynchronous timeout deadline, subject to Tokio scheduling jitter. Already-started SQLite database queries dispatched to Tokio's blocking threadpool (`spawn_blocking`) cannot be preemptively aborted and will execute to completion on the worker thread.
 ### 4. Release Packaging & Configuration Boundaries (Phase 04 Proposed: F2, F4, F12)
 
 - **F2 — Bundled Toolchain Packaging:** Packaging pipeline bundles and verifies the exact pinned engine tuple (Node 24.16.0, TypeScript 5.9.3, TSLS 6.0.2) with cryptographic manifest validation.

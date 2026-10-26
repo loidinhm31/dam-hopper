@@ -23,8 +23,8 @@ use super::protocol::{
     METHOD_DID_OPEN, METHOD_INITIALIZE, METHOD_INITIALIZED,
 };
 use super::reaper::{
-    get_all_descendants, is_pgid_empty, merge_descendants, verify_pids_dead, verify_tree_reaped,
-    ReaperError,
+    get_all_descendants, is_pgid_empty, merge_descendants, verify_pids_dead,
+    verify_tree_reaped, ReaperError,
 };
 use super::resources::{
     ResourceLimitError, ResourcePolicy, FORCE_KILL_REAP_BUDGET, IDLE_SHUTDOWN_TIMEOUT,
@@ -97,6 +97,14 @@ struct InFlightRequest {
     response_tx: oneshot::Sender<Result<Value, SessionError>>,
     created_at: Instant,
 }
+/// Notification sent to the supervisor when an empty session's idle timer expires.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IdleEvictionNotice {
+    pub key: SessionKey,
+    pub session_generation: u64,
+    pub idle_token: u64,
+}
+
 /// Commands sent to the session actor task.
 pub enum SessionCommand {
     Initialize {
@@ -145,6 +153,10 @@ pub enum SessionCommand {
     GetPgid {
         reply: oneshot::Sender<Option<u32>>,
     },
+    RetireIfIdle {
+        idle_token: u64,
+        reply: oneshot::Sender<bool>,
+    },
     Invalidate,
 }
 
@@ -159,9 +171,20 @@ pub struct SemanticSessionHandle {
     actor_done: Arc<AtomicBool>,
     current_pgid: Arc<AtomicU32>,
     counters: Arc<SessionPressureCounters>,
+    idle_timer_token: Arc<AtomicU64>,
+    idle_timer_scheduled: Arc<AtomicBool>,
 }
 
 impl SemanticSessionHandle {
+    #[inline]
+    pub fn current_idle_token(&self) -> u64 {
+        self.idle_timer_token.load(Ordering::Acquire)
+    }
+
+    #[inline]
+    pub fn is_idle_timer_scheduled(&self) -> bool {
+        self.idle_timer_scheduled.load(Ordering::Acquire)
+    }
     /// Shared synchronous revocation token for this session.
     #[inline]
     pub fn revocation_token(&self) -> &RevocationToken {
@@ -241,6 +264,8 @@ impl SemanticSessionHandle {
         actor_done: Arc<AtomicBool>,
         current_pgid: Arc<AtomicU32>,
         counters: Arc<SessionPressureCounters>,
+        idle_timer_token: Arc<AtomicU64>,
+        idle_timer_scheduled: Arc<AtomicBool>,
     ) -> Self {
         Self {
             key,
@@ -251,9 +276,10 @@ impl SemanticSessionHandle {
             actor_done,
             current_pgid,
             counters,
+            idle_timer_token,
+            idle_timer_scheduled,
         }
     }
-
     pub(crate) fn shared_flags(
         &self,
     ) -> (
@@ -522,6 +548,26 @@ impl SemanticSessionHandle {
             self.current_pgid_cached()
         }
     }
+
+    pub async fn retire_if_idle(&self, idle_token: u64) -> bool {
+        if self.is_revoked() {
+            return false;
+        }
+        let (tx, rx) = oneshot::channel();
+        if let Ok(permit) = self.cmd_tx.reserve().await {
+            let slot_permit = CommandSlotPermit::new(Arc::clone(&self.counters));
+            permit.send(EnqueuedCommand {
+                cmd: SessionCommand::RetireIfIdle {
+                    idle_token,
+                    reply: tx,
+                },
+                permit: slot_permit,
+            });
+            rx.await.unwrap_or(false)
+        } else {
+            false
+        }
+    }
 }
 
 /// Internal session actor running the event loop.
@@ -543,13 +589,15 @@ pub struct SemanticSessionActor {
     restarts_in_window: Vec<Instant>,
     cmd_rx: mpsc::Receiver<EnqueuedCommand<SessionCommand>>,
     idle_timer_token: Arc<AtomicU64>,
-    idle_notify_tx: mpsc::Sender<SessionKey>,
+    idle_timer_scheduled: Arc<AtomicBool>,
+    idle_notify_tx: mpsc::Sender<IdleEvictionNotice>,
     revocation: RevocationToken,
     cleanly_reaped: Arc<AtomicBool>,
     actor_done: Arc<AtomicBool>,
     current_pgid: Arc<AtomicU32>,
     counters: Arc<SessionPressureCounters>,
     verifier: Option<ToolchainVerifier>,
+    initial_start_completed: bool,
 }
 
 impl SemanticSessionActor {
@@ -558,7 +606,7 @@ impl SemanticSessionActor {
         fence: SessionIdentityFence,
         target_root: PathBuf,
         launch_spec: BundledLaunchSpec,
-        idle_notify_tx: mpsc::Sender<SessionKey>,
+        idle_notify_tx: mpsc::Sender<IdleEvictionNotice>,
         verifier: Option<ToolchainVerifier>,
     ) -> SemanticSessionHandle {
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
@@ -568,7 +616,8 @@ impl SemanticSessionActor {
         let actor_done = Arc::new(AtomicBool::new(false));
         let current_pgid = Arc::new(AtomicU32::new(0));
         let counters = Arc::new(SessionPressureCounters::new());
-
+        let idle_timer_token = Arc::new(AtomicU64::new(0));
+        let idle_timer_scheduled = Arc::new(AtomicBool::new(false));
         let actor = Self {
             key: key.clone(),
             fence,
@@ -586,7 +635,8 @@ impl SemanticSessionActor {
             next_req_id: 100,
             restarts_in_window: Vec::new(),
             cmd_rx,
-            idle_timer_token: Arc::new(AtomicU64::new(0)),
+            idle_timer_token: Arc::clone(&idle_timer_token),
+            idle_timer_scheduled: Arc::clone(&idle_timer_scheduled),
             idle_notify_tx,
             revocation: revocation.clone(),
             cleanly_reaped: Arc::clone(&cleanly_reaped),
@@ -594,6 +644,7 @@ impl SemanticSessionActor {
             current_pgid: Arc::clone(&current_pgid),
             counters: Arc::clone(&counters),
             verifier,
+            initial_start_completed: false,
         };
 
         tokio::spawn(actor.run());
@@ -607,6 +658,8 @@ impl SemanticSessionActor {
             actor_done,
             current_pgid,
             counters,
+            idle_timer_token,
+            idle_timer_scheduled,
         }
     }
 
@@ -777,6 +830,10 @@ impl SemanticSessionActor {
                 SessionCommand::CancelRequest { .. } | SessionCommand::Invalidate => {
                     return false;
                 }
+                SessionCommand::RetireIfIdle { reply, .. } => {
+                    let _ = reply.send(false);
+                    return false;
+                }
             }
         }
 
@@ -784,6 +841,22 @@ impl SemanticSessionActor {
             SessionCommand::Invalidate => {
                 self.apply_invalidation();
                 false
+            }
+            SessionCommand::RetireIfIdle { idle_token, reply } => {
+                let is_still_idle = self.state == SemanticState::Ready
+                    && self.overlays.document_count() == 0
+                    && self.temp_pins.is_empty()
+                    && self.in_flight_requests.is_empty()
+                    && self.idle_timer_token.load(Ordering::SeqCst) == idle_token;
+
+                if is_still_idle {
+                    self.apply_invalidation();
+                    let _ = reply.send(true);
+                    false
+                } else {
+                    let _ = reply.send(false);
+                    false
+                }
             }
             SessionCommand::Initialize { reply } => {
                 let res = self.do_initialize().await;
@@ -877,13 +950,19 @@ impl SemanticSessionActor {
         }
     }
 
-    async fn do_initialize(&mut self) -> Result<(), SessionError> {
+    async fn spawn_and_handshake_child(&mut self) -> Result<(), SessionError> {
         if self.revocation.is_revoked() || self.state == SemanticState::Invalidated {
             return Err(SessionError::Invalidated);
         }
-        if self.state == SemanticState::Ready && self.child_handle.is_some() {
-            return Ok(());
+
+        // Preserve process ownership: ensure any lingering child or unreaped PGID is fully reaped before launching
+        if self.child_handle.is_some() || self.unreaped_pgid.is_some() {
+            if let Err(e) = self.reap_current_child().await {
+                self.state = SemanticState::Crashed;
+                return Err(e);
+            }
         }
+
         if let Some(verifier) = &self.verifier {
             if self.revocation.is_revoked() || self.state == SemanticState::Invalidated {
                 return Err(SessionError::Invalidated);
@@ -1046,8 +1125,7 @@ impl SemanticSessionActor {
                     "method": METHOD_INITIALIZED,
                     "params": {}
                 });
-                let _ = self.send_child_json(&initialized_notif).await;
-                self.state = SemanticState::Ready;
+                self.send_child_json(&initialized_notif).await?;
                 Ok(())
             }
             Ok(Err(SessionError::Invalidated)) => {
@@ -1067,6 +1145,31 @@ impl SemanticSessionActor {
         }
     }
 
+    async fn do_initialize(&mut self) -> Result<(), SessionError> {
+        if self.revocation.is_revoked() || self.state == SemanticState::Invalidated {
+            return Err(SessionError::Invalidated);
+        }
+        if self.state == SemanticState::Ready && self.child_handle.is_some() {
+            return Ok(());
+        }
+        if self.initial_start_completed {
+            return Err(SessionError::NotReady(self.state));
+        }
+        self.initial_start_completed = true;
+
+        match self.spawn_and_handshake_child().await {
+            Ok(()) => {
+                self.state = SemanticState::Ready;
+                self.check_schedule_idle_timer();
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.reap_current_child().await;
+                Err(e)
+            }
+        }
+    }
+
     async fn do_did_open(
         &mut self,
         uri: String,
@@ -1075,13 +1178,29 @@ impl SemanticSessionActor {
         text: String,
     ) -> Result<(), SessionError> {
         if !is_supported_language(&language_id) {
+            self.check_schedule_idle_timer();
             return Err(SessionError::UnsupportedLanguage(language_id));
+        }
+        if self.state != SemanticState::Ready && self.state != SemanticState::Idle {
+            self.check_schedule_idle_timer();
+            return Err(SessionError::NotReady(self.state));
         }
 
         self.cancel_idle_timer();
 
         if self.child_handle.is_none() {
-            self.do_initialize().await?;
+            if !self.initial_start_completed {
+                self.initial_start_completed = true;
+                if let Err(e) = self.spawn_and_handshake_child().await {
+                    let _ = self.reap_current_child().await;
+                    self.check_schedule_idle_timer();
+                    return Err(e);
+                }
+                self.state = SemanticState::Ready;
+            } else {
+                self.check_schedule_idle_timer();
+                return Err(SessionError::NotReady(self.state));
+            }
         }
 
         // If URI is currently held as a temporary G5 disk pin, supersede it cleanly before user didOpen
@@ -1101,6 +1220,7 @@ impl SemanticSessionActor {
         }
 
         if self.overlays.document_count() + self.temp_pins.len() >= MAX_OPEN_DOCUMENTS_PER_SESSION {
+            self.check_schedule_idle_timer();
             return Err(SessionError::Overlay(OverlayError::ResourceLimit(
                 ResourceLimitError::TooManyDocuments {
                     count: self.overlays.document_count() + self.temp_pins.len() + 1,
@@ -1111,6 +1231,7 @@ impl SemanticSessionActor {
         if self.overlays.total_bytes() + self.temp_pin_bytes + text.len()
             > MAX_SESSION_OVERLAY_BYTES
         {
+            self.check_schedule_idle_timer();
             return Err(SessionError::Overlay(OverlayError::ResourceLimit(
                 ResourceLimitError::SessionOverlayExceeded {
                     bytes: self.overlays.total_bytes() + self.temp_pin_bytes + text.len(),
@@ -1119,9 +1240,11 @@ impl SemanticSessionActor {
             )));
         }
 
-        let _doc_open_incarnation =
-            self.overlays
-                .open_document(uri.clone(), language_id.clone(), version, text.clone())?;
+        let is_reopen = self.overlays.get(&uri).is_some();
+        if let Err(e) = self.overlays.open_document(uri.clone(), language_id.clone(), version, text.clone()) {
+            self.check_schedule_idle_timer();
+            return Err(SessionError::Overlay(e));
+        }
         self.sync_overlay_atomics();
         let notif = serde_json::json!({
             "jsonrpc": "2.0",
@@ -1136,7 +1259,17 @@ impl SemanticSessionActor {
             }
         });
 
-        self.send_child_json(&notif).await
+        if let Err(e) = self.send_child_json(&notif).await {
+            if !is_reopen {
+                self.overlays.close_document(&uri);
+                self.sync_overlay_atomics();
+            }
+            self.check_schedule_idle_timer();
+            return Err(e);
+        }
+
+        self.cancel_idle_timer();
+        Ok(())
     }
 
     async fn do_did_change(
@@ -1691,7 +1824,7 @@ impl SemanticSessionActor {
         self.temp_pins.clear();
         self.temp_pin_bytes = 0;
         self.sync_overlay_atomics();
-
+        self.cancel_idle_timer();
         if let Some(pgid) = exited_pgid {
             let descendants = get_all_descendants(pgid);
             if is_pgid_empty(pgid) && verify_pids_dead(&descendants) {
@@ -1763,69 +1896,131 @@ impl SemanticSessionActor {
             .restart_attempts
             .fetch_add(1, Ordering::SeqCst);
         self.state = SemanticState::Starting;
-        if self.do_initialize().await.is_ok() {
-            let docs: Vec<(String, String, i64, String)> = self
-                .overlays
-                .all_documents()
-                .into_iter()
-                .map(|d| {
-                    (
-                        d.uri.clone(),
-                        d.language_id.clone(),
-                        d.version,
-                        d.text.clone(),
-                    )
-                })
-                .collect();
+        if self.spawn_and_handshake_child().await.is_ok() {
+            let ordered_uris = self.overlays.ordered_document_uris();
             let mut replay_ok = true;
-            for (uri, language_id, version, text) in docs {
+            for uri in ordered_uris {
                 if self.revocation.is_revoked() {
                     self.apply_invalidation();
+                    let _ = self.reap_current_child().await;
                     return;
                 }
-                let notif = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": METHOD_DID_OPEN,
-                    "params": {
-                        "textDocument": {
-                            "uri": uri,
-                            "languageId": language_id,
-                            "version": version,
-                            "text": text
+                let notif = {
+                    let Some(doc) = self.overlays.get(&uri) else { continue };
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "method": METHOD_DID_OPEN,
+                        "params": {
+                            "textDocument": {
+                                "uri": &doc.uri,
+                                "languageId": &doc.language_id,
+                                "version": doc.version,
+                                "text": &doc.text
+                            }
                         }
-                    }
-                });
-                if self.send_child_json(&notif).await.is_err() {
+                    })
+                };
+                if self.send_child_json_with_backpressure(&notif).await.is_err() {
                     replay_ok = false;
                     break;
                 }
             }
             if replay_ok {
+                self.state = SemanticState::Ready;
                 self.counters
                     .successful_restarts
                     .fetch_add(1, Ordering::SeqCst);
+                self.check_schedule_idle_timer();
+            } else {
+                let _ = self.reap_current_child().await;
+                self.state = SemanticState::Crashed;
+                let drained = self.in_flight_requests.len();
+                for (_, req) in self.in_flight_requests.drain() {
+                    let _ = req.response_tx.send(Err(SessionError::ChildCrashed(
+                        "Overlay replay to replacement child failed".into(),
+                    )));
+                }
+                self.counters
+                    .in_flight_requests
+                    .fetch_sub(drained, Ordering::SeqCst);
             }
+        } else {
+            let _ = self.reap_current_child().await;
+            self.state = SemanticState::Crashed;
+            let drained = self.in_flight_requests.len();
+            for (_, req) in self.in_flight_requests.drain() {
+                let _ = req.response_tx.send(Err(SessionError::ChildCrashed(
+                    "Replacement child launch failed".into(),
+                )));
+            }
+            self.counters
+                .in_flight_requests
+                .fetch_sub(drained, Ordering::SeqCst);
         }
     }
 
     fn check_schedule_idle_timer(&mut self) {
-        if self.overlays.document_count() == 0 && self.in_flight_requests.is_empty() {
+        if self.state == SemanticState::Ready
+            && self.overlays.document_count() == 0
+            && self.temp_pins.is_empty()
+            && self.in_flight_requests.is_empty()
+        {
+            if self.idle_timer_scheduled.swap(true, Ordering::SeqCst) {
+                return;
+            }
             let token = self.idle_timer_token.fetch_add(1, Ordering::SeqCst) + 1;
             let token_clone = Arc::clone(&self.idle_timer_token);
             let tx = self.idle_notify_tx.clone();
-            let key = self.key.clone();
+            let notice = IdleEvictionNotice {
+                key: self.key.clone(),
+                session_generation: self.fence.session_generation,
+                idle_token: token,
+            };
 
             tokio::spawn(async move {
                 sleep(IDLE_SHUTDOWN_TIMEOUT).await;
                 if token_clone.load(Ordering::SeqCst) == token {
-                    let _ = tx.send(key).await;
+                    let _ = tx.send(notice).await;
                 }
             });
         }
     }
 
     fn cancel_idle_timer(&mut self) {
+        self.idle_timer_scheduled.store(false, Ordering::Release);
         self.idle_timer_token.fetch_add(1, Ordering::SeqCst);
+    }
+
+    async fn send_child_json_with_backpressure(
+        &mut self,
+        json_val: &Value,
+    ) -> Result<(), SessionError> {
+        let bytes = serde_json::to_vec(json_val).map_err(|e| ChildError::Framing(e.into()))?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if self.revocation.is_revoked() {
+                return Err(SessionError::Invalidated);
+            }
+            let handle = self
+                .child_handle
+                .as_mut()
+                .ok_or(SessionError::NotReady(self.state))?;
+
+            match handle.send_message(bytes.clone()) {
+                Ok(()) => return Ok(()),
+                Err(ChildError::QueueFull) => {
+                    if Instant::now() >= deadline {
+                        return Err(SessionError::Child(ChildError::QueueFull));
+                    }
+                    tokio::select! {
+                        biased;
+                        _ = self.revocation.cancelled() => return Err(SessionError::Invalidated),
+                        _ = tokio::time::sleep(Duration::from_millis(5)) => {}
+                    }
+                }
+                Err(e) => return Err(SessionError::Child(e)),
+            }
+        }
     }
 
     async fn send_child_json(&mut self, json_val: &Value) -> Result<(), SessionError> {
@@ -1937,6 +2132,7 @@ impl SemanticSessionActor {
                 expired.push(id.clone());
             }
         }
+        let had_expired = !expired.is_empty();
         for id in expired {
             if let Some(req) = self.in_flight_requests.remove(&id) {
                 self.counters
@@ -1954,6 +2150,9 @@ impl SemanticSessionActor {
                 });
                 let _ = self.send_child_json(&cancel_notif).await;
             }
+        }
+        if had_expired {
+            self.check_schedule_idle_timer();
         }
     }
 }

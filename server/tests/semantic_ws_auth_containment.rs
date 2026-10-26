@@ -1629,3 +1629,166 @@ async fn test_live_auth_cutoff_mongo_mandatory_matrix_nonreading_consumer() {
 
     fixture.cleanup().await;
 }
+
+#[tokio::test]
+async fn test_pre_upgrade_auth_evaluation_timeout_fails_closed() {
+    let raw_uri = std::env::var("TEST_MONGODB_URI")
+        .unwrap_or_else(|_| "mongodb://127.0.0.1:27018".to_string());
+    let endpoint = raw_uri
+        .strip_prefix("mongodb://")
+        .expect("Qualification Mongo URI must use mongodb://");
+    let host_port = endpoint.split(['/', '?']).next().unwrap();
+    let upstream: SocketAddr = host_port
+        .parse()
+        .expect("Qualification Mongo URI requires one numeric loopback host:port");
+    assert!(
+        upstream.ip().is_loopback(),
+        "Qualification Mongo must be owned loopback"
+    );
+
+    let (proxy_addr, proxy_control, _proxy) = start_mongo_tcp_proxy(host_port).await;
+    let proxy_client = mongodb::Client::with_uri_str(format!(
+        "mongodb://{proxy_addr}/?directConnection=true&serverSelectionTimeoutMS=10000&connectTimeoutMS=10000",
+    ))
+    .await
+    .unwrap();
+    let db_name = format!("test_upgrade_auth_timeout_{}", uuid::Uuid::new_v4().simple());
+    let db = proxy_client.database(&db_name);
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        db.run_command(mongodb::bson::doc! { "ping": 1 }),
+    )
+    .await
+    .expect("Mandatory real MongoDB is unavailable")
+    .unwrap();
+
+    let store = dam_hopper_server::auth::AuthStore::from_mongo(db.clone());
+    tokio::time::timeout(Duration::from_secs(10), store.init_indexes())
+        .await
+        .expect("Mongo index setup timed out")
+        .unwrap();
+
+    let mut fixture = common::auth_fixtures::AuthTestFixture::new_sqlite().await;
+    let auth_service = Arc::new(dam_hopper_server::auth::AuthService::new(
+        Some(store.clone()),
+        Some(dam_hopper_server::auth::secret::MfaEncryptionKey::new(
+            fixture.raw_mfa_key,
+            "test-mfa-fixture-key",
+        )),
+        fixture.clock.clone(),
+    ));
+
+    fixture.state = fixture.state.clone().with_auth_service(auth_service);
+    fixture.store = store.clone();
+    fixture.db = Some(db);
+    fixture.db_name = Some(db_name);
+
+    let project_dir = fixture.tmp_dir.path().join("timeout-auth-project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(project_dir.join("index.ts"), "export const x = 1;\n").unwrap();
+
+    {
+        let mut cfg = fixture.state.config.write().await;
+        cfg.projects.push(ProjectConfig {
+            name: "timeout-auth-project".into(),
+            path: project_dir.to_string_lossy().to_string(),
+            project_type: ProjectType::Custom,
+            services: None,
+            commands: None,
+            env_file: None,
+            tags: None,
+            terminals: vec![],
+            agents: None,
+            restart_policy: Default::default(),
+            restart_max_retries: 5,
+            health_check_url: None,
+        });
+    }
+
+    let toolchain = common::semantic_fixtures::TestToolchain::new();
+    let profile = toolchain.tool_profile();
+    let supervisor = Arc::new(dam_hopper_server::semantic::supervisor::SemanticSupervisor::new(Some(profile)));
+    supervisor.set_enabled(true).await;
+    let state = fixture.state.clone().with_semantic_supervisor(supervisor);
+
+    // Create a valid user and session in the MongoDB store before stalling
+    let username = format!("timeout-user-{}", uuid::Uuid::new_v4().simple());
+    let secret = [0x42u8; 20];
+    let _user = fixture
+        .create_enrolled_user(&username, "Password123!", &secret)
+        .await;
+    fixture.operator_approve(&username).await;
+    let now = fixture.clock.now();
+    let expires = now + chrono::Duration::hours(1);
+    let (_session, valid_jwt) = fixture
+        .create_session(&username, 0, now, expires, now)
+        .await;
+
+    let addr = start_server_with_origin(state.clone()).await;
+
+    // Stall only Mongo proxy replies now!
+    proxy_control.stalled.store(true, Ordering::SeqCst);
+
+    let req = http::Request::builder()
+        .uri(format!("ws://{addr}/ws/semantic/v1?token={valid_jwt}"))
+        .header("Host", addr.to_string())
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", generate_key())
+        .header("Sec-WebSocket-Protocol", SEMANTIC_SUBPROTOCOL)
+        .header("Origin", TRUSTED_ORIGIN)
+        .body(())
+        .unwrap();
+
+    let upgrade_start = Instant::now();
+    let client_deadline = Duration::from_secs(3);
+    let connect_res = tokio::time::timeout(client_deadline, connect_async(req)).await;
+
+    let elapsed = upgrade_start.elapsed();
+    assert!(
+        connect_res.is_ok(),
+        "Upgrade response must return before 3s client deadline (elapsed: {elapsed:?})"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(1800),
+        "Upgrade timeout must hold for ~2s AUTH_STORE_LOOKUP_TIMEOUT (elapsed: {elapsed:?})"
+    );
+
+    let conn_err = connect_res.unwrap().err().expect("WebSocket upgrade must fail");
+    match conn_err {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => {
+            assert_eq!(
+                resp.status(),
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Must return HTTP 503 SERVICE_UNAVAILABLE on store timeout"
+            );
+            let body_bytes = resp.body().as_ref().cloned().unwrap_or_default();
+            let body_str = String::from_utf8_lossy(&body_bytes);
+            assert!(
+                body_str.contains("AUTH_UNAVAILABLE"),
+                "Body must contain AUTH_UNAVAILABLE code: {body_str}"
+            );
+        }
+        other => panic!("Expected HTTP 503 error, got: {other:?}"),
+    }
+
+    // Verify 0 presence reservation, 0 supervisor session, 0 tree allocation
+    let presence_snap = state.client_presence.snapshot();
+    assert_eq!(
+        presence_snap.connection_count, 0,
+        "No presence connection must be held"
+    );
+    assert_eq!(
+        presence_snap.pending_upgrade_count, 0,
+        "No pending presence upgrade must be held"
+    );
+    let diag = state.semantic_supervisor.get_aggregate_status().await;
+    assert_eq!(diag.active_trees, 0, "No semantic trees must be spawned");
+    assert_eq!(diag.active_sessions, 0, "No semantic sessions must be allocated");
+
+    // Release stall and cleanup
+    proxy_control.stalled.store(false, Ordering::SeqCst);
+    proxy_control.resumed.notify_waiters();
+    fixture.cleanup().await;
+}
