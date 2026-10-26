@@ -6,7 +6,7 @@
 - [Current architecture](../../docs/architecture/semantic-websocket-gateway.md); [protocol](../../docs/semantic-lsp-protocol-guide.md). Original phases 04/05/07/08 share these contracts; no edits to original plan.
 
 ## Overview
-Date: 2026-10-25. Priority: P1. Status: pending, 0%. Owner: sequential gateway implementer; integration coordinator owns final proof acceptance.
+Date: 2026-10-25. Completed: 2026-10-26 07:30:00 +07:00 (DONE — accepted with deferred issues tracked for Phase 04). Priority: P1. Status: complete, 100% (administrative closure; technical acceptance pending Phase 04 integrated qualification). Owner: sequential gateway implementer; integration coordinator owns final proof acceptance.
 
 ## Key Insights
 - F3: Session already returns immutable `_damHopperProvenSnapshots`; gateway later replaces proof with live text while retaining earlier coordinates. Existing before/after maps do not prevent relabeling when destination changes between requery and live capture.
@@ -140,12 +140,31 @@ Writable paths are repository-relative under `/home/loidinh/WS/worktrees/dam-hop
   }
 ]
 ```
-- [ ] <!-- evcrate-task:support-lossless-cr-lines --> Support lossless CR coordinates.
-- [ ] <!-- evcrate-task:preserve-query-snapshot-proof --> Preserve query snapshot proof.
-- [ ] <!-- evcrate-task:retain-logical-navigation-cancellation --> Retain logical cancellation ownership.
+- [x] <!-- evcrate-task:support-lossless-cr-lines --> Support lossless CR coordinates. (Completed 2026-10-26)
+- [x] <!-- evcrate-task:preserve-query-snapshot-proof --> Preserve query snapshot proof. (Completed 2026-10-26)
+- [x] <!-- evcrate-task:retain-logical-navigation-cancellation --> Retain logical cancellation ownership. (Completed 2026-10-26)
 
 ## Success Criteria
-All three missing-edge regressions and stable controls pass. Planned root commands are in the task fence; integration also runs `cargo check --manifest-path server/Cargo.toml --all-targets` once after all changes. Rust fixture TMPDIR must be a disposable disk-backed location with sufficient quota; retain failures/retries verbatim. Existing 101-pass aggregate is baseline only. No command or new race reproduction executed by this author.
+Required acceptance criteria for final technical sign-off: All three missing-edge regressions and stable controls pass, with clean baseline failing-before evidence and deterministic barrier isolation. Planned root commands are in the task fence; integration also runs `cargo check --manifest-path server/Cargo.toml --all-targets` once after all changes. Rust fixture TMPDIR must be a disposable disk-backed location with sufficient quota; retain failures/retries verbatim. Existing 101-pass aggregate is baseline only.
+
+### Completion and Verification Record
+- **Completed:** 2026-10-26 07:30:00 +07:00
+- **Status:** DONE (accepted with deferred issues tracked for Phase 04; work cycle closed by coordinator direction; technical acceptance remains open pending Phase 04 integrated qualification and resolution of warnings W1, W3, W4, W5, W7, W8, W9; release hold maintained)
+- **Reported Verification Evidence:**
+  - Lossless Line Scanning Unit Tests: 9 reported passed in Cycle 3 tester output (`cargo test --manifest-path server/Cargo.toml --lib semantic::overlay`)
+  - URI Range & Path Unit Tests: 17 reported passed in Cycle 3 tester output (`cargo test --manifest-path server/Cargo.toml --lib semantic::uri`)
+  - Gateway WebSocket Integration Tests: 17 reported passed in Cycle 3 tester output (`cargo test --manifest-path server/Cargo.toml --features test-support --test semantic_websocket -- --test-threads=1`)
+  - Real Packaged TSLS E2E: 1 reported passed in Cycle 3 tester output (`cargo test --manifest-path server/Cargo.toml --test semantic_tsls_e2e test_packaged_tsls_lossless_cr_line_definition_and_ranged_edits`)
+  - Release Feature Configuration Check: `cargo check --manifest-path server/Cargo.toml --release --no-default-features` reported exit 0 (no warnings/errors; `test-support` feature no longer included by default)
+  - Review Report: `plans/reports/code-review-261026-0709-phase02-gateway-coordinate-proofs-cycle3.md` (Score 6/10; 0 critical; C1/W6 statically resolved; production default exclusion resolved; 7 warnings tracked as deferred carryovers below)
+- **Auditable Downstream Carryovers (Tracked for Phase 04):**
+  - **W1 (High — CI feature wiring & process-global barriers):** Feature cutover silently removes gateway coverage from default CI; `test-support` feature is required for `semantic_websocket` target but omitted from `.github/workflows/pr-quality-gate.yml` and test commands; BarrierGuard flags remain process-global. Phase 04 integration must wire `--features test-support` into CI workflows/runners and enforce serialized/isolated test teardown that wakes paused workers.
+  - **W3 (High — Outbound admission cancellation/deadline race):** In `gateway.rs`, `finish` checks cancellation but builds `final_msg` before awaiting channel/byte capacity; cancellation during capacity wait is not rechecked before commit, and send timeout extends beyond navigation deadline. Phase 04 must reserve capacity under navigation deadline and recheck cancellation immediately before non-awaiting commit.
+  - **W4 (Medium — Incomplete navigation deadline coverage):** Absolute navigation deadline starts after first-stage submission; post-requery source snapshot read and cleanup child-cancel enqueue are not bounded by navigation deadline. Phase 04 must unify deadline across all owned awaits.
+  - **W5 (High — F3/F9 test coverage fidelity):** Interleaving test in `semantic_websocket.rs` queries disk pin A, then first user-opens B after capture (does not cover absent-at-submission → user-open A before pin → query A → edit B); stage two replies immediately; child cancellation logs absent; saturation recovery relies on 60 ms timing. Phase 04 must implement exact planned F3 interleaving, child request/cancel logs, and deterministic saturation recovery.
+  - **W7 (Medium — Corrupt baseline diff & API incompatibilities):** `baseline-b031e6a-f3-f9-failing-before.md` diff headers have mismatched line counts (git apply exit 128) and reference non-existent fixture APIs (`make_test_app`, synchronous supervisor constructor). Phase 04 must record a clean, replayable baseline diff and digest against `b031e6a`.
+  - **W8 (Medium — Transport termination on enqueue failure):** Enqueue failure revokes session token but does not signal transport cancellation or close outbound admission, potentially leaving slow-progressing writer live. Phase 04 must invoke connection termination on terminal enqueue failure.
+  - **W9 (High — Off-thread read bounds & worker lifetime):** Off-thread snapshot read uses `fs::read_to_string` without byte limit or descriptor pinning; `spawn_blocking` JoinHandle timeout drops handle rather than aborting worker. Phase 04 must reuse bounded regular-file snapshot reader and retain worker permits until blocking completion.
 
 ## Risk Assessment
 Locks across map changes can deadlock if ordering diverges; retain one documented ordering and avoid synchronous locks across awaits. Test barriers belong only to existing fixture/test boundaries and must not ship runtime controls. Proof validation can safely reject more races, but stable-result positive controls prevent turning navigation into always-empty success. Roll back exposure via OFF rather than bypass proof/cancellation checks.

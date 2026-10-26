@@ -1772,3 +1772,1011 @@ process.stdin.on('data', (chunk) => {{
     assert_eq!(oob_res["id"], 12);
     assert_eq!(oob_res["result"], json!([]));
 }
+
+#[tokio::test]
+async fn test_f3_preserve_query_snapshot_proof_remediation() {
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().join("f3-remed-project");
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+
+    let main_text = "import { helper } from './unopened';\nexport const localVal = helper();\n";
+    let disk_unopened_text = "// disk header line\nexport function helper(): number {\n  return 99;\n}\n";
+    let main_path = project_dir.join("src/main.ts");
+    let unopened_path = project_dir.join("src/unopened.ts");
+    std::fs::write(&main_path, main_text).unwrap();
+    std::fs::write(&unopened_path, disk_unopened_text).unwrap();
+
+    let canonical_main = dunce::canonicalize(&main_path).unwrap();
+    let canonical_unopened = dunce::canonicalize(&unopened_path).unwrap();
+    let main_file_uri = url::Url::from_file_path(&canonical_main).unwrap().to_string();
+    let unopened_file_uri = url::Url::from_file_path(&canonical_unopened).unwrap().to_string();
+
+    let toolchain = common::semantic_fixtures::TestToolchain::new();
+    let cli_path = toolchain
+        .root
+        .join("lib/semantic-engine/tsls/node_modules/typescript-language-server/lib/cli.mjs");
+
+    let custom_cli = format!(
+        r#"
+import fs from 'node:fs';
+const mainUri = {main_uri:?};
+const unopenedUri = {unopened_uri:?};
+const openDocs = new Map();
+let buf = Buffer.alloc(0);
+function send(obj) {{
+  const s = JSON.stringify(obj);
+  process.stdout.write(`Content-Length: ${{Buffer.byteLength(s, 'utf8')}}\r\n\r\n${{s}}`);
+}}
+process.stdin.on('data', (chunk) => {{
+  buf = Buffer.concat([buf, chunk]);
+  while (true) {{
+    const idx = buf.indexOf('\r\n\r\n');
+    if (idx === -1) break;
+    const m = buf.slice(0, idx).toString('utf8').match(/Content-Length:\s*(\d+)/i);
+    if (!m) break;
+    const len = parseInt(m[1], 10);
+    if (buf.length < idx + 4 + len) break;
+    const msg = JSON.parse(buf.slice(idx + 4, idx + 4 + len).toString('utf8'));
+    buf = buf.slice(idx + 4 + len);
+    if (msg.method === 'initialize') {{
+      send({{ jsonrpc: '2.0', id: msg.id, result: {{ capabilities: {{ textDocumentSync: 2, definitionProvider: true }} }} }});
+    }} else if (msg.method === 'textDocument/didOpen') {{
+      openDocs.set(msg.params.textDocument.uri, msg.params.textDocument.text);
+    }} else if (msg.method === 'textDocument/didClose') {{
+      openDocs.delete(msg.params.textDocument.uri);
+    }} else if (msg.method === 'textDocument/definition') {{
+      const isPinned = openDocs.has(unopenedUri);
+      send({{
+        jsonrpc: '2.0',
+        id: msg.id,
+        result: [{{
+          targetUri: unopenedUri,
+          targetRange: {{ start: {{ line: isPinned ? 1 : 0, character: 0 }}, end: {{ line: isPinned ? 1 : 0, character: isPinned ? 32 : 2 }} }},
+          targetSelectionRange: {{ start: {{ line: isPinned ? 1 : 0, character: isPinned ? 16 : 0 }}, end: {{ line: isPinned ? 1 : 0, character: isPinned ? 22 : 2 }} }}
+        }}]
+      }});
+    }} else if (msg.method === 'shutdown') {{
+      send({{ jsonrpc: '2.0', id: msg.id, result: null }});
+    }} else if (msg.method === 'exit') {{
+      process.exit(0);
+    }}
+  }}
+}});
+"#,
+        main_uri = main_file_uri,
+        unopened_uri = unopened_file_uri,
+    );
+    std::fs::write(&cli_path, custom_cli).unwrap();
+    let profile = toolchain.tool_profile();
+
+    let (base_state, _unused_tc) =
+        make_test_app(&tmp, vec![("f3-remed-project", project_dir.clone())]).await;
+    let state = base_state.with_semantic_supervisor(Arc::new(
+        dam_hopper_server::semantic::supervisor::SemanticSupervisor::new(Some(profile)),
+    ));
+    state.semantic_supervisor.set_enabled(true).await;
+    let addr = start_server(state.clone()).await;
+
+    let token = make_valid_jwt(MOCK_USER, MOCK_SESSION_ID);
+    let req = http::Request::builder()
+        .uri(format!("ws://{addr}/ws/semantic/v1?token={token}"))
+        .header("Host", addr.to_string())
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", generate_key())
+        .header("Sec-WebSocket-Protocol", SEMANTIC_SUBPROTOCOL)
+        .body(())
+        .unwrap();
+    let (mut ws, _) = connect_async(req).await.unwrap();
+
+    ws.send(Message::Text(
+        json!({
+            "jsonrpc": "2.0", "id": 1, "method": "damHopper/attachTarget",
+            "params": { "target": { "project": "f3-remed-project" }, "descriptor": "typescript" }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let attach_res = read_next_json(&mut ws).await.unwrap();
+    let target_id = attach_res["result"]["targetId"].as_str().unwrap().to_string();
+
+    ws.send(Message::Text(json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {} }).to_string().into())).await.unwrap();
+    let _ = read_initialize_json(&mut ws, 2).await.unwrap();
+    ws.send(Message::Text(json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }).to_string().into())).await.unwrap();
+
+    let main_virt_uri = format!("dam-hopper://semantic/{target_id}/src/main.ts");
+    let unopened_virt_uri = format!("dam-hopper://semantic/{target_id}/src/unopened.ts");
+
+    ws.send(Message::Text(
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": main_virt_uri, "languageId": "typescript", "version": 1, "text": main_text } }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    // 1. Unopened pin-and-requery: proof extracted from _damHopperProvenSnapshots, metadata stripped from output
+    ws.send(Message::Text(
+        json!({
+            "jsonrpc": "2.0", "id": 10, "method": "textDocument/definition",
+            "params": { "textDocument": { "uri": main_virt_uri }, "position": { "line": 0, "character": 10 }, "damHopperDocumentVersion": 1 }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let def_res = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(def_res["id"], 10);
+    assert!(def_res.get("_damHopperProvenSnapshots").is_none(), "Internal proven snapshots must be stripped from response");
+    let locs = def_res["result"].as_array().unwrap();
+    assert_eq!(locs.len(), 1);
+    assert_eq!(
+        locs[0]["damHopperDestinationContentSha256"],
+        dam_hopper_server::semantic::uri::compute_text_sha256(disk_unopened_text)
+    );
+    assert_eq!(locs[0]["damHopperDestinationVersion"], Value::Null);
+
+    // 2. Positive control: User-open destination before pin with different content from disk.
+    // Requery must succeed using the actor's immutable proof, preserving user's version and contentSha256!
+    let user_open_text = "// user overlay line\nexport function helper(): number {\n  return 100;\n}\n";
+    let user_open_sha = dam_hopper_server::semantic::uri::compute_text_sha256(user_open_text);
+    assert_ne!(user_open_sha, dam_hopper_server::semantic::uri::compute_text_sha256(disk_unopened_text));
+
+    ws.send(Message::Text(
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": unopened_virt_uri, "languageId": "typescript", "version": 5, "text": user_open_text } }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    ws.send(Message::Text(
+        json!({
+            "jsonrpc": "2.0", "id": 11, "method": "textDocument/definition",
+            "params": { "textDocument": { "uri": main_virt_uri }, "position": { "line": 0, "character": 10 }, "damHopperDocumentVersion": 1 }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let open_res = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(open_res["id"], 11);
+    let open_locs = open_res["result"].as_array().unwrap();
+    assert_eq!(open_locs.len(), 1);
+    assert_eq!(open_locs[0]["damHopperDestinationContentSha256"], user_open_sha);
+    assert_eq!(open_locs[0]["damHopperDestinationVersion"], 5);
+}
+
+#[tokio::test]
+async fn test_f9_retain_logical_cancellation_ownership_remediation() {
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().join("f9-remed-project");
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+
+    let main_text = "export const val = 42;\nexport const refVal = val;\n";
+    let main_path = project_dir.join("src/main.ts");
+    std::fs::write(&main_path, main_text).unwrap();
+
+    let canonical_main = dunce::canonicalize(&main_path).unwrap();
+    let main_file_uri = url::Url::from_file_path(&canonical_main).unwrap().to_string();
+
+    let toolchain = common::semantic_fixtures::TestToolchain::new();
+    let cli_path = toolchain
+        .root
+        .join("lib/semantic-engine/tsls/node_modules/typescript-language-server/lib/cli.mjs");
+
+    let custom_cli = format!(
+        r#"
+import fs from 'node:fs';
+const mainUri = {main_uri:?};
+let buf = Buffer.alloc(0);
+function send(obj) {{
+  const s = JSON.stringify(obj);
+  process.stdout.write(`Content-Length: ${{Buffer.byteLength(s, 'utf8')}}\r\n\r\n${{s}}`);
+}}
+process.stdin.on('data', (chunk) => {{
+  buf = Buffer.concat([buf, chunk]);
+  while (true) {{
+    const idx = buf.indexOf('\r\n\r\n');
+    if (idx === -1) break;
+    const m = buf.slice(0, idx).toString('utf8').match(/Content-Length:\s*(\d+)/i);
+    if (!m) break;
+    const len = parseInt(m[1], 10);
+    if (buf.length < idx + 4 + len) break;
+    const msg = JSON.parse(buf.slice(idx + 4, idx + 4 + len).toString('utf8'));
+    buf = buf.slice(idx + 4 + len);
+    if (msg.method === 'initialize') {{
+      send({{ jsonrpc: '2.0', id: msg.id, result: {{ capabilities: {{ textDocumentSync: 2, definitionProvider: true }} }} }});
+    }} else if (msg.method === 'textDocument/didOpen') {{
+      // Open doc
+    }} else if (msg.method === 'textDocument/definition') {{
+      // Simulate a slightly delayed response so client can cancel or test duplicate IDs
+      setTimeout(() => {{
+        send({{
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: [{{
+            uri: mainUri,
+            range: {{ start: {{ line: 0, character: 13 }}, end: {{ line: 0, character: 16 }} }}
+          }}]
+        }});
+      }}, 100);
+    }} else if (msg.method === '$/cancelRequest') {{
+      // Acknowledged cancel
+    }} else if (msg.method === 'shutdown') {{
+      send({{ jsonrpc: '2.0', id: msg.id, result: null }});
+    }} else if (msg.method === 'exit') {{
+      process.exit(0);
+    }}
+  }}
+}});
+"#,
+        main_uri = main_file_uri,
+    );
+    std::fs::write(&cli_path, custom_cli).unwrap();
+    let profile = toolchain.tool_profile();
+
+    let (base_state, _unused_tc) =
+        make_test_app(&tmp, vec![("f9-remed-project", project_dir.clone())]).await;
+    let state = base_state.with_semantic_supervisor(Arc::new(
+        dam_hopper_server::semantic::supervisor::SemanticSupervisor::new(Some(profile)),
+    ));
+    state.semantic_supervisor.set_enabled(true).await;
+    let addr = start_server(state.clone()).await;
+
+    let token = make_valid_jwt(MOCK_USER, MOCK_SESSION_ID);
+    let req = http::Request::builder()
+        .uri(format!("ws://{addr}/ws/semantic/v1?token={token}"))
+        .header("Host", addr.to_string())
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", generate_key())
+        .header("Sec-WebSocket-Protocol", SEMANTIC_SUBPROTOCOL)
+        .body(())
+        .unwrap();
+    let (mut ws, _) = connect_async(req).await.unwrap();
+
+    ws.send(Message::Text(
+        json!({
+            "jsonrpc": "2.0", "id": 1, "method": "damHopper/attachTarget",
+            "params": { "target": { "project": "f9-remed-project" }, "descriptor": "typescript" }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let attach_res = read_next_json(&mut ws).await.unwrap();
+    let target_id = attach_res["result"]["targetId"].as_str().unwrap().to_string();
+
+    ws.send(Message::Text(json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {} }).to_string().into())).await.unwrap();
+    let _ = read_initialize_json(&mut ws, 2).await.unwrap();
+    ws.send(Message::Text(json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }).to_string().into())).await.unwrap();
+
+    let main_virt_uri = format!("dam-hopper://semantic/{target_id}/src/main.ts");
+    ws.send(Message::Text(
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": main_virt_uri, "languageId": "typescript", "version": 1, "text": main_text } }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    // 1. Duplicate ID rejection while in-flight:
+    ws.send(Message::Text(
+        json!({
+            "jsonrpc": "2.0", "id": 50, "method": "textDocument/definition",
+            "params": { "textDocument": { "uri": main_virt_uri }, "position": { "line": 1, "character": 22 }, "damHopperDocumentVersion": 1 }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    // Immediately send duplicate request with same client ID 50
+    ws.send(Message::Text(
+        json!({
+            "jsonrpc": "2.0", "id": 50, "method": "textDocument/definition",
+            "params": { "textDocument": { "uri": main_virt_uri }, "position": { "line": 1, "character": 22 }, "damHopperDocumentVersion": 1 }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    // The duplicate request must immediately fail with DUPLICATE_REQUEST_ID (-32600)
+    let dup_err = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(dup_err["id"], 50);
+    assert_eq!(dup_err["error"]["code"], -32600);
+
+    // The original request 50 completes successfully
+    let orig_res = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(orig_res["id"], 50);
+    assert!(orig_res.get("result").is_some());
+
+    // 2. Cancellation: Client sends request with ID 60 and immediately cancels it
+    ws.send(Message::Text(
+        json!({
+            "jsonrpc": "2.0", "id": 60, "method": "textDocument/definition",
+            "params": { "textDocument": { "uri": main_virt_uri }, "position": { "line": 1, "character": 22 }, "damHopperDocumentVersion": 1 }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    ws.send(Message::Text(
+        json!({
+            "jsonrpc": "2.0",
+            "method": "$/cancelRequest",
+            "params": { "id": 60 }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    // The cancelled request must return -32800 REQUEST_CANCELLED
+    let cancel_res = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(cancel_res["id"], 60);
+    assert_eq!(cancel_res["error"]["code"], -32800);
+
+    // 3. ID reuse after terminal completion: ID 60 can now be reused cleanly
+    ws.send(Message::Text(
+        json!({
+            "jsonrpc": "2.0", "id": 60, "method": "textDocument/definition",
+            "params": { "textDocument": { "uri": main_virt_uri }, "position": { "line": 1, "character": 22 }, "damHopperDocumentVersion": 1 }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let reused_res = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(reused_res["id"], 60);
+    assert!(reused_res.get("result").is_some());
+}
+
+#[tokio::test]
+async fn test_f3_interleaving_with_barrier_remediation() {
+    use dam_hopper_server::semantic::gateway::test_barriers;
+    let _guard = test_barriers::BarrierGuard;
+    test_barriers::F3_ENABLED.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().join("f3-barrier-project");
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+
+    let main_text = "import { helper } from './unopened';\nexport const localVal = helper();\n";
+    let unopened_text_a = "// header line\nexport function helper(): number {\n  return 99;\n}\n";
+    let sha_a = dam_hopper_server::semantic::uri::compute_text_sha256(unopened_text_a);
+    let main_path = project_dir.join("src/main.ts");
+    let unopened_path = project_dir.join("src/unopened.ts");
+    std::fs::write(&main_path, main_text).unwrap();
+    std::fs::write(&unopened_path, unopened_text_a).unwrap();
+
+    let canonical_main = dunce::canonicalize(&main_path).unwrap();
+    let canonical_unopened = dunce::canonicalize(&unopened_path).unwrap();
+    let main_file_uri = url::Url::from_file_path(&canonical_main).unwrap().to_string();
+    let unopened_file_uri = url::Url::from_file_path(&canonical_unopened).unwrap().to_string();
+
+    let toolchain = common::semantic_fixtures::TestToolchain::new();
+    let cli_path = toolchain
+        .root
+        .join("lib/semantic-engine/tsls/node_modules/typescript-language-server/lib/cli.mjs");
+
+    let custom_cli = format!(
+        r#"
+import fs from 'node:fs';
+const mainUri = {main_uri:?};
+const unopenedUri = {unopened_uri:?};
+const openDocs = new Map();
+let buf = Buffer.alloc(0);
+function send(obj) {{
+  const s = JSON.stringify(obj);
+  process.stdout.write(`Content-Length: ${{Buffer.byteLength(s, 'utf8')}}\r\n\r\n${{s}}`);
+}}
+process.stdin.on('data', (chunk) => {{
+  buf = Buffer.concat([buf, chunk]);
+  while (true) {{
+    const idx = buf.indexOf('\r\n\r\n');
+    if (idx === -1) break;
+    const m = buf.slice(0, idx).toString('utf8').match(/Content-Length:\s*(\d+)/i);
+    if (!m) break;
+    const len = parseInt(m[1], 10);
+    if (buf.length < idx + 4 + len) break;
+    const msg = JSON.parse(buf.slice(idx + 4, idx + 4 + len).toString('utf8'));
+    buf = buf.slice(idx + 4 + len);
+    if (msg.method === 'initialize') {{
+      send({{ jsonrpc: '2.0', id: msg.id, result: {{ capabilities: {{ textDocumentSync: 2, definitionProvider: true }} }} }});
+    }} else if (msg.method === 'textDocument/didOpen') {{
+      openDocs.set(msg.params.textDocument.uri, msg.params.textDocument.text);
+    }} else if (msg.method === 'textDocument/didClose') {{
+      openDocs.delete(msg.params.textDocument.uri);
+    }} else if (msg.method === 'textDocument/definition') {{
+      const isPinned = openDocs.has(unopenedUri);
+      send({{
+        jsonrpc: '2.0',
+        id: msg.id,
+        result: [{{
+          targetUri: unopenedUri,
+          targetRange: {{ start: {{ line: isPinned ? 1 : 0, character: 0 }}, end: {{ line: isPinned ? 1 : 0, character: isPinned ? 32 : 2 }} }},
+          targetSelectionRange: {{ start: {{ line: isPinned ? 1 : 0, character: isPinned ? 16 : 0 }}, end: {{ line: isPinned ? 1 : 0, character: isPinned ? 22 : 2 }} }}
+        }}]
+      }});
+    }} else if (msg.method === 'shutdown') {{
+      send({{ jsonrpc: '2.0', id: msg.id, result: null }});
+    }} else if (msg.method === 'exit') {{
+      process.exit(0);
+    }}
+  }}
+}});
+"#,
+        main_uri = main_file_uri,
+        unopened_uri = unopened_file_uri,
+    );
+    std::fs::write(&cli_path, custom_cli).unwrap();
+    let profile = toolchain.tool_profile();
+
+    let (base_state, _unused_tc) =
+        make_test_app(&tmp, vec![("f3-barrier-project", project_dir.clone())]).await;
+    let supervisor = Arc::new(dam_hopper_server::semantic::supervisor::SemanticSupervisor::new(Some(profile)));
+    let state = base_state.with_semantic_supervisor(supervisor.clone());
+    state.semantic_supervisor.set_enabled(true).await;
+    let addr = start_server(state.clone()).await;
+
+    let token = make_valid_jwt(MOCK_USER, MOCK_SESSION_ID);
+    let req = http::Request::builder()
+        .uri(format!("ws://{addr}/ws/semantic/v1?token={token}"))
+        .header("Host", addr.to_string())
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", generate_key())
+        .header("Sec-WebSocket-Protocol", SEMANTIC_SUBPROTOCOL)
+        .body(())
+        .unwrap();
+    let (mut ws, _) = connect_async(req).await.unwrap();
+
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "id": 1, "method": "damHopper/attachTarget",
+        "params": { "target": { "project": "f3-barrier-project" }, "descriptor": "typescript" }
+    }).to_string().into())).await.unwrap();
+    let attach_res = read_next_json(&mut ws).await.unwrap();
+    let target_id = attach_res["result"]["targetId"].as_str().unwrap().to_string();
+
+    ws.send(Message::Text(json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {} }).to_string().into())).await.unwrap();
+    let _ = read_initialize_json(&mut ws, 2).await.unwrap();
+    ws.send(Message::Text(json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }).to_string().into())).await.unwrap();
+
+    let main_virt_uri = format!("dam-hopper://semantic/{target_id}/src/main.ts");
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": { "textDocument": { "uri": main_virt_uri, "languageId": "typescript", "version": 1, "text": main_text } }
+    }).to_string().into())).await.unwrap();
+
+    let barrier_paused = test_barriers::F3_PAUSE_NOTIFY.notified();
+    tokio::pin!(barrier_paused);
+
+    // Send definition query
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "id": 101, "method": "textDocument/definition",
+        "params": { "textDocument": { "uri": main_virt_uri }, "position": { "line": 0, "character": 10 }, "damHopperDocumentVersion": 1 }
+    }).to_string().into())).await.unwrap();
+
+    // Wait for gateway to pause at F3 barrier
+    barrier_paused.await;
+
+    // Mutate destination in session overlay while paused
+    let text_b = "// mutated B\n// second line has length 35 chars!\nexport function helperB(): number {\n  return 999;\n}\n";
+    let sha_b = dam_hopper_server::semantic::uri::compute_text_sha256(text_b);
+
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": format!("dam-hopper://semantic/{target_id}/src/unopened.ts"),
+                "languageId": "typescript",
+                "version": 2,
+                "text": text_b
+            }
+        }
+    }).to_string().into())).await.unwrap();
+    // Deterministic causal synchronization: send a probe message with id 996 to guarantee didOpen
+    // was fully processed by reader loop before resuming the barrier!
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "id": 996, "method": "unknownProbe", "params": {}
+    }).to_string().into())).await.unwrap();
+    let probe_res = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(probe_res["id"], 996);
+
+    // Resume gateway
+    test_barriers::F3_RESUME_NOTIFY.notify_waiters();
+    let res = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(res["id"], 101);
+
+    // CRITICAL ACCEPTANCE: Gateway NEVER outputs A coordinates labeled with B's proof!
+    // Gateway uses exact immutable requery proof (sha_a), NEVER live text proof (sha_b)!
+    let locs = res["result"].as_array().expect("result array");
+    assert_eq!(locs.len(), 1);
+    assert_eq!(
+        locs[0]["damHopperDestinationContentSha256"], sha_a,
+        "Gateway must use exact immutable requery proof (sha_a), NEVER live text proof (sha_b)"
+    );
+    assert_ne!(locs[0]["damHopperDestinationContentSha256"], sha_b);
+    test_barriers::F3_ENABLED.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[tokio::test]
+async fn test_f9_gap_cancellation_with_barrier_remediation() {
+    use dam_hopper_server::semantic::gateway::test_barriers;
+    let _guard = test_barriers::BarrierGuard;
+    test_barriers::F9_GAP_ENABLED.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().join("f9-gap-project");
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+
+    let main_text = "import { helper } from './unopened';\nexport const localVal = helper();\n";
+    let unopened_text = "// header line\nexport function helper(): number {\n  return 99;\n}\n";
+    let main_path = project_dir.join("src/main.ts");
+    let unopened_path = project_dir.join("src/unopened.ts");
+    std::fs::write(&main_path, main_text).unwrap();
+    std::fs::write(&unopened_path, unopened_text).unwrap();
+
+    let canonical_main = dunce::canonicalize(&main_path).unwrap();
+    let canonical_unopened = dunce::canonicalize(&unopened_path).unwrap();
+    let main_file_uri = url::Url::from_file_path(&canonical_main).unwrap().to_string();
+    let unopened_file_uri = url::Url::from_file_path(&canonical_unopened).unwrap().to_string();
+
+    let toolchain = common::semantic_fixtures::TestToolchain::new();
+    let cli_path = toolchain
+        .root
+        .join("lib/semantic-engine/tsls/node_modules/typescript-language-server/lib/cli.mjs");
+
+    let custom_cli = format!(
+        r#"
+import fs from 'node:fs';
+const mainUri = {main_uri:?};
+const unopenedUri = {unopened_uri:?};
+const openDocs = new Map();
+let buf = Buffer.alloc(0);
+function send(obj) {{
+  const s = JSON.stringify(obj);
+  process.stdout.write(`Content-Length: ${{Buffer.byteLength(s, 'utf8')}}\r\n\r\n${{s}}`);
+}}
+process.stdin.on('data', (chunk) => {{
+  buf = Buffer.concat([buf, chunk]);
+  while (true) {{
+    const idx = buf.indexOf('\r\n\r\n');
+    if (idx === -1) break;
+    const m = buf.slice(0, idx).toString('utf8').match(/Content-Length:\s*(\d+)/i);
+    if (!m) break;
+    const len = parseInt(m[1], 10);
+    if (buf.length < idx + 4 + len) break;
+    const msg = JSON.parse(buf.slice(idx + 4, idx + 4 + len).toString('utf8'));
+    buf = buf.slice(idx + 4 + len);
+    if (msg.method === 'initialize') {{
+      send({{ jsonrpc: '2.0', id: msg.id, result: {{ capabilities: {{ textDocumentSync: 2, definitionProvider: true }} }} }});
+    }} else if (msg.method === 'textDocument/didOpen') {{
+      openDocs.set(msg.params.textDocument.uri, msg.params.textDocument.text);
+    }} else if (msg.method === 'textDocument/didClose') {{
+      openDocs.delete(msg.params.textDocument.uri);
+    }} else if (msg.method === 'textDocument/definition') {{
+      const isPinned = openDocs.has(unopenedUri);
+      send({{
+        jsonrpc: '2.0',
+        id: msg.id,
+        result: [{{
+          targetUri: unopenedUri,
+          targetRange: {{ start: {{ line: isPinned ? 1 : 0, character: 0 }}, end: {{ line: isPinned ? 1 : 0, character: isPinned ? 32 : 2 }} }},
+          targetSelectionRange: {{ start: {{ line: isPinned ? 1 : 0, character: isPinned ? 16 : 0 }}, end: {{ line: isPinned ? 1 : 0, character: isPinned ? 22 : 2 }} }}
+        }}]
+      }});
+    }} else if (msg.method === 'shutdown') {{
+      send({{ jsonrpc: '2.0', id: msg.id, result: null }});
+    }} else if (msg.method === 'exit') {{
+      process.exit(0);
+    }}
+  }}
+}});
+"#,
+        main_uri = main_file_uri,
+        unopened_uri = unopened_file_uri,
+    );
+    std::fs::write(&cli_path, custom_cli).unwrap();
+    let profile = toolchain.tool_profile();
+
+    let (base_state, _unused_tc) =
+        make_test_app(&tmp, vec![("f9-gap-project", project_dir.clone())]).await;
+    let state = base_state.with_semantic_supervisor(Arc::new(
+        dam_hopper_server::semantic::supervisor::SemanticSupervisor::new(Some(profile)),
+    ));
+    state.semantic_supervisor.set_enabled(true).await;
+    let addr = start_server(state.clone()).await;
+
+    let token = make_valid_jwt(MOCK_USER, MOCK_SESSION_ID);
+    let req = http::Request::builder()
+        .uri(format!("ws://{addr}/ws/semantic/v1?token={token}"))
+        .header("Host", addr.to_string())
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", generate_key())
+        .header("Sec-WebSocket-Protocol", SEMANTIC_SUBPROTOCOL)
+        .body(())
+        .unwrap();
+    let (mut ws, _) = connect_async(req).await.unwrap();
+
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "id": 1, "method": "damHopper/attachTarget",
+        "params": { "target": { "project": "f9-gap-project" }, "descriptor": "typescript" }
+    }).to_string().into())).await.unwrap();
+    let attach_res = read_next_json(&mut ws).await.unwrap();
+    let target_id = attach_res["result"]["targetId"].as_str().unwrap().to_string();
+
+    ws.send(Message::Text(json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {} }).to_string().into())).await.unwrap();
+    let _ = read_initialize_json(&mut ws, 2).await.unwrap();
+    ws.send(Message::Text(json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }).to_string().into())).await.unwrap();
+
+    let main_virt_uri = format!("dam-hopper://semantic/{target_id}/src/main.ts");
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": { "textDocument": { "uri": main_virt_uri, "languageId": "typescript", "version": 1, "text": main_text } }
+    }).to_string().into())).await.unwrap();
+
+    let barrier_paused = test_barriers::F9_GAP_PAUSE_NOTIFY.notified();
+    tokio::pin!(barrier_paused);
+
+    // Send definition query with client ID 501
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "id": 501, "method": "textDocument/definition",
+        "params": { "textDocument": { "uri": main_virt_uri }, "position": { "line": 0, "character": 10 }, "damHopperDocumentVersion": 1 }
+    }).to_string().into())).await.unwrap();
+
+    // Wait for gateway to pause in the pin gap
+    barrier_paused.await;
+
+    // Client sends $/cancelRequest for in-flight ID 501
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "method": "$/cancelRequest",
+        "params": { "id": 501 }
+    }).to_string().into())).await.unwrap();
+    // Deterministic causal synchronization: send a probe message with id 998 to guarantee cancelRequest
+    // was fully processed by reader loop before resuming the barrier!
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "id": 998, "method": "unknownProbe", "params": {}
+    }).to_string().into())).await.unwrap();
+    let probe_res = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(probe_res["id"], 998);
+
+    // Resume gateway
+    test_barriers::F9_GAP_RESUME_NOTIFY.notify_waiters();
+    // The gateway must cancel before stage 2 and return -32800 Request cancelled
+    let res = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(res["id"], 501);
+    assert_eq!(res["error"]["code"], -32800, "Gap cancellation must return -32800 REQUEST_CANCELLED");
+
+    test_barriers::F9_GAP_ENABLED.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[tokio::test]
+async fn test_f9_stage2_cancellation_with_barrier_remediation() {
+    use dam_hopper_server::semantic::gateway::test_barriers;
+    let _guard = test_barriers::BarrierGuard;
+    test_barriers::F9_STAGE2_ENABLED.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().join("f9-stage2-project");
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+
+    let main_text = "import { helper } from './unopened';\nexport const localVal = helper();\n";
+    let unopened_text = "// header line\nexport function helper(): number {\n  return 99;\n}\n";
+    let main_path = project_dir.join("src/main.ts");
+    let unopened_path = project_dir.join("src/unopened.ts");
+    std::fs::write(&main_path, main_text).unwrap();
+    std::fs::write(&unopened_path, unopened_text).unwrap();
+
+    let canonical_main = dunce::canonicalize(&main_path).unwrap();
+    let canonical_unopened = dunce::canonicalize(&unopened_path).unwrap();
+    let main_file_uri = url::Url::from_file_path(&canonical_main).unwrap().to_string();
+    let unopened_file_uri = url::Url::from_file_path(&canonical_unopened).unwrap().to_string();
+
+    let toolchain = common::semantic_fixtures::TestToolchain::new();
+    let cli_path = toolchain
+        .root
+        .join("lib/semantic-engine/tsls/node_modules/typescript-language-server/lib/cli.mjs");
+
+    let custom_cli = format!(
+        r#"
+import fs from 'node:fs';
+const mainUri = {main_uri:?};
+const unopenedUri = {unopened_uri:?};
+const openDocs = new Map();
+let buf = Buffer.alloc(0);
+function send(obj) {{
+  const s = JSON.stringify(obj);
+  process.stdout.write(`Content-Length: ${{Buffer.byteLength(s, 'utf8')}}\r\n\r\n${{s}}`);
+}}
+process.stdin.on('data', (chunk) => {{
+  buf = Buffer.concat([buf, chunk]);
+  while (true) {{
+    const idx = buf.indexOf('\r\n\r\n');
+    if (idx === -1) break;
+    const m = buf.slice(0, idx).toString('utf8').match(/Content-Length:\s*(\d+)/i);
+    if (!m) break;
+    const len = parseInt(m[1], 10);
+    if (buf.length < idx + 4 + len) break;
+    const msg = JSON.parse(buf.slice(idx + 4, idx + 4 + len).toString('utf8'));
+    buf = buf.slice(idx + 4 + len);
+    if (msg.method === 'initialize') {{
+      send({{ jsonrpc: '2.0', id: msg.id, result: {{ capabilities: {{ textDocumentSync: 2, definitionProvider: true }} }} }});
+    }} else if (msg.method === 'textDocument/didOpen') {{
+      openDocs.set(msg.params.textDocument.uri, msg.params.textDocument.text);
+    }} else if (msg.method === 'textDocument/didClose') {{
+      openDocs.delete(msg.params.textDocument.uri);
+    }} else if (msg.method === 'textDocument/definition') {{
+      const isPinned = openDocs.has(unopenedUri);
+      send({{
+        jsonrpc: '2.0',
+        id: msg.id,
+        result: [{{
+          targetUri: unopenedUri,
+          targetRange: {{ start: {{ line: isPinned ? 1 : 0, character: 0 }}, end: {{ line: isPinned ? 1 : 0, character: isPinned ? 32 : 2 }} }},
+          targetSelectionRange: {{ start: {{ line: isPinned ? 1 : 0, character: isPinned ? 16 : 0 }}, end: {{ line: isPinned ? 1 : 0, character: isPinned ? 22 : 2 }} }}
+        }}]
+      }});
+    }} else if (msg.method === 'shutdown') {{
+      send({{ jsonrpc: '2.0', id: msg.id, result: null }});
+    }} else if (msg.method === 'exit') {{
+      process.exit(0);
+    }}
+  }}
+}});
+"#,
+        main_uri = main_file_uri,
+        unopened_uri = unopened_file_uri,
+    );
+    std::fs::write(&cli_path, custom_cli).unwrap();
+    let profile = toolchain.tool_profile();
+
+    let (base_state, _unused_tc) =
+        make_test_app(&tmp, vec![("f9-stage2-project", project_dir.clone())]).await;
+    let state = base_state.with_semantic_supervisor(Arc::new(
+        dam_hopper_server::semantic::supervisor::SemanticSupervisor::new(Some(profile)),
+    ));
+    state.semantic_supervisor.set_enabled(true).await;
+    let addr = start_server(state.clone()).await;
+
+    let token = make_valid_jwt(MOCK_USER, MOCK_SESSION_ID);
+    let req = http::Request::builder()
+        .uri(format!("ws://{addr}/ws/semantic/v1?token={token}"))
+        .header("Host", addr.to_string())
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", generate_key())
+        .header("Sec-WebSocket-Protocol", SEMANTIC_SUBPROTOCOL)
+        .body(())
+        .unwrap();
+    let (mut ws, _) = connect_async(req).await.unwrap();
+
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "id": 1, "method": "damHopper/attachTarget",
+        "params": { "target": { "project": "f9-stage2-project" }, "descriptor": "typescript" }
+    }).to_string().into())).await.unwrap();
+    let attach_res = read_next_json(&mut ws).await.unwrap();
+    let target_id = attach_res["result"]["targetId"].as_str().unwrap().to_string();
+
+    ws.send(Message::Text(json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {} }).to_string().into())).await.unwrap();
+    let _ = read_initialize_json(&mut ws, 2).await.unwrap();
+    ws.send(Message::Text(json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }).to_string().into())).await.unwrap();
+
+    let main_virt_uri = format!("dam-hopper://semantic/{target_id}/src/main.ts");
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": { "textDocument": { "uri": main_virt_uri, "languageId": "typescript", "version": 1, "text": main_text } }
+    }).to_string().into())).await.unwrap();
+
+    let barrier_paused = test_barriers::F9_STAGE2_PAUSE_NOTIFY.notified();
+    tokio::pin!(barrier_paused);
+
+    // Send definition query with client ID 502
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "id": 502, "method": "textDocument/definition",
+        "params": { "textDocument": { "uri": main_virt_uri }, "position": { "line": 0, "character": 10 }, "damHopperDocumentVersion": 1 }
+    }).to_string().into())).await.unwrap();
+
+    // Wait for gateway to pause in stage 2 after submission
+    barrier_paused.await;
+
+    // Client sends $/cancelRequest for in-flight ID 502
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "method": "$/cancelRequest",
+        "params": { "id": 502 }
+    }).to_string().into())).await.unwrap();
+    // Deterministic causal synchronization: send a probe message with id 997 to guarantee cancelRequest
+    // was fully processed and child cancel dispatched before resuming the barrier!
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "id": 997, "method": "unknownProbe", "params": {}
+    }).to_string().into())).await.unwrap();
+    let probe_res = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(probe_res["id"], 997);
+
+    // Resume gateway
+    test_barriers::F9_STAGE2_RESUME_NOTIFY.notify_waiters();
+    // The gateway must cancel active stage 2 child and return -32800 Request cancelled
+    let res = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(res["id"], 502);
+    assert_eq!(res["error"]["code"], -32800, "Stage-2 cancellation must return -32800 REQUEST_CANCELLED");
+
+    test_barriers::F9_STAGE2_ENABLED.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[tokio::test]
+async fn test_gateway_concurrency_saturation_and_cleanup() {
+    let tmp = TempDir::new().unwrap();
+    let project_dir = tmp.path().join("concurrency-saturation-project");
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+
+    let main_text = "export const x = 42;\n";
+    let main_path = project_dir.join("src/main.ts");
+    std::fs::write(&main_path, main_text).unwrap();
+
+    let canonical_main = dunce::canonicalize(&main_path).unwrap();
+    let main_file_uri = url::Url::from_file_path(&canonical_main).unwrap().to_string();
+
+    let toolchain = common::semantic_fixtures::TestToolchain::new();
+    let cli_path = toolchain
+        .root
+        .join("lib/semantic-engine/tsls/node_modules/typescript-language-server/lib/cli.mjs");
+
+    let custom_cli = format!(
+        r#"
+const mainUri = {main_uri:?};
+let buf = Buffer.alloc(0);
+function send(obj) {{
+  const s = JSON.stringify(obj);
+  process.stdout.write(`Content-Length: ${{Buffer.byteLength(s, 'utf8')}}\r\n\r\n${{s}}`);
+}}
+process.stdin.on('data', (chunk) => {{
+  buf = Buffer.concat([buf, chunk]);
+  while (true) {{
+    const idx = buf.indexOf('\r\n\r\n');
+    if (idx === -1) break;
+    const m = buf.slice(0, idx).toString('utf8').match(/Content-Length:\s*(\d+)/i);
+    if (!m) break;
+    const len = parseInt(m[1], 10);
+    if (buf.length < idx + 4 + len) break;
+    const msg = JSON.parse(buf.slice(idx + 4, idx + 4 + len).toString('utf8'));
+    buf = buf.slice(idx + 4 + len);
+    if (msg.method === 'initialize') {{
+      send({{ jsonrpc: '2.0', id: msg.id, result: {{ capabilities: {{ textDocumentSync: 2, definitionProvider: true }} }} }});
+    }} else if (msg.method === 'textDocument/didOpen') {{
+      // noop
+    }} else if (msg.method === 'textDocument/definition') {{
+      setTimeout(() => {{
+        send({{ jsonrpc: '2.0', id: msg.id, result: [] }});
+      }}, 60);
+    }} else if (msg.method === 'shutdown') {{
+      send({{ jsonrpc: '2.0', id: msg.id, result: null }});
+    }} else if (msg.method === 'exit') {{
+      process.exit(0);
+    }}
+  }}
+}});
+"#,
+        main_uri = main_file_uri
+    );
+    std::fs::write(&cli_path, custom_cli).unwrap();
+
+    let profile = toolchain.tool_profile();
+    let (base_state, _unused_tc) =
+        make_test_app(&tmp, vec![("concurrency-project", project_dir.clone())]).await;
+    let supervisor = Arc::new(
+        dam_hopper_server::semantic::supervisor::SemanticSupervisor::new(Some(profile)),
+    );
+    let state = base_state.with_semantic_supervisor(supervisor.clone());
+    state.semantic_supervisor.set_enabled(true).await;
+
+    let addr = start_server(state.clone()).await;
+    let token = make_valid_jwt(MOCK_USER, MOCK_SESSION_ID);
+    let req = http::Request::builder()
+        .uri(format!("ws://{addr}/ws/semantic/v1?token={token}"))
+        .header("Host", addr.to_string())
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", generate_key())
+        .header("Sec-WebSocket-Protocol", SEMANTIC_SUBPROTOCOL)
+        .body(())
+        .unwrap();
+
+    let (mut ws, _) = connect_async(req).await.unwrap();
+
+    // Attach target
+    ws.send(Message::Text(
+        json!({
+            "jsonrpc": "2.0", "id": 1, "method": "damHopper/attachTarget",
+            "params": { "target": { "project": "concurrency-project" }, "descriptor": "typescript" }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let attach_res = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(attach_res["id"], 1);
+    let target_id = attach_res["result"]["targetId"].as_str().unwrap().to_string();
+
+    // Initialize
+    ws.send(Message::Text(json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {} }).to_string().into())).await.unwrap();
+    let _ = read_initialize_json(&mut ws, 2).await.unwrap();
+    ws.send(Message::Text(json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }).to_string().into())).await.unwrap();
+
+    let main_virt_uri = format!("dam-hopper://semantic/{target_id}/src/main.ts");
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": { "textDocument": { "uri": main_virt_uri, "languageId": "typescript", "version": 1, "text": main_text } }
+    }).to_string().into())).await.unwrap();
+
+    // Send 8 navigation requests to saturate all slots
+    for id in 10..18 {
+        ws.send(Message::Text(json!({
+            "jsonrpc": "2.0", "id": id, "method": "textDocument/definition",
+            "params": { "textDocument": { "uri": main_virt_uri }, "position": { "line": 0, "character": 13 }, "damHopperDocumentVersion": 1 }
+        }).to_string().into())).await.unwrap();
+    }
+
+    // 9th request must be immediately rejected with RPC_ERR_IN_FLIGHT_FULL (-32004)
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "id": 999, "method": "textDocument/definition",
+        "params": { "textDocument": { "uri": main_virt_uri }, "position": { "line": 0, "character": 13 }, "damHopperDocumentVersion": 1 }
+    }).to_string().into())).await.unwrap();
+
+    let err999 = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(err999["id"], 999);
+    assert_eq!(err999["error"]["code"], -32004, "9th concurrent request must be rejected with RPC_ERR_IN_FLIGHT_FULL");
+
+    // Drain the 8 responses
+    for _ in 10..18 {
+        let res = read_next_json(&mut ws).await.unwrap();
+        assert!(res.get("result").is_some());
+    }
+
+    // 10th request after drain must succeed, proving slot freed
+    ws.send(Message::Text(json!({
+        "jsonrpc": "2.0", "id": 1000, "method": "textDocument/definition",
+        "params": { "textDocument": { "uri": main_virt_uri }, "position": { "line": 0, "character": 13 }, "damHopperDocumentVersion": 1 }
+    }).to_string().into())).await.unwrap();
+
+    let res1000 = read_next_json(&mut ws).await.unwrap();
+    assert_eq!(res1000["id"], 1000);
+    assert!(res1000.get("result").is_some(), "Freed concurrency slot must permit subsequent request");
+
+    supervisor.shutdown().await;
+}
+

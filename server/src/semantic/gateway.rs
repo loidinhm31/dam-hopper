@@ -48,6 +48,37 @@ use crate::api::auth::AuthenticatedActor;
 use crate::fs::secure_path::{directory_identity, DirectoryIdentity};
 use crate::state::AppState;
 use crate::workspace_target::ProjectTargetRef;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_barriers {
+    use tokio::sync::Notify;
+    use std::sync::LazyLock;
+
+    pub static F3_PAUSE_NOTIFY: LazyLock<Notify> = LazyLock::new(Notify::new);
+    pub static F3_RESUME_NOTIFY: LazyLock<Notify> = LazyLock::new(Notify::new);
+    pub static F3_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    pub static F9_GAP_PAUSE_NOTIFY: LazyLock<Notify> = LazyLock::new(Notify::new);
+    pub static F9_GAP_RESUME_NOTIFY: LazyLock<Notify> = LazyLock::new(Notify::new);
+    pub static F9_GAP_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    pub static F9_STAGE2_PAUSE_NOTIFY: LazyLock<Notify> = LazyLock::new(Notify::new);
+    pub static F9_STAGE2_RESUME_NOTIFY: LazyLock<Notify> = LazyLock::new(Notify::new);
+    pub static F9_STAGE2_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    pub fn reset() {
+        F3_ENABLED.store(false, std::sync::atomic::Ordering::SeqCst);
+        F9_GAP_ENABLED.store(false, std::sync::atomic::Ordering::SeqCst);
+        F9_STAGE2_ENABLED.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub struct BarrierGuard;
+    impl Drop for BarrierGuard {
+        fn drop(&mut self) {
+            reset();
+        }
+    }
+}
+
 
 /// Method identifier for attaching a project target to the semantic gateway.
 pub const METHOD_ATTACH_TARGET: &str = "damHopper/attachTarget";
@@ -120,6 +151,13 @@ impl GatewayState {
     }
 }
 
+/// In-flight logical navigation request ownership and child tracking.
+#[derive(Debug, Clone)]
+pub struct LogicalNavigationEntry {
+    pub active_child_id: Option<u64>,
+    pub cancelled: bool,
+}
+
 /// Active gateway session managing client protocol state.
 pub struct SemanticGateway {
     connection_id: ConnectionId,
@@ -129,7 +167,7 @@ pub struct SemanticGateway {
     admission_epoch: u64,
     lifecycle: GatewayState,
     in_flight_count: Arc<AtomicUsize>,
-    client_to_internal: Arc<Mutex<HashMap<Value, u64>>>,
+    client_to_logical: Arc<Mutex<HashMap<Value, LogicalNavigationEntry>>>,
     internal_to_client: Arc<Mutex<HashMap<u64, Value>>>,
     next_internal_id: Arc<AtomicU64>,
     open_docs: Arc<Mutex<HashMap<String, (i64, u64)>>>,
@@ -153,7 +191,7 @@ impl SemanticGateway {
             admission_epoch,
             lifecycle: GatewayState::Unattached,
             in_flight_count: Arc::new(AtomicUsize::new(0)),
-            client_to_internal: Arc::new(Mutex::new(HashMap::new())),
+            client_to_logical: Arc::new(Mutex::new(HashMap::new())),
             internal_to_client: Arc::new(Mutex::new(HashMap::new())),
             next_internal_id: Arc::new(AtomicU64::new(1_000_000)),
             open_docs: Arc::new(Mutex::new(HashMap::new())),
@@ -1265,7 +1303,7 @@ impl SemanticGateway {
         }
 
         let is_duplicate = {
-            let map = self.client_to_internal.lock().await;
+            let map = self.client_to_logical.lock().await;
             map.contains_key(&client_id)
         };
         if is_duplicate {
@@ -1416,13 +1454,15 @@ impl SemanticGateway {
 
         let open_docs_at_submit = self.open_docs.lock().await.clone();
 
-        // Allocate internal ID and register in maps
         let internal_id = self.next_internal_id.fetch_add(1, Ordering::SeqCst);
         {
-            self.client_to_internal
-                .lock()
-                .await
-                .insert(client_id.clone(), internal_id);
+            self.client_to_logical.lock().await.insert(
+                client_id.clone(),
+                LogicalNavigationEntry {
+                    active_child_id: Some(internal_id),
+                    cancelled: false,
+                },
+            );
             self.internal_to_client
                 .lock()
                 .await
@@ -1436,7 +1476,7 @@ impl SemanticGateway {
         {
             Ok(receiver) => receiver,
             Err(SessionError::StaleDocumentVersion { current, requested }) => {
-                self.client_to_internal.lock().await.remove(&client_id);
+                self.client_to_logical.lock().await.remove(&client_id);
                 self.internal_to_client.lock().await.remove(&internal_id);
                 let err = json_rpc_error(
                     client_id,
@@ -1450,7 +1490,7 @@ impl SemanticGateway {
                 return Ok(());
             }
             Err(SessionError::InFlightQueueFull { count, max }) => {
-                self.client_to_internal.lock().await.remove(&client_id);
+                self.client_to_logical.lock().await.remove(&client_id);
                 self.internal_to_client.lock().await.remove(&internal_id);
                 let err = json_rpc_error(
                     client_id,
@@ -1462,7 +1502,7 @@ impl SemanticGateway {
                 return Ok(());
             }
             Err(SessionError::Invalidated) => {
-                self.client_to_internal.lock().await.remove(&client_id);
+                self.client_to_logical.lock().await.remove(&client_id);
                 self.internal_to_client.lock().await.remove(&internal_id);
                 let err = json_rpc_error(
                     client_id,
@@ -1474,7 +1514,7 @@ impl SemanticGateway {
                 return Ok(());
             }
             Err(_) => {
-                self.client_to_internal.lock().await.remove(&client_id);
+                self.client_to_logical.lock().await.remove(&client_id);
                 self.internal_to_client.lock().await.remove(&internal_id);
                 if handle.is_revoked() || self.is_authority_revoked(Some(&handle)).await {
                     let err = json_rpc_error(
@@ -1504,7 +1544,7 @@ impl SemanticGateway {
         let target_id = binding.target_id.clone();
         let target_root = binding.target_root.clone();
         let root_identity = binding.root_identity;
-        let client_map = Arc::clone(&self.client_to_internal);
+        let client_map = Arc::clone(&self.client_to_logical);
         let internal_map = Arc::clone(&self.internal_to_client);
         let next_internal_id = Arc::clone(&self.next_internal_id);
         let open_docs = Arc::clone(&self.open_docs);
@@ -1514,15 +1554,98 @@ impl SemanticGateway {
         let admission_epoch = self.admission_epoch;
         let method_owned = method.to_string();
         let nav_deadline = tokio::time::Instant::now() + NAVIGATION_REQUEST_TIMEOUT;
+        let c_id = client_id.clone();
+        let handle_clone = handle.clone();
+        let session_revocation = Arc::clone(&self.session_revocation);
 
         tokio::spawn(async move {
-            struct InFlightGuard(Arc<AtomicUsize>);
+            let active_child_holder = Arc::new(AtomicU64::new(internal_id));
+
+            struct InFlightGuard {
+                in_flight_counter: Arc<AtomicUsize>,
+                client_map: Arc<Mutex<HashMap<Value, LogicalNavigationEntry>>>,
+                internal_map: Arc<Mutex<HashMap<u64, Value>>>,
+                client_id: Value,
+                active_child: Arc<AtomicU64>,
+                completed: bool,
+            }
             impl Drop for InFlightGuard {
                 fn drop(&mut self) {
-                    self.0.fetch_sub(1, Ordering::SeqCst);
+                    if !self.completed {
+                        self.in_flight_counter.fetch_sub(1, Ordering::SeqCst);
+                        let client_map = Arc::clone(&self.client_map);
+                        let internal_map = Arc::clone(&self.internal_map);
+                        let cid = self.client_id.clone();
+                        let aid = self.active_child.swap(0, Ordering::SeqCst);
+                        tokio::spawn(async move {
+                            client_map.lock().await.remove(&cid);
+                            if aid != 0 {
+                                internal_map.lock().await.remove(&aid);
+                            }
+                        });
+                    }
                 }
             }
-            let _guard = InFlightGuard(in_flight_counter);
+
+            let mut guard = InFlightGuard {
+                in_flight_counter: Arc::clone(&in_flight_counter),
+                client_map: Arc::clone(&client_map),
+                internal_map: Arc::clone(&internal_map),
+                client_id: c_id.clone(),
+                active_child: Arc::clone(&active_child_holder),
+                completed: false,
+            };
+
+            let finish = |msg: Value| {
+                let out_tx = out_tx.clone();
+                let client_map = Arc::clone(&client_map);
+                let internal_map = Arc::clone(&internal_map);
+                let in_flight_counter = Arc::clone(&in_flight_counter);
+                let active_child = Arc::clone(&active_child_holder);
+                let session_revocation = Arc::clone(&session_revocation);
+                let cid = c_id.clone();
+                async move {
+                    let final_msg = {
+                        let map = client_map.lock().await;
+                        let is_cancelled = map.get(&cid).map_or(false, |e| e.cancelled);
+                        let is_already_cancel_err = msg
+                            .get("error")
+                            .and_then(|e| e.get("code"))
+                            .and_then(|c| c.as_i64())
+                            == Some(RPC_ERR_REQUEST_CANCELLED);
+                        if is_cancelled && !is_already_cancel_err {
+                            json_rpc_error(
+                                cid.clone(),
+                                RPC_ERR_REQUEST_CANCELLED,
+                                "Request cancelled",
+                                Some("REQUEST_CANCELLED"),
+                            )
+                        } else {
+                            msg
+                        }
+                    };
+
+                    let child_id = active_child.swap(0, Ordering::SeqCst);
+                    let send_res =
+                        tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(final_msg.to_string())).await;
+                    if send_res.is_err() || matches!(send_res, Ok(Err(_))) {
+                        if let Ok(guard) = session_revocation.read() {
+                            if let Some(tok) = guard.as_ref() {
+                                tok.revoke();
+                            }
+                        }
+                    }
+                    {
+                        let mut c_map = client_map.lock().await;
+                        let mut i_map = internal_map.lock().await;
+                        c_map.remove(&cid);
+                        if child_id != 0 {
+                            i_map.remove(&child_id);
+                        }
+                    }
+                    in_flight_counter.fetch_sub(1, Ordering::SeqCst);
+                }
+            };
 
             let raw_res = tokio::select! {
                 biased;
@@ -1531,81 +1654,111 @@ impl SemanticGateway {
                 res = rx => res,
             };
 
-            let c_id = {
-                let mut map = internal_map.lock().await;
-                let cid = match map.remove(&internal_id) {
-                    Some(id) => id,
-                    None => return,
-                };
-                client_map.lock().await.remove(&cid);
-                cid
+            if matches!(raw_res, Ok(Err(SessionError::Timeout)) | Ok(Err(SessionError::Invalidated))) {
+                handle_clone.cancel_request(Value::from(internal_id)).await;
+            }
+
+            let is_cancelled = {
+                let mut c_map = client_map.lock().await;
+                let mut i_map = internal_map.lock().await;
+                i_map.remove(&internal_id);
+                active_child_holder.store(0, Ordering::SeqCst);
+                if let Some(entry) = c_map.get_mut(&c_id) {
+                    entry.active_child_id = None;
+                    entry.cancelled
+                } else {
+                    true
+                }
             };
 
-            // Immediate revocation check at delayed completion boundary
+            if is_cancelled {
+                guard.completed = true;
+                let err = json_rpc_error(
+                    c_id.clone(),
+                    RPC_ERR_REQUEST_CANCELLED,
+                    "Request cancelled",
+                    Some("REQUEST_CANCELLED"),
+                );
+                finish(err).await;
+                return;
+            }
+
             if revocation_token.is_revoked()
                 || !supervisor.is_enabled()
                 || supervisor.get_connection_epoch(&conn_id).await != Some(admission_epoch)
             {
+                guard.completed = true;
                 let err = json_rpc_error(
-                    c_id,
+                    c_id.clone(),
                     RPC_ERR_AUTH_INVALIDATED,
                     "Session invalidated",
                     Some("AUTH_REVOKED"),
                 );
-                let _ =
-                    tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string())).await;
+                finish(err).await;
                 return;
             }
+            if tokio::time::Instant::now() >= nav_deadline {
+                guard.completed = true;
+                let err = json_rpc_error(
+                    c_id.clone(),
+                    RPC_ERR_INTERNAL_ERROR,
+                    "Navigation request timed out",
+                    Some("TIMEOUT"),
+                );
+                finish(err).await;
+                return;
+            }
+
 
             match raw_res {
                 Ok(Ok(raw_result)) => {
                     if unwrap_lsp_result_payload(&raw_result).is_err() {
+                        guard.completed = true;
                         let err = json_rpc_error(
-                            c_id,
+                            c_id.clone(),
                             RPC_ERR_INTERNAL_ERROR,
                             "Navigation request failed",
                             Some("NAVIGATION_ERROR"),
                         );
-                        let _ =
-                            tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
-                                .await;
+                        finish(err).await;
                         return;
                     }
-                    // Verify target root identity has not been replaced in flight
                     if std::fs::symlink_metadata(&target_root)
                         .map(|m| m.file_type().is_symlink() || !m.is_dir())
                         .unwrap_or(true)
                         || directory_identity(&target_root).ok() != Some(root_identity)
                     {
+                        guard.completed = true;
                         let err = json_rpc_error(
-                            c_id,
+                            c_id.clone(),
                             RPC_ERR_TARGET_NOT_FOUND,
                             "Target root directory identity has changed",
                             Some("TARGET_IDENTITY_MODIFIED"),
                         );
-                        let _ =
-                            tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
-                                .await;
+                        finish(err).await;
                         return;
                     }
 
-                    // Verify source overlay freshness (both version and open_incarnation)
                     let source_submit_state = open_docs_at_submit.get(&source_file_uri).copied();
                     if open_docs.lock().await.get(&source_file_uri).copied() != source_submit_state
                     {
+                        guard.completed = true;
                         let err = json_rpc_error(
-                            c_id,
+                            c_id.clone(),
                             RPC_ERR_STALE_VERSION,
                             "Source document overlay changed or closed while navigation was in flight",
                             Some("STALE_VERSION"),
                         );
-                        let _ =
-                            tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
-                                .await;
+                        finish(err).await;
                         return;
                     }
-                    let source_snap = match handle.get_overlay_snapshot(&source_file_uri).await {
-                        Ok(Some(s))
+                    let source_snap = match tokio::time::timeout_at(
+                        nav_deadline,
+                        handle_clone.get_overlay_snapshot(&source_file_uri),
+                    )
+                    .await
+                    {
+                        Ok(Ok(Some(s)))
                             if s.version == doc_version
                                 && nav_params
                                     .dam_hopper_model_generation
@@ -1613,516 +1766,810 @@ impl SemanticGateway {
                         {
                             s
                         }
-                        _ => {
+                        Err(_) => {
+                            guard.completed = true;
                             let err = json_rpc_error(
-                                c_id,
+                                c_id.clone(),
+                                RPC_ERR_INTERNAL_ERROR,
+                                "Navigation request timed out",
+                                Some("TIMEOUT"),
+                            );
+                            finish(err).await;
+                            return;
+                        }
+                        _ => {
+                            guard.completed = true;
+                            let err = json_rpc_error(
+                                c_id.clone(),
                                 RPC_ERR_STALE_VERSION,
                                 "Source document overlay changed or closed while navigation was in flight",
                                 Some("STALE_VERSION"),
                             );
-                            let _ = tokio::time::timeout(
-                                SOCKET_SEND_TIMEOUT,
-                                out_tx.send(err.to_string()),
-                            )
-                            .await;
+                            finish(err).await;
                             return;
                         }
                     };
-                    let mut requery_nav_params = nav_params.clone();
-                    requery_nav_params.dam_hopper_model_generation =
-                        Some(source_snap.open_incarnation);
-                    // Inspect candidate in-target destination files for G5 association
-                    let dest_candidates =
-                        extract_in_target_destination_uris(&raw_result, &target_id, &target_root);
-                    let mut provenance_map: HashMap<String, DestinationProvenance> = HashMap::new();
-                    let mut unopened_destinations: Vec<(String, PathBuf)> = Vec::new();
+                     let mut requery_nav_params = nav_params.clone();
+                     requery_nav_params.dam_hopper_model_generation =
+                         Some(source_snap.open_incarnation);
 
-                    for (dest_file_uri, canonical_dest_path) in dest_candidates {
-                        if let Some(&(submit_ver, submit_inc)) =
-                            open_docs_at_submit.get(&dest_file_uri)
-                        {
-                            let still_same_in_gateway = open_docs.lock().await.get(&dest_file_uri)
-                                == Some(&(submit_ver, submit_inc));
-                            let snap_opt = handle
-                                .get_overlay_snapshot(&dest_file_uri)
-                                .await
-                                .ok()
-                                .flatten();
-                            match (still_same_in_gateway, snap_opt) {
-                                (true, Some(snap)) if snap.version == submit_ver => {
-                                    provenance_map.insert(
-                                        dest_file_uri,
-                                        DestinationProvenance {
-                                            content_sha256: snap.content_sha256,
-                                            version: Some(snap.version),
-                                            open_incarnation: Some(snap.open_incarnation),
-                                            text: snap.text,
-                                        },
-                                    );
-                                }
-                                _ => {
-                                    let err = json_rpc_error(
-                                        c_id,
-                                        RPC_ERR_STALE_VERSION,
-                                        "Destination document modified or closed while navigation was in flight",
-                                        Some("STALE_VERSION"),
-                                    );
-                                    let _ = tokio::time::timeout(
-                                        SOCKET_SEND_TIMEOUT,
-                                        out_tx.send(err.to_string()),
-                                    )
-                                    .await;
-                                    return;
-                                }
-                            }
-                        } else {
-                            unopened_destinations.push((dest_file_uri, canonical_dest_path));
-                        }
-                    }
+                     let dest_candidates =
+                         extract_in_target_destination_uris(&raw_result, &target_id, &target_root);
+                     let mut provenance_map: HashMap<String, DestinationProvenance> = HashMap::new();
+                     let mut unopened_destinations: Vec<(String, PathBuf)> = Vec::new();
+                     let mut open_dest_actor_identities: HashMap<String, (i64, u64)> = HashMap::new();
 
-                    // For unopened destination files, execute bounded validated FIFO pin-and-requery
-                    let mut final_raw_result = raw_result;
-                    if !unopened_destinations.is_empty() {
-                        if unopened_destinations.len() > 4 {
-                            let err = json_rpc_error(
-                                c_id,
-                                RPC_ERR_INTERNAL_ERROR,
-                                "Navigation destination fanout exceeds bounded pin-and-requery limit",
-                                Some("NAVIGATION_ERROR"),
-                            );
-                            let _ = tokio::time::timeout(
-                                SOCKET_SEND_TIMEOUT,
-                                out_tx.send(err.to_string()),
+                     for (dest_file_uri, canonical_dest_path) in dest_candidates {
+                         if let Some(&(submit_ver, submit_inc)) =
+                             open_docs_at_submit.get(&dest_file_uri)
+                         {
+                             let still_same_in_gateway = open_docs.lock().await.get(&dest_file_uri)
+                                 == Some(&(submit_ver, submit_inc));
+                             let snap_opt = match tokio::time::timeout_at(
+                                 nav_deadline,
+                                 handle_clone.get_overlay_snapshot(&dest_file_uri),
+                             )
+                             .await
+                             {
+                                 Ok(res) => res.ok().flatten(),
+                                 Err(_) => {
+                                     guard.completed = true;
+                                     let err = json_rpc_error(
+                                         c_id.clone(),
+                                         RPC_ERR_INTERNAL_ERROR,
+                                         "Navigation request timed out",
+                                         Some("TIMEOUT"),
+                                     );
+                                     finish(err).await;
+                                     return;
+                                 }
+                             };
+                             match (still_same_in_gateway, snap_opt) {
+                                 (true, Some(snap)) if snap.version == submit_ver => {
+                                     open_dest_actor_identities.insert(
+                                         dest_file_uri.clone(),
+                                         (snap.version, snap.open_incarnation),
+                                     );
+                                     provenance_map.insert(
+                                         dest_file_uri,
+                                         DestinationProvenance {
+                                             content_sha256: snap.content_sha256,
+                                             version: Some(snap.version),
+                                             open_incarnation: Some(snap.open_incarnation),
+                                             text: snap.text,
+                                         },
+                                     );
+                                 }
+                                 _ => {
+                                     guard.completed = true;
+                                     let err = json_rpc_error(
+                                         c_id.clone(),
+                                         RPC_ERR_STALE_VERSION,
+                                         "Destination document modified or closed while navigation was in flight",
+                                         Some("STALE_VERSION"),
+                                     );
+                                     finish(err).await;
+                                     return;
+                                 }
+                             }
+                         } else {
+                             unopened_destinations.push((dest_file_uri, canonical_dest_path));
+                         }
+                     }
+
+                     let mut final_raw_result = raw_result;
+                     if !unopened_destinations.is_empty() {
+                         if unopened_destinations.len() > 4 {
+                            guard.completed = true;
+                             let err = json_rpc_error(
+                                c_id.clone(),
+                                 RPC_ERR_INTERNAL_ERROR,
+                                 "Navigation destination fanout exceeds bounded pin-and-requery limit",
+                                 Some("NAVIGATION_ERROR"),
+                             );
+                            finish(err).await;
+                             return;
+                         }
+
+                         let mut pinned_files: Vec<(String, String, String)> =
+                             Vec::with_capacity(unopened_destinations.len());
+                        let mut expected_pin_shas: HashMap<String, String> =
+                            HashMap::with_capacity(unopened_destinations.len());
+
+                         for (dest_file_uri, canonical_dest_path) in &unopened_destinations {
+                             let meta_ok = std::fs::symlink_metadata(canonical_dest_path)
+                                 .map(|m| {
+                                     m.file_type().is_file()
+                                         && (m.len() as usize) <= MAX_DOCUMENT_BYTES
+                                 })
+                                 .unwrap_or(false);
+                             let Some(lang_id) = language_id_for_path(canonical_dest_path) else {
+                                guard.completed = true;
+                                 let err = json_rpc_error(
+                                    c_id.clone(),
+                                     RPC_ERR_INTERNAL_ERROR,
+                                     "Unsupported destination file language for freshness pin",
+                                     Some("NAVIGATION_ERROR"),
+                                 );
+                                finish(err).await;
+                                 return;
+                             };
+                            let canonical_dest_path_owned = canonical_dest_path.clone();
+                            let disk_read_res = tokio::time::timeout_at(
+                                nav_deadline,
+                                tokio::task::spawn_blocking(move || {
+                                    if meta_ok {
+                                        std::fs::read_to_string(&canonical_dest_path_owned).ok()
+                                    } else {
+                                        None
+                                    }
+                                }),
                             )
                             .await;
-                            return;
-                        }
-
-                        let mut pinned_files: Vec<(String, String, String)> =
-                            Vec::with_capacity(unopened_destinations.len());
-                        for (dest_file_uri, canonical_dest_path) in &unopened_destinations {
-                            let meta_ok = std::fs::symlink_metadata(canonical_dest_path)
-                                .map(|m| {
-                                    m.file_type().is_file()
-                                        && (m.len() as usize) <= MAX_DOCUMENT_BYTES
-                                })
-                                .unwrap_or(false);
-                            let Some(lang_id) = language_id_for_path(canonical_dest_path) else {
-                                let err = json_rpc_error(
-                                    c_id,
-                                    RPC_ERR_INTERNAL_ERROR,
-                                    "Unsupported destination file language for freshness pin",
-                                    Some("NAVIGATION_ERROR"),
-                                );
-                                let _ = tokio::time::timeout(
-                                    SOCKET_SEND_TIMEOUT,
-                                    out_tx.send(err.to_string()),
-                                )
-                                .await;
-                                return;
+                            let disk_text = match disk_read_res {
+                                Ok(Ok(Some(text))) => text,
+                                Ok(Ok(None)) | Ok(Err(_)) => {
+                                    guard.completed = true;
+                                    let err = json_rpc_error(
+                                        c_id.clone(),
+                                        RPC_ERR_INTERNAL_ERROR,
+                                        "Failed to read canonical destination file for freshness pin",
+                                        Some("NAVIGATION_ERROR"),
+                                    );
+                                    finish(err).await;
+                                    return;
+                                }
+                                Err(_) => {
+                                    guard.completed = true;
+                                    let err = json_rpc_error(
+                                        c_id.clone(),
+                                        RPC_ERR_INTERNAL_ERROR,
+                                        "Navigation request timed out",
+                                        Some("TIMEOUT"),
+                                    );
+                                    finish(err).await;
+                                    return;
+                                }
                             };
-                            let disk_text = if meta_ok {
-                                std::fs::read_to_string(canonical_dest_path).ok()
-                            } else {
-                                None
-                            };
-                            let Some(disk_text) = disk_text else {
-                                let err = json_rpc_error(
-                                    c_id,
-                                    RPC_ERR_INTERNAL_ERROR,
-                                    "Failed to read canonical destination file for freshness pin",
-                                    Some("NAVIGATION_ERROR"),
-                                );
-                                let _ = tokio::time::timeout(
-                                    SOCKET_SEND_TIMEOUT,
-                                    out_tx.send(err.to_string()),
-                                )
-                                .await;
-                                return;
-                            };
-                            let disk_text = project_disk_text_for_pin(&disk_text);
-                            let sha256 = compute_text_sha256(&disk_text);
+                             let disk_text = project_disk_text_for_pin(&disk_text);
+                             let sha256 = compute_text_sha256(&disk_text);
                             let text_owned = disk_text.into_owned();
+                            expected_pin_shas.insert(dest_file_uri.clone(), sha256);
                             pinned_files.push((
                                 dest_file_uri.clone(),
                                 lang_id.to_string(),
-                                text_owned.clone(),
+                                text_owned,
                             ));
-                            provenance_map.insert(
-                                dest_file_uri.clone(),
-                                DestinationProvenance {
-                                    content_sha256: sha256,
-                                    version: None,
-                                    open_incarnation: None,
-                                    text: text_owned,
-                                },
-                            );
+                        }
+                        #[cfg(any(test, feature = "test-support"))]
+                        if test_barriers::F9_GAP_ENABLED.load(std::sync::atomic::Ordering::SeqCst) {
+                            test_barriers::F9_GAP_PAUSE_NOTIFY.notify_waiters();
+                            test_barriers::F9_GAP_RESUME_NOTIFY.notified().await;
                         }
 
-                        let docs_before_pin = open_docs.lock().await.clone();
-                        let requery_id = next_internal_id.fetch_add(1, Ordering::SeqCst);
-                        let requery_rx = match handle
-                            .submit_pinned_navigation(
+
+                        let is_cancelled = {
+                            let map = client_map.lock().await;
+                            map.get(&c_id).map_or(true, |e| e.cancelled)
+                        };
+                        if is_cancelled {
+                            guard.completed = true;
+                            let err = json_rpc_error(
+                                c_id.clone(),
+                                RPC_ERR_REQUEST_CANCELLED,
+                                "Request cancelled",
+                                Some("REQUEST_CANCELLED"),
+                            );
+                            finish(err).await;
+                            return;
+                         }
+
+                         let docs_before_pin = open_docs.lock().await.clone();
+                         for (dest_file_uri, _) in &unopened_destinations {
+                             if docs_before_pin.get(dest_file_uri).is_some() {
+                                 if let Ok(Ok(Some(snap))) = tokio::time::timeout_at(
+                                     nav_deadline,
+                                     handle_clone.get_overlay_snapshot(dest_file_uri),
+                                 )
+                                 .await
+                                 {
+                                     open_dest_actor_identities.insert(
+                                         dest_file_uri.clone(),
+                                         (snap.version, snap.open_incarnation),
+                                     );
+                                 }
+                             }
+                         }
+                         let requery_id = next_internal_id.fetch_add(1, Ordering::SeqCst);
+                        {
+                            let mut c_map = client_map.lock().await;
+                            let mut i_map = internal_map.lock().await;
+                            if let Some(entry) = c_map.get_mut(&c_id) {
+                                if entry.cancelled {
+                                    drop(c_map);
+                                    drop(i_map);
+                                    guard.completed = true;
+                                    let err = json_rpc_error(
+                                        c_id.clone(),
+                                        RPC_ERR_REQUEST_CANCELLED,
+                                        "Request cancelled",
+                                        Some("REQUEST_CANCELLED"),
+                                    );
+                                    finish(err).await;
+                                    return;
+                                }
+                                entry.active_child_id = Some(requery_id);
+                            }
+                            i_map.insert(requery_id, c_id.clone());
+                            active_child_holder.store(requery_id, Ordering::SeqCst);
+                        }
+                        if tokio::time::Instant::now() >= nav_deadline {
+                            handle_clone.cancel_request(Value::from(requery_id)).await;
+                            guard.completed = true;
+                            let err = json_rpc_error(
+                                c_id.clone(),
+                                RPC_ERR_INTERNAL_ERROR,
+                                "Navigation request timed out",
+                                Some("TIMEOUT"),
+                            );
+                            finish(err).await;
+                            return;
+                        }
+
+                        let requery_rx = match tokio::time::timeout_at(
+                            nav_deadline,
+                            handle_clone.submit_pinned_navigation(
                                 Value::from(requery_id),
                                 &method_owned,
                                 requery_nav_params,
                                 pinned_files,
-                            )
-                            .await
+                            ),
+                        )
+                        .await
                         {
-                            Ok(rx) => rx,
-                            Err(SessionError::StaleDocumentVersion { current, requested }) => {
+                            Ok(Ok(rx)) => rx,
+                            Ok(Err(SessionError::StaleDocumentVersion { current, requested })) => {
+                                guard.completed = true;
                                 let err = json_rpc_error(
-                                    c_id,
+                                    c_id.clone(),
                                     RPC_ERR_STALE_VERSION,
                                     &format!("Stale document version: current {current}, requested {requested}"),
                                     Some("STALE_VERSION"),
                                 );
-                                let _ = tokio::time::timeout(
-                                    SOCKET_SEND_TIMEOUT,
-                                    out_tx.send(err.to_string()),
-                                )
-                                .await;
+                                finish(err).await;
                                 return;
                             }
-                            Err(SessionError::Invalidated) => {
+                            Ok(Err(SessionError::Invalidated)) => {
+                                guard.completed = true;
                                 let err = json_rpc_error(
-                                    c_id,
+                                    c_id.clone(),
                                     RPC_ERR_AUTH_INVALIDATED,
                                     "Session invalidated",
                                     Some("AUTH_REVOKED"),
                                 );
-                                let _ = tokio::time::timeout(
-                                    SOCKET_SEND_TIMEOUT,
-                                    out_tx.send(err.to_string()),
-                                )
-                                .await;
+                                finish(err).await;
                                 return;
                             }
-                            Err(SessionError::Timeout) => {
+                            Ok(Err(SessionError::Timeout)) => {
+                                guard.completed = true;
                                 let err = json_rpc_error(
-                                    c_id,
+                                    c_id.clone(),
                                     RPC_ERR_INTERNAL_ERROR,
                                     "Navigation request timed out",
                                     Some("TIMEOUT"),
                                 );
-                                let _ = tokio::time::timeout(
-                                    SOCKET_SEND_TIMEOUT,
-                                    out_tx.send(err.to_string()),
-                                )
-                                .await;
+                                finish(err).await;
                                 return;
                             }
                             Err(_) => {
+                                guard.completed = true;
                                 let err = json_rpc_error(
-                                    c_id,
+                                    c_id.clone(),
+                                    RPC_ERR_INTERNAL_ERROR,
+                                    "Navigation request timed out",
+                                    Some("TIMEOUT"),
+                                );
+                                finish(err).await;
+                                return;
+                            }
+                            Ok(Err(_)) => {
+                                guard.completed = true;
+                                let err = json_rpc_error(
+                                    c_id.clone(),
                                     RPC_ERR_INTERNAL_ERROR,
                                     "Destination pin-and-requery submission failed",
                                     Some("NAVIGATION_ERROR"),
                                 );
-                                let _ = tokio::time::timeout(
-                                    SOCKET_SEND_TIMEOUT,
-                                    out_tx.send(err.to_string()),
-                                )
-                                .await;
+                                finish(err).await;
                                 return;
                             }
                         };
-
-                        let requery_res = tokio::select! {
-                            biased;
-                            _ = revocation_token.cancelled() => Ok(Err(SessionError::Invalidated)),
-                            _ = tokio::time::sleep_until(nav_deadline) => Ok(Err(SessionError::Timeout)),
-                            res = requery_rx => res,
-                        };
-
-                        match requery_res {
-                            Ok(Ok(verified_raw)) => {
-                                final_raw_result = verified_raw;
-                            }
-                            Ok(Err(SessionError::StaleDocumentVersion { current, requested })) => {
-                                let err = json_rpc_error(
-                                    c_id,
-                                    RPC_ERR_STALE_VERSION,
-                                    &format!("Stale document version: current {current}, requested {requested}"),
-                                    Some("STALE_VERSION"),
-                                );
-                                let _ = tokio::time::timeout(
-                                    SOCKET_SEND_TIMEOUT,
-                                    out_tx.send(err.to_string()),
-                                )
-                                .await;
-                                return;
-                            }
-                            Ok(Err(SessionError::Invalidated)) => {
-                                let err = json_rpc_error(
-                                    c_id,
-                                    RPC_ERR_AUTH_INVALIDATED,
-                                    "Session invalidated",
-                                    Some("AUTH_REVOKED"),
-                                );
-                                let _ = tokio::time::timeout(
-                                    SOCKET_SEND_TIMEOUT,
-                                    out_tx.send(err.to_string()),
-                                )
-                                .await;
-                                return;
-                            }
-                            Ok(Err(SessionError::Timeout)) => {
-                                let err = json_rpc_error(
-                                    c_id,
-                                    RPC_ERR_INTERNAL_ERROR,
-                                    "Navigation request timed out",
-                                    Some("TIMEOUT"),
-                                );
-                                let _ = tokio::time::timeout(
-                                    SOCKET_SEND_TIMEOUT,
-                                    out_tx.send(err.to_string()),
-                                )
-                                .await;
-                                return;
-                            }
-                            _ => {
-                                let err = json_rpc_error(
-                                    c_id,
-                                    RPC_ERR_INTERNAL_ERROR,
-                                    "Destination pin-and-requery failed",
-                                    Some("NAVIGATION_ERROR"),
-                                );
-                                let _ = tokio::time::timeout(
-                                    SOCKET_SEND_TIMEOUT,
-                                    out_tx.send(err.to_string()),
-                                )
-                                .await;
-                                return;
-                            }
+                        #[cfg(any(test, feature = "test-support"))]
+                        if test_barriers::F9_STAGE2_ENABLED.load(std::sync::atomic::Ordering::SeqCst) {
+                            test_barriers::F9_STAGE2_PAUSE_NOTIFY.notify_waiters();
+                            test_barriers::F9_STAGE2_RESUME_NOTIFY.notified().await;
                         }
 
-                        // Re-verify source document (version + open_incarnation) and participating overlays
-                        let docs_after_requery = open_docs.lock().await.clone();
-                        let source_snap_after = handle
-                            .get_overlay_snapshot(&source_file_uri)
-                            .await
-                            .ok()
-                            .flatten();
-                        let source_unchanged = docs_after_requery.get(&source_file_uri)
-                            == open_docs_at_submit.get(&source_file_uri)
-                            && source_snap_after.as_ref().is_some_and(|s| {
-                                s.version == source_snap.version
-                                    && s.open_incarnation == source_snap.open_incarnation
-                            });
-                        if !source_unchanged {
+
+                        let is_cancelled = {
+                            let map = client_map.lock().await;
+                            map.get(&c_id).map_or(true, |e| e.cancelled)
+                        };
+                        if is_cancelled {
+                            handle_clone.cancel_request(Value::from(requery_id)).await;
+                            guard.completed = true;
                             let err = json_rpc_error(
-                                c_id,
-                                RPC_ERR_STALE_VERSION,
-                                "Source document state modified during destination pin-and-requery",
-                                Some("STALE_VERSION"),
+                                c_id.clone(),
+                                RPC_ERR_REQUEST_CANCELLED,
+                                "Request cancelled",
+                                Some("REQUEST_CANCELLED"),
                             );
-                            let _ = tokio::time::timeout(
-                                SOCKET_SEND_TIMEOUT,
-                                out_tx.send(err.to_string()),
-                            )
-                            .await;
+                            finish(err).await;
                             return;
                         }
 
-                        // Check if any candidate destination became user-open before pin acquisition or changed during requery
-                        for (dest_file_uri, _) in &unopened_destinations {
-                            if docs_after_requery.get(dest_file_uri)
-                                != docs_before_pin.get(dest_file_uri)
-                            {
-                                let err = json_rpc_error(
-                                    c_id,
-                                    RPC_ERR_STALE_VERSION,
-                                    "Destination document modified during pin-and-requery",
-                                    Some("STALE_VERSION"),
-                                );
-                                let _ = tokio::time::timeout(
-                                    SOCKET_SEND_TIMEOUT,
-                                    out_tx.send(err.to_string()),
-                                )
-                                .await;
+                         let requery_res = tokio::select! {
+                             biased;
+                             _ = revocation_token.cancelled() => Ok(Err(SessionError::Invalidated)),
+                             _ = tokio::time::sleep_until(nav_deadline) => Ok(Err(SessionError::Timeout)),
+                             res = requery_rx => res,
+                         };
+
+                        if matches!(requery_res, Ok(Err(SessionError::Timeout)) | Ok(Err(SessionError::Invalidated))) {
+                            handle_clone.cancel_request(Value::from(requery_id)).await;
+                        }
+
+                        let is_cancelled = {
+                            let mut c_map = client_map.lock().await;
+                            let mut i_map = internal_map.lock().await;
+                            i_map.remove(&requery_id);
+                            active_child_holder.store(0, Ordering::SeqCst);
+                            if let Some(entry) = c_map.get_mut(&c_id) {
+                                entry.active_child_id = None;
+                                entry.cancelled
+                            } else {
+                                true
+                            }
+                        };
+
+                        if is_cancelled {
+                            guard.completed = true;
+                            let err = json_rpc_error(
+                                c_id.clone(),
+                                RPC_ERR_REQUEST_CANCELLED,
+                                "Request cancelled",
+                                Some("REQUEST_CANCELLED"),
+                            );
+                            finish(err).await;
+                            return;
+                        }
+
+                        let mut proven_snapshots: HashMap<String, (String, String, i64, u64)> =
+                            HashMap::new();
+
+                         match requery_res {
+                            Ok(Ok(mut verified_raw)) => {
+                                if let Some(obj) = verified_raw.as_object_mut() {
+                                    if let Some(proven_val) = obj.remove("_damHopperProvenSnapshots") {
+                                        if let Some(map) = proven_val.as_object() {
+                                            for (uri, snap_val) in map {
+                                                if let (Some(text), Some(sha), Some(ver), Some(inc)) = (
+                                                    snap_val.get("text").and_then(|t| t.as_str()),
+                                                    snap_val.get("contentSha256").and_then(|s| s.as_str()),
+                                                    snap_val.get("version").and_then(|v| v.as_i64()),
+                                                    snap_val.get("openIncarnation").and_then(|i| i.as_u64()),
+                                                ) {
+                                                    if compute_text_sha256(text) == sha {
+                                                        proven_snapshots.insert(
+                                                            uri.clone(),
+                                                            (text.to_string(), sha.to_string(), ver, inc),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                 final_raw_result = verified_raw;
+                             }
+                             Ok(Err(SessionError::StaleDocumentVersion { current, requested })) => {
+                                guard.completed = true;
+                                 let err = json_rpc_error(
+                                    c_id.clone(),
+                                     RPC_ERR_STALE_VERSION,
+                                     &format!("Stale document version: current {current}, requested {requested}"),
+                                     Some("STALE_VERSION"),
+                                 );
+                                finish(err).await;
                                 return;
                             }
-                            if let Ok(Some(actor_snap)) =
-                                handle.get_overlay_snapshot(dest_file_uri).await
-                            {
-                                let is_user_overlay = actor_snap.version >= 1;
+                            Ok(Err(SessionError::Cancelled)) => {
+                                guard.completed = true;
+                                let err = json_rpc_error(
+                                    c_id.clone(),
+                                    RPC_ERR_REQUEST_CANCELLED,
+                                    "Request cancelled",
+                                    Some("REQUEST_CANCELLED"),
+                                );
+                                finish(err).await;
+                                 return;
+                             }
+                             Ok(Err(SessionError::Invalidated)) => {
+                                guard.completed = true;
+                                 let err = json_rpc_error(
+                                    c_id.clone(),
+                                     RPC_ERR_AUTH_INVALIDATED,
+                                     "Session invalidated",
+                                     Some("AUTH_REVOKED"),
+                                 );
+                                finish(err).await;
+                                 return;
+                             }
+                             Ok(Err(SessionError::Timeout)) => {
+                                guard.completed = true;
+                                 let err = json_rpc_error(
+                                    c_id.clone(),
+                                     RPC_ERR_INTERNAL_ERROR,
+                                     "Navigation request timed out",
+                                     Some("TIMEOUT"),
+                                 );
+                                finish(err).await;
+                                 return;
+                             }
+                             _ => {
+                                guard.completed = true;
+                                 let err = json_rpc_error(
+                                    c_id.clone(),
+                                     RPC_ERR_INTERNAL_ERROR,
+                                     "Destination pin-and-requery failed",
+                                     Some("NAVIGATION_ERROR"),
+                                 );
+                                finish(err).await;
+                                 return;
+                             }
+                         }
+
+                         let docs_after_requery = open_docs.lock().await.clone();
+                        let source_snap_after = handle_clone
+                             .get_overlay_snapshot(&source_file_uri)
+                             .await
+                             .ok()
+                             .flatten();
+                         let source_unchanged = docs_after_requery.get(&source_file_uri)
+                             == open_docs_at_submit.get(&source_file_uri)
+                             && source_snap_after.as_ref().is_some_and(|s| {
+                                 s.version == source_snap.version
+                                     && s.open_incarnation == source_snap.open_incarnation
+                             });
+                         if !source_unchanged {
+                            guard.completed = true;
+                             let err = json_rpc_error(
+                                c_id.clone(),
+                                 RPC_ERR_STALE_VERSION,
+                                 "Source document state modified during destination pin-and-requery",
+                                 Some("STALE_VERSION"),
+                             );
+                            finish(err).await;
+                             return;
+                         }
+                        // Re-verify that every originally open destination remained completely unchanged during requery
+                        for dest_file_uri in open_docs_at_submit.keys() {
+                            if provenance_map.contains_key(dest_file_uri) {
+                                let Some(&(submit_ver, submit_inc)) = open_docs_at_submit.get(dest_file_uri) else {
+                                    continue;
+                                };
+                                let Some(&(actor_ver, actor_inc)) = open_dest_actor_identities.get(dest_file_uri) else {
+                                    continue;
+                                };
+                                let still_same_in_gateway = docs_after_requery.get(dest_file_uri)
+                                    == Some(&(submit_ver, submit_inc));
+                                let snap_opt = match tokio::time::timeout_at(
+                                    nav_deadline,
+                                    handle_clone.get_overlay_snapshot(dest_file_uri),
+                                )
+                                .await
+                                {
+                                    Ok(res) => res.ok().flatten(),
+                                    Err(_) => {
+                                        guard.completed = true;
+                                        let err = json_rpc_error(
+                                            c_id.clone(),
+                                            RPC_ERR_INTERNAL_ERROR,
+                                            "Navigation request timed out",
+                                            Some("TIMEOUT"),
+                                        );
+                                        finish(err).await;
+                                        return;
+                                    }
+                                };
+                                let valid = still_same_in_gateway
+                                    && snap_opt.as_ref().is_some_and(|s| {
+                                        s.version == actor_ver && s.open_incarnation == actor_inc
+                                    });
+                                if !valid {
+                                    guard.completed = true;
+                                    let err = json_rpc_error(
+                                        c_id.clone(),
+                                        RPC_ERR_STALE_VERSION,
+                                        "Open destination document modified or closed during pin-and-requery",
+                                        Some("STALE_VERSION"),
+                                    );
+                                    finish(err).await;
+                                    return;
+                                }
+                            }
+                        }
+
+
+                        #[cfg(any(test, feature = "test-support"))]
+                        if test_barriers::F3_ENABLED.load(std::sync::atomic::Ordering::SeqCst) {
+                            test_barriers::F3_PAUSE_NOTIFY.notify_waiters();
+                            test_barriers::F3_RESUME_NOTIFY.notified().await;
+                        }
+
+                         for (dest_file_uri, _) in &unopened_destinations {
+                             if docs_after_requery.get(dest_file_uri)
+                                 != docs_before_pin.get(dest_file_uri)
+                             {
+                                guard.completed = true;
+                                 let err = json_rpc_error(
+                                    c_id.clone(),
+                                     RPC_ERR_STALE_VERSION,
+                                     "Destination document modified during pin-and-requery",
+                                     Some("STALE_VERSION"),
+                                 );
+                                finish(err).await;
+                                 return;
+                             }
+
+                            let Some((snap_text, snap_sha, snap_ver, snap_inc)) =
+                                proven_snapshots.get(dest_file_uri)
+                            else {
+                                guard.completed = true;
+                                let err = json_rpc_error(
+                                    c_id.clone(),
+                                    RPC_ERR_STALE_VERSION,
+                                    "Destination document missing proven snapshot from requery",
+                                    Some("STALE_VERSION"),
+                                );
+                                finish(err).await;
+                                return;
+                            };
+
+                            let is_user_open_before = docs_before_pin.get(dest_file_uri).is_some();
+                            if is_user_open_before {
+                                if let Some(&(actor_ver, actor_inc)) = open_dest_actor_identities.get(dest_file_uri) {
+                                    if *snap_ver != actor_ver || *snap_inc != actor_inc {
+                                        guard.completed = true;
+                                        let err = json_rpc_error(
+                                            c_id.clone(),
+                                            RPC_ERR_STALE_VERSION,
+                                            "Destination overlay version shifted during requery",
+                                            Some("STALE_VERSION"),
+                                        );
+                                        finish(err).await;
+                                        return;
+                                    }
+                                }
+                                 provenance_map.insert(
+                                     dest_file_uri.clone(),
+                                     DestinationProvenance {
+                                        content_sha256: snap_sha.clone(),
+                                        version: Some(*snap_ver),
+                                        open_incarnation: Some(*snap_inc),
+                                        text: snap_text.clone(),
+                                    },
+                                );
+                            } else {
+                                let Some(expected_sha) = expected_pin_shas.get(dest_file_uri) else {
+                                    guard.completed = true;
+                                    let err = json_rpc_error(
+                                        c_id.clone(),
+                                        RPC_ERR_STALE_VERSION,
+                                        "Destination disk pin was not registered",
+                                        Some("STALE_VERSION"),
+                                    );
+                                    finish(err).await;
+                                    return;
+                                };
+                                if snap_sha != expected_sha {
+                                    guard.completed = true;
+                                    let err = json_rpc_error(
+                                        c_id.clone(),
+                                        RPC_ERR_STALE_VERSION,
+                                        "Destination proven snapshot digest does not match pinned text",
+                                        Some("STALE_VERSION"),
+                                    );
+                                    finish(err).await;
+                                    return;
+                                }
                                 provenance_map.insert(
                                     dest_file_uri.clone(),
                                     DestinationProvenance {
-                                        content_sha256: actor_snap.content_sha256,
-                                        version: if is_user_overlay {
-                                            Some(actor_snap.version)
-                                        } else {
-                                            None
-                                        },
-                                        open_incarnation: if is_user_overlay {
-                                            Some(actor_snap.open_incarnation)
-                                        } else {
-                                            None
-                                        },
-                                        text: actor_snap.text,
-                                    },
-                                );
-                            }
-                        }
-                    }
+                                        content_sha256: snap_sha.clone(),
+                                        version: None,
+                                        open_incarnation: None,
+                                        text: snap_text.clone(),
+                                     },
+                                 );
+                             }
+                         }
+                     }
 
-                    // Verify every in-target destination in final_raw_result belongs to the validated provenance set
-                    let final_dests = extract_in_target_destination_uris(
-                        &final_raw_result,
-                        &target_id,
-                        &target_root,
-                    );
-                    if final_dests
-                        .iter()
-                        .any(|(u, _)| !provenance_map.contains_key(u))
-                    {
-                        let err = json_rpc_error(
-                            c_id,
-                            RPC_ERR_STALE_VERSION,
-                            "Navigation destination shifted outside validated pin set",
-                            Some("STALE_VERSION"),
-                        );
-                        let _ =
-                            tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
-                                .await;
-                        return;
-                    }
-                    if revocation_token.is_revoked()
-                        || !supervisor.is_enabled()
-                        || supervisor.get_connection_epoch(&conn_id).await != Some(admission_epoch)
-                    {
-                        let err = json_rpc_error(
-                            c_id,
-                            RPC_ERR_AUTH_INVALIDATED,
-                            "Session invalidated",
-                            Some("AUTH_REVOKED"),
-                        );
-                        let _ =
-                            tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
-                                .await;
-                        return;
-                    }
+                     let final_dests = extract_in_target_destination_uris(
+                         &final_raw_result,
+                         &target_id,
+                         &target_root,
+                     );
+                     if final_dests
+                         .iter()
+                         .any(|(u, _)| !provenance_map.contains_key(u))
+                     {
+                        guard.completed = true;
+                         let err = json_rpc_error(
+                            c_id.clone(),
+                             RPC_ERR_STALE_VERSION,
+                             "Navigation destination shifted outside validated pin set",
+                             Some("STALE_VERSION"),
+                         );
+                        finish(err).await;
+                         return;
+                     }
 
-                    let sanitized = match filter_location_or_link_result_with_provenance(
-                        &final_raw_result,
-                        &target_id,
-                        &target_root,
-                        &provenance_map,
-                        Some(&source_snap.text),
-                    ) {
-                        Ok(v) => v,
-                        Err(_) => {
-                            let err = json_rpc_error(
-                                c_id,
-                                RPC_ERR_INTERNAL_ERROR,
-                                "Navigation result filtering failed",
-                                Some("NAVIGATION_ERROR"),
-                            );
-                            let _ = tokio::time::timeout(
-                                SOCKET_SEND_TIMEOUT,
-                                out_tx.send(err.to_string()),
-                            )
-                            .await;
-                            return;
-                        }
-                    };
-                    let response = json!({
-                        "jsonrpc": "2.0",
-                        "id": c_id,
-                        "result": sanitized,
-                    });
-                    let _ = tokio::time::timeout(
-                        SOCKET_SEND_TIMEOUT,
-                        out_tx.send(response.to_string()),
-                    )
-                    .await;
-                }
-                Ok(Err(SessionError::StaleDocumentVersion { current, requested })) => {
-                    let err = json_rpc_error(
-                        c_id,
-                        RPC_ERR_STALE_VERSION,
-                        &format!(
-                            "Stale document version: current {current}, requested {requested}"
-                        ),
-                        Some("STALE_VERSION"),
-                    );
-                    let _ = tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
-                        .await;
-                }
-                Ok(Err(SessionError::DocumentNotFound(_))) => {
-                    let err = json_rpc_error(
-                        c_id,
-                        RPC_ERR_STALE_VERSION,
-                        "Source document overlay is no longer open",
-                        Some("STALE_VERSION"),
-                    );
-                    let _ = tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
-                        .await;
-                }
-                Ok(Err(SessionError::Timeout)) => {
-                    let err = json_rpc_error(
-                        c_id,
-                        RPC_ERR_INTERNAL_ERROR,
-                        "Navigation request timed out",
-                        Some("TIMEOUT"),
-                    );
-                    let _ = tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
-                        .await;
-                }
-                Ok(Err(SessionError::Cancelled)) => {
-                    let err = json_rpc_error(
-                        c_id,
-                        RPC_ERR_REQUEST_CANCELLED,
-                        "Request cancelled",
-                        Some("REQUEST_CANCELLED"),
-                    );
-                    let _ = tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
-                        .await;
-                }
-                Ok(Err(SessionError::Invalidated)) => {
-                    let err = json_rpc_error(
-                        c_id,
-                        RPC_ERR_AUTH_INVALIDATED,
-                        "Session invalidated",
-                        Some("AUTH_REVOKED"),
-                    );
-                    let _ = tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
-                        .await;
-                }
-                Ok(Err(_)) => {
-                    let err = json_rpc_error(
-                        c_id,
-                        RPC_ERR_INTERNAL_ERROR,
-                        "Navigation request failed",
-                        Some("NAVIGATION_ERROR"),
-                    );
-                    let _ = tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
-                        .await;
-                }
-                Err(_) => {
-                    let err = if revocation_token.is_revoked() || !supervisor.is_enabled() {
-                        json_rpc_error(
-                            c_id,
-                            RPC_ERR_AUTH_INVALIDATED,
-                            "Session invalidated",
-                            Some("AUTH_REVOKED"),
-                        )
-                    } else {
-                        json_rpc_error(
-                            c_id,
+                     if revocation_token.is_revoked()
+                         || !supervisor.is_enabled()
+                         || supervisor.get_connection_epoch(&conn_id).await != Some(admission_epoch)
+                     {
+                        guard.completed = true;
+                         let err = json_rpc_error(
+                            c_id.clone(),
+                             RPC_ERR_AUTH_INVALIDATED,
+                             "Session invalidated",
+                             Some("AUTH_REVOKED"),
+                         );
+                        finish(err).await;
+                         return;
+                     }
+
+                     let sanitized = match filter_location_or_link_result_with_provenance(
+                         &final_raw_result,
+                         &target_id,
+                         &target_root,
+                         &provenance_map,
+                         Some(&source_snap.text),
+                     ) {
+                         Ok(v) => v,
+                         Err(_) => {
+                            guard.completed = true;
+                             let err = json_rpc_error(
+                                c_id.clone(),
+                                 RPC_ERR_INTERNAL_ERROR,
+                                 "Navigation result filtering failed",
+                                 Some("NAVIGATION_ERROR"),
+                             );
+                            finish(err).await;
+                             return;
+                         }
+                     };
+                    if tokio::time::Instant::now() >= nav_deadline {
+                        guard.completed = true;
+                        let err = json_rpc_error(
+                            c_id.clone(),
                             RPC_ERR_INTERNAL_ERROR,
-                            "Request terminated before response was produced",
-                            Some("SESSION_CLOSED"),
-                        )
+                            "Navigation request timed out",
+                            Some("TIMEOUT"),
+                        );
+                        finish(err).await;
+                        return;
+                    }
+
+
+                    // Recheck cancellation immediately prior to terminal publication
+                    let is_cancelled = {
+                        let map = client_map.lock().await;
+                        map.get(&c_id).map_or(true, |e| e.cancelled)
                     };
-                    let _ = tokio::time::timeout(SOCKET_SEND_TIMEOUT, out_tx.send(err.to_string()))
-                        .await;
-                }
-            }
-        });
+                    if is_cancelled {
+                        guard.completed = true;
+                        let err = json_rpc_error(
+                            c_id.clone(),
+                            RPC_ERR_REQUEST_CANCELLED,
+                            "Request cancelled",
+                            Some("REQUEST_CANCELLED"),
+                        );
+                        finish(err).await;
+                        return;
+                    }
+
+                    guard.completed = true;
+                     let response = json!({
+                         "jsonrpc": "2.0",
+                        "id": c_id.clone(),
+                         "result": sanitized,
+                     });
+                    finish(response).await;
+                 }
+                 Ok(Err(SessionError::StaleDocumentVersion { current, requested })) => {
+                    guard.completed = true;
+                     let err = json_rpc_error(
+                        c_id.clone(),
+                         RPC_ERR_STALE_VERSION,
+                        &format!("Stale document version: current {current}, requested {requested}"),
+                         Some("STALE_VERSION"),
+                     );
+                    finish(err).await;
+                 }
+                 Ok(Err(SessionError::DocumentNotFound(_))) => {
+                    guard.completed = true;
+                     let err = json_rpc_error(
+                        c_id.clone(),
+                         RPC_ERR_STALE_VERSION,
+                         "Source document overlay is no longer open",
+                         Some("STALE_VERSION"),
+                     );
+                    finish(err).await;
+                 }
+                 Ok(Err(SessionError::Timeout)) => {
+                    guard.completed = true;
+                     let err = json_rpc_error(
+                        c_id.clone(),
+                         RPC_ERR_INTERNAL_ERROR,
+                         "Navigation request timed out",
+                         Some("TIMEOUT"),
+                     );
+                    finish(err).await;
+                 }
+                 Ok(Err(SessionError::Cancelled)) => {
+                    guard.completed = true;
+                     let err = json_rpc_error(
+                        c_id.clone(),
+                         RPC_ERR_REQUEST_CANCELLED,
+                         "Request cancelled",
+                         Some("REQUEST_CANCELLED"),
+                     );
+                    finish(err).await;
+                 }
+                 Ok(Err(SessionError::Invalidated)) => {
+                    guard.completed = true;
+                     let err = json_rpc_error(
+                        c_id.clone(),
+                         RPC_ERR_AUTH_INVALIDATED,
+                         "Session invalidated",
+                         Some("AUTH_REVOKED"),
+                     );
+                    finish(err).await;
+                 }
+                 Ok(Err(_)) => {
+                    guard.completed = true;
+                     let err = json_rpc_error(
+                        c_id.clone(),
+                         RPC_ERR_INTERNAL_ERROR,
+                         "Navigation request failed",
+                         Some("NAVIGATION_ERROR"),
+                     );
+                    finish(err).await;
+                 }
+                 Err(_) => {
+                    guard.completed = true;
+                     let err = if revocation_token.is_revoked() || !supervisor.is_enabled() {
+                         json_rpc_error(
+                            c_id.clone(),
+                             RPC_ERR_AUTH_INVALIDATED,
+                             "Session invalidated",
+                             Some("AUTH_REVOKED"),
+                         )
+                     } else {
+                         json_rpc_error(
+                            c_id.clone(),
+                             RPC_ERR_INTERNAL_ERROR,
+                             "Request terminated before response was produced",
+                             Some("SESSION_CLOSED"),
+                         )
+                     };
+                    finish(err).await;
+                 }
+             }
+         });
 
         Ok(())
     }
@@ -2145,15 +2592,19 @@ impl SemanticGateway {
             if !validate_request_id(cancel_id) {
                 return Ok(());
             }
-            let internal_id_opt = {
-                let map = self.client_to_internal.lock().await;
-                map.get(cancel_id).copied()
+            let active_child_id = {
+                let mut map = self.client_to_logical.lock().await;
+                if let Some(entry) = map.get_mut(cancel_id) {
+                    entry.cancelled = true;
+                    entry.active_child_id
+                } else {
+                    None
+                }
             };
-            if let Some(internal_id) = internal_id_opt {
-                handle.cancel_request(Value::from(internal_id)).await;
+            if let Some(child_id) = active_child_id {
+                handle.cancel_request(Value::from(child_id)).await;
             }
         }
-
         Ok(())
     }
 
@@ -2216,7 +2667,7 @@ impl SemanticGateway {
         }
         self.lifecycle = GatewayState::Terminated;
         self.open_docs.lock().await.clear();
-        self.client_to_internal.lock().await.clear();
+        self.client_to_logical.lock().await.clear();
         self.internal_to_client.lock().await.clear();
         self.state
             .semantic_supervisor

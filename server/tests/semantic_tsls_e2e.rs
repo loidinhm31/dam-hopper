@@ -1426,3 +1426,208 @@ async fn test_adversarial_code_loading_vectors_with_tuple_specific_positive_cont
         "Hostile session process group must be empty after shutdown"
     );
 }
+
+#[tokio::test]
+async fn test_packaged_tsls_lossless_cr_line_definition_and_ranged_edits() {
+    let packaged = PackagedToolchain::new();
+    let supervisor = SemanticSupervisor::new(Some(packaged.tool_profile()));
+    supervisor.set_enabled(true).await;
+
+    let ws_tmp = tempfile::tempdir().unwrap();
+    let ws = ws_tmp.path();
+    fs::create_dir_all(ws.join("src")).unwrap();
+
+    fs::write(
+        ws.join("tsconfig.json"),
+        r#"{"compilerOptions":{"target":"ES2022","module":"NodeNext","moduleResolution":"NodeNext"}}"#,
+    )
+    .unwrap();
+
+    // Destination file with lone CR line endings, definition on line 3
+    let dest_path = ws.join("src/dest.ts");
+    let dest_text = "// header 0\r// header 1\r// header 2\rexport const crTargetSymbol = 42;\r";
+    fs::write(&dest_path, dest_text).unwrap();
+
+    // Main file with canonical LF endings importing crTargetSymbol
+    let main_path = ws.join("src/main.ts");
+    let main_text = "import { crTargetSymbol } from './dest';\nexport const x = crTargetSymbol;\n";
+    fs::write(&main_path, main_text).unwrap();
+
+    let conn = ConnectionId("conn-cr".into());
+    let epoch = supervisor.register_connection(&conn).await;
+    let session = supervisor
+        .get_or_create_session(conn, "proj-cr", None, ws.to_path_buf(), epoch)
+        .await
+        .expect("create session");
+    session.initialize().await.expect("initialize session");
+
+    let dest_uri = path_to_file_uri(&dest_path);
+    let main_uri = path_to_file_uri(&main_path);
+
+    // Open direct overlay for dest.ts with lone CR line endings
+    session
+        .did_open(
+            dest_uri.clone(),
+            "typescript".into(),
+            1,
+            dest_text.into(),
+        )
+        .await
+        .unwrap();
+
+    session
+        .did_open(
+            main_uri.clone(),
+            "typescript".into(),
+            1,
+            main_text.into(),
+        )
+        .await
+        .unwrap();
+
+    // Query definition of crTargetSymbol from main.ts (line 1, col 20)
+    let def_res = session
+        .navigation(
+            "textDocument/definition",
+            NavigationParams {
+                text_document: TextDocumentIdentifier {
+                    uri: main_uri.clone(),
+                },
+                position: Position {
+                    line: 1,
+                    character: 20,
+                },
+                dam_hopper_document_version: 1,
+                dam_hopper_model_generation: None,
+            },
+        )
+        .await
+        .expect("navigation on cr target");
+
+    // The definition in dest.ts must be on line 3
+    let def_str = serde_json::to_string(&def_res).unwrap();
+    assert!(
+        def_str.contains("\"line\":3"),
+        "Definition must resolve to line 3 of lone CR destination: {def_str}"
+    );
+
+    // Now apply a ranged edit on line 3 in dest.ts via overlay
+    // Rename crTargetSymbol -> crRenamedSymbol
+    let edit_change = TextDocumentContentChangeEvent {
+        range: Some(Range {
+            start: Position {
+                line: 3,
+                character: 13,
+            },
+            end: Position {
+                line: 3,
+                character: 27,
+            },
+        }),
+        range_length: Some(14),
+        text: "crRenamedSymbol".into(),
+    };
+    session
+        .did_change(dest_uri.clone(), 2, vec![edit_change])
+        .await
+        .unwrap();
+
+    // Also update main.ts to import crRenamedSymbol
+    let main_change = TextDocumentContentChangeEvent {
+        range: None,
+        range_length: None,
+        text: "import { crRenamedSymbol } from './dest';\nexport const x = crRenamedSymbol;\n".into(),
+    };
+    session
+        .did_change(main_uri.clone(), 2, vec![main_change])
+        .await
+        .unwrap();
+
+    // Re-query definition
+    let def_res2 = session
+        .navigation(
+            "textDocument/definition",
+            NavigationParams {
+                text_document: TextDocumentIdentifier {
+                    uri: main_uri.clone(),
+                },
+                position: Position {
+                    line: 1,
+                    character: 20,
+                },
+                dam_hopper_document_version: 2,
+                dam_hopper_model_generation: None,
+            },
+        )
+        .await
+        .expect("navigation on renamed cr target");
+
+    let def_str2 = serde_json::to_string(&def_res2).unwrap();
+    assert!(
+        def_str2.contains("\"line\":3"),
+        "Definition must still resolve to line 3 after ranged edit: {def_str2}"
+    );
+
+    // Unopened projected pin path: destination with lone CR line endings kept unopened on disk
+    let unopened_cr_path = ws.join("src/unopened_cr.ts");
+    let unopened_cr_text = "// cr header 0\r// cr header 1\r// cr header 2\rexport const unopenedCrSymbol = 99;\r";
+    fs::write(&unopened_cr_path, unopened_cr_text).unwrap();
+
+    let unopened_cr_uri = path_to_file_uri(&unopened_cr_path);
+    let projected = dam_hopper_server::semantic::uri::project_disk_text_for_pin(unopened_cr_text);
+    assert_eq!(projected, "// cr header 0\n// cr header 1\n// cr header 2\nexport const unopenedCrSymbol = 99;\n");
+    let projected_sha = dam_hopper_server::semantic::uri::compute_text_sha256(&projected);
+
+    let main_unopened_change = TextDocumentContentChangeEvent {
+        range: None,
+        range_length: None,
+        text: "import { unopenedCrSymbol } from './unopened_cr';\nexport const y = unopenedCrSymbol;\n".into(),
+    };
+    session
+        .did_change(main_uri.clone(), 3, vec![main_unopened_change])
+        .await
+        .unwrap();
+
+    let pinned_rx = session
+        .submit_pinned_navigation(
+            serde_json::Value::from(9999),
+            "textDocument/definition",
+            NavigationParams {
+                text_document: TextDocumentIdentifier {
+                    uri: main_uri.clone(),
+                },
+                position: Position {
+                    line: 1,
+                    character: 20,
+                },
+                dam_hopper_document_version: 3,
+                dam_hopper_model_generation: None,
+            },
+            vec![(
+                unopened_cr_uri.clone(),
+                "typescript".into(),
+                projected.into_owned(),
+            )],
+        )
+        .await
+        .expect("submit pinned navigation with projected lone CR text");
+
+    let pinned_res = pinned_rx.await.expect("pinned response").expect("pinned result ok");
+    let locs = pinned_res.get("result").and_then(|r| r.as_array()).expect("array of locations");
+    assert_eq!(locs.len(), 1, "Exactly one location must resolve for unopened projected pin");
+    let loc = &locs[0];
+    let target_uri = loc.get("targetUri").or_else(|| loc.get("uri")).and_then(|u| u.as_str()).expect("target uri");
+    assert_eq!(target_uri, unopened_cr_uri, "Target URI must match unopened_cr.ts");
+    let range = loc.get("targetSelectionRange").or_else(|| loc.get("range")).expect("range");
+    assert_eq!(range["start"]["line"], 3, "Start line must be 3");
+    assert_eq!(range["start"]["character"], 13, "Start character must be 13 (unopenedCrSymbol)");
+
+    let proven = pinned_res.get("_damHopperProvenSnapshots").and_then(|p| p.as_object()).expect("proven snapshots object");
+    assert!(proven.contains_key(&unopened_cr_uri), "Proven snapshots must contain unopened_cr.ts");
+    let snap = &proven[&unopened_cr_uri];
+    assert_eq!(snap["contentSha256"], projected_sha);
+    assert_eq!(snap["version"], 0);
+    assert_eq!(snap["openIncarnation"], 0);
+
+    supervisor.shutdown().await;
+}

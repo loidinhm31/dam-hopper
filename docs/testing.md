@@ -28,7 +28,7 @@ Dam-Hopper maintains strict quality gates across backend, shared libraries, and 
 
 | Layer | Runner | Scope & Discovery Pattern | Target / Environment | Command | Workflow Purpose |
 |---|---|---|---|---|---|
-| **Backend Unit + Integration** | `cargo test` | Unit: `server/src/**`<br>Integration: `server/tests/**` | Native binary, temp filesystems, real Git repos | `pnpm test` | Production server logic, CAS, PTY, Git operations, API routes |
+| **Backend Unit + Integration** | `cargo test` | Unit: `server/src/**`<br>Integration: `server/tests/**` (gateway suite skipped unless `--features test-support` is passed) | Native binary, temp filesystems, real Git repos | `pnpm test` (skips gateway tests) / `cargo test --manifest-path server/Cargo.toml --features test-support --test semantic_websocket -- --test-threads=1` | Production server logic, CAS, PTY, Git operations, API routes |
 | **Frontend Unit** | Vitest (jsdom) | `packages/ui/src/**/*.test.{ts,tsx}` | Node.js / jsdom | `pnpm --filter @dam-hopper/ui test` | State reducers, hooks, pure helpers, data models |
 | **Browser Component Regressions** | Vitest Browser Mode | `packages/ui/browser-tests/**/*.browser.{ts,tsx}` | Headless Chromium, port 15173 | `pnpm --filter @dam-hopper/ui test:browser` | Focused component lifecycle, xterm geometry, media tickets |
 | **Application E2E Journeys** | `@playwright/test` | `packages/ui/e2e/**/*.spec.ts` | Headless Chromium, containerized web SPA + production server (MongoDB default or SQLite lite mode) | `pnpm --filter @dam-hopper/ui test:e2e` | Full application user journeys, layout bounds, auth seed |
@@ -78,6 +78,16 @@ PATCH 403 rejection, Monaco Go to Definition across `.ts`, `.tsx`, `.js`, `.jsx`
 astral emoji coordinates, multi-result peek, in-memory dirty buffer navigation with container disk
 byte isolation, 64 KiB adaptive sync crossings, socket loss reconnect recovery with dirty buffer replay,
 complete zero-child teardown on disable, and 6 full-viewport visual checkpoints under `review.md` governance.
+
+### Gateway Integration Tests & `test-support` Feature Gate
+
+Integration tests validating gateway coordinate proofs and multi-stage cancellation (`server/tests/semantic_websocket.rs`) utilize async channel barrier synchronization (`test_barriers`). In `server/Cargo.toml`, this suite is gated under `test-support` (`required-features = ["test-support"]`) to exclude barrier code and flags from default production release binaries. Run via:
+
+```bash
+cargo test --manifest-path server/Cargo.toml --features test-support --test semantic_websocket -- --test-threads=1
+```
+
+> **Coverage Gap Notice (Tracked W1):** Because `required-features = ["test-support"]` is specified on the test target, running standard `cargo test` or `pnpm test` silently skips all 17 gateway tests. Wiring `--features test-support` into CI pipelines (`pr-quality-gate.yml`) and standard test runners, along with isolating process-global barriers, is tracked for Phase 04 under review finding W1.
 
 ---
 

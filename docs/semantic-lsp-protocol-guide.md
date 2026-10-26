@@ -2,7 +2,7 @@
 
 **Authority:** Server Semantic Subsystem (`server/src/api/semantic_ws.rs`, `server/src/semantic/gateway.rs`, `server/src/semantic/uri.rs`, `server/src/semantic/resources.rs`)  
 **Client Implementation:** Shared Monaco Semantic Client (`packages/ui/src/api/semantic-client.ts`, `packages/ui/src/lib/semantic-monaco.ts`, `packages/ui/src/lib/semantic-model-uri.ts`, `packages/ui/src/stores/semantic-navigation.ts`)  
-**Status:** Shipped Feature Protocol (Phase 09 & Phase 10 Qualified for Portable-Only Linux x64 Server + Web Host; Visual Human Review Pending Governance in `review.md`)
+**Status:** Shipped Feature Protocol (Phase 09 & Phase 10 Qualified for Portable-Only Linux x64 Server + Web Host; PR #74 Remediation: Phase 01 Passed, Phase 02 Accepted with Deferred Issues; Visual Human Review Pending Governance in `review.md`)
 
 ---
 
@@ -133,7 +133,7 @@ The gateway exposes a strictly fenced subset of the Language Server Protocol. Un
 | `textDocument/didClose` | Client → Server | `Ready` | Closes document overlay and releases in-memory overlay bytes. If zero open documents remain, initiates a 60-second idle eviction timer. |
 | `textDocument/definition` | Client → Server | `Ready` | Requests definition locations. `params` MUST include `damHopperDocumentVersion`. Responses include destination freshness metadata. |
 | `textDocument/implementation` | Client → Server | `Ready` | Requests implementation locations. `params` MUST include `damHopperDocumentVersion`. Responses include destination freshness metadata. |
-| `$/cancelRequest` | Client → Server | `Ready` | Cancels an in-flight navigation request by echoing `{ id: <client-req-id> }`. Cancelled requests return JSON-RPC error `-32800 REQUEST_CANCELLED`. |
+| `$/cancelRequest` | Client → Server | `Ready` | Cancels an in-flight navigation request by client request ID (`{ id: <client-req-id> }`). The gateway marks the logical entry cancelled across both child stages, cancels active child operations, and returns JSON-RPC error `-32800 REQUEST_CANCELLED` echoing the original client request ID. |
 | `shutdown` | Client → Server | `Ready`, `Initializing` | Gracefully shuts down child language server. Returns `result: null`. |
 | `exit` | Client → Server | Any | Releases session actor and tears down connection. |
 
@@ -444,13 +444,13 @@ If the gateway returns `-32005` (e.g. following a workspace switch, config reloa
 5. If the revocation was permanent (e.g. project deleted or auth revoked), reconnect attempts fail closed.
 ### 3. Request Cancellation (`$/cancelRequest`)
 
-1. If the user navigates away, closes a tab, or unmounts the editor while a navigation query is pending, the client immediately transmits `$/cancelRequest` with the request ID.
-2. The server cancels child processing and replies with JSON-RPC error `-32800 REQUEST_CANCELLED`.
-3. The client suppresses user-facing error notifications for cancelled requests.
-
+1. If the user navigates away, closes a tab, or unmounts the editor while a navigation query is pending, the client transmits `$/cancelRequest` carrying `{ "id": <client-req-id> }`.
+2. The gateway correlates the client request ID through its `LogicalNavigationEntry` across both child stages (initial query and pin-and-requery) and inter-stage pin acquisition. If an active child process request is running, the gateway dispatches `cancel_request` to the child language server.
+3. The eventual terminal completion frame returns JSON-RPC error `-32800 REQUEST_CANCELLED` echoing the client's original request ID. (Cancellation notifications themselves do not produce responses).
+4. The client suppresses user-facing error notifications for cancelled requests.
 ---
 
-## 10. PR74 Remediation Protocol Contracts (Phase 01 Implemented; Phases 02–04 Proposed Design)
+## 10. PR74 Remediation Protocol Contracts (Phases 01 & 02 Implemented; Phases 03–04 Proposed Design)
 
 > **Notice:** The following protocol contracts document enhancements resolving findings F1–F13 (PR #74 review remediation). Phase 01 protocol contracts (F1, F5, F6, F7) are implemented in client and server source code with scoped unit/component test coverage, while full live-TSLS and containerized browser qualification remain open until Phase 04 integration under active release hold. Phases 02–04 specifications represent proposed future designs currently undergoing staged implementation.
 
@@ -501,10 +501,11 @@ If the gateway returns `-32005` (e.g. following a workspace switch, config reloa
 - **Error-to-Close Pipeline:** `ws.onerror` captures `attempt.lastError` without prematurely retiring the attempt. The subsequent `ws.onclose` consumes `attempt.lastError` for diagnostic reporting and correctly routes terminal vs retryable scheduling.
 - **Admissible Dirty Buffer Replay:** Prior to declaring `ready`, the client re-attaches the target, initializes the session, and replays all admissible dirty buffers matching provenance via `replayMatchingModels()`. Over-cap models remain blocked.
 
-### 5. Immutable Query Snapshot Proof & Logical Cancellation (Phase 02 Proposed: F3, F9)
-- **Immutable Query Snapshot Proof (F3):** Gateway destination proofs (target URI, range, content SHA, version, incarnation) are captured from an exact immutable query snapshot rather than mutable live state.
-- **Unified Logical Navigation Cancellation (F9):** `$/cancelRequest` spans both supervisor queue and language server execution stages, freeing resources without orphan tasks.
-
+### 5. Coordinate Proofs, Lossless CR Spans & Logical Cancellation (Phase 02 Implemented: F3, F8, F9)
+- **Borrowed Lossless Line-Span Iteration (F8):** `server/src/semantic/overlay.rs` provides `lossless_line_spans` yielding borrowed `LineSpan` structures without per-line string allocations. Recognizes CRLF (`\r\n`), LF (`\n`), and lone CR (`\r`), and preserves trailing empty lines. Direct-client text is never mutated to LF in storage or memory; `position_to_byte_offset` and destination range validation consume borrowed spans directly, ensuring byte offsets and UTF-16 code units match unrewritten documents.
+- **Immutable Query Snapshot Coordinate Proof (F3):** Session actors return internal coordinate proofs (`_damHopperProvenSnapshots`) containing `{ text, contentSha256, version, openIncarnation }` in response to pinned navigation requeries. The gateway validates destination coordinates against this exact proof, separates actor incarnation checks (`open_dest_actor_identities`) from gateway state checks (`open_docs_at_submit`), and deletes `_damHopperProvenSnapshots` prior to outbound serialization. Wire Location and LocationLink objects append `damHopperDestinationContentSha256`, `damHopperDestinationVersion`, and `damHopperDestinationIncarnation`.
+- **Unified Logical Navigation Cancellation (F9):** The gateway maintains `LogicalNavigationEntry` in `client_to_logical` spanning stage 1, disk reads, pin acquisition, stage 2, and outbound frame publication under in-flight concurrency caps. Re-using active client request IDs before terminal completion is rejected with `-32600`. Cancellation via `$/cancelRequest` cancels active child requests and returns `-32800 REQUEST_CANCELLED` echoing the original client request ID. Outbound channel failure revokes the session token (with saturated-outbound cancellation/deadline races [W3], deadline coverage across disk/cancel awaits [W4], and direct transport termination [W8] tracked as deferred issues for Phase 04).
+- **Test Feature Gate & Phase 04 Deferred Items:** Integration tests utilizing barrier synchronization (`tests/semantic_websocket.rs`) require `--features test-support` in `server/Cargo.toml`. Seven review warnings (W1 CI test-support wiring & global barriers, W3 outbound admission cancellation/deadline race, W4 navigation deadline coverage of disk/cancel awaits, W5 F3/F9 test coverage fidelity, W7 baseline diff header repair, W8 transport termination on enqueue failure, W9 bounded off-thread snapshot reader and worker lifetime) are tracked for Phase 04 integrated qualification linking to [Cycle 3 Code Review Report](../plans/reports/code-review-261026-0709-phase02-gateway-coordinate-proofs-cycle3.md).
 ### 6. Session Lifecycle & Idle Management (Phase 03 Proposed: F10, F11, F13)
 - **Supervisor Process Tree Reaping & Restart Budget (F10):** Replacement child processes strictly adhere to bounded restart budgets and replay accepted overlays before reaching `ready`. Exhausted supervisor actors cannot revive from `didOpen`.
 - **Server-Authoritative Idle Session Eviction (F11):** Empty sessions with zero open documents evict after a 60-second idle deadline under real WebSocket Pings.

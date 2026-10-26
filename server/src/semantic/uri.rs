@@ -498,11 +498,11 @@ pub fn validate_range_in_text(range: &Range, text: &str) -> Result<(), UriMediat
     validate_range(range)?;
 
     let check_pos = |pos: Position| -> Result<(), UriMediationError> {
-        let mut current_line = 0u32;
-        for raw_line in text.split('\n') {
-            if current_line == pos.line {
-                let line_no_cr = raw_line.strip_suffix('\r').unwrap_or(raw_line);
-                let utf16_len = line_no_cr.encode_utf16().count() as u32;
+        let mut total_lines = 0u32;
+        for span in crate::semantic::overlay::lossless_line_spans(text) {
+            total_lines = span.line_number.saturating_add(1);
+            if span.line_number == pos.line {
+                let utf16_len = span.content.encode_utf16().count() as u32;
                 if pos.character <= utf16_len {
                     return Ok(());
                 } else {
@@ -512,11 +512,10 @@ pub fn validate_range_in_text(range: &Range, text: &str) -> Result<(), UriMediat
                     )));
                 }
             }
-            current_line = current_line.saturating_add(1);
         }
         Err(UriMediationError::InvalidRange(format!(
             "Position ({}:{}) line exceeds document line count {}",
-            pos.line, pos.character, current_line
+            pos.line, pos.character, total_lines
         )))
     };
 
@@ -1179,6 +1178,26 @@ mod tests {
             },
         };
         assert!(validate_range_in_text(&bad_line_range, text).is_err());
+
+        // Lone CR text range validation
+        let cr_text = "line0\rline1\rline2";
+        let cr_valid_range = Range {
+            start: Position { line: 1, character: 0 },
+            end: Position { line: 1, character: 5 },
+        };
+        assert!(validate_range_in_text(&cr_valid_range, cr_text).is_ok());
+
+        let cr_oob_char = Range {
+            start: Position { line: 1, character: 0 },
+            end: Position { line: 1, character: 6 },
+        };
+        assert!(validate_range_in_text(&cr_oob_char, cr_text).is_err());
+
+        let cr_oob_line = Range {
+            start: Position { line: 3, character: 0 },
+            end: Position { line: 3, character: 0 },
+        };
+        assert!(validate_range_in_text(&cr_oob_line, cr_text).is_err());
 
         let temp = tempdir().unwrap();
         let canonical_root = dunce::canonicalize(temp.path()).unwrap();

@@ -1,7 +1,7 @@
 # Authenticated Semantic WebSocket Gateway Architecture
 
 **Authority:** Server Semantic Subsystem (`server/src/api/semantic_ws.rs`, `server/src/semantic/gateway.rs`, `server/src/semantic/uri.rs`)  
-**Status:** Maintained Architecture Specification (Phase 09 Qualified for Portable-Only Linux x64 Server + Web)
+**Status:** Maintained Architecture Specification (Phase 09 Qualified for Portable-Only Linux x64 Server + Web; PR #74 Remediation: Phase 01 Passed, Phase 02 Accepted with Deferred Issues; Release Hold Maintained)
 
 ## Scope and Subsystem Boundary
 
@@ -191,12 +191,11 @@ Navigation requests (`textDocument/definition`, `textDocument/implementation`) M
 2. Rejects stale requests with `-32003 STALE_VERSION`.
 3. Strips `damHopperDocumentVersion` and `damHopperModelGeneration` before dispatching the standard LSP request to child TSLS.
 
-### Known JSON-RPC Protocol Deviations
+### Known Protocol Deviations & Resolution Status
 
-- **Cancelled Request ID Correlation (Tracked W-B):** When `$/cancelRequest` cancels an in-flight navigation request, the completion response currently returns `{ id: null }` rather than echoing the client's original request ID.
+- **Cancelled Request ID Correlation (Tracked W-B — Resolved in Phase 02):** Previously, cancelling an in-flight request returned `{ id: null }`. Phase 02 introduces `LogicalNavigationEntry` keyed by client request ID. When `$/cancelRequest` cancels a request, the gateway marks `entry.cancelled = true`, cancels any active child request, and returns JSON-RPC error `-32800 REQUEST_CANCELLED` with the client's original request ID. Outbound admission and deadline coverage races remain tracked under W3/W4.
 - **Invalid Request ID Handling (Tracked W-C):** Requests with invalid ID types (e.g. boolean, array, or object) return error frames with `{ id: null }` rather than echoing the invalid value.
 - **Pre-Actor Rejection Overlay Sync (Tracked W-D):** If an opened file encounters pre-actor validation errors on subsequent operations, an explicit `did_close` is issued to prevent in-memory overlay desynchronization.
-
 ---
 
 ## Virtual URI Grammar & Path Containment
@@ -247,6 +246,78 @@ Containment is evaluated strictly against the canonical target root (`canonical_
 - **`outsideTarget` Marker:** If all locations fall outside the target root, the gateway returns `{ "outsideTarget": true }` instead of an empty result, signaling that definitions exist externally without disclosing host filesystem paths.
 - **Implementation Note on Classification Folding:** If a child location object is malformed (e.g. non-object or non-string URI), `filter_single_location_or_link` returns `Ok(None)`, which is counted alongside genuine outside-target locations. Consequently, an entirely malformed child array produces `{"outsideTarget": true}`. Distinguishing malformed child outputs from authentic out-of-root locations is tracked for future refinement.
 
+---
+
+## Destination Coordinate Proofs & Multi-Stage Requery (Phase 02 / F3)
+
+Cross-document navigation (`textDocument/definition`, `textDocument/implementation`) coordinates unopened files using a two-stage pin-and-requery workflow:
+
+1. **Preliminary Stage-1 Query:** The client's request is submitted to the active session actor. If the response references in-target files that are not open in the gateway's overlay registry, the gateway identifies unopened destination candidates.
+2. **Bounded Destination Pinning & Requery:** Unopened candidate files are read from disk within strict limits (`MAX_DOCUMENT_BYTES`), projected, and pinned into the language server session via `submit_pinned_navigation`. The actor then executes a stage-2 requery against the pinned state.
+3. **Internal Proof Generation & Stripping:** The session actor attaches an internal coordinate proof (`_damHopperProvenSnapshots`) to its requery response payload, containing `{ text, contentSha256, version, openIncarnation }` for each snapshot evaluated. Before returning the final result or serializing frames to the client, the gateway extracts and deletes `_damHopperProvenSnapshots` (`obj.remove("_damHopperProvenSnapshots")`). Internal proof metadata is never transmitted on the wire to clients.
+4. **Separated Actor vs. Gateway Incarnation Validation:**
+   - **Gateway-Level State Validation:** The gateway compares `open_docs_at_submit` with post-requery gateway state (`open_docs`) to ensure the user did not modify or close the destination document through the gateway while requery was in flight.
+   - **Actor-Level State Validation:** The gateway compares the snapshot's actor version and incarnation (`actor_ver`, `actor_inc` in `open_dest_actor_identities`) with the proven snapshot metadata (`snap_ver`, `snap_inc`).
+   - **Separation Invariant:** Gateway overlay versioning and actor child incarnation operate in distinct domains; separating their validation prevents false-positive version collisions and eliminates relabeling destination coordinates with live content when documents mutate during requery.
+5. **Wire Destination Provenance:** Validated in-target destinations append DamHopper wire extension attributes (`damHopperDestinationContentSha256`, `damHopperDestinationVersion`, `damHopperDestinationIncarnation`) to standard Location and LocationLink structures via `filter_location_or_link_result_with_provenance`.
+
+---
+
+## Borrowed Lossless Line-Span Iteration (Phase 02 / F8)
+
+Accurate position-to-byte conversion and destination range validation require exact line-ending accounting matching TypeScript 5.9 parser behavior:
+
+- **Zero-Allocation Borrowed Iteration:** `server/src/semantic/overlay.rs` provides `lossless_line_spans(text: &str) -> LosslessLineSpans<'a>`, yielding borrowed `LineSpan<'a>` (`line_number`, `start_byte`, `content`, `separator_len`).
+- **Separator Recognition:** Recognizes CRLF (`\r\n`, separator len 2), LF (`\n`, separator len 1), and lone CR (`\r`, separator len 1), preserving trailing empty lines without allocating intermediate `String` instances per line.
+- **Client Overlay Text Preservation:** Direct-client text is never rewritten or mutated to LF-only representations in memory or storage. Both `position_to_byte_offset` (in `overlay.rs`) and `validate_range_in_text` (in `uri.rs`) consume `lossless_line_spans`, guaranteeing that byte accounting and UTF-16 code unit indexing match direct-client documents containing mixed or lone CR endings.
+
+---
+
+## Retained Logical Cancellation Ownership Across Child Stages (Phase 02 / F9)
+
+Navigation requests span multiple asynchronous stages (initial query, disk reads, pin acquisition, and stage-2 requery). The gateway enforces unified logical request ownership:
+
+- **Single Logical Registration (`LogicalNavigationEntry`):** The gateway maintains `client_to_logical: Arc<Mutex<HashMap<Value, LogicalNavigationEntry>>>` where `LogicalNavigationEntry` records `{ active_child_id: Option<u64>, cancelled: bool }`.
+- **Child ID Correlation:** `internal_to_client: Arc<Mutex<HashMap<u64, Value>>>` correlates child request IDs back to the original client request ID.
+- **Lifecycle Span & In-Flight Tracking:** A single in-flight permit (`in_flight_count`) and navigation deadline (`nav_deadline`) cover stage 1, disk snapshot reads, pin acquisition, stage 2, and outbound frame publication (with remaining deadline coverage gaps across disk/cancel awaits tracked as W4, and outbound channel capacity races tracked as W3).
+- **Duplicate-ID Rejection Throughout:** Re-using an active client request ID before terminal publication is rejected with JSON-RPC error `-32600 Invalid request` across all execution stages.
+- **Cancellation Propagation:** Incoming `$/cancelRequest` notifications lookup the logical entry by client ID:
+  - If found, `entry.cancelled = true` is set immediately.
+  - If an `active_child_id` is present, the gateway dispatches `handle.cancel_request(child_id)` to the active child process.
+  - If cancellation arrives during the inter-stage gap (between stage 1 and stage 2), stage 2 is aborted before dispatch.
+- **Terminal Error Echoing:** When a cancelled request terminates, the gateway emits JSON-RPC error `-32800 REQUEST_CANCELLED` carrying the client's original request ID. (Cancellation notifications themselves do not produce responses).
+- **Session Revocation on Enqueue Failure:** If outbound channel transmission fails during request finalization, the gateway revokes the session token (`tok.revoke()`) to fence against orphaned responses (direct transport termination rather than token revocation alone remains tracked as W8).
+
+---
+
+## Test Feature Gating & Phase 04 Deferred Items
+
+### Cargo `test-support` Feature Gate
+
+The integration test suite `server/tests/semantic_websocket.rs` exercises deterministic barrier synchronization (`test_barriers`) to verify complex interleavings. In `server/Cargo.toml`, the test target is gated:
+
+```toml
+[features]
+test-support = []
+
+[[test]]
+name = "semantic_websocket"
+required-features = ["test-support"]
+```
+
+This prevents test-only barrier synchronization flags (`BarrierGuard`, `F3_ENABLED`, `F9_GAP_ENABLED`, `F9_STAGE2_ENABLED`) from being compiled into default production release binaries. Running gateway integration tests requires `--features test-support`.
+
+### Phase 04 Deferred Issues
+
+Phase 02 was formally accepted with seven deferred review issues tracked for Phase 04 integrated qualification, linking directly to [Cycle 3 Code Review Report](../plans/reports/code-review-261026-0709-phase02-gateway-coordinate-proofs-cycle3.md):
+
+1. **W1 (High) — CI Test-Support Wiring & Process-Global Barriers:** `semantic_websocket` requires `--features test-support`; runner scripts and CI must explicitly enable the feature. Barrier flags are process-global; tests must be serialized (`--test-threads=1`) with bounded waits and cleanup that wakes paused workers.
+2. **W3 (High) — Outbound Admission Cancellation/Deadline Race:** In `finish()`, capacity recovery under saturated outbound channels can commit responses after a cancellation or deadline has elapsed. Capacity reservation must occur under the navigation deadline and wakeable cancellation signal.
+3. **W4 (Medium) — Navigation Deadline Coverage of All Awaits:** The navigation deadline must cover all owned awaits from initiation, including disk snapshot reads, session handle submissions, and bounded child-cancel cleanup.
+4. **W5 (High) — Test Coverage Fidelity (F3/F9):** Gateway fixtures must test the exact planned absent-at-submission → user-open A before pin → query A → edit B interleaving, and held-child cancellation logging.
+5. **W7 (Medium) — Baseline Diff Header & API Repair:** Repair corrupt patch line counts and outdated API signatures in `plans/reports/baseline-b031e6a-f3-f9-failing-before.md`.
+6. **W8 (Medium) — Transport Termination on Enqueue Failure:** Enqueue failure revokes the session token, but should additionally invoke direct connection transport termination.
+7. **W9 (High) — Bounded Off-Thread Snapshot Reader & Worker Lifetime:** Off-thread disk snapshot reads must enforce `MAX_DOCUMENT_BYTES + 1` caps, validate file descriptors/identities without following symlinks, and retain worker permits until blocking tasks complete to prevent detached worker accumulation.
 ---
 
 ## Error Handling & Close Code Taxonomy

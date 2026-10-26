@@ -40,22 +40,106 @@ pub enum OverlayError {
     ResourceLimit(#[from] ResourceLimitError),
 }
 
+/// Borrowed line span representing a single line in a text document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineSpan<'a> {
+    /// 0-based line index.
+    pub line_number: u32,
+    /// 0-based byte offset where this line starts in the original text.
+    pub start_byte: usize,
+    /// Borrowed content of this line, strictly excluding line terminators (\r\n, \n, or \r).
+    pub content: &'a str,
+    /// Length in bytes of the line separator (0 for last line without trailing newline, 1 for \n or \r, 2 for \r\n).
+    pub separator_len: usize,
+}
+
+/// Lossless borrowed line span iterator that recognizes CRLF, LF, and lone CR,
+/// and properly preserves trailing empty lines without per-line allocations or text mutation.
+pub struct LosslessLineSpans<'a> {
+    remaining: &'a str,
+    current_byte_offset: usize,
+    current_line: u32,
+    done: bool,
+}
+
+impl<'a> Iterator for LosslessLineSpans<'a> {
+    type Item = LineSpan<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        let bytes = self.remaining.as_bytes();
+        let mut idx = 0;
+        while idx < bytes.len() {
+            let b = bytes[idx];
+            if b == b'\r' {
+                let content = &self.remaining[..idx];
+                let is_crlf = idx + 1 < bytes.len() && bytes[idx + 1] == b'\n';
+                let sep_len = if is_crlf { 2 } else { 1 };
+                let span = LineSpan {
+                    line_number: self.current_line,
+                    start_byte: self.current_byte_offset,
+                    content,
+                    separator_len: sep_len,
+                };
+                self.current_line = self.current_line.saturating_add(1);
+                self.current_byte_offset += idx + sep_len;
+                self.remaining = &self.remaining[idx + sep_len..];
+                return Some(span);
+            } else if b == b'\n' {
+                let content = &self.remaining[..idx];
+                let span = LineSpan {
+                    line_number: self.current_line,
+                    start_byte: self.current_byte_offset,
+                    content,
+                    separator_len: 1,
+                };
+                self.current_line = self.current_line.saturating_add(1);
+                self.current_byte_offset += idx + 1;
+                self.remaining = &self.remaining[idx + 1..];
+                return Some(span);
+            }
+            idx += 1;
+        }
+
+        let content = self.remaining;
+        let span = LineSpan {
+            line_number: self.current_line,
+            start_byte: self.current_byte_offset,
+            content,
+            separator_len: 0,
+        };
+        self.done = true;
+        self.current_byte_offset += content.len();
+        self.remaining = "";
+        Some(span)
+    }
+}
+
+/// Returns a zero-allocation iterator over borrowed line spans in `text`.
+pub fn lossless_line_spans<'a>(text: &'a str) -> LosslessLineSpans<'a> {
+    LosslessLineSpans {
+        remaining: text,
+        current_byte_offset: 0,
+        current_line: 0,
+        done: false,
+    }
+}
+
 /// Computes byte offset within a UTF-8 text given a 0-based line and UTF-16 character code unit offset.
 pub fn position_to_byte_offset(text: &str, pos: Position) -> Result<usize, OverlayError> {
-    let mut current_line: u32 = 0;
-    let mut line_start_byte: usize = 0;
-
-    let lines = text.split('\n');
-    for line in lines {
-        if current_line == pos.line {
-            // Trim carriage return for CRLF lines
-            let line_content = line.strip_suffix('\r').unwrap_or(line);
+    let mut total_lines: u32 = 0;
+    for span in lossless_line_spans(text) {
+        total_lines = span.line_number + 1;
+        if span.line_number == pos.line {
             let mut utf16_count: u32 = 0;
             let mut char_byte_offset: usize = 0;
 
-            for ch in line_content.chars() {
+            for ch in span.content.chars() {
                 if utf16_count == pos.character {
-                    return Ok(line_start_byte + char_byte_offset);
+                    return Ok(span.start_byte + char_byte_offset);
                 }
                 if utf16_count > pos.character {
                     return Err(OverlayError::InvalidPosition {
@@ -69,7 +153,7 @@ pub fn position_to_byte_offset(text: &str, pos: Position) -> Result<usize, Overl
             }
 
             if utf16_count == pos.character {
-                return Ok(line_start_byte + char_byte_offset);
+                return Ok(span.start_byte + char_byte_offset);
             }
 
             return Err(OverlayError::InvalidPosition {
@@ -81,10 +165,6 @@ pub fn position_to_byte_offset(text: &str, pos: Position) -> Result<usize, Overl
                 ),
             });
         }
-
-        // Advance line start byte (+1 for the '\n' separator)
-        line_start_byte += line.len() + 1;
-        current_line += 1;
     }
 
     Err(OverlayError::InvalidPosition {
@@ -92,7 +172,7 @@ pub fn position_to_byte_offset(text: &str, pos: Position) -> Result<usize, Overl
         character: pos.character,
         reason: format!(
             "Line {} exceeds total document lines ({})",
-            pos.line, current_line
+            pos.line, total_lines
         ),
     })
 }
@@ -587,5 +667,113 @@ mod tests {
         let doc = map.get("doc.ts").unwrap();
         assert_eq!(doc.text, "alpha bar omega");
         assert_eq!(doc.version, 2);
+    }
+
+    #[test]
+    fn test_lossless_line_spans_comprehensive() {
+        // Empty string -> single empty line
+        let spans: Vec<_> = lossless_line_spans("").collect();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].line_number, 0);
+        assert_eq!(spans[0].start_byte, 0);
+        assert_eq!(spans[0].content, "");
+        assert_eq!(spans[0].separator_len, 0);
+
+        // Lone CR text
+        let cr_text = "line0\rline1\rline2";
+        let spans: Vec<_> = lossless_line_spans(cr_text).collect();
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0], LineSpan { line_number: 0, start_byte: 0, content: "line0", separator_len: 1 });
+        assert_eq!(spans[1], LineSpan { line_number: 1, start_byte: 6, content: "line1", separator_len: 1 });
+        assert_eq!(spans[2], LineSpan { line_number: 2, start_byte: 12, content: "line2", separator_len: 0 });
+
+        // Mixed text: CRLF, CR, LF
+        let mixed = "first\r\nsecond\rthird\nfourth";
+        let spans: Vec<_> = lossless_line_spans(mixed).collect();
+        assert_eq!(spans.len(), 4);
+        assert_eq!(spans[0], LineSpan { line_number: 0, start_byte: 0, content: "first", separator_len: 2 });
+        assert_eq!(spans[1], LineSpan { line_number: 1, start_byte: 7, content: "second", separator_len: 1 });
+        assert_eq!(spans[2], LineSpan { line_number: 2, start_byte: 14, content: "third", separator_len: 1 });
+        assert_eq!(spans[3], LineSpan { line_number: 3, start_byte: 20, content: "fourth", separator_len: 0 });
+
+        // Trailing empty lines across all separators
+        let trailing_lf: Vec<_> = lossless_line_spans("foo\n").collect();
+        assert_eq!(trailing_lf.len(), 2);
+        assert_eq!(trailing_lf[0], LineSpan { line_number: 0, start_byte: 0, content: "foo", separator_len: 1 });
+        assert_eq!(trailing_lf[1], LineSpan { line_number: 1, start_byte: 4, content: "", separator_len: 0 });
+
+        let trailing_crlf: Vec<_> = lossless_line_spans("foo\r\n").collect();
+        assert_eq!(trailing_crlf.len(), 2);
+        assert_eq!(trailing_crlf[0], LineSpan { line_number: 0, start_byte: 0, content: "foo", separator_len: 2 });
+        assert_eq!(trailing_crlf[1], LineSpan { line_number: 1, start_byte: 5, content: "", separator_len: 0 });
+
+        let trailing_cr: Vec<_> = lossless_line_spans("foo\r").collect();
+        assert_eq!(trailing_cr.len(), 2);
+        assert_eq!(trailing_cr[0], LineSpan { line_number: 0, start_byte: 0, content: "foo", separator_len: 1 });
+        assert_eq!(trailing_cr[1], LineSpan { line_number: 1, start_byte: 4, content: "", separator_len: 0 });
+
+        // Multiple consecutive separators
+        let consecutive: Vec<_> = lossless_line_spans("\r\n\r\n").collect();
+        assert_eq!(consecutive.len(), 3);
+        assert_eq!(consecutive[0], LineSpan { line_number: 0, start_byte: 0, content: "", separator_len: 2 });
+        assert_eq!(consecutive[1], LineSpan { line_number: 1, start_byte: 2, content: "", separator_len: 2 });
+        assert_eq!(consecutive[2], LineSpan { line_number: 2, start_byte: 4, content: "", separator_len: 0 });
+    }
+
+    #[test]
+    fn test_position_to_byte_offset_cr_crlf_mixed_and_edits() {
+        let text = "alpha\r\nbeta\rgamma\ndelta";
+        // Line 0: "alpha" (0..5), sep \r\n (5..7)
+        // Line 1: "beta" (7..11), sep \r (11..12)
+        // Line 2: "gamma" (12..17), sep \n (17..18)
+        // Line 3: "delta" (18..23), sep none
+
+        assert_eq!(position_to_byte_offset(text, Position { line: 0, character: 0 }).unwrap(), 0);
+        assert_eq!(position_to_byte_offset(text, Position { line: 0, character: 5 }).unwrap(), 5);
+        assert_eq!(position_to_byte_offset(text, Position { line: 1, character: 0 }).unwrap(), 7);
+        assert_eq!(position_to_byte_offset(text, Position { line: 1, character: 2 }).unwrap(), 9);
+        assert_eq!(position_to_byte_offset(text, Position { line: 1, character: 4 }).unwrap(), 11);
+        assert_eq!(position_to_byte_offset(text, Position { line: 2, character: 0 }).unwrap(), 12);
+        assert_eq!(position_to_byte_offset(text, Position { line: 2, character: 5 }).unwrap(), 17);
+        assert_eq!(position_to_byte_offset(text, Position { line: 3, character: 0 }).unwrap(), 18);
+        assert_eq!(position_to_byte_offset(text, Position { line: 3, character: 5 }).unwrap(), 23);
+
+        // End of line offset strictly points to start of separator, never interior of CRLF
+        let crlf_text = "abc\r\ndef";
+        assert_eq!(position_to_byte_offset(crlf_text, Position { line: 0, character: 3 }).unwrap(), 3);
+        assert_eq!(position_to_byte_offset(crlf_text, Position { line: 1, character: 0 }).unwrap(), 5);
+
+        // Applying ranged edit on a lone CR document preserves CR line separators
+        let mut map = SessionOverlayMap::new();
+        map.open_document("cr.ts".into(), "typescript".into(), 1, "const a = 1;\rconst b = 2;\rconst c = 3;".into()).unwrap();
+        let change = TextDocumentContentChangeEvent {
+            range: Some(Range {
+                start: Position { line: 1, character: 6 },
+                end: Position { line: 1, character: 7 },
+            }),
+            range_length: Some(1),
+            text: "target".into(),
+        };
+        map.apply_changes("cr.ts", 2, &[change]).unwrap();
+        let doc = map.get("cr.ts").unwrap();
+        assert_eq!(doc.text, "const a = 1;\rconst target = 2;\rconst c = 3;");
+    }
+
+    #[test]
+    fn test_position_to_byte_offset_boundary_and_surrogate_rejections() {
+        let text = "a\r\n/* 🚀 */\rb";
+        // Line 1 has rocket emoji: '/* ' (3 UTF-16, 3 bytes), '🚀' (2 UTF-16 code units, 4 bytes)
+        // Column 3 is start of rocket, Column 5 is after rocket.
+        // Column 4 splits the surrogate pair -> must return error
+        let split_err = position_to_byte_offset(text, Position { line: 1, character: 4 });
+        assert!(matches!(split_err, Err(OverlayError::InvalidPosition { line: 1, character: 4, .. })));
+
+        // Out of bounds character
+        let oob_char = position_to_byte_offset(text, Position { line: 0, character: 2 });
+        assert!(matches!(oob_char, Err(OverlayError::InvalidPosition { line: 0, character: 2, .. })));
+
+        // Out of bounds line
+        let oob_line = position_to_byte_offset(text, Position { line: 3, character: 0 });
+        assert!(matches!(oob_line, Err(OverlayError::InvalidPosition { line: 3, character: 0, .. })));
     }
 }
