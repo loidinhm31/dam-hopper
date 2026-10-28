@@ -31,6 +31,12 @@ sealed class WsState {
 }
 
 /**
+ * Thrown when a whole WebSocket connection attempt (including token retrieval,
+ * handshake, and protocol upgrade) exceeds the connection attempt deadline.
+ */
+class ConnectTimeoutException(message: String = "WebSocket connect attempt timed out") : Exception(message)
+
+/**
  * Receipt proving active host:uiConnection capability on an exact live socket.
  * Revoked immediately when the socket closes, reconnects, or is retired.
  * Never persisted to disk.

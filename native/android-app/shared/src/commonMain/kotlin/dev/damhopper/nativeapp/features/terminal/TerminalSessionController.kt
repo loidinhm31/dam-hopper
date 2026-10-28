@@ -2,6 +2,9 @@ package dev.damhopper.nativeapp.features.terminal
 
 import dev.damhopper.nativeapp.core.logging.AppLogger
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 
 /**
  * TerminalSessionController maintains terminal session state across navigation transitions.
@@ -30,8 +33,11 @@ open class TerminalSessionController(
     var isAlternateScreen: Boolean = false
         private set
 
+    var isStreamReadyState: Boolean by mutableStateOf(false)
+        private set
+
     val isReplayCompleted: Boolean
-        get() = gate.hasAttachBufferBeenReceived && gate.isLiveStreamReady
+        get() = isStreamReadyState && gate.hasAttachBufferBeenReceived && gate.isLiveStreamReady
 
     var isPanelActive: Boolean = false
 
@@ -84,6 +90,7 @@ open class TerminalSessionController(
      */
     fun beginAttach(): ULong {
         pendingReplayDrainGeneration = null
+        isStreamReadyState = false
         gate.resetForAttach()
         return lastSeenOffset
     }
@@ -91,11 +98,23 @@ open class TerminalSessionController(
     /** Keeps an uncertain/failed attach fenced, even if a late reset already supplied a baseline. */
     fun failAttach() {
         pendingReplayDrainGeneration = null
+        isStreamReadyState = false
+        gate.failAttach()
+    }
+
+    /**
+     * Called when the underlying WebSocket socket closes, fails, or is replaced.
+     * Synchronously revokes stream readiness so input is immediately fenced.
+     */
+    fun onSocketDisconnected() {
+        pendingReplayDrainGeneration = null
+        isStreamReadyState = false
         gate.failAttach()
     }
 
     fun markReplayCompleted() {
         gate.markReadyAfterRestart()
+        isStreamReadyState = true
     }
 
     /**
@@ -340,6 +359,7 @@ open class TerminalSessionController(
         }
         gate.markLiveStreamReady(generation)
         if (!gate.isLiveStreamReady) return
+        isStreamReadyState = true
         AppLogger.recordDiagnostic(
             type = "transport",
             scope = "terminal-panel",

@@ -144,7 +144,7 @@ native/android-app/
 │       │   │   ├── MainActivity.kt # Initializes repositories; hosts DamHopperMobileApp and AppFlowNavigation
 │       │   │   ├── platform/
 │       │   │   │   ├── crypto/      # OpaqueClientBridge (JNI companion for Rust crypto-bridge)
-│       │   │   │   ├── network/     # AndroidHttpClientFactory
+│   │   │   │   ├── network/     # AndroidNetworkMonitor (ConnectivityManager default-network callback)
 │       │   │   │   ├── storage/     # AndroidProfileMetadataStore (SharedPreferences)
 │       │   │   │   ├── terminal/    # TerminalInputController, AndroidTerminalSurface
 │       │   │   │   └── vault/       # AndroidCredentialVault (Keystore AES-256-GCM)
@@ -200,7 +200,9 @@ Phase 03 establishes the typed networking foundation used across all remote work
    - URL sanitizer (`redactUrl`) strips sensitive query tokens and user:password credentials across `http`, `https`, `ws`, and `wss` protocols.
    - `UiConnectionReceipt` and `ServerMsg.UiConnection` redact `decisionCapability` in `toString()` output.
    - Structured concurrency: `ApiClient` immediately rethrows `CancellationException` before error wrapping.
-   - Android platform OkHttp engine configures pinned timeouts (15s connect, 30s read/write), 15s ping interval, disabled redirects (`followRedirects(false)`, `followSslRedirects(false)`), and release TLS-only network security config.
+   - Android platform OkHttp engine configures pinned timeouts (15s connect, 30s write), 15s ping interval, disabled redirects (`followRedirects(false)`, `followSslRedirects(false)`), and release TLS-only network security config.
+   - Autonomous WebSocket recovery supervisor (`WsRecoverySupervisor` & `WsRecoveryPolicy`): handles exponential backoff with jitter on transient socket drops, halts generic retry on MFA/login challenges (`4401`/`4403`), and triggers immediate reconnection on foreground resume or default-network change.
+   - Decoupled terminal status presentation (`TerminalConnectionPresentation`): transport disconnection overrides PTY process liveness; stream readiness (`isReplayCompleted`) is synchronously revoked upon socket failure to prevent stale green indicators.
 
 ### Profiles, Authentication, MFA & Credential Vault Architecture (Phase 04)
 

@@ -49,6 +49,8 @@ class ProfileRepository(
     val authStatuses: StateFlow<Map<String, AuthStatus>> = _authStatuses.asStateFlow()
 
     val attemptTracker = AuthAttemptTracker()
+    private val _cachedWsConnections = mutableMapOf<String, dev.damhopper.nativeapp.core.transport.WsConnection>()
+
 
     suspend fun initialize() {
         val loaded = metadataStore.loadProfiles()
@@ -64,6 +66,9 @@ class ProfileRepository(
             _activeProfileId.value = resolvedActive
         }
     }
+
+    suspend fun getLastNavigationState(): LastNavigationState? = metadataStore.loadLastNavigationState()
+    suspend fun saveLastNavigationState(state: LastNavigationState?) = metadataStore.saveLastNavigationState(state)
 
     suspend fun addProfile(name: String, baseUrl: String, username: String? = null): ServerProfile {
         val validatedUrl = ServerProfile.validateServerUrl(baseUrl).getOrThrow()
@@ -113,6 +118,7 @@ class ProfileRepository(
 
     suspend fun deleteProfile(id: String) = mutex.withLock {
         attemptTracker.invalidate(id)
+        _cachedWsConnections.remove(id)
         // Awaited drain with removal disposition: no successor authority is ever published.
         registry.removeProfile(id)
         currentCoroutineContext().ensureActive()
@@ -192,7 +198,11 @@ class ProfileRepository(
         val profile = _profiles.value.find { it.id == profileId }
             ?: throw IllegalArgumentException("Profile not found: $profileId")
         val conn = registry.getOrCreateConnection(profileId)
-        dev.damhopper.nativeapp.core.transport.WsConnection(
+        val existing = _cachedWsConnections[profileId]
+        if (existing != null && existing.connection == conn && existing.baseUrl == profile.baseUrl) {
+            return@withLock existing
+        }
+        val created = dev.damhopper.nativeapp.core.transport.WsConnection(
             connection = conn,
             baseUrl = profile.baseUrl,
             authTokenProvider = {
@@ -200,6 +210,8 @@ class ProfileRepository(
             },
             registry = registry
         )
+        _cachedWsConnections[profileId] = created
+        created
     }
 
     suspend fun applyAuthenticatedSession(
@@ -298,6 +310,7 @@ class ProfileRepository(
      * successor. Throws if the profile is in a pending/failed transition or the drain fails.
      */
     private suspend fun retireProfileConnection(profileId: String): ConnectionRef {
+        _cachedWsConnections.remove(profileId)
         val conn = registry.getCurrentConnection(profileId) ?: registry.getOrCreateConnection(profileId)
         return registry.retireConnection(conn)
     }

@@ -71,6 +71,7 @@ class MainActivity : ComponentActivity() {
             coordinator = viewModel.lifecycleCoordinator,
             onDetach = { viewModel.onActivityDestroy(isChangingConfigurations) },
             onResumed = { viewModel.notificationPlatform.refreshStatus() },
+            isChangingConfigurations = { isChangingConfigurations },
         )
     }
 
@@ -115,6 +116,7 @@ class MainActivity : ComponentActivity() {
         attachPlatformPorts()
         viewModel.viewModelScope.launch {
             viewModel.profileRepository.initialize()
+            viewModel.initializeNavigation()
             handleNotificationIntent(intent)
         }
         setContent {

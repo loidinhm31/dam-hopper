@@ -31,6 +31,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 
 /**
  * Result of [WsConnection.tryAdmitCurrentSocket]: [BUSY] means the lifecycle gate was contended (never waited on),
@@ -50,13 +54,19 @@ open class WsConnection(
     private val httpClient: HttpClient = HttpClient(createDefaultHttpEngine()) {
         install(WebSockets)
     },
+    val connectAttemptTimeoutMillis: Long = CONNECT_ATTEMPT_TIMEOUT_MILLIS,
 ) {
+    companion object {
+        const val CONNECT_ATTEMPT_TIMEOUT_MILLIS: Long = 20_000L
+        const val CLOSE_GRACE_TIMEOUT_MILLIS: Long = 2_000L
+    }
+
     private val scope = CoroutineScope(Dispatchers.Default + Job())
     private val lifecycleMutex = Mutex()
     private var socketSequence = 0L
 
     private val _state = MutableStateFlow<WsState>(WsState.Disconnected)
-    val state: StateFlow<WsState> = _state.asStateFlow()
+    open val state: StateFlow<WsState> = _state.asStateFlow()
 
     private val _currentReceipt = MutableStateFlow<UiConnectionReceipt?>(null)
     /**
@@ -127,15 +137,22 @@ open class WsConnection(
         val socketRef = SocketInstanceRef(connection, socketId)
         correlator.bindSocket(socketRef)
 
-        val token = authTokenProvider()
-        val wsUrl = buildWsHandshakeUrl(baseUrl, token)
-
         val session = try {
-            httpClient.webSocketSession(wsUrl)
+            withTimeout(connectAttemptTimeoutMillis) {
+                val token = authTokenProvider()
+                val wsUrl = buildWsHandshakeUrl(baseUrl, token)
+                httpClient.webSocketSession(wsUrl)
+            }
         } catch (t: Throwable) {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            val isAttemptTimeout = t is TimeoutCancellationException && coroutineContext.isActive
+            val effectiveCause = if (isAttemptTimeout) {
+                ConnectTimeoutException("WebSocket connect attempt timed out after ${connectAttemptTimeoutMillis}ms")
+            } else {
+                t
+            }
+            withContext(NonCancellable) {
                 _state.value = WsState.Disconnected
-                correlator.cancelAll("WebSocket connect failed or cancelled: ${t.message}")
+                correlator.cancelAll("WebSocket connect failed or cancelled: ${effectiveCause.message}")
             }
             AppLogger.recordDiagnostic(
                 type = "transport",
@@ -143,10 +160,10 @@ open class WsConnection(
                 message = "ws.error",
                 profileId = connection.profileId,
                 generation = connection.generation,
-                metadata = mapOf("error" to (t.message ?: "connect_failed"))
+                metadata = mapOf("error" to (effectiveCause.message ?: "connect_failed"))
             )
-            if (t is kotlinx.coroutines.CancellationException) throw t
-            _state.value = WsState.Error(t)
+            if (t is kotlinx.coroutines.CancellationException && !isAttemptTimeout) throw t
+            _state.value = WsState.Error(effectiveCause)
             return@withLock
         }
         try {
@@ -308,7 +325,7 @@ open class WsConnection(
     /**
      * Closes the active session and revokes receipts.
      */
-    suspend fun disconnect() = lifecycleMutex.withLock {
+    open suspend fun disconnect() = lifecycleMutex.withLock {
         closeInternal("Explicit disconnect", WsState.Disconnected)
     }
 
@@ -352,7 +369,13 @@ open class WsConnection(
         }
 
         // Normal close loop exit: check close reason
-        val reason = session.closeReason.await()
+        val reason = try {
+            withTimeout(CLOSE_GRACE_TIMEOUT_MILLIS) {
+                session.closeReason.await()
+            }
+        } catch (_: Throwable) {
+            null
+        }
         handleCloseReason(reason, socketRef)
     }
     private suspend fun handleServerMsg(msg: ServerMsg, socketRef: SocketInstanceRef) {
@@ -431,13 +454,18 @@ open class WsConnection(
         readerJob?.cancel()
         readerJob = null
 
-        try {
-            activeSession?.close(CloseReason(CloseReason.Codes.NORMAL, reason))
-        } catch (_: Throwable) {
-        }
+        val sessionToClose = activeSession
         activeSession = null
         activeWriter = null
 
         _state.value = nextState
+
+        if (sessionToClose != null) {
+            try {
+                withTimeout(CLOSE_GRACE_TIMEOUT_MILLIS) {
+                    sessionToClose.close(CloseReason(CloseReason.Codes.NORMAL, reason))
+                }
+            } catch (_: Throwable) {}
+        }
     }
 }

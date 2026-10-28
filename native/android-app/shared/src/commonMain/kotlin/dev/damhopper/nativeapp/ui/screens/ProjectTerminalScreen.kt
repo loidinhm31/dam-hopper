@@ -78,6 +78,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.core.logging.AppLogger
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.model.ConnectionOwnerError
+import dev.damhopper.nativeapp.core.model.ConnectionErrorReason
+import dev.damhopper.nativeapp.core.transport.WsState
+import dev.damhopper.nativeapp.features.terminal.TerminalConnectionPresentation
 import dev.damhopper.nativeapp.features.terminal.TerminalDiagnosticsDialog
 import dev.damhopper.nativeapp.features.profiles.ProfileRepository
 import dev.damhopper.nativeapp.features.settings.SettingsOwner
@@ -203,6 +207,8 @@ fun ProjectTerminalScreen(
     fun currentActiveSessionEpoch(): Long = retainedState?.activeSessionEpoch ?: fallbackActiveSessionEpoch
     val activeSessionId = currentActiveSessionId()
     val activeSessionEpoch = currentActiveSessionEpoch()
+    val terminalWsState by (terminalRepo?.wsConnection?.state ?: remember { MutableStateFlow<WsState>(WsState.Disconnected) }).collectAsState()
+
     var showCreateDialog by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
     var showDiagnosticsDialog by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
     var sessionToKill by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
@@ -231,6 +237,12 @@ fun ProjectTerminalScreen(
 
     val fallbackControllers = remember(terminalRepo, connectionKey) { mutableStateMapOf<String, TerminalSessionController>() }
     val controllers = retainedState?.controllers ?: fallbackControllers
+
+    LaunchedEffect(terminalWsState) {
+        if (terminalWsState !is WsState.Connected) {
+            controllers.values.forEach { it.onSocketDisconnected() }
+        }
+    }
 
     val fallbackSurfaces = remember(terminalRepo, connectionKey) { mutableStateMapOf<String, NativeTerminalSurface>() }
     val surfaces = retainedState?.surfaces ?: fallbackSurfaces
@@ -530,7 +542,11 @@ fun ProjectTerminalScreen(
                         requestEpoch == currentActiveSessionEpoch() && requestIncarnation == ctrl.incarnation &&
                         requestToken == currentAttachmentAttemptToken()
                 },
-                connect = { terminalRepo.wsConnection?.connect() },
+                connect = {
+                    if (terminalRepo.wsConnection?.state?.value !is WsState.Connected) {
+                        throw ConnectionOwnerError("WebSocket is not connected", ConnectionErrorReason.UNAVAILABLE)
+                    }
+                },
                 send = { capturedOffset -> terminalRepo.attachTerminal(sId, capturedOffset) },
                 onResult = { error ->
                     if (error != null) {
@@ -740,7 +756,8 @@ fun ProjectTerminalScreen(
     }
 
     // This effect does not own the send job: per-controller ordering survives effect replacement.
-    LaunchedEffect(activeSessionId, activeSession?.incarnation, attachmentRevision, terminalRepo, connectionKey) {
+    val connectedSocketRef = (terminalWsState as? WsState.Connected)?.socketRef
+    LaunchedEffect(activeSessionId, activeSession?.incarnation, attachmentRevision, terminalRepo, connectionKey, connectedSocketRef) {
         val session = activeSession ?: return@LaunchedEffect
         if (destroyingSessionIds[session.id] == true) return@LaunchedEffect
         val ctrl = getOrCreateController(session.id, session.incarnation.toLong())
@@ -755,7 +772,11 @@ fun ProjectTerminalScreen(
                     terminalRepo.apiClient.connection == connectionRef &&
                     destroyingSessionIds[session.id] != true && controllers[session.id] === ctrl
             },
-            connect = { terminalRepo.wsConnection?.connect() },
+            connect = {
+                if (terminalRepo.wsConnection?.state?.value !is WsState.Connected) {
+                    throw ConnectionOwnerError("WebSocket is not connected", ConnectionErrorReason.UNAVAILABLE)
+                }
+            },
             send = { capturedOffset -> terminalRepo.attachTerminal(session.id, capturedOffset) },
             onResult = { error ->
                 attachError = if (error == null) null else "Failed to attach terminal to server"
@@ -973,6 +994,8 @@ fun ProjectTerminalScreen(
                 activeSessionId = activeSessionId,
                 onSelectSession = { selectSession(it) },
                 onKillSession = { sessionToKill = it },
+                wsState = terminalWsState,
+                controllers = controllers,
             )
 
         // Exact manual-activation refusal: the required terminal is missing/restarted; never another terminal.
@@ -1468,7 +1491,9 @@ fun ProjectTerminalScreen(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = if (activeController?.isReplayCompleted == true) {
+                        text = if (terminalWsState !is WsState.Connected) {
+                            "Terminal offline. Reconnecting to service..."
+                        } else if (activeController?.isReplayCompleted == true) {
                             "Terminal connected. Interactive session ready."
                         } else {
                             "Replaying stream buffer..."
@@ -1930,6 +1955,8 @@ private fun TerminalSessionTabs(
     onSelectSession: (String) -> Unit,
     onKillSession: (String) -> Unit,
     modifier: Modifier = Modifier,
+    wsState: WsState? = null,
+    controllers: Map<String, TerminalSessionController> = emptyMap(),
 ) {
     if (sessions.isEmpty()) return
     Row(
@@ -1943,11 +1970,14 @@ private fun TerminalSessionTabs(
     ) {
         sessions.forEach { session ->
             val isSelected = session.id == activeSessionId
-            val statusColor = when {
-                !session.alive -> DamHopperColors.Error
-                session.restartCount > 0u -> DamHopperColors.Warning
-                else -> DamHopperColors.Success
-            }
+            val ctrl = controllers[session.id]
+            val isStreamReady = ctrl?.isReplayCompleted == true
+            val tabStatus = TerminalConnectionPresentation.resolveTabStatus(
+                wsState = wsState,
+                isSessionAlive = session.alive,
+                isStreamReady = isStreamReady,
+                restartCount = session.restartCount,
+            )
 
             Row(
                 modifier = Modifier
@@ -1963,7 +1993,8 @@ private fun TerminalSessionTabs(
                         .width(8.dp)
                         .height(8.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .background(statusColor)
+                        .background(tabStatus.color)
+                        .semantics { contentDescription = tabStatus.description }
                 )
                 Text(
                     text = session.displayName,

@@ -19,6 +19,7 @@ class AndroidLifecycleCoordinator(
     val coordinator: LifecycleCoordinator = LifecycleCoordinator(),
     private val onDetach: (() -> Unit)? = null,
     private val onResumed: (() -> Unit)? = null,
+    private val isChangingConfigurations: (() -> Boolean)? = null,
 ) : DefaultLifecycleObserver {
 
     override fun onStart(owner: LifecycleOwner) {
@@ -30,6 +31,7 @@ class AndroidLifecycleCoordinator(
     }
 
     override fun onStop(owner: LifecycleOwner) {
+        if (isChangingConfigurations?.invoke() == true) return
         coordinator.onAppBackground()
     }
 

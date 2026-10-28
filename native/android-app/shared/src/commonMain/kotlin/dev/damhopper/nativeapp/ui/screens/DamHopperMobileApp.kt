@@ -268,14 +268,14 @@ private fun RootContent(
                 wsConnection = ws
                 workspaceRepo = WorkspaceRepository(client, targetStore)
                 terminalRepo = TerminalRepository(client, ws)
-                if (ws != null) {
+                // When RetainedRootServices is available, connection lifecycle and recovery are managed
+                // by WsRecoverySupervisor in attachRuntime(). Only standalone preview/tests without services connect directly.
+                if (services == null && ws != null) {
                     try {
                         ws.connect()
                     } catch (e: CancellationException) {
                         throw e
-                    } catch (_: Exception) {
-                        // Handled by downstream screens
-                    }
+                    } catch (_: Exception) {}
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -290,11 +290,14 @@ private fun RootContent(
 
     // Hand the already-created runtime to the retained owner (one collector per runtime, no extra connection).
     val effectiveAccountUser = (currentAuthStatus as? AuthStatus.Authenticated)?.session?.user
-    LaunchedEffect(apiClient, wsConnection, effectiveAccountUser) {
+    LaunchedEffect(apiClient, wsConnection, effectiveAccountUser, activeProfileId) {
         val client = apiClient
         val ws = wsConnection
         val user = effectiveAccountUser
-        if (services != null && client != null && ws != null && user != null) {
+        val profId = activeProfileId
+        if (services != null && client != null && ws != null && user != null && profId != null &&
+            client.connection.profileId == profId && ws.connection.profileId == profId
+        ) {
             services.attachRuntime(client, ws, user)
             services.refreshTerminalAgents(TerminalAgentsRefreshReason.CONNECTED)
         }
@@ -320,7 +323,9 @@ private fun RootContent(
         val ws = wsConnection
         val profId = activeProfileId
         val prof = currentProfile
-        if (profId != null && prof != null && client != null && ws != null && selectedProj != null) {
+        if (profId != null && prof != null && client != null && ws != null && selectedProj != null &&
+            client.connection.profileId == profId && ws.connection.profileId == profId
+        ) {
             val accountUser = (currentAuthStatus as? AuthStatus.Authenticated)?.session?.user
                 ?: if (prof.baseUrl.contains("127.0.0.1") || prof.baseUrl.contains("localhost")) "dev-user" else "authenticated-user"
             val owner = WorkspaceFileOwner(
@@ -433,15 +438,28 @@ private fun RootContent(
     // Auto-advance or redirect based on the repository's active profile authentication
     LaunchedEffect(repoActiveProfileId, repoAuthStatus) {
         val profId = repoActiveProfileId
-        val isAuthenticated = repoAuthStatus is AuthStatus.Authenticated
-        if (!isAuthenticated && flowState.stage != AppFlowStage.PROFILE_LOGIN) {
+        val isExplicitlyUnauthenticated = repoAuthStatus is AuthStatus.LoginRequired ||
+            repoAuthStatus is AuthStatus.Incompatible ||
+            repoAuthStatus is AuthStatus.MfaRequired
+        if (isExplicitlyUnauthenticated && flowState.stage != AppFlowStage.PROFILE_LOGIN) {
             activeWorkspaceState?.revokeAuthority()
             navigation.navigateToProfiles()
-        } else if (isAuthenticated && profId != null) {
-            if (!hasInitialAutoAdvanced) {
+        } else if (repoAuthStatus is AuthStatus.Authenticated && profId != null) {
+            if (flowState.stage == AppFlowStage.PROFILE_LOGIN) {
                 hasInitialAutoAdvanced = true
-                navigation.onProfileAuthenticated(profId)
-            } else if (flowState.stage != AppFlowStage.PROFILE_LOGIN && flowState.activeProfileId != profId) {
+                val lastNav = profileRepository.getLastNavigationState()
+                if (lastNav != null && lastNav.profileId == profId && lastNav.stage == AppFlowStage.TERMINAL.name && lastNav.project != null) {
+                    navigation.restoreState(
+                        stage = AppFlowStage.TERMINAL,
+                        profileId = profId,
+                        project = lastNav.project,
+                        sessionId = lastNav.sessionId,
+                        worktreePath = lastNav.worktreePath
+                    )
+                } else {
+                    navigation.onProfileAuthenticated(profId)
+                }
+            } else if (flowState.activeProfileId != profId) {
                 navigation.onProfileAuthenticated(profId)
             }
         }
