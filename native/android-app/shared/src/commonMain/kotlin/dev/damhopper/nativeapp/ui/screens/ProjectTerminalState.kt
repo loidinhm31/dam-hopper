@@ -131,6 +131,7 @@ class ProjectTerminalState(
     fun onForeground() {
         if (_isForeground) return
         _isForeground = true
+        attachmentRevision++
         updateAllControllersInputPolicy()
     }
 

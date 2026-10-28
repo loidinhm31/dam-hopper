@@ -18,6 +18,9 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import dev.damhopper.nativeapp.core.transport.WsState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
@@ -299,6 +302,8 @@ fun TerminalPanelScreen(
     var searchMatchCase by remember { mutableStateOf(false) }
 
     val activeSession = sessions.find { it.id == activeSessionId }
+    val wsState by (controller?.terminalRepository?.wsConnection?.state ?: remember { kotlinx.coroutines.flow.MutableStateFlow<WsState>(WsState.Disconnected) }).collectAsState()
+
 
     Column(
         modifier = modifier
@@ -317,11 +322,12 @@ fun TerminalPanelScreen(
         ) {
             sessions.forEach { session ->
                 val isSelected = session.id == activeSessionId
-                val statusColor = when {
-                    !session.alive -> DamHopperColors.Error
-                    session.restartCount > 0u -> DamHopperColors.Warning
-                    else -> DamHopperColors.Success
-                }
+                val statusColor = TerminalConnectionPresentation.resolveTabStatus(
+                    wsState = wsState,
+                    isSessionAlive = session.alive,
+                    isStreamReady = controller?.takeIf { it.sessionId == session.id }?.isReplayCompleted == true,
+                    restartCount = session.restartCount,
+                ).color
 
                 Row(
                     modifier = Modifier
@@ -546,9 +552,15 @@ fun TerminalPanelScreen(
                             fontSize = 10.sp,
                             fontFamily = JetBrainsMonoFontFamily
                         )
+                        val streamStatus = TerminalConnectionPresentation.resolveTabStatus(
+                            wsState = wsState,
+                            isSessionAlive = activeSession.alive,
+                            isStreamReady = controller?.isReplayCompleted == true,
+                            restartCount = controller?.restartCount ?: 0u,
+                        )
                         Text(
-                            text = if (controller?.isReplayCompleted == true) "READY" else "REPLAYING",
-                            color = if (controller?.isReplayCompleted == true) DamHopperColors.Success else DamHopperColors.Warning,
+                            text = streamStatus.label,
+                            color = streamStatus.color,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = JetBrainsMonoFontFamily
@@ -570,7 +582,9 @@ fun TerminalPanelScreen(
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = if (controller?.isReplayCompleted == true) {
+                                text = if (wsState !is WsState.Connected) {
+                                    "Terminal offline. Reconnecting to service..."
+                                } else if (controller?.isReplayCompleted == true) {
                                     "Terminal connected. Interactive session ready."
                                 } else {
                                     "Replaying stream buffer..."

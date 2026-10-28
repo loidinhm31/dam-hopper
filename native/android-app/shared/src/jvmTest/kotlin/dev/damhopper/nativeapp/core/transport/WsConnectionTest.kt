@@ -13,6 +13,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.launch
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.Test
@@ -300,6 +301,55 @@ class WsConnectionTest {
             kotlinx.coroutines.withTimeout(15_000) { ws.disconnect() }
             assertEquals(WsSocketAdmission.STALE, ws.tryAdmitCurrentSocket(socket) { true })
         }
+    }
+
+    @Test
+    fun testConnectAttemptTimeoutBecomesTypedError(): Unit = kotlinx.coroutines.runBlocking {
+        val connection = ConnectionRef("timeout-prof", 1L)
+        val ws = WsConnection(
+            connection = connection,
+            baseUrl = "http://127.0.0.1:59999",
+            authTokenProvider = {
+                kotlinx.coroutines.delay(500)
+                null
+            },
+            connectAttemptTimeoutMillis = 50L,
+        )
+
+        ws.connect()
+        val state = ws.state.value
+        assertIs<WsState.Error>(state)
+        assertIs<ConnectTimeoutException>(state.cause)
+        Unit
+    }
+
+    @Test
+    fun testConnectExternalCancellationDoesNotPublishSocket(): Unit = kotlinx.coroutines.runBlocking {
+        val connection = ConnectionRef("cancel-prof", 1L)
+        val enteredProvider = CompletableDeferred<Unit>()
+        val releaseProvider = CompletableDeferred<Unit>()
+        val ws = WsConnection(
+            connection = connection,
+            baseUrl = "http://127.0.0.1:59999",
+            authTokenProvider = {
+                enteredProvider.complete(Unit)
+                releaseProvider.await()
+                null
+            },
+            connectAttemptTimeoutMillis = 5000L,
+        )
+
+        val job = launch {
+            ws.connect()
+        }
+
+        enteredProvider.await()
+        job.cancel()
+        releaseProvider.complete(Unit)
+        job.join()
+
+        assertEquals(WsState.Disconnected, ws.state.value)
+        assertEquals(null, ws.activeSocketRef())
     }
 
     /** Minimal loopback RFC 6455 server: completes the upgrade handshake and then only drains client frames. */

@@ -30,6 +30,27 @@ class AppFlowNavigation(
      */
     val state: StateFlow<AppFlowState> = _state.asStateFlow()
 
+
+    /**
+     * Restores a previously saved navigation state across process recreation.
+     */
+    fun restoreState(
+        stage: AppFlowStage,
+        profileId: String?,
+        project: String?,
+        sessionId: String?,
+        worktreePath: String? = null
+    ) {
+        _state.update {
+            it.copy(
+                stage = stage,
+                activeProfileId = profileId,
+                activeProject = project,
+                activeSessionId = sessionId,
+                activeWorktreePath = worktreePath,
+            )
+        }
+    }
     /**
      * Interception hook for departure guards (e.g. dirty documents in workspace).
      * If returning true, navigation is intercepted and the guard owns exactly one later call of the request's

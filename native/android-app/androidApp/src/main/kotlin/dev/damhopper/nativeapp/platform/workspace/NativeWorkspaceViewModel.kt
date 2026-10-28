@@ -18,6 +18,8 @@ import dev.damhopper.nativeapp.core.transport.ServerMsg
 import dev.damhopper.nativeapp.core.transport.SocketBoundMessage
 import dev.damhopper.nativeapp.core.transport.WsConnection
 import dev.damhopper.nativeapp.core.transport.WsState
+import dev.damhopper.nativeapp.core.transport.WsRecoverySupervisor
+import dev.damhopper.nativeapp.platform.network.AndroidNetworkMonitor
 import dev.damhopper.nativeapp.features.editor.EditorRepository
 import dev.damhopper.nativeapp.features.files.FileRepository
 import dev.damhopper.nativeapp.features.host.IdleConsentController
@@ -506,6 +508,7 @@ class AgentRuntime internal constructor(
     internal var reconcileJob: Job? = null
     internal var refreshJob: Job? = null
     /** The roster attachment of THIS connection object (new incarnation for every replaced object). */
+    internal var supervisor: WsRecoverySupervisor? = null
     internal var agents: TerminalAgentsAttachment? = null
 }
 
@@ -574,6 +577,9 @@ class AgentRuntimeHost(
                     listDetailed = { listing.listDetailed() },
                 ),
             )
+            val supervisor = WsRecoverySupervisor(ws, runtimeScope)
+            runtime.supervisor = supervisor
+            supervisor.start()
             onOwned(owner)
             runtimes = runtimes + (owner.profileId to runtime)
             runtimeScope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -619,12 +625,29 @@ class AgentRuntimeHost(
     suspend fun stopAll() {
         lock.withLock { runtimes.values.toList().forEach { stopLocked(it) } }
     }
+    fun onForeground() {
+        runtimes.values.forEach { it.supervisor?.onForeground() }
+    }
+
+    fun onBackground() {
+        runtimes.values.forEach { it.supervisor?.onBackground() }
+    }
+
+    fun onNetworkAvailable() {
+        runtimes.values.forEach { it.supervisor?.onNetworkAvailable() }
+    }
+
+    fun onNetworkLost() {
+        runtimes.values.forEach { it.supervisor?.onNetworkLost() }
+    }
+
 
     private suspend fun stopLocked(rt: AgentRuntime) {
         runtimes = runtimes - rt.owner.profileId
         // Revoke this attachment under the roster gate BEFORE awaiting the children (never held across the drain).
         rt.agents?.let { inventory.detach(it) }
         val failures = ArrayList<suspend () -> Unit>()
+        failures += { rt.supervisor?.stopSuspended() }
         failures += { rt.job.cancelAndJoin() }
         failures += { rt.reducer.retireOwner(rt.owner) }
         failures += { provider.invalidate(rt.owner) {} }
@@ -921,6 +944,31 @@ class NativeWorkspaceViewModel(
         registry = registry,
         metadataStore = metadataStore,
     )
+    private var isNavigationInitialized = false
+
+    suspend fun initializeNavigation() {
+        val lastNav = metadataStore.loadLastNavigationState()
+        if (lastNav != null && lastNav.profileId != null) {
+            val stage = try {
+                dev.damhopper.nativeapp.ui.flow.AppFlowStage.valueOf(lastNav.stage)
+            } catch (_: Exception) {
+                dev.damhopper.nativeapp.ui.flow.AppFlowStage.PROFILE_LOGIN
+            }
+            flowNavigation.restoreState(
+                stage = stage,
+                profileId = lastNav.profileId,
+                project = lastNav.project,
+                sessionId = lastNav.sessionId,
+                worktreePath = lastNav.worktreePath
+            )
+        }
+        isNavigationInitialized = true
+    }
+    private val networkMonitor = AndroidNetworkMonitor(
+        context = application.applicationContext,
+        onNetworkAvailable = { runtimes.onNetworkAvailable() },
+        onNetworkLost = { runtimes.onNetworkLost() },
+    )
     val preferencesStore: AndroidPreferencesStore = AndroidPreferencesStore(application.applicationContext)
     val notificationSink: AndroidNotificationSink = AndroidNotificationSink(application.applicationContext)
     val notificationPlatform: AndroidNotificationPlatform = AndroidNotificationPlatform(application.applicationContext)
@@ -1116,7 +1164,10 @@ class NativeWorkspaceViewModel(
             var previous = lifecycleCoordinator.state.value
             lifecycleCoordinator.state.collect { current ->
                 if (previous == LifecycleState.BACKGROUND && current == LifecycleState.FOREGROUND) {
+                    runtimes.onForeground()
                     agents.refreshAll(TerminalAgentsRefreshReason.FOREGROUND)
+                } else if (current == LifecycleState.BACKGROUND) {
+                    runtimes.onBackground()
                 }
                 previous = current
             }
@@ -1129,6 +1180,20 @@ class NativeWorkspaceViewModel(
                     if (profileId != null) readiness.advanceRevision(profileId)
                     runtimes.refreshAll()
                 }
+            }
+        }
+        // Persist navigation state so terminal and active project survive app switching and process restarts
+        runtimeScope.launch {
+            flowNavigation.state.collect { state ->
+                if (!isNavigationInitialized) return@collect
+                val lastNav = dev.damhopper.nativeapp.features.profiles.LastNavigationState(
+                    profileId = state.activeProfileId,
+                    stage = state.stage.name,
+                    project = state.activeProject,
+                    sessionId = state.activeSessionId,
+                    worktreePath = state.activeWorktreePath,
+                )
+                metadataStore.saveLastNavigationState(lastNav)
             }
         }
         // Selected Settings target B services + display readiness of the active profile.
@@ -1475,6 +1540,7 @@ class NativeWorkspaceViewModel(
         workspaceStates.clear()
         lifecycleCoordinator.onDestroy()
         agents.close()
+        networkMonitor.close()
         if (!teardownStarted.compareAndSet(false, true)) return
         // Disable producers, drain every owned ref NonCancellable (including pending/failed refs), and only after a
         // successful drain remove the barrier token and release resources. A failed drain keeps the barrier fenced.
