@@ -44,8 +44,10 @@ sealed interface AccessoryAction {
 
     data object ToggleCtrl : AccessoryAction
     data object ToggleAlt : AccessoryAction
+    data object ToggleShift : AccessoryAction
     data object ShowKeyboard : AccessoryAction
     data object ClearLocalDisplay : AccessoryAction
+    data class Scroll(val direction: TerminalScrollDirection) : AccessoryAction
 }
 
 data class AccessoryKey(val label: String, val description: String, val action: AccessoryAction)
@@ -55,6 +57,7 @@ fun accessoryModifierRow(): List<AccessoryKey> = listOf(
     AccessoryKey("⌨", "Show keyboard", AccessoryAction.ShowKeyboard),
     AccessoryKey("Ctrl", "Control modifier", AccessoryAction.ToggleCtrl),
     AccessoryKey("Alt", "Alt modifier", AccessoryAction.ToggleAlt),
+    AccessoryKey("Shift", "Shift modifier", AccessoryAction.ToggleShift),
     AccessoryKey("Ctrl+C", "Control C", AccessoryAction.CtrlChar('c')),
     AccessoryKey("Ctrl+D", "Control D", AccessoryAction.CtrlChar('d')),
     AccessoryKey("Clear", "Clear local display", AccessoryAction.ClearLocalDisplay),
@@ -71,6 +74,42 @@ fun accessoryNavigationRow(): List<AccessoryKey> = listOf(
     AccessoryKey("End", "End", AccessoryAction.Special("END")),
     AccessoryKey("Enter", "Enter", AccessoryAction.Special("ENTER")),
 )
+
+fun accessoryScrollKeys(step: Int): List<AccessoryKey> = listOf(
+    AccessoryKey("▲ $step", "Scroll up $step lines", AccessoryAction.Scroll(TerminalScrollDirection.UP)),
+    AccessoryKey("▼ $step", "Scroll down $step lines", AccessoryAction.Scroll(TerminalScrollDirection.DOWN)),
+    AccessoryKey("Top", "Jump to the top of the output", AccessoryAction.Scroll(TerminalScrollDirection.TOP)),
+    AccessoryKey("Bottom", "Jump to the latest output", AccessoryAction.Scroll(TerminalScrollDirection.BOTTOM)),
+)
+
+/**
+ * Builds at most 2 accessory rows:
+ * - When both keyboard and scroll controls are enabled: Row 1 combines modifiers + scroll buttons, Row 2 has navigation keys.
+ * - When only keyboard is enabled: Row 1 has modifiers, Row 2 has navigation keys.
+ * - When only scroll buttons are enabled: Row 1 has scroll buttons.
+ * - When neither is enabled: 0 rows.
+ * The total row count strictly never exceeds 2.
+ */
+fun accessoryKeyRows(
+    enabled: Boolean,
+    scrollButtonsEnabled: Boolean,
+    scrollStep: Int,
+): List<List<AccessoryKey>> {
+    if (!enabled && !scrollButtonsEnabled) return emptyList()
+    return buildList {
+        if (enabled) {
+            val row1 = if (scrollButtonsEnabled) {
+                accessoryModifierRow() + accessoryScrollKeys(scrollStep)
+            } else {
+                accessoryModifierRow()
+            }
+            add(row1)
+            add(accessoryNavigationRow())
+        } else {
+            add(accessoryScrollKeys(scrollStep))
+        }
+    }
+}
 
 /** Clamped visual metrics from the synchronized accessory preferences (9..18 sp, 2..14 dp, 2..12 dp). */
 data class AccessoryMetrics(val fontSp: Int, val paddingDp: Int, val gapDp: Int)
@@ -95,10 +134,15 @@ fun NativeAccessoryKeyboard(
     haptics: Boolean,
     ctrlLatched: Boolean,
     altLatched: Boolean,
+    shiftLatched: Boolean = false,
     onAction: (AccessoryAction) -> Unit,
     modifier: Modifier = Modifier,
+    scrollButtonsEnabled: Boolean = false,
+    scrollStep: Int = 5,
 ) {
-    if (!enabled || inert) return
+    if (inert) return
+    val rows = accessoryKeyRows(enabled, scrollButtonsEnabled, scrollStep)
+    if (rows.isEmpty()) return
     val haptic = LocalHapticFeedback.current
     Column(
         modifier = modifier
@@ -107,7 +151,7 @@ fun NativeAccessoryKeyboard(
             .padding(horizontal = 6.dp, vertical = 2.dp),
         verticalArrangement = Arrangement.spacedBy(metrics.gapDp.dp),
     ) {
-        listOf(accessoryModifierRow(), accessoryNavigationRow()).forEach { row ->
+        rows.forEach { row ->
             Row(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically,
@@ -115,7 +159,8 @@ fun NativeAccessoryKeyboard(
             ) {
                 row.forEach { key ->
                     val active = (key.action == AccessoryAction.ToggleCtrl && ctrlLatched) ||
-                        (key.action == AccessoryAction.ToggleAlt && altLatched)
+                        (key.action == AccessoryAction.ToggleAlt && altLatched) ||
+                        (key.action == AccessoryAction.ToggleShift && shiftLatched)
                     AccessoryKeyButton(key, active, metrics) {
                         if (haptics) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onAction(key.action)

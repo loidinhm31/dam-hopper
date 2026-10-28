@@ -15,6 +15,8 @@ import dev.damhopper.nativeapp.ui.screens.TerminalScrollDirection
 import dev.damhopper.nativeapp.ui.screens.accessoryMetrics
 import dev.damhopper.nativeapp.ui.screens.accessoryModifierRow
 import dev.damhopper.nativeapp.ui.screens.accessoryNavigationRow
+import dev.damhopper.nativeapp.ui.screens.accessoryKeyRows
+import dev.damhopper.nativeapp.ui.screens.accessoryScrollKeys
 import dev.damhopper.nativeapp.ui.screens.autoSwitchProjectFor
 import dev.damhopper.nativeapp.ui.screens.clampTerminalScrollStep
 import dev.damhopper.nativeapp.ui.screens.filterNotificationRecords
@@ -101,8 +103,53 @@ class PreferenceConsumersTest {
         val actions = (accessoryModifierRow() + accessoryNavigationRow()).map { it.action }
         val specials = actions.filterIsInstance<AccessoryAction.Special>().map { it.name }.toSet()
         assertTrue(specials.containsAll(setOf("ESC", "TAB", "UP", "DOWN", "LEFT", "RIGHT", "HOME", "END")))
-        assertTrue(AccessoryAction.ToggleCtrl in actions && AccessoryAction.ToggleAlt in actions)
+        assertTrue(AccessoryAction.ToggleCtrl in actions && AccessoryAction.ToggleAlt in actions && AccessoryAction.ToggleShift in actions)
         assertTrue(actions.any { it is AccessoryAction.CtrlChar && it.char == 'c' })
+    }
+
+    @Test
+    fun accessoryRowsLimitToMaximumTwoRowsAcrossAllPreferenceCombinations() {
+        // 1. Both keyboard and scroll buttons enabled -> exactly 2 rows
+        val bothRows = accessoryKeyRows(enabled = true, scrollButtonsEnabled = true, scrollStep = 5)
+        assertEquals(2, bothRows.size, "both enabled produces exactly 2 rows")
+        assertTrue(bothRows.size <= 2)
+        val row1Actions = bothRows[0].map { it.action }
+        val row2Actions = bothRows[1].map { it.action }
+        assertTrue(row1Actions.contains(AccessoryAction.ToggleCtrl))
+        assertTrue(row1Actions.contains(AccessoryAction.ToggleShift))
+        assertTrue(row1Actions.any { it is AccessoryAction.Scroll && it.direction == TerminalScrollDirection.UP })
+        assertTrue(row1Actions.any { it is AccessoryAction.Scroll && it.direction == TerminalScrollDirection.BOTTOM })
+        // Local scroll actions are distinct from PTY arrow-key actions
+        assertTrue(row2Actions.any { it is AccessoryAction.Special && it.name == "UP" })
+
+        // 2. Keyboard enabled, scroll buttons disabled -> exactly 2 rows
+        val kbOnlyRows = accessoryKeyRows(enabled = true, scrollButtonsEnabled = false, scrollStep = 5)
+        assertEquals(2, kbOnlyRows.size, "keyboard only produces 2 rows")
+        assertTrue(kbOnlyRows.size <= 2)
+        assertTrue(kbOnlyRows[0].none { it.action is AccessoryAction.Scroll })
+
+        // 3. Keyboard disabled, scroll buttons enabled -> exactly 1 row
+        val scrollOnlyRows = accessoryKeyRows(enabled = false, scrollButtonsEnabled = true, scrollStep = 5)
+        assertEquals(1, scrollOnlyRows.size, "scroll only produces 1 row")
+        assertTrue(scrollOnlyRows.size <= 2)
+        assertEquals(4, scrollOnlyRows[0].size)
+        assertTrue(scrollOnlyRows[0].all { it.action is AccessoryAction.Scroll })
+
+        // 4. Neither enabled -> 0 rows
+        val neitherRows = accessoryKeyRows(enabled = false, scrollButtonsEnabled = false, scrollStep = 5)
+        assertTrue(neitherRows.isEmpty(), "neither enabled produces 0 rows")
+        assertTrue(neitherRows.size <= 2)
+
+        // 5. Scroll keys contain all 4 directions and step label
+        val scrollKeys = accessoryScrollKeys(10)
+        assertEquals(4, scrollKeys.size)
+        val scrollDirections = scrollKeys.mapNotNull { (it.action as? AccessoryAction.Scroll)?.direction }.toSet()
+        assertEquals(
+            setOf(TerminalScrollDirection.UP, TerminalScrollDirection.DOWN, TerminalScrollDirection.TOP, TerminalScrollDirection.BOTTOM),
+            scrollDirections
+        )
+        assertTrue(scrollKeys.any { it.label == "▲ 10" })
+        assertTrue(scrollKeys.any { it.label == "▼ 10" })
     }
 
     @Test

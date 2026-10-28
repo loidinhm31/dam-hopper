@@ -29,6 +29,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.input.KeyboardType
@@ -216,7 +217,6 @@ fun ProjectTerminalScreen(
     var appliedInventoryRuntime by remember(terminalRepo, connectionKey) { mutableStateOf<TerminalAgentsRuntimeKey?>(null) }
     var appliedInventoryTicket by remember(terminalRepo, connectionKey) { mutableStateOf<Long?>(null) }
     var lastAgentsRuntime by remember(terminalRepo, connectionKey) { mutableStateOf<TerminalAgentsRuntimeKey?>(null) }
-    var commandInput by remember(terminalRepo, connectionKey) { mutableStateOf("") }
     var uiErrorBanner by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
     var attachError by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
     var isDestructiveOpInProgress by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
@@ -259,10 +259,9 @@ fun ProjectTerminalScreen(
     val fallbackFailedRecords = remember(terminalRepo, connectionKey) { mutableStateListOf<FailedCommandRecord>() }
     val failedRecords = retainedState?.failedRecords ?: fallbackFailedRecords
 
-    val fallbackSessionDrafts = remember(terminalRepo, connectionKey) { mutableStateMapOf<String, String>() }
-    val sessionDrafts = retainedState?.sessionDrafts ?: fallbackSessionDrafts
     val terminalFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
+    val clipboardManager = LocalClipboardManager.current
     var directInputState by remember { mutableStateOf(TextFieldValue("")) }
     var cursorVisible by remember { mutableStateOf(true) }
     val prefAccess = preferenceAccess ?: retainedState?.preferenceAccess
@@ -296,6 +295,7 @@ fun ProjectTerminalScreen(
     }
     var ctrlLatched by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
     var altLatched by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
+    var shiftLatched by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
 
     var commitStatus by remember(terminalRepo, connectionKey, worktreePath) { mutableStateOf<TerminalCommitStatus?>(null) }
     LaunchedEffect(terminalRepo, connectionKey, worktreePath, prefs.terminalCommitStatusEnabled) {
@@ -368,7 +368,6 @@ fun ProjectTerminalScreen(
         val prevId = activeSessionId
         if (prevId != null) {
             controllers[prevId]?.isPanelActive = false
-            sessionDrafts[prevId] = commandInput
         }
 
         if (retainedState != null) {
@@ -381,9 +380,6 @@ fun ProjectTerminalScreen(
 
         if (newSessionId != null) {
             controllers[newSessionId]?.isPanelActive = isEligibleForInput(newSessionId)
-            commandInput = sessionDrafts[newSessionId] ?: ""
-        } else {
-            commandInput = ""
         }
     }
 
@@ -817,7 +813,6 @@ fun ProjectTerminalScreen(
                 readingStates.clear()
                 destroyingSessionIds.clear()
                 failedRecords.clear()
-                sessionDrafts.clear()
             }
         }
     }
@@ -828,46 +823,6 @@ fun ProjectTerminalScreen(
         (activeSurface as? VtTerminalSurface)?.updateCursorBlink(cursorVisible)
     }
 
-    fun sendCommand() {
-        val cmd = commandInput
-        val ctrl = activeController
-        if (ctrl == null) {
-            uiErrorBanner = "Cannot send command: no active terminal session"
-            return
-        }
-        if (destroyingSessionIds[ctrl.sessionId] == true) {
-            uiErrorBanner = "Cannot send command: session is being closed"
-            return
-        }
-        if (!ctrl.isPanelActive) {
-            uiErrorBanner = "Cannot send command: session is inactive"
-            return
-        }
-        if (!ctrl.isReplayCompleted) {
-            uiErrorBanner = "Cannot send command: terminal buffer is replaying"
-            return
-        }
-        if (!ctrl.isInputAllowed()) {
-            bumpActiveSessionEpoch()
-            uiErrorBanner = "Cannot send command: input blocked by privacy settings"
-            return
-        }
-
-        lastSinkAdmitted = false
-        lastSubmittedCommandText = cmd
-        try {
-            // Strictly routes through controller.sendInput, invoking rawInputSink
-            ctrl.sendInput("$cmd\r".encodeToByteArray())
-            if (lastSinkAdmitted) {
-                commandInput = ""
-                uiErrorBanner = null
-            } else if (uiErrorBanner == null) {
-                uiErrorBanner = "Command rejected: input queue full or dropped"
-            }
-        } finally {
-            lastSubmittedCommandText = null
-        }
-    }
 
     fun sendSpecialKey(keyName: String) {
         val ctrl = activeController ?: return
@@ -898,12 +853,15 @@ fun ProjectTerminalScreen(
                 sendSpecialKey(action.name)
                 ctrlLatched = false
                 altLatched = false
+                shiftLatched = false
             }
             is AccessoryAction.CtrlChar -> {
                 sendCtrlChar(action.char)
                 ctrlLatched = false
                 altLatched = false
+                shiftLatched = false
             }
+            is AccessoryAction.Scroll -> Unit
             AccessoryAction.ToggleCtrl -> {
                 activeController?.toggleModifier(TerminalModifier.CTRL)
                 ctrlLatched = !ctrlLatched
@@ -911,6 +869,10 @@ fun ProjectTerminalScreen(
             AccessoryAction.ToggleAlt -> {
                 activeController?.toggleModifier(TerminalModifier.ALT)
                 altLatched = !altLatched
+            }
+            AccessoryAction.ToggleShift -> {
+                activeController?.toggleModifier(TerminalModifier.SHIFT)
+                shiftLatched = !shiftLatched
             }
             AccessoryAction.ShowKeyboard -> {
                 terminalFocusRequester.requestFocus()
@@ -1069,17 +1031,13 @@ fun ProjectTerminalScreen(
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Restore",
+                        text = "Copy",
                         color = if (pendingFailedRecord.isDeliveryUncertain) DamHopperColors.Primary else DamHopperColors.Background,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.clickable {
-                            if (commandInput.isEmpty()) {
-                                commandInput = pendingFailedRecord.command
-                                failedRecords.remove(pendingFailedRecord)
-                            } else {
-                                uiErrorBanner = "Draft \"${pendingFailedRecord.command}\" retained. Clear input field to restore."
-                            }
+                            clipboardManager.setText(AnnotatedString(pendingFailedRecord.command))
+                            uiErrorBanner = "Command copied to clipboard"
                         }
                     )
                     Text(
@@ -1399,10 +1357,12 @@ fun ProjectTerminalScreen(
                                 activeController?.sendInput(byteArrayOf(0x0D))
                             } else {
                                 activeController?.let { c ->
-                                    if (ctrlLatched || altLatched) {
-                                        c.sendInput(c.encodeKey(ch))
+                                    if (ctrlLatched || altLatched || shiftLatched) {
+                                        val effectiveChar = if (shiftLatched && ch.isLowerCase()) ch.uppercaseChar() else ch
+                                        c.sendInput(c.encodeKey(effectiveChar))
                                         ctrlLatched = false
                                         altLatched = false
+                                        shiftLatched = false
                                     } else {
                                         c.sendInput(ch.toString().encodeToByteArray())
                                     }
@@ -1527,34 +1487,21 @@ fun ProjectTerminalScreen(
         }
         }
 
-        // 5. Inline scroll controls (1..50 lines per step) and the native accessory keyboard.
-        if (activeController != null && prefs.terminalScrollButtonsEnabled && !covered) {
-            TerminalScrollControls(
-                step = clampTerminalScrollStep(prefs.terminalScrollStep),
-                onScroll = { scrollTerminal(it) },
-            )
-        }
-        // Strictly inline above IME, ZERO floating action buttons!
+        // 5. Native accessory keyboard and scroll controls (strictly maximum 2 rows, docked above IME, zero input box)
         if (activeController != null) {
-            val suggestions = if (covered) {
-                emptyList()
-            } else {
-                remember(historyRevision, historyEnabled, commandInput, prefs.terminalSuggestionsEnabled, projectName, historyScopeOwner) {
-                    terminalSuggestionsFor(prefs.terminalSuggestionsEnabled, history, historyScopeOwner, projectName, commandInput)
-                }
-            }
-            TerminalAccessoryAndCommandBar(
-                commandInput = commandInput,
-                onCommandInputChange = { commandInput = it },
-                onSend = { sendCommand() },
-                onFocusChanged = { retainedState?.isCommandInputFocused?.value = it },
+            TerminalAccessoryBar(
                 prefs = prefs,
                 covered = covered,
                 ctrlLatched = ctrlLatched,
                 altLatched = altLatched,
-                onAccessoryAction = { onAccessoryAction(it) },
-                suggestions = suggestions,
-                historyFailure = historyFailure,
+                shiftLatched = shiftLatched,
+                onAccessoryAction = { action ->
+                    if (action is AccessoryAction.Scroll) {
+                        scrollTerminal(action.direction)
+                    } else {
+                        onAccessoryAction(action)
+                    }
+                },
             )
         }
     }
@@ -1692,49 +1639,6 @@ private val NO_HISTORY_FAILURE: StateFlow<String?> = MutableStateFlow(null)
 private val NO_AGENT_INVENTORIES: StateFlow<Map<TerminalAgentsRuntimeKey, TerminalAgentsInventoryReceipt>> =
     MutableStateFlow(emptyMap())
 
-/**
- * Inline terminal scroll controls: up/down by the preferred [step] lines (1..50) and jumps to the top/bottom.
- * Each control keeps a 48 dp touch target; they only move the local viewport, never the remote PTY.
- */
-@Composable
-private fun TerminalScrollControls(step: Int, onScroll: (TerminalScrollDirection) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(DamHopperColors.Surface)
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        listOf(
-            Triple("▲ $step", "Scroll up $step lines", TerminalScrollDirection.UP),
-            Triple("▼ $step", "Scroll down $step lines", TerminalScrollDirection.DOWN),
-            Triple("Top", "Jump to the top of the output", TerminalScrollDirection.TOP),
-            Triple("Bottom", "Jump to the latest output", TerminalScrollDirection.BOTTOM),
-        ).forEach { (label, description, direction) ->
-            Box(
-                modifier = Modifier
-                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                    .semantics { contentDescription = description }
-                    .clickable { onScroll(direction) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = label,
-                    color = DamHopperColors.TextPrimary,
-                    fontSize = 12.sp,
-                    fontFamily = JetBrainsMonoFontFamily,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(DamHopperColors.SurfaceVariant)
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                )
-            }
-        }
-    }
-}
 @Composable
 private fun TerminalTopHeader(
     projectName: String,
@@ -2019,128 +1923,28 @@ private fun TerminalSessionTabs(
 }
 
 @Composable
-private fun TerminalAccessoryAndCommandBar(
-    commandInput: String,
-    onCommandInputChange: (String) -> Unit,
-    onSend: () -> Unit,
-    onFocusChanged: (Boolean) -> Unit,
+private fun TerminalAccessoryBar(
     prefs: WorkbenchPreferences,
     covered: Boolean,
     ctrlLatched: Boolean,
     altLatched: Boolean,
+    shiftLatched: Boolean,
     onAccessoryAction: (AccessoryAction) -> Unit,
-    suggestions: List<String>,
-    historyFailure: String?,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier) {
-        NativeAccessoryKeyboard(
-            enabled = prefs.mobileCustomKeyboardEnabled,
-            inert = covered,
-            metrics = accessoryMetrics(prefs),
-            haptics = prefs.hapticFeedbackEnabled,
-            ctrlLatched = ctrlLatched,
-            altLatched = altLatched,
-            onAction = onAccessoryAction,
-        )
-
-        if (suggestions.isNotEmpty()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DamHopperColors.Surface)
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = "This device's history:",
-                    color = DamHopperColors.TextSecondary,
-                    fontSize = 11.sp,
-                )
-                suggestions.forEach { suggestion ->
-                    Box(
-                        modifier = Modifier
-                            .sizeIn(minHeight = 48.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(DamHopperColors.SurfaceVariant)
-                            .semantics { contentDescription = "Insert history command into draft" }
-                            .clickable { onCommandInputChange(suggestion) }
-                            .padding(horizontal = 10.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = suggestion,
-                            color = DamHopperColors.TextPrimary,
-                            fontSize = 12.sp,
-                            fontFamily = JetBrainsMonoFontFamily,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-        }
-        historyFailure?.let { failure ->
-            Text(
-                text = failure,
-                color = DamHopperColors.Warning,
-                fontSize = 11.sp,
-                modifier = Modifier.fillMaxWidth().background(DamHopperColors.Surface).padding(horizontal = 12.dp, vertical = 2.dp),
-            )
-        }
-
-        // Interactive Command Input Field
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(DamHopperColors.Surface)
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedTextField(
-                value = commandInput,
-                onValueChange = onCommandInputChange,
-                placeholder = {
-                    Text(
-                        text = "Enter command (e.g. ls -la)...",
-                        fontSize = 12.sp,
-                        color = DamHopperColors.TextSecondary
-                    )
-                },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { onSend() }),
-                textStyle = TextStyle(
-                    fontFamily = JetBrainsMonoFontFamily,
-                    fontSize = 13.sp,
-                    color = DamHopperColors.TextPrimary
-                ),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = DamHopperColors.Primary,
-                    unfocusedBorderColor = DamHopperColors.SurfaceVariant,
-                    focusedContainerColor = DamHopperColors.Background,
-                    unfocusedContainerColor = DamHopperColors.Background,
-                ),
-                modifier = Modifier
-                    .weight(1f)
-                    .height(48.dp)
-                    .onFocusChanged { onFocusChanged(it.isFocused) }
-            )
-
-            Button(
-                onClick = onSend,
-                colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary),
-                shape = RoundedCornerShape(6.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-                modifier = Modifier.height(44.dp)
-            ) {
-                Text("Send", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            }
-        }
-    }
+    NativeAccessoryKeyboard(
+        enabled = prefs.mobileCustomKeyboardEnabled,
+        inert = covered,
+        metrics = accessoryMetrics(prefs),
+        haptics = prefs.hapticFeedbackEnabled,
+        ctrlLatched = ctrlLatched,
+        altLatched = altLatched,
+        shiftLatched = shiftLatched,
+        scrollButtonsEnabled = prefs.terminalScrollButtonsEnabled,
+        scrollStep = clampTerminalScrollStep(prefs.terminalScrollStep),
+        onAction = onAccessoryAction,
+        modifier = modifier,
+    )
 }
 
 @Composable
