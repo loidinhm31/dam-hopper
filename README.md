@@ -13,30 +13,30 @@ DamHopper is a multi-profile development workbench for web and desktop. An Axum/
 
 ## Repository Map
 
-| Path | Responsibility |
-| --- | --- |
-| `server/` | Rust Axum/Tokio API, PTYs, Git, filesystem, auth, workflow, telemetry, and host services |
-| `packages/ui/` | Shared React UI, state, API/transport clients, and browser tests (canonical entry `src/embed/dam-hopper-app.tsx`) |
-| `apps/web/` | Vite browser host |
-| `apps/native/` | Tauri 2 desktop host and Windows-native SSH port forwarding |
-| `packages/shared/` | Shared utilities, including sensitive-metadata logging redaction |
-| `packages/browser-bridge/` | Browser debugging runtime and version 1 protocol |
-| `deploy/release/` | Linux systemd and Windows release packaging, installers, and service templates |
+| Path                       | Responsibility                                                                                                    |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `server/`                  | Rust Axum/Tokio API, PTYs, Git, filesystem, auth, workflow, telemetry, and host services                          |
+| `packages/ui/`             | Shared React UI, state, API/transport clients, and browser tests (canonical entry `src/embed/dam-hopper-app.tsx`) |
+| `apps/web/`                | Vite browser host                                                                                                 |
+| `apps/native/`             | Tauri 2 desktop host and Windows-native SSH port forwarding                                                       |
+| `packages/shared/`         | Shared utilities, including sensitive-metadata logging redaction                                                  |
+| `packages/browser-bridge/` | Browser debugging runtime and version 1 protocol                                                                  |
+| `deploy/release/`          | Linux systemd and Windows release packaging, installers, and service templates                                    |
 
 ## Requirements
 
-- Node.js 20 or newer and pnpm 10 or newer.
+- Node.js 22.13.0 or newer (Node.js 24 recommended) and pnpm 10 or newer for development workflows (release installations use self-contained native binaries without Node.js).
 - Current stable Rust toolchain (container builder pinned to 1.97.1) for server and native builds; platform development headers (`libwebkit2gtk-4.1-dev` on Linux) are needed for native desktop builds.
 
 ## Port & Network Topology
 
-| Surface | Default Port | Host Address | Environment / Details |
-| --- | --- | --- | --- |
-| **Standalone Server** (`dam-hopper-server`) | `4800` | `0.0.0.0` | Direct binary startup (`DAM_HOPPER_PORT=4800`). |
-| **Systemd API Service** (`dam-hopper-api`) | `4801` | `0.0.0.0` | Production managed daemon. |
-| **Systemd Dedicated Web** (`dam-hopper-web`) | `4802` | `0.0.0.0` | Production static SPA host. |
-| **Development API** | `4803` | `127.0.0.1` | Local development target for Vite proxy. |
-| **Development Web (Vite)** | `5173` | `127.0.0.1` | Local development frontend. |
+| Surface                                      | Default Port | Host Address | Environment / Details                           |
+| -------------------------------------------- | ------------ | ------------ | ----------------------------------------------- |
+| **Standalone Server** (`dam-hopper-server`)  | `4800`       | `0.0.0.0`    | Direct binary startup (`DAM_HOPPER_PORT=4800`). |
+| **Systemd API Service** (`dam-hopper-api`)   | `4801`       | `0.0.0.0`    | Production managed daemon.                      |
+| **Systemd Dedicated Web** (`dam-hopper-web`) | `4802`       | `0.0.0.0`    | Production static SPA host.                     |
+| **Development API**                          | `4803`       | `127.0.0.1`  | Local development target for Vite proxy.        |
+| **Development Web (Vite)**                   | `5173`       | `127.0.0.1`  | Local development frontend.                     |
 
 ## Installation
 
@@ -74,6 +74,7 @@ Vite proxies `/api` and `/ws` to `http://127.0.0.1:4803`. Add `--config /path/to
 SQLite is the default authentication store for zero-config startup (`DAM_HOPPER_AUTH_SQLITE_PATH` defaults to `~/.config/dam-hopper/auth.db`; exactly one server process may use one local SQLite auth file, and `--no-auth` is a separate loopback bypass). MongoDB is selected automatically when both `MONGODB_URI` and `MONGODB_DATABASE` are set, or SQLite can be forced explicitly via `DAM_HOPPER_LITE_MODE=true`.
 
 To provision a first administrator account under the **Development profile**:
+
 1. Run the local provisioning script (creates an enabled admin directly in SQLite without exposing a public register API):
    ```bash
    pnpm create-admin
@@ -81,22 +82,24 @@ To provision a first administrator account under the **Development profile**:
    ```
 2. Start `dam-hopper-server` on loopback (for example `--host 127.0.0.1 --port 4801`).
 3. Log in at `http://127.0.0.1:4801/api/auth/login` or via the web UI. On first login, scan the TOTP QR code into your authenticator app and enter the 6-digit confirmation code to complete MFA setup.
+
 ## Common Commands
 
-| Command | Action |
-| --- | --- |
-| `pnpm dev:native` | Run the Tauri desktop development host |
-| `pnpm build` | Build the web application (`apps/web`) |
-| `pnpm build:native` | Build native desktop package (Linux deb/rpm) |
-| `pnpm build:server` | Build the Rust server in release mode |
-| `pnpm test` | Run Rust server unit and integration tests |
-| `pnpm test:all` | Run the repository test runner script across all packages |
-| `pnpm lint` | Lint code across `apps/` and `packages/` |
-| `pnpm check` | Run web build, native build, lint, and server tests |
+| Command             | Action                                                    |
+| ------------------- | --------------------------------------------------------- |
+| `pnpm dev:native`   | Run the Tauri desktop development host                    |
+| `pnpm build`        | Build the web application (`apps/web`)                    |
+| `pnpm build:native` | Build native desktop package (Linux deb/rpm)              |
+| `pnpm build:server` | Build the Rust server in release mode                     |
+| `pnpm test`         | Run Rust server unit and integration tests                |
+| `pnpm test:all`     | Run the repository test runner script across all packages |
+| `pnpm lint`         | Lint code across `apps/` and `packages/`                  |
+| `pnpm check`        | Run web build, native build, lint, and server tests       |
 
 ## Documentation
 
 Start at [the documentation index](./docs/README.md). Key references:
+
 - [Installation and Deployment Guide](./docs/deployment-guide.md)
 - [Project Requirements & PDR](./docs/project-overview-pdr.md)
 - [System Architecture](./docs/system-architecture.md)

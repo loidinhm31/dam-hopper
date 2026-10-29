@@ -67,6 +67,8 @@ jobs:
             command: pnpm --filter @dam-hopper/ui test
           - suite: native
             command: pnpm --filter @dam-hopper/native test
+          - suite: create-admin
+            command: node --test tests/create-admin.test.mjs
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

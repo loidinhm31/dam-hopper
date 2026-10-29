@@ -88,7 +88,7 @@ DamHopper supports two production-grade authenticated storage backends within th
 
 - **Dotenv Precedence**: `dotenv::dotenv()` only populates variables not already present in the process environment. Pre-existing system environment variables (such as those supplied by systemd `EnvironmentFile=/etc/dam-hopper/server.env` or exported in the host shell) take precedence over values in working directory `.env` files.
 - **Path Resolution (`DAM_HOPPER_AUTH_SQLITE_PATH`)**: Applies when SQLite is selected. Relative paths resolve relative to the server process current working directory (CWD) at startup. In production or daemon deployments, always specify an absolute path on local persistent storage (e.g. `/var/lib/dam-hopper/auth.db`).
-- **Default SQLite Storage**: When `DAM_HOPPER_AUTH_SQLITE_PATH` is omitted or empty, the server defaults to `auth.db` in the global DamHopper configuration directory (`~/.config/dam-hopper/auth.db` on Linux/macOS, or `%APPDATA%\dam-hopper\auth.db` on Windows).
+- **Default SQLite Storage**: When `DAM_HOPPER_AUTH_SQLITE_PATH` is omitted or empty, the server defaults to `auth.db` in the global DamHopper configuration directory (`~/.config/dam-hopper/auth.db` on Linux/macOS, or `%USERPROFILE%\.config\dam-hopper\auth.db` on Windows; overridable via `XDG_CONFIG_HOME`).
   - **Subsystem Isolation**: `auth.db` is strictly dedicated to authentication, credentials, and session state. It is completely isolated from PTY/IDE session state (`~/.config/dam-hopper/sessions.db`) and telemetry state (`~/.config/dam-hopper/telemetry.db`).
 
 ### Production Safety Guards
@@ -134,15 +134,23 @@ export DAM_HOPPER_MFA_KEY_FILE=~/.config/dam-hopper/mfa-encryption.key
 
 #### 2. Provision the Admin Account
 
-Run the offline provisioning script:
+Using the native server CLI (recommended, self-contained):
+
+```bash
+cargo run --manifest-path server/Cargo.toml --bin dam-hopper-server -- create-admin --username admin
+```
+
+Or using the developer script:
 
 ```bash
 pnpm create-admin
-# Or pass arguments directly:
-node scripts/create-admin.mjs admin "ReplaceWithStrongPassword!"
+# Or specify username:
+node scripts/create-admin.mjs admin
 ```
 
-The script:
+_(You will be prompted securely to enter and confirm your password without terminal echo.)_
+
+The command:
 
 - Initializes the SQLite database and schema if not yet present with secure file permissions (`0600`).
 - Validates database identity (`application_id` and schema version) and rejects foreign or insecure databases.
@@ -188,12 +196,24 @@ On a production deployment (e.g. `dam-hopper-api.service` with SQLite at `/var/l
 
 #### 1. Provision the Admin Account Offline as the API User
 
-Run `create-admin.mjs` pointing to the production database:
+On a production release installation, run the self-contained `dam-hopper-server` binary as the service user:
+
+```bash
+sudo -u <API_USER> dam-hopper-server create-admin \
+  --username <target-username> \
+  --db /var/lib/dam-hopper/auth.db
+```
+
+_(You will be prompted to enter and confirm the administrator password without echo. Passwords should never be passed as command-line arguments in production to prevent credential leakage in shell history or process inspection tools.)_
+
+Alternatively, when running from a source checkout with Node.js >= 22.13.0:
 
 ```bash
 sudo -u <API_USER> DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db \
-  node scripts/create-admin.mjs <target-username> "ReplaceWithStrongPassword!"
+  node scripts/create-admin.mjs <target-username>
 ```
+
+_(Prompts securely for password without terminal echo)._
 
 This writes the admin account directly to `/var/lib/dam-hopper/auth.db` preserving correct service-user ownership.
 

@@ -472,7 +472,7 @@ export async function main() {
     }
   } catch {
     console.error(
-      `Error: node:sqlite is unavailable on Node.js ${process.version}. Node.js >= 22.5.0 is required.`,
+      `Error: node:sqlite is unavailable on Node.js ${process.version}. Node.js >= 22.13.0 is required.`,
     );
     process.exit(1);
   }

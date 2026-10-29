@@ -1047,6 +1047,9 @@ async fn script_created_database_opens_and_authenticates_admin() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let script_path = repo_root.join("scripts/create-admin.mjs");
     if !repo_root.join("node_modules/bcryptjs").exists() {
+        if std::env::var("CI").is_ok() {
+            panic!("node_modules/bcryptjs must be installed in CI for integration tests");
+        }
         eprintln!("Skipping create-admin test: node_modules/bcryptjs not installed");
         return;
     }

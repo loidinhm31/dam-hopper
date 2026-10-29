@@ -69,6 +69,24 @@ struct Cli {
 enum Commands {
     /// Local extension integration commands
     Integration(IntegrationArgs),
+
+    /// Provision an administrator account offline in the SQLite authentication database
+    CreateAdmin(CreateAdminArgs),
+}
+
+#[derive(Debug, clap::Args)]
+struct CreateAdminArgs {
+    /// Administrator username (prompted interactively if omitted)
+    #[arg(short = 'u', long)]
+    username: Option<String>,
+
+    /// Read credentials from stdin (line 1: username, line 2: password) for automated provisioning
+    #[arg(long)]
+    stdin: bool,
+
+    /// Path to SQLite authentication database (defaults to auth.db under global config dir)
+    #[arg(short = 'd', long)]
+    db: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -293,6 +311,150 @@ async fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()
     }
     Ok(())
 }
+async fn dispatch_create_admin(args: CreateAdminArgs) -> anyhow::Result<()> {
+    use dam_hopper_server::auth::config::{resolve_sqlite_path, PathContext};
+    use dam_hopper_server::auth::model::{UserRecord, UserRole};
+    use dam_hopper_server::auth::AuthStore;
+    use std::io::{self, IsTerminal, Write};
+
+    let is_tty = io::stdin().is_terminal() && !args.stdin;
+
+    let username = match args.username {
+        Some(u) => {
+            let trimmed = u.trim().to_string();
+            if trimmed.is_empty() {
+                anyhow::bail!("Error: Username cannot be empty.");
+            }
+            trimmed
+        }
+        None => {
+            if is_tty {
+                print!("Enter admin username: ");
+                io::stdout().flush()?;
+                let mut line = String::new();
+                io::stdin().read_line(&mut line)?;
+                let trimmed = line.trim().to_string();
+                if trimmed.is_empty() {
+                    anyhow::bail!("Error: Username cannot be empty.");
+                }
+                trimmed
+            } else {
+                let mut line = String::new();
+                io::stdin().read_line(&mut line)?;
+                let trimmed = line.trim().to_string();
+                if trimmed.is_empty() {
+                    anyhow::bail!("Error: When piping stdin, username must not be empty.");
+                }
+                trimmed
+            }
+        }
+    };
+
+    let password = if is_tty {
+        let pass = rpassword::prompt_password("Enter admin password: ")?;
+        if pass.is_empty() {
+            anyhow::bail!("Error: Password cannot be empty.");
+        }
+        if pass.len() > 72 {
+            anyhow::bail!("Error: Password exceeds bcrypt limit of 72 bytes.");
+        }
+        let confirm = rpassword::prompt_password("Confirm admin password: ")?;
+        if pass != confirm {
+            anyhow::bail!("Error: Passwords do not match.");
+        }
+        pass
+    } else {
+        let mut line = String::new();
+        io::stdin().read_line(&mut line)?;
+        if line.ends_with('\n') {
+            line.pop();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+        }
+        if line.is_empty() {
+            anyhow::bail!("Error: When piping stdin, password must not be empty.");
+        }
+        if line.len() > 72 {
+            anyhow::bail!("Error: Password exceeds bcrypt limit of 72 bytes.");
+        }
+        line
+    };
+
+    let cwd = std::env::current_dir()?;
+    let home = dirs::home_dir();
+    let config_dir = dam_hopper_server::config::dam_hopper_config_dir();
+    let path_context = PathContext {
+        home: home.as_deref(),
+        cwd: &cwd,
+        config_dir: &config_dir,
+    };
+
+    let env_sqlite = std::env::var_os("DAM_HOPPER_AUTH_SQLITE_PATH");
+    let raw_db_path = args
+        .db
+        .as_ref()
+        .map(|p| p.as_os_str())
+        .or(env_sqlite.as_deref());
+    let db_path = resolve_sqlite_path(raw_db_path, &path_context)
+        .map_err(|e| anyhow::anyhow!("Invalid database path: {e}"))?;
+
+    let store = AuthStore::open_sqlite(&db_path).await.map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to open authentication database at {}: {e}",
+            db_path.display()
+        )
+    })?;
+
+    if store.get_user(&username).await?.is_some() {
+        anyhow::bail!(
+            "Error: User \"{username}\" already exists in {}",
+            db_path.display()
+        );
+    }
+
+    let password_hash =
+        bcrypt::hash(&password, 10).map_err(|e| anyhow::anyhow!("Failed to hash password: {e}"))?;
+
+    let user = UserRecord {
+        id: None,
+        username: username.clone(),
+        password_hash,
+        is_enabled: true,
+        role: UserRole::Admin,
+        auth_version: 0,
+        mfa: None,
+        mfa_attempt_window_started_at: None,
+        mfa_attempt_count: 0,
+        mfa_blocked_until: None,
+    };
+
+    store
+        .create_user(user)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to insert admin user: {e}"))?;
+
+    println!();
+    println!("✓ Admin user \"{username}\" created successfully in:");
+    println!("  {}", db_path.display());
+    println!();
+    println!("Configuration reminder:");
+    println!("  Ensure DAM_HOPPER_MFA_KEY_FILE is configured before starting the server:");
+    println!("    export DAM_HOPPER_MFA_KEY_FILE=/path/to/mfa-encryption.key");
+    println!(
+        "  (Generate with: (set -C; umask 077 && [ ! -e /path/to/mfa-encryption.key ] && openssl rand -hex 32 > /path/to/mfa-encryption.key) || true && chmod 600 /path/to/mfa-encryption.key)"
+    );
+    println!();
+    println!("Next steps:");
+    println!("  1. Start DamHopper server:");
+    println!(
+        "     DAM_HOPPER_MFA_KEY_FILE=/path/to/mfa-encryption.key dam-hopper-server --host 127.0.0.1 --port 4801"
+    );
+    println!("  2. Log in at http://127.0.0.1:4801/api/auth/login or via Web UI.");
+    println!("  3. Scan the TOTP QR code on first login to complete MFA enrollment.");
+
+    Ok(())
+}
 
 const TOKEN_CAPACITY: usize = 512;
 
@@ -391,7 +553,7 @@ mod tests {
                     panic!("expected OMP integration")
                 }
             },
-            None => panic!("expected integration command"),
+            _ => panic!("expected integration command"),
         }
 
         let args2 = [
@@ -417,7 +579,7 @@ mod tests {
                     panic!("expected OMP integration")
                 }
             },
-            None => panic!("expected integration command"),
+            _ => panic!("expected integration command"),
         }
 
         let args3 = ["dam-hopper-server", "--port", "4900"];
@@ -492,6 +654,30 @@ mod tests {
                 }),
             }))
         ));
+    }
+    #[test]
+    fn create_admin_subcommand_is_parsed_correctly() {
+        use super::{Cli, Commands};
+        use clap::Parser;
+
+        let args = [
+            "dam-hopper-server",
+            "create-admin",
+            "--username",
+            "test_admin",
+            "--db",
+            "/tmp/custom_auth.db",
+            "--stdin",
+        ];
+        let parsed = Cli::try_parse_from(args).expect("valid create-admin args");
+        match parsed.command {
+            Some(Commands::CreateAdmin(cmd)) => {
+                assert_eq!(cmd.username, Some("test_admin".to_string()));
+                assert_eq!(cmd.db, Some(PathBuf::from("/tmp/custom_auth.db")));
+                assert!(cmd.stdin);
+            }
+            _ => panic!("expected create-admin command"),
+        }
     }
 
     #[tokio::test]
@@ -678,8 +864,10 @@ async fn main() -> anyhow::Result<()> {
     // Load config-adjacent environment variables before Clap reads env-backed options.
     load_explicit_config_env();
     let cli = Cli::parse();
-    if let Some(Commands::Integration(integration)) = cli.command {
-        return dispatch_integration(integration).await;
+    match cli.command {
+        Some(Commands::CreateAdmin(args)) => return dispatch_create_admin(args).await,
+        Some(Commands::Integration(integration)) => return dispatch_integration(integration).await,
+        None => {}
     }
     // Disable libgit2 repository owner validation so git operations succeed on projects
     // across user homes, WSL mounts, and external drives owned by other users or UIDs.

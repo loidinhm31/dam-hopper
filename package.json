@@ -23,6 +23,7 @@
     "build:server": "cd server && cargo build --release",
     "serve": "cd server && cargo run --release",
     "create-admin": "node scripts/create-admin.mjs",
+    "test:admin": "node --test tests/create-admin.test.mjs",
     "lint": "eslint apps/ packages/",
     "format": "prettier --write .",
     "test": "cd server && cargo test",
@@ -48,7 +49,7 @@
     "check": "pnpm build && pnpm build:native && pnpm lint && cd server && cargo test"
   },
   "engines": {
-    "node": ">=20",
+    "node": ">=22.13.0",
     "pnpm": ">=10"
   },
   "devDependencies": {

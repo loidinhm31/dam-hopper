@@ -237,7 +237,7 @@ fn parse_lite_mode(value: Option<&OsStr>) -> Result<Option<bool>, AuthConfigErro
     }
 }
 
-fn resolve_sqlite_path(
+pub fn resolve_sqlite_path(
     value: Option<&OsStr>,
     context: &PathContext<'_>,
 ) -> Result<PathBuf, AuthConfigError> {
@@ -561,6 +561,46 @@ pub(crate) mod tests {
         assert_eq!(
             resolve_full(Some("1"), Some("rel/a.db"), None, None),
             Ok(explicit_sqlite("/work/dir/rel/a.db"))
+        );
+    }
+    #[test]
+    #[cfg(windows)]
+    fn windows_path_conventions_and_config_dir_resolve_correctly() {
+        let home = Path::new(r"C:\Users\operator");
+        let cwd = Path::new(r"C:\work\dam-hopper");
+        let win_config = Path::new(r"C:\Users\operator\.config\dam-hopper");
+        let win_ctx = ctx(Some(home), cwd, win_config);
+
+        // Default path under Windows config dir
+        assert_eq!(
+            AuthBackendConfig::resolve(Some(OsStr::new("true")), None, None, None, &win_ctx),
+            Ok(explicit_sqlite(
+                r"C:\Users\operator\.config\dam-hopper\auth.db"
+            ))
+        );
+
+        // Explicit absolute Windows drive path
+        assert_eq!(
+            AuthBackendConfig::resolve(
+                Some(OsStr::new("true")),
+                Some(OsStr::new(r"D:\Data\custom_auth.db")),
+                None,
+                None,
+                &win_ctx
+            ),
+            Ok(explicit_sqlite(r"D:\Data\custom_auth.db"))
+        );
+
+        // Windows relative path resolves against cwd
+        assert_eq!(
+            AuthBackendConfig::resolve(
+                Some(OsStr::new("true")),
+                Some(OsStr::new(r"data\auth.db")),
+                None,
+                None,
+                &win_ctx
+            ),
+            Ok(explicit_sqlite(r"C:\work\dam-hopper\data\auth.db"))
         );
     }
 
