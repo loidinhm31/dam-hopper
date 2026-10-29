@@ -475,11 +475,12 @@ async fn clean_install_provisioning_and_login_flow() {
     }
 
     // 2. Run offline provisioning script targeting default auth.db via HOME/XDG environment
-    let script_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("scripts/create-admin.mjs");
-
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let script_path = repo_root.join("scripts/create-admin.mjs");
+    if !repo_root.join("node_modules/bcryptjs").exists() {
+        eprintln!("Skipping clean_install test: node_modules/bcryptjs not installed");
+        return;
+    }
     let script_output = Command::new("node")
         .arg(&script_path)
         .arg("clean_admin")

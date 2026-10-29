@@ -133,13 +133,13 @@ export function parseArgs(args = process.argv.slice(2)) {
  */
 export function promptPassword(promptText) {
   return new Promise((resolvePrompt, rejectPrompt) => {
-    process.stdout.write(promptText);
     let password = "";
 
     const wasRaw = Boolean(process.stdin.isRaw);
     if (typeof process.stdin.setRawMode === "function") {
       process.stdin.setRawMode(true);
     }
+    process.stdout.write(promptText);
     process.stdin.resume();
     process.stdin.setEncoding("utf8");
 

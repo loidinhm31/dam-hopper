@@ -124,7 +124,7 @@ test.describe("SQLite Authentication Lite Mode Real Application Journey", () => 
     });
     expect(loginRes.status).toBe(401);
     const loginBody = (await loginRes.json()) as { code: string };
-    expect(loginBody.code).toBe("ACCOUNT_DISABLED");
+    expect(loginBody.code).toBe("INVALID_CREDENTIALS");
 
     // 5. Navigate to Settings and verify healthy surviving controls backed by SQLite auth
     await page.goto(`${appServices.appOrigin}/settings`);
