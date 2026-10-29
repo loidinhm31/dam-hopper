@@ -231,6 +231,8 @@ export async function startApplicationServices(
           ]
         : [
             "-e",
+            "DAM_HOPPER_LITE_MODE=false",
+            "-e",
             "MONGODB_URI=mongodb://mongo:27017",
             "-e",
             `MONGODB_DATABASE=${databaseName}`,

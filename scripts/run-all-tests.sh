@@ -69,6 +69,7 @@ run_suite() {
 }
 
 run_suite 'Rust server tests' pnpm test
+run_suite 'Admin provisioning tests' node --test tests/create-admin.test.mjs
 run_suite 'Shared package tests' pnpm --filter @dam-hopper/shared test
 run_suite 'Browser bridge tests' pnpm --filter @dam-hopper/browser-bridge test
 run_suite 'UI unit tests' pnpm --filter @dam-hopper/ui test

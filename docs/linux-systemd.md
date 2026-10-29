@@ -203,28 +203,26 @@ the release manager's managed lifecycle list covers the helper service itself.
    sudo chmod 600 /etc/dam-hopper/server.env
    ```
 
-   ##### Option B: SQLite Lite Mode (Alternative, no MongoDB required)
+   ##### Option B: SQLite Mode (Default, no MongoDB required)
    ```bash
    sudo mkdir -p /var/lib/dam-hopper
    sudo chown <API_USER>:<API_GROUP> /var/lib/dam-hopper
    sudo chmod 700 /var/lib/dam-hopper
 
    sudo tee /etc/dam-hopper/server.env <<EOF
-   DAM_HOPPER_LITE_MODE=true
    DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db
    DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key
    EOF
    sudo chmod 600 /etc/dam-hopper/server.env
    ```
-   `DAM_HOPPER_LITE_MODE=true` (or `1`, trim/case-insensitive) selects authenticated SQLite storage with no automatic fallback to MongoDB and fatal startup on SQLite initialization failure; it is never the loopback-only `--no-auth` development bypass. Exactly one server process may use one local SQLite auth file (never network/shared filesystems).
-
+   SQLite is the default authentication store when MongoDB variables are omitted (or forced via `DAM_HOPPER_LITE_MODE=true`). It has zero runtime fallback to MongoDB, and SQLite initialization failure is fatal. It is never the loopback-only `--no-auth` development bypass. Exactly one server process may use one local SQLite auth file (never network/shared filesystems or multi-node clusters).
 5. **Explicitly activate the release:**
    ```bash
    sudo dam-hopper start
    ```
 
-6. **Provision and approve the first account (post-activation):**
-   `POST /api/auth/register` creates a disabled `user` account (`auth_version = 0`) and never grants automatic first-user `admin` rights; login returns `401 ACCOUNT_DISABLED` until local operator approval. From the API host, follow the **Deployment profile** in the canonical [Operator Account Approval and Role Promotion Runbook](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook) to register against `http://127.0.0.1:4801`, inspect and approve/promote the account in `/var/lib/dam-hopper/auth.db` via `sqlite3` (or `mongosh` for MongoDB), and complete first-login TOTP MFA enrollment (`enrollmentRequired`) via the [Authentication API](./api/authentication.md).
+6. **Provision the first account (offline):**
+   Public registration is permanently removed. From the API host, run `sudo -u <API_USER> DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db node scripts/create-admin.mjs <username> <password>` to create the administrator account directly in SQLite, then log in and complete first-login TOTP MFA enrollment (`enrollmentRequired`) via the [Authentication API](./api/authentication.md).
 ### 5.2 Release Activation Gate
 
 The `dam-hopper start` command is the sole activation entrypoint. Under `/run/lock/dam-hopper/deploy.lock`:

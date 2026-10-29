@@ -7,32 +7,22 @@ use axum::{
     Json,
 };
 use axum_extra::extract::CookieJar;
-use bcrypt::{hash, verify, DEFAULT_COST};
+use bcrypt::verify;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 use crate::api::auth_mfa::{auth_error_response, no_store_json_response, LoginChallengeResponse};
 use crate::auth::model::{
     bson_to_chrono, chrono_to_bson, AuthChallenge, AuthClaims, AuthDecision, ChallengePurpose,
-    UserRecord,
 };
 use crate::auth::policy::{
     check_account_throttle, compute_mfa_due_at, AUTH_PROTOCOL_VERSION, CHALLENGE_LIFETIME_SECS,
 };
 use crate::auth::totp::TotpEngine;
-use crate::auth::{AuthService, AuthStore, StoreError};
+use crate::auth::{AuthService, AuthStore};
 use crate::state::AppState;
 
 pub const AUTH_COOKIE: &str = "damhopper-auth";
-
-// ---------------------------------------------------------------------------
-// Error response
-// ---------------------------------------------------------------------------
-
-#[derive(Serialize)]
-struct ErrorBody {
-    error: String,
-}
 
 pub(crate) fn auth_cookie_header(value: &str, clear: bool) -> String {
     let max_age = if clear {
@@ -394,67 +384,6 @@ pub async fn verify_actor_credentials(
     verify_enabled_user(state.auth_service.store(), username, password)
         .await
         .map(|_| ())
-}
-
-fn register_error(status: StatusCode, message: &str) -> Response {
-    (
-        status,
-        Json(ErrorBody {
-            error: message.into(),
-        }),
-    )
-        .into_response()
-}
-
-/// POST /api/auth/register — registers a disabled `user` account in the selected store.
-///
-/// Approval and role assignment stay an operator action; success is reported
-/// only after the store has actually inserted the account.
-pub async fn register(State(state): State<AppState>, Json(body): Json<LoginBody>) -> Response {
-    let Some(store) = state.auth_service.store() else {
-        return register_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Authentication storage not configured, cannot register",
-        );
-    };
-
-    let Some(username) = body.username else {
-        return unauthorized();
-    };
-    let Some(password) = body.password else {
-        return unauthorized();
-    };
-    let password = zeroize::Zeroizing::new(password);
-
-    let password_hash = match hash(password.as_str(), DEFAULT_COST) {
-        Ok(hash) => hash,
-        Err(error) => {
-            tracing::error!(%error, "Registration password hashing failed");
-            return register_error(StatusCode::INTERNAL_SERVER_ERROR, "Registration failed");
-        }
-    };
-    let new_user = UserRecord {
-        id: None,
-        username,
-        password_hash,
-        is_enabled: false,
-        role: UserRole::User,
-        auth_version: 0,
-        mfa: None,
-        mfa_attempt_window_started_at: None,
-        mfa_attempt_count: 0,
-        mfa_blocked_until: None,
-    };
-    match store.create_user(new_user).await {
-        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
-        Err(StoreError::DuplicateUsername(_)) => {
-            register_error(StatusCode::BAD_REQUEST, "User already exists")
-        }
-        Err(error) => {
-            tracing::error!(%error, "Registration storage failure");
-            register_error(StatusCode::INTERNAL_SERVER_ERROR, "Registration failed")
-        }
-    }
 }
 
 /// POST /api/auth/login — password login against the selected `AuthStore` (MongoDB or SQLite);

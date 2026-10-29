@@ -1,6 +1,7 @@
 # Server Deployment and Transport
 
 Server launch modes, deployment, browser origin/CORS, media compatibility, and host-resource SSE operations moved from the [server configuration index](./server-configuration.md).
+
 ## Running the Server
 
 ### Development Mode
@@ -40,10 +41,12 @@ DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key \
 ```
 
 **Storage, Isolation & First-Account Invariants:**
+
 - **Authenticated Mode (Not `--no-auth`)**: `DAM_HOPPER_LITE_MODE=true` (or `1`, case-insensitive) selects authenticated SQLite storage with no automatic fallback to MongoDB and fatal startup on SQLite initialization failure. `--no-auth` is a separate loopback-only development bypass, never SQLite lite mode.
 - **Private Persistent Directory**: Ensure the directory containing `auth.db` (e.g. `/var/lib/dam-hopper`) is strictly owned by the server process user with mode `0700`, and provide a valid dedicated 32-byte owner-only `DAM_HOPPER_MFA_KEY_FILE` in production.
 - **Single Process Constraint**: Exactly **one server process per local auth file**. Do not run multiple DamHopper server processes pointing to the same SQLite auth file. Network filesystems (NFS, SMB, CIFS) are not supported.
-- **First Account Approval & Promotion**: `POST /api/auth/register` creates a disabled `user` account (`auth_version = 0`) and never grants automatic first-user `admin` rights (`POST /api/auth/login` returns `401 ACCOUNT_DISABLED` until approved). After starting the server, follow the **Development profile** or **Deployment profile** in the canonical [Operator Account Approval and Role Promotion Runbook](./server-environment-auth.md#operator-account-approval-and-role-promotion-runbook) to register against `http://127.0.0.1:4801`, approve/promote the account in SQLite, and complete TOTP MFA enrollment ([Authentication API](../api/authentication.md)).
+- **Offline First-Account Provisioning**: DamHopper does not expose a public registration endpoint (`POST /api/auth/register` is removed). After starting or before starting the server, follow the **Development profile** or **Deployment profile** in the canonical [Direct Account Provisioning Runbook](./server-environment-auth.md#direct-account-provisioning-no-public-registration-api) to provision an administrator using `dam-hopper-server create-admin` (or `pnpm create-admin`), then complete first-time TOTP MFA enrollment ([Authentication API](../api/authentication.md)).
+
 ### Dedicated release web host (`dam-hopper-web`)
 
 Build and run the second Cargo binary with a selected immutable web root:
@@ -185,11 +188,15 @@ SSH, WebView2/DPAPI, and Browser relay evidence is recorded. Old browser
 layouts/history discarded by the fresh reset cannot be restored by rollback.
 
 ## Host resources SSE delivery and reverse proxy operations
+
 The authenticated `GET /api/system/resources/v1/events` stream serves an eligible connected, visible profile. While a paired stream is LIVE it updates snapshot and metrics together; the existing REST endpoints remain the gated fallback. Operational runbooks and documentation do not replace target release qualification.
+
 ### Reverse proxy requirements
+
 Buffering, caching, compression, and body transformation must be disabled for the SSE route at every proxy/CDN hop. Preserve `X-Accel-Buffering: no`; on Nginx use `proxy_buffering off`, `proxy_cache off`, `gzip off`, and `proxy_set_header Accept-Encoding ""` (the last disables upstream compression only; also disable downstream gzip/Brotli).
 Set the upstream idle-read timeout to at least 45 s; status/keepalive bytes arrive at least every 15 s. HTTP/1.1 browsers commonly cap connections per origin and multiple SSE tabs can delay REST/WS traffic; HTTP/2 multiplexing mitigates this, but stage-test the actual deployed chain with HTTP/2 enabled and concurrent REST/WS requests.
 **Nginx example** (4801 is the documented systemd API port; direct/Docker defaults to 4800. Match the actual `DAM_HOPPER_PORT`):
+
 ```nginx
 location /api/system/resources/v1/events {
     proxy_pass http://127.0.0.1:4801;
@@ -206,14 +213,18 @@ location /api/system/resources/v1/events {
 ```
 
 ### Admission, capacity, and qualification gates
+
 Each server process admits at most 32 live response bodies globally and 4 per authenticated subject. Rejections return HTTP `429` with `code: "HOST_RESOURCE_STREAM_LIMIT"` and `Retry-After: 30`; auth admission timeout/store failure returns `503 AUTH_UNAVAILABLE` after 2 s.
 Independent auth supervision checks each body every 5 s (2 persisted reads/check): about 12.8 persisted reads/s at N=32 is a model, not observed load. No SSE setting is added; existing server-owned monitor cadences remain unchanged, REST fallback is 15 s snapshot/5 s visible-detail metrics, and history remains 30 s/coalesced.
 The process inventory deadline is 150 ms; the 500 ms snapshot deadline is a wait, not a CPU or blocked-syscall bound. The default-cadence whole-monitor ≤2% one-core target requires the separate baseline monitor profiler; ten collector-only scans do not qualify it.
 Before any target rollout, identify reference/weak Linux hosts and the deployed proxy, then close the applicable operational qualification gates: same-run optimized harness evidence vs separately attributed authenticated release-PID CPU/RSS, 30-minute soak, live Chromium/browser, and deployed-proxy verification. Active auth revocation and active backpressured HTTP/WS shutdown remain runtime gates. Missing metric producer/population is null+reason and blocked, never zero/green. Unsupported native targets stay on owner-bound REST and do not block a qualified Linux-web release. See [Host-Resource SSE Architecture](../architecture/host-resource-sse.md).
+
 ### Rollout and rollback
+
 Roll forward only after applicable target gates pass: deploy the backend first so old clients continue REST snapshot/metrics and WS; then deploy the web bundle. A new client on an older backend treats `/events` 404/405 as REST-only. Verify the deployed proxy's buffering, compression, idle timeout, and HTTP version during staging.
 Roll back artifacts, not a runtime flag: restore the prior REST/WS UI first, and refresh/close tabs running the new client so their active SSE bodies can close; then, only if needed, replace the backend with its prior artifact. New clients left loaded after backend rollback fall back to REST on 404/405.
 Keep `/api/system/resources/v1/snapshot`, `/api/system/metrics`, host-alert/history and unread behavior, the non-resource WS bridge, monitor cadence/configuration, and separately authorized Force Machine to Sleep/idle-suspend behavior intact. On an auth/security violation stop the affected rollout and revert the client and/or backend artifact; never log bearer tokens or raw resource payloads.
-### Shutdown bounds
-On OS signal the server revokes SSE admission/emission immediately, bounds feature cleanup to ≤2 s, and forces accepted HTTP/WS I/O cancellation at signal+10 s. This bounds HTTP drain, not total process exit if a collector syscall blocks; later PTY cleanup remains ordered.
 
+### Shutdown bounds
+
+On OS signal the server revokes SSE admission/emission immediately, bounds feature cleanup to ≤2 s, and forces accepted HTTP/WS I/O cancellation at signal+10 s. This bounds HTTP drain, not total process exit if a collector syscall blocks; later PTY cleanup remains ordered.

@@ -4,13 +4,14 @@ DamHopper provides multiple installation paths suited for production deployments
 
 ## Deployment Topologies
 
-| Topology | Target Host | Installer / Runner | Activation Model |
-| --- | --- | --- | --- |
-| **Linux Release** | Linux x86_64 systemd | `dam-hopper-install.sh` | Staged release candidate activated via `dam-hopper start` |
-| **Windows Direct** | Windows x86_64 | `dam-hopper-install.ps1` | Standalone console executable in `%LOCALAPPDATA%\Programs\dam-hopper` |
-| **Android Native** | Android 10+ (API 29+) | Signed Release APK | Assembled via `.github/workflows/release-android.yml` or `pnpm android:build` |
-| **Source Build** | Any supported OS | `pnpm` + `cargo` | Compiled release binaries from Git clone |
-| **Local Dev Loopback** | Workstation | `cargo run` (`--no-auth`) | Transient unauthenticated loopback server |
+| Topology               | Target Host           | Installer / Runner        | Activation Model                                                              |
+| ---------------------- | --------------------- | ------------------------- | ----------------------------------------------------------------------------- |
+| **Linux Release**      | Linux x86_64 systemd  | `dam-hopper-install.sh`   | Staged release candidate activated via `dam-hopper start`                     |
+| **Windows Direct**     | Windows x86_64        | `dam-hopper-install.ps1`  | Standalone console executable in `%LOCALAPPDATA%\Programs\dam-hopper`         |
+| **Android Native**     | Android 10+ (API 29+) | Signed Release APK        | Assembled via `.github/workflows/release-android.yml` or `pnpm android:build` |
+| **Source Build**       | Any supported OS      | `pnpm` + `cargo`          | Compiled release binaries from Git clone                                      |
+| **Local Dev Loopback** | Workstation           | `cargo run` (`--no-auth`) | Transient unauthenticated loopback server                                     |
+
 ---
 
 ## 1. Linux Release Installer (x86_64 systemd)
@@ -79,20 +80,30 @@ sudo chown <API_USER>:<API_GROUP> /etc/dam-hopper/mfa-encryption.key
 sudo chmod 600 /etc/dam-hopper/mfa-encryption.key
 ```
 
-#### Option A: Default MongoDB Mode
+#### Option A: MongoDB Mode (Clustered or Dedicated)
+
 Configure `/etc/dam-hopper/server.env` with MongoDB connection parameters:
+
 ```bash
 sudo tee /etc/dam-hopper/server.env <<EOF
 MONGODB_URI=mongodb://127.0.0.1:27017
 MONGODB_DATABASE=damHopper
+DAM_HOPPER_LITE_MODE=false
 DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key
 DAM_HOPPER_CORS_ORIGINS=http://localhost:4802
 EOF
 sudo chmod 600 /etc/dam-hopper/server.env
 ```
 
-#### Option B: SQLite Lite Mode (No MongoDB Required)
-Configure `/etc/dam-hopper/server.env` with SQLite lite mode:
+_MongoDB Invariants_:
+
+- Both `MONGODB_URI` and `MONGODB_DATABASE` are required. `DAM_HOPPER_LITE_MODE=false` explicitly enforces MongoDB and fails startup if Mongo variables are missing.
+- Startup issues a bounded connectivity ping; unreachable MongoDB causes immediate fatal exit without fallback to SQLite.
+
+#### Option B: SQLite Mode (Single-Node Default, No MongoDB Required)
+
+Configure `/etc/dam-hopper/server.env` for local SQLite authentication:
+
 ```bash
 # Create private persistent state directory for auth.db
 sudo mkdir -p /var/lib/dam-hopper
@@ -100,7 +111,6 @@ sudo chown <API_USER>:<API_GROUP> /var/lib/dam-hopper
 sudo chmod 700 /var/lib/dam-hopper
 
 sudo tee /etc/dam-hopper/server.env <<EOF
-DAM_HOPPER_LITE_MODE=true
 DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db
 DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key
 DAM_HOPPER_CORS_ORIGINS=http://localhost:4802
@@ -108,9 +118,10 @@ EOF
 sudo chmod 600 /etc/dam-hopper/server.env
 ```
 
-*Deployment & Auth Invariants*:
-- `DAM_HOPPER_LITE_MODE=true` (or `1`, trim/case-insensitive) selects authenticated SQLite mode with no automatic fallback to MongoDB; SQLite initialization failure is fatal. It is **never** a synonym for the loopback-only `--no-auth` development bypass.
-- Exactly **one server process per local auth file**. Do not share `auth.db` across multiple server processes or network/shared filesystems.
+_Deployment & Auth Invariants_:
+
+- SQLite is the default when MongoDB variables are unset (`DAM_HOPPER_LITE_MODE=true` can be set as an optional explicit override). It is **never** a synonym for the loopback-only `--no-auth` development bypass.
+- Exactly **one server process per local auth file**. Do not share `auth.db` across multiple server processes or network/shared filesystems. Clustered multi-node deployments must use MongoDB.
 
 ### Step 5: Activate the Release and Provision the First Account
 
@@ -122,7 +133,8 @@ sudo dam-hopper start
 
 The `start` command installs concrete systemd units, reloads `systemd`, starts configured services, and enforces a strict health gate: a 20-second startup deadline followed by 20 consecutive 500 ms health probes over a 10-second stability window. If health checks fail, the manager aborts activation and keeps prior units running.
 
-**First-Account Provisioning (Post-Activation):** DamHopper never creates a default administrator or auto-promotes the first registrant. `POST /api/auth/register` creates a disabled `user` account (`auth_version = 0`) that returns `401 ACCOUNT_DISABLED` on login until an operator approves it. After `sudo dam-hopper start` succeeds, follow the **Deployment profile** in the canonical [Operator Account Approval and Role Promotion Runbook](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook) to register from the API host against `http://127.0.0.1:4801`, approve and promote the account via `sqlite3` (or `mongosh`), and complete TOTP MFA enrollment ([Authentication API](./api/authentication.md)). Never use the server's `server-token` signing secret as a client credential.
+**First-Account Provisioning (Post-Activation):** DamHopper does not expose a public registration endpoint. After `sudo dam-hopper start` succeeds, run `sudo -u <API_USER> dam-hopper-server create-admin --username <username> --db /var/lib/dam-hopper/auth.db` to create your administrator account directly in SQLite (you will be prompted securely for password without echo), then log in and complete TOTP MFA enrollment ([Authentication API](./api/authentication.md)). Never pass passwords as command-line arguments in production, and never use the server's `server-token` signing secret as a client credential.
+
 ### Rollback and Recovery
 
 ```bash
@@ -189,7 +201,7 @@ dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\dam-hopper
 dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\dam-hopper.toml" --host 127.0.0.1 --port 4801
 ```
 
-For authenticated SQLite lite mode on Windows (`$env:DAM_HOPPER_LITE_MODE="true"`, defaulting to `%APPDATA%\dam-hopper\auth.db` when `DAM_HOPPER_AUTH_SQLITE_PATH` is unset; one server process per local auth file), register and approve your first account using the canonical [Operator Account Approval and Role Promotion Runbook](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook).
+For authenticated SQLite mode on Windows (defaulting to `%USERPROFILE%\.config\dam-hopper\auth.db` when `DAM_HOPPER_AUTH_SQLITE_PATH` is unset; one server process per local auth file), provision your initial administrator account offline using the self-contained CLI command: `& "$installDir\bin\dam-hopper-server.exe" create-admin --username <target-username>`. See the canonical [Offline Administrator Provisioning Runbook](./configuration/server-environment-auth.md#offline-administrator-provisioning-runbook).
 
 ### Upgrading on Windows
 
@@ -234,6 +246,7 @@ pnpm build:server
 # 4. Run the release binary directly (default host 0.0.0.0:4800)
 ./server/target/release/dam-hopper-server --config ~/.config/dam-hopper/dam-hopper.toml
 ```
+
 ---
 
 ## 4. Local Development & Loopback Mode (`--no-auth`)
@@ -255,7 +268,7 @@ pnpm --filter @dam-hopper/web exec vite --host 127.0.0.1
 
 ### Strict Security Constraints for `--no-auth`
 
-`--no-auth` is a local loopback development bypass—**never** SQLite lite mode (`DAM_HOPPER_LITE_MODE=true`). For authenticated local SQLite development and first-account approval, follow the **Development profile** in [Server Environment and Authentication](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook).
+`--no-auth` is a local loopback development bypass—**never** SQLite lite mode (`DAM_HOPPER_LITE_MODE=true`). For authenticated local SQLite development and first-account provisioning, follow the **Development profile** in [Server Environment and Authentication](./configuration/server-environment-auth.md#development-profile).
 
 1. **Loopback Only (`127.0.0.1`):** The server binary defaults to binding `0.0.0.0`. When running with `--no-auth`, **always pass `--host 127.0.0.1`**. Never bind `--no-auth` to a public IP, LAN, or untrusted network.
 2. **Forbidden in Production:** Server startup aborts if `RUST_ENV=production` or `ENVIRONMENT=production` is detected while `--no-auth` is active.
@@ -304,7 +317,7 @@ base64 -w 0 damhopper-release.jks > keystore_base64.txt
 [Convert]::ToBase64String([IO.File]::ReadAllBytes("damhopper-release.jks")) | Out-File -Encoding ascii keystore_base64.txt
 ```
 
-*(Note: `keystore_base64.txt` is explicitly ignored by `.gitignore` to prevent accidental commits).*
+_(Note: `keystore_base64.txt` is explicitly ignored by `.gitignore` to prevent accidental commits)._
 
 ### 5.3 Configuring GitHub Repository Secrets
 
@@ -313,12 +326,12 @@ Navigate to your repository settings:
 
 Add the following four mandatory repository secrets:
 
-| Secret Name | Description | Example / Format |
-| :--- | :--- | :--- |
-| `DAMHOPPER_KEYSTORE_BASE64` | Base64-encoded release JKS file | Full content of `keystore_base64.txt` (single-line string) |
-| `DAMHOPPER_KEY_ALIAS` | Key alias name inside the keystore | `damhopper-release` |
-| `DAMHOPPER_STORE_PASSWORD` | Password used to open the keystore file | `<store_password>` |
-| `DAMHOPPER_KEY_PASSWORD` | Password protecting the private key alias | `<key_password>` |
+| Secret Name                 | Description                               | Example / Format                                           |
+| :-------------------------- | :---------------------------------------- | :--------------------------------------------------------- |
+| `DAMHOPPER_KEYSTORE_BASE64` | Base64-encoded release JKS file           | Full content of `keystore_base64.txt` (single-line string) |
+| `DAMHOPPER_KEY_ALIAS`       | Key alias name inside the keystore        | `damhopper-release`                                        |
+| `DAMHOPPER_STORE_PASSWORD`  | Password used to open the keystore file   | `<store_password>`                                         |
+| `DAMHOPPER_KEY_PASSWORD`    | Password protecting the private key alias | `<key_password>`                                           |
 
 ### 5.4 Triggering the Release Workflow
 
@@ -326,10 +339,12 @@ The workflow `.github/workflows/release-android.yml` can be triggered via two me
 
 1. **Tag Push (Automatic Production Release)**:
    Pushing any tag matching `v*` (e.g. `v0.13.2`) or `android-v*` (e.g. `android-v0.1.0`):
+
    ```bash
    git tag android-v0.1.0
    git push origin android-v0.1.0
    ```
+
    The workflow automatically:
    - Validates semantic versioning against committed `native/android-app/gradle.properties`.
    - Cross-compiles the Rust `crypto-bridge` cdylib (`libdamhopper_crypto_bridge.so`) for target ABIs (`arm64-v8a`, `x86_64`) via `cargo-ndk`.

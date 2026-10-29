@@ -133,29 +133,21 @@ fn operator(db_path: &Path) -> rusqlite::Connection {
     connection
 }
 
-async fn register(app: &axum::Router, username: &str, password: &str) -> (StatusCode, Value) {
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/auth/register")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({ "username": username, "password": password }).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
+async fn seed_user(lite: &Lite, username: &str, password: &str) {
+    let hash = bcrypt::hash(password, 4).unwrap();
+    let user = dam_hopper_server::auth::UserRecord {
+        id: None,
+        username: username.to_string(),
+        password_hash: hash,
+        is_enabled: false,
+        role: dam_hopper_server::auth::UserRole::User,
+        auth_version: 0,
+        mfa: None,
+        mfa_attempt_window_started_at: None,
+        mfa_attempt_count: 0,
+        mfa_blocked_until: None,
+    };
+    lite.store.create_user(user).await.unwrap();
 }
 
 /// Active full-access session for `username` (registered users have authVersion 0).
@@ -209,58 +201,28 @@ async fn get(app: &axum::Router, uri: &str, bearer: &str) -> (StatusCode, Value)
 }
 
 #[tokio::test]
-async fn register_stores_a_disabled_user_and_rejects_duplicates() {
+async fn register_endpoint_is_removed_and_returns_404() {
     let lite = lite().await;
-
-    let (status, body) = register(&lite.app, "alice", "correct horse").await;
-    assert_eq!((status, &body), (StatusCode::OK, &json!({ "ok": true })));
-
-    let user = lite
-        .store
-        .get_user("alice")
+    let response = lite
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "username": "alice", "password": "pw" }).to_string()))
+                .unwrap(),
+        )
         .await
-        .unwrap()
-        .expect("persisted");
-    assert!(!user.is_enabled, "registration never self-approves");
-    assert_eq!(user.role, dam_hopper_server::auth::UserRole::User);
-    assert_eq!(user.auth_version, 0);
-    assert!(user.mfa.is_none());
-    assert!(bcrypt::verify("correct horse", &user.password_hash).unwrap());
-    assert_ne!(user.password_hash, "correct horse");
-
-    let (status, body) = register(&lite.app, "alice", "another").await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"], "User already exists");
-    let still = lite.store.get_user("alice").await.unwrap().unwrap();
-    assert_eq!(
-        still.password_hash, user.password_hash,
-        "duplicate never overwrites"
-    );
-}
-
-#[tokio::test]
-async fn register_never_reports_success_when_storage_fails_or_is_absent() {
-    let lite = lite().await;
-    operator(&lite.db_path)
-        .execute_batch("DROP TABLE auth_users")
-        .expect("operator drops table");
-    let (status, body) = register(&lite.app, "bob", "pw").await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_ne!(body, json!({ "ok": true }));
-
-    let no_store = new_state(&lite.tmp, None, false).unwrap();
-    let (status, body) = register(&build_router(no_store), "bob", "pw").await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_ne!(body, json!({ "ok": true }));
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn reauthentication_verifies_same_subject_password_against_sqlite() {
     let lite = lite().await;
-    assert_eq!(
-        register(&lite.app, "carol", "s3cret").await.0,
-        StatusCode::OK
-    );
+    seed_user(&lite, "carol", "s3cret").await;
     let actor = AuthenticatedActor::new("carol", None);
 
     async fn attempt(
@@ -310,7 +272,7 @@ async fn reauthentication_verifies_same_subject_password_against_sqlite() {
 #[tokio::test]
 async fn host_action_availability_is_derived_from_the_selected_store() {
     let lite = lite().await;
-    assert_eq!(register(&lite.app, "dave", "pw").await.0, StatusCode::OK);
+    seed_user(&lite, "dave", "pw").await;
     let token = bearer_for(&lite, "dave").await;
     operator(&lite.db_path)
         .execute_batch("UPDATE auth_users SET is_enabled = 1 WHERE username = 'dave'")
@@ -446,7 +408,7 @@ async fn post_bearer(
 #[tokio::test]
 async fn routed_sensitive_action_is_denied_once_the_same_session_account_is_disabled() {
     let lite = lite().await;
-    assert_eq!(register(&lite.app, "erin", "pw").await.0, StatusCode::OK);
+    seed_user(&lite, "erin", "pw").await;
     let token = bearer_for(&lite, "erin").await;
     let uri = "/api/system/idle-suspend/v1/force-suspend";
     let body = json!({ "wakeAfterSeconds": 0, "force": false });
@@ -480,7 +442,7 @@ async fn routed_sensitive_action_is_denied_once_the_same_session_account_is_disa
 #[tokio::test]
 async fn storage_failure_denies_admin_actor_and_reauthentication_consumers() {
     let lite = lite().await;
-    assert_eq!(register(&lite.app, "root", "pw").await.0, StatusCode::OK);
+    seed_user(&lite, "root", "pw").await;
     operator(&lite.db_path)
         .execute_batch(
             "UPDATE auth_users SET is_enabled = 1, role = 'admin' WHERE username = 'root'",
@@ -531,10 +493,7 @@ async fn storage_failure_denies_admin_actor_and_reauthentication_consumers() {
 #[tokio::test]
 async fn stale_account_version_and_operator_mfa_reset_invalidates_active_jwt_and_challenges() {
     let lite = lite().await;
-    assert_eq!(
-        register(&lite.app, "frank", "Password123!").await.0,
-        StatusCode::OK
-    );
+    seed_user(&lite, "frank", "Password123!").await;
 
     // Operator approves account
     let conn = operator(&lite.db_path);
@@ -638,7 +597,7 @@ async fn stale_account_version_and_operator_mfa_reset_invalidates_active_jwt_and
 #[tokio::test]
 async fn account_disable_and_deletion_invalidates_live_session() {
     let lite = lite().await;
-    assert_eq!(register(&lite.app, "grace", "pw").await.0, StatusCode::OK);
+    seed_user(&lite, "grace", "pw").await;
 
     let conn = operator(&lite.db_path);
     conn.execute(
@@ -679,7 +638,7 @@ async fn account_disable_and_deletion_invalidates_live_session() {
 #[tokio::test]
 async fn session_revocation_denies_token() {
     let lite = lite().await;
-    assert_eq!(register(&lite.app, "heidi", "pw").await.0, StatusCode::OK);
+    seed_user(&lite, "heidi", "pw").await;
     operator(&lite.db_path)
         .execute_batch("UPDATE auth_users SET is_enabled = 1 WHERE username = 'heidi'")
         .unwrap();
@@ -725,54 +684,3 @@ async fn session_revocation_denies_token() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
-async fn registration_validation_edge_cases() {
-    let lite = lite().await;
-
-    // Missing body fields
-    let resp = lite
-        .app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/auth/register")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({}).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    // Missing password -> 401 Unauthorized
-    let resp = lite
-        .app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/auth/register")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({ "username": "valid_user" }).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-
-    // Missing username -> 401 Unauthorized
-    let resp = lite
-        .app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/auth/register")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({ "password": "valid_pass" }).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-}
