@@ -73,14 +73,19 @@ pub fn build_router_with_web_dir_and_origins(
     // Separate boundary so no-store also wraps authentication/extractor rejections.
     let device_sessions = Router::new()
         .route("/api/auth/sessions", get(super::auth_sessions::list))
-        .route("/api/auth/sessions/{id}", delete(super::auth_sessions::revoke))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth))
+        .route(
+            "/api/auth/sessions/{id}",
+            delete(super::auth_sessions::revoke),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ))
         .layer(middleware::from_fn(super::auth_sessions::no_store));
 
     // Public routes — no auth required
     let public = Router::new()
         .route("/api/health", get(settings::health))
-        .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/status", get(auth::status))

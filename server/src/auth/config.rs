@@ -1,9 +1,19 @@
 //! Environment-selected authentication backend.
 //!
-//! `DAM_HOPPER_LITE_MODE` alone selects the backend; `DAM_HOPPER_AUTH_SQLITE_PATH`
-//! only locates the SQLite file once lite mode is on. There is no CLI/TOML
-//! setting, no auto-detection and no fallback between backends: an
-//! unrecognised selector or an unusable path is a startup error.
+//! DamHopper supports two authenticated backends within the same compiled binary:
+//!
+//! - **SQLite**: Default for unconfigured startup (when both `MONGODB_URI` and
+//!   `MONGODB_DATABASE` are unset), or explicitly forced via
+//!   `DAM_HOPPER_LITE_MODE=true` (or `1`). Database location defaults to `auth.db`
+//!   under the global DamHopper configuration directory, overridable via
+//!   `DAM_HOPPER_AUTH_SQLITE_PATH`.
+//! - **MongoDB**: Selected automatically when both `MONGODB_URI` and
+//!   `MONGODB_DATABASE` are set and non-blank, or explicitly enforced with
+//!   `DAM_HOPPER_LITE_MODE=false` (or `0`).
+//!
+//! Partial, empty, or whitespace-only MongoDB variables are treated as malformed
+//! configuration errors and abort startup. There is no runtime fallback from
+//! an unreachable MongoDB server to SQLite.
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -13,16 +23,39 @@ use thiserror::Error;
 pub const LITE_MODE_ENV: &str = "DAM_HOPPER_LITE_MODE";
 /// Environment variable locating the SQLite authentication database.
 pub const SQLITE_PATH_ENV: &str = "DAM_HOPPER_AUTH_SQLITE_PATH";
+/// Environment variable for MongoDB connection URI.
+pub const MONGODB_URI_ENV: &str = "MONGODB_URI";
+/// Environment variable for MongoDB database name.
+pub const MONGODB_DATABASE_ENV: &str = "MONGODB_DATABASE";
 /// File name used under the global DamHopper config directory by default.
 pub const DEFAULT_SQLITE_FILE: &str = "auth.db";
 
 /// Backend chosen at startup.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum AuthBackendConfig {
-    /// Existing default: MongoDB from `MONGODB_URI` / `MONGODB_DATABASE`.
-    Mongo,
-    /// Lite mode: SQLite file at an absolute, startup-resolved path.
-    Sqlite { path: PathBuf },
+    /// MongoDB from validated connection URI and database name.
+    Mongo { uri: String, database: String },
+    /// SQLite file at an absolute, startup-resolved path.
+    /// `explicit` is true when forced via `DAM_HOPPER_LITE_MODE=true/1`,
+    /// or false when automatically selected as the default unconfigured store.
+    Sqlite { path: PathBuf, explicit: bool },
+}
+
+impl std::fmt::Debug for AuthBackendConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Mongo { database, .. } => f
+                .debug_struct("Mongo")
+                .field("uri", &"[REDACTED]")
+                .field("database", database)
+                .finish(),
+            Self::Sqlite { path, explicit } => f
+                .debug_struct("Sqlite")
+                .field("path", path)
+                .field("explicit", explicit)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -37,6 +70,16 @@ pub enum AuthConfigError {
     PathCollision(&'static str),
     #[error("cannot resolve {SQLITE_PATH_ENV}: {0}")]
     Unresolvable(String),
+    #[error("{0} is not valid UTF-8")]
+    NonUnicodeMongoConfig(&'static str),
+    #[error(
+        "{0} is set but empty or whitespace-only; provide a non-blank value or unset it completely"
+    )]
+    MalformedMongoConfig(&'static str),
+    #[error("both {MONGODB_URI_ENV} and {MONGODB_DATABASE_ENV} must be configured for MongoDB, or both genuinely unset for default SQLite (missing {0})")]
+    IncompleteMongoConfig(&'static str),
+    #[error("{LITE_MODE_ENV} was set to false/0 to enforce MongoDB, but MongoDB configuration is missing: set {MONGODB_URI_ENV} and {MONGODB_DATABASE_ENV}, or unset {LITE_MODE_ENV} for default SQLite")]
+    EnforcedMongoMissing,
 }
 
 /// Process facts needed to resolve a path, injected so resolution is pure.
@@ -46,8 +89,31 @@ pub struct PathContext<'a> {
     pub config_dir: &'a Path,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum MongoInput<'a> {
+    Unset,
+    Configured(&'a str),
+    EmptyOrWhitespace,
+    NonUnicode,
+}
+
+fn classify_mongo_input<'a>(value: Option<&'a OsStr>) -> MongoInput<'a> {
+    let Some(raw) = value else {
+        return MongoInput::Unset;
+    };
+    let Some(text) = raw.to_str() else {
+        return MongoInput::NonUnicode;
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        MongoInput::EmptyOrWhitespace
+    } else {
+        MongoInput::Configured(trimmed)
+    }
+}
+
 impl AuthBackendConfig {
-    /// Read the selector and path from the process environment.
+    /// Read selector, path, and MongoDB variables from the process environment.
     ///
     /// Call after every `.env` file has been loaded and before any auth
     /// service is constructed. Relative paths resolve against the process CWD.
@@ -59,6 +125,8 @@ impl AuthBackendConfig {
         Self::resolve(
             std::env::var_os(LITE_MODE_ENV).as_deref(),
             std::env::var_os(SQLITE_PATH_ENV).as_deref(),
+            std::env::var_os(MONGODB_URI_ENV).as_deref(),
+            std::env::var_os(MONGODB_DATABASE_ENV).as_deref(),
             &PathContext {
                 home: home.as_deref(),
                 cwd: &cwd,
@@ -67,17 +135,71 @@ impl AuthBackendConfig {
         )
     }
 
-    /// Pure selection/path resolution; see the module docs for the contract.
+    /// Pure selection and path resolution according to the Precedence Matrix.
     pub fn resolve(
         lite_mode: Option<&OsStr>,
         sqlite_path: Option<&OsStr>,
+        mongodb_uri: Option<&OsStr>,
+        mongodb_database: Option<&OsStr>,
         context: &PathContext<'_>,
     ) -> Result<Self, AuthConfigError> {
-        if !parse_lite_mode(lite_mode)? {
-            return Ok(Self::Mongo);
+        let selector = parse_lite_mode(lite_mode)?;
+        if selector == Some(true) {
+            let path = resolve_sqlite_path(sqlite_path, context)?;
+            return Ok(Self::Sqlite {
+                path,
+                explicit: true,
+            });
         }
-        let path = resolve_sqlite_path(sqlite_path, context)?;
-        Ok(Self::Sqlite { path })
+
+        let uri_state = classify_mongo_input(mongodb_uri);
+        let db_state = classify_mongo_input(mongodb_database);
+
+        // Non-Unicode check
+        if uri_state == MongoInput::NonUnicode {
+            return Err(AuthConfigError::NonUnicodeMongoConfig(MONGODB_URI_ENV));
+        }
+        if db_state == MongoInput::NonUnicode {
+            return Err(AuthConfigError::NonUnicodeMongoConfig(MONGODB_DATABASE_ENV));
+        }
+
+        // Empty / whitespace check
+        if uri_state == MongoInput::EmptyOrWhitespace {
+            return Err(AuthConfigError::MalformedMongoConfig(MONGODB_URI_ENV));
+        }
+        if db_state == MongoInput::EmptyOrWhitespace {
+            return Err(AuthConfigError::MalformedMongoConfig(MONGODB_DATABASE_ENV));
+        }
+
+        match (selector, uri_state, db_state) {
+            (Some(false), MongoInput::Configured(uri), MongoInput::Configured(database)) => {
+                Ok(Self::Mongo {
+                    uri: uri.to_string(),
+                    database: database.to_string(),
+                })
+            }
+            (Some(false), _, _) => Err(AuthConfigError::EnforcedMongoMissing),
+            (None, MongoInput::Configured(uri), MongoInput::Configured(database)) => {
+                Ok(Self::Mongo {
+                    uri: uri.to_string(),
+                    database: database.to_string(),
+                })
+            }
+            (None, MongoInput::Unset, MongoInput::Unset) => {
+                let path = resolve_sqlite_path(sqlite_path, context)?;
+                Ok(Self::Sqlite {
+                    path,
+                    explicit: false,
+                })
+            }
+            (None, MongoInput::Configured(_), MongoInput::Unset) => {
+                Err(AuthConfigError::IncompleteMongoConfig(MONGODB_DATABASE_ENV))
+            }
+            (None, MongoInput::Unset, MongoInput::Configured(_)) => {
+                Err(AuthConfigError::IncompleteMongoConfig(MONGODB_URI_ENV))
+            }
+            _ => unreachable!(),
+        }
     }
 
     /// Reject an auth database that is the same file as another SQLite
@@ -87,7 +209,7 @@ impl AuthBackendConfig {
         &self,
         others: &[(&'static str, &Path)],
     ) -> Result<(), AuthConfigError> {
-        let Self::Sqlite { path } = self else {
+        let Self::Sqlite { path, .. } = self else {
             return Ok(());
         };
         for (label, other) in others {
@@ -99,14 +221,18 @@ impl AuthBackendConfig {
     }
 }
 
-fn parse_lite_mode(value: Option<&OsStr>) -> Result<bool, AuthConfigError> {
+fn parse_lite_mode(value: Option<&OsStr>) -> Result<Option<bool>, AuthConfigError> {
     let Some(raw) = value else {
-        return Ok(false);
+        return Ok(None);
     };
-    let text = raw.to_str().ok_or(AuthConfigError::InvalidLiteMode)?.trim();
-    match text.to_ascii_lowercase().as_str() {
-        "" | "false" | "0" => Ok(false),
-        "true" | "1" => Ok(true),
+    let Some(text) = raw.to_str() else {
+        return Err(AuthConfigError::InvalidLiteMode);
+    };
+    let trimmed = text.trim();
+    match trimmed.to_ascii_lowercase().as_str() {
+        "" => Ok(None),
+        "false" | "0" => Ok(Some(false)),
+        "true" | "1" => Ok(Some(true)),
         _ => Err(AuthConfigError::InvalidLiteMode),
     }
 }
@@ -163,7 +289,7 @@ fn resolve_sqlite_path(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn ctx<'a>(home: Option<&'a Path>, cwd: &'a Path, config: &'a Path) -> PathContext<'a> {
@@ -174,9 +300,11 @@ mod tests {
         }
     }
 
-    fn resolve(
+    fn resolve_full(
         lite: Option<&str>,
         path: Option<&str>,
+        uri: Option<&str>,
+        db: Option<&str>,
     ) -> Result<AuthBackendConfig, AuthConfigError> {
         let (home, cwd, config) = (
             Path::new("/home/u"),
@@ -186,50 +314,158 @@ mod tests {
         AuthBackendConfig::resolve(
             lite.map(OsStr::new),
             path.map(OsStr::new),
+            uri.map(OsStr::new),
+            db.map(OsStr::new),
             &ctx(Some(home), cwd, config),
         )
     }
 
-    fn sqlite(path: &str) -> AuthBackendConfig {
+    fn default_sqlite(path: &str) -> AuthBackendConfig {
         AuthBackendConfig::Sqlite {
             path: PathBuf::from(path),
+            explicit: false,
+        }
+    }
+
+    fn explicit_sqlite(path: &str) -> AuthBackendConfig {
+        AuthBackendConfig::Sqlite {
+            path: PathBuf::from(path),
+            explicit: true,
         }
     }
 
     #[test]
-    fn absent_empty_false_zero_select_mongo_even_with_a_path() {
-        for lite in [
-            None,
-            Some(""),
-            Some("  \t"),
-            Some("false"),
-            Some("FALSE"),
-            Some(" 0 "),
-        ] {
+    fn unconfigured_defaults_to_sqlite() {
+        for lite in [None, Some(""), Some("   \t")] {
             assert_eq!(
-                resolve(lite, Some("/data/auth.db")),
-                Ok(AuthBackendConfig::Mongo),
+                resolve_full(lite, None, None, None),
+                Ok(default_sqlite("/home/u/.config/dam-hopper/auth.db")),
+                "selector {lite:?}"
+            );
+            assert_eq!(
+                resolve_full(lite, Some("/custom/auth.db"), None, None),
+                Ok(default_sqlite("/custom/auth.db")),
+                "selector {lite:?} with custom path"
+            );
+        }
+    }
+
+    #[test]
+    fn valid_mongo_vars_auto_select_mongo_when_selector_unset() {
+        for lite in [None, Some(""), Some("  \t")] {
+            assert_eq!(
+                resolve_full(
+                    lite,
+                    Some("/ignored/auth.db"),
+                    Some("mongodb://127.0.0.1:27017"),
+                    Some("damHopper")
+                ),
+                Ok(AuthBackendConfig::Mongo {
+                    uri: "mongodb://127.0.0.1:27017".into(),
+                    database: "damHopper".into(),
+                }),
                 "selector {lite:?}"
             );
         }
     }
 
     #[test]
-    fn true_and_one_select_sqlite_case_and_space_insensitively() {
+    fn explicit_true_selects_sqlite_and_ignores_mongo_vars() {
         for lite in ["true", "TRUE", " True ", "1"] {
+            // Unset Mongo
             assert_eq!(
-                resolve(Some(lite), Some("/data/auth.db")),
-                Ok(sqlite("/data/auth.db")),
+                resolve_full(Some(lite), Some("/data/auth.db"), None, None),
+                Ok(explicit_sqlite("/data/auth.db")),
+                "selector {lite:?}"
+            );
+            // Even with valid Mongo vars, explicit true selects SQLite
+            assert_eq!(
+                resolve_full(
+                    Some(lite),
+                    Some("/data/auth.db"),
+                    Some("mongodb://localhost"),
+                    Some("test")
+                ),
+                Ok(explicit_sqlite("/data/auth.db")),
+                "selector {lite:?}"
+            );
+            // Even with malformed or blank Mongo vars, explicit true selects SQLite
+            assert_eq!(
+                resolve_full(Some(lite), Some("/data/auth.db"), Some(""), Some("   ")),
+                Ok(explicit_sqlite("/data/auth.db")),
                 "selector {lite:?}"
             );
         }
     }
 
     #[test]
-    fn any_other_selector_is_an_error_never_a_default() {
+    fn explicit_false_enforces_mongo() {
+        for lite in ["false", "FALSE", " 0 "] {
+            // Valid Mongo succeeds
+            assert_eq!(
+                resolve_full(
+                    Some(lite),
+                    None,
+                    Some("mongodb://127.0.0.1"),
+                    Some("prodDb")
+                ),
+                Ok(AuthBackendConfig::Mongo {
+                    uri: "mongodb://127.0.0.1".into(),
+                    database: "prodDb".into(),
+                }),
+                "selector {lite:?}"
+            );
+            // Missing Mongo vars fails with EnforcedMongoMissing
+            assert_eq!(
+                resolve_full(Some(lite), None, None, None),
+                Err(AuthConfigError::EnforcedMongoMissing),
+                "selector {lite:?}"
+            );
+            assert_eq!(
+                resolve_full(Some(lite), None, Some("mongodb://127.0.0.1"), None),
+                Err(AuthConfigError::EnforcedMongoMissing),
+                "selector {lite:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn partial_mongo_when_unconfigured_selector_is_an_error() {
+        assert_eq!(
+            resolve_full(None, None, Some("mongodb://localhost"), None),
+            Err(AuthConfigError::IncompleteMongoConfig(MONGODB_DATABASE_ENV))
+        );
+        assert_eq!(
+            resolve_full(None, None, None, Some("damHopper")),
+            Err(AuthConfigError::IncompleteMongoConfig(MONGODB_URI_ENV))
+        );
+    }
+
+    #[test]
+    fn empty_or_whitespace_mongo_is_malformed_error() {
+        assert_eq!(
+            resolve_full(None, None, Some(""), Some("db")),
+            Err(AuthConfigError::MalformedMongoConfig(MONGODB_URI_ENV))
+        );
+        assert_eq!(
+            resolve_full(None, None, Some("  \t"), Some("db")),
+            Err(AuthConfigError::MalformedMongoConfig(MONGODB_URI_ENV))
+        );
+        assert_eq!(
+            resolve_full(None, None, Some("mongodb://localhost"), Some("")),
+            Err(AuthConfigError::MalformedMongoConfig(MONGODB_DATABASE_ENV))
+        );
+        assert_eq!(
+            resolve_full(None, None, Some(""), None),
+            Err(AuthConfigError::MalformedMongoConfig(MONGODB_URI_ENV))
+        );
+    }
+
+    #[test]
+    fn any_invalid_selector_is_an_error() {
         for lite in ["yes", "on", "2", "enabled", "t"] {
             assert_eq!(
-                resolve(Some(lite), None),
+                resolve_full(Some(lite), None, None, None),
                 Err(AuthConfigError::InvalidLiteMode),
                 "{lite}"
             );
@@ -240,18 +476,58 @@ mod tests {
             let bad = OsStr::from_bytes(&[0x66, 0xff]);
             let context = ctx(None, Path::new("/"), Path::new("/c"));
             assert_eq!(
-                AuthBackendConfig::resolve(Some(bad), None, &context),
+                AuthBackendConfig::resolve(Some(bad), None, None, None, &context),
                 Err(AuthConfigError::InvalidLiteMode)
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_mongo_inputs_are_rejected() {
+        use std::os::unix::ffi::OsStrExt;
+        let bad = OsStr::from_bytes(&[0x66, 0xff]);
+        let context = ctx(None, Path::new("/"), Path::new("/c"));
+        assert_eq!(
+            AuthBackendConfig::resolve(None, None, Some(bad), Some(OsStr::new("db")), &context),
+            Err(AuthConfigError::NonUnicodeMongoConfig(MONGODB_URI_ENV))
+        );
+        assert_eq!(
+            AuthBackendConfig::resolve(None, None, Some(OsStr::new("uri")), Some(bad), &context),
+            Err(AuthConfigError::NonUnicodeMongoConfig(MONGODB_DATABASE_ENV))
+        );
+        // Explicit true still ignores non-Unicode Mongo
+        assert!(matches!(
+            AuthBackendConfig::resolve(
+                Some(OsStr::new("true")),
+                None,
+                Some(bad),
+                Some(bad),
+                &context
+            ),
+            Ok(AuthBackendConfig::Sqlite { explicit: true, .. })
+        ));
+    }
+
+    #[test]
+    fn debug_output_redacts_credentials() {
+        let config = AuthBackendConfig::Mongo {
+            uri: "mongodb://user:supersecretpass@localhost:27017".into(),
+            database: "prodDb".into(),
+        };
+        let debug_str = format!("{config:?}");
+        assert!(!debug_str.contains("supersecretpass"));
+        assert!(!debug_str.contains("user"));
+        assert!(debug_str.contains("[REDACTED]"));
+        assert!(debug_str.contains("prodDb"));
     }
 
     #[test]
     fn missing_or_blank_path_defaults_to_auth_db_in_global_config_dir() {
         for path in [None, Some(""), Some("   ")] {
             assert_eq!(
-                resolve(Some("true"), path),
-                Ok(sqlite("/home/u/.config/dam-hopper/auth.db"))
+                resolve_full(Some("true"), path, None, None),
+                Ok(explicit_sqlite("/home/u/.config/dam-hopper/auth.db"))
             );
         }
     }
@@ -260,33 +536,31 @@ mod tests {
     fn relative_and_tilde_config_dir_defaults_resolve_to_absolute_paths() {
         let home = Path::new("/home/u");
         let cwd = Path::new("/work/dir");
-        // Relative config dir (e.g. from relative XDG_CONFIG_HOME) resolves against CWD
         let rel_ctx = ctx(Some(home), cwd, Path::new("custom/config"));
         assert_eq!(
-            AuthBackendConfig::resolve(Some(OsStr::new("true")), None, &rel_ctx),
-            Ok(sqlite("/work/dir/custom/config/auth.db"))
+            AuthBackendConfig::resolve(Some(OsStr::new("true")), None, None, None, &rel_ctx),
+            Ok(explicit_sqlite("/work/dir/custom/config/auth.db"))
         );
-        // Tilde-prefixed config dir resolves against HOME
         let tilde_ctx = ctx(Some(home), cwd, Path::new("~/custom/config"));
         assert_eq!(
-            AuthBackendConfig::resolve(Some(OsStr::new("true")), None, &tilde_ctx),
-            Ok(sqlite("/home/u/custom/config/auth.db"))
+            AuthBackendConfig::resolve(Some(OsStr::new("true")), None, None, None, &tilde_ctx),
+            Ok(explicit_sqlite("/home/u/custom/config/auth.db"))
         );
     }
 
     #[test]
     fn path_forms_resolve_once_at_startup() {
         assert_eq!(
-            resolve(Some("1"), Some("/abs/a.db")),
-            Ok(sqlite("/abs/a.db"))
+            resolve_full(Some("1"), Some("/abs/a.db"), None, None),
+            Ok(explicit_sqlite("/abs/a.db"))
         );
         assert_eq!(
-            resolve(Some("1"), Some("~/priv/a.db")),
-            Ok(sqlite("/home/u/priv/a.db"))
+            resolve_full(Some("1"), Some("~/priv/a.db"), None, None),
+            Ok(explicit_sqlite("/home/u/priv/a.db"))
         );
         assert_eq!(
-            resolve(Some("1"), Some("rel/a.db")),
-            Ok(sqlite("/work/dir/rel/a.db"))
+            resolve_full(Some("1"), Some("rel/a.db"), None, None),
+            Ok(explicit_sqlite("/work/dir/rel/a.db"))
         );
     }
 
@@ -301,7 +575,7 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    resolve(Some("1"), Some(path)),
+                    resolve_full(Some("1"), Some(path), None, None),
                     Err(AuthConfigError::UnsupportedPath(_))
                 ),
                 "{path:?}"
@@ -309,18 +583,43 @@ mod tests {
         }
         let context = ctx(None, Path::new("/"), Path::new("/c"));
         assert!(matches!(
-            AuthBackendConfig::resolve(Some(OsStr::new("1")), Some(OsStr::new("~/a.db")), &context),
+            AuthBackendConfig::resolve(
+                Some(OsStr::new("1")),
+                Some(OsStr::new("~/a.db")),
+                None,
+                None,
+                &context
+            ),
             Err(AuthConfigError::Unresolvable(_))
         ));
     }
 
     #[test]
-    fn invalid_path_is_ignored_when_lite_mode_is_off() {
+    fn invalid_path_is_ignored_when_mongo_is_selected() {
         assert_eq!(
-            resolve(Some("false"), Some(":memory:")),
-            Ok(AuthBackendConfig::Mongo)
+            resolve_full(
+                Some("false"),
+                Some(":memory:"),
+                Some("mongodb://localhost"),
+                Some("db")
+            ),
+            Ok(AuthBackendConfig::Mongo {
+                uri: "mongodb://localhost".into(),
+                database: "db".into(),
+            })
         );
-        assert_eq!(resolve(None, Some("~root/x")), Ok(AuthBackendConfig::Mongo));
+        assert_eq!(
+            resolve_full(
+                None,
+                Some("~root/x"),
+                Some("mongodb://localhost"),
+                Some("db")
+            ),
+            Ok(AuthBackendConfig::Mongo {
+                uri: "mongodb://localhost".into(),
+                database: "db".into(),
+            })
+        );
     }
 
     #[test]
@@ -336,11 +635,13 @@ mod tests {
 
         let distinct = AuthBackendConfig::Sqlite {
             path: dir.path().join("auth.db"),
+            explicit: false,
         };
         assert_eq!(distinct.ensure_distinct_from(&others), Ok(()));
 
         let same = AuthBackendConfig::Sqlite {
             path: session.clone(),
+            explicit: true,
         };
         assert_eq!(
             same.ensure_distinct_from(&others),
@@ -349,7 +650,10 @@ mod tests {
 
         let alias = dir.path().join("alias.db");
         std::fs::hard_link(&session, &alias).unwrap();
-        let hard = AuthBackendConfig::Sqlite { path: alias };
+        let hard = AuthBackendConfig::Sqlite {
+            path: alias,
+            explicit: false,
+        };
         assert_eq!(
             hard.ensure_distinct_from(&others),
             Err(AuthConfigError::PathCollision("session"))
@@ -357,15 +661,17 @@ mod tests {
 
         let tel = AuthBackendConfig::Sqlite {
             path: telemetry.clone(),
+            explicit: false,
         };
         assert_eq!(
             tel.ensure_distinct_from(&others),
             Err(AuthConfigError::PathCollision("telemetry"))
         );
 
-        assert_eq!(
-            AuthBackendConfig::Mongo.ensure_distinct_from(&others),
-            Ok(())
-        );
+        let mongo = AuthBackendConfig::Mongo {
+            uri: "mongodb://localhost".into(),
+            database: "db".into(),
+        };
+        assert_eq!(mongo.ensure_distinct_from(&others), Ok(()));
     }
 }

@@ -1205,33 +1205,26 @@ async fn test_smoke_end_to_end_real_tcp_ws_deadline_and_recovery() {
     let http_client = reqwest::Client::new();
     let base_url = format!("http://{addr}");
 
-    // 3. User registers through real HTTP endpoint
-    let register_resp = http_client
-        .post(format!("{base_url}/api/auth/register"))
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(
-            serde_json::to_vec(&serde_json::json!({
-                "username": "smoke_eval_user",
-                "password": "SmokePassword123!"
-            }))
-            .unwrap(),
-        )
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(register_resp.status(), StatusCode::OK);
-
-    // Operator approves user in MongoDB (sets isEnabled: true)
+    // 3. Operator provisions user in MongoDB
+    let password_hash = bcrypt::hash("SmokePassword123!", 4).unwrap();
+    let user_record = UserRecord {
+        id: None,
+        username: "smoke_eval_user".to_string(),
+        password_hash,
+        is_enabled: true,
+        role: dam_hopper_server::auth::UserRole::User,
+        auth_version: 0,
+        mfa: None,
+        mfa_attempt_window_started_at: None,
+        mfa_attempt_count: 0,
+        mfa_blocked_until: None,
+    };
     fixture
         .db()
         .collection::<UserRecord>("users")
-        .update_one(
-            doc! { "username": "smoke_eval_user" },
-            doc! { "$set": { "isEnabled": true } },
-        )
+        .insert_one(user_record)
         .await
         .unwrap();
-
     // 4. Login -> state: enrollmentRequired
     let login_resp = http_client
         .post(format!("{base_url}/api/auth/login"))

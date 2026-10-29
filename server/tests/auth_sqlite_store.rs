@@ -998,17 +998,25 @@ async fn version_one_upgrade_preserves_user_and_session_and_reopens_idempotently
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
-    raw.execute_batch(include_str!("../src/auth/store/migrations/001-auth.sql")).unwrap();
-    raw.pragma_update(None, "application_id", 0x4448_4155_i64).unwrap();
+    raw.execute_batch(include_str!("../src/auth/store/migrations/001-auth.sql"))
+        .unwrap();
+    raw.pragma_update(None, "application_id", 0x4448_4155_i64)
+        .unwrap();
     raw.pragma_update(None, "user_version", 1).unwrap();
     raw.execute(
         "INSERT INTO auth_users (id, username, password_hash, is_enabled, role) \
-         VALUES ('111111111111111111111111', 'legacy', 'original-hash', 1, 'admin')", [],
-    ).unwrap();
+         VALUES ('111111111111111111111111', 'legacy', 'original-hash', 1, 'admin')",
+        [],
+    )
+    .unwrap();
     raw.execute(
         "INSERT INTO auth_sessions VALUES ('legacy-session', 'legacy', 0, 1, ?1, ?2, ?1, NULL)",
-        rusqlite::params![t0().timestamp_millis(), (t0() + Duration::days(30)).timestamp_millis()],
-    ).unwrap();
+        rusqlite::params![
+            t0().timestamp_millis(),
+            (t0() + Duration::days(30)).timestamp_millis()
+        ],
+    )
+    .unwrap();
     drop(raw);
 
     for _ in 0..2 {
@@ -1020,8 +1028,10 @@ async fn version_one_upgrade_preserves_user_and_session_and_reopens_idempotently
         assert_eq!(original.user_agent, None);
         assert_eq!(original.issued_at, chrono_to_bson(t0()));
         assert!(original.revoked_at.is_none());
-        let version: i64 = Connection::open(&path).unwrap()
-            .pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        let version: i64 = Connection::open(&path)
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
         assert_eq!(version, 2);
     }
     let store = AuthStore::open_sqlite(&path).await.unwrap();
@@ -1029,4 +1039,41 @@ async fn version_one_upgrade_preserves_user_and_session_and_reopens_idempotently
     added.user_agent = Some("Browser 界".into());
     store.create_session(added.clone()).await.unwrap();
     assert_eq!(store.get_session("new-session").await.unwrap(), Some(added));
+}
+#[tokio::test]
+async fn script_created_database_opens_and_authenticates_admin() {
+    let tmp = tempdir().unwrap();
+    let db_path = tmp.path().join("auth.db");
+    let script_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("scripts/create-admin.mjs");
+
+    let output = std::process::Command::new("node")
+        .arg(&script_path)
+        .arg("created_admin")
+        .arg("AdminPass123!")
+        .arg("--db")
+        .arg(&db_path)
+        .output()
+        .expect("run create-admin script");
+    assert!(
+        output.status.success(),
+        "create-admin script failed: stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let store = AuthStore::open_sqlite(&db_path)
+        .await
+        .expect("AuthStore must open script-created db");
+    let user = store
+        .get_user("created_admin")
+        .await
+        .expect("get_user")
+        .expect("user exists");
+    assert_eq!(user.username, "created_admin");
+    assert_eq!(user.role, UserRole::Admin);
+    assert!(user.is_enabled);
+    assert!(bcrypt::verify("AdminPass123!", &user.password_hash).expect("verify password"));
 }

@@ -104,7 +104,7 @@ test.describe("SQLite Authentication Lite Mode Real Application Journey", () => 
     expect(statusBody.role).toBe("admin");
     expect(statusBody.devMode).toBeUndefined();
 
-    // 4. Verify disabled-by-default registration in SQLite lite mode
+    // 4. Verify registration endpoint is disabled (404 Not Found)
     const regRes = await fetch(`${appServices.appOrigin}/api/auth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -113,10 +113,7 @@ test.describe("SQLite Authentication Lite Mode Real Application Journey", () => 
         password: "StrongPassword123!",
       }),
     });
-    expect(regRes.status).toBe(200);
-    const regBody = (await regRes.json()) as { ok: boolean };
-    expect(regBody.ok).toBe(true);
-
+    expect(regRes.status).toBe(404);
     const loginRes = await fetch(`${appServices.appOrigin}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -79,20 +79,24 @@ sudo chown <API_USER>:<API_GROUP> /etc/dam-hopper/mfa-encryption.key
 sudo chmod 600 /etc/dam-hopper/mfa-encryption.key
 ```
 
-#### Option A: Default MongoDB Mode
+#### Option A: MongoDB Mode (Clustered or Dedicated)
 Configure `/etc/dam-hopper/server.env` with MongoDB connection parameters:
 ```bash
 sudo tee /etc/dam-hopper/server.env <<EOF
 MONGODB_URI=mongodb://127.0.0.1:27017
 MONGODB_DATABASE=damHopper
+DAM_HOPPER_LITE_MODE=false
 DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key
 DAM_HOPPER_CORS_ORIGINS=http://localhost:4802
 EOF
 sudo chmod 600 /etc/dam-hopper/server.env
 ```
+*MongoDB Invariants*:
+- Both `MONGODB_URI` and `MONGODB_DATABASE` are required. `DAM_HOPPER_LITE_MODE=false` explicitly enforces MongoDB and fails startup if Mongo variables are missing.
+- Startup issues a bounded connectivity ping; unreachable MongoDB causes immediate fatal exit without fallback to SQLite.
 
-#### Option B: SQLite Lite Mode (No MongoDB Required)
-Configure `/etc/dam-hopper/server.env` with SQLite lite mode:
+#### Option B: SQLite Mode (Single-Node Default, No MongoDB Required)
+Configure `/etc/dam-hopper/server.env` for local SQLite authentication:
 ```bash
 # Create private persistent state directory for auth.db
 sudo mkdir -p /var/lib/dam-hopper
@@ -100,7 +104,6 @@ sudo chown <API_USER>:<API_GROUP> /var/lib/dam-hopper
 sudo chmod 700 /var/lib/dam-hopper
 
 sudo tee /etc/dam-hopper/server.env <<EOF
-DAM_HOPPER_LITE_MODE=true
 DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db
 DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key
 DAM_HOPPER_CORS_ORIGINS=http://localhost:4802
@@ -109,9 +112,8 @@ sudo chmod 600 /etc/dam-hopper/server.env
 ```
 
 *Deployment & Auth Invariants*:
-- `DAM_HOPPER_LITE_MODE=true` (or `1`, trim/case-insensitive) selects authenticated SQLite mode with no automatic fallback to MongoDB; SQLite initialization failure is fatal. It is **never** a synonym for the loopback-only `--no-auth` development bypass.
-- Exactly **one server process per local auth file**. Do not share `auth.db` across multiple server processes or network/shared filesystems.
-
+- SQLite is the default when MongoDB variables are unset (`DAM_HOPPER_LITE_MODE=true` can be set as an optional explicit override). It is **never** a synonym for the loopback-only `--no-auth` development bypass.
+- Exactly **one server process per local auth file**. Do not share `auth.db` across multiple server processes or network/shared filesystems. Clustered multi-node deployments must use MongoDB.
 ### Step 5: Activate the Release and Provision the First Account
 
 Explicitly activate the staged candidate:
@@ -122,7 +124,7 @@ sudo dam-hopper start
 
 The `start` command installs concrete systemd units, reloads `systemd`, starts configured services, and enforces a strict health gate: a 20-second startup deadline followed by 20 consecutive 500 ms health probes over a 10-second stability window. If health checks fail, the manager aborts activation and keeps prior units running.
 
-**First-Account Provisioning (Post-Activation):** DamHopper never creates a default administrator or auto-promotes the first registrant. `POST /api/auth/register` creates a disabled `user` account (`auth_version = 0`) that returns `401 ACCOUNT_DISABLED` on login until an operator approves it. After `sudo dam-hopper start` succeeds, follow the **Deployment profile** in the canonical [Operator Account Approval and Role Promotion Runbook](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook) to register from the API host against `http://127.0.0.1:4801`, approve and promote the account via `sqlite3` (or `mongosh`), and complete TOTP MFA enrollment ([Authentication API](./api/authentication.md)). Never use the server's `server-token` signing secret as a client credential.
+**First-Account Provisioning (Post-Activation):** DamHopper does not expose a public registration endpoint. After `sudo dam-hopper start` succeeds, run `node scripts/create-admin.mjs <username> <password>` as the service user (e.g. `sudo -u damhopper DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db node scripts/create-admin.mjs <username> <password>`) to create your administrator account directly in SQLite, then log in and complete TOTP MFA enrollment ([Authentication API](./api/authentication.md)). Never use the server's `server-token` signing secret as a client credential.
 ### Rollback and Recovery
 
 ```bash

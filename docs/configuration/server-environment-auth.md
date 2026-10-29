@@ -43,10 +43,10 @@ path = "/tmp/test-workspace"
 | `VITE_DAM_HOPPER_LOG_LEVEL`                | string  | Web bootstrap log level, embedded at build time                           |
 | `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS` | string  | Exact extension parent origins, embedded at build time                    |
 | `RUST_LOG`                                 | string  | Rust logging filter                                                       |
-| `MONGODB_URI` / `MONGODB_DATABASE`        | string  | MongoDB connection URI and database name for default authenticated mode. |
-| `DAM_HOPPER_LITE_MODE`                     | boolean | Set `true` (or `1`, case-insensitive) to enable authenticated SQLite lite mode (removes MongoDB dependency). Omission, empty value, `false`, or `0` selects MongoDB. |
-| `DAM_HOPPER_AUTH_SQLITE_PATH`              | path    | Optional SQLite database file path for lite mode. Defaults to `auth.db` in global DamHopper config directory (`~/.config/dam-hopper/auth.db`). |
-| `DAM_HOPPER_MFA_KEY_FILE`                  | path    | Dedicated 32-byte MFA encryption key for encrypting TOTP secrets at rest via AES-256-GCM. Mandatory in production authenticated mode (both MongoDB and SQLite lite mode). See [Authentication State & Cryptography](../architecture/authentication-state-and-cryptography.md). |
+| `MONGODB_URI` / `MONGODB_DATABASE`        | string  | MongoDB connection URI and database name. When both are set and non-blank, MongoDB is selected automatically. |
+| `DAM_HOPPER_LITE_MODE`                     | boolean | Optional backend selector. Set `true` (or `1`) to force SQLite even if Mongo variables are present. Set `false` (or `0`) to enforce MongoDB (missing Mongo variables abort startup). Unset/empty defaults to SQLite when Mongo variables are unset, or selects MongoDB when both variables are set. |
+| `DAM_HOPPER_AUTH_SQLITE_PATH`              | path    | Optional SQLite database file path. Defaults to `auth.db` in global DamHopper config directory (`~/.config/dam-hopper/auth.db`). |
+| `DAM_HOPPER_MFA_KEY_FILE`                  | path    | Dedicated 32-byte MFA encryption key for encrypting TOTP secrets at rest via AES-256-GCM. Mandatory in production authenticated mode (both MongoDB and SQLite). See [Authentication State & Cryptography](../architecture/authentication-state-and-cryptography.md). |
 
 `VITE_*` values require a web rebuild. `VITE_DAM_HOPPER_SERVER_URL` is not
 allowed for production builds; production API origin is runtime config.
@@ -55,21 +55,39 @@ CORS values are runtime API configuration and must exactly match the browser
 origin.
 
 
-## Storage Backend Selection and Dotenv Precedence
+## Storage Backend Selection and Precedence Matrix
 
-### Backend Selection (`DAM_HOPPER_LITE_MODE`)
+DamHopper supports two production-grade authenticated storage backends within the same compiled binary:
 
-DamHopper provides two production-grade authenticated storage backends within the same compiled binary:
+1. **SQLite (Default for Unconfigured Startup)**: Selected automatically when both `MONGODB_URI` and `MONGODB_DATABASE` are unset, or forced explicitly via `DAM_HOPPER_LITE_MODE=true` (or `1`). Provides full security parity with zero external dependencies.
+2. **MongoDB**: Selected automatically when both `MONGODB_URI` and `MONGODB_DATABASE` are configured (set and non-blank), or explicitly enforced via `DAM_HOPPER_LITE_MODE=false` (or `0`).
 
-1. **MongoDB (Default)**: Selected when `DAM_HOPPER_LITE_MODE` is unset, empty, `false`, or `0` (case-insensitive after trimming). Connects to `MONGODB_URI` (database `MONGODB_DATABASE`, default `damHopper`).
-2. **SQLite Lite Mode**: Selected when `DAM_HOPPER_LITE_MODE` is set to `true` or `1` (case-insensitive after trimming). Removes the MongoDB service requirement while preserving full security parity (password hashing, mandatory AES-256-GCM encrypted MFA, session management, and role-based access control).
+### Complete Precedence Matrix
 
-Any other nonempty `DAM_HOPPER_LITE_MODE` value (e.g. `DAM_HOPPER_LITE_MODE=invalid`) fails startup immediately. There is no automatic backend detection or fallback between MongoDB and SQLite.
+| `DAM_HOPPER_LITE_MODE` | `MONGODB_URI` & `MONGODB_DATABASE` | Selected Backend | Behavior / Contract |
+|---|---|---|---|
+| `true` / `1` | Any (including malformed, blank, or partial) | **SQLite (explicit)** | Forced SQLite; ignores MongoDB environment variables. |
+| `false` / `0` | Both set and non-empty/non-whitespace | **MongoDB (enforced)** | Enforces MongoDB. Startup issues a bounded ping. |
+| `false` / `0` | Either unset, empty, whitespace, or malformed | **Fatal Error** | Operator explicitly disabled lite mode but omitted valid Mongo config. Aborts startup. |
+| Unset / empty / whitespace | Both set and non-empty/non-whitespace | **MongoDB (automatic)** | Auto-selects MongoDB because complete Mongo configuration is supplied. |
+| Unset / empty / whitespace | Both genuinely unset | **SQLite (default)** | **Default**: Zero-config startup defaults to local SQLite `auth.db`. |
+| Unset / empty / whitespace | Any other combination (e.g. set-blank, partial) | **Fatal Error** | Incomplete or malformed MongoDB configuration; fails startup with actionable diagnostic. |
+| Invalid string (e.g. `banana`) | Any | **Fatal Error** | Invalid boolean syntax; fails startup immediately. |
+
+### Configuration Semantics: Unset vs Set-Empty
+
+- **Genuinely Unset**: Variable is absent from process environment (`std::env::var_os(...)` is `None`). Only when **both** `MONGODB_URI` and `MONGODB_DATABASE` are genuinely unset does the server default to SQLite.
+- **Set-Empty or Whitespace-Only**: If either variable is defined as an empty string or whitespace (e.g. `MONGODB_URI=""`), it is treated as a **malformed configuration error**, aborting startup with an actionable error message rather than silently defaulting to SQLite.
+- **Startup MongoDB Ping**: When MongoDB is selected, startup executes a bounded ping (`admin.run_command(doc! { "ping": 1 })`). An unreachable or unauthenticated Mongo server causes startup to abort within the connection timeout and never creates an SQLite fallback.
+- **Startup Observability Logs**:
+  - Unconfigured SQLite: `Authentication backend: SQLite (default — MONGODB_URI not set)` with `reason = "MongoDB variables unset"`.
+  - Explicit SQLite: `Authentication backend: SQLite (explicit)` with `reason = "DAM_HOPPER_LITE_MODE"`.
+  - MongoDB: `Authentication backend: MongoDB`.
 
 ### Dotenv Precedence and Path Resolution
 
 - **Dotenv Precedence**: `dotenv::dotenv()` only populates variables not already present in the process environment. Pre-existing system environment variables (such as those supplied by systemd `EnvironmentFile=/etc/dam-hopper/server.env` or exported in the host shell) take precedence over values in working directory `.env` files.
-- **Path Resolution (`DAM_HOPPER_AUTH_SQLITE_PATH`)**: Applies only when SQLite lite mode is selected. Relative paths resolve relative to the server process current working directory (CWD) at startup. In production or daemon deployments, always specify an absolute path on local persistent storage (e.g. `/var/lib/dam-hopper/auth.db`).
+- **Path Resolution (`DAM_HOPPER_AUTH_SQLITE_PATH`)**: Applies when SQLite is selected. Relative paths resolve relative to the server process current working directory (CWD) at startup. In production or daemon deployments, always specify an absolute path on local persistent storage (e.g. `/var/lib/dam-hopper/auth.db`).
 - **Default SQLite Storage**: When `DAM_HOPPER_AUTH_SQLITE_PATH` is omitted or empty, the server defaults to `auth.db` in the global DamHopper configuration directory (`~/.config/dam-hopper/auth.db` on Linux/macOS, or `%APPDATA%\dam-hopper\auth.db` on Windows).
   - **Subsystem Isolation**: `auth.db` is strictly dedicated to authentication, credentials, and session state. It is completely isolated from PTY/IDE session state (`~/.config/dam-hopper/sessions.db`) and telemetry state (`~/.config/dam-hopper/telemetry.db`).
 
@@ -77,9 +95,10 @@ Any other nonempty `DAM_HOPPER_LITE_MODE` value (e.g. `DAM_HOPPER_LITE_MODE=inva
 
 - **Production Mode Enforcement**: When running in production (`RUST_ENV=production` or `ENVIRONMENT=production`), the server enforces strict backend readiness:
   - If MongoDB is selected, `MONGODB_URI` and `MONGODB_DATABASE` must be provided, reachable, and authenticated.
-  - If SQLite lite mode is selected, the configured database file and parent directory must be writable and accessible. SQLite open or migration failure is always fatal and aborts startup immediately.
+  - If SQLite is selected, the configured database file and parent directory must be writable and accessible. SQLite open or migration failure is always fatal and aborts startup immediately.
   - In both backends, `DAM_HOPPER_MFA_KEY_FILE` pointing to a valid dedicated 32-byte key file with strict owner-only permissions (`0600` on Unix) is mandatory.
-- **Development Auth Bypass (`--no-auth`)**: The `--no-auth` CLI flag (or `DAM_HOPPER_NO_AUTH=1`) is a separate loopback development bypass that skips authentication store initialization and issues a development token. **It is never SQLite lite mode.** The server refuses to start with `--no-auth` if an authentication store is initialized or if running in production mode.
+- **Development Auth Bypass (`--no-auth`)**: The `--no-auth` CLI flag (or `DAM_HOPPER_NO_AUTH=1`) is a separate loopback development bypass that skips authentication store initialization and issues a development token. **It is never SQLite mode.** The server refuses to start with `--no-auth` if an authentication store is initialized or if running in production mode.
+
 ### Deployment Limits: Single Server Process per Auth File
 
 **Validated deployment limit: exactly one server process per local auth file.**
@@ -87,113 +106,69 @@ Any other nonempty `DAM_HOPPER_LITE_MODE` value (e.g. `DAM_HOPPER_LITE_MODE=inva
 SQLite operates in WAL mode (`PRAGMA journal_mode = WAL`) and supports concurrent asynchronous read queries alongside serialized write transactions within a single server process. However:
 - Multiple DamHopper server processes sharing the same SQLite auth file on a single host or across hosts are **not supported**.
 - Network-shared filesystems (NFS, SMB, CIFS, GlusterFS) must **not** be used for `auth.db` due to POSIX advisory lock inconsistencies and WAL flush latency.
+- Clustered or load-balanced deployments with multiple API instances must use MongoDB.
 - Separate DamHopper server deployments or test instances must be configured with separate, dedicated SQLite database paths.
+## Offline Administrator Provisioning Runbook
 
-## Operator Account Approval and Role Promotion Runbook
+### Direct Account Provisioning (No Public Registration API)
 
-### Default-Disabled Registration Policy
+To prevent unauthorized user creation, account enumeration, and denial-of-service risks, **DamHopper does not expose a public registration endpoint over HTTP (`POST /api/auth/register` is permanently removed)**.
 
-`POST /api/auth/register` accepts JSON `{ "username", "password" }`, returns `{ "ok": true }`, and creates a `user` account disabled (`is_enabled = 0` in SQLite; `isEnabled: false` in MongoDB) with `auth_version = 0` (`authVersion: 0`). Until an operator explicitly approves the account:
-- Any `POST /api/auth/login` attempt returns `HTTP 401 Unauthorized` with error payload:
-  ```json
-  {
-    "code": "ACCOUNT_DISABLED",
-    "error": "Account is disabled. Contact an administrator."
-  }
-  ```
-- Registration **never grants automatic first-user administrator rights**, and there is **no public admin promotion API**.
-- An operator must locally approve the account in the database and, when intended, promote it to `admin`.
-- After operator approval, a password login for an account with no enrolled factor returns `state: "enrollmentRequired"`; completion uses `POST /api/auth/mfa/setup` and `POST /api/auth/mfa/confirm` in [Authentication API](../api/authentication.md). Never use the server's `server-token` JWT signing secret as a client credential.
+Administrator and user accounts must be provisioned locally/offline on the host machine using the provided `create-admin` script. The script hashes passwords using `bcrypt` and inserts enabled admin records directly into the SQLite authentication database.
 
-### Development profile
+### Development Profile
 
-Use this flow when running a local authenticated SQLite server on `http://127.0.0.1:4801` (for example with `DAM_HOPPER_LITE_MODE=true` and default `~/.config/dam-hopper/auth.db` or `%APPDATA%\dam-hopper\auth.db` on Windows, or an explicit local `DAM_HOPPER_AUTH_SQLITE_PATH`). `--no-auth` is a separate loopback bypass and never exercises SQLite lite mode.
+When running locally on loopback (`127.0.0.1:4801` with default SQLite at `~/.config/dam-hopper/auth.db`):
 
-#### 1. Register the Account Against Local `http://127.0.0.1:4801`
-Replace `ReplaceWithStrongPassword!` with a real strong secret before executing:
+#### 1. Provision the Admin Account
+Run the offline provisioning script:
 ```bash
-curl -sS -X POST http://127.0.0.1:4801/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"ReplaceWithStrongPassword!"}'
+pnpm create-admin
+# Or pass arguments directly:
+node scripts/create-admin.mjs admin "ReplaceWithStrongPassword!"
 ```
-The response is `{"ok":true}`. The account is created as a disabled standard user (`role = 'user'`, `is_enabled = 0`, `auth_version = 0`) without automatic first-user admin rights. Calling `POST /api/auth/login` before approval returns `401 ACCOUNT_DISABLED`.
+The script:
+- Initializes the SQLite database and schema if not yet present.
+- Validates that the username does not already exist.
+- Generates a 24-character hexadecimal ID and standard bcrypt hash.
+- Inserts the user as active (`is_enabled = 1`) with role `'admin'`.
+- Automatically creates a local 32-byte MFA encryption key (`~/.config/dam-hopper/mfa-encryption.key`) with `0600` permissions if missing.
 
-#### 2. Inspect, Approve, and Promote in SQLite (`sqlite3`)
-Open the local SQLite auth database (substitute your explicit `DAM_HOPPER_AUTH_SQLITE_PATH` or `%APPDATA%\dam-hopper\auth.db` on Windows) with a busy timeout:
+#### 2. Start DamHopper Server
 ```bash
-sqlite3 ~/.config/dam-hopper/auth.db -cmd ".timeout 5000"
+cargo run --bin dam-hopper-server -- --host 127.0.0.1 --port 4801
 ```
-Inspect the pending row in `auth_users`:
-```sql
-SELECT id, username, is_enabled, role, auth_version, mfa_enrolled_at_ms
-FROM auth_users
-WHERE username = 'admin';
-```
-Record the immutable 24-character hexadecimal `id` and observed `auth_version` (`0` on initial registration). Run a `BEGIN IMMEDIATE` conditional update matching both `id` and `auth_version` (use `role = 'admin'` to promote to administrator, or `role = 'user'` to approve as a standard user), and check `SELECT changes();` before committing:
-```sql
-BEGIN IMMEDIATE;
-UPDATE auth_users
-SET is_enabled = 1, role = 'admin'
-WHERE id = '<verified-24-hex-id>' AND auth_version = <observed-auth_version>;
-SELECT changes();
-```
-Verify the interactive output of `SELECT changes();` before closing the transaction:
-- Only after observing **`1`**, issue:
-  ```sql
-  COMMIT;
-  ```
-- If `SELECT changes();` returns **`0`**, do **not** commit; issue `ROLLBACK;` and re-run the `SELECT` query above to inspect the current row before retrying:
-  ```sql
-  ROLLBACK;
-  ```
 
-#### 3. Complete First Login and TOTP Enrollment
-Call `POST http://127.0.0.1:4801/api/auth/login` with the registered username and password. Because no MFA factor is enrolled yet (`mfa_enrolled_at_ms` is `NULL`), login returns `enrollmentRequired`; finish enrollment with `POST /api/auth/mfa/setup` and `POST /api/auth/mfa/confirm` per [Authentication API](../api/authentication.md).
+#### 3. Log In and Complete First-Time TOTP Setup
+1. Navigate to the Web UI or call `POST http://127.0.0.1:4801/api/auth/login` with your username and password.
+2. Because no TOTP factor is enrolled yet (`mfa_enrolled_at_ms` is `NULL`), the response returns `state: "enrollmentRequired"` with a challenge token.
+3. Scan the TOTP QR code with your authenticator app (Google Authenticator, 1Password, Authy) and submit the 6-digit verification code via `POST /api/auth/mfa/confirm` to finalize authentication.
 
-### Deployment profile
+---
 
-On a production deployment (such as `dam-hopper-api.service` listening on port `4801` with `DAM_HOPPER_LITE_MODE=true`, `DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db`, and a valid 32-byte owner-only `DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key`), execute the registration and SQLite approval commands directly from the API host against its local loopback endpoint (`http://127.0.0.1:4801`).
+### Deployment / Production Profile
 
-#### 1. Register From the API Host Against `http://127.0.0.1:4801`
-Replace `<target-username>` (e.g. `admin`) and replace `ReplaceWithStrongPassword!` with a real strong secret before executing:
+On a production deployment (e.g. `dam-hopper-api.service` with SQLite at `/var/lib/dam-hopper/auth.db`):
+
+#### 1. Provision the Admin Account Offline as the API User
+Run `create-admin.mjs` pointing to the production database:
 ```bash
-curl -sS -X POST http://127.0.0.1:4801/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"username":"<target-username>","password":"ReplaceWithStrongPassword!"}'
+sudo -u <API_USER> DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db \
+  node scripts/create-admin.mjs <target-username> "ReplaceWithStrongPassword!"
 ```
-The response is `{"ok":true}`. The account starts disabled (`is_enabled = 0`, `role = 'user'`, `auth_version = 0`) and never receives automatic first-user `admin` rights; login attempts return `401 ACCOUNT_DISABLED` until approved below.
+This writes the admin account directly to `/var/lib/dam-hopper/auth.db` preserving correct service-user ownership.
 
-#### 2. Inspect, Approve, and Promote on the API Host (`sqlite3`)
-Connect to the configured local SQLite database on the API host as the service user so file ownership remains intact:
+#### 2. Ensure Production MFA Key is Configured
+Production authenticated mode requires a dedicated 32-byte MFA encryption key:
 ```bash
-sudo -u <API_USER> sqlite3 /var/lib/dam-hopper/auth.db -cmd ".timeout 5000"
+openssl rand -hex 32 | sudo tee /etc/dam-hopper/mfa-encryption.key > /dev/null
+sudo chown <API_USER>:<API_GROUP> /etc/dam-hopper/mfa-encryption.key
+sudo chmod 600 /etc/dam-hopper/mfa-encryption.key
 ```
-Inspect the pending account:
-```sql
-SELECT id, username, is_enabled, role, auth_version, mfa_enrolled_at_ms
-FROM auth_users
-WHERE username = '<target-username>';
-```
-Record the verified 24-character hexadecimal `id` and observed `auth_version`. Execute a `BEGIN IMMEDIATE` conditional update matching both `id` and `auth_version` (setting `role = 'admin'` for an administrator or `role = 'user'` for a standard account), and only `COMMIT` after `SELECT changes();` returns `1`:
-```sql
-BEGIN IMMEDIATE;
-UPDATE auth_users
-SET is_enabled = 1, role = 'admin' -- or role = 'user' for a standard user
-WHERE id = '<verified-24-hex-id>' AND auth_version = <observed-auth_version>;
-SELECT changes();
-```
-Verify the interactive output of `SELECT changes();` before closing the transaction:
-- Only after observing **`1`**, issue:
-  ```sql
-  COMMIT;
-  ```
-- If `SELECT changes();` returns **`0`**, do **not** commit; issue `ROLLBACK;` and re-read `auth_users` before retrying:
-  ```sql
-  ROLLBACK;
-  ```
+Ensure `DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key` is present in `/etc/dam-hopper/server.env`.
 
-#### 3. Complete First Login and TOTP Enrollment
-After approval, the user's next `POST /api/auth/login` returns `enrollmentRequired`; complete TOTP setup and confirmation via the MFA endpoints documented in [Authentication API](../api/authentication.md).
+#### 3. First Login & TOTP Enrollment
+Log in from the host or through the secured reverse proxy; complete TOTP confirmation on first login.
 ### MongoDB Operator Procedure (`mongosh`)
 
 Connect via `mongosh` to the configured MongoDB database:
