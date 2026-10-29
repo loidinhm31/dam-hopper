@@ -277,10 +277,10 @@ Development progresses under the [Git conflict resolver plan](../plans/261019-15
     `[profileId, generation, serverUrl, configuredRoot, project, worktreePath, root, repositoryRoot, worktreeRoot, fullIndexFingerprint, conflictId, snapshotVersion]`.
     Separates persistent repository target identity from active connection-generation fencing (`isOwnerActive`). Requests, callbacks, and draft subscriptions capture `{ profileId, generation }` and fail closed on profile switch or reconnection, preventing cross-profile, cross-server, or cross-worktree draft bleed and fencing out stale asynchronous callbacks or replays.
   - **Measured Capacity Boundaries & Eviction Rules:** Enforced by `packages/ui/src/lib/conflict-draft-capacity.ts` using accounted UTF-8 text bytes via `TextEncoder` (measuring string payload bytes rather than JavaScript object heap overhead).
-    - *Tracked byte metrics:* `sourceBytes` (stages 1–3 + worktree file content), `resultBytes` (resolved text), `historyBytes` (past/future history entries text), and `recoveryBytes` (`recoveryText`).
-    - *Default limits:* `DEFAULT_MAX_TOTAL_BYTES` = 10 MiB (10,485,760 bytes) across all drafts in the registry, `DEFAULT_MAX_DRAFT_BYTES` = 2 MiB (2,097,152 bytes) per individual draft, and `DEFAULT_MAX_DIRTY_DRAFTS` = 10 dirty drafts per registry instance.
-    - *Admission & Eviction (`canAdmitDraft`):* When admitting new drafts under memory pressure, clean drafts (not dirty, not in recovery, not in flight) are evicted oldest-first. Dirty and recovery drafts are never silently evicted; admission fails closed with `"Memory capacity exceeded"` if dirty drafts saturate capacity.
-    - *Prospective Edit Growth (`checkProspectiveEditGrowth`):* Inspects proposed text updates and history creation before mutating draft text. Edits exceeding per-draft (2 MiB) or registry total (10 MiB) limits are rejected fail-closed. Typing edits within 1,000ms coalesce into a single history entry to bound history growth.
+    - _Tracked byte metrics:_ `sourceBytes` (stages 1–3 + worktree file content), `resultBytes` (resolved text), `historyBytes` (past/future history entries text), and `recoveryBytes` (`recoveryText`).
+    - _Default limits:_ `DEFAULT_MAX_TOTAL_BYTES` = 10 MiB (10,485,760 bytes) across all drafts in the registry, `DEFAULT_MAX_DRAFT_BYTES` = 2 MiB (2,097,152 bytes) per individual draft, and `DEFAULT_MAX_DIRTY_DRAFTS` = 10 dirty drafts per registry instance.
+    - _Admission & Eviction (`canAdmitDraft`):_ When admitting new drafts under memory pressure, clean drafts (not dirty, not in recovery, not in flight) are evicted oldest-first. Dirty and recovery drafts are never silently evicted; admission fails closed with `"Memory capacity exceeded"` if dirty drafts saturate capacity.
+    - _Prospective Edit Growth (`checkProspectiveEditGrowth`):_ Inspects proposed text updates and history creation before mutating draft text. Edits exceeding per-draft (2 MiB) or registry total (10 MiB) limits are rejected fail-closed. Typing edits within 1,000ms coalesce into a single history entry to bound history growth.
   - **Stale Snapshot Drift & Recovery Import Flow:** When `loadSnapshot` receives an updated snapshot version or altered index fingerprint for a conflict with uncommitted edits (`isDirty`, `isRecovery`, or `isResolving`), the existing draft transitions to `isRecovery = true` with `requiresReview = true` and `recoveryReason: "Conflict snapshot changed; import into a fresh snapshot and review"`. Direct resolve and automatic replaying are blocked. `importRecoveryDraft(recoveryId, freshDraftId)` enforces:
     1. Source draft is in recovery (`isRecovery: true`) with valid `recoveryText`.
     2. Target draft is an unrecovered, clean baseline snapshot (`!fresh.isRecovery`, `!fresh.isDirty`, empty history).
@@ -293,25 +293,25 @@ Development progresses under the [Git conflict resolver plan](../plans/261019-15
   - **Lossless Line Tokenization (`conflict-tokenization.ts`):** `tokenizeLosslessLines` splits UTF-8 text into line tokens preserving raw terminators (`\r\n`, `\n`, lone `\r`) and missing final newlines exactly with 100% roundtrip fidelity (`rejoinLosslessLines(tokens) === text`). Line ending classification (`detectLineEnding`) reports dominant `crlf`, `lf`, `mixed`, or `none` based on CRLF and LF presence; standalone `\r` is preserved in tokens without altering dominant classification.
   - **Git Conflict Marker Parser (`conflict-marker-parser.ts`):** `parseResultMarkerBlocks` scans result text for completed, balanced Git conflict blocks (`<<<<<<<`, optional `|||||||` diff3 base separator, `=======`, `>>>>>>>`). Extracts stage token slices, 1-based line spans, and character offsets. Note: Requires completed balanced marker blocks; unterminated or malformed markers are treated as plain text.
   - **Conservative 3-Way Region Mapping (`conflict-region-mapper.ts`):** Runs pinned `node-diff3@3.2.1` (`diff3MergeRegions`) on stage tokens to construct source regions (`SourceConflictRegion[]`). Note: Proposed main-thread execution budget ($\le$ 5,000 lines or $\le$ 500 KB) and worst-case diff complexity bounds remain unqualified; tokenization bounds alone do not establish safe diff3 execution bounds. Maps source regions to result text conservatively:
-    1. *Strategy 1A (Count & Token Alignment):* When parsed marker count matches conflict region count and token contents align, assigns exact line and offset ranges.
-    2. *Strategy 1B (Unique Token Match):* Matches isolated marker blocks by unique content, verifying non-overlapping line ranges.
-    3. *Resolved Content Search:* When conflict markers are absent, searches result lines for accepted side content (`ours`, `theirs`, or both in order). Ambiguous multiple occurrences flag `confidence: "ambiguous"`; unmapped regions flag `confidence: "unmapped"`.
-    4. *Manual Edit Review Downgrade:* When `applyManualResultTextEdit` updates result text, `ambiguous` and `unmapped` regions are downgraded to `manualReview: "needs-review"` and `decision: "pending"`.
+    1. _Strategy 1A (Count & Token Alignment):_ When parsed marker count matches conflict region count and token contents align, assigns exact line and offset ranges.
+    2. _Strategy 1B (Unique Token Match):_ Matches isolated marker blocks by unique content, verifying non-overlapping line ranges.
+    3. _Resolved Content Search:_ When conflict markers are absent, searches result lines for accepted side content (`ours`, `theirs`, or both in order). Ambiguous multiple occurrences flag `confidence: "ambiguous"`; unmapped regions flag `confidence: "unmapped"`.
+    4. _Manual Edit Review Downgrade:_ When `applyManualResultTextEdit` updates result text, `ambiguous` and `unmapped` regions are downgraded to `manualReview: "needs-review"` and `decision: "pending"`.
   - **Readiness Evaluation (`computeConflictReadiness`):** Aggregates conflict counts (`totalConflicts`, `resolvedConflicts`, `unresolvedConflicts`, `needsReviewConflicts`, `ambiguousRegions`, `hasMarkers`, `unresolvedReasons`). Evaluates `parseResultMarkerBlocks(resultText)`; permits `isReady = true` when unresolved conflicts = 0, ambiguous regions = 0, and all conflict regions have `manualReview === "reviewed"` (note: if a file has malformed/unterminated markers not parsed into blocks, or contains zero conflict regions, the "all regions reviewed" check can be vacuously satisfied).
 - **Draft Store Decision History & Model Actions (Phase 06):**
   - **Model Actions:** `acceptRegionSide`, `ignoreRegionSide`, `acceptRegionBoth` (`ours-then-theirs` | `theirs-then-ours`), `markRegionReviewed`, whole-file previews (`previewAcceptAllOurs`, `previewAcceptAllTheirs`, `previewRebuildClean`), and `confirmWholeFileAction`.
   - **Decision-Aware History in `ConflictDraftRegistry`:** Draft entries track `mergeModel` and history entries with `decisions` snapshots (`draft.history.past` and `future`), enabling atomic undo/redo of both text and region decisions. Supports undo/redo of identical-text accept actions (records decision transition even when result text is unchanged, enabling clean undo/redo of acceptance).
   - **Open Correctness Defects & Boundary Realities:**
-    - *Open Defect — Capacity Accounting Bypass:* Metadata-only store actions (`ignoreSide`, `markReviewed`, and identical-text accept) push full text snapshots into history with a fixed 100-entry stack cap, but bypass `checkProspectiveEditGrowth` and do not increment `historyBytes` metrics, contradicting the hard-capacity invariant.
-    - *Open Defect — Redo Dirtiness Invariant:* On redo of an identical-text accept, `applyDraftRedo` computes `isDirty` strictly against initial text, meaning decision-only changes do not register as dirty after redo and risk premature clean eviction under memory pressure or missed recovery.
-    - *Open Defect — Typing Coalescing Sequence:* In text-changing store actions, `draft.canCoalesceHistory = false` is assigned after `updateResult`, so typing edits immediately preceding an accept action within 1000ms may coalesce unless explicitly interrupted.
-    - *Open Gate — BOM Re-application Boundary:* Store actions serialize via `getModelSerializedResult`, while manual Monaco edits return un-BOM'd strings from `getValue()`; downstream Phase 07/08 wiring will reconcile the single authority for BOM re-attachment prior to backend staging.
+    - _Open Defect — Capacity Accounting Bypass:_ Metadata-only store actions (`ignoreSide`, `markReviewed`, and identical-text accept) push full text snapshots into history with a fixed 100-entry stack cap, but bypass `checkProspectiveEditGrowth` and do not increment `historyBytes` metrics, contradicting the hard-capacity invariant.
+    - _Open Defect — Redo Dirtiness Invariant:_ On redo of an identical-text accept, `applyDraftRedo` computes `isDirty` strictly against initial text, meaning decision-only changes do not register as dirty after redo and risk premature clean eviction under memory pressure or missed recovery.
+    - _Open Defect — Typing Coalescing Sequence:_ In text-changing store actions, `draft.canCoalesceHistory = false` is assigned after `updateResult`, so typing edits immediately preceding an accept action within 1000ms may coalesce unless explicitly interrupted.
+    - _Open Gate — BOM Re-application Boundary:_ Store actions serialize via `getModelSerializedResult`, while manual Monaco edits return un-BOM'd strings from `getValue()`; downstream Phase 07/08 wiring will reconcile the single authority for BOM re-attachment prior to backend staging.
 - **Joint History Authority (`JointHistoryAuthority`):**
   - Located at `packages/ui/src/lib/joint-history-authority.ts`.
   - Standalone controller wrapping Monaco editor public APIs (`model.onDidChangeContent`, `editor.addCommand`, `editor.addAction`) to intercept `Ctrl+Z`, `Ctrl+Shift+Z`, and `Ctrl+Y`, and register context-menu Undo/Redo actions.
   - Records atomic transactions (`JointTransaction`: text, metadata, or combined atomic text+decisions) with `maxDepth` bounding (default 100) and branch-clears-redo semantics.
   - Supports `getSnapshot()` / `restoreSnapshot()` across Monaco editor remounts.
-  - *Open Qualification & Integration Gates:* `JointHistoryAuthority` is verified in isolated unit tests and headless Chromium browser tests (`conflict-monaco-history.browser.tsx`), but operates as a separate controller alongside `ConflictDraftRegistry`'s internal `draft.history`. Phase 01 native-history and Monaco byte-fidelity gates remain open, and unification into a single integrated history authority wired to `MergeConflictEditor` remains tracked under Phase 09 qualification.
+  - _Open Qualification & Integration Gates:_ `JointHistoryAuthority` is verified in isolated unit tests and headless Chromium browser tests (`conflict-monaco-history.browser.tsx`), but operates as a separate controller alongside `ConflictDraftRegistry`'s internal `draft.history`. Phase 01 native-history and Monaco byte-fidelity gates remain open, and unification into a single integrated history authority wired to `MergeConflictEditor` remains tracked under Phase 09 qualification.
 - **Floating Monaco Surface, Unified Stacking & Responsive Narrow Mode (Phase 07):**
   - **Shared Floating Host (`ConflictResolverPanel` & `ConflictResolverToolbar`):** Mounted in `WorkspacePage` above `IdeShell`, `TerminalWorkspaceShell`, and `MobileWorkspaceShell` when `conflictResolver.isPanelVisible` is true. Keeps draft model and history ownership strictly outside frame visibility so hiding and reopening retains in-progress draft text and decision states in memory (while unified Monaco-level command undo/redo remains an open Phase 09 gate). When unmerged conflicts exist and the panel is hidden, a floating conflict pill button (`bottom-4 right-4 z-40`) displays conflict counts and provides one-click panel reopening.
   - **Unified Floating Panel Stacking Identity (`terminal-workspace-panel.ts`):** Extends `TerminalFloatingPanelId` to `"files" | "tool" | "resolver"`. Employs `updateFloatingPanelStack`, `resolveFloatingPanelStackZIndex` (`TERMINAL_FLOATING_PANEL_BASE_Z_INDEX = 20`, with +2 per stack depth), and `isTopmostFloatingPanel` across both `WorkspacePage` and `TerminalWorkspaceShell` to coordinate logical stack ordering across panels, provided compatible ancestor CSS stacking contexts are maintained.
@@ -319,7 +319,7 @@ Development progresses under the [Git conflict resolver plan](../plans/261019-15
     1. The resolver panel is the topmost floating panel (`isTopmost === true`).
     2. Focus is inside the panel DOM subtree or at document body.
     3. No active Monaco overlay widget or menu is visible (`.suggest-widget.visible`, `.find-widget.visible`, `.monaco-menu-container`), allowing Monaco widgets to consume Escape before panel dismissal.
-    When hiding, calls `stopImmediatePropagation()`, `stopPropagation()`, and `preventDefault()` to prevent keystrokes from leaking into underlying terminal PTY sessions or closing background panels.
+       When hiding, calls `stopImmediatePropagation()`, `stopPropagation()`, and `preventDefault()` to prevent keystrokes from leaking into underlying terminal PTY sessions or closing background panels.
   - **Panel Geometry & Clamping (`use-floating-panel-geometry.ts`, `conflict-resolver-panel-state.ts`):** Manages floating frame position and dimensions (default `1040x700`, min `480x360`, 12px margins) clamped via `clampResolverPanelLayout` on window resize and maximize toggle (`isMaximized`). Supports dragging via title toolbar handle and corner resizing via `Grip` control.
   - **Responsive Narrow Layout (768px Container Breakpoint):** In `MergeConflictEditor.tsx`, a `ResizeObserver` observing the editor container node (`containerNode`) dynamically switches between wide multi-column layout ($\ge 768\text{px}$) and narrow tabbed layout ($< 768\text{px}$). Wide layout renders `Theirs` (readonly), `Result` (editable), `Ours` (readonly), and an optional 4th `Base` column (`showBaseInWide`). Narrow layout provides an accessible tablist with `Theirs`, `Result*`, `Ours`, and optional `Base` tabs. Switching tabs changes visible editor view without unmounting or resetting the underlying draft model or in-progress edits.
   - **In-Memory Model URI Routing & Open Target Gap:** Monaco editor instances mount to dedicated URIs: `inmemory://${projectName}/${filePath}/theirs`, `/result`, `/ours`, and `/base`, configured with `keepCurrentModel: true`. Note: Current URI routing encodes project name and file path, but lacks profile ID, connection generation, or worktree path; full owner-qualified URI scoping remains an open isolation gate for multi-target environments.
@@ -342,6 +342,7 @@ Development progresses under the [Git conflict resolver plan](../plans/261019-15
       - **Live Daemon Smoke Verification:** `scripts/qualify-git-conflict-resolver.mjs` verifies functional lifecycle across 54 assertions in primary and nested repositories (operation status, conflict inventory, snapshots, CUT1 staging rejection, CUT2 legacy rejection, stale preconditions, text resolution, guarded continue, commit-message editor sentinel handoff, nested repository target isolation, and confirmed abort). Linked-worktree isolation is independently verified by integration tests in `server/tests/git_conflict_operation_lifecycle.rs`.
       - **Preserved Open Deferrals & Review Items:** Joint history authority unification, draft capacity accounting on metadata actions, decision-only redo dirtiness evaluation, owner-qualified Monaco URIs, aggregate nested-root operation-banner parity, multi-panel layout test depth across all simultaneous panes, and Monaco view-zones/marker-parser cleanup deferral tracking remain documented under [plan.md](../plans/261019-1505-git-conflict-resolver/plan.md) and [phase-09](../plans/261019-1505-git-conflict-resolver/phase-09-qualification-and-documentation.md).
       - **Release Gating & Platform Status:** Production release remains blocked pending AC12 actual Linux-native host launch, fresh local captures, human visual review, and authoritative disposition of remaining Cycle 2 review items. Windows-native client qualification remains separately pending and explicitly unqualified.
+
 ## Cognito Privacy Mode
 
 <a id="cognito-mode"></a>
@@ -352,13 +353,14 @@ Current CSS in `packages/ui/src/index.css` sets Heavy Blur to `blur(16px) satura
 ## Authentication, Privacy, and Capability Boundaries
 
 - Normal server requests use validated session authentication and role checks across default SQLite (when unconfigured) or MongoDB (when both `MONGODB_URI` and `MONGODB_DATABASE` are configured, enforced via `DAM_HOPPER_LITE_MODE=false/0`, or SQLite forced via `DAM_HOPPER_LITE_MODE=true/1`). `DAM_HOPPER_AUTH_SQLITE_PATH` applies to SQLite (default `auth.db` in the global config directory; production uses absolute local storage, strictly one server process per local auth file, never network/shared filesystems, and fatal startup on SQLite failure). Unreachable or failing MongoDB fails startup loudly without SQLite fallback. Production authenticated mode requires a dedicated 32-byte owner-only `DAM_HOPPER_MFA_KEY_FILE`.
-- `POST /api/auth/register` creates disabled `user` accounts (`auth_version = 0`) and never grants automatic first-user `admin` rights; login returns `401 ACCOUNT_DISABLED` until a local operator approves and, when intended, promotes the account to `admin`, after which password login without an enrolled factor returns `enrollmentRequired` for TOTP MFA completion. The server's `server-token` is the JWT signing secret, never a client credential. See [Authentication API](./api/authentication.md), [Authentication State & Cryptography](./architecture/authentication-state-and-cryptography.md), and the canonical runbook in [Server Environment & Authentication](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook).
+- Public registration endpoint `POST /api/auth/register` is removed for security; initial administrator accounts are provisioned offline directly via `dam-hopper-server create-admin` (or `pnpm create-admin`), after which password login without an enrolled factor returns `enrollmentRequired` for TOTP MFA completion. The server's `server-token` is the JWT signing secret, never a client credential. See [Authentication API](./api/authentication.md), [Authentication State & Cryptography](./architecture/authentication-state-and-cryptography.md), and the canonical runbook in [Server Environment & Authentication](./configuration/server-environment-auth.md#direct-account-provisioning-no-public-registration-api).
 - Credentialed browser requests use explicit allowed origins. `--no-auth` is a separate loopback development bypass—never SQLite lite mode—and must be bound to `127.0.0.1`, never to an untrusted network interface.
 - Filesystem and media operations validate resolved targets and bound data. Opaque media tickets bind actor, client namespace, target, file identity/version, kind, purpose, and incarnation; cleanup stays with the original owner.
 - Encrypted uploads use OPAQUE PAKE exchange and chunked AES-256-GCM over the WebSocket transport. One captured profile/generation transport owns authentication and final write; no plaintext or alternate-owner fallback is allowed.
 - The shared logger redacts sensitive metadata. Agent status carries lifecycle facts only, never conversation content.
 
 <a id="login-device-management-design"></a>
+
 ### Device Login Sessions Architecture (Delivered)
 
 Device login session management operates across the entire selected server for the authenticated user account, spanning all projects rather than per-project ACLs or physical device identities.
@@ -375,6 +377,7 @@ Device login session management operates across the entire selected server for t
 - **Frontend UI & Owner Fencing:** `LoginDevicesSection` within `ServerSettingsDialog` enforces HTTPS or loopback HTTP (`credentials: "omit"`). Requests, subscriptions, and self-revocation cleanup capture profile ID, URL, credential, and connection generation (`{ profileId, generation }`); stale responses or superseded generations cannot clear replacement credentials, leak into newer login drafts, or affect another profile. Acknowledging self-revocation marks the dialog credential draft as revoked; subsequent dialog saves will not re-save the dead token or overwrite newer replacement credentials.
 - **No-Auth Mode:** Both endpoints return HTTP 409 `DEVICE_SESSIONS_UNAVAILABLE` under `--no-auth`.
 - **Visual Evidence Governance:** Full-application Chromium Playwright journeys (`device-login-management.spec.ts`) exercise same-account and foreign session isolation, bearer-only DELETE denial, real-time revocation, narrow-viewport layout, and atomic evidence generation. Automated runs initialize `review.md` in `packages/ui/e2e/device-login-management/` to `PENDING_HUMAN_REVIEW` (retained as Pending); green automated test execution validates functional assertions only and does not substitute for human visual inspection.
+
 ## Idle Suspend and Deployment
 
 <a id="server-authoritative-terminal-idle-suspend-architecture"></a>
@@ -492,6 +495,7 @@ Phase 01 through Phase 06 are fully implemented and certified, including end-to-
 **Android app entry flow and focused workspace implemented; runtime/release qualification remains open.** `native/android-app/` is the Kotlin Multiplatform and Jetpack Compose client, isolated from Tauri (`apps/native/`). The root keeps Profile Login → Project List → Terminal route stages; the Terminal stage mounts focused Terminal/Files/Editor panels through retained workspace state. User-approved Phase 07 closeout is distinct from live-server or physical-device qualification.
 
 ### Two-Module Architecture
+
 - `:shared` — Kotlin Multiplatform module targeting Android and JVM (`jvmTarget` set to JVM 17, `minSdk = 29`). Contains common domain models (`dev.damhopper.nativeapp.model.WorkbenchModel`), state containers, theme definitions, and Compose Multiplatform UI components (`WorkbenchScreen`, `WorkbenchHeader`, `PanelNavigationRow`, `PanelPlaceholders`). Common code strictly excludes Android- or Swing-specific APIs.
 - `:androidApp` — Android application module (`compileSdk = 35`, `minSdk = 29`, `targetSdk = 35`, ABI filters `arm64-v8a` and `x86_64`). Hosts `MainActivity.kt` providing Compose entry point with `statusBarsPadding()` top status bar inset handling, Android application manifest, and security configurations.
 
@@ -507,9 +511,10 @@ The Activity-scoped lifecycle adapter forwards foreground/background events to s
 
 The current root does not mount `WorkbenchScreen` or `PanelHost`. Their separate 12-panel shell remains in source and in the panel-shell contract below, but those destinations are not reachable through the active three-screen flow.
 
-
 ### Toolchain Pins
+
 Cataloged in `native/android-app/gradle/libs.versions.toml` and pinned in wrapper:
+
 - **Gradle**: 8.11.1 wrapper with verified SHA-256 checksum (`f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6`).
 - **Android Gradle Plugin (AGP)**: 8.7.3.
 - **Kotlin**: 2.1.10 (`org.jetbrains.kotlin.multiplatform`, `org.jetbrains.kotlin.plugin.serialization`, `org.jetbrains.kotlin.plugin.compose`).
@@ -521,6 +526,7 @@ Cataloged in `native/android-app/gradle/libs.versions.toml` and pinned in wrappe
 ### Retained 12-Panel Workbench Shell (Separate from Active Root Flow)
 
 `WorkbenchScreen`, `PanelHost`, and `WorkbenchNavigation` describe a separate panel subsystem. `MainActivity` currently hosts `DamHopperMobileApp`, which exposes only the three core flow screens; do not infer panel reachability from the retained components or their unit tests.
+
 - **12-Panel Registry**: Modeled authoritatively in `dev/damhopper/nativeapp/model/WorkbenchModel.kt` (`WorkbenchPanel` enum) and registered in `ui/navigation/PanelRegistry.kt` (`PanelDescriptor` map for all 12 entries: `TERMINAL`, `FILES`, `EDITOR`, `DIFF`, `MERGE`, `GIT`, `WORKFLOW`, `AGENTS`, `RESOURCES`, `PORTS`, `SSH_HOST`, `SETTINGS`), each with display label, monospace short code (e.g. `RESOURCES` / `RES`, `SSH_HOST` / `HOST`), icon glyph, and description. Fails closed on unmodeled panel identifiers.
 - **Single-Row Navigation**: Docked horizontal scrollable row (`ui/navigation/PanelNavigationRow.kt`) directly beneath the server/project header. Monospace short codes and labels indicate active selection; Compose `BringIntoViewRequester` automatically scrolls the selected button into viewport on activation. Zero floating action buttons (FABs) or secondary navigation drawers.
 - **Shell Restrictions**: Strict TERMINAL mode only (`workspaceMode = "terminal"`), Traditional terminal presentation only (`terminalUsageMode = "traditional"`), and a single content area across all screen geometries (`singleContentArea = true`). Selecting a panel replaces the visible content area without multi-panel or split docking.
@@ -529,6 +535,7 @@ Cataloged in `native/android-app/gradle/libs.versions.toml` and pinned in wrappe
 - **Preview Exceptions**: Embedded interactive HTML previews and DOM-rendered Mermaid diagrams are explicitly excluded for this release; HTML and Markdown are edited as raw source with notices.
 
 ### Security Policies & Manifest Isolation
+
 - **Network Security Configuration**:
   - Release base config (`src/main/res/xml/network_security_config.xml`) sets `cleartextTrafficPermitted="false"` with system trust anchors.
   - Debug network configuration (`src/debug/res/xml/network_security_config.xml`) permits cleartext traffic to any host and trusts system and user-installed certificates. This is a debug-only transport allowance; authenticated device traffic should use HTTPS. Release config remains TLS-only with system trust anchors.
@@ -538,7 +545,9 @@ Cataloged in `native/android-app/gradle/libs.versions.toml` and pinned in wrappe
 - **Component Isolation**: All components non-exported by default except `MainActivity` (`android:exported="true"` with `MAIN`/`LAUNCHER` intent filter).
 - **IME Window Management**: Configured with `android:windowSoftInputMode="adjustResize"` to request window resizing when the software keyboard opens (visual dock stability across third-party IMEs pending device testing).
 - **Web Engine Exclusion**: Zero occurrences of `WebView` or `tauri` detected in `native-app` source code by the static verification suite.
+
 ### Workspaces, Target Fencing & Remote Configuration (Phase 06)
+
 - **Project Target Store & Revision Fencing (`features/workspace/`):**
   - `ProjectTargetStore` manages active project target (root vs worktree) with monotonic workspace revisions (`invalidateWorkspace`) preventing race conditions and stale async worktree responses from contaminating cross-workspace or cross-project state.
   - Fail-closed unavailable target handling: worktrees marked prunable or missing do not silently redirect to root; UI reflects unverified or unavailable state explicitly.
@@ -554,11 +563,13 @@ Cataloged in `native/android-app/gradle/libs.versions.toml` and pinned in wrappe
   - Granular `UiPreferences` (system font size, editor font size, terminal font size, Cognito mode style/shortcut) supported via `/api/global-config/ui`.
 
 ### Terminal Sessions, Stream Replay & Agent Status (Phase 07)
+
 - **Retained Session Controller (`features/terminal/`):** `TerminalSessionController` manages PTY incarnation, input isolation, modifier translations, and ANSI escape sequences, decoupled from Compose recomposition lifecycles.
 - **Stream Replay Gate & Output Reconciliation:** `TerminalReplayGate` queues live WebSocket output during attach buffer replay; `reconcileTerminalOutput` performs duplicate chunk discard, gap detection, and overlap slicing; outbound terminal queries are suppressed during replay to prevent echo loops.
 - **Agent Status Reducer:** `AgentStatusReducer` applies `serverEpoch` and monotonic `revision` ordering with snapshot reloads hoisted outside non-reentrant mutex locks to avoid deadlocks; unread attention alerts deduplicated with a bounded 1,000-entry LRU cache.
 
 ### Filesystem Watchers, Search & Replace Architecture (Phase 08)
+
 - **Target-Qualified Filesystem Repository (`features/files/`):**
   - `FileRepository` provides target-qualified operations (`listDirectory`, `stat`, `readFile`, `writeFile`, `executeFsOp`). Requests forward the specified `ProjectTargetRef` through `ApiClient` and `WsConnection` without independent in-client `target.profileId` validation against captured generation.
   - `FsWriteCoordinator` serializes chunked writes (`fs:write_begin` with `expected_mtime` CAS, chunk frames, `fs:write_commit`) under coroutine `Mutex` with monotonic `reqId` allocated by `WsConnection`. Phase 06: with a reservation token, quarantines it before commit dispatch, recording submitted bytes/revision, `baselineMtime`, and `tabIncarnation` for reconciliation.
@@ -579,21 +590,21 @@ Cataloged in `native/android-app/gradle/libs.versions.toml` and pinned in wrappe
 - **Recorded Limitations & Open Gates:**
   - Remaining limitations include permissive UTF-8 decode in fallback paths, generic-cancellation batch abort, secondary-profile display-name target resolution, and partial failure/outcome UI detail; Phase 04 resolved root-only watching via `FileWatchCoordinator` and bounded early buffering. See [Android Native Architecture](./architecture/android-native-client.md) and [Acceptance Ledger](./android-native-acceptance.md).
 
-
 ### Native Editor Language Services & Safe Saves (Phase 09)
 
 #### Phase 03 Shared Editor State (2026-10-23)
 
-  - **Document authority:** `EditorSession` delegates text, undo/redo, and save-point tracking to injected `EditorDocument`. Obsolete `EditorUndoManager`, `EditorFindReplaceHelper`, and `EditorPositionHelper` were removed; `TestEditorDocument` is the `jvmTest` double.
-  - **Bounded reads and saves:** `EditorRepository` implements `EditorRangeRequestPort` and fail-closed `EditorSavePort`. `saveDocument` requires `documentProvider` and an installed `saveGate`; saturated `loadEditableText` reads escalate `NORMAL → DEGRADED → LARGE` and fall back to 64 KiB `BoundedRangeWindow`s.
-  - **Tab ports and identity:** `EditorTabsState` implements `EditorTabLifecyclePort`, `EditorDirtyGuardPort`, `EditorDocumentAccessPort`, `EditorCommandPort`, and `EditorSaveOutcomePort`. A reload changing tier rotates `tabIncarnation` and `DocumentId`; `CloseIntent.DISCARD` is rejected if document revision advanced after consent.
-  - **Open carryovers after Phase 05:** W-P03-1 (Phases 05/06) remains open for workspace budget admission/eviction. When opening would exceed a workspace cap, the pending contract allows eviction only of clean inactive documents not in flight; refuse admission if eligible eviction cannot free sufficient capacity, and never silently discard edits. `AndroidEditorDocument.getBudgetMetrics` currently supplies `content.length` as `utf8Length` and zero `inFlightSnapshotBytes`, so it does not establish byte-accurate workspace accounting. W-P03-2 remains open: `EditorSession` still exposes `getText` and full-text listener/snapshot paths; replacing the Compose `TextField` alone does not close per-edit snapshot or metadata-publication work.
-  - **Open carryovers, continued:** W-P03-3 (Phase 06): Unknown-save arbiter token, submitted snapshot preservation, and original stage/opId quarantine — implemented by Phase 06 (pre-send quarantine, retained `submittedSnapshot` on `UnknownOutcome`); child-save reconcile residual open. W-P03-4 (Phase 06): open/reload/range error watermarks and disposed-session save-cleanup fencing — no Phase 06 change evidenced; open.
-  - **Disposition:** Cycle 4 user approval (2026-10-23, 8/10, 0 Critical) closed the Phase 03 work cycle; full technical acceptance remains gated on W-P03-1..4. Phase 02 W1–W6 remain tracked through their assigned Phase 04/05/06 gates. Historical Phase 03 verification was `:shared:jvmTest` 458/458 plus successful `:shared:compileDebugKotlinAndroid` and `:androidApp:compileDebugKotlin`; Phase 05 implementation and its reported verification are summarized below without implying these carryovers are closed.
+- **Document authority:** `EditorSession` delegates text, undo/redo, and save-point tracking to injected `EditorDocument`. Obsolete `EditorUndoManager`, `EditorFindReplaceHelper`, and `EditorPositionHelper` were removed; `TestEditorDocument` is the `jvmTest` double.
+- **Bounded reads and saves:** `EditorRepository` implements `EditorRangeRequestPort` and fail-closed `EditorSavePort`. `saveDocument` requires `documentProvider` and an installed `saveGate`; saturated `loadEditableText` reads escalate `NORMAL → DEGRADED → LARGE` and fall back to 64 KiB `BoundedRangeWindow`s.
+- **Tab ports and identity:** `EditorTabsState` implements `EditorTabLifecyclePort`, `EditorDirtyGuardPort`, `EditorDocumentAccessPort`, `EditorCommandPort`, and `EditorSaveOutcomePort`. A reload changing tier rotates `tabIncarnation` and `DocumentId`; `CloseIntent.DISCARD` is rejected if document revision advanced after consent.
+- **Open carryovers after Phase 05:** W-P03-1 (Phases 05/06) remains open for workspace budget admission/eviction. When opening would exceed a workspace cap, the pending contract allows eviction only of clean inactive documents not in flight; refuse admission if eligible eviction cannot free sufficient capacity, and never silently discard edits. `AndroidEditorDocument.getBudgetMetrics` currently supplies `content.length` as `utf8Length` and zero `inFlightSnapshotBytes`, so it does not establish byte-accurate workspace accounting. W-P03-2 remains open: `EditorSession` still exposes `getText` and full-text listener/snapshot paths; replacing the Compose `TextField` alone does not close per-edit snapshot or metadata-publication work.
+- **Open carryovers, continued:** W-P03-3 (Phase 06): Unknown-save arbiter token, submitted snapshot preservation, and original stage/opId quarantine — implemented by Phase 06 (pre-send quarantine, retained `submittedSnapshot` on `UnknownOutcome`); child-save reconcile residual open. W-P03-4 (Phase 06): open/reload/range error watermarks and disposed-session save-cleanup fencing — no Phase 06 change evidenced; open.
+- **Disposition:** Cycle 4 user approval (2026-10-23, 8/10, 0 Critical) closed the Phase 03 work cycle; full technical acceptance remains gated on W-P03-1..4. Phase 02 W1–W6 remain tracked through their assigned Phase 04/05/06 gates. Historical Phase 03 verification was `:shared:jvmTest` 458/458 plus successful `:shared:compileDebugKotlinAndroid` and `:androidApp:compileDebugKotlin`; Phase 05 implementation and its reported verification are summarized below without implying these carryovers are closed.
 
 #### Phase 05 Android Native Document and Shared Editor Presentation (2026-10-24)
 
 Phase 05 adds the Android document adapter and common editor presentation bridge for the focused Files/Editor increment; see the [phase record](../plans/261023-1429-native-editor-file-explorer/phase-05-android-native-editor.md).
+
 - **Document authority:** `AndroidEditorDocument` owns a Sora `Content` instance as the interactive text/undo authority. It publishes revision, dirty, length, line-count, selection, and undo state/events; enforces configured undo-count/byte limits and read-only/input checks; supports find navigation; and captures explicit UTF-8 save snapshots. Final close detaches the widget/listeners and disables native undo.
 - **Android surface:** `AndroidEditorSurfaceView` mounts Sora `CodeEditor` through Compose `AndroidView`, enables native line numbers, selects Java syntax for `.java`, and uses `EmptyLanguage` otherwise. The common `NativeTextEditorView` receives an `EditorDocument`, metadata, and an injected `NativeEditorSurfaceHost`; shared presentation no longer uses an editable full-text Compose `TextField`.
 - **Editor presentation:** `EditorScreens` and `EditorTopBar` route dirty/undo/redo/find/save actions through the shared tab/document interfaces. `LargeFileView` renders bounded range windows when supplied, and `SaveConflictDialog` presents explicit conflict choices. Phase 05 supplied the surface bridge; Phase 07 subsequently mounted the focused Editor panel in the active root. This does not imply TypeScript semantics, richer preview parity, or LGPL distribution compliance.
@@ -611,14 +622,14 @@ Integrates C4/C5 across editor tabs, tree, watch demand, and arbiter; see [phase
 - **Effective owner scoping:** `FileWatchCoordinator.resolveEffectiveOwner` maps wildcard repository owner (`project == "*"`) to target profile/project/worktree. Used by `FileMutationCoordinator.owner`, `FileRepository.writeFileWithOutcome` / `executeFsOpWithOutcome`, `EditorRepository.saveDocument`, and `EditorTabsState.saveTab` / `forceOverwriteTab`, so saves and mutations contend in one owner namespace; other owners stay independent.
 - **Mutation transaction (`FileMutationCoordinator.executeReservedMutation`):**
 
-  | Step | Behavior |
-  | --- | --- |
-  | 1. Gate | Target/owner assertion; quarantined source/destination → `NotSubmitted`. |
-  | 2. Reserve | `tryReserveMutation`; token owner/kind/state/paths re-qualified before use. |
-  | 3. Collision | Destination (or descendant) open in a same-target tab → `NotSubmitted`, reservation released. |
-  | 4. Dirty settlement | Dirty docs in source + destination subtrees frozen; `settleDirtyDocuments` applies `CloseDecision`. |
-  | 5. Dispatch | `executeFsOpWithOutcome` quarantines token before `fs:op` send. |
-  | 6. Settle | `Confirmed`: rekey/delete locally, then release, then refresh (refresh failure keeps `Confirmed`). `Rejected`/`NotSubmitted`: unfreeze, release, identity unchanged. `Unknown`: keep quarantine, record `UnresolvedMutation`. |
+  | Step                | Behavior                                                                                                                                                                                                                      |
+  | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | 1. Gate             | Target/owner assertion; quarantined source/destination → `NotSubmitted`.                                                                                                                                                      |
+  | 2. Reserve          | `tryReserveMutation`; token owner/kind/state/paths re-qualified before use.                                                                                                                                                   |
+  | 3. Collision        | Destination (or descendant) open in a same-target tab → `NotSubmitted`, reservation released.                                                                                                                                 |
+  | 4. Dirty settlement | Dirty docs in source + destination subtrees frozen; `settleDirtyDocuments` applies `CloseDecision`.                                                                                                                           |
+  | 5. Dispatch         | `executeFsOpWithOutcome` quarantines token before `fs:op` send.                                                                                                                                                               |
+  | 6. Settle           | `Confirmed`: rekey/delete locally, then release, then refresh (refresh failure keeps `Confirmed`). `Rejected`/`NotSubmitted`: unfreeze, release, identity unchanged. `Unknown`: keep quarantine, record `UnresolvedMutation`. |
 
 - **Dirty document settlement:** `EditorTabsState.freezeDocuments` sets `EditorSession.isFrozen`; `isInputPermitted` blocks edits/undo/redo while save snapshots stay allowed. `SAVE` saves each doc via child token (`saveDocumentWithToken`) and aborts if doc is still dirty; `DISCARD` aborts when current revision exceeds captured consent revision (`capturedDirtyRevisions`); `CANCEL` → `NotSubmitted`. Buffers never discarded locally before commit.
 - **Atomic rekeying:** on confirmed rename/move, `EditorTabsState.rekeyPath` moves descendant tab keys, `DocumentId`, sessions, save outcomes, and active tab in one `_tabs` swap; `EditorSession.rekey` calls `EditorDocument.rekey`, keeping document/undo identity. `FileTreeState.rekeyPath` then rekeys selection, watch demand, and loaded nodes, all before reservation release.
@@ -641,11 +652,13 @@ Phase 07's active-root workspace work cycle was closed by user approval after Cy
 - **Limitations:** Root identity fallbacks/memoization, incomplete transport rebinding, direct authentication transitions that bypass the hook, no deep-link generation recheck after confirmation, no post-suspension authority check before departure continuation, and “Discard & Leave” retaining dirty buffers remain documented issues. Instrumentation examples do not establish mounted document/undo retention, terminal input journeys, or leak-free widget teardown. See [Android Native Client Architecture](./architecture/android-native-client.md#phase-07-retained-workspace-runtime-terminal-input-and-guarded-departures-2026-10-24).
 
 ### Native Diff, 3-Way Merge & Git Blame (Phase 10)
+
 - **Native Diff Review (`DiffReviewController`, `DiffCalculator`, `LcsDiffEngine`):** Side-by-side and inline layouts with 10,000 line computation cap. Server hunk index mapping, hunk discard mapping with dirty buffer / modified / read-only guards, CAS baseline mtime saves, and commit diff inspection.
 - **3-Way Merge Conflict Resolution (`MergeConflictController`, `ConflictParser`):** 2-way and 3-way/diff3 marker parsing, ours/theirs/ancestor/both resolution, malformed marker detection, and server resolution submission.
 - **Git Blame Attribution & Caching (`BlameRepository`, `BlameValidator`, `BlameCache`):** 5 MiB buffer threshold, 250 ms keystroke debounce with per-file coroutine cancellation, contiguous partition validation, bounded 64-entry / 32 MiB LRU cache with SHA-256 buffer fingerprinting (`Sha256Digest`), editor gutter annotations (`EditorBlameGutter`), and commit reveal routing (`CommitRevealRequest`).
 
 ### Encrypted Transfers, Media Streaming & Android Storage Scaffolding (Phase 11)
+
 - **Cryptographic Envelopes & Sessions (`core/security/`):**
   - `CryptoEnvelope` implements exact wire parity with server `decrypt_blob` (`iv(12) || ciphertext + tag(16)`), packing metadata JSON (`FileBlobMetadata`/`TextBlobMetadata`), 0x00 delimiter, and content bytes with max 4096-byte metadata JSON.
   - `CryptoSession` manages derived 32-byte AES-256-GCM key, generation validation via `assertValid(expectedOwner)`, and explicit `close()` zeroization (`keyBytes.fill(0)`), subject to JVM GC zeroization limitations.
@@ -661,7 +674,9 @@ Phase 07's active-root workspace work cycle was closed by user approval after Cy
   - `AndroidVideoSurface` utilizes `SurfaceView` and `MediaPlayer` backed by `LeaseMediaDataSource`; `MediaPreviewCard` renders metadata and optional SAF download button with zero FABs.
 - **Blocking Integration Gaps & Open Qualification:**
   - Scaffolding delivered; documented critical defects from code review (score 5/10) prevent production enablement: unwired production paths for crypto session and SAF picker, permissive non-fail-closed cookie capture (`contains` matching, nullable `cookieHeader`), unbounded `readRangeSync` memory allocation, incomplete asynchronous generation fencing, and duplicate Rust/Kotlin envelope implementations. End-to-end device/server qualification is deferred to Phase 18.
+
 ### Native Android Git & Safe History Workflows (Phase 12)
+
 - **Domain Repositories & Facade (`features/git/`):**
   - Unified `GitRepository` facade aggregates target-qualified domain repositories: `GitQueryRepository` (roots, branches, logs with literal `messageQuery`, diff summaries, commit details/files/diffs), `GitMutationRepository` (stage, unstage, discard, commit, fetch, pull, push), `GitBranchWorktreeRepository` (branch CRUD/checkout, worktree list/add/remove/prune), `GitHistoryMutationRepository` (cherry-pick, revert, reset, drop, undo-last-commit, message edit, squash), and `GitPublishRepository` (leased push prepare/publish).
   - Operations capture `GitOperationScope(profileId, generation, project, worktreePath)` to prevent cross-profile collisions and enforce generation fencing.
@@ -687,6 +702,7 @@ Phase 07's active-root workspace work cycle was closed by user approval after Cy
   - Real disposable multi-root/worktree repository verification deferred to Phase 18.
 
 ### Native Android Workflow Tracking & Project Plans (Phase 13)
+
 - **Workflow Domain Models & DTO Contracts (W01):**
   - Strict enum typing: `ItemKind` (`PLAN`, `PHASE`, `TASK`), `ItemStatus` (`todo`, `in_progress`, `blocked`, `done`, `canceled`), `SessionStatus` (`active`, `ended`, `abandoned`), `ResourceLinkType` (`terminal`, `agent`), `ResourceObservedState`, `WorkflowSource`.
   - Request DTOs: `CreateItemRequest`, `PatchItemRequest` with custom `PatchItemRequestSerializer`, `DeleteItemRequest`, `CreateSessionRequest`, `EndSessionRequest`, `AbandonSessionRequest`, `LinkResourceRequest`, `UnlinkResourceRequest`, `CreateNoteRequest`, `DeleteNoteRequest`, `PurgeHistoryRequest`.
@@ -711,6 +727,7 @@ Phase 07's active-root workspace work cycle was closed by user approval after Cy
   - Full live device qualification and WebSocket chunked integration deferred to Phase 18.
 
 ### Native Android Agent Store, Imports & Memory (Phase 14)
+
 - **Domain Models & Repositories (`features/agents/`):**
   - Strict enum typing: `AgentType` (`claude`, `gemini`), `AgentItemCategory` (`skill`, `command`, `hook`, `mcp-server`, `subagent`, `memory-template`), `DistributionMethod` (`symlink`, `copy`).
   - Wire DTO contracts: `AgentStoreItem`, `DistributionStatus`, `ShipResult`, `HealthCheckResult`, `ProjectAgentScanResult`, `MemoryTemplateInfo`, `ProjectMemoryDetailResponse`, `RepoScanItem`, `ScanRepoResponse`, `ScanLocalResponse`, `ImportConfirmRequest`, `ImportResult`.
@@ -733,7 +750,9 @@ Phase 07's active-root workspace work cycle was closed by user approval after Cy
   - Absorb action semantics (M2): Server absorb moves project-local non-symlink items to the store; offering absorb on shipped matrix cells contradicts server distributor semantics.
   - Unused repository methods: `getItem` and `listProjectMemory` lack UI callers.
   - Live qualification (L1/L2): Physical Android device execution, symlink traversal across filesystems, and live temp dir deletion deferred to Phase 18.
+
 ### Native Android Host Resources Fleet & Usage Insights (Phase 15)
+
 - **Host Resource & Alert Models (H01):**
   - Strict enum typing: `AvailabilityState` (`NORMAL`, `DEGRADED`, `UNKNOWN`), `AlertState` (`ACTIVE`, `RESOLVED`, `UNKNOWN`), `AlertSeverity` (`INFO`, `WARNING`, `CRITICAL`).
   - Wire DTO contracts: `HostResourceSnapshotV1`, `HostIdentity`, `Availability`, `MemorySnapshot`, `PressureInfo`, `MemoryPressure`, `CgroupMemory`, `ProcessMemory`, `ProcessInventory`, `MountContext`, `BatterySnapshot`, `HostMetrics`, `CpuMetrics`, `MemoryMetrics`, `DiskMetrics`, `AlertSummary`, `AlertIncident`.
@@ -759,6 +778,7 @@ Phase 07's active-root workspace work cycle was closed by user approval after Cy
   - Live qualification: Physical Android device execution, real SSE proxy buffering, and 32 global / 4 per-subject server admission limit qualification deferred to Phase 18.
 
 ### Native Android Ports, Tunnels, Idle Consent & Host Controls (Phase 16)
+
 - **Host Ports & Cloudflared Tunnels (P01):**
   - Models & Repositories: `PortModels.kt`, `PortRepository.kt`, `TunnelModels.kt`, `TunnelRepository.kt` (`features/host/`).
   - REST endpoints: `GET /api/ports`, `GET /api/tunnels`, `POST /api/tunnels`, `DELETE /api/tunnels/{id}`, `GET /api/tunnels/install`, `POST /api/tunnels/install`.
@@ -784,7 +804,9 @@ Phase 07's active-root workspace work cycle was closed by user approval after Cy
   - Warnings W-A through W-I: WS handler coroutine launch on every message; mixed-owner profile window during initialization; tunnel/port snapshot replacement races vs live WS updates; device clock skew vs server `expiresAtMs`.
   - Static structural assertions (194/194) assert AST/source invariants (models, routes, wire mappings, 0 FABs, 0 WebViews, redactions) without establishing dynamic Compose interaction or behavioral execution.
   - Live qualification: Physical Android hardware, live server WebSocket integration, and credential keystore binding deferred to Phase 18.
+
 ### Native Android Preferences, Privacy, Notifications & Lifecycle (Phase 17)
+
 - **Settings & Preferences Models and Boundaries (C02, C03):**
   - Models & Store: `SettingsModels.kt`, `PreferencesStore.kt`, `AndroidPreferencesStore.kt` (`features/settings/`, `platform/storage/`).
   - Typed Enums: `WorkbenchTheme` (`DARK`, `LIGHT`, `SYSTEM`), `CognitoModeStyle` (`HEAVY_BLUR`, `BLACK_SCREEN`), `ExplorerLanguageFilter` (`ALL`, `KNOWN`, `CODE`, `TEXT`), `PreferenceSourceStatus` (`ACTIVE`, `SOURCE_REMOVED`, `UNSET`).
@@ -817,7 +839,9 @@ Phase 07's active-root workspace work cycle was closed by user approval after Cy
   - Partial Lifecycle Demand-Pausing: Outside the Phase 07 focused workspace's file-watch coordination, only `HostResourceController` implements demand pause on background; SSE, usage polling, and media remain active or unwired; endpoint change does not trigger full owner retirement.
   - Storage & Deep Linking: TOML import/export uses clipboard/paste instead of Android SAF file picker; deep link extras are not consumed once and lack server-side target terminal validation.
   - Live Qualification: Physical Android hardware, native IME suppression, lockscreen notification redaction, and process death recovery deferred to Phase 18.
+
 ### Native Android Integrated Device Security & Performance Qualification (Phase 18)
+
 - **Core Qualification Suites & Ownership Fencing:**
   - `OwnershipAndReplayTests.kt` (`commonTest`): Validates multi-server profile isolation, generation watermark rejection, UTF-8 chunk boundary splitting across multi-byte characters, monotonic terminal replay ordering/gap/overlap/duplicate handling, clean SSE stream EOF completion, 5s REST fallback interval verification, UTC date interval calculation and formatting, and fail-closed crypto envelope tamper rejection.
   - `WorkbenchJourneysUnitTest.kt` (`androidApp/src/test/`): Validates in-memory 12-panel navigation journey (`TERMINAL`, `FILES`, `EDITOR`, `DIFF`, `MERGE`, `GIT`, `WORKFLOW`, `AGENTS`, `RESOURCES`, `PORTS`, `SSH_HOST`, `SETTINGS`), solitary top navigation row, zero FABs, zero WebViews, back-stack hierarchical unwinding, and Cognito privacy overlay input gating.
@@ -835,7 +859,9 @@ Phase 07's active-root workspace work cycle was closed by user approval after Cy
   - L3 (Phase 15 Residuals): Live SSE proxy buffering, 32 global / 4 per-subject server admission limits, background dispatcher payload decoding, exporter toggle, and end-of-day boundary option open.
   - L4 (Phase 17 Residuals): Terminal scrollback preference consumption, runtime `POST_NOTIFICATIONS` permission launcher, and Android SAF file picker open.
   - L5 (Live Journeys, Performance & Licensing): Real-server UI/IME/PTY journeys, performance/soak profiling, and third-party license audit open.
+
 ### Test Commands & Foundation Verification
+
 - `pnpm native-app:test` — Runs `:shared:jvmTest` (state invariants, panel registry, serialization).
 - `pnpm native-app:test:android` — Runs `:androidApp:testDebugUnitTest` (manifest security, network security configs, data extraction rules).
 - `pnpm native-app:assembleDebug` — Assembles debug APK for ARM64 and x86_64 targets.
@@ -853,10 +879,11 @@ Phase 07's active-root workspace work cycle was closed by user approval after Cy
 - `bash tests/test-phase-16-ports-tunnels-host-controls.sh` — Phase 16 ports, tunnels, idle consent, and host controls static assertion suite (194/194 assertions passing).
 - `bash tests/test-phase-17-preferences-privacy-lifecycle.sh` — Phase 17 preferences, privacy, notification sink, lifecycle, and zero-FAB invariants static verification suite (104/104 assertions passing).
 - `bash tests/test-phase-18-device-qualification.sh` — Phase 18 integrated device qualification, journeys, APK security audit, and zero-FAB invariants static verification suite (98/98 assertions passing).
-- *Automated Verification Evidence:* 1,430 cumulative static structural assertions passing across 17 phase test scripts (Phases 02–18, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); 481 unit test executions across shared JVM and Android variants (310 `:shared:jvmTest`, 82 debug, 82 release, 399 unique test definitions, 0 failures, 0 skipped); clean debug APK assembly (`:androidApp:assembleDebug`). Phase 18 tooling baseline recorded under review Cycle 2 (score 6/10, approved by user); GATE-C physical device/visual qualification is BLOCKED_PENDING_DEVICE.
-- *Qualification Gate*: Static checks and unit tests establish contract implementation only. Live Android runtime feasibility, physical hardware execution, real server-backed WebSocket integration, and live media decoding remain open under GATE-B / Phase 18 (GATE-C BLOCKED_PENDING_DEVICE).
+- _Automated Verification Evidence:_ 1,430 cumulative static structural assertions passing across 17 phase test scripts (Phases 02–18, 100% pass rate); 7/7 Rust crypto-bridge unit tests passing (`native-app/crypto-bridge`); 481 unit test executions across shared JVM and Android variants (310 `:shared:jvmTest`, 82 debug, 82 release, 399 unique test definitions, 0 failures, 0 skipped); clean debug APK assembly (`:androidApp:assembleDebug`). Phase 18 tooling baseline recorded under review Cycle 2 (score 6/10, approved by user); GATE-C physical device/visual qualification is BLOCKED_PENDING_DEVICE.
+- _Qualification Gate_: Static checks and unit tests establish contract implementation only. Live Android runtime feasibility, physical hardware execution, real server-backed WebSocket integration, and live media decoding remain open under GATE-B / Phase 18 (GATE-C BLOCKED_PENDING_DEVICE).
 
 See [Android native client architecture](./architecture/android-native-client.md), [frozen acceptance ledger](./android-native-acceptance.md), and [implementation plan](../plans/261015-1647-android-native-app/plan.md).
+
 ## Qualification Boundary
 
 Automated unit and integration tests establish only their exercised contracts. Live browser behavior, particular agent versions, Linux deployment behavior, Windows native scopes, and deployed proxies are separately qualified. See [Project Roadmap](./project-roadmap.md) and [Testing Guide](./testing.md) for current open gates.

@@ -268,7 +268,7 @@ pnpm --filter @dam-hopper/web exec vite --host 127.0.0.1
 
 ### Strict Security Constraints for `--no-auth`
 
-`--no-auth` is a local loopback development bypass—**never** SQLite lite mode (`DAM_HOPPER_LITE_MODE=true`). For authenticated local SQLite development and first-account approval, follow the **Development profile** in [Server Environment and Authentication](./configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook).
+`--no-auth` is a local loopback development bypass—**never** SQLite lite mode (`DAM_HOPPER_LITE_MODE=true`). For authenticated local SQLite development and first-account provisioning, follow the **Development profile** in [Server Environment and Authentication](./configuration/server-environment-auth.md#development-profile).
 
 1. **Loopback Only (`127.0.0.1`):** The server binary defaults to binding `0.0.0.0`. When running with `--no-auth`, **always pass `--host 127.0.0.1`**. Never bind `--no-auth` to a public IP, LAN, or untrusted network.
 2. **Forbidden in Production:** Server startup aborts if `RUST_ENV=production` or `ENVIRONMENT=production` is detected while `--no-auth` is active.

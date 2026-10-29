@@ -73,15 +73,25 @@ Vite proxies `/api` and `/ws` to `http://127.0.0.1:4803`. Add `--config /path/to
 
 SQLite is the default authentication store for zero-config startup (`DAM_HOPPER_AUTH_SQLITE_PATH` defaults to `~/.config/dam-hopper/auth.db`; exactly one server process may use one local SQLite auth file, and `--no-auth` is a separate loopback bypass). MongoDB is selected automatically when both `MONGODB_URI` and `MONGODB_DATABASE` are set, or SQLite can be forced explicitly via `DAM_HOPPER_LITE_MODE=true`.
 
-To provision a first administrator account under the **Development profile**:
+To run with authentication enabled under the **Development profile** (see [Server Environment and Authentication](docs/configuration/server-environment-auth.md#development-profile)):
 
-1. Run the local provisioning script (creates an enabled admin directly in SQLite without exposing a public register API):
+1. Generate a local 32-byte MFA encryption key:
+   ```bash
+   mkdir -p ~/.config/dam-hopper && chmod 700 ~/.config/dam-hopper
+   [ ! -f ~/.config/dam-hopper/mfa-encryption.key ] && (umask 077 && openssl rand -hex 32 > ~/.config/dam-hopper/mfa-encryption.key)
+   export DAM_HOPPER_MFA_KEY_FILE=~/.config/dam-hopper/mfa-encryption.key
+   ```
+2. Provision the administrator account offline (prompts securely for password without echo):
    ```bash
    pnpm create-admin
-   # or with arguments: node scripts/create-admin.mjs <username> <password>
+   # or using the native Rust CLI:
+   cargo run --manifest-path server/Cargo.toml --bin dam-hopper-server -- create-admin --username admin
    ```
-2. Start `dam-hopper-server` on loopback (for example `--host 127.0.0.1 --port 4801`).
-3. Log in at `http://127.0.0.1:4801/api/auth/login` or via the web UI. On first login, scan the TOTP QR code into your authenticator app and enter the 6-digit confirmation code to complete MFA setup.
+3. Start `dam-hopper-server` on loopback:
+   ```bash
+   cargo run --manifest-path server/Cargo.toml --bin dam-hopper-server -- --host 127.0.0.1 --port 4801
+   ```
+4. Log in at `http://127.0.0.1:4801/api/auth/login` or via the web UI. On first login, scan the TOTP QR code into your authenticator app and enter the 6-digit confirmation code to complete MFA setup.
 
 ## Common Commands
 
