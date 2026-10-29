@@ -1,6 +1,7 @@
 # Server Environment and Authentication
 
 Global defaults, environment variables, server-token handling, MFA key provisioning, recovery, and retired plugin configuration moved from the [server configuration index](./server-configuration.md).
+
 ## Global Configuration (~/.config/dam-hopper/config.toml)
 
 Store global defaults and known workspace metadata. This file is separate from the project registry.
@@ -26,34 +27,33 @@ path = "/tmp/test-workspace"
 
 ## Environment Variables
 
-| Var                                        | Type    | Purpose                                                                   |
-| ------------------------------------------ | ------- | ------------------------------------------------------------------------- |
-| `DAM_HOPPER_CONFIG`                        | path    | Load an exact `dam-hopper.toml` registry file                             |
-| `DAM_HOPPER_WORKSPACE`                     | path    | Legacy workspace path/discovery fallback                                  |
-| `DAM_HOPPER_PORT`                          | number  | API listen port (direct/Docker default 4800; systemd sets 4801)           |
-| `DAM_HOPPER_HOST`                          | string  | API bind address (default `0.0.0.0`)                                      |
-| `DAM_HOPPER_CORS_ORIGINS`                  | string  | Comma-separated exact HTTP(S) origins for credentialed API/WS CORS        |
-| `DAM_HOPPER_WEB_DIR`                       | path    | Explicit API combined-mode static root; Docker sets `/opt/dam-hopper/web` |
-| `DAM_HOPPER_NO_AUTH`                       | boolean | Development-only API auth bypass                                          |
-| `DAM_HOPPER_WEB_ROOT`                      | path    | Dedicated `dam-hopper-web` static root                                    |
-| `DAM_HOPPER_WEB_HOST`                      | string  | Dedicated web bind address (default `0.0.0.0`)                            |
-| `DAM_HOPPER_WEB_PORT`                      | number  | Dedicated web listen port (default `4802`)                                |
-| `DAM_HOPPER_WEB_RUNTIME_CONFIG`            | path    | Optional public runtime-config JSON file                                  |
-| `DAM_HOPPER_WEB_RELEASE_VERSION`           | string  | Optional web health release-version override                              |
-| `VITE_DAM_HOPPER_LOG_LEVEL`                | string  | Web bootstrap log level, embedded at build time                           |
-| `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS` | string  | Exact extension parent origins, embedded at build time                    |
-| `RUST_LOG`                                 | string  | Rust logging filter                                                       |
-| `MONGODB_URI` / `MONGODB_DATABASE`        | string  | MongoDB connection URI and database name. When both are set and non-blank, MongoDB is selected automatically. |
+| Var                                        | Type    | Purpose                                                                                                                                                                                                                                                                                             |
+| ------------------------------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DAM_HOPPER_CONFIG`                        | path    | Load an exact `dam-hopper.toml` registry file                                                                                                                                                                                                                                                       |
+| `DAM_HOPPER_WORKSPACE`                     | path    | Legacy workspace path/discovery fallback                                                                                                                                                                                                                                                            |
+| `DAM_HOPPER_PORT`                          | number  | API listen port (direct/Docker default 4800; systemd sets 4801)                                                                                                                                                                                                                                     |
+| `DAM_HOPPER_HOST`                          | string  | API bind address (default `0.0.0.0`)                                                                                                                                                                                                                                                                |
+| `DAM_HOPPER_CORS_ORIGINS`                  | string  | Comma-separated exact HTTP(S) origins for credentialed API/WS CORS                                                                                                                                                                                                                                  |
+| `DAM_HOPPER_WEB_DIR`                       | path    | Explicit API combined-mode static root; Docker sets `/opt/dam-hopper/web`                                                                                                                                                                                                                           |
+| `DAM_HOPPER_NO_AUTH`                       | boolean | Development-only API auth bypass                                                                                                                                                                                                                                                                    |
+| `DAM_HOPPER_WEB_ROOT`                      | path    | Dedicated `dam-hopper-web` static root                                                                                                                                                                                                                                                              |
+| `DAM_HOPPER_WEB_HOST`                      | string  | Dedicated web bind address (default `0.0.0.0`)                                                                                                                                                                                                                                                      |
+| `DAM_HOPPER_WEB_PORT`                      | number  | Dedicated web listen port (default `4802`)                                                                                                                                                                                                                                                          |
+| `DAM_HOPPER_WEB_RUNTIME_CONFIG`            | path    | Optional public runtime-config JSON file                                                                                                                                                                                                                                                            |
+| `DAM_HOPPER_WEB_RELEASE_VERSION`           | string  | Optional web health release-version override                                                                                                                                                                                                                                                        |
+| `VITE_DAM_HOPPER_LOG_LEVEL`                | string  | Web bootstrap log level, embedded at build time                                                                                                                                                                                                                                                     |
+| `VITE_DAM_HOPPER_EXTENSION_PARENT_ORIGINS` | string  | Exact extension parent origins, embedded at build time                                                                                                                                                                                                                                              |
+| `RUST_LOG`                                 | string  | Rust logging filter                                                                                                                                                                                                                                                                                 |
+| `MONGODB_URI` / `MONGODB_DATABASE`         | string  | MongoDB connection URI and database name. When both are set and non-blank, MongoDB is selected automatically.                                                                                                                                                                                       |
 | `DAM_HOPPER_LITE_MODE`                     | boolean | Optional backend selector. Set `true` (or `1`) to force SQLite even if Mongo variables are present. Set `false` (or `0`) to enforce MongoDB (missing Mongo variables abort startup). Unset/empty defaults to SQLite when Mongo variables are unset, or selects MongoDB when both variables are set. |
-| `DAM_HOPPER_AUTH_SQLITE_PATH`              | path    | Optional SQLite database file path. Defaults to `auth.db` in global DamHopper config directory (`~/.config/dam-hopper/auth.db`). |
-| `DAM_HOPPER_MFA_KEY_FILE`                  | path    | Dedicated 32-byte MFA encryption key for encrypting TOTP secrets at rest via AES-256-GCM. Mandatory in production authenticated mode (both MongoDB and SQLite). See [Authentication State & Cryptography](../architecture/authentication-state-and-cryptography.md). |
+| `DAM_HOPPER_AUTH_SQLITE_PATH`              | path    | Optional SQLite database file path. Defaults to `auth.db` in global DamHopper config directory (`~/.config/dam-hopper/auth.db`).                                                                                                                                                                    |
+| `DAM_HOPPER_MFA_KEY_FILE`                  | path    | Dedicated 32-byte MFA encryption key for encrypting TOTP secrets at rest via AES-256-GCM. Mandatory in production authenticated mode (both MongoDB and SQLite). See [Authentication State & Cryptography](../architecture/authentication-state-and-cryptography.md).                                |
 
 `VITE_*` values require a web rebuild. `VITE_DAM_HOPPER_SERVER_URL` is not
 allowed for production builds; production API origin is runtime config.
 Changing extension parent origins also requires redistributing its generated ZIP.
 CORS values are runtime API configuration and must exactly match the browser
 origin.
-
 
 ## Storage Backend Selection and Precedence Matrix
 
@@ -64,15 +64,15 @@ DamHopper supports two production-grade authenticated storage backends within th
 
 ### Complete Precedence Matrix
 
-| `DAM_HOPPER_LITE_MODE` | `MONGODB_URI` & `MONGODB_DATABASE` | Selected Backend | Behavior / Contract |
-|---|---|---|---|
-| `true` / `1` | Any (including malformed, blank, or partial) | **SQLite (explicit)** | Forced SQLite; ignores MongoDB environment variables. |
-| `false` / `0` | Both set and non-empty/non-whitespace | **MongoDB (enforced)** | Enforces MongoDB. Startup issues a bounded ping. |
-| `false` / `0` | Either unset, empty, whitespace, or malformed | **Fatal Error** | Operator explicitly disabled lite mode but omitted valid Mongo config. Aborts startup. |
-| Unset / empty / whitespace | Both set and non-empty/non-whitespace | **MongoDB (automatic)** | Auto-selects MongoDB because complete Mongo configuration is supplied. |
-| Unset / empty / whitespace | Both genuinely unset | **SQLite (default)** | **Default**: Zero-config startup defaults to local SQLite `auth.db`. |
-| Unset / empty / whitespace | Any other combination (e.g. set-blank, partial) | **Fatal Error** | Incomplete or malformed MongoDB configuration; fails startup with actionable diagnostic. |
-| Invalid string (e.g. `banana`) | Any | **Fatal Error** | Invalid boolean syntax; fails startup immediately. |
+| `DAM_HOPPER_LITE_MODE`         | `MONGODB_URI` & `MONGODB_DATABASE`              | Selected Backend        | Behavior / Contract                                                                      |
+| ------------------------------ | ----------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------- |
+| `true` / `1`                   | Any (including malformed, blank, or partial)    | **SQLite (explicit)**   | Forced SQLite; ignores MongoDB environment variables.                                    |
+| `false` / `0`                  | Both set and non-empty/non-whitespace           | **MongoDB (enforced)**  | Enforces MongoDB. Startup issues a bounded ping.                                         |
+| `false` / `0`                  | Either unset, empty, whitespace, or malformed   | **Fatal Error**         | Operator explicitly disabled lite mode but omitted valid Mongo config. Aborts startup.   |
+| Unset / empty / whitespace     | Both set and non-empty/non-whitespace           | **MongoDB (automatic)** | Auto-selects MongoDB because complete Mongo configuration is supplied.                   |
+| Unset / empty / whitespace     | Both genuinely unset                            | **SQLite (default)**    | **Default**: Zero-config startup defaults to local SQLite `auth.db`.                     |
+| Unset / empty / whitespace     | Any other combination (e.g. set-blank, partial) | **Fatal Error**         | Incomplete or malformed MongoDB configuration; fails startup with actionable diagnostic. |
+| Invalid string (e.g. `banana`) | Any                                             | **Fatal Error**         | Invalid boolean syntax; fails startup immediately.                                       |
 
 ### Configuration Semantics: Unset vs Set-Empty
 
@@ -104,10 +104,12 @@ DamHopper supports two production-grade authenticated storage backends within th
 **Validated deployment limit: exactly one server process per local auth file.**
 
 SQLite operates in WAL mode (`PRAGMA journal_mode = WAL`) and supports concurrent asynchronous read queries alongside serialized write transactions within a single server process. However:
+
 - Multiple DamHopper server processes sharing the same SQLite auth file on a single host or across hosts are **not supported**.
 - Network-shared filesystems (NFS, SMB, CIFS, GlusterFS) must **not** be used for `auth.db` due to POSIX advisory lock inconsistencies and WAL flush latency.
 - Clustered or load-balanced deployments with multiple API instances must use MongoDB.
 - Separate DamHopper server deployments or test instances must be configured with separate, dedicated SQLite database paths.
+
 ## Offline Administrator Provisioning Runbook
 
 ### Direct Account Provisioning (No Public Registration API)
@@ -120,29 +122,63 @@ Administrator and user accounts must be provisioned locally/offline on the host 
 
 When running locally on loopback (`127.0.0.1:4801` with default SQLite at `~/.config/dam-hopper/auth.db`):
 
-#### 1. Provision the Admin Account
+#### 1. Generate the MFA Encryption Key
+
+Generate a 32-byte MFA encryption key with owner-only (`0600`) permissions and configure `DAM_HOPPER_MFA_KEY_FILE`:
+
+```bash
+mkdir -p ~/.config/dam-hopper && chmod 700 ~/.config/dam-hopper
+[ ! -f ~/.config/dam-hopper/mfa-encryption.key ] && (umask 077 && openssl rand -hex 32 > ~/.config/dam-hopper/mfa-encryption.key)
+export DAM_HOPPER_MFA_KEY_FILE=~/.config/dam-hopper/mfa-encryption.key
+```
+
+#### 2. Provision the Admin Account
+
 Run the offline provisioning script:
+
 ```bash
 pnpm create-admin
 # Or pass arguments directly:
 node scripts/create-admin.mjs admin "ReplaceWithStrongPassword!"
 ```
+
 The script:
-- Initializes the SQLite database and schema if not yet present.
+
+- Initializes the SQLite database and schema if not yet present with secure file permissions (`0600`).
+- Validates database identity (`application_id` and schema version) and rejects foreign or insecure databases.
 - Validates that the username does not already exist.
 - Generates a 24-character hexadecimal ID and standard bcrypt hash.
 - Inserts the user as active (`is_enabled = 1`) with role `'admin'`.
-- Automatically creates a local 32-byte MFA encryption key (`~/.config/dam-hopper/mfa-encryption.key`) with `0600` permissions if missing.
 
-#### 2. Start DamHopper Server
+#### 3. Start DamHopper Server
+
 ```bash
-cargo run --bin dam-hopper-server -- --host 127.0.0.1 --port 4801
+DAM_HOPPER_MFA_KEY_FILE=~/.config/dam-hopper/mfa-encryption.key \
+  cargo run --manifest-path server/Cargo.toml --bin dam-hopper-server -- --host 127.0.0.1 --port 4801
 ```
 
-#### 3. Log In and Complete First-Time TOTP Setup
-1. Navigate to the Web UI or call `POST http://127.0.0.1:4801/api/auth/login` with your username and password.
-2. Because no TOTP factor is enrolled yet (`mfa_enrolled_at_ms` is `NULL`), the response returns `state: "enrollmentRequired"` with a challenge token.
-3. Scan the TOTP QR code with your authenticator app (Google Authenticator, 1Password, Authy) and submit the 6-digit verification code via `POST /api/auth/mfa/confirm` to finalize authentication.
+#### 4. Log In and Complete First-Time TOTP Setup
+
+1. Navigate to the Web UI or call `POST http://127.0.0.1:4801/api/auth/login` with your username and password:
+   ```bash
+   curl -s -X POST http://127.0.0.1:4801/api/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"username": "admin", "password": "ReplaceWithStrongPassword!"}'
+   ```
+2. Because no TOTP factor is enrolled yet (`mfa_enrolled_at_ms` is `NULL`), the response returns HTTP 200 with `state: "enrollmentRequired"` and a `challengeToken`.
+3. Call `POST /api/auth/mfa/setup` with the challenge token to retrieve the TOTP enrollment secret and URI (or view the QR code in the Web UI / via `GET /api/auth/mfa/enrollment-qr?token=<challengeToken>`):
+   ```bash
+   curl -s -X POST http://127.0.0.1:4801/api/auth/mfa/setup \
+     -H "Content-Type: application/json" \
+     -d '{"challengeToken": "<CHALLENGE_TOKEN>"}'
+   ```
+4. Scan the TOTP QR code or import the Base32 secret into your authenticator app (Google Authenticator, 1Password, Authy) and submit the 6-digit verification code via `POST /api/auth/mfa/confirm`:
+   ```bash
+   curl -s -X POST http://127.0.0.1:4801/api/auth/mfa/confirm \
+     -H "Content-Type: application/json" \
+     -d '{"challengeToken": "<CHALLENGE_TOKEN>", "code": "<6-DIGIT-CODE>"}'
+   ```
+   The response returns HTTP 200 with `state: "authenticated"` and your session token.
 
 ---
 
@@ -151,37 +187,47 @@ cargo run --bin dam-hopper-server -- --host 127.0.0.1 --port 4801
 On a production deployment (e.g. `dam-hopper-api.service` with SQLite at `/var/lib/dam-hopper/auth.db`):
 
 #### 1. Provision the Admin Account Offline as the API User
+
 Run `create-admin.mjs` pointing to the production database:
+
 ```bash
 sudo -u <API_USER> DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db \
   node scripts/create-admin.mjs <target-username> "ReplaceWithStrongPassword!"
 ```
+
 This writes the admin account directly to `/var/lib/dam-hopper/auth.db` preserving correct service-user ownership.
 
 #### 2. Ensure Production MFA Key is Configured
+
 Production authenticated mode requires a dedicated 32-byte MFA encryption key:
+
 ```bash
 openssl rand -hex 32 | sudo tee /etc/dam-hopper/mfa-encryption.key > /dev/null
 sudo chown <API_USER>:<API_GROUP> /etc/dam-hopper/mfa-encryption.key
 sudo chmod 600 /etc/dam-hopper/mfa-encryption.key
 ```
+
 Ensure `DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key` is present in `/etc/dam-hopper/server.env`.
 
 #### 3. First Login & TOTP Enrollment
+
 Log in from the host or through the secured reverse proxy; complete TOTP confirmation on first login.
+
 ### MongoDB Operator Procedure (`mongosh`)
 
 Connect via `mongosh` to the configured MongoDB database:
 
 #### 1. Inspect Pending Accounts
+
 ```javascript
 db.users.findOne(
   { username: "<target-username>" },
-  { _id: 1, username: 1, isEnabled: 1, role: 1, authVersion: 1 }
+  { _id: 1, username: 1, isEnabled: 1, role: 1, authVersion: 1 },
 );
 ```
 
 #### 2. Approve and Promote
+
 ```javascript
 const userId = ObjectId("<verified-24-hex-id>");
 const expectedVersion = NumberLong("<observed-authVersion>");
@@ -189,18 +235,20 @@ const expectedVersion = NumberLong("<observed-authVersion>");
 // Promote to admin
 db.users.updateOne(
   { _id: userId, authVersion: expectedVersion },
-  { $set: { isEnabled: true, role: "admin" } }
+  { $set: { isEnabled: true, role: "admin" } },
 );
 
 // Or approve as standard user
 db.users.updateOne(
   { _id: userId, authVersion: expectedVersion },
-  { $set: { isEnabled: true, role: "user" } }
+  { $set: { isEnabled: true, role: "user" } },
 );
 ```
+
 Require `matchedCount === 1` and `modifiedCount === 1`.
 
 After approval, the user's next login returns `enrollmentRequired` and prompts for TOTP MFA setup.
+
 ## JWT Signing Secret and Session Tokens
 
 `~/.config/dam-hopper/server-token` stores a 32-character hexadecimal UUIDv4
@@ -223,10 +271,12 @@ returned by `/api/auth/mfa/confirm` or `/api/auth/mfa/verify`, or the
 ### Key File Provisioning (`DAM_HOPPER_MFA_KEY_FILE`)
 
 In authenticated production mode, `DAM_HOPPER_MFA_KEY_FILE` is mandatory for both MongoDB and SQLite lite mode:
+
 - Contains exactly 32 raw bytes (or 64 hexadecimal characters / 44 Base64 characters).
 - File permissions must be strictly restricted to the owner (`chmod 600` on Unix). The server rejects symlinks, non-regular files, and files with group or world permissions.
 - Dedicated to encrypting confirmed and pending TOTP secrets at rest via AES-256-GCM.
 - Must be backed up separately from database files and deployed with identical contents across any server instance migrations.
+
 ### Operator Recovery Runbook (Lost TOTP Authenticator)
 
 This privileged reset is not self-service. Verify identity out of band; use
@@ -241,17 +291,22 @@ db.users.updateOne(
   { _id: userId, authVersion: expectedVersion },
   {
     $inc: { authVersion: NumberLong(1) },
-    $unset: { mfa: "", mfaAttemptWindowStartedAt: "", mfaAttemptCount: "", mfaBlockedUntil: "" }
-  }
+    $unset: {
+      mfa: "",
+      mfaAttemptWindowStartedAt: "",
+      mfaAttemptCount: "",
+      mfaBlockedUntil: "",
+    },
+  },
 );
 ```
 
 **Verification & Invariants:**
+
 1. Require `matchedCount === 1` and `modifiedCount === 1`; otherwise stop and re-read. Never retry blindly.
 2. The version bump invalidates sessions/challenges; `authSessions`/`authChallenges` TTL indexes clean later, so no direct deletion is needed for authorization.
 3. WebSockets/live streams poll state every 5s with a 2s DB cap (≤7s; smoke timeout 8s); restart/disconnect instances for immediate containment.
 4. Next password login requires fresh TOTP enrollment. Do not change `passwordHash`, `isEnabled`, `role`, signing keys/settings, or install an unencrypted factor/bypass.
-
 
 ### SQLite Operator Recovery Runbook (Lost TOTP Authenticator)
 
@@ -294,6 +349,7 @@ When a user loses their authenticator app or secret in SQLite lite mode, an oper
      ```
 
 **Verification & Invariants:**
+
 1. **Single Row Guarantee**: Only run `COMMIT;` after verifying `SELECT changes();` returned `1`. If it returned `0`, run `ROLLBACK;`, re-read `auth_users`, and do not retry blindly.
 2. **Immediate Invalidation via Version Bump**: The `auth_version` increment instantly invalidates all active sessions in `auth_sessions` and outstanding challenges in `auth_challenges`. Background sweeps clean up expired sessions; no manual row deletion is required.
 3. **Schema Constraint Compliance**: The `auth_users` table enforces a STRICT CHECK constraint requiring all 5 confirmed factor fields (`mfa_secret_ciphertext`, `mfa_nonce`, `mfa_key_id`, `mfa_enrolled_at_ms`, `mfa_last_accepted_step`) to be NULL simultaneously when MFA is cleared. Attempt rate-limiting fields are reset to clean defaults.
@@ -305,6 +361,7 @@ When a user loses their authenticator app or secret in SQLite lite mode, an oper
 ### SQLite WAL Consistent Backup Procedure
 
 In SQLite lite mode, DamHopper configures Write-Ahead Logging (`PRAGMA journal_mode = WAL`). While the server process is actively running:
+
 - The main database file (`auth.db`), write-ahead log (`auth.db-wal`), and shared-memory index (`auth.db-shm`) form a single atomic storage unit.
 - **Never** perform naive file copies (`cp auth.db backup/`) while the server is active, as this risks copying a file with uncheckpointed transactions and inconsistent page headers.
 
@@ -329,11 +386,13 @@ Both methods lock pages consistently without interrupting active HTTP or WebSock
 
 - **Independent Secret Backup**: The MFA encryption key (`DAM_HOPPER_MFA_KEY_FILE`) and the JWT signing token (`~/.config/dam-hopper/server-token`) must be backed up securely and stored separately from database file snapshots.
 - **Permissions**: Restored key files must maintain `chmod 600` permissions. If the key file is lost or destroyed, existing encrypted MFA secrets cannot be decrypted, requiring operator MFA resets for all enrolled users.
+
 ### Independent Backend State and Switching / Rollback
 
 - **No Data Migration**: Switching between MongoDB and SQLite lite mode does **not** transfer or synchronize user accounts, passwords, or session tokens.
 - **Independent Stores**: Each backend maintains its own independent datastore.
 - **Safe Rollback**: If an operator switches to SQLite and subsequently chooses to switch back to MongoDB (by removing `DAM_HOPPER_LITE_MODE=true`), the server seamlessly reconnects to the original MongoDB database, restoring access to all preexisting accounts and credentials intact.
+
 ## Historical Archive: Retired Plugin Platform
 
 The trusted plugin platform and external runner daemon (`dam-hopper-plugin-runner`) were decommissioned on 2026-10-02.

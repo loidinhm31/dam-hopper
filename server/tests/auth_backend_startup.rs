@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -454,4 +454,164 @@ async fn no_auth_bypasses_all_auth_storage() {
         !env.default_sqlite_path().exists(),
         "auth.db must not be created when running with --no-auth"
     );
+}
+
+#[tokio::test]
+async fn clean_install_provisioning_and_login_flow() {
+    let env = TestEnv::new();
+
+    // 1. Generate MFA key file in config directory with 0600 permissions
+    let key_path = env.home_dir().join(".config/dam-hopper/mfa-encryption.key");
+    fs::create_dir_all(key_path.parent().unwrap()).unwrap();
+    fs::write(
+        &key_path,
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    // 2. Run offline provisioning script targeting default auth.db via HOME/XDG environment
+    let script_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("scripts/create-admin.mjs");
+
+    let script_output = Command::new("node")
+        .arg(&script_path)
+        .arg("clean_admin")
+        .arg("CleanPassword123!")
+        .env("HOME", env.home_dir())
+        .env("XDG_CONFIG_HOME", env.home_dir().join(".config"))
+        .env_remove("DAM_HOPPER_AUTH_SQLITE_PATH")
+        .env_remove("DAM_HOPPER_LITE_MODE")
+        .env_remove("MONGODB_URI")
+        .env_remove("MONGODB_DATABASE")
+        .env_remove("DAM_HOPPER_MFA_KEY_FILE")
+        .output()
+        .expect("run create-admin script");
+
+    assert!(
+        script_output.status.success(),
+        "create-admin script failed: stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&script_output.stdout),
+        String::from_utf8_lossy(&script_output.stderr)
+    );
+
+    let default_db = env.default_sqlite_path();
+    assert!(default_db.exists(), "auth.db must exist after create-admin");
+
+    // 3. Start server with DAM_HOPPER_MFA_KEY_FILE configured
+    let mut cmd = env.base_command();
+    cmd.env("DAM_HOPPER_MFA_KEY_FILE", &key_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut guard = ChildGuard::new(cmd.spawn().expect("spawn server"));
+    let ready = env
+        .wait_for_ready(guard.child_mut(), Duration::from_secs(5))
+        .await;
+    assert!(ready, "Server failed to start after provisioning");
+
+    let client = reqwest::Client::new();
+
+    // 4. Submit credentials to POST /api/auth/login
+    let login_payload = serde_json::to_string(&serde_json::json!({
+        "username": "clean_admin",
+        "password": "CleanPassword123!"
+    }))
+    .unwrap();
+    let login_resp = client
+        .post(format!("http://127.0.0.1:{}/api/auth/login", env.port))
+        .header("content-type", "application/json")
+        .body(login_payload)
+        .send()
+        .await
+        .expect("send login request");
+
+    assert_eq!(login_resp.status(), reqwest::StatusCode::OK);
+    let login_text = login_resp.text().await.expect("read login text");
+    let login_body: serde_json::Value =
+        serde_json::from_str(&login_text).expect("parse login json");
+    assert_eq!(login_body["state"], "enrollmentRequired");
+    let challenge_token = login_body["challengeToken"]
+        .as_str()
+        .expect("challengeToken must be present")
+        .to_string();
+
+    // 5. Fetch MFA setup info using challenge token
+    let setup_payload = serde_json::to_string(&serde_json::json!({
+        "challengeToken": &challenge_token
+    }))
+    .unwrap();
+    let setup_resp = client
+        .post(format!("http://127.0.0.1:{}/api/auth/mfa/setup", env.port))
+        .header("content-type", "application/json")
+        .body(setup_payload)
+        .send()
+        .await
+        .expect("send mfa setup request");
+
+    assert_eq!(setup_resp.status(), reqwest::StatusCode::OK);
+    let setup_text = setup_resp.text().await.expect("read setup text");
+    let setup_body: serde_json::Value =
+        serde_json::from_str(&setup_text).expect("parse setup json");
+    let secret_base32 = setup_body["secret"]
+        .as_str()
+        .expect("secret base32 present");
+
+    // 6. Generate TOTP code from setup secret and confirm enrollment
+    let raw_secret = dam_hopper_server::auth::totp::TotpEngine::base32_to_secret(secret_base32)
+        .expect("decode base32 secret");
+    let totp = dam_hopper_server::auth::totp::TotpEngine::build_totp(
+        &raw_secret,
+        "clean_admin",
+        "DamHopper",
+    )
+    .expect("build totp generator");
+    let totp_code = totp.generate_current().to_string();
+
+    let confirm_payload = serde_json::to_string(&serde_json::json!({
+        "challengeToken": &challenge_token,
+        "code": totp_code
+    }))
+    .unwrap();
+    let confirm_resp = client
+        .post(format!(
+            "http://127.0.0.1:{}/api/auth/mfa/confirm",
+            env.port
+        ))
+        .header("content-type", "application/json")
+        .body(confirm_payload)
+        .send()
+        .await
+        .expect("send confirm request");
+
+    assert_eq!(confirm_resp.status(), reqwest::StatusCode::OK);
+    let confirm_text = confirm_resp.text().await.expect("read confirm text");
+    let confirm_body: serde_json::Value =
+        serde_json::from_str(&confirm_text).expect("parse confirm json");
+    assert_eq!(confirm_body["state"], "authenticated");
+    let session_token = confirm_body["token"]
+        .as_str()
+        .expect("session token present");
+
+    // 7. Verify session token against /api/auth/status
+    let status_resp = client
+        .get(format!("http://127.0.0.1:{}/api/auth/status", env.port))
+        .header("Authorization", format!("Bearer {session_token}"))
+        .send()
+        .await
+        .expect("send status request");
+
+    assert_eq!(status_resp.status(), reqwest::StatusCode::OK);
+    let status_text = status_resp.text().await.expect("read status text");
+    let status_body: serde_json::Value =
+        serde_json::from_str(&status_text).expect("parse status json");
+    assert_eq!(status_body["authenticated"], true);
+    assert_eq!(status_body["user"], "clean_admin");
+    assert_eq!(status_body["role"], "admin");
 }
