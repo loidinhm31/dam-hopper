@@ -16,6 +16,9 @@ import dev.damhopper.nativeapp.features.files.FileOperationOutcome
 import dev.damhopper.nativeapp.features.files.FileRepository
 import dev.damhopper.nativeapp.features.files.FileTreeState
 import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
+import dev.damhopper.nativeapp.features.git.GitWorkspaceState
+import dev.damhopper.nativeapp.features.git.GitWorkspaceRuntime
+import dev.damhopper.nativeapp.features.git.GitRefreshReason
 import dev.damhopper.nativeapp.features.settings.SettingsOwner
 import dev.damhopper.nativeapp.ui.screens.ObservableCommandHistory
 import dev.damhopper.nativeapp.ui.screens.PreferenceAccess
@@ -35,6 +38,7 @@ enum class WorkspacePanel {
     TERMINAL,
     FILES,
     EDITOR,
+    GIT,
 }
 
 /**
@@ -85,6 +89,16 @@ class ProjectWorkspaceState(
     var lifecycleCoordinator: LifecycleCoordinator? = null,
 ) : LifecycleAware {
 
+    val gitState: GitWorkspaceState = GitWorkspaceState()
+    var gitRuntime: GitWorkspaceRuntime? = null
+        private set
+
+    fun bindGitRuntime(runtime: GitWorkspaceRuntime): Boolean {
+        if (runtime.owner != owner) return false
+        if (runtime.connection.profileId != owner.profileId) return false
+        gitRuntime = runtime
+        return true
+    }
     var fileRepository: FileRepository = initialFileRepository
         private set
     var editorRepository: EditorRepository = initialEditorRepository
@@ -131,6 +145,9 @@ class ProjectWorkspaceState(
     fun selectPanel(panel: WorkspacePanel) {
         _activePanel.value = panel
         terminalState?.setPanelVisible(panel == WorkspacePanel.TERMINAL)
+        if (panel == WorkspacePanel.GIT) {
+            gitRuntime?.refresh(GitRefreshReason.ENTRY)
+        }
         updateInputGate()
     }
 
@@ -165,6 +182,9 @@ class ProjectWorkspaceState(
             try {
                 fileTreeState.resumeWatching()
             } catch (_: Throwable) {}
+        }
+        if (_activePanel.value == WorkspacePanel.GIT) {
+            gitRuntime?.refresh(GitRefreshReason.FOREGROUND)
         }
         updateInputGate()
     }
@@ -205,6 +225,8 @@ class ProjectWorkspaceState(
     fun revokeAuthority() {
         _isAuthorityRetired.value = true
         terminalState?.revokeAuthority()
+        gitRuntime?.revoke()
+        gitState.invalidateAuthority()
         spendPendingDeparture()
         updateInputGate()
     }
@@ -215,15 +237,16 @@ class ProjectWorkspaceState(
      */
     fun rebindAuthority(
         expectedOwner: WorkspaceFileOwner,
-        newConnection: ConnectionRef? = null,
+        newConnection: ConnectionRef,
     ): Boolean {
         if (expectedOwner != owner) {
             return false
         }
         _isAuthorityRetired.value = false
-        val conn = newConnection ?: owner.profileId?.let { ConnectionRef(it, 1L) }
-        if (conn != null) {
-            terminalState?.rebindAuthority(conn)
+        terminalState?.rebindAuthority(newConnection)
+        if (gitRuntime?.connection != newConnection) {
+            gitRuntime?.revoke()
+            gitRuntime = null
         }
         updateInputGate()
         return true
@@ -241,7 +264,14 @@ class ProjectWorkspaceState(
         fileRepository = newFileRepo
         editorRepository = newEditorRepo
         _isAuthorityRetired.value = false
-        terminalState?.rebindAuthority(newConnection)
+        editorTabsState.rebindRepository(newEditorRepo)
+        fileTreeState.rebindRepository(newFileRepo)
+        fileMutationCoordinator.rebindRepository(newFileRepo)
+        terminalState?.rebindTransports(newConnection, dev.damhopper.nativeapp.features.terminal.TerminalRepository(newFileRepo.apiClient, newFileRepo.wsConnection))
+        if (gitRuntime?.connection != newConnection) {
+            gitRuntime?.revoke()
+            gitRuntime = null
+        }
         updateInputGate()
         return true
     }
@@ -437,6 +467,8 @@ class ProjectWorkspaceState(
         updateInputGate()
         lifecycleCoordinator?.unregister(this)
         terminalState?.close()
+        gitRuntime?.close()
+        gitRuntime = null
         coroutineScope.cancel()
         fileTreeState.dispose()
         editorTabsState.closeAll()
@@ -479,6 +511,7 @@ class ProjectWorkspaceState(
                 projectName = target.project,
                 connectionRef = fileRepository.apiClient.connection,
                 ownerScope = coroutineScope,
+                owner = owner,
             )
             val created = ProjectWorkspaceState(
                 owner = owner,

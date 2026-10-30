@@ -24,6 +24,7 @@ sealed class LeasedPublishState {
 class LeasedPublishController(
     val repository: GitRepository,
     val coroutineScope: CoroutineScope,
+    val host: GitHostPorts,
 ) {
     private val _state = MutableStateFlow<LeasedPublishState>(LeasedPublishState.Idle)
     val state: StateFlow<LeasedPublishState> = _state.asStateFlow()
@@ -47,30 +48,27 @@ class LeasedPublishController(
         }
     }
 
-    fun prepareWithReceipt(receipt: SquashReceipt): Job {
+    fun revoke() {
+        cancel()
+        activeScope = null
+    }
+
+    fun prepareWithReceipt(receipt: RewriteReceipt): Job {
         val scope = activeScope
         if (scope == null || !receipt.scope.matches(scope)) {
             _state.value = LeasedPublishState.Error("Receipt scope does not match active operation scope")
             return coroutineScope.launch {}
         }
-        return prepare(receipt.branch, receipt.sourceOid)
-    }
-
-    fun prepare(branch: String, sourceOid: String): Job {
-        val scope = activeScope ?: run {
-            _state.value = LeasedPublishState.Error("No active operation scope")
-            return coroutineScope.launch {}
-        }
 
         activePrepareJob?.cancel()
-        expectedBranch = branch
-        expectedSourceOid = sourceOid
+        expectedBranch = receipt.branch
+        expectedSourceOid = receipt.sourceOid
         _state.value = LeasedPublishState.Preparing
 
         val job = coroutineScope.launch {
             try {
                 val req = PrepareLeasedPushRequest(
-                    branch = branch,
+                    branch = receipt.branch,
                     worktreePath = scope.worktreePath,
                     root = scope.root,
                 )
@@ -85,9 +83,9 @@ class LeasedPublishController(
                 }
 
                 val snap = preview.snapshot
-                if (snap.branch != branch || snap.sourceOid != sourceOid) {
+                if (snap.branch != receipt.branch || snap.sourceOid != receipt.sourceOid) {
                     _state.value = LeasedPublishState.Blocked(
-                        "Prepared snapshot mismatch: expected branch $branch at $sourceOid, got ${snap.branch} at ${snap.sourceOid}"
+                        "Prepared snapshot mismatch: expected branch ${receipt.branch} at ${receipt.sourceOid}, got ${snap.branch} at ${snap.sourceOid}"
                     )
                     return@launch
                 }
@@ -119,31 +117,70 @@ class LeasedPublishController(
             return coroutineScope.launch {}
         }
 
+        val impact = GitMutationImpact.PUBLICATION
         _state.value = LeasedPublishState.Publishing
 
         return coroutineScope.launch {
             try {
-                val req = PublishLeasedPushRequest(
-                    snapshot = snapshot,
-                    worktreePath = capturedScope.worktreePath,
-                    root = capturedScope.root,
-                )
-                val res = repository.publish.publishLeasedPush(capturedScope.project, req)
-                if (capturedScope.matches(activeScope)) {
-                    if (res.isPublished) {
-                        _state.value = LeasedPublishState.Success(res)
-                    } else if (res.isStaleRemote) {
-                        _state.value = LeasedPublishState.Blocked(
-                            "Remote reference changed concurrently (stale remote). Refresh history before retry."
+                val guardResult = host.withMutationGuard(capturedScope, impact, emptyList()) {
+                    val req = PublishLeasedPushRequest(
+                        snapshot = snapshot,
+                        worktreePath = capturedScope.worktreePath,
+                        root = capturedScope.root,
+                    )
+                    repository.publish.publishLeasedPush(capturedScope.project, req)
+                }
+                if (guardResult.isSuccess) {
+                    val res = guardResult.getOrThrow()
+                    val kind = if (res.isPublished) GitOutcomeKind.SUCCEEDED else GitOutcomeKind.REJECTED
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = capturedScope,
+                            impact = impact,
+                            kind = kind,
+                            paths = emptyList(),
+                            message = res.message,
                         )
-                    } else {
-                        _state.value = LeasedPublishState.Error(res.message ?: "Publication failed: ${res.status}")
+                    )
+                    if (capturedScope.matches(activeScope)) {
+                        if (res.isPublished) {
+                            _state.value = LeasedPublishState.Success(res)
+                        } else if (res.isStaleRemote) {
+                            _state.value = LeasedPublishState.Blocked(
+                                "Remote reference changed concurrently (stale remote). Refresh history before retry."
+                            )
+                        } else {
+                            _state.value = LeasedPublishState.Error(res.message ?: "Publication failed: ${res.status}")
+                        }
+                        onComplete(res)
                     }
-                    onComplete(res)
+                } else {
+                    val t = guardResult.exceptionOrNull()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = capturedScope,
+                            impact = impact,
+                            kind = GitOutcomeKind.REJECTED,
+                            paths = emptyList(),
+                            message = t?.message,
+                        )
+                    )
+                    if (capturedScope.matches(activeScope)) {
+                        _state.value = LeasedPublishState.Error(t?.message ?: "Publication rejected by safety guard")
+                    }
                 }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
+                host.onMutationOutcome(
+                    GitMutationEvent(
+                        scope = capturedScope,
+                        impact = impact,
+                        kind = GitOutcomeKind.UNKNOWN,
+                        paths = emptyList(),
+                        message = t.message,
+                    )
+                )
                 if (capturedScope.matches(activeScope)) {
                     _state.value = LeasedPublishState.Error(t.message ?: "Leased publish error")
                 }

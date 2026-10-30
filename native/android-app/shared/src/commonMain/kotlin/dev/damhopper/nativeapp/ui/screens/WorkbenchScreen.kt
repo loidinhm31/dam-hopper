@@ -117,6 +117,10 @@ import dev.damhopper.nativeapp.features.git.LeasedPublishController
 import dev.damhopper.nativeapp.features.git.GitPanelScreen
 import dev.damhopper.nativeapp.features.git.GitSyncController
 import dev.damhopper.nativeapp.features.git.GitOperationScope
+import dev.damhopper.nativeapp.features.workspace.ProjectWorkspaceState
+import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
+import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
+import dev.damhopper.nativeapp.features.profiles.AuthStatus
 import dev.damhopper.nativeapp.features.workflow.WorkflowRepository
 import dev.damhopper.nativeapp.features.workflow.WorkflowController
 import dev.damhopper.nativeapp.features.workflow.ProjectPlansRepository
@@ -145,6 +149,7 @@ import dev.damhopper.nativeapp.features.host.WorkbenchSleepConsentBanner
 
 @Composable
 fun WorkbenchScreen(
+    gitWorkspace: ProjectWorkspaceState,
     initialState: WorkbenchState = WorkbenchState(),
     profileRepository: ProfileRepository? = null,
     targetStore: ProjectTargetStore = remember { ProjectTargetStore() },
@@ -233,19 +238,10 @@ fun WorkbenchScreen(
     )
     var editorTabsState by remember { mutableStateOf<EditorTabsState?>(null) }
     var editorRepo by remember { mutableStateOf<EditorRepository?>(null) }
-    var diffController by remember { mutableStateOf<DiffReviewController?>(null) }
+    val diffController = gitWorkspace.gitRuntime?.diff
     var mergeController by remember { mutableStateOf<MergeConflictController?>(null) }
     val blameCache = remember { BlameCache() }
     var blameRepo by remember { mutableStateOf<BlameRepository?>(null) }
-    var gitRepo by remember { mutableStateOf<GitRepository?>(null) }
-    var gitHistoryController by remember { mutableStateOf<GitHistoryController?>(null) }
-    var gitChangesController by remember { mutableStateOf<GitChangesController?>(null) }
-    var gitBranchController by remember { mutableStateOf<GitBranchController?>(null) }
-    var gitWorktreeController by remember { mutableStateOf<WorktreeMutationController?>(null) }
-    var gitRewriteController by remember { mutableStateOf<GitRewriteActionController?>(null) }
-    var gitActionController by remember { mutableStateOf<GitHistoryActionController?>(null) }
-    var leasedPublishController by remember { mutableStateOf<LeasedPublishController?>(null) }
-    var gitSyncController by remember { mutableStateOf<GitSyncController?>(null) }
     var workflowRepo by remember { mutableStateOf<WorkflowRepository?>(null) }
     var workflowController by remember { mutableStateOf<WorkflowController?>(null) }
     var projectPlansRepo by remember { mutableStateOf<ProjectPlansRepository?>(null) }
@@ -325,12 +321,6 @@ fun WorkbenchScreen(
                     editorTabsState = null
                     editorRepo = null
                 }
-                val dCtrl = DiffReviewController(
-                    apiClient = client,
-                    targetStore = targetStore,
-                    isDirtyBufferProvider = { target, path -> editorTabsState?.isDirtyFile(target, path) ?: false },
-                    coroutineScope = coroutineScope
-                )
                 val mCtrl = MergeConflictController(
                     apiClient = client,
                     targetStore = targetStore,
@@ -341,37 +331,8 @@ fun WorkbenchScreen(
                     cache = blameCache,
                     coroutineScope = coroutineScope
                 )
-                diffController = dCtrl
                 mergeController = mCtrl
                 blameRepo = bRepo
-                val gRepo = GitRepository(client)
-                val gHistory = GitHistoryController(gRepo, coroutineScope)
-                val gChanges = GitChangesController(gRepo, coroutineScope)
-                val gBranch = GitBranchController(gRepo, coroutineScope)
-                val gWorktree = WorktreeMutationController(
-                    repository = gRepo,
-                    coroutineScope = coroutineScope,
-                    isTargetDirty = { target -> editorTabsState?.isDirtyTarget(target) ?: false },
-                    hasActiveTerminal = { target ->
-                        terminalSessions.any { it.project == target.project && it.worktreePath == target.worktreePath }
-                    },
-                    onActiveWorktreeRemoved = {
-                        targetStore.selectTarget(activeProfileId, workspaceStatus?.configPath, navState.activeProject, null)
-                    }
-                )
-                val gRewrite = GitRewriteActionController(gRepo, coroutineScope)
-                val gAction = GitHistoryActionController(gRepo, coroutineScope)
-                val lPublish = LeasedPublishController(gRepo, coroutineScope)
-                val gSync = GitSyncController(gRepo, coroutineScope)
-                gitRepo = gRepo
-                gitHistoryController = gHistory
-                gitChangesController = gChanges
-                gitBranchController = gBranch
-                gitWorktreeController = gWorktree
-                gitRewriteController = gRewrite
-                gitActionController = gAction
-                leasedPublishController = lPublish
-                gitSyncController = gSync
                 val wfRepo = WorkflowRepository(client)
                 val wfCtrl = WorkflowController(
                     repository = wfRepo,
@@ -492,18 +453,7 @@ fun WorkbenchScreen(
             editorRepo = null
             fileRepo = null
             activeApiClient = null
-            diffController = null
-            mergeController = null
-            blameRepo = null
-            gitRepo = null
-            gitHistoryController = null
-            gitChangesController = null
-            gitBranchController = null
-            gitWorktreeController = null
-            gitRewriteController = null
-            gitActionController = null
-            leasedPublishController = null
-            gitSyncController = null
+                // Git and diff controllers are retained by gitWorkspace
             workflowRepo = null
             workflowController = null
             projectPlansRepo = null
@@ -741,31 +691,22 @@ fun WorkbenchScreen(
         workspaceConfigPath = workspaceStatus?.configPath,
         project = navState.activeProject
     )
-    // Refresh Git controllers when active project, worktree, or profile changes
-    LaunchedEffect(gitRepo, currentActiveProj, snapshot.target.worktreePath) {
-        val client = activeApiClient ?: return@LaunchedEffect
-        val proj = currentActiveProj.takeIf { it.isNotBlank() && it != "Default Workspace" } ?: return@LaunchedEffect
-        val conn = client.connection
-        val scope = GitOperationScope(
-            profileId = conn.profileId,
-            generation = conn.generation,
-            project = proj,
-            worktreePath = snapshot.target.worktreePath,
-            root = null,
-        )
-        gitHistoryController?.updateScope(scope, null, null)
-        gitChangesController?.updateScope(scope)
-        gitBranchController?.updateScope(scope)
-        gitWorktreeController?.updateScope(scope)
-        gitRewriteController?.updateScope(scope)
-        gitActionController?.updateScope(scope)
-        leasedPublishController?.updateScope(scope)
-        gitSyncController?.updateScope(scope)
-        gitBranchController?.refreshBranches { branches ->
-            val active = branches.firstOrNull { it.isCurrent }
-            gitHistoryController?.updateScope(scope, active, active)
-        }
+    val currentScope: () -> GitOperationScope? = {
+        val client = activeApiClient
+        val proj = currentActiveProj.takeIf { it.isNotBlank() && it != "Default Workspace" }
+        val profile = activeProfile
+        val auth = profile?.let { authStatuses[it.id] } as? AuthStatus.Authenticated
+        if (client != null && proj != null && profile != null && auth != null) {
+            val owner = WorkspaceFileOwner.fromSession(
+                profile = profile,
+                authStatus = auth,
+                project = proj,
+                worktreePath = snapshot.target.worktreePath,
+            )
+            GitOperationScope.from(owner, client.connection, root = null)
+        } else null
     }
+    // Scope effects for gitWorkspace are managed by gitWorkspace.gitRuntime
     LaunchedEffect(currentActiveProj, snapshot.target.worktreePath, activeProfileId, activeApiClient) {
         val proj = currentActiveProj.takeIf { it.isNotBlank() && it != "Default Workspace" } ?: ""
         val client = activeApiClient
@@ -821,7 +762,9 @@ fun WorkbenchScreen(
                 if (current?.commitHash == null) {
                     val openPath = editorTabsState?.activeTab?.path ?: ""
                     if (openPath.isNotBlank() && current?.path != openPath) {
-                        diffController?.loadDiff(proj, snapshot.target, openPath)
+                        currentScope()?.let { sc ->
+                            diffController?.loadDiff(sc, openPath)
+                        }
                     }
                 }
             } else if (navState.activePanel == WorkbenchPanel.MERGE) {
@@ -1231,16 +1174,16 @@ fun WorkbenchScreen(
                                     tabsState = editorTabsState!!,
                                     blameRepo = blameRepo,
                                     onInspectCommit = { hash ->
-                                        val proj = navState.activeProject.takeIf { it != "Default Workspace" } ?: ""
                                         val activePath = editorTabsState?.activeTab?.path
-                                        if (proj.isNotBlank() && !activePath.isNullOrBlank()) {
-                                            diffController?.loadDiff(
-                                                project = proj,
-                                                target = snapshot.target,
-                                                path = activePath,
-                                                commitHash = hash
-                                            )
-                                            navigation.navigateTo(WorkbenchPanel.DIFF)
+                                        if (!activePath.isNullOrBlank()) {
+                                            currentScope()?.let { sc ->
+                                                diffController?.loadDiff(
+                                                    scope = sc,
+                                                    path = activePath,
+                                                    commitHash = hash,
+                                                )
+                                                navigation.navigateTo(WorkbenchPanel.DIFF)
+                                            }
                                         }
                                     },
                                     fontSize = workbenchPreferences.editorFontSize
@@ -1254,8 +1197,11 @@ fun WorkbenchScreen(
                                 // DiffReviewScreen(controller = diffController!!)
                                 DiffReviewScreen(
                                     controller = diffController!!,
-                                    onSaveModified = {
-                                        fileRepo?.let { repo -> coroutineScope.launch { diffController?.saveModified(repo) } }
+                                    onOpenInEditor = { path ->
+                                        coroutineScope.launch {
+                                            editorTabsState?.openTab(snapshot.target, path)
+                                        }
+                                        navigation.navigateTo(WorkbenchPanel.EDITOR)
                                     }
                                 )
                             } else {
@@ -1345,49 +1291,24 @@ fun WorkbenchScreen(
                             }
                         },
                         gitContent = {
-                            if (gitHistoryController != null && gitChangesController != null &&
-                                gitBranchController != null && gitWorktreeController != null &&
-                                gitRewriteController != null && gitActionController != null &&
-                                leasedPublishController != null && gitSyncController != null
-                            ) {
+                            val runtime = gitWorkspace.gitRuntime
+                            if (runtime != null) {
                                 GitPanelScreen(
-                                    historyController = gitHistoryController!!,
-                                    changesController = gitChangesController!!,
-                                    branchController = gitBranchController!!,
-                                    worktreeController = gitWorktreeController!!,
-                                    rewriteController = gitRewriteController!!,
-                                    actionController = gitActionController!!,
-                                    leasedController = leasedPublishController!!,
-                                    syncController = gitSyncController!!,
-                                    onOpenFileDiff = { path ->
-                                        val proj = navState.activeProject.takeIf { it != "Default Workspace" } ?: ""
-                                        if (proj.isNotBlank()) {
-                                            diffController?.loadDiff(
-                                                project = proj,
-                                                target = snapshot.target,
-                                                path = path,
-                                                commitHash = null
-                                            )
-                                            navigation.navigateTo(WorkbenchPanel.DIFF)
-                                        }
-                                    },
-                                    onMutationSuccess = {
-                                        val client = activeApiClient
-                                        if (client != null) {
-                                            coroutineScope.launch {
-                                                blameCache.advanceTargetEpoch(client.connection, snapshot.target)
-                                            }
-                                        }
-                                        gitChangesController?.refreshChanges()
-                                        gitBranchController?.refreshBranches()
-                                        val activePath = editorTabsState?.activeTab?.path ?: ""
-                                        if (activePath.isNotBlank()) {
-                                            diffController?.loadDiff(navState.activeProject, snapshot.target, activePath)
-                                        }
-                                    }
+                                    runtime = runtime,
+                                    state = gitWorkspace.gitState,
+                                    modifier = Modifier.fillMaxSize(),
                                 )
                             } else {
-                                GenericPanelPlaceholder(WorkbenchPanel.GIT)
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        "Git runtime unavailable",
+                                        style = DamHopperTypography.bodyMedium,
+                                        color = DamHopperColors.TextSecondary
+                                    )
+                                }
                             }
                         },
                         workflowContent = {

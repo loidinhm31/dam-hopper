@@ -1,45 +1,37 @@
 package dev.damhopper.nativeapp.features.git
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
-import kotlinx.coroutines.launch
 
 @Composable
 fun DiffReviewScreen(
     controller: DiffReviewController,
-    onSaveModified: (() -> Unit)? = null,
+    onOpenInEditor: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val coroutineScope = rememberCoroutineScope()
     val query by controller.activeQuery.collectAsState()
     val content by controller.diffContent.collectAsState()
     val layoutMode by controller.layoutMode.collectAsState()
     val diffRows by controller.diffRows.collectAsState()
     val currentHunk by controller.currentHunkIndex.collectAsState()
     val totalHunks by controller.totalHunks.collectAsState()
-    val isReadOnly by controller.isReadOnly.collectAsState()
-    val isDirty by controller.isModifiedDirty.collectAsState()
-    val modifiedDraft by controller.modifiedDraft.collectAsState()
     val isLoading by controller.isLoading.collectAsState()
     val errorMsg by controller.errorMessage.collectAsState()
-    var isEditing by remember { mutableStateOf(false) }
+
     Column(modifier = modifier.fillMaxSize().background(DamHopperColors.Background)) {
-        // Diff Top Action Toolbar (Zero FABs)
+        // Diff Top Action Toolbar (Zero FABs, read-only)
         Row(
             modifier = Modifier.fillMaxWidth().background(DamHopperColors.Surface)
                 .horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp),
@@ -88,35 +80,17 @@ fun DiffReviewScreen(
                 color = DamHopperColors.TextSecondary
             )
 
-            if (!isReadOnly) {
-                Spacer(modifier = Modifier.width(6.dp))
-                Button(
-                    onClick = { isEditing = !isEditing },
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = if (isEditing) DamHopperColors.Primary else DamHopperColors.SurfaceVariant)
-                ) {
-                    Text(if (isEditing) "Done" else "Edit", fontSize = 11.sp, color = if (isEditing) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary)
-                }
-                Spacer(modifier = Modifier.width(4.dp))
-                Button(
-                    onClick = { coroutineScope.launch { controller.discardHunk(currentHunk) } },
-                    enabled = totalHunks > 0 && !isDirty,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Error)
-                ) {
-                    Text("Revert Hunk", fontSize = 11.sp, color = DamHopperColors.TextPrimary)
-                }
-                if (isDirty && onSaveModified != null) {
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Button(
-                        onClick = { onSaveModified() },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Success)
-                    ) {
-                        Text("Save", fontSize = 11.sp, color = DamHopperColors.TextPrimary)
-                    }
-                }
-            } else if (query?.commitHash != null) {
+            Spacer(modifier = Modifier.width(6.dp))
+            Button(
+                onClick = { query?.path?.let(onOpenInEditor) },
+                enabled = query?.path != null,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary)
+            ) {
+                Text("Open in Editor", fontSize = 11.sp, color = DamHopperColors.TextPrimary)
+            }
+
+            if (query?.commitHash != null) {
                 Spacer(modifier = Modifier.width(6.dp))
                 Button(
                     onClick = { controller.exitCommitDiff() },
@@ -142,24 +116,38 @@ fun DiffReviewScreen(
             }
         }
 
-        // Diff lines viewer
-        if (content == null && !isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No file diff loaded.\nSelect a file or commit to review diff.", style = DamHopperTypography.bodyMedium, color = DamHopperColors.TextSecondary)
+        // Diff content viewer
+        when {
+            content == null && !isLoading -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        "No file diff loaded.\nSelect a file or commit to review diff.",
+                        style = DamHopperTypography.bodyMedium,
+                        color = DamHopperColors.TextSecondary
+                    )
+                }
             }
-        } else if (isEditing && !isReadOnly) {
-            TextField(
-                value = modifiedDraft,
-                onValueChange = { controller.updateModifiedDraft(it) },
-                modifier = Modifier.fillMaxSize(),
-                textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = DamHopperColors.TextPrimary),
-                colors = TextFieldDefaults.colors(focusedContainerColor = DamHopperColors.Background, unfocusedContainerColor = DamHopperColors.Background)
-            )
-        } else {
-            val horizScroll = rememberScrollState()
-            LazyColumn(modifier = Modifier.fillMaxSize().horizontalScroll(horizScroll)) {
-                itemsIndexed(diffRows) { _, row ->
-                    DiffRowItem(row, layoutMode)
+            content?.isBinary == true -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Binary file cannot be displayed inline.", style = DamHopperTypography.bodyMedium, color = DamHopperColors.TextSecondary)
+                }
+            }
+            content != null && content!!.original != null && content!!.modified == null -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("File was deleted.", style = DamHopperTypography.bodyMedium, color = DamHopperColors.Error)
+                }
+            }
+            content != null && diffRows.isEmpty() && !isLoading -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("No differences found.", style = DamHopperTypography.bodyMedium, color = DamHopperColors.TextSecondary)
+                }
+            }
+            else -> {
+                val horizScroll = rememberScrollState()
+                LazyColumn(modifier = Modifier.fillMaxSize().horizontalScroll(horizScroll)) {
+                    itemsIndexed(diffRows) { _, row ->
+                        DiffRowItem(row, layoutMode)
+                    }
                 }
             }
         }

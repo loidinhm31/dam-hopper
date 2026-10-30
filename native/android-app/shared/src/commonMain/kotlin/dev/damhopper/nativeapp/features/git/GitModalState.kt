@@ -14,4 +14,5 @@ data class GitModalState(
     val showAddWorktreeDialog: Boolean = false,
     val removeWorktreeTarget: Pair<ProjectWorktree, WorktreeRemovalPrecheck>? = null,
     val actionErrorResult: GitActionResult? = null,
+    val capturedScope: GitOperationScope? = null,
 )

@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 class GitBranchController(
     val repository: GitRepository,
     val coroutineScope: CoroutineScope,
+    val host: GitHostPorts,
 ) {
     private val _branches = MutableStateFlow<List<GitBranch>>(emptyList())
     val branches: StateFlow<List<GitBranch>> = _branches.asStateFlow()
@@ -38,6 +39,17 @@ class GitBranchController(
         if (changed) {
             refreshBranches()
         }
+    }
+    fun clearScope() {
+        activeScope = null
+        activeJob?.cancel()
+        _branches.value = emptyList()
+        _error.value = null
+        _isLoading.value = false
+    }
+
+    fun revoke() {
+        clearScope()
     }
 
     fun refreshBranches(onLoaded: ((List<GitBranch>) -> Unit)? = null): Job {
@@ -73,21 +85,57 @@ class GitBranchController(
         val scope = activeScope ?: return coroutineScope.launch {
             onResult(GitActionResult(ok = false, message = "No active scope"))
         }
+        val impact = if (checkout) GitMutationImpact.FILES else GitMutationImpact.REFS
         return coroutineScope.launch {
             try {
-                val req = CreateBranchRequest(
-                    name = name,
-                    startPoint = startPoint,
-                    checkout = checkout,
-                    worktreePath = scope.worktreePath,
-                    root = scope.root,
-                )
-                val res = repository.branchWorktree.createBranch(scope.project, req)
-                if (res.ok && scope.matches(activeScope)) refreshBranches()
-                onResult(res)
+                val guardResult = host.withMutationGuard(scope, impact, emptyList()) {
+                    val req = CreateBranchRequest(
+                        name = name,
+                        startPoint = startPoint,
+                        checkout = checkout,
+                        worktreePath = scope.worktreePath,
+                        root = scope.root,
+                    )
+                    repository.branchWorktree.createBranch(scope.project, req)
+                }
+                if (guardResult.isSuccess) {
+                    val res = guardResult.getOrThrow()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = impact,
+                            kind = if (res.ok) GitOutcomeKind.SUCCEEDED else GitOutcomeKind.REJECTED,
+                            paths = emptyList(),
+                            message = res.message,
+                        )
+                    )
+                    if (res.ok && scope.matches(activeScope)) refreshBranches()
+                    onResult(res)
+                } else {
+                    val t = guardResult.exceptionOrNull()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = impact,
+                            kind = GitOutcomeKind.REJECTED,
+                            paths = emptyList(),
+                            message = t?.message,
+                        )
+                    )
+                    onResult(GitActionResult(ok = false, message = t?.message ?: "Failed to create branch"))
+                }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
+                host.onMutationOutcome(
+                    GitMutationEvent(
+                        scope = scope,
+                        impact = impact,
+                        kind = GitOutcomeKind.UNKNOWN,
+                        paths = emptyList(),
+                        message = t.message,
+                    )
+                )
                 onResult(GitActionResult(ok = false, message = t.message ?: "Failed to create branch"))
             }
         }
@@ -101,20 +149,56 @@ class GitBranchController(
         val scope = activeScope ?: return coroutineScope.launch {
             onResult(GitActionResult(ok = false, message = "No active scope"))
         }
+        val impact = GitMutationImpact.FILES
         return coroutineScope.launch {
             try {
-                val req = CheckoutBranchRequest(
-                    branch = branchName,
-                    strategy = strategy,
-                    worktreePath = scope.worktreePath,
-                    root = scope.root,
-                )
-                val res = repository.branchWorktree.checkoutBranch(scope.project, req)
-                if (res.ok && scope.matches(activeScope)) refreshBranches()
-                onResult(res)
+                val guardResult = host.withMutationGuard(scope, impact, emptyList()) {
+                    val req = CheckoutBranchRequest(
+                        branch = branchName,
+                        strategy = strategy,
+                        worktreePath = scope.worktreePath,
+                        root = scope.root,
+                    )
+                    repository.branchWorktree.checkoutBranch(scope.project, req)
+                }
+                if (guardResult.isSuccess) {
+                    val res = guardResult.getOrThrow()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = impact,
+                            kind = if (res.ok) GitOutcomeKind.SUCCEEDED else GitOutcomeKind.REJECTED,
+                            paths = emptyList(),
+                            message = res.message,
+                        )
+                    )
+                    if (res.ok && scope.matches(activeScope)) refreshBranches()
+                    onResult(res)
+                } else {
+                    val t = guardResult.exceptionOrNull()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = impact,
+                            kind = GitOutcomeKind.REJECTED,
+                            paths = emptyList(),
+                            message = t?.message,
+                        )
+                    )
+                    onResult(GitActionResult(ok = false, message = t?.message ?: "Failed to checkout branch"))
+                }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
+                host.onMutationOutcome(
+                    GitMutationEvent(
+                        scope = scope,
+                        impact = impact,
+                        kind = GitOutcomeKind.UNKNOWN,
+                        paths = emptyList(),
+                        message = t.message,
+                    )
+                )
                 onResult(GitActionResult(ok = false, message = t.message ?: "Failed to checkout branch"))
             }
         }
@@ -127,19 +211,55 @@ class GitBranchController(
         val scope = activeScope ?: return coroutineScope.launch {
             onResult(GitActionResult(ok = false, message = "No active scope"))
         }
+        val impact = GitMutationImpact.REFS
         return coroutineScope.launch {
             try {
-                val req = DeleteBranchRequest(
-                    name = branchName,
-                    worktreePath = scope.worktreePath,
-                    root = scope.root,
-                )
-                val res = repository.branchWorktree.deleteBranch(scope.project, req)
-                if (res.ok && scope.matches(activeScope)) refreshBranches()
-                onResult(res)
+                val guardResult = host.withMutationGuard(scope, impact, emptyList()) {
+                    val req = DeleteBranchRequest(
+                        name = branchName,
+                        worktreePath = scope.worktreePath,
+                        root = scope.root,
+                    )
+                    repository.branchWorktree.deleteBranch(scope.project, req)
+                }
+                if (guardResult.isSuccess) {
+                    val res = guardResult.getOrThrow()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = impact,
+                            kind = if (res.ok) GitOutcomeKind.SUCCEEDED else GitOutcomeKind.REJECTED,
+                            paths = emptyList(),
+                            message = res.message,
+                        )
+                    )
+                    if (res.ok && scope.matches(activeScope)) refreshBranches()
+                    onResult(res)
+                } else {
+                    val t = guardResult.exceptionOrNull()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = impact,
+                            kind = GitOutcomeKind.REJECTED,
+                            paths = emptyList(),
+                            message = t?.message,
+                        )
+                    )
+                    onResult(GitActionResult(ok = false, message = t?.message ?: "Failed to delete branch"))
+                }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
+                host.onMutationOutcome(
+                    GitMutationEvent(
+                        scope = scope,
+                        impact = impact,
+                        kind = GitOutcomeKind.UNKNOWN,
+                        paths = emptyList(),
+                        message = t.message,
+                    )
+                )
                 onResult(GitActionResult(ok = false, message = t.message ?: "Failed to delete branch"))
             }
         }
@@ -152,19 +272,55 @@ class GitBranchController(
         val scope = activeScope ?: return coroutineScope.launch {
             onResult(BranchUpdateResult(branch = branchName ?: "", success = false, reason = "No active scope"))
         }
+        val impact = GitMutationImpact.REFS
         return coroutineScope.launch {
             try {
-                val req = UpdateBranchRequest(
-                    branch = branchName,
-                    worktreePath = scope.worktreePath,
-                    root = scope.root,
-                )
-                val res = repository.branchWorktree.updateBranch(scope.project, req)
-                if (res.success && scope.matches(activeScope)) refreshBranches()
-                onResult(res)
+                val guardResult = host.withMutationGuard(scope, impact, emptyList()) {
+                    val req = UpdateBranchRequest(
+                        branch = branchName,
+                        worktreePath = scope.worktreePath,
+                        root = scope.root,
+                    )
+                    repository.branchWorktree.updateBranch(scope.project, req)
+                }
+                if (guardResult.isSuccess) {
+                    val res = guardResult.getOrThrow()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = impact,
+                            kind = if (res.success) GitOutcomeKind.SUCCEEDED else GitOutcomeKind.REJECTED,
+                            paths = emptyList(),
+                            message = res.reason,
+                        )
+                    )
+                    if (res.success && scope.matches(activeScope)) refreshBranches()
+                    onResult(res)
+                } else {
+                    val t = guardResult.exceptionOrNull()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = impact,
+                            kind = GitOutcomeKind.REJECTED,
+                            paths = emptyList(),
+                            message = t?.message,
+                        )
+                    )
+                    onResult(BranchUpdateResult(branch = branchName ?: "", success = false, reason = t?.message))
+                }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
+                host.onMutationOutcome(
+                    GitMutationEvent(
+                        scope = scope,
+                        impact = impact,
+                        kind = GitOutcomeKind.UNKNOWN,
+                        paths = emptyList(),
+                        message = t.message,
+                    )
+                )
                 onResult(BranchUpdateResult(branch = branchName ?: "", success = false, reason = t.message))
             }
         }

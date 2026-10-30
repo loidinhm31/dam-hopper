@@ -216,7 +216,7 @@ class ProjectWorkspaceStateTest {
         state.revokeAuthority()
         assertTrue(state.isAuthorityRetired.value)
 
-        val success = state.rebindAuthority(state.owner)
+        val success = state.rebindAuthority(state.owner, ConnectionRef(state.owner.profileId ?: "prof-test", 2L))
         assertTrue(success)
         assertFalse(state.isAuthorityRetired.value)
     }
@@ -227,7 +227,7 @@ class ProjectWorkspaceStateTest {
         state.revokeAuthority()
 
         val otherOwner = state.owner.copy(accountUser = "bob")
-        val success = state.rebindAuthority(otherOwner)
+        val success = state.rebindAuthority(otherOwner, ConnectionRef(state.owner.profileId ?: "prof-test", 2L))
         assertFalse(success, "Rebinding to different user must be rejected")
         assertTrue(state.isAuthorityRetired.value)
     }

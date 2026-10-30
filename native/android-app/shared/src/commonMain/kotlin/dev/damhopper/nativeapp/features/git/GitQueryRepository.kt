@@ -99,13 +99,13 @@ class GitQueryRepository(
         project: String,
         worktreePath: String? = null,
         root: String? = null,
-    ): GitDiffSummary {
+    ): GitDiffResponse {
         val encodedProject = ApiClient.encodePathSegment(project)
         val params = mutableMapOf<String, String>()
         worktreePath?.let { params["worktreePath"] = it }
         root?.let { params["root"] = it }
         val text = apiClient.get("/api/git/$encodedProject/diff", params)
-        return ProtocolJson.decodeFromString(GitDiffSummary.serializer(), text)
+        return ProtocolJson.decodeFromString(GitDiffResponse.serializer(), text)
     }
 
     suspend fun getUntracked(
@@ -114,7 +114,7 @@ class GitQueryRepository(
         offset: Int = 0,
         limit: Int = 500,
         root: String? = null,
-    ): List<DiffFileEntry> {
+    ): GitDiffResponse {
         val encodedProject = ApiClient.encodePathSegment(project)
         val params = mutableMapOf(
             "offset" to offset.toString(),
@@ -123,7 +123,35 @@ class GitQueryRepository(
         worktreePath?.let { params["worktreePath"] = it }
         root?.let { params["root"] = it }
         val text = apiClient.get("/api/git/$encodedProject/untracked", params)
-        return ProtocolJson.decodeFromString(ListSerializer(DiffFileEntry.serializer()), text)
+        return ProtocolJson.decodeFromString(GitDiffResponse.serializer(), text)
+    }
+
+    suspend fun getConflicts(
+        project: String,
+        worktreePath: String? = null,
+        root: String? = null,
+        cursor: String? = null,
+    ): GitConflictSummary {
+        val encodedProject = ApiClient.encodePathSegment(project)
+        val params = mutableMapOf<String, String>()
+        worktreePath?.let { params["worktreePath"] = it }
+        root?.let { params["root"] = it }
+        cursor?.let { params["cursor"] = it }
+        val text = apiClient.get("/api/git/$encodedProject/conflicts", params)
+        return ProtocolJson.decodeFromString(GitConflictSummary.serializer(), text)
+    }
+
+    suspend fun getOperation(
+        project: String,
+        worktreePath: String? = null,
+        root: String? = null,
+    ): GitOperationStatus {
+        val encodedProject = ApiClient.encodePathSegment(project)
+        val params = mutableMapOf<String, String>()
+        worktreePath?.let { params["worktreePath"] = it }
+        root?.let { params["root"] = it }
+        val text = apiClient.get("/api/git/$encodedProject/operation", params)
+        return ProtocolJson.decodeFromString(GitOperationStatus.serializer(), text)
     }
 
     suspend fun getFileDiff(

@@ -1,11 +1,13 @@
 package dev.damhopper.nativeapp.ui.flow
 
+import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-
 class AppFlowNavigationTest {
 
     @Test
@@ -442,5 +444,82 @@ class AppFlowNavigationTest {
         assertEquals("TERMINAL", nav.closeSettings()?.panel)
         assertEquals("proj-1", nav.state.value.activeProject)
         assertNull(nav.state.value.settings)
+    }
+
+    @Test
+    fun testRequestWorkspaceTargetGuardedAndRevalidated() = runTest {
+        val nav = AppFlowNavigation()
+        nav.onProfileAuthenticated("server-A")
+        nav.selectProject("proj-1")
+
+        var guardProceed: (() -> Unit)? = null
+        var guardCancel: (() -> Unit)? = null
+        nav.departureGuard = { req ->
+            guardProceed = req.onProceed
+            guardCancel = req.onCancelled
+            true
+        }
+
+        val target = ProjectTargetRef("server-A", "proj-2", null)
+        var committed = false
+        var revalidated = false
+
+        // Launch switch to proj-2
+        val job = async {
+            nav.requestWorkspaceTarget(
+                target = target,
+                revalidate = {
+                    revalidated = true
+                    true
+                },
+                onCommitted = { committed = true }
+            )
+        }
+
+        // Before guard confirmation: not committed
+        testScheduler.runCurrent()
+        assertFalse(committed)
+        assertEquals("proj-1", nav.state.value.activeProject)
+
+        // Confirm departure
+        guardProceed!!.invoke()
+        testScheduler.runCurrent()
+        val result = job.await()
+        assertTrue(result.isSuccess)
+        assertTrue(revalidated)
+        assertTrue(committed)
+        assertEquals("proj-2", nav.state.value.activeProject)
+    }
+
+    @Test
+    fun testRequestWorkspaceTargetCancelledDoesNotCommit() = runTest {
+        val nav = AppFlowNavigation()
+        nav.onProfileAuthenticated("server-A")
+        nav.selectProject("proj-1")
+
+        var guardCancel: (() -> Unit)? = null
+        nav.departureGuard = { req ->
+            guardCancel = req.onCancelled
+            true
+        }
+
+        val target = ProjectTargetRef("server-A", "proj-2", null)
+        var committed = false
+
+        val job = async {
+            nav.requestWorkspaceTarget(
+                target = target,
+                revalidate = { true },
+                onCommitted = { committed = true }
+            )
+        }
+        testScheduler.runCurrent()
+        // Cancel departure
+        guardCancel!!.invoke()
+        testScheduler.runCurrent()
+        val result = job.await()
+        assertTrue(result.isFailure)
+        assertFalse(committed)
+        assertEquals("proj-1", nav.state.value.activeProject)
     }
 }

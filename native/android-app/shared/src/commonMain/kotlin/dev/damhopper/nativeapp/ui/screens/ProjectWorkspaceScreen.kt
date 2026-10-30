@@ -61,6 +61,7 @@ import dev.damhopper.nativeapp.features.files.FileOperationOutcome
 import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
 import dev.damhopper.nativeapp.ui.components.TerminalAgentsContext
 import dev.damhopper.nativeapp.features.files.FocusedFilesExplorerScreen
+import dev.damhopper.nativeapp.features.git.GitPanelScreen
 import dev.damhopper.nativeapp.features.settings.WorkbenchPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import dev.damhopper.nativeapp.features.terminal.TerminalRepository
@@ -71,6 +72,7 @@ import dev.damhopper.nativeapp.features.workspace.WorkspaceDepartureIntent
 import dev.damhopper.nativeapp.features.workspace.WorkspacePanel
 import dev.damhopper.nativeapp.ui.flow.AppFlowNavigation
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
+import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
 import dev.damhopper.nativeapp.ui.theme.JetBrainsMonoFontFamily
 import kotlinx.coroutines.launch
 
@@ -145,6 +147,16 @@ fun ProjectWorkspaceScreen(
     // A compact Agents sheet consumes route controls: nothing routes under it.
     val routeLocked = agents?.host?.compactSheetOpen == true
 
+    DisposableEffect(activePanel, routeLocked) {
+        val unregister = if (activePanel == WorkspacePanel.GIT && !routeLocked) {
+            navigation.registerBackInterceptor {
+                workspaceState.gitState.back()
+            }
+        } else null
+        onDispose {
+            unregister?.invoke()
+        }
+    }
     // Register departure guard with flow navigation
     DisposableEffect(navigation, workspaceState) {
         navigation.departureGuard = { request ->
@@ -198,8 +210,12 @@ fun ProjectWorkspaceScreen(
                         .border(BorderStroke(1.dp, DamHopperColors.Border), RoundedCornerShape(6.dp))
                         .background(DamHopperColors.SurfaceVariant.copy(alpha = 0.7f))
                         .clickable {
-                            if (!routeLocked && !navigation.handleBackPress()) {
-                                // Handled by system or departure guard
+                            if (!routeLocked) {
+                                if (activePanel == WorkspacePanel.GIT && workspaceState.gitState.back()) {
+                                    // Consumed by Git back
+                                } else if (!navigation.handleBackPress()) {
+                                    // Handled by system or departure guard
+                                }
                             }
                         }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
@@ -254,6 +270,12 @@ fun ProjectWorkspaceScreen(
                     isSelected = activePanel == WorkspacePanel.EDITOR,
                     badgeCount = tabs.size,
                     onClick = { if (!routeLocked) workspaceState.selectPanel(WorkspacePanel.EDITOR) }
+                )
+
+                PanelTabButton(
+                    label = "Git",
+                    isSelected = activePanel == WorkspacePanel.GIT,
+                    onClick = { if (!routeLocked) workspaceState.selectPanel(WorkspacePanel.GIT) }
                 )
             }
         }
@@ -397,6 +419,28 @@ fun ProjectWorkspaceScreen(
                                     modifier = Modifier.fillMaxSize(),
                                 )
                             }
+                        }
+                    }
+                }
+
+                WorkspacePanel.GIT -> {
+                    val gitRuntime = workspaceState.gitRuntime
+                    if (gitRuntime != null) {
+                        GitPanelScreen(
+                            runtime = gitRuntime,
+                            state = workspaceState.gitState,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Git runtime unavailable",
+                                style = DamHopperTypography.bodyMedium,
+                                color = DamHopperColors.TextSecondary
+                            )
                         }
                     }
                 }

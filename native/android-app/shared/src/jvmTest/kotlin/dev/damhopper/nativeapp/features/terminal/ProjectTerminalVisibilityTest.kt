@@ -4,6 +4,8 @@ import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.features.settings.InMemoryPreferencesStore
 import dev.damhopper.nativeapp.ui.screens.ProjectTerminalState
 import dev.damhopper.nativeapp.ui.screens.QueuedWrite
+import dev.damhopper.nativeapp.ui.screens.TerminalBindingToken
+import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -145,6 +147,14 @@ class ProjectTerminalVisibilityTest {
         }
 
         // Submit queued write through writeChannel
+        val token = TerminalBindingToken(
+            owner = WorkspaceFileOwner("prof-1", "http://127.0.0.1", "dev-user", "test-project"),
+            connectionRef = state.connectionRef,
+            repositoryIdentity = 1,
+            controllerId = "sess-1",
+            controllerIncarnation = 1L,
+            surfaceEpoch = 1L,
+        )
         state.writeChannel.send(
             QueuedWrite(
                 sessionId = "sess-1",
@@ -152,6 +162,7 @@ class ProjectTerminalVisibilityTest {
                 bytes = "ls\n".encodeToByteArray(),
                 epoch = state.activeSessionEpoch,
                 incarnation = 1L,
+                bindingToken = token,
                 commandText = "ls",
                 onResult = { ok, uncertain, error ->
                     writeSuccess = ok

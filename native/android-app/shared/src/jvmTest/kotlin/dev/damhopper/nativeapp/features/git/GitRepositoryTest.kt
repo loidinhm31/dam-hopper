@@ -103,6 +103,55 @@ class GitRepositoryTest {
     }
 
     @Test
+    fun testGetDiffSummaryAndUntracked() = runTest {
+        server!!.createContext("/api/git/test-proj/diff") { exchange ->
+            val json = """{"entries":[{"path":"README.md","status":"modified","staged":false,"additions":1,"deletions":0}],"untrackedTruncated":false,"untrackedTotal":0}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/git/test-proj/untracked") { exchange ->
+            val json = """{"entries":[{"path":"new.txt","status":"added","staged":false,"additions":0,"deletions":0}],"untrackedTruncated":false,"untrackedTotal":1}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+
+        val repo = createRepository()
+        val diff = repo.getDiffSummary("test-proj")
+        assertEquals(1, diff.entries.size)
+        assertEquals("README.md", diff.entries[0].path)
+        assertEquals(1, diff.entries[0].additions)
+
+        val untracked = repo.getUntracked("test-proj")
+        assertEquals(1, untracked.entries.size)
+        assertEquals("new.txt", untracked.entries[0].path)
+        assertEquals(1, untracked.untrackedTotal)
+    }
+
+    @Test
+    fun testGetConflictsAndOperation() = runTest {
+        server!!.createContext("/api/git/test-proj/conflicts") { exchange ->
+            val json = """{"targetRevision":"rev-1","entries":[{"conflictId":"c1","path":"conflict.txt","status":"bothModified","isBinary":false}],"truncated":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/git/test-proj/operation") { exchange ->
+            val json = """{"operation":"merge","canContinue":false,"canAbort":true,"operationFingerprint":"op1","fullIndexFingerprint":"idx1","blockers":["conflict"]}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+
+        val repo = createRepository()
+        val conflicts = repo.getConflicts("test-proj")
+        assertEquals("rev-1", conflicts.targetRevision)
+        assertEquals("c1", conflicts.entries[0].conflictId)
+
+        val op = repo.getOperation("test-proj")
+        assertEquals("merge", op.operation)
+        assertTrue(op.canAbort)
+        assertFalse(op.canContinue)
+    }
+
+    @Test
     fun testGitNotInitialized409Propagates() = runTest {
         server!!.createContext("/api/git/non-git-proj/branches") { exchange ->
             val json = """{"error":"Git is not initialized for this project","code":"GIT_NOT_INITIALIZED"}"""

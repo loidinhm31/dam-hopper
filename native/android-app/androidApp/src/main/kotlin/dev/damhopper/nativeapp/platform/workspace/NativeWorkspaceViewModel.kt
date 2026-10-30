@@ -72,6 +72,14 @@ import dev.damhopper.nativeapp.features.workspace.ProjectTargetStore
 import dev.damhopper.nativeapp.features.workspace.ProjectWorkspaceState
 import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 import dev.damhopper.nativeapp.features.workspace.WorkspaceRepository
+import dev.damhopper.nativeapp.features.workspace.DocumentId
+import dev.damhopper.nativeapp.features.workspace.ProjectWorktree
+import dev.damhopper.nativeapp.features.git.GitOperationScope
+import dev.damhopper.nativeapp.features.git.WorktreeRemovalPrecheck
+import dev.damhopper.nativeapp.features.git.GitHostPorts
+import dev.damhopper.nativeapp.features.git.GitWorkspaceRuntime
+import dev.damhopper.nativeapp.features.git.GitRepository
+import dev.damhopper.nativeapp.features.git.WorkspaceGitSafety
 import dev.damhopper.nativeapp.platform.editor.AndroidEditorDocumentFactory
 import dev.damhopper.nativeapp.platform.notifications.AndroidNotificationAudio
 import dev.damhopper.nativeapp.platform.notifications.AndroidNotificationPlatform
@@ -1337,6 +1345,7 @@ class NativeWorkspaceViewModel(
                 owner = owner,
                 apiClient = apiClient,
                 wsConnection = wsConnection,
+                arbiter = existing.fileRepository.arbiter,
             )
             val editorRepo = EditorRepository(
                 fileRepository = fileRepo,
@@ -1345,6 +1354,29 @@ class NativeWorkspaceViewModel(
             )
             existing.rebindTransports(fileRepo, editorRepo, apiClient.connection)
             existing.bindPreferenceConsumers(access, commandHistory, historyOwner)
+            if (existing.gitRuntime == null || existing.gitRuntime?.connection != apiClient.connection) {
+                existing.gitRuntime?.revoke()
+                val gitSafety = WorkspaceGitSafety(
+                    boundOwner = owner,
+                    connectionGetter = { apiClient.connection },
+                    fileRepositoryGetter = { existing.fileRepository },
+                    editorRepositoryGetter = { existing.editorRepository },
+                    terminalRepositoryGetter = { TerminalRepository(apiClient, wsConnection) },
+                    workspaceStateGetter = { existing },
+                    retainedDirtyDocsProvider = ::retainedDirtyDocuments,
+                    targetStore = targetStore,
+                    flowNavigation = flowNavigation,
+                )
+                val runtime = GitWorkspaceRuntime(
+                    owner = owner,
+                    connection = apiClient.connection,
+                    repository = GitRepository(apiClient),
+                    presentation = existing.gitState,
+                    safety = gitSafety,
+                    coroutineScope = runtimeScope,
+                )
+                existing.bindGitRuntime(runtime)
+            }
             return existing
         }
 
@@ -1370,6 +1402,26 @@ class NativeWorkspaceViewModel(
             commandHistory = commandHistory,
             historyOwner = historyOwner,
         )
+        val gitSafety = WorkspaceGitSafety(
+            boundOwner = owner,
+            connectionGetter = { apiClient.connection },
+            fileRepositoryGetter = { fileRepo },
+            editorRepositoryGetter = { editorRepo },
+            terminalRepositoryGetter = { TerminalRepository(apiClient, wsConnection) },
+            workspaceStateGetter = { workspaceStates[owner] ?: newState },
+            retainedDirtyDocsProvider = ::retainedDirtyDocuments,
+            targetStore = targetStore,
+            flowNavigation = flowNavigation,
+        )
+        val gitRuntime = GitWorkspaceRuntime(
+            owner = owner,
+            connection = apiClient.connection,
+            repository = GitRepository(apiClient),
+            presentation = newState.gitState,
+            safety = gitSafety,
+            coroutineScope = runtimeScope,
+        )
+        newState.bindGitRuntime(gitRuntime)
         workspaceStates[owner] = newState
         lifetime.own(apiClient.connection)
         val navState = flowNavigation.state.value
@@ -1390,6 +1442,75 @@ class NativeWorkspaceViewModel(
      */
     fun getWorkspaceState(owner: WorkspaceFileOwner): ProjectWorkspaceState? {
         return workspaceStates[owner]
+    }
+
+    fun retainedDirtyDocuments(owner: WorkspaceFileOwner): List<DocumentId> {
+        return workspaceStates.entries
+            .filter { (key, _) ->
+                key.normalizedBaseUrl == owner.normalizedBaseUrl &&
+                    key.accountUser == owner.accountUser &&
+                    key.project == owner.project &&
+                    key.normalizedWorktreePath == owner.normalizedWorktreePath
+            }
+            .flatMap { it.value.getDirtyDocumentIds() }
+            .distinct()
+    }
+
+    suspend fun preflightGitWorktreeRemoval(
+        scope: GitOperationScope,
+        worktree: ProjectWorktree,
+    ): WorktreeRemovalPrecheck {
+        if (worktree.isMain) {
+            return WorktreeRemovalPrecheck.Blocked(listOf("Cannot remove the primary/main worktree."))
+        }
+        val blockers = mutableListOf<String>()
+        val targetOwner = WorkspaceFileOwner(
+            profileId = scope.profileId,
+            baseUrl = workspaceStates.keys.firstOrNull { it.profileId == scope.profileId }?.baseUrl ?: "",
+            accountUser = workspaceStates.keys.firstOrNull { it.profileId == scope.profileId }?.accountUser ?: "authenticated-user",
+            project = scope.project,
+            worktreePath = worktree.path,
+        )
+        val dirty = retainedDirtyDocuments(targetOwner)
+        if (dirty.isNotEmpty()) {
+            blockers.add("Worktree has unsaved editor tabs: ${dirty.joinToString { it.relativePath }}")
+        }
+        val targetSession = try {
+            val profileId = scope.profileId
+            val apiClient = profileRepository.getOrCreateApiClient(profileId)
+            val ws = profileRepository.getOrCreateWsConnection(profileId)
+            val termRepo = TerminalRepository(apiClient, ws)
+            termRepo.listDetailed()
+        } catch (e: Exception) {
+            blockers.add("Failed to inspect terminal sessions: ${e.message}")
+            emptyList()
+        }
+        val normTargetWt = WorkspaceFileOwner.normalizeWorktree(worktree.path)
+        for (session in targetSession) {
+            if (!session.alive) continue
+            val matches = if (session.worktreePath != null) {
+                session.project == scope.project &&
+                    WorkspaceFileOwner.normalizeWorktree(session.worktreePath) == normTargetWt
+            } else {
+                session.project == scope.project && isCwdInWorktree(session.cwd, worktree.path)
+            }
+            if (matches) {
+                blockers.add("Worktree has active terminal sessions (session ${session.id})")
+            }
+        }
+        return if (blockers.isEmpty()) {
+            WorktreeRemovalPrecheck.Allowed
+        } else {
+            WorktreeRemovalPrecheck.Blocked(blockers)
+        }
+    }
+
+    private fun isCwdInWorktree(cwd: String?, worktreePath: String): Boolean {
+        if (cwd == null) return false
+        val normCwd = cwd.trim().replace('\\', '/').trim('/')
+        val normWt = worktreePath.trim().replace('\\', '/').trim('/')
+        if (normWt.isEmpty()) return true
+        return normCwd == normWt || normCwd.startsWith("$normWt/")
     }
 
     /**
@@ -1446,6 +1567,11 @@ class NativeWorkspaceViewModel(
 
     override fun onTargetRevalidated(profileId: String) {
         runtimes.refresh(profileId)
+    }
+
+    override fun gitHostPorts(owner: WorkspaceFileOwner): GitHostPorts {
+        val ws = workspaceStates[owner] ?: throw IllegalArgumentException("No workspace state for owner $owner")
+        return ws.gitRuntime ?: throw IllegalStateException("Git runtime not initialized for owner $owner")
     }
 
     override val terminalAgents: RetainedTerminalAgentsService get() = agents

@@ -13,11 +13,27 @@ class GitModelsSerializationTest {
                 "path": ".",
                 "absolutePath": "/abs/path",
                 "kind": "primary",
+                "gitlink": {
+                    "path": "sub/module",
+                    "objectId": "0123456789abcdef0123456789abcdef01234567",
+                    "moduleName": "submodule-1",
+                    "url": "https://example.com/repo.git"
+                },
                 "status": {
+                    "projectName": "test-project",
                     "branch": "main",
-                    "headCommit": "abc1234",
-                    "isDetached": false,
-                    "hasLocalChanges": true
+                    "isClean": false,
+                    "ahead": 1,
+                    "behind": 2,
+                    "staged": 3,
+                    "modified": 4,
+                    "untracked": 5,
+                    "hasStash": false,
+                    "lastCommit": {
+                        "hash": "abc1234",
+                        "message": "feat: init",
+                        "date": "2026-10-30T10:00:00Z"
+                    }
                 },
                 "warnings": ["warning 1"]
             }
@@ -25,14 +41,105 @@ class GitModelsSerializationTest {
         val root = ProtocolJson.decodeFromString(VcsRoot.serializer(), json)
         assertEquals(".", root.rootId)
         assertEquals("primary", root.kind)
+        assertEquals("sub/module", root.gitlink?.path)
+        assertEquals("test-project", root.status?.projectName)
         assertEquals("main", root.status?.branch)
-        assertTrue(root.status?.hasLocalChanges == true)
+        assertEquals(4, root.status?.modified)
+        assertEquals("abc1234", root.status?.lastCommit?.hash)
         assertEquals(1, root.warnings.size)
 
         val encoded = ProtocolJson.encodeToString(VcsRoot.serializer(), root)
         assertTrue(encoded.contains("\"rootId\":\".\""))
+        assertTrue(encoded.contains("\"submodule-1\""))
     }
 
+    @Test
+    fun testGitDiffResponseSerialization() {
+        val json = """
+            {
+                "entries": [
+                    {
+                        "path": "src/App.kt",
+                        "status": "modified",
+                        "staged": true,
+                        "additions": 10,
+                        "deletions": 2,
+                        "rootId": "root-1",
+                        "rootPath": "."
+                    },
+                    {
+                        "path": "untracked.txt",
+                        "status": "added",
+                        "staged": false,
+                        "additions": 0,
+                        "deletions": 0
+                    }
+                ],
+                "untrackedTruncated": true,
+                "untrackedTotal": 550
+            }
+        """.trimIndent()
+        val resp = ProtocolJson.decodeFromString(GitDiffResponse.serializer(), json)
+        assertEquals(2, resp.entries.size)
+        assertTrue(resp.untrackedTruncated)
+        assertEquals(550, resp.untrackedTotal)
+        assertEquals("src/App.kt", resp.entries[0].path)
+        assertTrue(resp.entries[0].staged)
+        assertEquals(10, resp.entries[0].additions)
+        assertEquals("untracked.txt", resp.entries[1].path)
+        assertFalse(resp.entries[1].staged)
+    }
+
+    @Test
+    fun testGitConflictAndOperationModelsSerialization() {
+        val conflictJson = """
+            {
+                "targetRevision": "rev-1",
+                "entries": [
+                    {
+                        "conflictId": "c-1",
+                        "path": "conflict.txt",
+                        "status": "bothModified",
+                        "isBinary": false,
+                        "unsupportedReason": null
+                    }
+                ],
+                "truncated": false,
+                "nextCursor": null
+            }
+        """.trimIndent()
+        val conflict = ProtocolJson.decodeFromString(GitConflictSummary.serializer(), conflictJson)
+        assertEquals("rev-1", conflict.targetRevision)
+        assertEquals(1, conflict.entries.size)
+        assertEquals("bothModified", conflict.entries[0].status)
+
+        val opJson = """
+            {
+                "operation": "rebase",
+                "canContinue": true,
+                "canAbort": true,
+                "operationFingerprint": "fp-op-1",
+                "fullIndexFingerprint": "fp-idx-1",
+                "stoppedReason": "conflict",
+                "stageRoleLabels": {
+                    "ours": "HEAD",
+                    "theirs": "upstream",
+                    "base": "common"
+                },
+                "terminalHandoffRequired": {
+                    "reason": "complex conflict",
+                    "worktreeRoot": "/path/to/worktree"
+                },
+                "blockers": ["unmerged files"]
+            }
+        """.trimIndent()
+        val op = ProtocolJson.decodeFromString(GitOperationStatus.serializer(), opJson)
+        assertEquals("rebase", op.operation)
+        assertTrue(op.canContinue)
+        assertEquals("HEAD", op.stageRoleLabels?.ours)
+        assertEquals("complex conflict", op.terminalHandoffRequired?.reason)
+        assertEquals(1, op.blockers.size)
+    }
     @Test
     fun testGitBranchLocalAndRefHelpers() {
         val branchLocal = GitBranch(name = "feature/alpha", isCurrent = true, isRemote = false)
