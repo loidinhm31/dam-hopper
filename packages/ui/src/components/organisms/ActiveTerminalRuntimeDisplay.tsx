@@ -1,7 +1,9 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { ListTree, Plus } from "lucide-react";
+import { ListTree, Plus, Layers } from "lucide-react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { useGlobalConfig } from "@/api/queries.js";
+import { parseTerminalKey } from "@/api/ownership.js";
+import { useTerminalAgentStatus } from "@/stores/agent-status.js";
 import { TerminalRuntimeNavigator } from "@/components/organisms/TerminalRuntimeNavigator.js";
 import { TerminalRuntimeOutput } from "@/components/organisms/TerminalRuntimeOutput.js";
 import { TerminalCommitStatusChip } from "@/components/organisms/TerminalCommitStatusChip.js";
@@ -51,6 +53,7 @@ interface ActiveTerminalRuntimeDisplayProps {
   browserOpen?: boolean;
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
+  onOpenSessionChanges?: (sessionId: string) => void;
 }
 
 export function RuntimeActiveSessionTitle({
@@ -133,6 +136,7 @@ export function ActiveTerminalRuntimeDisplay({
   browserOpen = false,
   renderBrowserContent,
   onCloseBrowser,
+  onOpenSessionChanges,
 }: ActiveTerminalRuntimeDisplayProps) {
   const { data: globalConfig } = useGlobalConfig();
   const terminalCommitStatusEnabled = useSettingsStore(
@@ -183,6 +187,12 @@ export function ActiveTerminalRuntimeDisplay({
     ? (activeSession.name ??
       `${activeSession.project}: ${activeSession.command}`)
     : "No terminal selected";
+  const activeRef = useMemo(() => {
+    if (!activeOpenTab && !activeSessionId) return undefined;
+    return activeOpenTab?.terminalRef ?? (activeSessionId ? parseTerminalKey(activeSessionId) : undefined);
+  }, [activeOpenTab, activeSessionId]);
+  const agentStatus = useTerminalAgentStatus(activeRef ?? undefined);
+  const isOmpSession = agentStatus?.agentKind === "omp" && Boolean(agentStatus.agentSessionId);
   const handleMobileSelectSession = (sessionId: string) => {
     onSelectTab?.(sessionId);
     setRuntimeSheetOpen(false);
@@ -236,6 +246,7 @@ export function ActiveTerminalRuntimeDisplay({
             onSessionExit={onSessionExit}
             onNewTerminal={handleNewTerminal}
             onSelectActive={onSelectTab}
+            onOpenSessionChanges={onOpenSessionChanges}
           />
         </main>
 
@@ -328,6 +339,18 @@ export function ActiveTerminalRuntimeDisplay({
             project={activeSession?.project}
             enabled={terminalCommitStatusEnabled}
           />
+          {onOpenSessionChanges && activeSessionId && isOmpSession && (
+            <button
+              type="button"
+              onClick={() => onOpenSessionChanges(activeSessionId)}
+              title={`Review OMP session changes (${agentStatus.agentSessionId})`}
+              aria-label="Review OMP session changes"
+              className="p-1 rounded text-[var(--color-primary)] hover:bg-[var(--color-surface-2)] transition-colors shrink-0 flex items-center ml-1 gap-1"
+            >
+              <Layers className="h-3.5 w-3.5" />
+              <span className="text-[10px] font-mono font-medium">Changes</span>
+            </button>
+          )}
         </div>
         <div className="min-h-0 flex-1">
           {browserOpen ? (

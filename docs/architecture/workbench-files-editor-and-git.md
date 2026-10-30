@@ -335,6 +335,27 @@ Phase 08 integrates the floating conflict resolver across the workspace and clos
 - **Configured-Editor Terminal Handoff & Post-Terminal Requery:** When `resolver.terminalHandoff` is set (stopped reason `messageEditRequired`), the resolver toolbar and editor card display a prominent guidance banner detailing the exact `worktreeRoot` and Git configured editor requirement. A "Refresh after terminal return" button invokes `resolver.refreshAfterTerminalReturn(terminalHandoff)` or `resolver.refetchAll()`, triggering authoritative requery.
 - **Nonce Consumption & Intent Snap-Back Prevention:** `ConflictResolverPanel` tracks `lastConsumedNonceRef` during component mount to apply `revealIntent` file paths once without snapping back during background refetches. Unmounting the panel resets the local ref, re-evaluating fresh reveal intents on remount.
 
+## Read-Only Session Changes Review vs. Git Changes
+
+DamHopper provides two distinct diff and change-review capabilities with non-overlapping authorities and lifecycle models:
+
+| Dimension | Git Changes (`WorkspaceGitPanel`) | Session Changes Review (`SessionChangesPanel`) |
+| --- | --- | --- |
+| **Baseline** | Git `HEAD` commit object or unmerged index | Raw, immutable session-start bytes captured at OMP agent start |
+| **Target** | Git working tree / index | Current working tree disk bytes |
+| **Capability** | Writable (stage, unstage, discard, commit, push, resolve) | Strictly read-only (capability-free Monaco, no mutations) |
+| **Absence Model** | Git index / HEAD tree nonmembership | Historical `AbsenceTrie` directory completeness certification |
+| **Lifecycle Authority** | Repository Git refs and porcelain operations | PTY terminal ID and incarnation; retained 60s post-exit |
+| **Persistence** | Permanent Git object database on disk | In-memory server process lifetime; no cross-restart archiving |
+| **Host Mounting** | Embedded IDE tool panel / Git page | Single `SessionChangesHost` modal above responsive shells |
+
+### Subsystem Boundaries and Invariants
+
+- **Capability-Free Monaco Diff Viewer:** `ReadonlyMonacoDiffViewer` renders side-by-side or inline unified diffs with `readOnly: true`, `originalEditable: false`, and `domReadOnly: true`. All edit, drop, and paste commands are disabled. Monaco models use owner-scoped URIs (`inmemory://session-changes/...`) and deferred disposal to prevent race conditions during rapid file selection.
+- **Absence Certification:** Negative proof requires historical directory certification in `AbsenceTrie`. Nonmembership in current eligible inventory alone never proves historical absence; unproven or ignored subtrees remain `unknown` / `unproven` to prevent false added-file claims when files are unignored.
+- **Keyboard Isolation:** `SessionChangesHost` modal dialog captures keyboard events at the window capture phase, preventing keystrokes and navigation shortcuts from leaking into underlying live xterm PTYs.
+- **Non-Goals:** No attribution to specific agent prompts or tools; no undo/edit/stage/commit/reset operations; no cross-restart session archives; Windows producer is platform-unqualified; Android-native client is excluded.
+
 ## Source Map and Verification
 
 | Contract | Primary Implementation |
@@ -373,5 +394,6 @@ Phase 08 integrates the floating conflict resolver across the workspace and clos
 | Android native Git controllers & operation scope | `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/git/GitChangesController.kt`, `GitBranchController.kt`, `GitHistoryController.kt`, `GitHistoryActionController.kt`, `GitRewriteActionController.kt`, `WorktreeMutationController.kt`, `LeasedPublishController.kt`, `GitSyncController.kt`, `GitOperationScope.kt` |
 | Android native Git panel UI & zero-FAB modals | `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/git/GitPanelScreen.kt`, `GitChangesView.kt`, `GitHistoryView.kt`, `GitBranchesWorktreesView.kt`, `GitCommitRow.kt`, `GitModalsHost.kt`, `GitModalState.kt`, `GitCommitDetailsDialog.kt`, `GitErrorDialog.kt`, `LeasedPushDialog.kt` |
 | Android native editor dirty target provider | `native/android-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/editor/EditorTabsState.kt` |
+| Read-only session changes review and Monaco diff viewer | `server/src/session_changes/`, `packages/ui/src/components/organisms/SessionChangesHost.tsx`, `SessionChangesPanel.tsx`, `ReadonlyMonacoDiffViewer.tsx`, `packages/ui/src/api/session-changes-client.ts`, `packages/ui/src/api/session-changes-queries.ts` |
 
 Related contracts: [API Reference](../api-reference.md), [Git API](../api/git.md), [System Architecture](../system-architecture.md), [Code Standards](../code-standards.md), and [Multi-Server Profiles User Guide](../user-guide-multi-server-profiles.md).

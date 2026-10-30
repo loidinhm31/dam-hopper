@@ -1672,6 +1672,100 @@ function channelToEndpoint(
     case "workflow:purgeHistory":
       return { method: "DELETE", url: "/api/workflow/history", body: data };
 
+    // Session changes
+    case "sessionChanges:status": {
+      const { terminalId, ...query } = data as {
+        terminalId: string;
+        terminalIncarnation: string;
+        ompSessionId: string;
+        expectedServerEpoch?: string;
+      };
+      const params = new URLSearchParams();
+      params.set("terminalIncarnation", query.terminalIncarnation);
+      params.set("ompSessionId", query.ompSessionId);
+      if (query.expectedServerEpoch) {
+        params.set("expectedServerEpoch", query.expectedServerEpoch);
+      }
+      return {
+        method: "GET",
+        url: `/api/terminal/${encodeURIComponent(terminalId)}/session-changes/v1/status?${params.toString()}`,
+      };
+    }
+    case "sessionChanges:fromNow": {
+      const { terminalId, ...body } = data as {
+        terminalId: string;
+        terminalIncarnation: string;
+        ompSessionId: string;
+        rootId: string;
+        requestId: string;
+        expectedServerEpoch?: string;
+      };
+      return {
+        method: "POST",
+        url: `/api/terminal/${encodeURIComponent(terminalId)}/session-changes/v1/from-now`,
+        body: { version: 1, ...body },
+      };
+    }
+    case "sessionChanges:refresh": {
+      const { terminalId, ...body } = data as {
+        terminalId: string;
+        terminalIncarnation: string;
+        ompSessionId: string;
+        serverEpoch: string;
+        baselineId: string;
+        requestId: string;
+      };
+      return {
+        method: "POST",
+        url: `/api/terminal/${encodeURIComponent(terminalId)}/session-changes/v1/refresh`,
+        body: { version: 1, ...body },
+      };
+    }
+    case "sessionChanges:files": {
+      const { terminalId, ...query } = data as {
+        terminalId: string;
+        terminalIncarnation: string;
+        ompSessionId: string;
+        serverEpoch: string;
+        baselineId: string;
+        comparisonRevision: string;
+        cursor?: string;
+        limit?: number;
+      };
+      const params = new URLSearchParams();
+      params.set("terminalIncarnation", query.terminalIncarnation);
+      params.set("ompSessionId", query.ompSessionId);
+      params.set("serverEpoch", query.serverEpoch);
+      params.set("baselineId", query.baselineId);
+      params.set("comparisonRevision", query.comparisonRevision);
+      if (query.cursor) params.set("cursor", query.cursor);
+      if (query.limit != null) params.set("limit", String(query.limit));
+      return {
+        method: "GET",
+        url: `/api/terminal/${encodeURIComponent(terminalId)}/session-changes/v1/files?${params.toString()}`,
+      };
+    }
+    case "sessionChanges:file": {
+      const { terminalId, fileId, ...query } = data as {
+        terminalId: string;
+        fileId: string;
+        terminalIncarnation: string;
+        ompSessionId: string;
+        serverEpoch: string;
+        baselineId: string;
+        comparisonRevision: string;
+      };
+      const params = new URLSearchParams();
+      params.set("terminalIncarnation", query.terminalIncarnation);
+      params.set("ompSessionId", query.ompSessionId);
+      params.set("serverEpoch", query.serverEpoch);
+      params.set("baselineId", query.baselineId);
+      params.set("comparisonRevision", query.comparisonRevision);
+      return {
+        method: "GET",
+        url: `/api/terminal/${encodeURIComponent(terminalId)}/session-changes/v1/files/${encodeURIComponent(fileId)}?${params.toString()}`,
+      };
+    }
     default:
       throw new Error(`Unknown channel for WsTransport: ${channel}`);
   }

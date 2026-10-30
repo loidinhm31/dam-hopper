@@ -42,12 +42,14 @@ export function MobileTerminalAccessoryBar({
   terminalRef,
   className,
   onPanelOpenChange,
+  onOpenSessionChanges,
 }: {
   sessionId: string;
   profileId?: string;
   terminalRef?: TerminalRef;
   className?: string;
   onPanelOpenChange?: (isOpen: boolean) => void;
+  onOpenSessionChanges?: (sessionId: string) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
@@ -258,6 +260,11 @@ export function MobileTerminalAccessoryBar({
           onToggleKeyboard={toggleKeyboard}
           keysPanelId={keysPanelId}
           keyboardPanelId={keyboardPanelId}
+          onOpenSessionChanges={
+            onOpenSessionChanges
+              ? () => onOpenSessionChanges(sessionId)
+              : undefined
+          }
         />
       </TerminalFloatingControlShell>
 

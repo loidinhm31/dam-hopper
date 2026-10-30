@@ -58,10 +58,11 @@ import {
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { useProjectTargetStore } from "@/stores/project-target.js";
-import { projectKey, parseProjectKey, parseTerminalKey, type TerminalInstanceRef } from "@/api/ownership.js";
+import { projectKey, parseProjectKey, parseTerminalKey, type TerminalInstanceRef, type ConnectionRef } from "@/api/ownership.js";
 import { getApi, captureConnection, useConnectionSnapshot } from "@/api/connections.js";
 import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import { useAgentStatusStore } from "@/stores/agent-status.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
@@ -252,6 +253,11 @@ const WorkspaceGitPanel = lazy(() =>
 const ConflictResolverPanel = lazy(() =>
   import("@/components/organisms/ConflictResolverPanel.js").then((m) => ({
     default: m.ConflictResolverPanel,
+  })),
+);
+const SessionChangesHost = lazy(() =>
+  import("@/components/organisms/SessionChangesHost.js").then((m) => ({
+    default: m.SessionChangesHost,
   })),
 );
 
@@ -666,6 +672,75 @@ export default function WorkspacePage() {
         (candidate) => candidate.sessionId === activeTab,
       ),
     [activeTab, browserTerminalTargets],
+  );
+  const [sessionChangesState, setSessionChangesState] = useState<{
+    isOpen: boolean;
+    owner: ConnectionRef | null;
+    terminalId: string | null;
+    terminalIncarnation: string | null;
+    ompSessionId: string | null;
+    rootId: string;
+  }>({
+    isOpen: false,
+    owner: null,
+    terminalId: null,
+    terminalIncarnation: null,
+    ompSessionId: null,
+    rootId: ".",
+  });
+
+  const handleOpenSessionChanges = useCallback(
+    async (terminalOrSessionId: string) => {
+      const parsed = parseTerminalKey(terminalOrSessionId);
+      const terminalId = parsed ? parsed.id : terminalOrSessionId;
+      const profileId = parsed ? parsed.profileId : (activeProfileId ?? "default");
+      const owner = captureConnection(profileId);
+      if (!owner) return;
+
+      let incarnation: number | undefined = sessionMap.get(terminalOrSessionId)?.incarnation;
+      if (incarnation == null) {
+        try {
+          const client = getApi(owner);
+          const detailed = await client.terminal.listDetailed();
+          const currentOwner = captureConnection(profileId);
+          if (!currentOwner || currentOwner.generation !== owner.generation) {
+            return;
+          }
+          const found = detailed.find(
+            (s) => s.id === terminalId || s.id === terminalOrSessionId,
+          );
+          if (found) {
+            incarnation = found.incarnation;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (incarnation == null || !Number.isSafeInteger(incarnation)) {
+        return;
+      }
+
+      const currentOwner = captureConnection(profileId);
+      if (!currentOwner || currentOwner.generation !== owner.generation) {
+        return;
+      }
+
+      const row = useAgentStatusStore.getState().profiles.get(profileId)?.rows.get(terminalId);
+      if (row?.agentKind !== "omp" || !row.agentSessionId) {
+        return;
+      }
+      const ompSessionId = row.agentSessionId;
+      setSessionChangesState({
+        isOpen: true,
+        owner,
+        terminalId,
+        terminalIncarnation: String(incarnation),
+        ompSessionId,
+        rootId: ".",
+      });
+    },
+    [sessionMap, activeProfileId],
   );
 
   const prepareBrowserTerminalArtifact = useCallback(
@@ -1865,6 +1940,7 @@ export default function WorkspacePage() {
                   renderBrowserContent(onClose, "active")
                 }
                 onCloseBrowser={closeEmbeddedBrowser}
+                onOpenSessionChanges={handleOpenSessionChanges}
               />
             </Suspense>
           ) : hasTraditionalTerminalProjects ? (
@@ -1892,6 +1968,7 @@ export default function WorkspacePage() {
                   renderBrowserContent(onClose, "active")
                 }
                 onCloseBrowser={closeEmbeddedBrowser}
+                onOpenSessionChanges={handleOpenSessionChanges}
               />
             </Suspense>
           ) : shouldRenderEmptyTerminalBrowserSurface({
@@ -2886,6 +2963,21 @@ export default function WorkspacePage() {
             </button>
           </div>
         )}
+      {sessionChangesState.isOpen && (
+        <Suspense fallback={null}>
+          <SessionChangesHost
+            isOpen={sessionChangesState.isOpen}
+            owner={sessionChangesState.owner}
+            terminalId={sessionChangesState.terminalId}
+            terminalIncarnation={sessionChangesState.terminalIncarnation}
+            ompSessionId={sessionChangesState.ompSessionId}
+            rootId={sessionChangesState.rootId}
+            onClose={() =>
+              setSessionChangesState((prev) => ({ ...prev, isOpen: false }))
+            }
+          />
+        </Suspense>
+      )}
     </>
   );
 }

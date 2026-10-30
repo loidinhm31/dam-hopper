@@ -50,6 +50,14 @@ and notification services connect over authenticated WebSocket and REST snapshot
 - Every callback/close/timeout is fenced by captured terminal incarnation and reporter epoch. An old socket cannot clear or overwrite its replacement.
 - This is scoped local reporting, not a sandbox against malicious code running as the same OS account. The adapter ignores `OMPCODE=1` nested sessions and non-main agent contexts to avoid accidental parent overwrites; capabilities do not prove model truth.
 
+### OMP Session Changes Coordination
+
+The managed OMP adapter coordinates with the server's session changes subsystem over private HTTP endpoints (`/private/session-changes/v1/*`):
+- **Three-Step Handshake Barrier:** Intercepts `session_start` and `before_agent_start` to call `POST /prepare`, `POST /activate`, and `POST /receipt`, verifying baseline readiness before model tools execute.
+- **Failure Latching:** If baseline capture fails or expires, reports `POST /fail` with an allowlisted failure reason, permanently latching an explicit `unavailable` status for the original attempt without blocking model tool turns.
+- **Metadata Lookup:** Calls `POST /lookup` during turn transitions to detect active baselines (including user-initiated `fromNow` baselines) without filesystem reads or capturing new snapshots.
+- **Turn Settling:** Reports `POST /settled` with `(turnId, outcome)` on turn completion. The server deduplicates duplicate turn notifications across 64 recent turn IDs, refreshing the current comparison revision asynchronously.
+- **Separation of Concerns:** Semantic agent status (over loopback WebSocket `/v1/agent-status`) remains strictly source-free and bounded to execution states (`idle`, `working`, `blocked`, `unknown`). Source bytes and diffs are never carried over the status WebSocket.
 ## Implemented semantic contract v1
 
 Version 1 uses camelCase JSON. Rust `ReporterHello` and `ReporterReport` reject

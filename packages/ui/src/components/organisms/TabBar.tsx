@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useState, useMemo } from "react";
 import { useDndMonitor, useDraggable } from "@dnd-kit/core";
 import {
   GripVertical,
@@ -8,10 +8,12 @@ import {
   SplitSquareVertical,
   X,
   Plus,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import { TerminalActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
 import { AgentStatusBadge } from "@/components/atoms/AgentStatusBadge.js";
+import { useTerminalAgentStatus } from "@/stores/agent-status.js";
 import { parseTerminalKey } from "@/api/ownership.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
@@ -189,6 +191,7 @@ export interface TabBarProps {
   onSplitPaneHorizontal: () => void;
   onSplitPaneVertical: () => void;
   onClosePane: () => void;
+  onOpenSessionChanges?: (sessionId: string) => void;
 }
 
 export function TabBar({
@@ -207,9 +210,20 @@ export function TabBar({
   onSplitPaneHorizontal,
   onSplitPaneVertical,
   onClosePane,
+  onOpenSessionChanges,
 }: TabBarProps) {
   const [isDragging, setIsDragging] = useState(false);
 
+  const activeTab = useMemo(
+    () => paneTabs.find((t) => t.sessionId === activeSessionId),
+    [paneTabs, activeSessionId],
+  );
+  const activeRef = useMemo(() => {
+    if (!activeTab && !activeSessionId) return undefined;
+    return activeTab?.terminalRef ?? (activeSessionId ? parseTerminalKey(activeSessionId) : undefined);
+  }, [activeTab, activeSessionId]);
+  const agentStatus = useTerminalAgentStatus(activeRef ?? undefined);
+  const isOmpSession = agentStatus?.agentKind === "omp" && Boolean(agentStatus.agentSessionId);
   function splitPane(action: "right" | "down") {
     const direction = splitActionToPaneDirection(action);
     if (direction === "horizontal") {
@@ -286,6 +300,18 @@ export function TabBar({
           />
         </div>
       ) : null}
+      {onOpenSessionChanges && activeSessionId && isOmpSession && (
+        <button
+          type="button"
+          onClick={() => onOpenSessionChanges(activeSessionId)}
+          title={`Review OMP session changes (${agentStatus.agentSessionId})`}
+          aria-label="Review OMP session changes"
+          className="p-1 rounded text-[var(--color-primary)] hover:bg-[var(--color-surface-2)] transition-colors shrink-0 flex items-center ml-1 gap-1"
+        >
+          <Layers className="h-3.5 w-3.5" />
+          <span className="text-[10px] font-mono font-medium">Changes</span>
+        </button>
+      )}
 
       <div className="flex items-center px-1 border-l border-[var(--color-border)] bg-[var(--color-surface)]">
         {/* Split Horizontal Button */}

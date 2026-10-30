@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { Keyboard, ChevronDown, ChevronUp } from "lucide-react";
+import { Keyboard, ChevronDown, ChevronUp, Layers } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 
 interface TerminalAccessoryControlsProps {
@@ -13,6 +13,7 @@ interface TerminalAccessoryControlsProps {
   onToggleKeyboard: () => void;
   keysPanelId: string;
   keyboardPanelId: string;
+  onOpenSessionChanges?: () => void;
 }
 
 export function TerminalAccessoryControls({
@@ -26,6 +27,7 @@ export function TerminalAccessoryControls({
   onToggleKeyboard,
   keysPanelId,
   keyboardPanelId,
+  onOpenSessionChanges,
 }: TerminalAccessoryControlsProps) {
   const isPanelOpen = isExpanded || isKeyboardOpen;
 
@@ -76,6 +78,18 @@ export function TerminalAccessoryControls({
         <Keyboard className="h-3 w-3 shrink-0" aria-hidden="true" />
         <span className="sr-only">{keyboardButtonText}</span>
       </button>
+      {onOpenSessionChanges && (
+        <button
+          type="button"
+          onClick={onOpenSessionChanges}
+          title="Review session changes"
+          aria-label="Review session changes"
+          className="inline-flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-0 text-[11px] font-semibold text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] active:bg-[var(--color-border)]"
+        >
+          <Layers className="h-3 w-3 shrink-0" aria-hidden="true" />
+          <span className="sr-only">Session changes</span>
+        </button>
+      )}
     </div>
   );
 }
