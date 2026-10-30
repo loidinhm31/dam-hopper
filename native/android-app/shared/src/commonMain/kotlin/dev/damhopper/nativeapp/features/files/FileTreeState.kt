@@ -83,20 +83,25 @@ enum class ExplorerConnectionStatus {
  */
 class FileTreeState(
     val target: ProjectTargetRef,
-    private val repository: FileRepository,
+    repository: FileRepository,
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
-    val watchCoordinator: FileWatchCoordinator = FileWatchCoordinator(
+    watchCoordinator: FileWatchCoordinator? = null,
+) {
+    var repository: FileRepository = repository
+        private set
+
+    var watchCoordinator: FileWatchCoordinator = watchCoordinator ?: FileWatchCoordinator(
         target = target,
         repository = repository,
         coroutineScope = coroutineScope,
-    ),
-) {
+    )
+        private set
     @Volatile
     private var isDisposed: Boolean = false
 
     @Volatile
     private var initialLoadJob: kotlinx.coroutines.Job? = null
-
+    private var connectionStateJob: kotlinx.coroutines.Job? = null
     private val initialRoot = FileTreeNode(target, "", target.project, isDirectory = true, isExpanded = true)
     private val _root = MutableStateFlow(initialRoot)
     val root: StateFlow<FileTreeNode> = _root.asStateFlow()
@@ -143,18 +148,58 @@ class FileTreeState(
     private var scanJob: kotlinx.coroutines.Job? = null
 
     init {
-        watchCoordinator.onRefetchExplorerDirectory = { dirPath ->
-            refreshDirectoryOrdered(dirPath)
-        }
-        watchCoordinator.onOverflowNotice = { _, _ ->
-            _error.value = "Watcher overflow recovered"
-        }
+        wireWatchCoordinator(this.watchCoordinator)
         initialLoadJob = coroutineScope.launch {
             initTreeAndSubscriptionInternal()
         }
-        coroutineScope.launch {
+        connectionStateJob = coroutineScope.launch {
             observeConnectionState()
         }
+    }
+
+    private fun wireWatchCoordinator(coordinator: FileWatchCoordinator) {
+        coordinator.onRefetchExplorerDirectory = { dirPath ->
+            refreshDirectoryOrdered(dirPath)
+        }
+        coordinator.onOverflowNotice = { _, _ ->
+            _error.value = "Watcher overflow recovered"
+        }
+    }
+
+    fun rebindRepository(newRepo: FileRepository): Boolean {
+        if (newRepo.owner != this.repository.owner) return false
+        this.repository = newRepo
+        connectionStateJob?.cancel()
+        this.watchCoordinator.dispose()
+        val newCoordinator = FileWatchCoordinator(
+            target = target,
+            repository = newRepo,
+            coroutineScope = coroutineScope,
+        )
+        wireWatchCoordinator(newCoordinator)
+        this.watchCoordinator = newCoordinator
+        _connectionStatus.value = resolveInitialConnectionStatus()
+        connectionStateJob = coroutineScope.launch {
+            observeConnectionState()
+        }
+        val expanded = collectExpandedPaths(_root.value)
+        coroutineScope.launch {
+            for (dir in expanded) {
+                watchCoordinator.acquireExplorerDemand(dir)
+            }
+        }
+        return true
+    }
+
+    private fun collectExpandedPaths(node: FileTreeNode): Set<String> {
+        val paths = mutableSetOf<String>()
+        if (node.isDirectory && node.isExpanded) {
+            paths.add(node.path)
+            for (child in node.children) {
+                paths.addAll(collectExpandedPaths(child))
+            }
+        }
+        return paths
     }
 
     private fun resolveInitialConnectionStatus(): ExplorerConnectionStatus {
@@ -603,6 +648,8 @@ class FileTreeState(
 
     fun dispose() {
         isDisposed = true
+        connectionStateJob?.cancel()
+        initialLoadJob?.cancel()
         scanTicket++
         scanJob?.cancel()
         watchCoordinator.dispose()

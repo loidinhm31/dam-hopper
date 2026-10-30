@@ -33,6 +33,26 @@ class GitRepository(
     suspend fun getDiffSummary(project: String, worktreePath: String? = null, root: String? = null) =
         query.getDiffSummary(project, worktreePath, root)
 
+    suspend fun getUntracked(
+        project: String,
+        worktreePath: String? = null,
+        offset: Int = 0,
+        limit: Int = 500,
+        root: String? = null,
+    ) = query.getUntracked(project, worktreePath, offset, limit, root)
+
+    suspend fun getConflicts(
+        project: String,
+        worktreePath: String? = null,
+        root: String? = null,
+        cursor: String? = null,
+    ) = query.getConflicts(project, worktreePath, root, cursor)
+
+    suspend fun getOperation(
+        project: String,
+        worktreePath: String? = null,
+        root: String? = null,
+    ) = query.getOperation(project, worktreePath, root)
     suspend fun stage(project: String, paths: List<String>, worktreePath: String? = null, root: String? = null) =
         mutation.stage(project, paths, worktreePath, root)
 

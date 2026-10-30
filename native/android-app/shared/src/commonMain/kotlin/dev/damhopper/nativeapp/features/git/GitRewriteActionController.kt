@@ -15,13 +15,13 @@ import kotlinx.coroutines.launch
 class GitRewriteActionController(
     val repository: GitRepository,
     val coroutineScope: CoroutineScope,
+    val host: GitHostPorts,
 ) {
     private val _frozenMessageSnapshot = MutableStateFlow<CommitMessageSnapshot?>(null)
     val frozenMessageSnapshot: StateFlow<CommitMessageSnapshot?> = _frozenMessageSnapshot.asStateFlow()
 
-    private val _lastSquashReceipt = MutableStateFlow<SquashReceipt?>(null)
-    val lastSquashReceipt: StateFlow<SquashReceipt?> = _lastSquashReceipt.asStateFlow()
-
+    private val _lastRewriteReceipt = MutableStateFlow<RewriteReceipt?>(null)
+    val lastRewriteReceipt: StateFlow<RewriteReceipt?> = _lastRewriteReceipt.asStateFlow()
     private val _isMutating = MutableStateFlow(false)
     val isMutating: StateFlow<Boolean> = _isMutating.asStateFlow()
 
@@ -33,8 +33,15 @@ class GitRewriteActionController(
         activeScope = scope
         if (changed) {
             _frozenMessageSnapshot.value = null
-            _lastSquashReceipt.value = null
+            _lastRewriteReceipt.value = null
         }
+    }
+
+    fun revoke() {
+        activeScope = null
+        _frozenMessageSnapshot.value = null
+        _lastRewriteReceipt.value = null
+        _isMutating.value = false
     }
 
     fun loadMessageSnapshot(
@@ -77,25 +84,97 @@ class GitRewriteActionController(
         val snapshot = _frozenMessageSnapshot.value ?: return coroutineScope.launch {
             onResult(GitActionResult(ok = false, message = "No frozen snapshot; refresh first"))
         }
+        val impact = GitMutationImpact.HISTORY
 
         return coroutineScope.launch {
             _isMutating.value = true
             try {
-                val req = EditCommitMessageRequest(
-                    message = newMessage,
-                    expectedBranch = snapshot.branch,
-                    expectedHeadOid = snapshot.headOid,
-                    allowSignatureRemoval = allowSignatureRemoval,
-                    worktreePath = scope.worktreePath,
-                    root = scope.root,
-                )
-                val res = repository.history.editCommitMessage(scope.project, hash, req)
-                if (res.ok && scope.matches(activeScope)) _frozenMessageSnapshot.value = null
-                onResult(res)
+                val guardResult = host.withMutationGuard(scope, impact, emptyList()) {
+                    val req = EditCommitMessageRequest(
+                        message = newMessage,
+                        expectedBranch = snapshot.branch,
+                        expectedHeadOid = snapshot.headOid,
+                        allowSignatureRemoval = allowSignatureRemoval,
+                        worktreePath = scope.worktreePath,
+                        root = scope.root,
+                    )
+                    repository.history.editCommitMessage(scope.project, hash, req)
+                }
+                if (guardResult.isSuccess) {
+                    val res = guardResult.getOrThrow()
+                    val isPublicationUncertain = res.blockedReason == "publication-uncertain" || res.recovery?.operation == "publication-uncertain"
+                    val isStaleRef = res.blockedReason == "stale-ref"
+                    val kind = if (res.ok) GitOutcomeKind.SUCCEEDED else if (isPublicationUncertain) GitOutcomeKind.UNKNOWN else GitOutcomeKind.REJECTED
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = impact,
+                            kind = kind,
+                            paths = emptyList(),
+                            message = res.message,
+                        )
+                    )
+
+                    if (isPublicationUncertain || isStaleRef) {
+                        if (scope.matches(activeScope)) {
+                            _frozenMessageSnapshot.value = null
+                            _lastRewriteReceipt.value = null
+                        }
+                    } else if (res.ok && !res.noOp && !isPublicationUncertain &&
+                        res.branch == snapshot.branch &&
+                        res.oldHeadOid == snapshot.headOid &&
+                        !res.newHeadOid.isNullOrBlank() &&
+                        !res.newTargetOid.isNullOrBlank() &&
+                        scope.matches(activeScope)
+                    ) {
+                        val receipt = RewriteReceipt(
+                            branch = res.branch,
+                            sourceOid = res.newHeadOid,
+                            oldHeadOid = res.oldHeadOid,
+                            targetOid = res.newTargetOid,
+                            rewrittenCount = res.rewrittenCount,
+                            scope = scope,
+                        )
+                        _lastRewriteReceipt.value = receipt
+                        _frozenMessageSnapshot.value = null
+                    } else if (res.ok && scope.matches(activeScope)) {
+                        _frozenMessageSnapshot.value = null
+                    }
+                    if (scope.matches(activeScope)) {
+                        onResult(res)
+                    } else {
+                        onResult(GitActionResult(ok = false, message = "Scope changed during commit rewrite", recommendation = "Re-inspect history before retry"))
+                    }
+                } else {
+                    val t = guardResult.exceptionOrNull()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = impact,
+                            kind = GitOutcomeKind.REJECTED,
+                            paths = emptyList(),
+                            message = t?.message,
+                        )
+                    )
+                    if (scope.matches(activeScope)) {
+                        onResult(GitActionResult(ok = false, message = t?.message ?: "Commit message rewrite error"))
+                    }
+                }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
-                onResult(GitActionResult(ok = false, message = t.message ?: "Commit message rewrite error"))
+                host.onMutationOutcome(
+                    GitMutationEvent(
+                        scope = scope,
+                        impact = impact,
+                        kind = GitOutcomeKind.UNKNOWN,
+                        paths = emptyList(),
+                        message = t.message,
+                    )
+                )
+                if (scope.matches(activeScope)) {
+                    onResult(GitActionResult(ok = false, message = t.message ?: "Commit message rewrite error"))
+                }
             } finally {
                 if (scope.matches(activeScope)) _isMutating.value = false
             }
@@ -120,42 +199,103 @@ class GitRewriteActionController(
                 onResult(GitActionResult(ok = false, message = "Squash requires at least 2 contiguous commits"))
             }
         }
+        val impact = GitMutationImpact.HISTORY
 
         return coroutineScope.launch {
             _isMutating.value = true
             try {
-                val req = SquashCommitsRequest(
-                    hashes = orderedHashes,
-                    message = combinedMessage,
-                    expectedBranch = snapshot.branch,
-                    expectedHeadOid = snapshot.headOid,
-                    allowSignatureRemoval = allowSignatureRemoval,
-                    worktreePath = scope.worktreePath,
-                    root = scope.root,
-                )
-                val res = repository.history.squashCommits(scope.project, req)
-                if (res.ok && res.newHeadOid != null && scope.matches(activeScope)) {
-                    val receipt = SquashReceipt(
-                        branch = snapshot.branch,
-                        sourceOid = res.newHeadOid,
-                        count = res.rewrittenCount,
-                        targetOid = res.newTargetOid,
-                        scope = scope,
+                val guardResult = host.withMutationGuard(scope, impact, emptyList()) {
+                    val req = SquashCommitsRequest(
+                        hashes = orderedHashes,
+                        message = combinedMessage,
+                        expectedBranch = snapshot.branch,
+                        expectedHeadOid = snapshot.headOid,
+                        allowSignatureRemoval = allowSignatureRemoval,
+                        worktreePath = scope.worktreePath,
+                        root = scope.root,
                     )
-                    _lastSquashReceipt.value = receipt
-                    _frozenMessageSnapshot.value = null
+                    repository.history.squashCommits(scope.project, req)
                 }
-                onResult(res)
+                if (guardResult.isSuccess) {
+                    val res = guardResult.getOrThrow()
+                    val isPublicationUncertain = res.blockedReason == "publication-uncertain" || res.recovery?.operation == "publication-uncertain"
+                    val isStaleRef = res.blockedReason == "stale-ref"
+                    val kind = if (res.ok) GitOutcomeKind.SUCCEEDED else if (isPublicationUncertain) GitOutcomeKind.UNKNOWN else GitOutcomeKind.REJECTED
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = impact,
+                            kind = kind,
+                            paths = emptyList(),
+                            message = res.message,
+                        )
+                    )
+
+                    if (isPublicationUncertain || isStaleRef) {
+                        if (scope.matches(activeScope)) {
+                            _frozenMessageSnapshot.value = null
+                            _lastRewriteReceipt.value = null
+                        }
+                    } else if (res.ok && !res.noOp && !isPublicationUncertain &&
+                        res.branch == snapshot.branch &&
+                        res.oldHeadOid == snapshot.headOid &&
+                        !res.newHeadOid.isNullOrBlank() &&
+                        !res.newTargetOid.isNullOrBlank() &&
+                        scope.matches(activeScope)
+                    ) {
+                        val receipt = RewriteReceipt(
+                            branch = res.branch,
+                            sourceOid = res.newHeadOid,
+                            oldHeadOid = res.oldHeadOid,
+                            targetOid = res.newTargetOid,
+                            rewrittenCount = res.rewrittenCount,
+                            scope = scope,
+                        )
+                        _lastRewriteReceipt.value = receipt
+                        _frozenMessageSnapshot.value = null
+                    } else if (res.ok && scope.matches(activeScope)) {
+                        _frozenMessageSnapshot.value = null
+                    }
+                    if (scope.matches(activeScope)) {
+                        onResult(res)
+                    } else {
+                        onResult(GitActionResult(ok = false, message = "Scope changed during squash", recommendation = "Re-inspect history before retry"))
+                    }
+                } else {
+                    val t = guardResult.exceptionOrNull()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = impact,
+                            kind = GitOutcomeKind.REJECTED,
+                            paths = emptyList(),
+                            message = t?.message,
+                        )
+                    )
+                    if (scope.matches(activeScope)) {
+                        onResult(GitActionResult(ok = false, message = t?.message ?: "Squash execution error"))
+                    }
+                }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
-                onResult(GitActionResult(ok = false, message = t.message ?: "Squash execution error"))
+                host.onMutationOutcome(
+                    GitMutationEvent(
+                        scope = scope,
+                        impact = impact,
+                        kind = GitOutcomeKind.UNKNOWN,
+                        paths = emptyList(),
+                        message = t.message,
+                    )
+                )
+                if (scope.matches(activeScope)) {
+                    onResult(GitActionResult(ok = false, message = t.message ?: "Squash execution error"))
+                }
             } finally {
                 if (scope.matches(activeScope)) _isMutating.value = false
             }
         }
     }
 
-    fun clearReceipt() { _lastSquashReceipt.value = null }
-    fun clearSnapshot() { _frozenMessageSnapshot.value = null }
+    fun clearReceipt() { _lastRewriteReceipt.value = null }
 }

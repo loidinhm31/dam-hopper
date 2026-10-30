@@ -24,7 +24,7 @@
 | --- | --- | --- |
 | `PROFILE_LOGIN` | Initial state; also used when authentication is lost or Profiles / Switch is selected. | Successful authentication selects the active profile and advances to `PROJECT_LIST`. |
 | `PROJECT_LIST` | `WorkspaceRepository` fetches projects for the active profile. | Selecting a project updates `ProjectTargetStore` and advances to `TERMINAL`. |
-| `TERMINAL` | `TerminalRepository` loads sessions; `ProjectWorkspaceScreen` presents Terminal, Files, or Editor when retained workspace state is available. | Back, project selection, profile navigation, and eligible deep links consult the retained departure guard when it is installed. |
+| `TERMINAL` | `TerminalRepository` loads sessions; `ProjectWorkspaceScreen` presents Terminal, Files, Editor, or focused Git when retained workspace state is available. | Back, project selection, profile navigation, and eligible deep links consult the retained departure guard when it is installed. |
 
 `AppFlowState` stores the visible stage and active profile, project, and terminal-session IDs. `NativeWorkspaceViewModel` retains the profile runtime, flow navigation, target store, lifecycle coordinator, and workspace states. `DamHopperMobileApp` reconstructs current-profile repositories when profile, endpoint, or connection generation changes and requests the workspace state through the injected provider.
 
@@ -304,13 +304,39 @@ These findings describe the earlier Phase 08 review baseline and were not all re
 - Leased push publication (`LeasedPublishController`) is a separate user-confirmed action using exact expected remote OID (`PrepareLeasedPushRequest`, `PublishLeasedPushRequest`); stale remote aborts; explicit exact-OID leased publication with zero blind `--force` push fallback.
 - Zero-FAB UI presentation: `GitPanelScreen` (Changes, History, Branches/Worktrees sections) and inline `GitModalsHost` dialogs.
 
-### Recorded Open Limitations (Cycle 3 Review 6/10, NOT Accepted)
-1. **Branch Checkout Scope Sync (H1):** Branch controller `refreshBranches()` cancels in-flight reload; history entries not reloaded on checkout.
-2. **Repeat Identical Failure Suppression (H2):** Action error dialog does not redisplay for repeated identical failure due to un-reset `modalState.actionErrorResult`.
-3. **Details Dialog Mutation Invalidation (H3):** File-variant mutations in commit details dialog bypass invalidation hooks and error handling.
-4. **Premature Discard Invalidation (H4):** Discard invalidation hook executes immediately before async request completes and fires on failure.
-5. **Query Parameter Encoding (H5):** Default `encodeURLQueryComponent()` leaves `& + # =` raw, risking path corruption for special worktree paths.
-6. **Live Disposable Repo Verification:** Live multi-root/worktree repository qualification deferred to Phase 18.
+### Historical Open Limitations & Phase 07 Re-Evaluation Dispositions
+The historical Phase 12 baseline (2026-10-16, Cycle 3 Review 6/10) recorded limitations H1–H5. During the Focused Git qualification cycle (2026-10-30), these findings were re-evaluated against the current architecture:
+1. **Branch Checkout Scope Sync (H1):** *Historically:* `GitBranchController.refreshBranches()` cancelled in-flight reloads, leaving eligibility gated against old branch. *Current disposition:* Resolved by `GitWorkspaceRuntime`. Branch mutations emit `GitMutationEvent(impact = GitMutationImpact.REFS)`. The host port triggers coordinated refresh across both `GitBranchController` and `GitHistoryController`, re-evaluating branch state and eligibility atomically.
+2. **Repeat Identical Failure Suppression (H2):** *Historically:* Action error dialog failed to redisplay for repeated identical failures due to un-reset `modalState.actionErrorResult`. *Current disposition:* Resolved in contracts. Error state tracks monotonically increasing controller-local event sequence identities in `GitMutationEvent`, ensuring dismissed errors re-present on fresh identical failures.
+3. **Details Dialog Mutation Invalidation (H3):** *Historically:* File-variant mutations in commit details dialog bypassed invalidation hooks. *Current disposition:* Resolved. File mutations route through `GitHostPorts.withMutationGuard` with `GitMutationImpact.FILES`, invalidating cached authority and scheduling refresh across changes and details views upon completion.
+4. **Premature Discard Invalidation (H4):** *Historically:* Discard invalidation executed before async request completion and fired on failure. *Current disposition:* Resolved. Invalidation and reconciliation execute strictly within the post-completion callback of `onMutationOutcome` when the server responds with `GitOutcomeKind.SUCCEEDED`.
+5. **Query Parameter Encoding (H5):** *Historically:* Default `encodeURLQueryComponent()` left `& + # =` raw, risking path corruption for special worktree paths. *Current disposition:* Resolved. All query parameters in `NativeGitServerFixture`, `ApiClient`, and `git-workspace-fixture.mjs` pass through strict URL-encoding (`URLEncoder.encode(..., "UTF-8")` and `encodeURIComponent`), preserving complex worktree path segments.
+6. **Live Multi-Root & Disposable Repo Verification:** Live repository qualification was executed against disposable Git fixtures via `git-workspace-fixture.mjs` (self-test: 0 failures; current-server live smoke: 0 failures). Integrated physical ARM64 and API 29 device qualification remains deferred (GATE-C).
+
+### Implemented increment: focused-project Git workspace view
+
+The focused Git view is implemented and landed in the codebase on `feat/android-native-features` per [approved design](../../plans/reports/brainstorm-261030-1451-android-focused-git-view.md) and [implementation plan](../../plans/261030-1617-android-focused-git-view/plan.md).
+
+**Qualification Status:**
+- Independent Git Oracle Fixture (`git-workspace-fixture.mjs --self-test`): **PASSED (0 failures)**.
+- Current-Server Live Smoke (`git-workspace-fixture.mjs --smoke-current-server`): **PASSED (0 failures)**.
+- Automated Unit Tests: All 1,168 automated unit tests reported passing (937 shared JVM + 231 Android unit tests, 0 failures/errors/skips, with predecessor `TerminalPresentationPolicyTest` regressions resolved in source); `:androidApp:compileDebugAndroidTestKotlin` and debug APK assembly `:androidApp:assembleDebug` succeeded (reported in `plans/reports/tester-261031-0029-c1-verification.md` and `plans/reports/code-review-261031-0035-android-focused-git-view-cycle-3.md`).
+- Code Review Disposition: Cycle 3 review reports 0 Critical issues remaining (6/10; W1–W12 non-critical warnings tracked).
+- Connected Device Qualification (Q2/Q3): **BLOCKED_PENDING_DEVICE (GATE-C)**. Connected device journeys not executed; host workstation lacks `adb` in PATH, and physical ARM64 hardware, API 29 minimum SDK verification, emulator journeys, and human visual inspection remain open release blockers.
+
+**Implemented Architecture & Invariants:**
+- **Single Content Host Mounting:** Focused Git is mounted directly alongside Terminal, Files, and Editor in `ProjectTerminalScreen` (`WorkspacePanel.GIT`). The separate 12-panel shell remains unmounted. Changes, History, and Branches/Worktrees are first-class Git sections; commit details and read-only diffs are nested routes. Hardware Back and toolbar Back affordances unwind nested routes before guarded workspace departure.
+- **Four Distinct Working Identities:** Enforces strict distinction between:
+  1. *Authenticated logical owner (`ProfileId` / `profileId`):* Fences controllers, repositories, and cache entries.
+  2. *Connection generation (`generation`):* Monotonic watermark counter; stale background jobs and callbacks are rejected via `assertCurrentOwner`.
+  3. *Workspace project target (`ProjectTargetRef` / `targetWorktree`):* Active project directory or linked worktree target.
+  4. *Working tree root (`VcsRoot` / `root`):* Repository root within multi-root or submodule configurations.
+- **Worktree Switching & Safety Retention:** Git tracks the active workspace worktree. Switching worktrees is a guarded whole-workspace transition that prompts on unsaved editor drafts. Existing terminal PTYs retain their original target and VT geometry; new sessions adopt the selected target. Worktree removal aggregates dirty editor buffers across all retained matching owners and active PTY inventory, refusing removal if dirty drafts or active PTYs exist, and blocking main worktree removal.
+- **Pure Ancestry OID Graph Layout:** `GitGraphLayout` computes DAG commit lanes strictly from commit OIDs and ordered parent links. Supports linear histories, 2-parent merges, multi-parent octopus merges, skewed commit timestamps, downward/upward edges, and off-page parent stubs. Computed per changed dataset, not per draw. Literal search query filtering debounces input, renders a flat list, and disables squash selection.
+- **Safe History Rewrites & Leased Publication:** Distinguishes active checked-out branch actions (amend, reset, discard, drop, cherry-pick) from inactive local branch rewrites (CAS message edit snapshot and contiguous oldest-first squash). Signed commits require explicit consent (`allowSignatureRemoval = true`) to prevent accidental signature stripping. History rewrites never publish automatically; publication is an explicit subsequent user action (`/push/prepare` + `/push/publish`) verifying exact remote OIDs without blind `--force` fallback.
+- **Read-Only Conflict & Operation Handoff:** Conflict states (`GET /api/git/:project/conflicts`) and stopped operations (`GET /api/git/:project/operation`) provide read-only status and guidance directing the developer to Terminal or web CLI. Zero wire calls are made to `POST /resolve` or `POST /operation`.
+- **Secondary-Root Restrictions & Drop-Ack Idempotence:** The server fetch and pull endpoints (`POST /api/git/fetch`, `POST /api/git/pull`) do not support a root parameter; secondary roots in multi-root workspaces visibly disable fetch/pull with zero wire dispatch. Ordinary push (`POST /api/git/push`) supports root qualification. Mutating requests forwarded across a dropped acknowledgement connection do not trigger client replay or offline write queues (fault-injection test observed a single forwarded request; client does not assert distributed exactly-once server execution); the client reconciles state authoritatively upon refresh (`GitRefreshReason.RECONCILE`).
+- **Shortcut & Shell Scope:** Git shortcuts remain unmapped in this focused root; Git tab availability does not authorize broader Settings shortcut changes or 12-panel shell activation.
 
 ## Workflow tracking and project plans (Phase 13)
 

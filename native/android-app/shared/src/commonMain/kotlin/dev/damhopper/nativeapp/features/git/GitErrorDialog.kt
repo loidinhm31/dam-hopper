@@ -12,7 +12,7 @@ fun GitErrorDialog(
     error: GitActionResult,
     onDismiss: () -> Unit,
 ) {
-    val titleText = if (error.blockedReason != null) "Blocked: ${error.blockedReason}" else "Git Operation Failed"
+    val titleText = if (error.blockedReason != null) "Blocked: ${error.blockedReason}" else if (error.conflict) "Conflict Detected" else "Git Operation Failed"
     val messageText = listOfNotNull(error.message, error.recommendation).joinToString("\n\n")
 
     AlertDialog(

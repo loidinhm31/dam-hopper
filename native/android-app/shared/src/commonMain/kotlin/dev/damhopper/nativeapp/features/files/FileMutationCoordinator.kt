@@ -105,7 +105,7 @@ sealed interface ExplorerDialogState {
  * and phase-aware outcome classification.
  */
 class FileMutationCoordinator(
-    private val repository: FileRepository,
+    private var repository: FileRepository,
     private val treeState: FileTreeState,
     private val dirtyGuardPort: EditorDirtyGuardPort? = null,
     val arbiter: FileOperationArbiter = repository.arbiter,
@@ -138,6 +138,16 @@ class FileMutationCoordinator(
         nextActionId++
     }
 
+    fun rebindRepository(repository: FileRepository): Boolean {
+        if (repository.owner != this.repository.owner) return false
+        this.repository = repository
+        allocateActionId()
+        _isMutating.value = false
+        if (_dialogState.value != ExplorerDialogState.None) {
+            _dialogState.value = ExplorerDialogState.None
+        }
+        return true
+    }
     /**
      * Sanitizes a project-relative path: strips leading/trailing slashes and rejects traversal segments.
      */

@@ -19,12 +19,14 @@ fun GitHistoryView(
     actionController: GitHistoryActionController,
     onEditMessage: (GitLogEntry) -> Unit,
     onSquash: (List<String>) -> Unit,
-    onLeasedPush: (SquashReceipt) -> Unit,
+    onLeasedPush: (RewriteReceipt) -> Unit,
     onCherryPick: (GitLogEntry) -> Unit,
     onRevert: (GitLogEntry) -> Unit,
     onReset: (GitLogEntry) -> Unit,
     onDrop: (GitLogEntry) -> Unit,
-    lastSquashReceipt: SquashReceipt? = null,
+    lastRewriteReceipt: RewriteReceipt? = null,
+    onMutationSuccess: () -> Unit = {},
+    onError: ((GitActionResult) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val entries by historyController.entries.collectAsState()
@@ -40,6 +42,15 @@ fun GitHistoryView(
     val activeName = historyController.activeBranch?.name ?: "HEAD"
 
     val oldestFirstCommits = historyController.getSelectedCommitsOldestFirst()
+    val isSearchFiltered = searchQuery.isNotBlank()
+    val graphLayout = remember(entries, isSearchFiltered) {
+        if (isSearchFiltered) null else layoutGitGraph(entries)
+    }
+    val graphRowsByOid = remember(graphLayout) {
+        graphLayout?.rows?.associateBy { it.oid } ?: emptyMap()
+    }
+    val laneCount = graphLayout?.laneCount ?: 1
+
 
     Column(modifier = modifier.fillMaxSize().background(DamHopperColors.Background)) {
         // Search Toolbar
@@ -88,7 +99,7 @@ fun GitHistoryView(
         }
 
         // Multi-select / Leased push banner
-        if (selectedHashes.size >= 2 && isLocal) {
+        if (selectedHashes.size >= 2 && isLocal && searchQuery.isBlank()) {
             Row(
                 modifier = Modifier.fillMaxWidth().background(DamHopperColors.SurfaceVariant).padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -110,14 +121,14 @@ fun GitHistoryView(
             }
         }
 
-        if (lastSquashReceipt != null) {
+        if (lastRewriteReceipt != null) {
             Row(
                 modifier = Modifier.fillMaxWidth().background(DamHopperColors.Success.copy(alpha = 0.2f)).padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Squash ready: ${lastSquashReceipt.count} commits rewritten on ${lastSquashReceipt.branch}", style = DamHopperTypography.bodySmall)
-                Button(onClick = { onLeasedPush(lastSquashReceipt) }, colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Success)) {
+                Text("Rewrite ready: ${lastRewriteReceipt.rewrittenCount} commit(s) on ${lastRewriteReceipt.branch}", style = DamHopperTypography.bodySmall)
+                Button(onClick = { onLeasedPush(lastRewriteReceipt) }, colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Success)) {
                     Text("Leased Push", fontSize = 11.sp)
                 }
             }
@@ -133,7 +144,7 @@ fun GitHistoryView(
                 GitCommitRow(
                     entry = entry,
                     isSelected = selectedHashes.contains(entry.hash),
-                    canSelect = isLocal,
+                    canSelect = isLocal && searchQuery.isBlank(),
                     onToggleSelect = { historyController.toggleCommitSelection(entry.hash) },
                     onInspect = { historyController.inspectCommit(entry.hash) },
                     onEditMessage = { onEditMessage(entry) },
@@ -143,6 +154,8 @@ fun GitHistoryView(
                     onDrop = { onDrop(entry) },
                     isLocal = isLocal,
                     isActive = isActive,
+                    graphRow = if (isSearchFiltered) null else graphRowsByOid[entry.hash],
+                    laneCount = laneCount,
                 )
             }
             if (entries.isNotEmpty()) {
@@ -168,7 +181,12 @@ fun GitHistoryView(
             actionController = actionController,
             isLocal = isLocal,
             isActive = isActive,
-            onDismiss = { historyController.dismissCommitDetails() }
+            onDismiss = { historyController.dismissCommitDetails() },
+            onMutationSuccess = {
+                historyController.loadHistory(resetOffset = true)
+                onMutationSuccess()
+            },
+            onError = onError,
         )
     }
 }

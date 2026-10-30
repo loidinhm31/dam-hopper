@@ -35,6 +35,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import kotlinx.coroutines.delay
+import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -131,6 +132,118 @@ import dev.damhopper.nativeapp.ui.components.TERMINAL_AGENTS_PINNED_WIDTH
 import dev.damhopper.nativeapp.ui.components.TerminalAgentsTrigger
 import androidx.compose.runtime.SideEffect
 
+internal fun installCurrentControllerBinding(
+    controller: TerminalSessionController,
+    bindingToken: TerminalBindingToken,
+    ownerScope: CoroutineScope,
+    terminalRepo: TerminalRepository,
+    writeChannel: Channel<QueuedWrite>,
+    attachQueues: MutableMap<TerminalSessionController, TerminalAttachQueue>,
+    destroyingSessionIds: Map<String, Boolean>,
+    isInputEligible: () -> Boolean,
+    currentActiveSessionId: () -> String?,
+    currentActiveSessionEpoch: () -> Long,
+    currentAttachmentAttemptToken: () -> Long,
+    nextAttachmentAttemptToken: () -> Long,
+    isBindingCurrent: () -> Boolean,
+    lastSubmittedCommandText: () -> String?,
+    onConfirmedCommand: ((String) -> Unit)? = null,
+    onErrorBanner: ((String) -> Unit)? = null,
+    failedRecords: MutableList<FailedCommandRecord>? = null,
+    onAdmitted: ((Boolean) -> Unit)? = null,
+) {
+    controller.isPanelActive = isInputEligible()
+    controller.isInputAllowed = isInputEligible
+
+    controller.onResizeBroadcast = { cols, rows ->
+        if (isBindingCurrent()) {
+            ownerScope.launch {
+                try {
+                    terminalRepo.resizeTerminal(controller.sessionId, cols, rows)
+                } catch (_: Throwable) {}
+            }
+        }
+    }
+
+    controller.setRawInputSink { bytes ->
+        if (!isBindingCurrent()) return@setRawInputSink
+        val capturedCmd = lastSubmittedCommandText()
+        val item = QueuedWrite(
+            sessionId = controller.sessionId,
+            controller = controller,
+            bytes = bytes,
+            epoch = currentActiveSessionEpoch(),
+            incarnation = controller.incarnation.toLong(),
+            bindingToken = bindingToken,
+            commandText = capturedCmd,
+            onResult = { success, isDeliveryUncertain, error ->
+                if (success && capturedCmd != null) onConfirmedCommand?.invoke(capturedCmd)
+                if (!success) {
+                    if (error != null) {
+                        onErrorBanner?.invoke(error)
+                    }
+                    if (capturedCmd != null) {
+                        failedRecords?.add(
+                            FailedCommandRecord(
+                                sessionId = controller.sessionId,
+                                command = capturedCmd,
+                                isDeliveryUncertain = isDeliveryUncertain,
+                                reason = error ?: "Delivery failure"
+                            )
+                        )
+                    }
+                }
+            }
+        )
+        val admitted = writeChannel.trySend(item).isSuccess
+        onAdmitted?.invoke(admitted)
+        if (!admitted) {
+            onErrorBanner?.invoke("Terminal input buffer full")
+            if (capturedCmd != null) {
+                failedRecords?.add(
+                    FailedCommandRecord(
+                        sessionId = controller.sessionId,
+                        command = capturedCmd,
+                        isDeliveryUncertain = false,
+                        reason = "Input buffer full"
+                    )
+                )
+            }
+        }
+    }
+
+    controller.onRequestReattach = recovery@{ sId, offset ->
+        if (sId != currentActiveSessionId() || !isBindingCurrent() ||
+            destroyingSessionIds[sId] == true || !controller.isPanelActive
+        ) return@recovery
+        val requestEpoch = currentActiveSessionEpoch()
+        val requestIncarnation = controller.incarnation
+        val requestToken = nextAttachmentAttemptToken()
+        attachQueues.getOrPut(controller) { TerminalAttachQueue(controller, ownerScope) }.recover(
+            capturedOffset = offset,
+            isCurrent = {
+                isBindingCurrent() &&
+                    terminalRepo.apiClient.connection == bindingToken.connectionRef &&
+                    controller.isPanelActive &&
+                    destroyingSessionIds[sId] != true && sId == currentActiveSessionId() &&
+                    requestEpoch == currentActiveSessionEpoch() && requestIncarnation == controller.incarnation &&
+                    requestToken == currentAttachmentAttemptToken()
+            },
+            connect = {
+                if (terminalRepo.wsConnection?.state?.value !is WsState.Connected) {
+                    throw ConnectionOwnerError("WebSocket is not connected", ConnectionErrorReason.UNAVAILABLE)
+                }
+            },
+            send = { capturedOffset -> terminalRepo.attachTerminal(sId, capturedOffset) },
+            onResult = { error ->
+                if (error != null) {
+                    onErrorBanner?.invoke("Reattach failed: ${error.message ?: "network error"}")
+                }
+            },
+        )
+    }
+}
+
 /**
  * Standalone Mobile Terminal Display & Input Screen for a selected project.
  *
@@ -224,8 +337,29 @@ fun ProjectTerminalScreen(
     var pendingReconciliationId by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
     var fallbackAttachmentRevision by remember(terminalRepo, connectionKey) { mutableStateOf(0L) }
     var fallbackAttachmentAttemptToken by remember(terminalRepo, connectionKey) { mutableStateOf(0L) }
+    var surfaceEpoch by remember(terminalRepo, connectionKey) { mutableStateOf(1L) }
     fun currentAttachmentRevision(): Long = retainedState?.attachmentRevision ?: fallbackAttachmentRevision
     fun currentAttachmentAttemptToken(): Long = retainedState?.attachmentAttemptToken ?: fallbackAttachmentAttemptToken
+
+    val currentOwner = remember(profileId, connectionRef, projectName, worktreePath, historyOwner) {
+        retainedState?.owner ?: WorkspaceFileOwner(
+            profileId = profileId ?: connectionRef.profileId,
+            baseUrl = terminalRepo.apiClient.normalizedBaseUrl,
+            accountUser = historyOwner?.accountId ?: "authenticated-user",
+            project = projectName,
+            worktreePath = worktreePath,
+        )
+    }
+
+    fun currentBindingToken(ctrl: TerminalSessionController): TerminalBindingToken =
+        TerminalBindingToken(
+            owner = currentOwner,
+            connectionRef = connectionRef,
+            repositoryIdentity = System.identityHashCode(terminalRepo),
+            controllerId = ctrl.sessionId,
+            controllerIncarnation = ctrl.incarnation.toLong(),
+            surfaceEpoch = surfaceEpoch,
+        )
     val attachmentRevision = currentAttachmentRevision()
     val attachmentAttemptToken = currentAttachmentAttemptToken()
 
@@ -385,6 +519,8 @@ fun ProjectTerminalScreen(
 
     // Single background worker strictly serializing writes with epoch and boundary gating
     LaunchedEffect(terminalRepo, connectionKey) {
+        val repoIdentity = System.identityHashCode(terminalRepo)
+        val conn = connectionRef
         launch(Dispatchers.Main.immediate) {
             for (item in writeChannel) {
                 try {
@@ -392,10 +528,11 @@ fun ProjectTerminalScreen(
                     val curSession = currentActiveSessionId()
                     val isCurrent = (item.epoch == curEpoch) &&
                         (item.sessionId == curSession) &&
+                        (item.bindingToken.connectionRef == conn) &&
+                        (item.bindingToken.repositoryIdentity == repoIdentity) &&
                         (terminalRepo.apiClient.connection == connectionRef) &&
                         (controllers[item.sessionId] === item.controller) &&
                         (destroyingSessionIds[item.sessionId] != true)
-
                     val isEligible = isCurrent &&
                         item.controller.isPanelActive &&
                         item.controller.isReplayCompleted &&
@@ -447,114 +584,63 @@ fun ProjectTerminalScreen(
 
     fun getOrCreateController(id: String, incarnation: Long): TerminalSessionController {
         val existing = controllers[id]
-        if (existing != null) {
+        val ctrl = if (existing != null) {
             if (existing.incarnation.toLong() < incarnation) {
                 // Incarnation bumped on server: clean up stale controller immediately
                 removeSessionLocal(id)
+                null
             } else {
-                return existing
+                existing
             }
+        } else null
+
+        val finalCtrl = ctrl ?: run {
+            val surface = surfaces.getOrPut(id) {
+                VtTerminalSurface()
+            }
+            val created = TerminalSessionController(
+                sessionId = id,
+                initialIncarnation = incarnation,
+                connectionRef = connectionRef,
+                surface = surface,
+                terminalRepository = terminalRepo
+            )
+            controllers[id] = created
+            created
         }
 
-        val surface = surfaces.getOrPut(id) {
-            VtTerminalSurface()
-        }
-
-        val ctrl = TerminalSessionController(
-            sessionId = id,
-            initialIncarnation = incarnation,
-            connectionRef = connectionRef,
-            surface = surface,
-            terminalRepository = terminalRepo
+        val token = currentBindingToken(finalCtrl)
+        installCurrentControllerBinding(
+            controller = finalCtrl,
+            bindingToken = token,
+            ownerScope = ownerScope,
+            terminalRepo = terminalRepo,
+            writeChannel = writeChannel,
+            attachQueues = attachQueues,
+            destroyingSessionIds = destroyingSessionIds,
+            isInputEligible = { isEligibleForInput(id) },
+            currentActiveSessionId = { currentActiveSessionId() },
+            currentActiveSessionEpoch = { currentActiveSessionEpoch() },
+            currentAttachmentAttemptToken = { currentAttachmentAttemptToken() },
+            nextAttachmentAttemptToken = {
+                if (retainedState != null) ++retainedState.attachmentAttemptToken else ++fallbackAttachmentAttemptToken
+            },
+            isBindingCurrent = {
+                terminalRepo.apiClient.connection == connectionRef &&
+                    token.connectionRef == connectionRef &&
+                    token.repositoryIdentity == System.identityHashCode(terminalRepo) &&
+                    token.controllerIncarnation == finalCtrl.incarnation.toLong() &&
+                    token.surfaceEpoch == surfaceEpoch &&
+                    controllers[id] === finalCtrl
+            },
+            lastSubmittedCommandText = { lastSubmittedCommandText },
+            onConfirmedCommand = { recordConfirmedCommand(it) },
+            onErrorBanner = { uiErrorBanner = it },
+            failedRecords = failedRecords,
+            onAdmitted = { lastSinkAdmitted = it }
         )
 
-        ctrl.onResizeBroadcast = { cols, rows ->
-            ownerScope.launch {
-                try {
-                    terminalRepo.resizeTerminal(id, cols, rows)
-                } catch (_: Throwable) {}
-            }
-        }
-
-        ctrl.setRawInputSink { bytes ->
-            val capturedCmd = lastSubmittedCommandText
-            val item = QueuedWrite(
-                sessionId = id,
-                controller = ctrl,
-                bytes = bytes,
-                epoch = currentActiveSessionEpoch(),
-                incarnation = ctrl.incarnation.toLong(),
-                commandText = capturedCmd,
-                onResult = { success, isDeliveryUncertain, error ->
-                    // Only a transport-confirmed explicit submission is remembered; failed/uncertain never are.
-                    if (success && capturedCmd != null) recordConfirmedCommand(capturedCmd)
-                    if (!success) {
-                        if (error != null) {
-                            uiErrorBanner = error
-                        }
-                        if (capturedCmd != null) {
-                            failedRecords.add(
-                                FailedCommandRecord(
-                                    sessionId = id,
-                                    command = capturedCmd,
-                                    isDeliveryUncertain = isDeliveryUncertain,
-                                    reason = error ?: "Delivery failure"
-                                )
-                            )
-                        }
-                    }
-                }
-            )
-            val admitted = writeChannel.trySend(item).isSuccess
-            lastSinkAdmitted = admitted
-            if (!admitted) {
-                uiErrorBanner = "Terminal input buffer full"
-                if (capturedCmd != null) {
-                    failedRecords.add(
-                        FailedCommandRecord(
-                            sessionId = id,
-                            command = capturedCmd,
-                            isDeliveryUncertain = false,
-                            reason = "Input buffer full"
-                        )
-                    )
-                }
-            }
-        }
-
-        ctrl.onRequestReattach = recovery@{ sId, offset ->
-            if (sId != currentActiveSessionId() || controllers[sId] !== ctrl ||
-                destroyingSessionIds[sId] == true || !ctrl.isPanelActive
-            ) return@recovery
-            val requestEpoch = currentActiveSessionEpoch()
-            val requestIncarnation = ctrl.incarnation
-            val requestToken = if (retainedState != null) ++retainedState.attachmentAttemptToken else ++fallbackAttachmentAttemptToken
-            attachQueues.getOrPut(ctrl) { TerminalAttachQueue(ctrl, ownerScope) }.recover(
-                capturedOffset = offset,
-                isCurrent = {
-                    terminalRepo.apiClient.connection == connectionRef &&
-                        ctrl.isPanelActive && controllers[sId] === ctrl &&
-                        destroyingSessionIds[sId] != true && sId == currentActiveSessionId() &&
-                        requestEpoch == currentActiveSessionEpoch() && requestIncarnation == ctrl.incarnation &&
-                        requestToken == currentAttachmentAttemptToken()
-                },
-                connect = {
-                    if (terminalRepo.wsConnection?.state?.value !is WsState.Connected) {
-                        throw ConnectionOwnerError("WebSocket is not connected", ConnectionErrorReason.UNAVAILABLE)
-                    }
-                },
-                send = { capturedOffset -> terminalRepo.attachTerminal(sId, capturedOffset) },
-                onResult = { error ->
-                    if (error != null) {
-                        uiErrorBanner = "Reattach failed: ${error.message ?: "network error"}"
-                    }
-                },
-            )
-        }
-
-        ctrl.isPanelActive = isEligibleForInput(id)
-        controllers[id] = ctrl
-        return ctrl
+        return finalCtrl
     }
 
     suspend fun refreshSessions(
@@ -662,8 +748,11 @@ fun ProjectTerminalScreen(
 
     // Establish WebSocket stream listeners with UNDISPATCHED startup to guarantee subscription before attachment
     LaunchedEffect(terminalRepo, connectionKey) {
+        val repoIdentity = System.identityHashCode(terminalRepo)
+        val conn = connectionRef
         launch(start = CoroutineStart.UNDISPATCHED) {
             terminalRepo.terminalOutput.collect { msg ->
+                if (terminalRepo.apiClient.connection != conn || System.identityHashCode(terminalRepo) != repoIdentity) return@collect
                 controllers[msg.id]?.handleLiveChunk(
                     msg.data.encodeToByteArray(),
                     msg.offset,
@@ -673,6 +762,7 @@ fun ProjectTerminalScreen(
         }
         launch(start = CoroutineStart.UNDISPATCHED) {
             terminalRepo.terminalBuffer.collect { msg ->
+                if (terminalRepo.apiClient.connection != conn || System.identityHashCode(terminalRepo) != repoIdentity) return@collect
                 controllers[msg.id]?.handleBufferReplay(
                     msg.data.encodeToByteArray(),
                     msg.offset,
@@ -684,6 +774,7 @@ fun ProjectTerminalScreen(
         }
         launch(start = CoroutineStart.UNDISPATCHED) {
             terminalRepo.terminalExit.collect { msg ->
+                if (terminalRepo.apiClient.connection != conn || System.identityHashCode(terminalRepo) != repoIdentity) return@collect
                 controllers[msg.id]?.handleExit(
                     msg.exitCode,
                     msg.willRestart,
@@ -694,6 +785,7 @@ fun ProjectTerminalScreen(
         }
         launch(start = CoroutineStart.UNDISPATCHED) {
             terminalRepo.terminalLagged.collect { msg ->
+                if (terminalRepo.apiClient.connection != conn || System.identityHashCode(terminalRepo) != repoIdentity) return@collect
                 activeSessionId?.let { id ->
                     controllers[id]?.handleLagged(msg.dropped)
                 }
@@ -701,6 +793,7 @@ fun ProjectTerminalScreen(
         }
         launch(start = CoroutineStart.UNDISPATCHED) {
             terminalRepo.processRestarted.collect { msg ->
+                if (terminalRepo.apiClient.connection != conn || System.identityHashCode(terminalRepo) != repoIdentity) return@collect
                 controllers[msg.id]?.handleProcessRestarted(
                     msg.restartCount,
                     msg.previousExitCode
@@ -758,14 +851,18 @@ fun ProjectTerminalScreen(
         if (destroyingSessionIds[session.id] == true) return@LaunchedEffect
         val ctrl = getOrCreateController(session.id, session.incarnation.toLong())
         ctrl.isPanelActive = isEligibleForInput(session.id)
+        val token = currentBindingToken(ctrl)
         val requestToken = if (retainedState != null) ++retainedState.attachmentAttemptToken else ++fallbackAttachmentAttemptToken
         val requestEpoch = currentActiveSessionEpoch()
         val requestIncarnation = ctrl.incarnation
+        val repoIdentity = System.identityHashCode(terminalRepo)
+        val conn = connectionRef
         attachQueues.getOrPut(ctrl) { TerminalAttachQueue(ctrl, ownerScope) }.attach(
             isCurrent = {
                 requestToken == currentAttachmentAttemptToken() && session.id == currentActiveSessionId() &&
                     requestEpoch == currentActiveSessionEpoch() && ctrl.incarnation == requestIncarnation &&
-                    terminalRepo.apiClient.connection == connectionRef &&
+                    token.connectionRef == conn && token.repositoryIdentity == repoIdentity &&
+                    terminalRepo.apiClient.connection == conn &&
                     destroyingSessionIds[session.id] != true && controllers[session.id] === ctrl
             },
             connect = {
@@ -787,8 +884,6 @@ fun ProjectTerminalScreen(
             },
         )
     }
-
-    // Clean detachment on unmount or connection invalidation: deactivate input, close local controllers and surfaces
     DisposableEffect(terminalRepo, connectionKey, retainedState) {
         if (retainedState != null) {
             retainedState.setPanelVisible(true)

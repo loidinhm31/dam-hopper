@@ -22,7 +22,7 @@ import dev.damhopper.nativeapp.features.terminal.TerminalReadingStates
 import dev.damhopper.nativeapp.features.terminal.TerminalRepository
 import dev.damhopper.nativeapp.features.terminal.TerminalSessionController
 import dev.damhopper.nativeapp.features.terminal.TerminalSessionDetailed
-import kotlinx.coroutines.CancellationException
+import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -40,6 +40,19 @@ data class FailedCommandRecord(
 )
 
 /**
+ * Binding token capturing owner, connection, repository, controller identity/incarnation,
+ * and monotonic attachment/surface epoch.
+ */
+data class TerminalBindingToken(
+    val owner: WorkspaceFileOwner,
+    val connectionRef: ConnectionRef,
+    val repositoryIdentity: Int,
+    val controllerId: String,
+    val controllerIncarnation: Long,
+    val surfaceEpoch: Long,
+)
+
+/**
  * Tagged input write bearing session, epoch, and incarnation tokens
  * ensuring FIFO execution and preventing cross-epoch / cross-session transmission.
  */
@@ -49,10 +62,10 @@ data class QueuedWrite(
     val bytes: ByteArray,
     val epoch: Long,
     val incarnation: Long,
+    val bindingToken: TerminalBindingToken,
     val commandText: String? = null,
     val onResult: (Boolean, Boolean, String?) -> Unit,
 )
-
 /**
  * Retained non-Activity state owner for terminal sessions, surfaces, FIFO write queue,
  * active selection, and visibility-gated input policy.
@@ -66,8 +79,9 @@ data class QueuedWrite(
  */
 class ProjectTerminalState(
     val projectName: String,
-    val connectionRef: ConnectionRef,
+    var connectionRef: ConnectionRef,
     val ownerScope: CoroutineScope = CoroutineScope(Dispatchers.Main.immediate),
+    val owner: WorkspaceFileOwner? = null,
 ) : AutoCloseable {
 
     val controllers: SnapshotStateMap<String, TerminalSessionController> = mutableStateMapOf()
@@ -148,11 +162,27 @@ class ProjectTerminalState(
 
     fun rebindAuthority(newConnection: ConnectionRef): Boolean {
         if (newConnection.profileId != connectionRef.profileId) return false
+        this.connectionRef = newConnection
         _isAuthorityRetired = false
         updateAllControllersInputPolicy()
         return true
     }
 
+    fun rebindTransports(newConnection: ConnectionRef, newRepository: TerminalRepository): Boolean {
+        if (newConnection.profileId != connectionRef.profileId) return false
+        this.connectionRef = newConnection
+        _isAuthorityRetired = false
+        attachQueues.clear()
+        while (true) {
+            val pendingWrite = writeChannel.tryReceive().getOrNull() ?: break
+            pendingWrite.onResult(false, false, "Transport rebound")
+        }
+        controllers.values.forEach { ctrl ->
+            ctrl.rebindTransport(newConnection, newRepository)
+        }
+        updateAllControllersInputPolicy()
+        return true
+    }
     /**
      * Writes the terminal font through the one reactive preference truth. There is no local copy: screens read
      * [PreferenceAccess.preferences], so the pinch/step controls and Settings always agree.

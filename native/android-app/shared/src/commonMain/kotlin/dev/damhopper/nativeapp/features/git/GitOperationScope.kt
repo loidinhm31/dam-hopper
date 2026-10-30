@@ -2,6 +2,7 @@ package dev.damhopper.nativeapp.features.git
 
 import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 
 /**
  * Encapsulates the complete target and connection scope for Git actions.
@@ -12,37 +13,22 @@ import dev.damhopper.nativeapp.core.model.ProjectTargetRef
  *   mutation baselines, confirmation dialogs, and late asynchronous responses.
  */
 data class GitOperationScope(
-    val profileId: String,
+    val owner: WorkspaceFileOwner,
     val generation: Long,
-    val project: String,
-    val worktreePath: String? = null,
     val root: String? = null,
 ) {
-    fun matches(other: GitOperationScope?): Boolean {
-        if (other == null) return false
-        return profileId == other.profileId &&
-            generation == other.generation &&
-            project == other.project &&
-            worktreePath == other.worktreePath &&
-            root == other.root
-    }
+    val profileId: String get() = owner.profileId ?: ""
+    val project get() = owner.project
+    val worktreePath get() = owner.worktreePath
+    val targetRef get() = owner.toProjectTargetRef()
 
-    val targetRef: ProjectTargetRef
-        get() = ProjectTargetRef(
-            profileId = profileId,
-            project = project,
-            worktreePath = worktreePath,
-        )
+    fun matches(other: GitOperationScope?): Boolean =
+        other != null && owner == other.owner && generation == other.generation && root == other.root
 
     companion object {
-        fun from(connection: ConnectionRef, target: ProjectTargetRef, root: String? = null): GitOperationScope {
-            return GitOperationScope(
-                profileId = connection.profileId,
-                generation = connection.generation,
-                project = target.project,
-                worktreePath = target.worktreePath,
-                root = root,
-            )
+        fun from(owner: WorkspaceFileOwner, connection: ConnectionRef, root: String? = null): GitOperationScope {
+            require(owner.profileId == connection.profileId) { "owner profile mismatch" }
+            return GitOperationScope(owner = owner, generation = connection.generation, root = root)
         }
     }
 }

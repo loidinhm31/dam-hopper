@@ -71,6 +71,10 @@ import dev.damhopper.nativeapp.features.terminal.TerminalRepository
 import dev.damhopper.nativeapp.features.terminal.stepTerminalFontSize
 import dev.damhopper.nativeapp.features.workspace.ProjectTargetStore
 import dev.damhopper.nativeapp.features.workspace.ProjectWorkspaceState
+import dev.damhopper.nativeapp.features.git.GitHostPorts
+import dev.damhopper.nativeapp.features.git.GitWorkspaceRuntime
+import dev.damhopper.nativeapp.features.git.GitRepository
+import dev.damhopper.nativeapp.features.git.WorkspaceGitSafety
 import dev.damhopper.nativeapp.features.workspace.WorkspaceDepartureIntent
 import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 import dev.damhopper.nativeapp.features.workspace.WorkspacePanel
@@ -138,6 +142,8 @@ interface RetainedRootServices {
 
     /** Refreshes every attached connected runtime's roster inventory (sidebar open, retry); never connects. */
     fun refreshTerminalAgents(reason: TerminalAgentsRefreshReason)
+
+    fun gitHostPorts(owner: WorkspaceFileOwner): GitHostPorts
 }
 
 /**
@@ -318,16 +324,28 @@ private fun RootContent(
     }
 
     val selectedProj = flowState.activeProject
-    val activeWorkspaceState = remember(activeProfileId, currentProfile?.baseUrl, currentConn?.generation, selectedProj, flowState.activeWorktreePath, apiClient, wsConnection) {
+    val activeWorkspaceState = remember(
+        activeProfileId,
+        currentProfile?.baseUrl,
+        effectiveAccountUser,
+        currentConn,
+        selectedProj,
+        flowState.activeWorktreePath,
+        apiClient,
+        wsConnection,
+    ) {
         val client = apiClient
         val ws = wsConnection
         val profId = activeProfileId
         val prof = currentProfile
+        val conn = currentConn
+        val accountUser = effectiveAccountUser
         if (profId != null && prof != null && client != null && ws != null && selectedProj != null &&
-            client.connection.profileId == profId && ws.connection.profileId == profId
+            conn != null && accountUser != null &&
+            client.connection == conn && ws.connection == conn &&
+            client.normalizedBaseUrl == WorkspaceFileOwner.normalizeBaseUrl(prof.baseUrl) &&
+            ws.baseUrl.trim().trimEnd('/') == WorkspaceFileOwner.normalizeBaseUrl(prof.baseUrl)
         ) {
-            val accountUser = (currentAuthStatus as? AuthStatus.Authenticated)?.session?.user
-                ?: if (prof.baseUrl.contains("127.0.0.1") || prof.baseUrl.contains("localhost")) "dev-user" else "authenticated-user"
             val owner = WorkspaceFileOwner(
                 profileId = profId,
                 baseUrl = prof.baseUrl,
@@ -341,7 +359,7 @@ private fun RootContent(
             } else {
                 val fileRepo = FileRepository(owner, client, ws)
                 val editorRepo = EditorRepository(fileRepo, profileId = profId)
-                ProjectWorkspaceState.create(
+                val wsState = ProjectWorkspaceState.create(
                     owner = owner,
                     target = target,
                     fileRepository = fileRepo,
@@ -351,6 +369,33 @@ private fun RootContent(
                     commandHistory = services?.commandHistory,
                     historyOwner = SettingsOwner(client.connection, client.normalizedBaseUrl, accountUser),
                 )
+                val safety = WorkspaceGitSafety(
+                    boundOwner = owner,
+                    connectionGetter = { client.connection },
+                    fileRepositoryGetter = { fileRepo },
+                    editorRepositoryGetter = { editorRepo },
+                    terminalRepositoryGetter = { dev.damhopper.nativeapp.features.terminal.TerminalRepository(client, ws) },
+                    workspaceStateGetter = { wsState },
+                    retainedDirtyDocsProvider = { requestedOwner ->
+                        if (requestedOwner == owner) {
+                            wsState.getDirtyDocumentIds()
+                        } else {
+                            emptyList()
+                        }
+                    },
+                    targetStore = targetStore,
+                    flowNavigation = navigation,
+                )
+                val runtime = GitWorkspaceRuntime(
+                    owner = owner,
+                    connection = client.connection,
+                    repository = GitRepository(client),
+                    presentation = wsState.gitState,
+                    safety = safety,
+                    coroutineScope = wsState.coroutineScope,
+                )
+                wsState.bindGitRuntime(runtime)
+                wsState
             }
         } else null
     }
@@ -673,7 +718,7 @@ private fun RootContent(
 
     fun onRootKey(event: KeyEvent): Boolean {
         val svc = services ?: return false
-        val isEditing = searchMode != null || (activeWorkspaceState != null && (activeWorkspaceState.activePanel.value == WorkspacePanel.EDITOR || activeWorkspaceState.isCommandInputFocused.value || activeWorkspaceState.terminalState?.isCommandInputFocused?.value == true))
+        val isEditing = searchMode != null || (activeWorkspaceState != null && (activeWorkspaceState.activePanel.value == WorkspacePanel.EDITOR || activeWorkspaceState.activePanel.value == WorkspacePanel.GIT || activeWorkspaceState.isCommandInputFocused.value || activeWorkspaceState.terminalState?.isCommandInputFocused?.value == true))
         val isComposing = activeWorkspaceState?.terminalState?.isImeComposing?.value == true
         if ((isEditing || isComposing) && !masked) {
             svc.shortcutRegistry.reset()

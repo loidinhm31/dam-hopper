@@ -19,10 +19,16 @@ import androidx.compose.runtime.setValue
 open class TerminalSessionController(
     val sessionId: String,
     initialIncarnation: Long = 0L,
-    val connectionRef: ConnectionRef,
+    connectionRef: ConnectionRef,
     val surface: NativeTerminalSurface? = null,
-    val terminalRepository: TerminalRepository? = null,
+    terminalRepository: TerminalRepository? = null,
 ) : AutoCloseable {
+
+    var connectionRef: ConnectionRef = connectionRef
+        private set
+
+    var terminalRepository: TerminalRepository? = terminalRepository
+        private set
 
     var incarnation: ULong = initialIncarnation.toULong()
         private set
@@ -84,6 +90,15 @@ open class TerminalSessionController(
         this.rawInputSink = sink
     }
 
+    fun rebindTransport(newConnection: ConnectionRef, newRepository: TerminalRepository) {
+        this.connectionRef = newConnection
+        this.terminalRepository = newRepository
+        this.rawInputSink = null
+        this.onRequestReattach = null
+        pendingReplayDrainGeneration = null
+        isStreamReadyState = false
+        gate.resetForAttach()
+    }
     /**
      * Closes replay/input before any asynchronous attach work, retaining accepted text/offset.
      * Ordinary callers invoke once; recovery callbacks receive this already-captured offset.

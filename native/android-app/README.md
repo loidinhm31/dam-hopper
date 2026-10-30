@@ -1,6 +1,6 @@
 # DamHopper Android Native Client (`native/android-app`)
 
-**Status:** The active Android flow supports Profile Login → Project List → focused Project Terminal workspace with retained Terminal, Files, and Editor surfaces; the Traditional terminal Agents sidebar is integrated in that workspace. Sora Editor `0.23.4` and Java incremental syntax parsing remain the native editor implementation. Phase 08 editor/explorer journeys were verified on `Medium_Phone_API_36` (16/16 instrumentation tests against a live loopback server); this does not qualify the Agents sidebar's current-server/device journeys, which remain open alongside physical ARM64 and API 29 release gates.
+**Status:** The active Android flow supports Profile Login → Project List → focused Project Terminal workspace with retained Terminal, Files, Editor, and focused Git surfaces (`WorkspacePanel.GIT`); the Traditional terminal Agents sidebar is integrated in that workspace. Sora Editor `0.23.4` and Java incremental syntax parsing remain the native editor implementation. Focused Git view instrumentation test sources compile cleanly; independent Git oracle fixture (`--self-test`, 0 failures) and current-server smoke tests (`--smoke-current-server`, 0 failures) reportedly pass; all 1,168 automated unit tests are reported passing (937 shared JVM + 231 Android unit tests, 0 failures; predecessor terminal presentation policy regressions resolved in source; reported in `plans/reports/tester-261031-0029-c1-verification.md`); Cycle 3 code review scored 6/10 (CHANGES REQUIRED, 0 Critical findings remaining; non-critical warnings tracked). Connected device journeys have not run and qualification remains blocked on missing hardware/adb (GATE-C), which remains open alongside physical ARM64, API 29, and review remediation release gates.
 **Architecture Document:** [Android Native Client Architecture](../../docs/architecture/android-native-client.md)  
 **Acceptance Ledger:** [Android Native Acceptance Ledger](../../docs/android-native-acceptance.md)  
 **Implementation Plan:** [Android Native App Plan](../../plans/261015-1647-android-native-app/plan.md)  
@@ -23,7 +23,7 @@ The current app entry point is a guided three-stage flow: Profile Login → Proj
 | --- | --- | --- |
 | `PROFILE_LOGIN` | `ProfileLoginScreen` | Select or add a server profile, test reachability, authenticate (including MFA), or use Dev Login only after a server capability probe confirms development mode. |
 | `PROJECT_LIST` | `ProjectListScreen` | Load workspace projects with loading, error, and empty states; refresh the list or return to Profiles / Switch. Selecting a card sets the project target. |
-| `TERMINAL` | `ProjectTerminalScreen` | Show the selected project's retained Traditional terminal and focused Files/Editor surfaces; the terminal toolbar also exposes the Agents sidebar. |
+| `TERMINAL` | `ProjectTerminalScreen` | Show the selected project's retained Traditional terminal, focused Files/Editor, and focused Git surfaces (`WorkspacePanel.GIT`); the terminal toolbar also exposes the Agents sidebar. |
 
 `MainActivity` initializes `ProfileRepository`, creates `AppFlowNavigation`, and installs the platform `BackHandler`. `DamHopperMobileApp` renders the screen selected by `AppFlowState`, which tracks the stage, profile ID, project, and active session. It reconstructs the workspace and terminal repositories when the active profile, server URL, or connection generation changes, clearing the old references before constructing owner-scoped replacements.
 
@@ -31,7 +31,47 @@ Back navigation is hierarchical: Terminal → Project List → Profile Login. At
 
 Leaving Terminal deactivates input and disposes the screen's local terminal controllers, but does not kill or remove the server-owned PTY. Terminal font size is adjustable in-line from 10sp to 32sp (default 13sp, with line height `fontSize + 4`sp) via header controls (`A-`, `${terminalFontSize}sp`, `A+`) or two-finger pinch-to-zoom on the output area, persisted to local `PreferencesStore` and dynamically recalculating VT grid and PTY geometry without disconnecting or restarting the session. The terminal accessory controls are inline and strictly limited to a maximum of 2 rows (integrating modifier, navigation, and scroll buttons; zero redundant bottom input box for maximized terminal workspace): ⌨, Ctrl, Alt, Shift, Ctrl+C, Ctrl+D, Clear, optional scroll buttons (▲ step, ▼ step, Top, Bottom), Esc, Tab, arrow keys, Home, End, and Enter. Clear affects only the local display buffer. The hosted screens contain no WebView or floating action button.
 
-The shared module still contains a separate 12-panel `WorkbenchScreen` / `PanelHost` shell. The current `DamHopperMobileApp` root does not mount that shell; its other panel destinations are not reachable through the guided flow. The focused workspace and Traditional terminal Agents sidebar are active root surfaces, not entry points into that dormant shell.
+The shared module still contains a separate 12-panel `WorkbenchScreen` / `PanelHost` shell. The current `DamHopperMobileApp` root does not mount that shell; its other panel destinations are not reachable through the guided flow. The focused workspace, focused Git view, and Traditional terminal Agents sidebar are active root surfaces, not entry points into that dormant shell.
+
+### Focused Git workspace view
+
+The focused workspace toolbar mounts a direct Git destination (`WorkspacePanel.GIT`) alongside Terminal, Files, and Editor in `ProjectTerminalScreen`. Selecting Git renders the retained `GitPanelScreen` within the single content host without unmounting or terminating active terminal PTYs or editor tabs.
+
+The focused Git view organizes operations into three primary sections with nested inspection routes:
+
+1. **Changes Section (`GitChangesView`):**
+   - Displays staged, unstaged, untracked, and conflicting file changes in a categorized list. Supports staged and unstaged edits on the same file, untracked file pagination, binary assets, and deleted or empty files.
+   - Provides stage, unstage, commit (with optional `amend` toggle), and confirmed discard actions. File discard is guarded by dirty-editor checks and requires explicit user confirmation before executing.
+   - Invalidation and reconciliation run strictly after server mutation success (`GitOutcomeKind.SUCCEEDED`), preventing premature UI state clearing on network or server errors.
+
+2. **History Section (`GitHistoryView`):**
+   - Renders a pure ancestry directed acyclic graph (DAG) computed from commit OID parent links (`GitGraphLayout`). Supports linear histories, 2-parent merges, multi-parent octopus merges, skewed commit timestamps, downward and upward edges, and off-page stub indicators.
+   - Literal search query filtering debounces input and renders matching commits as a flat list; active search disables squash selection to prevent non-contiguous commit merges.
+   - Nested commit details view (`GitCommitDetailsDialog`) displays the full commit message, author, committer, and modified file list. Selecting a modified file opens a nested, read-only file diff view (`GitFileDiffView`).
+   - Hardware Back and toolbar Back affordances unwind nested diff views to commit details, and commit details back to the History overview before unmounting the Git surface.
+
+3. **Branches and Worktrees Section (`GitBranchesWorktreesView`):**
+   - Lists local and remote branches disambiguated by full canonical ref (`refs/heads/*` vs `refs/remotes/*`). Supports branch creation, checkout, fast-forward branch updates, and safe deletion of inactive branches.
+   - Manages git worktrees: create, open, remove, and prune. Path mapping preserves projected paths and strictly escapes punctuation characters (`& + # =`) across REST queries and bodies.
+   - Worktree removal validates prechecks: main worktree removal is blocked, and removal is refused if matching retained owners contain unsaved editor buffers or active terminal sessions.
+
+#### Four Distinct Working Identities
+
+The focused Git client maintains four distinct, non-interchangeable identities to ensure cross-profile isolation and prevent state corruption:
+
+1. **Authenticated Logical Owner (`ProfileId` / `profileId`):** Identifies the active server connection profile. All controllers, repositories, and caches are fenced to this owner.
+2. **Connection Generation (`generation`):** Monotonically increasing counter for the active socket/transport runtime. Stale responses and background jobs from retired generations are rejected via `assertCurrentOwner`.
+3. **Workspace Project Target (`ProjectTargetRef` / `targetWorktree`):** The active project directory or linked worktree target. Switching worktrees triggers a guarded whole-workspace transition that prompts on unsaved editor drafts.
+4. **Working Tree Root (`VcsRoot` / `root`):** The repository root within multi-root or submodule configurations. Wire requests qualify Git operations by root where supported.
+
+#### Safety Guards, Conflict Handoff & Contract Invariants
+
+- **Safe History Rewrites:** Differentiates checked-out active branch actions (amend, reset, discard, drop, cherry-pick) from inactive local branch rewrites (CAS message edit snapshot and contiguous oldest-first squash). Signed commits are protected by an explicit consent guard (`allowSignatureRemoval`), preventing accidental signature stripping without user confirmation.
+- **Separate Leased Publication:** History rewrites never publish automatically. Publication is an explicit subsequent user action (`/push/prepare` + `/push/publish`) verifying exact expected remote OIDs; stale remote tips abort without blind `--force` fallback.
+- **Read-Only Conflict & Operation Handoff:** Conflict states (`GET /api/git/:project/conflicts`) and stopped operations (`GET /api/git/:project/operation`) present unmerged file status and guidance directing the developer to Terminal or web CLI. Zero wire calls are made to `POST /resolve` or `POST /operation`.
+- **Secondary-Root Push vs Fetch/Pull Restrictions:** The server fetch and pull endpoints (`POST /api/git/fetch`, `POST /api/git/pull`) do not accept a root selector; secondary roots in multi-root workspaces visibly disable fetch and pull. Ordinary push (`POST /api/git/push`) supports root qualification and remains available for secondary roots.
+- **Drop-Ack Idempotence:** If a mutating request is accepted by the server but the connection drops before receiving the acknowledgement, exactly one request was forwarded; the client does not replay mutations or maintain offline write queues, instead performing authoritative reconciliation on refresh (`GitRefreshReason.RECONCILE`).
+- **Shortcut Scope:** Git shortcuts remain unmapped in this focused root; Git tab availability does not authorize broader Settings shortcut changes or 12-panel shell activation.
 
 ### Traditional terminal Agents sidebar
 
@@ -115,7 +155,8 @@ native/android-app/
 │       │       │   ├── settings/    # RemoteConfigRepository, RemoteConfigEditor, RemoteConfigScreen
 │       │       │   ├── files/       # FileRepository, FileTreeState, TreeSubscriptionManager, SearchRepository, ReplaceCoordinator
 │       │       │   ├── editor/      # EditorSession, EditorRepository, EditorTabSaveCoordinator, EditorTabsState, BlameRepository
-│       │       │   ├── git/         # GitRepository, GitChangesController, GitBranchController, GitHistoryController, DiffReviewController
+│       │       │   ├── git/         # GitRepository, GitWorkspaceRuntime, GitChangesController, GitBranchController,
+│       │       │   │                # GitHistoryController, GitGraphLayout, WorkspaceGitSafety, DiffReviewController
 │       │       │   ├── workflow/    # WorkflowRepository, WorkflowController, ProjectPlansRepository, ProjectPlansController
 │       │       │   ├── agents/      # AgentStoreRepository, AgentMemoryRepository, AgentImportRepository, Controllers & Screens
 │       │       │   └── host/        # PortRepository, TunnelRepository, IdleSuspendRepository, IdleConsentController,
@@ -270,7 +311,7 @@ Phase 07 implements host-contract foundations for remote PTY lifecycle managemen
 - **Viewport and geometry:** User drag pauses follow; returning to bottom reenables it. Reading position stays anchored by stable `lineId` and pixel offset, clamping to the earliest surviving row after eviction. Grid geometry uses measured monospace metrics from the displayed 12sp text / 16sp line-height style; `softWrap = false` keeps one visual row per terminal row.
 - **Reported validation (remediation handoff):** 111/111 JVM terminal tests passed; `:androidApp:assembleDebug` succeeded; a 50,000-line live-stream test on `Medium_Phone_API_36` recorded zero ANRs and zero dropped frames. These reported results were not independently rerun for this documentation update. Broader live-server, physical-device, visual, and IME qualification remains open.
 
-See the [terminal lifetime and remediation architecture](../docs/architecture/android-native-client.md#terminal-lifetime).
+See the [terminal lifetime and remediation architecture](../../docs/architecture/android-native-client.md#terminal-lifetime).
 
 ### Ports, Tunnels, Idle Consent & Host Controls Architecture (Phase 16)
 
@@ -300,7 +341,7 @@ Phase 16 implements remote network port discovery, Cloudflared tunnel management
 
 `DamHopperMobileApp` keeps Settings as an overlay on the guided Profile Login → Project List → Project Terminal flow; inline header entries expose Settings and the notification feed without mounting the separate 12-panel `WorkbenchScreen`. Returning from Settings restores its captured origin. The overlay retains the editor's dirty text/undo state, file sidebar, and remote PTY while suspending hidden-surface input.
 
-The retained `SettingsRepository` is the single reactive preference source for Settings and active screens. Android-applicable Settings cover independent preference-source and administrative-target selection; local/remote appearance and v2 notification policy; native accessory keyboard and command history; supported shortcuts; agent-path/integration management; usage and idle-suspend controls; global defaults and known workspaces; structured config; and local diagnostics plus bounded SAF TOML import/export. Only the approved Git, Ports, Fleet, and IDE-layout shortcut destinations are unavailable in this focused root. Request-local owner/selection guards reject stale pre-admission work; an admitted but unconfirmed mutation is `Unknown`, not retried or represented as canceled on the server. Reset clears PTYs/runtime state, not saved preferences.
+The retained `SettingsRepository` is the single reactive preference source for Settings and active screens. Android-applicable Settings cover independent preference-source and administrative-target selection; local/remote appearance and v2 notification policy; native accessory keyboard and command history; supported shortcuts; agent-path/integration management; usage and idle-suspend controls; global defaults and known workspaces; structured config; and local diagnostics plus bounded SAF TOML import/export. The focused Git tab is active in the workspace, while Git shortcut bindings and Ports, Fleet, and IDE-layout destinations remain unavailable in this focused root. Request-local owner/selection guards reject stale pre-admission work; an admitted but unconfirmed mutation is `Unknown`, not retried or represented as canceled on the server. Reset clears PTYs/runtime state, not saved preferences.
 
 Preference changes update active consumers without replacing their owner state: theme/system text scaling, editor and terminal fonts/zoom, Files/sidebar hidden-file and language-family filtering, terminal scroll/accessory controls and project switching, supported shortcuts, and optional app-local command suggestions. The terminal scroll step is bounded to 1..50 (default 5). Language wire filters are `all`, `rust`, `javascript-typescript`, and `java`; migrated native `known`/`code`/`text` values display a non-equivalent local `all` fallback and are never silently synchronized.
 
@@ -382,11 +423,11 @@ bash tests/test-phase-02-foundation.sh && bash tests/test-phase-03-transport.sh
 - **Phase 09:** Native editor, language services, and safe saves *(Implementation baseline recorded; 70/70 static assertions; candidate adapter and open limitations recorded)*
 - **Phase 10:** Native diff, merge, and blame *(Implementation baseline recorded; 77/77 static assertions; qualification open)*
 - **Phase 11:** Encrypted transfers, media, and Android storage *(Scaffolding baseline recorded; 84/84 static assertions; open security and integration limitations)*
-- **Phase 12:** Complete Git and safe history workflows *(Implementation baseline recorded; 139/139 static assertions; open limitations recorded)*
+- **Phase 12:** Complete Git and safe history workflows *(Implementation baseline recorded; 139/139 static assertions; focused Git view increment implemented in features/git/ and ProjectTerminalScreen; unit, JVM, Android unit tests passing, independent Git oracle and server smoke passing; connected device qualification blocked on missing hardware/adb)*
 - **Phase 13:** Workflow tracking and project plans *(Implementation baseline recorded; 100/100 static assertions; qualification open)*
 - **Phase 14:** Agent Store imports and memory *(Implementation baseline recorded; 99/99 static assertions; open limitations recorded)*
 - **Phase 15:** Host resources, fleet, and usage *(Implementation baseline recorded; 81/81 static assertions; qualification open)*
-- **Phase 16:** Ports, tunnels, idle consent, and host controls *(Implementation baseline recorded; 194/194 static assertions in tests/test-phase-16-ports-tunnels-host-controls.sh; dated QA report recorded 417 unit test executions, Cycle 2 review reported 350 unique tests; clean assembleDebug; review score 7/10 changes required / qualification open with 3 High implementation defects and live server/device qualification open; see [Acceptance Ledger](../docs/android-native-acceptance.md))*
-- **Phase 17:** Preferences, privacy, active-runtime notifications, Settings, and reactive consumers *(Implemented; main reports 901 unit tests passing and clean APK assembly; MainActivity/server and physical-device qualification remain open; see [Acceptance Ledger](../docs/android-native-acceptance.md))*
+- **Phase 16:** Ports, tunnels, idle consent, and host controls *(Implementation baseline recorded; 194/194 static assertions in tests/test-phase-16-ports-tunnels-host-controls.sh; dated QA report recorded 417 unit test executions, Cycle 2 review reported 350 unique tests; clean assembleDebug; review score 7/10 changes required / qualification open with 3 High implementation defects and live server/device qualification open; see [Acceptance Ledger](../../docs/android-native-acceptance.md))*
+- **Phase 17:** Preferences, privacy, active-runtime notifications, Settings, and reactive consumers *(Implemented; main reports 901 unit tests passing and clean APK assembly; MainActivity/server and physical-device qualification remain open; see [Acceptance Ledger](../../docs/android-native-acceptance.md))*
 - **Phase 18:** Integrated device security and performance qualification
 - **Phase 19:** Signed APK release and operational handoff (see [.github/workflows/release-android.yml](../../.github/workflows/release-android.yml) and the [Android Release & Signing Setup Guide](../../docs/deployment-guide.md#5-android-native-client-release--github-actions-signing-setup))
