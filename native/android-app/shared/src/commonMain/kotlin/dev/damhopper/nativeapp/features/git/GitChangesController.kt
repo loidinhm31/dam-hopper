@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 class GitChangesController(
     val repository: GitRepository,
     val coroutineScope: CoroutineScope,
+    val host: GitHostPorts,
 ) {
     private val _stagedFiles = MutableStateFlow<List<DiffFileEntry>>(emptyList())
     val stagedFiles: StateFlow<List<DiffFileEntry>> = _stagedFiles.asStateFlow()
@@ -23,6 +24,12 @@ class GitChangesController(
 
     private val _untrackedFiles = MutableStateFlow<List<DiffFileEntry>>(emptyList())
     val untrackedFiles: StateFlow<List<DiffFileEntry>> = _untrackedFiles.asStateFlow()
+
+    private val _untrackedTruncated = MutableStateFlow(false)
+    val untrackedTruncated: StateFlow<Boolean> = _untrackedTruncated.asStateFlow()
+
+    private val _untrackedTotal = MutableStateFlow(0)
+    val untrackedTotal: StateFlow<Int> = _untrackedTotal.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -49,6 +56,22 @@ class GitChangesController(
         }
     }
 
+    fun clearScope() {
+        activeScope = null
+        activeRefreshJob?.cancel()
+        _stagedFiles.value = emptyList()
+        _unstagedFiles.value = emptyList()
+        _untrackedFiles.value = emptyList()
+        _untrackedTruncated.value = false
+        _untrackedTotal.value = 0
+        _error.value = null
+        _isLoading.value = false
+    }
+
+    fun revoke() {
+        clearScope()
+    }
+
     fun setCommitMessage(msg: String) { _commitMessage.value = msg }
     fun setAmend(value: Boolean) { _amend.value = value }
 
@@ -60,11 +83,26 @@ class GitChangesController(
             _error.value = null
             try {
                 val diff = repository.getDiffSummary(scope.project, scope.worktreePath, scope.root)
-                val untracked = repository.query.getUntracked(scope.project, scope.worktreePath, 0, 500, scope.root)
                 if (scope.matches(activeScope)) {
-                    _stagedFiles.value = diff.staged
-                    _unstagedFiles.value = diff.unstaged
+                    val staged = mutableListOf<DiffFileEntry>()
+                    val unstaged = mutableListOf<DiffFileEntry>()
+                    val untracked = mutableListOf<DiffFileEntry>()
+
+                    for (entry in diff.entries) {
+                        if (entry.staged) {
+                            staged.add(entry)
+                        } else if (entry.status == "untracked" || (entry.status == "added" && entry.submodule == null)) {
+                            untracked.add(entry)
+                        } else {
+                            unstaged.add(entry)
+                        }
+                    }
+
+                    _stagedFiles.value = staged
+                    _unstagedFiles.value = unstaged
                     _untrackedFiles.value = untracked
+                    _untrackedTruncated.value = diff.untrackedTruncated
+                    _untrackedTotal.value = diff.untrackedTotal
                 }
             } catch (c: CancellationException) {
                 throw c
@@ -78,6 +116,32 @@ class GitChangesController(
         return job
     }
 
+    fun loadMoreUntracked(limit: Int = 500): Job {
+        val scope = activeScope ?: return coroutineScope.launch {}
+        if (!_untrackedTruncated.value) return coroutineScope.launch {}
+        return coroutineScope.launch {
+            try {
+                val currentCount = _untrackedFiles.value.size
+                val more = repository.query.getUntracked(
+                    project = scope.project,
+                    worktreePath = scope.worktreePath,
+                    offset = currentCount,
+                    limit = limit,
+                    root = scope.root,
+                )
+                if (scope.matches(activeScope)) {
+                    _untrackedFiles.value = _untrackedFiles.value + more.entries
+                    _untrackedTruncated.value = more.untrackedTruncated
+                    _untrackedTotal.value = more.untrackedTotal
+                }
+            } catch (c: CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                if (scope.matches(activeScope)) _error.value = t.message ?: "Failed to load more untracked files"
+            }
+        }
+    }
+
     fun stageFile(path: String): Job = stageFiles(listOf(path))
 
     fun stageAll(): Job {
@@ -89,12 +153,47 @@ class GitChangesController(
         val scope = activeScope ?: return coroutineScope.launch {}
         return coroutineScope.launch {
             try {
-                val ok = repository.stage(scope.project, paths, scope.worktreePath, scope.root)
-                if (ok && scope.matches(activeScope)) refreshChanges()
-                else if (scope.matches(activeScope)) _error.value = "Failed to stage files"
+                val guardResult = host.withMutationGuard(scope, GitMutationImpact.INDEX, paths) {
+                    repository.stage(scope.project, paths, scope.worktreePath, scope.root)
+                }
+                if (guardResult.isSuccess) {
+                    val ok = guardResult.getOrThrow()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = GitMutationImpact.INDEX,
+                            kind = if (ok) GitOutcomeKind.SUCCEEDED else GitOutcomeKind.REJECTED,
+                            paths = paths,
+                            message = if (ok) null else "Failed to stage files",
+                        )
+                    )
+                    if (ok && scope.matches(activeScope)) refreshChanges()
+                    else if (scope.matches(activeScope)) _error.value = "Failed to stage files"
+                } else {
+                    val t = guardResult.exceptionOrNull()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = GitMutationImpact.INDEX,
+                            kind = GitOutcomeKind.REJECTED,
+                            paths = paths,
+                            message = t?.message,
+                        )
+                    )
+                    if (scope.matches(activeScope)) _error.value = t?.message ?: "Staging error"
+                }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
+                host.onMutationOutcome(
+                    GitMutationEvent(
+                        scope = scope,
+                        impact = GitMutationImpact.INDEX,
+                        kind = GitOutcomeKind.UNKNOWN,
+                        paths = paths,
+                        message = t.message,
+                    )
+                )
                 if (scope.matches(activeScope)) _error.value = t.message ?: "Staging error"
             }
         }
@@ -111,12 +210,47 @@ class GitChangesController(
         val scope = activeScope ?: return coroutineScope.launch {}
         return coroutineScope.launch {
             try {
-                val ok = repository.unstage(scope.project, paths, scope.worktreePath, scope.root)
-                if (ok && scope.matches(activeScope)) refreshChanges()
-                else if (scope.matches(activeScope)) _error.value = "Failed to unstage files"
+                val guardResult = host.withMutationGuard(scope, GitMutationImpact.INDEX, paths) {
+                    repository.unstage(scope.project, paths, scope.worktreePath, scope.root)
+                }
+                if (guardResult.isSuccess) {
+                    val ok = guardResult.getOrThrow()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = GitMutationImpact.INDEX,
+                            kind = if (ok) GitOutcomeKind.SUCCEEDED else GitOutcomeKind.REJECTED,
+                            paths = paths,
+                            message = if (ok) null else "Failed to unstage files",
+                        )
+                    )
+                    if (ok && scope.matches(activeScope)) refreshChanges()
+                    else if (scope.matches(activeScope)) _error.value = "Failed to unstage files"
+                } else {
+                    val t = guardResult.exceptionOrNull()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = GitMutationImpact.INDEX,
+                            kind = GitOutcomeKind.REJECTED,
+                            paths = paths,
+                            message = t?.message,
+                        )
+                    )
+                    if (scope.matches(activeScope)) _error.value = t?.message ?: "Unstaging error"
+                }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
+                host.onMutationOutcome(
+                    GitMutationEvent(
+                        scope = scope,
+                        impact = GitMutationImpact.INDEX,
+                        kind = GitOutcomeKind.UNKNOWN,
+                        paths = paths,
+                        message = t.message,
+                    )
+                )
                 if (scope.matches(activeScope)) _error.value = t.message ?: "Unstaging error"
             }
         }
@@ -126,12 +260,48 @@ class GitChangesController(
         val scope = activeScope ?: return coroutineScope.launch {}
         return coroutineScope.launch {
             try {
-                val ok = repository.mutation.discard(scope.project, path, scope.worktreePath, scope.root)
-                if (ok && scope.matches(activeScope)) refreshChanges()
-                else if (scope.matches(activeScope)) _error.value = "Failed to discard file"
+                val paths = listOf(path)
+                val guardResult = host.withMutationGuard(scope, GitMutationImpact.FILES, paths) {
+                    repository.mutation.discard(scope.project, path, scope.worktreePath, scope.root)
+                }
+                if (guardResult.isSuccess) {
+                    val ok = guardResult.getOrThrow()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = GitMutationImpact.FILES,
+                            kind = if (ok) GitOutcomeKind.SUCCEEDED else GitOutcomeKind.REJECTED,
+                            paths = paths,
+                            message = if (ok) null else "Failed to discard file",
+                        )
+                    )
+                    if (ok && scope.matches(activeScope)) refreshChanges()
+                    else if (scope.matches(activeScope)) _error.value = "Failed to discard file"
+                } else {
+                    val t = guardResult.exceptionOrNull()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = GitMutationImpact.FILES,
+                            kind = GitOutcomeKind.REJECTED,
+                            paths = paths,
+                            message = t?.message,
+                        )
+                    )
+                    if (scope.matches(activeScope)) _error.value = t?.message ?: "Discard error"
+                }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
+                host.onMutationOutcome(
+                    GitMutationEvent(
+                        scope = scope,
+                        impact = GitMutationImpact.FILES,
+                        kind = GitOutcomeKind.UNKNOWN,
+                        paths = listOf(path),
+                        message = t.message,
+                    )
+                )
                 if (scope.matches(activeScope)) _error.value = t.message ?: "Discard error"
             }
         }
@@ -149,20 +319,58 @@ class GitChangesController(
         return coroutineScope.launch {
             _isLoading.value = true
             try {
-                val res = repository.commit(scope.project, msg, _amend.value, scope.worktreePath, scope.root)
-                if (scope.matches(activeScope)) {
-                    if (res.ok) {
-                        _commitMessage.value = ""
-                        _amend.value = false
-                        refreshChanges()
-                    } else {
-                        _error.value = res.error ?: "Commit rejected"
+                val guardResult = host.withMutationGuard(scope, GitMutationImpact.HISTORY, emptyList()) {
+                    repository.commit(scope.project, msg, _amend.value, scope.worktreePath, scope.root)
+                }
+                if (guardResult.isSuccess) {
+                    val res = guardResult.getOrThrow()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = GitMutationImpact.HISTORY,
+                            kind = if (res.ok) GitOutcomeKind.SUCCEEDED else GitOutcomeKind.REJECTED,
+                            paths = emptyList(),
+                            message = res.error,
+                        )
+                    )
+                    if (scope.matches(activeScope)) {
+                        if (res.ok) {
+                            _commitMessage.value = ""
+                            _amend.value = false
+                            refreshChanges()
+                        } else {
+                            _error.value = res.error ?: "Commit rejected"
+                        }
+                        onResult(res)
                     }
-                    onResult(res)
+                } else {
+                    val t = guardResult.exceptionOrNull()
+                    host.onMutationOutcome(
+                        GitMutationEvent(
+                            scope = scope,
+                            impact = GitMutationImpact.HISTORY,
+                            kind = GitOutcomeKind.REJECTED,
+                            paths = emptyList(),
+                            message = t?.message,
+                        )
+                    )
+                    if (scope.matches(activeScope)) {
+                        _error.value = t?.message ?: "Commit failure"
+                        onResult(CommitResponse(ok = false, error = t?.message))
+                    }
                 }
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
+                host.onMutationOutcome(
+                    GitMutationEvent(
+                        scope = scope,
+                        impact = GitMutationImpact.HISTORY,
+                        kind = GitOutcomeKind.UNKNOWN,
+                        paths = emptyList(),
+                        message = t.message,
+                    )
+                )
                 if (scope.matches(activeScope)) {
                     _error.value = t.message ?: "Commit failure"
                     onResult(CommitResponse(ok = false, error = t.message))

@@ -10,79 +10,143 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.damhopper.nativeapp.features.workspace.ProjectWorktree
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
-
-enum class GitPanelSection {
-    CHANGES,
-    HISTORY,
-    BRANCHES_WORKTREES,
-}
+import kotlinx.coroutines.launch
 
 @Composable
 fun GitPanelScreen(
-    historyController: GitHistoryController,
-    changesController: GitChangesController,
-    branchController: GitBranchController,
-    worktreeController: WorktreeMutationController,
-    rewriteController: GitRewriteActionController,
-    actionController: GitHistoryActionController,
-    leasedController: LeasedPublishController,
-    syncController: GitSyncController,
-    onOpenFileDiff: (String) -> Unit = {},
-    onMutationSuccess: () -> Unit = {},
+    runtime: GitWorkspaceRuntime,
+    state: GitWorkspaceState,
     modifier: Modifier = Modifier,
 ) {
-    var activeSection by remember { mutableStateOf(GitPanelSection.CHANGES) }
-    var modalState by remember { mutableStateOf(GitModalState()) }
-
-    val lastSquashReceipt by rewriteController.lastSquashReceipt.collectAsState()
-    val syncResults by syncController.lastOpResults.collectAsState()
-    val syncError by syncController.error.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
+    val activeSection by state.section.collectAsState()
+    val activeRoute by state.route.collectAsState()
+    val currentScope by runtime.scope.collectAsState()
+    val roots by runtime.roots.collectAsState()
+    val viewedRef by state.viewedRef.collectAsState()
+    val checkedOutBranch by state.checkedOutBranch.collectAsState()
+    val lastRewriteReceipt by runtime.rewrite.lastRewriteReceipt.collectAsState()
+    val syncResults by runtime.sync.lastOpResults.collectAsState()
+    val syncError by runtime.sync.error.collectAsState()
 
     Column(modifier = modifier.fillMaxSize().background(DamHopperColors.Background)) {
         // Top Toolbar
         Row(
-            modifier = Modifier.fillMaxWidth().background(DamHopperColors.Surface)
-                .horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(DamHopperColors.Surface)
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            GitSectionButton("Changes", activeSection == GitPanelSection.CHANGES) { activeSection = GitPanelSection.CHANGES }
-            GitSectionButton("History", activeSection == GitPanelSection.HISTORY) { activeSection = GitPanelSection.HISTORY }
-            GitSectionButton("Branches", activeSection == GitPanelSection.BRANCHES_WORKTREES) { activeSection = GitPanelSection.BRANCHES_WORKTREES }
-            Spacer(modifier = Modifier.width(8.dp))
+            GitSectionButton("Changes", activeSection == GitPanelSection.CHANGES) {
+                state.selectSection(GitPanelSection.CHANGES)
+                if (activeRoute != GitRoute.Overview) state.navigate(GitRoute.Overview)
+            }
+            GitSectionButton("History", activeSection == GitPanelSection.HISTORY) {
+                state.selectSection(GitPanelSection.HISTORY)
+                if (activeRoute != GitRoute.Overview) state.navigate(GitRoute.Overview)
+            }
+            GitSectionButton("Branches", activeSection == GitPanelSection.BRANCHES_WORKTREES) {
+                state.selectSection(GitPanelSection.BRANCHES_WORKTREES)
+                if (activeRoute != GitRoute.Overview) state.navigate(GitRoute.Overview)
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+
+            // Roots dropdown / selector if multiple roots exist
+            if (roots.size > 1) {
+                var rootsMenuOpen by remember { mutableStateOf(false) }
+                val currentRoot = currentScope?.root ?: "."
+                Box {
+                    Button(
+                        onClick = { rootsMenuOpen = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.SurfaceVariant),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text("Root: $currentRoot", fontSize = 11.sp, color = DamHopperColors.TextPrimary)
+                    }
+                    DropdownMenu(
+                        expanded = rootsMenuOpen,
+                        onDismissRequest = { rootsMenuOpen = false }
+                    ) {
+                        roots.forEach { root ->
+                            DropdownMenuItem(
+                                text = { Text("${root.path} (${root.kind})") },
+                                onClick = {
+                                    runtime.selectRoot(root.rootId)
+                                    rootsMenuOpen = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
             Button(
-                onClick = { syncController.fetch { changesController.refreshChanges() } },
+                onClick = { runtime.sync.fetch() },
                 colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.SurfaceVariant),
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
             ) { Text("Fetch", fontSize = 11.sp) }
             Button(
-                onClick = { syncController.pull {
-                    changesController.refreshChanges()
-                    onMutationSuccess()
-                } },
+                onClick = { runtime.sync.pull() },
                 colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.SurfaceVariant),
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
             ) { Text("Pull", fontSize = 11.sp) }
             Button(
-                onClick = { syncController.push { changesController.refreshChanges() } },
+                onClick = { runtime.sync.push() },
                 colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.SurfaceVariant),
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
             ) { Text("Push", fontSize = 11.sp) }
         }
 
+        // Context details row: distinct target / root / checked-out / viewed
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(DamHopperColors.SurfaceVariant.copy(alpha = 0.5f))
+                .padding(horizontal = 8.dp, vertical = 2.dp)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            val targetLabel = if (runtime.owner.worktreePath != null) {
+                "${runtime.owner.project} [wt: ${runtime.owner.worktreePath}]"
+            } else {
+                runtime.owner.project
+            }
+            Text("Target: $targetLabel", style = DamHopperTypography.bodySmall, color = DamHopperColors.TextSecondary)
+            Text("Root: ${currentScope?.root ?: "."}", style = DamHopperTypography.bodySmall, color = DamHopperColors.TextSecondary)
+            Text("Checked-out: ${checkedOutBranch ?: "HEAD"}", style = DamHopperTypography.bodySmall, color = DamHopperColors.TextSecondary)
+            if (viewedRef != null && viewedRef != checkedOutBranch) {
+                Text("Viewed: $viewedRef", style = DamHopperTypography.bodySmall, color = DamHopperColors.Warning)
+            }
+        }
+
         if (syncError != null) {
-            Text(syncError!!, color = DamHopperColors.Error, style = DamHopperTypography.bodySmall, modifier = Modifier.padding(6.dp))
+            Text(
+                syncError!!,
+                color = DamHopperColors.Error,
+                style = DamHopperTypography.bodySmall,
+                modifier = Modifier.padding(6.dp)
+            )
         }
 
         // Per-target Sync Outcomes Banner
         if (syncResults != null) {
-            Column(modifier = Modifier.fillMaxWidth().background(DamHopperColors.SurfaceVariant).padding(6.dp)) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.SurfaceVariant)
+                    .padding(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
                     Text("Sync Outcomes (${syncResults!!.size} targets)", style = DamHopperTypography.labelSmall)
-                    TextButton(onClick = { syncController.clearOpResults() }) { Text("Dismiss", fontSize = 10.sp) }
+                    TextButton(onClick = { runtime.sync.clearOpResults() }) { Text("Dismiss", fontSize = 10.sp) }
                 }
                 syncResults!!.forEach { res ->
                     val color = if (res.success) DamHopperColors.Success else DamHopperColors.Error
@@ -97,78 +161,141 @@ fun GitPanelScreen(
             }
         }
 
-        // Content
+        // Content switching based on activeRoute
         Box(modifier = Modifier.weight(1f)) {
-            when (activeSection) {
-                GitPanelSection.CHANGES -> GitChangesView(
-                    controller = changesController,
-                    onOpenFileDiff = onOpenFileDiff,
-                    onUndoLastCommit = { modalState = modalState.copy(showUndoCommitDialog = true) },
-                    onMutationSuccess = onMutationSuccess,
-                )
-                GitPanelSection.HISTORY -> GitHistoryView(
-                    historyController = historyController,
-                    actionController = actionController,
-                    onEditMessage = { modalState = modalState.copy(editMessageTarget = it) },
-                    onSquash = { modalState = modalState.copy(squashTargetHashes = it) },
-                    onLeasedPush = {
-                        leasedController.prepareWithReceipt(it)
-                        modalState = modalState.copy(showLeasedPushDialog = true)
-                    },
-                    onCherryPick = {
-                        actionController.cherryPick(it.hash) { res ->
-                            if (res.ok) {
-                                historyController.loadHistory(resetOffset = true)
-                                onMutationSuccess()
-                            } else {
-                                modalState = modalState.copy(actionErrorResult = res)
-                            }
-                        }
-                    },
-                    onRevert = { modalState = modalState.copy(revertTarget = it) },
-                    onReset = { modalState = modalState.copy(resetTarget = it) },
-                    onDrop = { modalState = modalState.copy(dropTarget = it) },
-                    lastSquashReceipt = lastSquashReceipt,
-                )
-                GitPanelSection.BRANCHES_WORKTREES -> GitBranchesWorktreesView(
-                    branchController = branchController,
-                    worktreeController = worktreeController,
-                    onSelectViewedBranch = { branch ->
-                        historyController.selectViewedBranch(branch)
-                        activeSection = GitPanelSection.HISTORY
-                    },
-                    onCreateBranch = { modalState = modalState.copy(showCreateBranchDialog = true) },
-                    onAddWorktree = { modalState = modalState.copy(showAddWorktreeDialog = true) },
-                    onRemoveWorktree = { wt ->
-                        val check = worktreeController.validateRemovalPrecheck(wt)
-                        modalState = modalState.copy(removeWorktreeTarget = Pair(wt, check))
-                    },
-                    onError = { res -> modalState = modalState.copy(actionErrorResult = res) },
-                    onMutationSuccess = {
-                        branchController.refreshBranches { branches ->
-                            val active = branches.firstOrNull { it.isCurrent }
-                            historyController.activeScope?.let { sc ->
-                                historyController.updateScope(sc, active, active)
-                            }
-                        }
-                        onMutationSuccess()
+            when (val route = activeRoute) {
+                is GitRoute.Overview -> {
+                    when (activeSection) {
+                        GitPanelSection.CHANGES -> GitChangesView(
+                            controller = runtime.changes,
+                            onOpenFileDiff = { path -> state.navigate(GitRoute.Diff(path, null)) },
+                            onUndoLastCommit = {
+                                state.updateModal(GitModalState(showUndoCommitDialog = true, capturedScope = currentScope))
+                            },
+                            onMutationSuccess = { runtime.refresh(GitRefreshReason.MUTATION) },
+                        )
+                        GitPanelSection.HISTORY -> GitHistoryView(
+                            historyController = runtime.history,
+                            actionController = runtime.actions,
+                            onEditMessage = { state.updateModal(GitModalState(editMessageTarget = it, capturedScope = currentScope)) },
+                            onSquash = { state.updateModal(GitModalState(squashTargetHashes = it, capturedScope = currentScope)) },
+                            onLeasedPush = {
+                                runtime.leased.prepareWithReceipt(it)
+                                state.updateModal(GitModalState(showLeasedPushDialog = true, capturedScope = currentScope))
+                            },
+                            onCherryPick = { entry ->
+                                runtime.actions.cherryPick(entry.hash) { res ->
+                                    if (res.ok) {
+                                        runtime.refresh(GitRefreshReason.MUTATION)
+                                    } else {
+                                        state.updateModal(GitModalState(actionErrorResult = res, capturedScope = currentScope))
+                                    }
+                                }
+                            },
+                            onRevert = { state.updateModal(GitModalState(revertTarget = it, capturedScope = currentScope)) },
+                            onReset = { state.updateModal(GitModalState(resetTarget = it, capturedScope = currentScope)) },
+                            onDrop = { state.updateModal(GitModalState(dropTarget = it, capturedScope = currentScope)) },
+                            lastRewriteReceipt = lastRewriteReceipt,
+                            onMutationSuccess = { runtime.refresh(GitRefreshReason.MUTATION) },
+                            onError = { res -> state.updateModal(GitModalState(actionErrorResult = res, capturedScope = currentScope)) },
+                        )
+                        GitPanelSection.BRANCHES_WORKTREES -> GitBranchesWorktreesView(
+                            branchController = runtime.branches,
+                            worktreeController = runtime.worktrees,
+                            onSelectViewedBranch = { branch ->
+                                runtime.history.selectViewedBranch(branch)
+                                state.setViewedRef(branch.name)
+                                state.selectSection(GitPanelSection.HISTORY)
+                            },
+                            onCreateBranch = { state.updateModal(GitModalState(showCreateBranchDialog = true, capturedScope = currentScope)) },
+                            onAddWorktree = { state.updateModal(GitModalState(showAddWorktreeDialog = true, capturedScope = currentScope)) },
+                            onRemoveWorktree = { wt ->
+                                coroutineScope.launch {
+                                    val check = runtime.worktrees.validateRemovalPrecheck(wt)
+                                    state.updateModal(GitModalState(removeWorktreeTarget = Pair(wt, check), capturedScope = currentScope))
+                                }
+                            },
+                            onError = { res -> state.updateModal(GitModalState(actionErrorResult = res, capturedScope = currentScope)) },
+                            onMutationSuccess = { runtime.refresh(GitRefreshReason.MUTATION) }
+                        )
                     }
-                )
+                }
+                is GitRoute.Diff -> {
+                    LaunchedEffect(route.path, route.commitOid, currentScope) {
+                        val sc = currentScope
+                        if (sc != null) {
+                            runtime.diff.loadDiff(sc, route.path, route.commitOid)
+                        }
+                    }
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(DamHopperColors.Surface)
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = { state.back() },
+                                colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.SurfaceVariant),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("← Back", fontSize = 11.sp, color = DamHopperColors.TextPrimary)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Diff: ${route.path}",
+                                style = DamHopperTypography.labelSmall,
+                                color = DamHopperColors.TextPrimary
+                            )
+                        }
+                        DiffReviewScreen(
+                            controller = runtime.diff,
+                            onOpenInEditor = { p ->
+                                coroutineScope.launch {
+                                    val sc = currentScope
+                                    if (sc != null) {
+                                        runtime.openWorkspaceFile(sc, p)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                is GitRoute.Details -> {
+                    // Commit details route: inspect details via history controller
+                    LaunchedEffect(route.oid) {
+                        runtime.history.inspectCommit(route.oid)
+                    }
+                    val details by runtime.history.selectedCommitDetails.collectAsState()
+                    if (details != null) {
+                        GitCommitDetailsDialog(
+                            details = details!!,
+                            repository = runtime.repository,
+                            actionController = runtime.actions,
+                            isLocal = runtime.history.isViewingLocalBranch,
+                            isActive = runtime.history.isViewingActiveBranch,
+                            onDismiss = {
+                                runtime.history.dismissCommitDetails()
+                                state.back()
+                            },
+                            onOpenFileDiff = { path -> state.navigate(GitRoute.Diff(path, details!!.hash)) },
+                            onMutationSuccess = {
+                                runtime.refresh(GitRefreshReason.MUTATION)
+                                state.back()
+                            },
+                            onError = { res -> state.updateModal(GitModalState(actionErrorResult = res, capturedScope = currentScope)) }
+                        )
+                    }
+                }
             }
         }
     }
 
     GitModalsHost(
-        modalState = modalState,
-        historyController = historyController,
-        changesController = changesController,
-        branchController = branchController,
-        worktreeController = worktreeController,
-        rewriteController = rewriteController,
-        actionController = actionController,
-        leasedController = leasedController,
-        onDismiss = { modalState = GitModalState() },
-        onMutationSuccess = onMutationSuccess,
+        runtime = runtime,
+        state = state,
     )
 }
 

@@ -2,6 +2,12 @@ package dev.damhopper.nativeapp.ui.flow
 
 import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
 import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
+import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -334,6 +340,54 @@ class AppFlowNavigation(
         }
     }
 
+    /**
+     * Requests switching to [target] using the departure guard to ensure unsaved changes are saved/discarded.
+     * Revalidates after departure confirmation, then commits the target to navigation flow and invokes [onCommitted].
+     */
+    suspend fun requestWorkspaceTarget(
+        target: ProjectTargetRef,
+        revalidate: suspend () -> Boolean = { true },
+        onCommitted: () -> Unit = {},
+    ): Result<Unit> = suspendCancellableCoroutine { cont ->
+        val profileId = target.profileId ?: _state.value.activeProfileId ?: ""
+        val commit = {
+            CoroutineScope(cont.context).launch {
+                try {
+                    if (!revalidate()) {
+                        if (cont.isActive) cont.resume(Result.failure(IllegalStateException("Target revalidation failed")))
+                        return@launch
+                    }
+                    _state.update { current ->
+                        current.copy(
+                             stage = AppFlowStage.TERMINAL,
+                             activeProfileId = profileId,
+                             activeProject = target.project,
+                             activeWorktreePath = target.worktreePath,
+                             activeSessionId = null,
+                             requiredTerminalInstance = null,
+                             settings = null,
+                             notificationsOpen = false,
+                         )
+                     }
+                     onCommitted()
+                     if (cont.isActive) cont.resume(Result.success(Unit))
+                 } catch (e: Throwable) {
+                     if (cont.isActive) cont.resume(Result.failure(e))
+                 }
+             }
+         }
+
+        val onCancel = {
+            if (cont.isActive) cont.resume(Result.failure(CancellationException("Departure cancelled")))
+        }
+
+        val guard = departureGuard
+        val isSame = isSameWorkspace(profileId, target.project, target.worktreePath)
+        if (!isSame && guard != null && guard(DepartureRequest(AppFlowStage.TERMINAL, { commit() }, onCancel))) {
+            return@suspendCancellableCoroutine
+        }
+        commit()
+    }
     /**
      * Admitted, non-suspending, mutation-only entry into the SAME private route-state commit the notification route
      * uses. The caller must hold every authority gate of the local admission protocol; this method does not

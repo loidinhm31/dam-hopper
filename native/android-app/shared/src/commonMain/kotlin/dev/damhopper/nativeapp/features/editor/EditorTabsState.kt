@@ -18,7 +18,7 @@ import kotlinx.coroutines.sync.withLock
  */
 class EditorTabsState(
     val profileId: String,
-    val editorRepository: EditorRepository,
+    editorRepository: EditorRepository,
     val documentFactory: EditorDocumentFactory? = null,
     val languageServiceCoordinator: LanguageServiceCoordinator = LanguageServiceCoordinator(),
     val jsonLanguageService: JsonLanguageService = JsonLanguageService(),
@@ -26,6 +26,10 @@ class EditorTabsState(
     val jsLanguageService: TsJsLanguageService = TsJsLanguageService("javascript"),
 ) : EditorTabLifecyclePort, EditorDirtyGuardPort, EditorDocumentAccessPort, EditorCommandPort, EditorSaveOutcomePort {
 
+    var editorRepository: EditorRepository = editorRepository
+        private set
+
+    private var transportEpoch: Long = 0L
     private val _tabs = MutableStateFlow<List<EditorTab>>(emptyList())
     val tabs: StateFlow<List<EditorTab>> = _tabs.asStateFlow()
 
@@ -48,12 +52,16 @@ class EditorTabsState(
     private val diagnosticsManager = EditorDiagnosticsManager(
         languageServiceCoordinator, jsonLanguageService, tsLanguageService, jsLanguageService
     )
-    private val saveCoordinator = EditorTabSaveCoordinator(editorRepository)
+    private var saveCoordinator = EditorTabSaveCoordinator(editorRepository)
     private val saveMutex = Mutex()
 
     init {
-        editorRepository.documentProvider = { getDocument(it) }
-        editorRepository.saveGate = gate@{ id ->
+        installRepositoryGates(editorRepository)
+    }
+
+    private fun installRepositoryGates(repo: EditorRepository) {
+        repo.documentProvider = { getDocument(it) }
+        repo.saveGate = gate@{ id ->
             val key = tabDocumentIds.entries.find { it.value == id }?.key ?: return@gate "Tab is closed"
             val tab = _tabs.value.find { it.key == key } ?: return@gate "Tab is closed"
             when {
@@ -67,6 +75,17 @@ class EditorTabsState(
                 else -> null
             }
         }
+    }
+
+    fun rebindRepository(repository: EditorRepository): Boolean {
+        if (repository.fileRepository.owner != this.editorRepository.fileRepository.owner) {
+            return false
+        }
+        this.editorRepository = repository
+        this.saveCoordinator = EditorTabSaveCoordinator(repository)
+        installRepositoryGates(repository)
+        transportEpoch++
+        return true
     }
 
     private fun installSession(
@@ -276,8 +295,10 @@ class EditorTabsState(
         _activeTabId.value = docId
         updateMetadataFlow()
 
+        val loadEpoch = transportEpoch
         when (val result = editorRepository.loadFile(target, path)) {
             is EditorLoadResult.Success -> {
+                if (transportEpoch != loadEpoch) return
                 // Ensure tab wasn't closed or replaced during load
                 val currentTab = _tabs.value.find { it.key == key }
                 if (currentTab == null || currentTab.sessionIncarnation != incarnation) {
@@ -332,8 +353,10 @@ class EditorTabsState(
         _tabs.value = _tabs.value.map { if (it.key == key) it.copy(isLoading = true) else it }
         updateMetadataFlow()
 
+        val loadEpoch = transportEpoch
         when (val res = editorRepository.loadFile(tab.target, tab.path, clampedOffset)) {
             is EditorLoadResult.Success -> {
+                if (transportEpoch != loadEpoch) return
                 val current = _tabs.value.find { it.key == key }
                 if (current == null || current.sessionIncarnation != incarnation) return
                 _tabs.value = _tabs.value.map {
@@ -460,6 +483,7 @@ class EditorTabsState(
 
         val tokenToUse = reservationToken ?: acquiredToken
         try {
+            val saveEpoch = transportEpoch
             val res = saveCoordinator.save(
                 tabKey = key,
                 currentTabProvider = { _tabs.value.find { it.key == key } },
@@ -470,6 +494,9 @@ class EditorTabsState(
                 },
                 reservationToken = tokenToUse,
             )
+            if (transportEpoch != saveEpoch) {
+                return@withLock EditorSaveResult.Error("Transport epoch changed during save")
+            }
             if (docId != null) {
                 val outcome = when (res) {
                     is EditorSaveResult.Success -> FileOperationOutcome.Confirmed(res.newMtime)
@@ -737,9 +764,10 @@ class EditorTabsState(
         val incarnation = tab.sessionIncarnation
         _tabs.value = _tabs.value.map { if (it.key == key) it.copy(isLoading = true, isConflicted = false, isStale = false) else it }
         updateMetadataFlow()
-
+        val loadEpoch = transportEpoch
         when (val res = editorRepository.loadFile(tab.target, tab.path)) {
             is EditorLoadResult.Success -> {
+                if (transportEpoch != loadEpoch) return
                 val currentTab = _tabs.value.find { it.key == key }
                 if (currentTab == null || currentTab.sessionIncarnation != incarnation) return
 

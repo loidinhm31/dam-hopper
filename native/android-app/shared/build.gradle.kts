@@ -73,3 +73,17 @@ tasks.withType<Test>().configureEach {
         events("passed", "skipped", "failed")
     }
 }
+
+tasks.named<Test>("jvmTest").configure {
+    exclude("**/*LiveSmoke.class")
+}
+
+tasks.register<Test>("jvmGitSmoke") {
+    group = "verification"
+    description = "Runs standalone external Git live smoke tests."
+    dependsOn("jvmTestClasses")
+    val jvmTest = tasks.named<Test>("jvmTest")
+    testClassesDirs = jvmTest.get().testClassesDirs
+    classpath = jvmTest.get().classpath
+    include("**/*LiveSmoke.class")
+}

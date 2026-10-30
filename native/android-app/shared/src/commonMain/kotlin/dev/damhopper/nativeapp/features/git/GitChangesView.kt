@@ -27,6 +27,8 @@ fun GitChangesView(
     val staged by controller.stagedFiles.collectAsState()
     val unstaged by controller.unstagedFiles.collectAsState()
     val untracked by controller.untrackedFiles.collectAsState()
+    val untrackedTruncated by controller.untrackedTruncated.collectAsState()
+    val untrackedTotal by controller.untrackedTotal.collectAsState()
     val commitMsg by controller.commitMessage.collectAsState()
     val amend by controller.amend.collectAsState()
     val isLoading by controller.isLoading.collectAsState()
@@ -67,13 +69,12 @@ fun GitChangesView(
             item {
                 Text("Staged Changes (${staged.size})", style = DamHopperTypography.labelSmall, color = DamHopperColors.Success, modifier = Modifier.padding(vertical = 4.dp))
             }
-            items(staged) { item ->
+            items(staged, key = { "staged:${it.rootId ?: ""}:${it.path}" }) { item ->
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).clickable { onOpenFileDiff(item.path) },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(item.path, style = DamHopperTypography.bodySmall, color = DamHopperColors.TextPrimary, modifier = Modifier.weight(1f))
+                    Text(item.path, style = DamHopperTypography.bodySmall, color = DamHopperColors.TextPrimary, modifier = Modifier.weight(1f).clickable { onOpenFileDiff(item.path) })
                     TextButton(onClick = { controller.unstageFile(item.path) }) {
                         Text("Unstage", fontSize = 11.sp, color = DamHopperColors.Primary)
                     }
@@ -84,13 +85,12 @@ fun GitChangesView(
                 Spacer(modifier = Modifier.height(8.dp))
                 Text("Unstaged Changes (${unstaged.size})", style = DamHopperTypography.labelSmall, color = DamHopperColors.Warning, modifier = Modifier.padding(vertical = 4.dp))
             }
-            items(unstaged) { item ->
+            items(unstaged, key = { "unstaged:${it.rootId ?: ""}:${it.path}" }) { item ->
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).clickable { onOpenFileDiff(item.path) },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(item.path, style = DamHopperTypography.bodySmall, color = DamHopperColors.TextPrimary, modifier = Modifier.weight(1f))
+                    Text(item.path, style = DamHopperTypography.bodySmall, color = DamHopperColors.TextPrimary, modifier = Modifier.weight(1f).clickable { onOpenFileDiff(item.path) })
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TextButton(onClick = { controller.stageFile(item.path) }) {
                             Text("Stage", fontSize = 11.sp, color = DamHopperColors.Success)
@@ -106,15 +106,21 @@ fun GitChangesView(
                 Spacer(modifier = Modifier.height(8.dp))
                 Text("Untracked Files (${untracked.size})", style = DamHopperTypography.labelSmall, color = DamHopperColors.TextSecondary, modifier = Modifier.padding(vertical = 4.dp))
             }
-            items(untracked) { item ->
+            items(untracked, key = { "untracked:${it.rootId ?: ""}:${it.path}" }) { item ->
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(item.path, style = DamHopperTypography.bodySmall, color = DamHopperColors.TextSecondary, modifier = Modifier.weight(1f))
+                    Text(item.path, style = DamHopperTypography.bodySmall, color = DamHopperColors.TextSecondary, modifier = Modifier.weight(1f).clickable { onOpenFileDiff(item.path) })
                     TextButton(onClick = { controller.stageFile(item.path) }) {
                         Text("Stage", fontSize = 11.sp, color = DamHopperColors.Success)
+                    }
+                }
+            }
+            if (untrackedTruncated) {
+                item {
+                    TextButton(onClick = { controller.loadMoreUntracked() }) {
+                        Text("Load more (${untracked.size} of $untrackedTotal)...", fontSize = 11.sp, color = DamHopperColors.Primary)
                     }
                 }
             }

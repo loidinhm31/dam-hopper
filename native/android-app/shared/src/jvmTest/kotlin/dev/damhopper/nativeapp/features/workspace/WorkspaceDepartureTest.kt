@@ -2,7 +2,9 @@ package dev.damhopper.nativeapp.features.workspace
 
 import com.sun.net.httpserver.HttpServer
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.core.model.SocketInstanceRef
+import kotlinx.coroutines.async
 import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.core.transport.ClientMsg
 import dev.damhopper.nativeapp.core.transport.ServerMsg
@@ -443,5 +445,42 @@ class WorkspaceDepartureTest {
         assertTrue(state.pendingDeparture.value === intent, "dirty data stays protected by the prompt")
         state.clearPendingDeparture()
         assertEquals(listOf("cancelled"), log)
+    }
+
+    @Test
+    fun testDepartureWithTargetTransitionAndCleanReconciliation() = runTest {
+        val (state, nav) = createFixture()
+        makeDirty(state)
+        assertTrue(state.hasDirtyDocuments())
+
+        var guardProceed: (() -> Unit)? = null
+        nav.departureGuard = { req ->
+            guardProceed = req.onProceed
+            true
+        }
+
+        val target = ProjectTargetRef("prof-test", "dam-hopper", "worktrees/feat")
+        var committed = false
+        val job = async {
+            nav.requestWorkspaceTarget(
+                target = target,
+                revalidate = { true },
+                onCommitted = { committed = true }
+            )
+        }
+
+        // Before guard: not committed
+        assertFalse(committed)
+        // Save dirty documents
+        val docId = state.editorTabsState.activeTabId.value!!
+        state.editorRepository.saveDocument(docId)
+        assertFalse(state.hasDirtyDocuments())
+
+        // Confirm departure
+        guardProceed?.invoke()
+        val res = job.await()
+        assertTrue(res.isSuccess)
+        assertTrue(committed)
+        assertEquals("worktrees/feat", nav.state.value.activeWorktreePath)
     }
 }

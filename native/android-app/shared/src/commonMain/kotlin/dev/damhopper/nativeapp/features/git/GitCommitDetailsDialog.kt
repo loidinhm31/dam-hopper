@@ -23,6 +23,8 @@ fun GitCommitDetailsDialog(
     isActive: Boolean,
     onDismiss: () -> Unit,
     onOpenFileDiff: ((path: String) -> Unit)? = null,
+    onMutationSuccess: () -> Unit = {},
+    onError: ((GitActionResult) -> Unit)? = null,
 ) {
     val coroutineScope = rememberCoroutineScope()
     var files by remember { mutableStateOf<List<DiffFileEntry>>(emptyList()) }
@@ -35,7 +37,10 @@ fun GitCommitDetailsDialog(
     LaunchedEffect(details.hash) {
         if (scope != null) {
             try {
-                files = repository.query.getCommitFiles(scope.project, details.hash, scope.worktreePath, scope.root)
+                val loadedFiles = repository.query.getCommitFiles(scope.project, details.hash, scope.worktreePath, scope.root)
+                if (scope.matches(actionController.activeScope)) {
+                    files = loadedFiles
+                }
             } catch (_: Exception) {}
         }
     }
@@ -58,11 +63,18 @@ fun GitCommitDetailsDialog(
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.fillMaxWidth().clickable {
-                                    scope?.let {
-                                        coroutineScope.launch {
-                                            try {
-                                                fileDiffContent = repository.query.getCommitFileDiff(it.project, details.hash, file.path, it.worktreePath, it.root)
-                                            } catch (_: Exception) {}
+                                    if (onOpenFileDiff != null) {
+                                        onOpenFileDiff(file.path)
+                                    } else {
+                                        scope?.let { sc ->
+                                            coroutineScope.launch {
+                                                try {
+                                                    val diff = repository.query.getCommitFileDiff(sc.project, details.hash, file.path, sc.worktreePath, sc.root)
+                                                    if (sc.matches(actionController.activeScope)) {
+                                                        fileDiffContent = diff
+                                                    }
+                                                } catch (_: Exception) {}
+                                            }
                                         }
                                     }
                                 }
@@ -86,7 +98,13 @@ fun GitCommitDetailsDialog(
                             Button(
                                 onClick = {
                                     actionController.cherryPickFiles(details.hash, selectedFiles.toList()) { res ->
-                                        statusMessage = res.message ?: if (res.ok) "Files cherry-picked" else "Cherry-pick failed"
+                                        if (res.ok) {
+                                            statusMessage = res.message ?: "Files cherry-picked"
+                                            onMutationSuccess()
+                                        } else {
+                                            statusMessage = res.message ?: "Cherry-pick failed"
+                                            onError?.invoke(res)
+                                        }
                                     }
                                 },
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
@@ -96,7 +114,13 @@ fun GitCommitDetailsDialog(
                             Button(
                                 onClick = {
                                     actionController.revertFiles(details.hash, selectedFiles.toList()) { res ->
-                                        statusMessage = res.message ?: if (res.ok) "Files reverted" else "Revert failed"
+                                        if (res.ok) {
+                                            statusMessage = res.message ?: "Files reverted"
+                                            onMutationSuccess()
+                                        } else {
+                                            statusMessage = res.message ?: "Revert failed"
+                                            onError?.invoke(res)
+                                        }
                                     }
                                 },
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
@@ -107,7 +131,13 @@ fun GitCommitDetailsDialog(
                                 Button(
                                     onClick = {
                                         actionController.dropFiles(details.hash, selectedFiles.toList()) { res ->
-                                            statusMessage = res.message ?: if (res.ok) "Files dropped" else "Drop failed"
+                                            if (res.ok) {
+                                                statusMessage = res.message ?: "Files dropped"
+                                                onMutationSuccess()
+                                            } else {
+                                                statusMessage = res.message ?: "Drop failed"
+                                                onError?.invoke(res)
+                                            }
                                         }
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Error),

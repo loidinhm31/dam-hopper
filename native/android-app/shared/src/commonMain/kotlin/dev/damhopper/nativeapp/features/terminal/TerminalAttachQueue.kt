@@ -12,6 +12,7 @@ internal class TerminalAttachQueue(
 ) {
     private class Request(
         val offset: ULong,
+        val replayGeneration: Long,
         val isCurrent: () -> Boolean,
         val connect: suspend () -> Unit,
         val send: suspend (ULong?) -> Unit,
@@ -28,10 +29,18 @@ internal class TerminalAttachQueue(
         send: suspend (ULong?) -> Unit,
         onResult: (Exception?) -> Unit = {},
     ): ULong {
+        if (!isCurrent()) {
+            return controller.lastSeenOffset
+        }
         // Coalesced ordinary requests share the pending attempt's gate and captured offset.
         val queued = pending
-        val offset = if (queued != null && !controller.isReplayCompleted) queued.offset else controller.beginAttach()
-        enqueue(Request(offset, isCurrent, connect, send, onResult))
+        val offset = if (queued != null && !controller.isReplayCompleted && queued.isCurrent()) {
+            queued.offset
+        } else {
+            controller.beginAttach()
+        }
+        val generation = controller.gate.replayGeneration
+        enqueue(Request(offset, generation, isCurrent, connect, send, onResult))
         return offset
     }
 
@@ -42,8 +51,10 @@ internal class TerminalAttachQueue(
         send: suspend (ULong?) -> Unit,
         onResult: (Exception?) -> Unit = {},
     ) {
+        if (!isCurrent()) return
         // Controller recovery already closed the gate. A second reset would drop queued live bytes.
-        enqueue(Request(capturedOffset, isCurrent, connect, send, onResult))
+        val generation = controller.gate.replayGeneration
+        enqueue(Request(capturedOffset, generation, isCurrent, connect, send, onResult))
     }
 
     private fun enqueue(request: Request) {
@@ -58,28 +69,33 @@ internal class TerminalAttachQueue(
                     val next = pending ?: break
                     pending = null
                     if (!next.isCurrent()) {
-                        fenceIfLatest(next)
+                        controller.failAttach()
                         continue
                     }
                     try {
                         next.connect()
                         if (!next.isCurrent()) {
-                            fenceIfLatest(next)
+                            controller.failAttach()
                             continue
                         }
                         next.send(next.offset.takeIf { it > 0uL })
-                        if (next.isCurrent()) next.onResult(null) else fenceIfLatest(next)
+                        if (next.isCurrent()) next.onResult(null) else controller.failAttach()
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        fenceIfLatest(next)
-                        if (next.isCurrent()) next.onResult(e)
+                        if (next.isCurrent()) {
+                            controller.failAttach()
+                            next.onResult(e)
+                        }
                     }
                     // Sending is not readiness: only controller replay/drain can open the gate.
                 }
             } catch (e: CancellationException) {
                 // This worker's pending send is abandoned too. Preserve bytes, but never enable input.
-                controller.failAttach()
+                val curLatest = latest
+                if (curLatest != null && curLatest.isCurrent()) {
+                    controller.failAttach()
+                }
                 throw e
             } finally {
                 running = false
@@ -91,6 +107,8 @@ internal class TerminalAttachQueue(
 
     private fun fenceIfLatest(request: Request) {
         // An older superseded send must not fence a newer attempt on the same controller.
-        if (latest === request) controller.failAttach()
+        if (latest === request) {
+            controller.failAttach()
+        }
     }
 }

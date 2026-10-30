@@ -4,18 +4,19 @@ import androidx.compose.runtime.*
 
 @Composable
 fun GitModalsHost(
-    modalState: GitModalState,
-    historyController: GitHistoryController,
-    changesController: GitChangesController,
-    branchController: GitBranchController,
-    worktreeController: WorktreeMutationController,
-    rewriteController: GitRewriteActionController,
-    actionController: GitHistoryActionController,
-    leasedController: LeasedPublishController,
-    onDismiss: () -> Unit,
-    onMutationSuccess: () -> Unit = {},
+    runtime: GitWorkspaceRuntime,
+    state: GitWorkspaceState,
 ) {
+    val modalState by state.modal.collectAsState()
+    val onDismiss = { state.updateModal(GitModalState()) }
     var pendingError by remember { mutableStateOf<GitActionResult?>(null) }
+
+    val currentScope by runtime.scope.collectAsState()
+    LaunchedEffect(currentScope) {
+        if (modalState.capturedScope != null && !modalState.capturedScope!!.matches(currentScope)) {
+            onDismiss()
+        }
+    }
 
     LaunchedEffect(modalState.actionErrorResult) {
         if (modalState.actionErrorResult != null) {
@@ -23,92 +24,109 @@ fun GitModalsHost(
         }
     }
 
-    if (modalState.editMessageTarget != null) {
+    val editTarget = modalState.editMessageTarget
+    if (editTarget != null) {
         GitCommitMessageEditDialog(
-            targetEntry = modalState.editMessageTarget,
-            viewedBranch = historyController.viewedBranch?.name,
-            rewriteController = rewriteController,
+            targetEntry = editTarget,
+            viewedBranch = runtime.history.viewedBranch?.fullRef ?: runtime.history.viewedBranch?.name,
+            rewriteController = runtime.rewrite,
             onDismiss = onDismiss,
             onSuccess = {
-                historyController.loadHistory(resetOffset = true)
-                onMutationSuccess()
+                onDismiss()
+                runtime.refresh(GitRefreshReason.MUTATION)
             }
         )
     }
-    if (modalState.squashTargetHashes != null) {
+    val squashHashes = modalState.squashTargetHashes
+    if (squashHashes != null) {
         GitSquashDialog(
-            selectedHashes = modalState.squashTargetHashes,
-            viewedBranch = historyController.viewedBranch?.name,
-            rewriteController = rewriteController,
+            selectedHashes = squashHashes,
+            viewedBranch = runtime.history.viewedBranch?.fullRef ?: runtime.history.viewedBranch?.name,
+            rewriteController = runtime.rewrite,
             onDismiss = onDismiss,
             onSuccess = {
-                historyController.loadHistory(resetOffset = true)
-                onMutationSuccess()
+                onDismiss()
+                runtime.refresh(GitRefreshReason.MUTATION)
             }
         )
     }
     if (modalState.showLeasedPushDialog) {
         LeasedPushDialog(
-            leasedController = leasedController,
+            leasedController = runtime.leased,
             onDismiss = onDismiss,
             onPublished = {
-                historyController.loadHistory(resetOffset = true)
-                onMutationSuccess()
+                runtime.rewrite.clearReceipt()
+                onDismiss()
+                runtime.refresh(GitRefreshReason.MUTATION)
             }
         )
     }
-    if (modalState.resetTarget != null) {
+    val resetTarget = modalState.resetTarget
+    if (resetTarget != null) {
         GitResetDialog(
-            entry = modalState.resetTarget,
+            entry = resetTarget,
             onConfirm = { mode ->
-                actionController.reset(modalState.resetTarget.hash, mode) { res ->
-                    if (res.ok) {
-                        onDismiss()
-                        historyController.loadHistory(resetOffset = true)
-                        changesController.refreshChanges()
-                        onMutationSuccess()
-                    } else {
-                        pendingError = res
+                val captured = modalState.capturedScope
+                if (captured != null && captured.matches(currentScope)) {
+                    runtime.actions.reset(resetTarget.hash, mode) { res ->
+                        if (res.ok) {
+                            onDismiss()
+                            runtime.refresh(GitRefreshReason.MUTATION)
+                        } else {
+                            pendingError = res
+                        }
                     }
+                } else {
+                    onDismiss()
                 }
             },
             onDismiss = onDismiss
         )
     }
-    if (modalState.dropTarget != null) {
+    val dropTarget = modalState.dropTarget
+    if (dropTarget != null) {
         GitConfirmSimpleDialog(
             title = "Drop Commit",
-            message = "Drop unpushed commit ${modalState.dropTarget.hash.take(7)}? This rewrites local history.",
+            message = "Drop unpushed commit ${dropTarget.hash.take(7)}? This rewrites local history.",
             confirmLabel = "Drop",
             isDestructive = true,
             onConfirm = {
-                actionController.drop(modalState.dropTarget.hash) { res ->
-                    if (res.ok) {
-                        onDismiss()
-                        historyController.loadHistory(resetOffset = true)
-                        onMutationSuccess()
-                    } else {
-                        pendingError = res
+                val captured = modalState.capturedScope
+                if (captured != null && captured.matches(currentScope)) {
+                    runtime.actions.drop(dropTarget.hash) { res ->
+                        if (res.ok) {
+                            onDismiss()
+                            runtime.refresh(GitRefreshReason.MUTATION)
+                        } else {
+                            pendingError = res
+                        }
                     }
+                } else {
+                    onDismiss()
                 }
             },
             onDismiss = onDismiss
         )
     }
-    if (modalState.revertTarget != null) {
+    val revertTarget = modalState.revertTarget
+    if (revertTarget != null) {
         GitConfirmSimpleDialog(
             title = "Revert Commit",
-            message = "Revert commit ${modalState.revertTarget.hash.take(7)} on the checked-out branch?",
+            message = "Revert commit ${revertTarget.hash.take(7)} on the checked-out branch?",
             confirmLabel = "Revert",
             onConfirm = {
-                actionController.revert(modalState.revertTarget.hash) { res ->
-                    if (res.ok) {
-                        onDismiss()
-                        historyController.loadHistory(resetOffset = true)
-                        onMutationSuccess()
-                    } else {
-                        pendingError = res
+                val captured = modalState.capturedScope
+                if (captured != null && captured.matches(currentScope)) {
+                    runtime.actions.revert(revertTarget.hash) { res ->
+                        if (res.ok) {
+                            onDismiss()
+                            runtime.refresh(GitRefreshReason.MUTATION)
+                        } else {
+                            pendingError = res
+                        }
                     }
+                } else {
+                    onDismiss()
                 }
             },
             onDismiss = onDismiss
@@ -121,15 +139,18 @@ fun GitModalsHost(
             confirmLabel = "Undo",
             isDestructive = true,
             onConfirm = {
-                actionController.undoLastCommit { res ->
-                    if (res.ok) {
-                        onDismiss()
-                        changesController.refreshChanges()
-                        historyController.loadHistory(resetOffset = true)
-                        onMutationSuccess()
-                    } else {
-                        pendingError = res
+                val captured = modalState.capturedScope
+                if (captured != null && captured.matches(currentScope)) {
+                    runtime.actions.undoLastCommit { res ->
+                        if (res.ok) {
+                            onDismiss()
+                            runtime.refresh(GitRefreshReason.MUTATION)
+                        } else {
+                            pendingError = res
+                        }
                     }
+                } else {
+                    onDismiss()
                 }
             },
             onDismiss = onDismiss
@@ -139,13 +160,18 @@ fun GitModalsHost(
         CreateBranchDialog(
             onDismiss = onDismiss,
             onConfirm = { name, checkout ->
-                branchController.createBranch(name = name, checkout = checkout) { res ->
-                    if (res.ok) {
-                        onDismiss()
-                        onMutationSuccess()
-                    } else {
-                        pendingError = res
+                val captured = modalState.capturedScope
+                if (captured != null && captured.matches(currentScope)) {
+                    runtime.branches.createBranch(name = name, checkout = checkout) { res ->
+                        if (res.ok) {
+                            onDismiss()
+                            runtime.refresh(GitRefreshReason.MUTATION)
+                        } else {
+                            pendingError = res
+                        }
                     }
+                } else {
+                    onDismiss()
                 }
             }
         )
@@ -154,31 +180,42 @@ fun GitModalsHost(
         AddWorktreeDialog(
             onDismiss = onDismiss,
             onConfirm = { branch, path, createBranch ->
-                worktreeController.addWorktree(branch, path, createBranch) { res ->
-                    if (res.isSuccess) {
-                        onDismiss()
-                        onMutationSuccess()
-                    } else {
-                        pendingError = GitActionResult(ok = false, message = res.exceptionOrNull()?.message)
+                val captured = modalState.capturedScope
+                if (captured != null && captured.matches(currentScope)) {
+                    runtime.worktrees.addWorktree(branch, path, createBranch) { res ->
+                        if (res.isSuccess) {
+                            onDismiss()
+                            runtime.refresh(GitRefreshReason.MUTATION)
+                        } else {
+                            pendingError = GitActionResult(ok = false, message = res.exceptionOrNull()?.message)
+                        }
                     }
+                } else {
+                    onDismiss()
                 }
             }
         )
     }
-    if (modalState.removeWorktreeTarget != null) {
-        val (wt, check) = modalState.removeWorktreeTarget
+    val removeTarget = modalState.removeWorktreeTarget
+    if (removeTarget != null) {
+        val (wt, check) = removeTarget
         RemoveWorktreeDialog(
             worktree = wt,
             precheck = check,
             onDismiss = onDismiss,
             onConfirm = {
-                worktreeController.removeWorktree(wt) { res ->
-                    if (res.isSuccess) {
-                        onDismiss()
-                        onMutationSuccess()
-                    } else {
-                        pendingError = GitActionResult(ok = false, message = res.exceptionOrNull()?.message)
+                val captured = modalState.capturedScope
+                if (captured != null && captured.matches(currentScope)) {
+                    runtime.worktrees.removeWorktree(wt) { res ->
+                        if (res.isSuccess) {
+                            onDismiss()
+                            runtime.refresh(GitRefreshReason.MUTATION)
+                        } else {
+                            pendingError = GitActionResult(ok = false, message = res.exceptionOrNull()?.message)
+                        }
                     }
+                } else {
+                    onDismiss()
                 }
             }
         )

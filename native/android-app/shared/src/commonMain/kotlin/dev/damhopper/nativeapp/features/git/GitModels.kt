@@ -6,24 +6,47 @@ import kotlinx.serialization.Serializable
  * VCS Root representation corresponding to server GET /api/git/{project}/roots
  */
 @Serializable
+data class GitLastCommit(
+    val hash: String,
+    val message: String,
+    val date: String,
+)
+
+@Serializable
+data class GitSubmoduleGitlink(
+    val path: String,
+    val objectId: String,
+    val moduleName: String? = null,
+    val url: String? = null,
+)
+
+@Serializable
+data class GitStatus(
+    val projectName: String,
+    val branch: String,
+    val isClean: Boolean,
+    val ahead: Int,
+    val behind: Int,
+    val staged: Int,
+    val modified: Int,
+    val untracked: Int,
+    val hasStash: Boolean,
+    val lastCommit: GitLastCommit,
+    val pathExists: Boolean? = null,
+    val statusError: String? = null,
+)
+
+@Serializable
 data class VcsRoot(
     val rootId: String,
     val path: String,
     val absolutePath: String? = null,
     val kind: String = "primary", // primary | submodule | nestedRepo
     val mappingState: String? = null,
-    val status: GitRootStatus? = null,
+    val gitlink: GitSubmoduleGitlink? = null,
+    val status: GitStatus? = null,
     val warnings: List<String> = emptyList(),
 )
-
-@Serializable
-data class GitRootStatus(
-    val branch: String? = null,
-    val headCommit: String? = null,
-    val isDetached: Boolean = false,
-    val hasLocalChanges: Boolean = false,
-)
-
 /**
  * Branch metadata returned by GET /api/git/{project}/branches
  */
@@ -82,17 +105,66 @@ data class UpdateBranchRequest(
 )
 
 @Serializable
-data class GitDiffSummary(
-    val staged: List<DiffFileEntry> = emptyList(),
-    val unstaged: List<DiffFileEntry> = emptyList(),
+data class DiffFileEntry(
+    val path: String,
+    val status: String,
+    val staged: Boolean,
+    val additions: Int = 0,
+    val deletions: Int = 0,
+    val oldPath: String? = null,
+    val rootId: String? = null,
+    val rootPath: String? = null,
+    val submodule: GitSubmoduleGitlink? = null,
 )
 
 @Serializable
-data class DiffFileEntry(
+data class GitDiffResponse(
+    val entries: List<DiffFileEntry>,
+    val untrackedTruncated: Boolean,
+    val untrackedTotal: Int,
+)
+
+@Serializable
+data class GitConflictSummary(
+    val targetRevision: String,
+    val entries: List<GitConflictSummaryEntry>,
+    val truncated: Boolean,
+    val nextCursor: String? = null,
+)
+
+@Serializable
+data class GitConflictSummaryEntry(
+    val conflictId: String,
     val path: String,
-    val status: String = "modified", // modified | added | deleted | renamed | untracked
-    val oldPath: String? = null,
-    val staged: Boolean = false,
+    val status: String,
+    val isBinary: Boolean,
+    val unsupportedReason: String? = null,
+)
+
+@Serializable
+data class GitOperationStatus(
+    val operation: String,
+    val canContinue: Boolean,
+    val canAbort: Boolean,
+    val operationFingerprint: String,
+    val fullIndexFingerprint: String,
+    val stoppedReason: String? = null,
+    val stageRoleLabels: GitStageRoleLabels? = null,
+    val terminalHandoffRequired: GitTerminalHandoff? = null,
+    val blockers: List<String> = emptyList(),
+)
+
+@Serializable
+data class GitStageRoleLabels(
+    val ours: String,
+    val theirs: String,
+    val base: String? = null,
+)
+
+@Serializable
+data class GitTerminalHandoff(
+    val reason: String,
+    val worktreeRoot: String,
 )
 
 @Serializable
