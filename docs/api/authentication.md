@@ -17,7 +17,6 @@ All MFA endpoints validate their challenge or session credential directly; a cha
 
 | Method and Path | Request | Success |
 | --- | --- | --- |
-| `POST /api/auth/register` | `{ "username", "password" }` | `{ "ok": true }`; created disabled pending operator approval |
 | `POST /api/auth/login` | `{ "username", "password" }` | Enrollment or login-MFA challenge; no session token in normal mode |
 | `POST /api/auth/mfa/setup` | `{ "challengeToken" }` | TOTP secret and provisioning details |
 | `POST /api/auth/mfa/confirm` | `{ "challengeToken", "code" }` | Authenticated session after first enrollment |
@@ -31,31 +30,19 @@ The MFA route group enforces a `16 KiB` request body limit (`router.rs:56`). `se
 
 ## Login and Enrollment
 
-### `POST /api/auth/register`
+### Offline Account Provisioning
 
-Registers a new username and password against the active storage backend (MongoDB or SQLite lite mode):
+To eliminate public attack surface, credential spraying, and account enumeration risks, **public registration over HTTP is permanently disabled (`POST /api/auth/register` is removed)**.
 
-```json
-{ "username": "alice", "password": "<password>" }
+Accounts must be provisioned offline by an operator directly on the host machine using `scripts/create-admin.mjs`:
+
+```bash
+pnpm create-admin
+# or:
+node scripts/create-admin.mjs <username> <password>
 ```
 
-On success, returns HTTP `200 OK`:
-
-```json
-{ "ok": true }
-```
-
-**Account Approval & First-User Governance Invariant**:
-Every newly registered account is created disabled (`is_enabled = 0` in SQLite; `isEnabled: false` in MongoDB) with role `user` and `auth_version = 0` (`authVersion: 0`). Registration **never** grants automatic first-user `admin` rights, and there is no public admin-promotion API. An operator must locally approve the account—and, when intended, promote it to `admin`—using the **Development profile** or **Deployment profile** in the canonical [Operator Account Approval and Role Promotion Runbook](../configuration/server-environment-auth.md#operator-account-approval-and-role-promotion-runbook) before login can proceed.
-
-Attempting to call `POST /api/auth/login` on an unapproved account fails immediately with `HTTP 401 Unauthorized`:
-
-```json
-{
-  "code": "ACCOUNT_DISABLED",
-  "error": "Account is disabled. Contact an administrator."
-}
-```
+The script hashes the password with bcrypt and inserts an enabled administrator account into SQLite. See [Server Environment & Authentication](../configuration/server-environment-auth.md) for runbooks and production deployment details.
 
 After operator approval, the next `POST /api/auth/login` for an account without an enrolled factor returns `enrollmentRequired`, and the user completes MFA setup via `POST /api/auth/mfa/setup` and `POST /api/auth/mfa/confirm` below.
 

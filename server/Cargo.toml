@@ -1,6 +1,6 @@
 [package]
 name = "dam-hopper-server"
-version = "0.15.3"
+version = "0.15.4"
 edition = "2021"
 default-run = "dam-hopper-server"
 license = "MIT"
@@ -170,9 +170,9 @@ tokio-util = { version = "0.7", features = ["io"] }
 # Database and authentication
 mongodb = "3.5.2"
 bcrypt = "0.19.0"
+rpassword = "7"
 jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 totp-rs = { version = "6.0", default-features = false, features = ["std", "gen_secret", "otpauth", "zeroize"] }
-
 [target.'cfg(unix)'.dependencies]
 # SIGTERM for graceful child process shutdown
 nix = { version = "0.29", features = ["signal", "process"] }

@@ -69,6 +69,24 @@ struct Cli {
 enum Commands {
     /// Local extension integration commands
     Integration(IntegrationArgs),
+
+    /// Provision an administrator account offline in the SQLite authentication database
+    CreateAdmin(CreateAdminArgs),
+}
+
+#[derive(Debug, clap::Args)]
+struct CreateAdminArgs {
+    /// Administrator username (prompted interactively if omitted)
+    #[arg(short = 'u', long)]
+    username: Option<String>,
+
+    /// Read credentials from stdin (line 1: username, line 2: password) for automated provisioning
+    #[arg(long)]
+    stdin: bool,
+
+    /// Path to SQLite authentication database (defaults to auth.db under global config dir)
+    #[arg(short = 'd', long)]
+    db: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -293,6 +311,150 @@ async fn dispatch_integration(integration: IntegrationArgs) -> anyhow::Result<()
     }
     Ok(())
 }
+async fn dispatch_create_admin(args: CreateAdminArgs) -> anyhow::Result<()> {
+    use dam_hopper_server::auth::config::{resolve_sqlite_path, PathContext};
+    use dam_hopper_server::auth::model::{UserRecord, UserRole};
+    use dam_hopper_server::auth::AuthStore;
+    use std::io::{self, IsTerminal, Write};
+
+    let is_tty = io::stdin().is_terminal() && !args.stdin;
+
+    let username = match args.username {
+        Some(u) => {
+            let trimmed = u.trim().to_string();
+            if trimmed.is_empty() {
+                anyhow::bail!("Error: Username cannot be empty.");
+            }
+            trimmed
+        }
+        None => {
+            if is_tty {
+                print!("Enter admin username: ");
+                io::stdout().flush()?;
+                let mut line = String::new();
+                io::stdin().read_line(&mut line)?;
+                let trimmed = line.trim().to_string();
+                if trimmed.is_empty() {
+                    anyhow::bail!("Error: Username cannot be empty.");
+                }
+                trimmed
+            } else {
+                let mut line = String::new();
+                io::stdin().read_line(&mut line)?;
+                let trimmed = line.trim().to_string();
+                if trimmed.is_empty() {
+                    anyhow::bail!("Error: When piping stdin, username must not be empty.");
+                }
+                trimmed
+            }
+        }
+    };
+
+    let password = if is_tty {
+        let pass = rpassword::prompt_password("Enter admin password: ")?;
+        if pass.is_empty() {
+            anyhow::bail!("Error: Password cannot be empty.");
+        }
+        if pass.len() > 72 {
+            anyhow::bail!("Error: Password exceeds bcrypt limit of 72 bytes.");
+        }
+        let confirm = rpassword::prompt_password("Confirm admin password: ")?;
+        if pass != confirm {
+            anyhow::bail!("Error: Passwords do not match.");
+        }
+        pass
+    } else {
+        let mut line = String::new();
+        io::stdin().read_line(&mut line)?;
+        if line.ends_with('\n') {
+            line.pop();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+        }
+        if line.is_empty() {
+            anyhow::bail!("Error: When piping stdin, password must not be empty.");
+        }
+        if line.len() > 72 {
+            anyhow::bail!("Error: Password exceeds bcrypt limit of 72 bytes.");
+        }
+        line
+    };
+
+    let cwd = std::env::current_dir()?;
+    let home = dirs::home_dir();
+    let config_dir = dam_hopper_server::config::dam_hopper_config_dir();
+    let path_context = PathContext {
+        home: home.as_deref(),
+        cwd: &cwd,
+        config_dir: &config_dir,
+    };
+
+    let env_sqlite = std::env::var_os("DAM_HOPPER_AUTH_SQLITE_PATH");
+    let raw_db_path = args
+        .db
+        .as_ref()
+        .map(|p| p.as_os_str())
+        .or(env_sqlite.as_deref());
+    let db_path = resolve_sqlite_path(raw_db_path, &path_context)
+        .map_err(|e| anyhow::anyhow!("Invalid database path: {e}"))?;
+
+    let store = AuthStore::open_sqlite(&db_path).await.map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to open authentication database at {}: {e}",
+            db_path.display()
+        )
+    })?;
+
+    if store.get_user(&username).await?.is_some() {
+        anyhow::bail!(
+            "Error: User \"{username}\" already exists in {}",
+            db_path.display()
+        );
+    }
+
+    let password_hash =
+        bcrypt::hash(&password, 10).map_err(|e| anyhow::anyhow!("Failed to hash password: {e}"))?;
+
+    let user = UserRecord {
+        id: None,
+        username: username.clone(),
+        password_hash,
+        is_enabled: true,
+        role: UserRole::Admin,
+        auth_version: 0,
+        mfa: None,
+        mfa_attempt_window_started_at: None,
+        mfa_attempt_count: 0,
+        mfa_blocked_until: None,
+    };
+
+    store
+        .create_user(user)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to insert admin user: {e}"))?;
+
+    println!();
+    println!("✓ Admin user \"{username}\" created successfully in:");
+    println!("  {}", db_path.display());
+    println!();
+    println!("Configuration reminder:");
+    println!("  Ensure DAM_HOPPER_MFA_KEY_FILE is configured before starting the server:");
+    println!("    export DAM_HOPPER_MFA_KEY_FILE=/path/to/mfa-encryption.key");
+    println!(
+        "  (Generate with: (set -C; umask 077 && [ ! -e /path/to/mfa-encryption.key ] && openssl rand -hex 32 > /path/to/mfa-encryption.key) || true && chmod 600 /path/to/mfa-encryption.key)"
+    );
+    println!();
+    println!("Next steps:");
+    println!("  1. Start DamHopper server:");
+    println!(
+        "     DAM_HOPPER_MFA_KEY_FILE=/path/to/mfa-encryption.key dam-hopper-server --host 127.0.0.1 --port 4801"
+    );
+    println!("  2. Log in at http://127.0.0.1:4801/api/auth/login or via Web UI.");
+    println!("  3. Scan the TOTP QR code on first login to complete MFA enrollment.");
+
+    Ok(())
+}
 
 const TOKEN_CAPACITY: usize = 512;
 
@@ -391,7 +553,7 @@ mod tests {
                     panic!("expected OMP integration")
                 }
             },
-            None => panic!("expected integration command"),
+            _ => panic!("expected integration command"),
         }
 
         let args2 = [
@@ -417,7 +579,7 @@ mod tests {
                     panic!("expected OMP integration")
                 }
             },
-            None => panic!("expected integration command"),
+            _ => panic!("expected integration command"),
         }
 
         let args3 = ["dam-hopper-server", "--port", "4900"];
@@ -493,9 +655,51 @@ mod tests {
             }))
         ));
     }
+    #[test]
+    fn create_admin_subcommand_is_parsed_correctly() {
+        use super::{Cli, Commands};
+        use clap::Parser;
+
+        let args = [
+            "dam-hopper-server",
+            "create-admin",
+            "--username",
+            "test_admin",
+            "--db",
+            "/tmp/custom_auth.db",
+            "--stdin",
+        ];
+        let parsed = Cli::try_parse_from(args).expect("valid create-admin args");
+        match parsed.command {
+            Some(Commands::CreateAdmin(cmd)) => {
+                assert_eq!(cmd.username, Some("test_admin".to_string()));
+                assert_eq!(cmd.db, Some(PathBuf::from("/tmp/custom_auth.db")));
+                assert!(cmd.stdin);
+            }
+            _ => panic!("expected create-admin command"),
+        }
+    }
 
     #[tokio::test]
     async fn init_auth_store_lite_mode_opens_sqlite_and_honors_precedence() {
+        struct EnvGuard(Vec<&'static str>);
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                for key in &self.0 {
+                    std::env::remove_var(key);
+                }
+            }
+        }
+        let _guard = EnvGuard(vec![
+            "DAM_HOPPER_LITE_MODE",
+            "DAM_HOPPER_AUTH_SQLITE_PATH",
+            "MONGODB_URI",
+            "MONGODB_DATABASE",
+            "RUST_ENV",
+            "ENVIRONMENT",
+            "DAM_HOPPER_MFA_KEY_FILE",
+        ]);
+
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("auth.db");
         let session_path = tmp.path().join("sessions.db");
@@ -512,7 +716,6 @@ mod tests {
 
         let store = super::init_auth_store(&session_path, &telemetry_str)
             .await
-            .unwrap()
             .expect("sqlite store opened");
         assert!(db_path.exists());
         drop(store);
@@ -537,12 +740,18 @@ mod tests {
             "SQLite file must not be created on failed MFA key check"
         );
 
-        // Cleanup env vars
+        // 3. Unset Mongo vars defaults to SQLite
         std::env::remove_var("DAM_HOPPER_LITE_MODE");
-        std::env::remove_var("DAM_HOPPER_AUTH_SQLITE_PATH");
         std::env::remove_var("MONGODB_URI");
         std::env::remove_var("MONGODB_DATABASE");
         std::env::remove_var("RUST_ENV");
+        let default_db_path = tmp.path().join("default_auth.db");
+        std::env::set_var("DAM_HOPPER_AUTH_SQLITE_PATH", &default_db_path);
+        let default_store = super::init_auth_store(&session_path, &telemetry_str)
+            .await
+            .expect("default sqlite store opened");
+        assert!(default_db_path.exists());
+        drop(default_store);
     }
 }
 
@@ -554,13 +763,13 @@ mod tests {
 async fn init_auth_store(
     session_db_path: &std::path::Path,
     telemetry_db_path: &str,
-) -> anyhow::Result<Option<dam_hopper_server::auth::AuthStore>> {
+) -> anyhow::Result<dam_hopper_server::auth::AuthStore> {
     use dam_hopper_server::auth::{AuthBackendConfig, AuthStore};
 
     let backend = AuthBackendConfig::from_env()
         .map_err(|e| anyhow::anyhow!("FATAL: invalid authentication backend configuration: {e}"))?;
     match backend {
-        AuthBackendConfig::Sqlite { path } => {
+        AuthBackendConfig::Sqlite { ref path, explicit } => {
             let production = std::env::var("RUST_ENV").unwrap_or_default() == "production"
                 || std::env::var("ENVIRONMENT").unwrap_or_default() == "production";
             if production && std::env::var_os("DAM_HOPPER_MFA_KEY_FILE").is_none() {
@@ -575,7 +784,7 @@ async fn init_auth_store(
             }
             let telemetry_path =
                 dam_hopper_server::telemetry::runtime::telemetry_path(telemetry_db_path);
-            AuthBackendConfig::Sqlite { path: path.clone() }
+            backend
                 .ensure_distinct_from(&[
                     ("session", session_db_path),
                     ("telemetry", telemetry_path.as_path()),
@@ -587,32 +796,48 @@ async fn init_auth_store(
                     path.display()
                 )
             })?;
-            tracing::info!(path = %path.display(), "Authentication backend: SQLite (lite mode)");
-            Ok(Some(store))
+            if explicit {
+                tracing::info!(
+                    path = %path.display(),
+                    reason = "DAM_HOPPER_LITE_MODE",
+                    "Authentication backend: SQLite (explicit)"
+                );
+            } else {
+                tracing::info!(
+                    path = %path.display(),
+                    reason = "MongoDB variables unset",
+                    "Authentication backend: SQLite (default — MONGODB_URI not set)"
+                );
+            }
+            Ok(store)
         }
-        AuthBackendConfig::Mongo => {
-            let (Ok(uri), Ok(name)) = (
-                std::env::var("MONGODB_URI"),
-                std::env::var("MONGODB_DATABASE"),
-            ) else {
-                if std::env::var("RUST_ENV").unwrap_or_default() == "production"
-                    || std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
-                {
-                    anyhow::bail!(
-                        "FATAL: an authentication store is required in production environment. Set MONGODB_URI and MONGODB_DATABASE, or enable lite mode with DAM_HOPPER_LITE_MODE=true."
-                    );
-                }
-                tracing::warn!("MongoDB not configured — running without database");
-                return Ok(None);
-            };
-            tracing::info!(%name, "Connecting to MongoDB...");
-            let client_options = mongodb::options::ClientOptions::parse(&uri).await?;
-            let client = mongodb::Client::with_options(client_options)?;
-            let store = AuthStore::from_mongo(client.database(&name));
+        AuthBackendConfig::Mongo { uri, database } => {
+            tracing::info!(name = %database, "Connecting to MongoDB...");
+            let client_options = mongodb::options::ClientOptions::parse(&uri)
+                .await
+                .map_err(|_| anyhow::anyhow!("FATAL: failed to parse MongoDB URI"))?;
+            let client = mongodb::Client::with_options(client_options)
+                .map_err(|e| anyhow::anyhow!("FATAL: failed to create MongoDB client: {e}"))?;
+            let db = client.database(&database);
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                db.run_command(mongodb::bson::doc! { "ping": 1 }),
+            )
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "FATAL: timed out after 10s connecting to MongoDB database '{database}'"
+                )
+            })?
+            .map_err(|e| {
+                anyhow::anyhow!("FATAL: cannot connect to MongoDB database '{database}': {e}")
+            })?;
+            let store = AuthStore::from_mongo(db);
             if let Err(e) = store.init_indexes().await {
                 tracing::warn!(error = %e, "Auth store index initialization failed or deferred");
             }
-            Ok(Some(store))
+            tracing::info!(name = %database, "Authentication backend: MongoDB");
+            Ok(store)
         }
     }
 }
@@ -639,8 +864,10 @@ async fn main() -> anyhow::Result<()> {
     // Load config-adjacent environment variables before Clap reads env-backed options.
     load_explicit_config_env();
     let cli = Cli::parse();
-    if let Some(Commands::Integration(integration)) = cli.command {
-        return dispatch_integration(integration).await;
+    match cli.command {
+        Some(Commands::CreateAdmin(args)) => return dispatch_create_admin(args).await,
+        Some(Commands::Integration(integration)) => return dispatch_integration(integration).await,
+        None => {}
     }
     // Disable libgit2 repository owner validation so git operations succeed on projects
     // across user homes, WSL mounts, and external drives owned by other users or UIDs.
@@ -857,7 +1084,7 @@ async fn main() -> anyhow::Result<()> {
     let auth_store = if cli.no_auth {
         None
     } else {
-        init_auth_store(&db_path, &config.server.telemetry.db_path).await?
+        Some(init_auth_store(&db_path, &config.server.telemetry.db_path).await?)
     };
 
     // Load (or generate) OPAQUE server keypair — persisted to ~/.config/dam-hopper/opaque-server-setup
