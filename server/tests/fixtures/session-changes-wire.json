@@ -1,5 +1,112 @@
 {
   "valid": {
+    "registerRequest": {
+      "version": 1,
+      "ompSessionId": "omp-session-456",
+      "rootId": ".",
+      "cwdHint": "/home/user/project"
+    },
+    "registerResponse": {
+      "serverEpoch": "epoch-uuid-1",
+      "terminalIncarnation": "1",
+      "ompSessionId": "omp-session-456",
+      "rootId": ".",
+      "baselineId": "base-uuid-1"
+    },
+    "captureRequestPreEdit": {
+      "version": 1,
+      "serverEpoch": "epoch-uuid-1",
+      "terminalIncarnation": "1",
+      "ompSessionId": "omp-session-456",
+      "rootId": ".",
+      "baselineId": "base-uuid-1",
+      "captureId": "cap-123",
+      "paths": ["src/lib.rs", "README.md"],
+      "mode": "preEdit"
+    },
+    "captureRequestUnproven": {
+      "version": 1,
+      "serverEpoch": "epoch-uuid-1",
+      "terminalIncarnation": "1",
+      "ompSessionId": "omp-session-456",
+      "rootId": ".",
+      "baselineId": "base-uuid-1",
+      "captureId": "cap-124",
+      "paths": ["generated/file.rs"],
+      "mode": "unproven"
+    },
+    "captureResponse": {
+      "version": 1,
+      "captureId": "cap-123",
+      "results": [
+        {
+          "path": "src/lib.rs",
+          "fileId": "fid-1",
+          "status": "captured",
+          "presence": "present",
+          "reason": null
+        },
+        {
+          "path": "README.md",
+          "fileId": "fid-2",
+          "status": "captured",
+          "presence": "absentAtFirstTouch",
+          "reason": null
+        }
+      ]
+    },
+    "statusToolObservedReady": {
+      "version": 1,
+      "serverEpoch": "epoch-uuid-1",
+      "terminalIncarnation": "1",
+      "ompSessionId": "omp-session-456",
+      "rootId": ".",
+      "baselineId": "base-uuid-1",
+      "origin": "toolObserved",
+      "state": "ready",
+      "acknowledgment": "notApplicable",
+      "capturedAtMs": 1700000001000,
+      "baselineCoverage": {
+        "state": "complete",
+        "inventoryComplete": true,
+        "absenceProofComplete": true,
+        "provenanceEntries": 2,
+        "eligibleEntries": 2,
+        "capturedEntries": 2,
+        "omittedEntries": null,
+        "rawBytes": 1024,
+        "reasons": []
+      },
+      "comparison": null,
+      "reason": null,
+      "sharedWriters": true
+    },
+    "statusToolObservedIncomplete": {
+      "version": 1,
+      "serverEpoch": "epoch-uuid-1",
+      "terminalIncarnation": "1",
+      "ompSessionId": "omp-session-456",
+      "rootId": ".",
+      "baselineId": "base-uuid-1",
+      "origin": "toolObserved",
+      "state": "incomplete",
+      "acknowledgment": "notApplicable",
+      "capturedAtMs": 1700000001000,
+      "baselineCoverage": {
+        "state": "incomplete",
+        "inventoryComplete": true,
+        "absenceProofComplete": true,
+        "provenanceEntries": 3,
+        "eligibleEntries": 3,
+        "capturedEntries": 2,
+        "omittedEntries": null,
+        "rawBytes": 1024,
+        "reasons": ["pathLimit"]
+      },
+      "comparison": null,
+      "reason": null,
+      "sharedWriters": true
+    },
     "prepareRequest": {
       "version": 1,
       "registrationId": "reg-123",

@@ -9,11 +9,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use crate::agent_status::runtime::{AgentStatusRuntime, TokenAuthResult};
-use crate::session_changes::capture::{
-    activate_session_baseline, fail_session_capture, prepare_session_capture,
-    receive_session_receipt, PrepareOutcome,
-};
-use crate::session_changes::comparison::run_comparison_scan;
+use crate::session_changes::capture::{capture_session_paths, register_session};
 use crate::session_changes::store::{SessionChangesKey, SessionChangesService};
 use crate::session_changes::types::*;
 
@@ -35,14 +31,14 @@ impl ControlRouterState {
         let service = self.get_service().ok_or_else(|| {
             error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                ErrorCode::TargetUnavailable,
+                ErrorCode::TrackingDisabled,
                 "Session changes service is unavailable",
             )
         })?;
         if !service.is_enabled() {
             return Err(error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                ErrorCode::TargetUnavailable,
+                ErrorCode::TrackingDisabled,
                 "Session changes service is disabled",
             ));
         }
@@ -54,7 +50,7 @@ fn error_response(status: StatusCode, code: ErrorCode, reason: impl Into<String>
     let body = ErrorBody {
         version: 1,
         code,
-        retryable: false,
+        retryable: code == ErrorCode::Busy || code == ErrorCode::Deadline,
         current_revision: None,
         reason: reason.into(),
     };
@@ -73,6 +69,32 @@ fn success_json<T: serde::Serialize>(val: T) -> Response {
         Json(val),
     )
         .into_response()
+}
+
+fn map_error_code(code: ErrorCode, reason: &str) -> Response {
+    let status = match code {
+        ErrorCode::TrackingDisabled => StatusCode::SERVICE_UNAVAILABLE,
+        ErrorCode::TargetUnavailable => StatusCode::NOT_FOUND,
+        ErrorCode::BaselineMissing => StatusCode::NOT_FOUND,
+        ErrorCode::FileMissing => StatusCode::NOT_FOUND,
+        ErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
+        ErrorCode::IncarnationMismatch => StatusCode::BAD_REQUEST,
+        ErrorCode::SessionMismatch => StatusCode::BAD_REQUEST,
+        ErrorCode::RootMismatch => StatusCode::BAD_REQUEST,
+        ErrorCode::Unauthorized => StatusCode::UNAUTHORIZED,
+        ErrorCode::AcknowledgmentPending => StatusCode::UNAUTHORIZED,
+        ErrorCode::TerminalMissing => StatusCode::NOT_FOUND,
+        ErrorCode::ServerRestarted => StatusCode::GONE,
+        ErrorCode::RegistrationExpired => StatusCode::GONE,
+        ErrorCode::OriginalUnavailable => StatusCode::CONFLICT,
+        ErrorCode::RefreshRequired => StatusCode::CONFLICT,
+        ErrorCode::Busy => StatusCode::CONFLICT,
+        ErrorCode::Capacity => StatusCode::TOO_MANY_REQUESTS,
+        ErrorCode::Deadline => StatusCode::GATEWAY_TIMEOUT,
+        ErrorCode::RegistrationFailed => StatusCode::INTERNAL_SERVER_ERROR,
+        ErrorCode::ResponseLimit => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    error_response(status, code, reason)
 }
 
 fn authenticate_request(
@@ -122,35 +144,22 @@ pub fn private_session_changes_router(
 ) -> Router {
     let state = ControlRouterState { runtime, service };
     Router::new()
-        .route("/prepare", post(handle_prepare))
-        .route("/activate", post(handle_activate))
-        .route("/receipt", post(handle_receipt))
-        .route("/fail", post(handle_fail))
+        .route("/register", post(handle_register))
+        .route("/capture", post(handle_capture))
         .route("/lookup", post(handle_lookup))
         .route("/settled", post(handle_settled))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .with_state(state)
 }
 
-async fn handle_prepare(
+async fn handle_register(
     State(state): State<ControlRouterState>,
     headers: HeaderMap,
-    Json(req): Json<PrepareRequest>,
+    Json(req): Json<RegisterRequest>,
 ) -> Response {
     let (terminal_id, incarnation) = match authenticate_request(&headers, &state.runtime) {
         Ok(pair) => pair,
         Err(resp) => return resp,
-    };
-
-    let _permit = match CONTROL_CONCURRENCY_SEMAPHORE.try_acquire() {
-        Ok(p) => p,
-        Err(_) => {
-            return error_response(
-                StatusCode::TOO_MANY_REQUESTS,
-                ErrorCode::Busy,
-                "Control concurrency saturated",
-            );
-        }
     };
 
     let service = match state.get_enabled_service() {
@@ -158,9 +167,8 @@ async fn handle_prepare(
         Err(resp) => return resp,
     };
 
-    // Determine target project root from bound target (strictly forbid falling back to '.')
-    let bound = match service.get_bound_terminal_target(&terminal_id, incarnation) {
-        Some(b) => b,
+    let bound_target = match service.get_bound_terminal_target(&terminal_id, incarnation) {
+        Some(t) => t,
         None => {
             return error_response(
                 StatusCode::NOT_FOUND,
@@ -169,129 +177,75 @@ async fn handle_prepare(
             );
         }
     };
-    let project_root = bound.launch_cwd;
 
-    match prepare_session_capture(
+    let _permit = match CONTROL_CONCURRENCY_SEMAPHORE.try_acquire() {
+        Ok(p) => p,
+        Err(_) => {
+            return error_response(
+                StatusCode::CONFLICT,
+                ErrorCode::Busy,
+                "Control plane request limit exceeded",
+            );
+        }
+    };
+
+    match register_session(
         &service,
         terminal_id,
         incarnation.to_string(),
-        &project_root,
+        &bound_target.launch_cwd,
         req,
     )
     .await
     {
-        Ok(PrepareOutcome::Prepared(receipt)) => success_json(receipt),
-        Ok(PrepareOutcome::Existing(existing)) => success_json(existing),
-        Err(ErrorCode::Capacity) => error_response(
-            StatusCode::TOO_MANY_REQUESTS,
-            ErrorCode::Capacity,
-            "Capacity limit exceeded",
-        ),
-        Err(ErrorCode::Busy) => error_response(
-            StatusCode::CONFLICT,
-            ErrorCode::Busy,
-            "Scan in progress",
-        ),
-        Err(code) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            code,
-            "Prepare capture failed",
-        ),
+        Ok(resp) => success_json(resp),
+        Err(code) => map_error_code(code, "Registration failed"),
     }
 }
 
-async fn handle_activate(
+async fn handle_capture(
     State(state): State<ControlRouterState>,
     headers: HeaderMap,
-    Json(req): Json<ActivationRequest>,
+    Json(req): Json<CaptureRequest>,
 ) -> Response {
     let (terminal_id, incarnation) = match authenticate_request(&headers, &state.runtime) {
         Ok(pair) => pair,
         Err(resp) => return resp,
     };
-
-    let key = SessionChangesKey {
-        terminal_id,
-        terminal_incarnation: incarnation.to_string(),
-        omp_session_id: req.omp_session_id.clone(),
-        root_id: req.root_id.clone(),
-    };
-
-    let service = match state.get_enabled_service() {
-        Ok(s) => s,
-        Err(resp) => return resp,
-    };
-    match activate_session_baseline(&service, &key, &req) {
-        Ok(receipt) => success_json(receipt),
-        Err(ErrorCode::RegistrationExpired) => error_response(
-            StatusCode::GONE,
-            ErrorCode::RegistrationExpired,
-            "Prepared registration expired",
-        ),
-        Err(ErrorCode::ServerRestarted) => error_response(
-            StatusCode::GONE,
-            ErrorCode::ServerRestarted,
-            "Server epoch mismatch",
-        ),
-        Err(code) => error_response(
+    if req.version != 1 {
+        return error_response(
             StatusCode::BAD_REQUEST,
-            code,
-            "Activation failed",
-        ),
+            ErrorCode::InvalidRequest,
+            "Invalid version",
+        );
     }
-}
-
-async fn handle_receipt(
-    State(state): State<ControlRouterState>,
-    headers: HeaderMap,
-    Json(req): Json<ReceiptRequest>,
-) -> Response {
-    let (terminal_id, incarnation) = match authenticate_request(&headers, &state.runtime) {
-        Ok(pair) => pair,
-        Err(resp) => return resp,
-    };
-
-    let key = SessionChangesKey {
-        terminal_id,
-        terminal_incarnation: incarnation.to_string(),
-        omp_session_id: req.omp_session_id.clone(),
-        root_id: req.root_id.clone(),
-    };
+    if req.terminal_incarnation != incarnation.to_string() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            ErrorCode::IncarnationMismatch,
+            "terminalIncarnation mismatch",
+        );
+    }
 
     let service = match state.get_enabled_service() {
         Ok(s) => s,
         Err(resp) => return resp,
     };
-    match receive_session_receipt(&service, &key, &req) {
+
+    let _permit = match CONTROL_CONCURRENCY_SEMAPHORE.try_acquire() {
+        Ok(p) => p,
+        Err(_) => {
+            return error_response(
+                StatusCode::CONFLICT,
+                ErrorCode::Busy,
+                "Control plane request limit exceeded",
+            );
+        }
+    };
+
+    match capture_session_paths(&service, terminal_id, incarnation.to_string(), req).await {
         Ok(resp) => success_json(resp),
-        Err(code) => error_response(StatusCode::BAD_REQUEST, code, "Receipt failed"),
-    }
-}
-
-async fn handle_fail(
-    State(state): State<ControlRouterState>,
-    headers: HeaderMap,
-    Json(req): Json<FailureRequest>,
-) -> Response {
-    let (terminal_id, incarnation) = match authenticate_request(&headers, &state.runtime) {
-        Ok(pair) => pair,
-        Err(resp) => return resp,
-    };
-
-    let key = SessionChangesKey {
-        terminal_id,
-        terminal_incarnation: incarnation.to_string(),
-        omp_session_id: req.omp_session_id.clone(),
-        root_id: ".".into(),
-    };
-
-    let service = match state.get_enabled_service() {
-        Ok(s) => s,
-        Err(resp) => return resp,
-    };
-    match fail_session_capture(&service, &key, &req) {
-        Ok(resp) => success_json(resp),
-        Err(code) => error_response(StatusCode::BAD_REQUEST, code, "Fail notification rejected"),
+        Err(code) => map_error_code(code, "Capture failed"),
     }
 }
 
@@ -305,6 +259,40 @@ async fn handle_lookup(
         Err(resp) => return resp,
     };
 
+    if req.version != 1 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            ErrorCode::InvalidRequest,
+            "Invalid version",
+        );
+    }
+
+    let service = match state.get_enabled_service() {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+
+    if let Some(known_epoch) = &req.known_server_epoch {
+        if known_epoch != &service.server_epoch {
+            return error_response(
+                StatusCode::GONE,
+                ErrorCode::ServerRestarted,
+                "Server epoch mismatch",
+            );
+        }
+    }
+
+    let _permit = match CONTROL_CONCURRENCY_SEMAPHORE.try_acquire() {
+        Ok(p) => p,
+        Err(_) => {
+            return error_response(
+                StatusCode::CONFLICT,
+                ErrorCode::Busy,
+                "Control plane request limit exceeded",
+            );
+        }
+    };
+
     let key = SessionChangesKey {
         terminal_id,
         terminal_incarnation: incarnation.to_string(),
@@ -312,37 +300,16 @@ async fn handle_lookup(
         root_id: req.root_id.clone(),
     };
 
-    let service = match state.get_enabled_service() {
-        Ok(s) => s,
-        Err(resp) => return resp,
+    let has_record = {
+        let records = service.records.lock();
+        records.contains_key(&key)
     };
-    let records = service.records.lock();
-    if let Some(rec) = records.get(&key) {
-        if rec.active_from_now.is_some() || rec.state == StatusState::Ready || rec.state == StatusState::Incomplete {
-            drop(records);
-            let status = service.build_status(&key);
-            return success_json(LookupResult::Active {
-                version: 1,
-                status,
-            });
-        }
-        if rec.original_failed {
-            return success_json(LookupResult::Unavailable {
-                version: 1,
-                server_epoch: service.server_epoch.clone(),
-                terminal_incarnation: incarnation.to_string(),
-                omp_session_id: req.omp_session_id,
-                root_id: req.root_id,
-                reason: ErrorCode::OriginalUnavailable,
-            });
-        }
-        success_json(LookupResult::Unavailable {
+
+    if has_record {
+        let status = service.build_status(&key);
+        success_json(LookupResult::Active {
             version: 1,
-            server_epoch: service.server_epoch.clone(),
-            terminal_incarnation: incarnation.to_string(),
-            omp_session_id: req.omp_session_id,
-            root_id: req.root_id,
-            reason: ErrorCode::AcknowledgmentPending,
+            status,
         })
     } else {
         success_json(LookupResult::Missing {
@@ -366,71 +333,89 @@ async fn handle_settled(
         Err(resp) => return resp,
     };
 
-    let key = SessionChangesKey {
-        terminal_id,
-        terminal_incarnation: incarnation.to_string(),
-        omp_session_id: req.omp_session_id.clone(),
-        root_id: req.root_id.clone(),
-    };
-
     let service = match state.get_enabled_service() {
         Ok(s) => s,
         Err(resp) => return resp,
     };
 
-    let mut is_duplicate = false;
-    {
-        let mut records = service.records.lock();
-        let rec = match records.get_mut(&key) {
-            Some(r) => r,
-            None => {
-                return error_response(
-                    StatusCode::NOT_FOUND,
-                    ErrorCode::BaselineMissing,
-                    "Baseline record missing",
-                );
-            }
-        };
+    if req.version != 1 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            ErrorCode::InvalidRequest,
+            "Invalid version",
+        );
+    }
+    if req.server_epoch != service.server_epoch {
+        return error_response(
+            StatusCode::GONE,
+            ErrorCode::ServerRestarted,
+            "Server epoch mismatch",
+        );
+    }
 
-        if req.server_epoch != service.server_epoch {
-            return error_response(
-                StatusCode::GONE,
-                ErrorCode::ServerRestarted,
-                "Server epoch mismatch",
-            );
-        }
-        if rec.baseline_id.as_deref() != Some(&req.baseline_id) {
+    if let Some(inc_str) = &req.terminal_incarnation {
+        if inc_str != &incarnation.to_string() {
             return error_response(
                 StatusCode::BAD_REQUEST,
-                ErrorCode::BaselineMissing,
-                "Baseline ID mismatch on settled turn",
+                ErrorCode::IncarnationMismatch,
+                "terminalIncarnation mismatch",
             );
         }
-        if rec.recent_turn_ids.contains(&req.turn_id) {
-            is_duplicate = true;
-        } else {
-            rec.recent_turn_ids.insert(req.turn_id.clone());
-            if rec.recent_turn_ids.len() > 64 {
-                let first = rec.recent_turn_ids.iter().next().cloned();
-                if let Some(f) = first {
-                    rec.recent_turn_ids.remove(&f);
-                }
-            }
+    }
+
+    let _permit = match CONTROL_CONCURRENCY_SEMAPHORE.try_acquire() {
+        Ok(p) => p,
+        Err(_) => {
+            return error_response(
+                StatusCode::CONFLICT,
+                ErrorCode::Busy,
+                "Control plane request limit exceeded",
+            );
+        }
+    };
+
+    let key = SessionChangesKey {
+        terminal_id,
+        terminal_incarnation: incarnation.to_string(),
+        omp_session_id: req.omp_session_id,
+        root_id: req.root_id,
+    };
+
+    let mut records = service.records.lock();
+    let rec = match records.get_mut(&key) {
+        Some(r) => r,
+        None => {
+            return error_response(
+                StatusCode::NOT_FOUND,
+                ErrorCode::BaselineMissing,
+                "Baseline record missing",
+            );
+        }
+    };
+
+    if rec.baseline_id != req.baseline_id {
+        return error_response(
+            StatusCode::CONFLICT,
+            ErrorCode::RefreshRequired,
+            "Baseline ID mismatch",
+        );
+    }
+
+    let duplicate = rec.recent_turn_ids.contains(&req.turn_id);
+    rec.recent_turn_ids.insert(req.turn_id.clone());
+    if rec.recent_turn_ids.len() > 64 {
+        let oldest = rec.recent_turn_ids.iter().next().cloned();
+        if let Some(o) = oldest {
+            rec.recent_turn_ids.remove(&o);
         }
     }
+    rec.last_settled_turn_id = Some(req.turn_id);
+    rec.dirty_settled_hint = true;
 
-    if !is_duplicate {
-        let service_clone = Arc::clone(&service);
-        let key_clone = key.clone();
-        let turn_id = req.turn_id.clone();
-        tokio::spawn(async move {
-            let _ = run_comparison_scan(&service_clone, &key_clone, Some(turn_id)).await;
-        });
-    }
-
+    // Zero background diffing or file reading on settled!
     success_json(SettledResponse {
         version: 1,
         accepted: true,
-        duplicate: is_duplicate,
+        duplicate,
     })
 }

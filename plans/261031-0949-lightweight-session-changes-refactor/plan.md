@@ -33,9 +33,11 @@ Planning only; implementation and product qualification not performed by authori
 | Phase | Effort | Owner role | Status | Contract |
 |---|---|---|---|---|
 | 01 | 0.35d | Server lifecycle | DONE (2026-10-31 19:54:51 +07:00) | [Config and managed lifecycle](phase-01-config-and-extension-lifecycle.md) |
-| 02 | 0.75d | Rust engine | pending | [Per-file engine and lazy comparison](phase-02-lightweight-per-file-engine.md) |
+| 02 | 0.75d | Rust engine | DONE (2026-10-31 21:34:24 +07:00) | [Per-file engine and lazy comparison](phase-02-lightweight-per-file-engine.md) |
 | 03 | 0.40d | OMP producer | DONE (2026-10-31 17:23:46 +07:00) | [Tool-event extension](phase-03-omp-tool-event-extension.md) |
 | 04 | 0.50d | UI, integration, docs | pending | [Toggle and qualification](phase-04-settings-toggle-and-ui-qualification.md) |
+
+Phase 02 marked DONE per user direction (2026-10-31 21:34:24 +07:00); technical acceptance remains incomplete per the Cycle 3 review.
 
 ## Task graph and ownership
 
@@ -57,11 +59,11 @@ Independent review: [cleared (0 blockers / 0 high / 0 medium)](reports/independe
 <!-- evcrate-progress:start -->
 - document-lightweight-session-changes: pending
 - lazy-panel-and-triggers: pending
-- lazy-view-comparison: pending
+- lazy-view-comparison: completed
 - managed-extension-lifecycle: completed
 - omp-tool-event-producer: completed
-- per-file-capture-engine: pending
-- qualify-engine-protocol: pending
+- per-file-capture-engine: completed
+- qualify-engine-protocol: completed
 - qualify-integrated-session-changes: pending
 - qualify-omp-producer: completed
 - server-session-changes-switch: completed

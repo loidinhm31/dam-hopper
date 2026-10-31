@@ -8,7 +8,6 @@ use tempfile::TempDir;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
-use crate::session_changes::inventory::{BaselineInventory, CapturedFile};
 use crate::session_changes::types::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -20,57 +19,72 @@ pub struct SessionChangesKey {
 }
 
 #[derive(Debug, Clone)]
-pub struct FromNowRecord {
-    pub baseline_id: String,
-    pub captured_at_ms: u64,
-    pub baseline_inventory: BaselineInventory,
-    pub comparison_revision: u64,
-}
-
-#[derive(Debug, Clone)]
 pub struct BoundTerminalTarget {
     pub project_name: Option<String>,
     pub worktree_path: Option<String>,
     pub launch_cwd: PathBuf,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureReservationState {
+    Pending {
+        capture_id: String,
+        reserved_at: Instant,
+    },
+    Sealed,
+}
+
 #[derive(Debug, Clone)]
-pub struct FileRowInternal {
+pub struct TrackedPathEntry {
+    pub file_id: String,
+    pub path: String,
+    pub presence: Presence,
+    pub provenance: Provenance,
+    pub size_bytes: u64,
+    pub sha256: Option<String>,
+    pub mode: Option<u32>,
+    pub kind: FileContentKind,
+    pub bytes: Option<Arc<[u8]>>,
+    pub reasons: Vec<CoverageReason>,
+    pub reservation: CaptureReservationState,
+    pub last_capture_id: Option<String>,
+    pub acknowledged: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComparisonRowMeta {
     pub row: FileRow,
-    pub original_file: Option<CapturedFile>,
-    pub current_file: Option<CapturedFile>,
+    pub current_sha256: Option<String>,
+    pub current_size_bytes: Option<u64>,
+    pub current_mode: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ComparisonArtifact {
     pub comparison: Comparison,
-    pub rows: Vec<FileRowInternal>,
+    pub rows: Vec<ComparisonRowMeta>,
 }
 
-
 pub struct SessionChangesRecord {
-    pub registration_id: String,
-    pub baseline_id: Option<String>,
-    pub activation_nonce: Option<String>,
-    pub activation_receipt_id: Option<String>,
-    pub captured_at_ms: Option<u64>,
-    pub prepared_at: Option<Instant>,
-    pub prepared_ttl_ms: u64,
-    pub origin: Option<Origin>,
+    pub baseline_id: String,
+    pub omp_session_id: String,
+    pub root_id: String,
+    pub canonical_root: PathBuf,
+    pub root_dir_file: Option<Arc<std::fs::File>>,
+    pub generation: u64,
+    pub created_at_ms: u64,
+    pub captured_at_ms: u64,
     pub state: StatusState,
-    pub acknowledgment: Acknowledgment,
-    pub baseline_inventory: Option<BaselineInventory>,
-    pub baseline_coverage: Option<Coverage>,
+    pub tracked_paths: BTreeMap<String, TrackedPathEntry>,
+    pub retained_bytes: u64,
     pub comparison: Option<ComparisonArtifact>,
-    pub current_revision_manifest: Option<BTreeMap<String, CapturedFile>>,
     pub comparison_revision: u64,
     pub reason: Option<ErrorCode>,
-    pub original_failed: bool,
-    pub active_from_now: Option<FromNowRecord>,
     pub recent_turn_ids: BTreeSet<String>,
     pub last_settled_turn_id: Option<String>,
     pub dirty_settled_hint: bool,
-    pub canonical_root: PathBuf,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LifecycleState {
     pub enabled: bool,
@@ -134,6 +148,7 @@ impl SessionChangesService {
     }
 
     pub fn disable_and_purge(&self) {
+        // Strict lock ordering: lifecycle.write() before records.lock()
         let mut state = self.lifecycle.write();
         state.enabled = false;
         state.generation = state.generation.wrapping_add(1);
@@ -149,7 +164,6 @@ impl SessionChangesService {
         }
         self.release_storage(bytes);
     }
-
     pub fn try_reserve_storage_for_generation(&self, generation: u64, bytes: u64) -> Result<(), ErrorCode> {
         let lifecycle = self.lifecycle.read();
         if !lifecycle.enabled || lifecycle.generation != generation {
@@ -157,6 +171,7 @@ impl SessionChangesService {
         }
         self.try_reserve_storage(bytes)
     }
+
 
     pub fn try_reserve_storage(&self, bytes: u64) -> Result<(), ErrorCode> {
         let max = MAX_GLOBAL_STORAGE_BYTES as u64;
@@ -202,27 +217,66 @@ impl SessionChangesService {
     }
 
     pub fn build_status(&self, key: &SessionChangesKey) -> Status {
+        if !self.is_enabled() {
+            return Status {
+                version: 1,
+                server_epoch: self.server_epoch.clone(),
+                terminal_incarnation: key.terminal_incarnation.clone(),
+                omp_session_id: key.omp_session_id.clone(),
+                root_id: Some(key.root_id.clone()),
+                baseline_id: None,
+                origin: None,
+                state: StatusState::Unavailable,
+                acknowledgment: Acknowledgment::NotApplicable,
+                captured_at_ms: None,
+                baseline_coverage: None,
+                comparison: None,
+                reason: Some(ErrorCode::TrackingDisabled),
+                shared_writers: true,
+            };
+        }
+
         let records = self.records.lock();
         if let Some(rec) = records.get(key) {
-            // Check preparation TTL expiration on access
-            let state = if rec.state == StatusState::Initializing {
-                if let Some(prep_time) = rec.prepared_at {
-                    if prep_time.elapsed().as_millis() as u64 > rec.prepared_ttl_ms {
-                        StatusState::Unavailable
-                    } else {
-                        rec.state
+            let eligible_entries = rec.tracked_paths.len() as u64;
+            let captured_entries = rec
+                .tracked_paths
+                .values()
+                .filter(|e| e.presence == Presence::Present || e.presence == Presence::Absent)
+                .count() as u64;
+
+            let mut reasons = Vec::new();
+            for entry in rec.tracked_paths.values() {
+                for r in &entry.reasons {
+                    if !reasons.contains(r) {
+                        reasons.push(*r);
                     }
-                } else {
-                    rec.state
                 }
+            }
+
+            let has_unknown = rec.tracked_paths.values().any(|e| e.presence == Presence::Unknown);
+            let coverage_state = if captured_entries == eligible_entries && reasons.is_empty() && !has_unknown {
+                CoverageState::Complete
             } else {
-                rec.state
+                CoverageState::Incomplete
             };
 
-            let reason = if state == StatusState::Unavailable && rec.reason.is_none() {
-                Some(ErrorCode::RegistrationExpired)
+            let state = if coverage_state == CoverageState::Complete {
+                StatusState::Ready
             } else {
-                rec.reason
+                StatusState::Incomplete
+            };
+
+            let coverage = Coverage {
+                state: coverage_state,
+                inventory_complete: true,
+                absence_proof_complete: true,
+                provenance_entries: eligible_entries,
+                eligible_entries,
+                captured_entries,
+                omitted_entries: None,
+                raw_bytes: rec.retained_bytes,
+                reasons,
             };
 
             Status {
@@ -231,14 +285,14 @@ impl SessionChangesService {
                 terminal_incarnation: key.terminal_incarnation.clone(),
                 omp_session_id: key.omp_session_id.clone(),
                 root_id: Some(key.root_id.clone()),
-                baseline_id: rec.baseline_id.clone(),
-                origin: rec.origin,
+                baseline_id: Some(rec.baseline_id.clone()),
+                origin: Some(Origin::ToolObserved),
                 state,
-                acknowledgment: rec.acknowledgment,
-                captured_at_ms: rec.captured_at_ms,
-                baseline_coverage: rec.baseline_coverage.clone(),
+                acknowledgment: Acknowledgment::NotApplicable,
+                captured_at_ms: Some(rec.captured_at_ms),
+                baseline_coverage: Some(coverage),
                 comparison: rec.comparison.as_ref().map(|c| c.comparison.clone()),
-                reason,
+                reason: rec.reason,
                 shared_writers: true,
             }
         } else {
@@ -271,9 +325,7 @@ impl SessionChangesService {
 
         for k in keys_to_remove {
             if let Some(rec) = records.remove(&k) {
-                if let Some(cov) = rec.baseline_coverage {
-                    self.release_storage(cov.raw_bytes);
-                }
+                self.release_storage(rec.retained_bytes);
             }
         }
         if let Ok(inc) = terminal_incarnation.parse::<u64>() {

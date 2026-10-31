@@ -10,7 +10,6 @@ use dam_hopper_server::state::AppState;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 use tempfile::tempdir;
 static TEST_ENV_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -26,38 +25,23 @@ async fn test_terminal_metadata_retention_and_removal() {
     };
 
     let record = SessionChangesRecord {
-        registration_id: "reg-1".into(),
-        baseline_id: Some("base-1".into()),
-        activation_nonce: Some("nonce-1".into()),
-        activation_receipt_id: Some("rcpt-1".into()),
-        captured_at_ms: Some(1700000000000),
-        prepared_at: Some(Instant::now()),
-        prepared_ttl_ms: 15000,
-        origin: Some(Origin::SessionStart),
+        baseline_id: "base-1".into(),
+        omp_session_id: "omp-session-abc".into(),
+        root_id: ".".into(),
+        canonical_root: PathBuf::from("/tmp/repo"),
+        root_dir_file: None,
+        generation: 1,
+        created_at_ms: 1700000000000,
+        captured_at_ms: 1700000000000,
         state: StatusState::Ready,
-        acknowledgment: Acknowledgment::Received,
-        baseline_inventory: None,
-        baseline_coverage: Some(Coverage {
-            state: CoverageState::Complete,
-            inventory_complete: true,
-            absence_proof_complete: true,
-            provenance_entries: 10,
-            eligible_entries: 10,
-            captured_entries: 10,
-            omitted_entries: None,
-            raw_bytes: 500,
-            reasons: Vec::new(),
-        }),
+        tracked_paths: std::collections::BTreeMap::new(),
+        retained_bytes: 500,
         comparison: None,
-        current_revision_manifest: None,
         comparison_revision: 0,
         reason: None,
-        original_failed: false,
-        active_from_now: None,
         recent_turn_ids: BTreeSet::new(),
         last_settled_turn_id: None,
         dirty_settled_hint: false,
-        canonical_root: PathBuf::from("/tmp/repo"),
     };
 
     {
@@ -160,32 +144,46 @@ async fn test_race_disable_during_capture_publication() {
             launch_cwd: root.clone(),
         },
     );
+    let reg = dam_hopper_server::session_changes::capture::register_session(
+        &service,
+        "term-race".into(),
+        "1".into(),
+        &root,
+        dam_hopper_server::session_changes::types::RegisterRequest {
+            version: 1,
+            omp_session_id: "omp-race".into(),
+            root_id: ".".into(),
+            cwd_hint: None,
+        },
+    )
+    .await
+    .unwrap();
 
     // Simulate race: service is disabled while in-flight worker was running
     service.disable_and_purge();
     assert!(!service.is_enabled());
 
-    // Worker attempt to prepare capture returns TargetUnavailable
-    let req = PrepareRequest {
+    let cap_req = dam_hopper_server::session_changes::types::CaptureRequest {
         version: 1,
-        registration_id: "reg-race".into(),
+        server_epoch: service.server_epoch.clone(),
+        terminal_incarnation: "1".into(),
         omp_session_id: "omp-race".into(),
         root_id: ".".into(),
-        cwd_hint: None,
-        expires_at_ms: 2000000000000,
-        mode: PrepareMode::Capture,
-        lifecycle: PrepareLifecycle::InitialFresh,
+        baseline_id: reg.baseline_id,
+        capture_id: "cap-race".into(),
+        paths: vec!["hello.txt".into()],
+        mode: dam_hopper_server::session_changes::types::CaptureMode::PreEdit,
     };
-    let err = dam_hopper_server::session_changes::capture::prepare_session_capture(
+
+    let err = dam_hopper_server::session_changes::capture::capture_session_paths(
         &service,
         "term-race".into(),
         "1".into(),
-        &root,
-        req,
+        cap_req,
     )
     .await
     .unwrap_err();
-    assert_eq!(err, ErrorCode::TargetUnavailable);
+    assert_eq!(err, ErrorCode::TrackingDisabled);
     assert_eq!(service.records.lock().len(), 0);
     assert_eq!(service.allocated_storage_bytes.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
@@ -213,26 +211,39 @@ async fn test_concurrent_disable_during_in_flight_capture_drains_state() {
         let service_clone = Arc::clone(&service);
         let root_clone = root.clone();
         let capture_handle = tokio::spawn(async move {
-            let req = PrepareRequest {
-                version: 1,
-                registration_id: "reg-conc".into(),
-                omp_session_id: "omp-conc".into(),
-                root_id: ".".into(),
-                cwd_hint: None,
-                expires_at_ms: 2000000000000,
-                mode: PrepareMode::Capture,
-                lifecycle: PrepareLifecycle::InitialFresh,
-            };
-            dam_hopper_server::session_changes::capture::prepare_session_capture(
+            let reg = dam_hopper_server::session_changes::capture::register_session(
                 &service_clone,
                 "term-conc".into(),
                 "1".into(),
                 &root_clone,
-                req,
+                dam_hopper_server::session_changes::types::RegisterRequest {
+                    version: 1,
+                    omp_session_id: "omp-conc".into(),
+                    root_id: ".".into(),
+                    cwd_hint: None,
+                },
             )
-            .await
+            .await;
+            if let Ok(r) = reg {
+                let _ = dam_hopper_server::session_changes::capture::capture_session_paths(
+                    &service_clone,
+                    "term-conc".into(),
+                    "1".into(),
+                    dam_hopper_server::session_changes::types::CaptureRequest {
+                        version: 1,
+                        server_epoch: service_clone.server_epoch.clone(),
+                        terminal_incarnation: "1".into(),
+                        omp_session_id: "omp-conc".into(),
+                        root_id: ".".into(),
+                        baseline_id: r.baseline_id,
+                        capture_id: "cap-conc".into(),
+                        paths: vec!["hello.txt".into()],
+                        mode: dam_hopper_server::session_changes::types::CaptureMode::PreEdit,
+                    },
+                )
+                .await;
+            }
         });
-
         let disable_handle = {
             let service_disable = Arc::clone(&service);
             tokio::spawn(async move {

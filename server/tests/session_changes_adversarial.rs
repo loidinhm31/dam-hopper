@@ -1,6 +1,5 @@
 use dam_hopper_server::session_changes::{
-    absence::{AbsenceTrie, EntryKind},
-    capture::{activate_session_baseline, prepare_session_capture, receive_session_receipt, PrepareOutcome},
+    capture::{capture_session_paths, probe_file_safely, register_session, ProbeResult},
     comparison::run_comparison_scan,
     root::{validate_project_root_preflight, PreflightBudget},
     store::{BoundTerminalTarget, SessionChangesKey, SessionChangesService},
@@ -54,32 +53,39 @@ async fn test_adversarial_root_preflight_and_invariance() {
         },
     );
 
-    let req = PrepareRequest {
-        version: 1,
-        registration_id: "reg-adv".into(),
-        omp_session_id: "sess-adv".into(),
-        root_id: ".".into(),
-        cwd_hint: None,
-        expires_at_ms: 2000000000000,
-        mode: PrepareMode::Capture,
-        lifecycle: PrepareLifecycle::InitialFresh,
-    };
-
-    let outcome = prepare_session_capture(
+    let reg = register_session(
         &service,
         "term-adv".into(),
         "1".into(),
         &root,
-        req,
+        RegisterRequest {
+            version: 1,
+            omp_session_id: "sess-adv".into(),
+            root_id: ".".into(),
+            cwd_hint: None,
+        },
     )
     .await
     .unwrap();
 
-    let prepared = match outcome {
-        PrepareOutcome::Prepared(p) => p,
-        _ => panic!("Expected PrepareOutcome::Prepared"),
-    };
-    assert_eq!(prepared.baseline_coverage.captured_entries, 1);
+    capture_session_paths(
+        &service,
+        "term-adv".into(),
+        "1".into(),
+        CaptureRequest {
+            version: 1,
+            server_epoch: service.server_epoch.clone(),
+            terminal_incarnation: "1".into(),
+            omp_session_id: "sess-adv".into(),
+            root_id: ".".into(),
+            baseline_id: reg.baseline_id.clone(),
+            capture_id: "cap-1".into(),
+            paths: vec!["main.rs".into()],
+            mode: CaptureMode::PreEdit,
+        },
+    )
+    .await
+    .unwrap();
 
     let key = SessionChangesKey {
         terminal_id: "term-adv".into(),
@@ -87,38 +93,6 @@ async fn test_adversarial_root_preflight_and_invariance() {
         omp_session_id: "sess-adv".into(),
         root_id: ".".into(),
     };
-
-    // Activate & acknowledge receipt
-    let act = activate_session_baseline(
-        &service,
-        &key,
-        &ActivationRequest {
-            version: 1,
-            server_epoch: service.server_epoch.clone(),
-            registration_id: "reg-adv".into(),
-            omp_session_id: "sess-adv".into(),
-            root_id: ".".into(),
-            baseline_id: prepared.baseline_id.clone(),
-            activation_nonce: prepared.activation_nonce.clone(),
-        },
-    )
-    .unwrap();
-
-    receive_session_receipt(
-        &service,
-        &key,
-        &ReceiptRequest {
-            version: 1,
-            server_epoch: service.server_epoch.clone(),
-            registration_id: "reg-adv".into(),
-            omp_session_id: "sess-adv".into(),
-            root_id: ".".into(),
-            baseline_id: prepared.baseline_id.clone(),
-            activation_nonce: prepared.activation_nonce.clone(),
-            activation_receipt_id: act.activation_receipt_id,
-        },
-    )
-    .unwrap();
 
     // 3. Compare revision
     let comp = run_comparison_scan(&service, &key, None)
@@ -155,133 +129,52 @@ async fn test_adversarial_symlink_and_deep_paths() {
         use std::os::unix::fs::symlink;
         let link_path = root.join("link_to_secret");
         let _ = symlink(&secret_file, &link_path);
+        let probe = probe_file_safely(None, &root, "link_to_secret");
+        match probe {
+            ProbeResult::Unknown { reason } => assert_eq!(reason, CoverageReason::Symlink),
+            _ => panic!("Expected symlink to be rejected"),
+        }
     }
 
-    let service = Arc::new(SessionChangesService::new_enabled().unwrap());
-    service.bind_terminal_target(
-        "term-sym",
-        1,
-        BoundTerminalTarget {
-            project_name: Some("test-project".into()),
-            worktree_path: None,
-            launch_cwd: root.clone(),
-        },
-    );
+    // Path traversal in relative path
+    let probe_traversal = probe_file_safely(None, &root, "../outside/secret.env");
+    match probe_traversal {
+        ProbeResult::Unknown { reason } => assert_eq!(reason, CoverageReason::PathLimit),
+        _ => panic!("Expected traversal to be rejected"),
+    }
 
-    let req = PrepareRequest {
-        version: 1,
-        registration_id: "reg-sym".into(),
-        omp_session_id: "sess-sym".into(),
-        root_id: ".".into(),
-        cwd_hint: None,
-        expires_at_ms: 2000000000000,
-        mode: PrepareMode::Capture,
-        lifecycle: PrepareLifecycle::InitialFresh,
-    };
-
-    let outcome = prepare_session_capture(
-        &service,
-        "term-sym".into(),
-        "1".into(),
-        &root,
-        req,
-    )
-    .await
-    .unwrap();
-
-    let prepared = match outcome {
-        PrepareOutcome::Prepared(p) => p,
-        _ => panic!("Expected PrepareOutcome::Prepared"),
-    };
-
-    let key = SessionChangesKey {
-        terminal_id: "term-sym".into(),
-        terminal_incarnation: "1".into(),
-        omp_session_id: "sess-sym".into(),
-        root_id: ".".into(),
-    };
-
-    let act = activate_session_baseline(
-        &service,
-        &key,
-        &ActivationRequest {
-            version: 1,
-            server_epoch: service.server_epoch.clone(),
-            registration_id: "reg-sym".into(),
-            omp_session_id: "sess-sym".into(),
-            root_id: ".".into(),
-            baseline_id: prepared.baseline_id.clone(),
-            activation_nonce: prepared.activation_nonce.clone(),
-        },
-    )
-    .unwrap();
-
-    receive_session_receipt(
-        &service,
-        &key,
-        &ReceiptRequest {
-            version: 1,
-            server_epoch: service.server_epoch.clone(),
-            registration_id: "reg-sym".into(),
-            omp_session_id: "sess-sym".into(),
-            root_id: ".".into(),
-            baseline_id: prepared.baseline_id.clone(),
-            activation_nonce: prepared.activation_nonce.clone(),
-            activation_receipt_id: act.activation_receipt_id,
-        },
-    )
-    .unwrap();
-
-    // Deep path limits
-    let mut deep_dir = root.clone();
+    // Deep path exceeding MAX_PATH_DEPTH
+    let mut deep_path = String::new();
     for i in 0..MAX_PATH_DEPTH + 5 {
-        deep_dir = deep_dir.join(format!("d_{}", i));
+        deep_path.push_str(&format!("dir_{}/", i));
     }
-    let _ = fs::create_dir_all(&deep_dir);
-    let deep_file = deep_dir.join("nested.txt");
-    let _ = fs::write(&deep_file, "nested");
-
-    let diff = run_comparison_scan(&service, &key, None).await;
-    // Handled safely without panicking
-    assert!(diff.is_ok());
+    deep_path.push_str("file.txt");
+    let probe_deep = probe_file_safely(None, &root, &deep_path);
+    match probe_deep {
+        ProbeResult::Unknown { reason } => assert_eq!(reason, CoverageReason::PathLimit),
+        _ => panic!("Expected deep path to exceed path depth limit"),
+    }
 }
 
 #[test]
-fn test_absence_proof_adversarial_tampering() {
-    let mut trie = AbsenceTrie::new();
+fn test_absence_proof_behavior() {
+    let tmp = tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn add() {}\n").unwrap();
 
-    trie.record_directory(
-        Path::new(""),
-        true,
-        &[("src".into(), EntryKind::Dir, false)],
-    );
+    // Absent file under real directory
+    let res = probe_file_safely(None, &root, "src/missing.ts");
+    match res {
+        ProbeResult::AbsentAtFirstTouch => {}
+        _ => panic!("Expected AbsentAtFirstTouch"),
+    }
 
-    // Record directory without the file -> absent
-    trie.record_directory(
-        Path::new("src"),
-        true,
-        &[("other.ts".into(), EntryKind::File, false)],
-    );
-    let res = trie.prove_path(Path::new("src/missing.ts"));
-    assert_eq!(res.presence, Presence::Absent);
-    assert_eq!(res.provenance, Provenance::AbsentInVerifiedDirectory);
-
-    // Truncated directory -> remains unknown, cannot certify absence
-    let mut trunc_trie = AbsenceTrie::new();
-    trunc_trie.record_directory(
-        Path::new(""),
-        true,
-        &[("src".into(), EntryKind::Dir, false)],
-    );
-    trunc_trie.record_directory(
-        Path::new("src"),
-        false, // complete = false (truncated)
-        &[("other.ts".into(), EntryKind::File, false)],
-    );
-    let res_trunc = trunc_trie.prove_path(Path::new("src/missing.ts"));
-    assert_eq!(
-        res_trunc.presence,
-        Presence::Unknown,
-        "Truncated proof cannot certify absence"
-    );
+    // Absent file under missing directory
+    let res2 = probe_file_safely(None, &root, "nested/missing/dir/file.txt");
+    match res2 {
+        ProbeResult::AbsentAtFirstTouch => {}
+        _ => panic!("Expected AbsentAtFirstTouch for non-existent hierarchy"),
+    }
 }

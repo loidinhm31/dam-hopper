@@ -1,23 +1,17 @@
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// Resource limits and constants (contracts.md S8)
+// Resource limits and constants (Phase 02 & contracts.md S8)
 // ---------------------------------------------------------------------------
 
 pub const MAX_RETAINED_IDENTITIES: usize = 32;
-pub const MAX_METADATA_NODES: usize = 10_000;
-pub const MAX_METADATA_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
+pub const MAX_PATHS_PER_SESSION: usize = 500;
 pub const MAX_PATH_BYTES: usize = 4096;
 pub const MAX_PATH_DEPTH: usize = 64;
 pub const MAX_FILE_RAW_BYTES: usize = 2 * 1024 * 1024; // 2 MiB
-pub const MAX_BASELINE_RAW_BYTES: usize = 128 * 1024 * 1024; // 128 MiB
-pub const MAX_CURRENT_CANDIDATE_RAW_BYTES: usize = 128 * 1024 * 1024; // 128 MiB
-pub const MAX_GLOBAL_STORAGE_BYTES: usize = 512 * 1024 * 1024; // 512 MiB
+pub const MAX_GLOBAL_STORAGE_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
 pub const MAX_PER_RECORD_METADATA_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
 pub const MAX_BLOCKING_PERMITS: usize = 2;
-pub const MAX_PREPARE_CAPTURE_DURATION_SECS: u64 = 10;
-pub const MAX_ADAPTER_BARRIER_DURATION_SECS: u64 = 12;
-pub const PREPARATION_TTL_SECS: u64 = 15;
 pub const MAX_COMPARISON_DURATION_SECS: u64 = 5;
 pub const MAX_PER_FILE_DIFF_MS: u64 = 50;
 pub const MAX_LINE_COMPARISON_UNITS: usize = 1_000_000;
@@ -56,37 +50,12 @@ pub fn is_valid_canonical_decimal_string(s: &str) -> bool {
 // Common Enums
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum PrepareMode {
-    Capture,
-    Lookup,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum PrepareLifecycle {
-    InitialFresh,
-    New,
-    Fork,
-    Resume,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum FailureReason {
-    Timeout,
-    Aborted,
-    Protocol,
-    CaptureFailed,
-    IdentityChanged,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SettledOutcome {
     Completed,
+    Interrupted,
     Blocked,
     Error,
     Aborted,
@@ -138,6 +107,7 @@ pub enum StatusState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Origin {
+    ToolObserved,
     SessionStart,
     FromNow,
 }
@@ -172,7 +142,8 @@ pub enum Presence {
 #[serde(rename_all = "camelCase")]
 pub enum Provenance {
     Captured,
-    AbsentInVerifiedDirectory,
+    #[serde(alias = "absentInVerifiedDirectory")]
+    AbsentAtFirstTouch,
     ExcludedAtCapture,
     Unproven,
 }
@@ -189,6 +160,7 @@ pub enum FileContentKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorCode {
+    TrackingDisabled,
     InvalidRequest,
     Unauthorized,
     TerminalMissing,
@@ -295,9 +267,34 @@ impl Status {
         }
 
         match (self.origin, self.state, self.acknowledgment) {
+            // toolObserved ready/incomplete requires notApplicable
+            (Some(Origin::ToolObserved), StatusState::Ready, Acknowledgment::NotApplicable) => {
+                if self.baseline_id.is_none() || self.captured_at_ms.is_none() {
+                    return Err("toolObserved ready requires baselineId and capturedAtMs");
+                }
+                match &self.baseline_coverage {
+                    Some(c) if c.state == CoverageState::Complete => Ok(()),
+                    _ => Err("toolObserved ready requires complete baselineCoverage"),
+                }
+            }
+            (Some(Origin::ToolObserved), StatusState::Incomplete, Acknowledgment::NotApplicable) => {
+                if self.baseline_id.is_none() || self.captured_at_ms.is_none() {
+                    return Err("toolObserved incomplete requires baselineId and capturedAtMs");
+                }
+                match &self.baseline_coverage {
+                    Some(c) if c.state == CoverageState::Incomplete => Ok(()),
+                    _ => Err("toolObserved incomplete requires incomplete baselineCoverage"),
+                }
+            }
+            (Some(Origin::ToolObserved), StatusState::Unavailable, Acknowledgment::NotApplicable) => {
+                Ok(())
+            }
+            (Some(Origin::ToolObserved), StatusState::Missing, Acknowledgment::NotApplicable) => {
+                Ok(())
+            }
+
             // sessionStart initializing requires pending acknowledgment
             (Some(Origin::SessionStart), StatusState::Initializing, Acknowledgment::Pending) => {
-                // may have null baseline/coverage or exact prepared ID, never source-ready
                 Ok(())
             }
             // sessionStart ready/incomplete requires received acknowledgment
@@ -374,113 +371,88 @@ impl Status {
 }
 
 // ---------------------------------------------------------------------------
-// Producer Protocol Wire DTOs (contracts.md S2)
+// Producer Protocol Wire DTOs (Phase 02 & contracts.md S2)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PrepareRequest {
+pub struct RegisterRequest {
     pub version: u32,
-    pub registration_id: String,
     pub omp_session_id: String,
     pub root_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd_hint: Option<String>,
-    pub expires_at_ms: u64,
-    pub mode: PrepareMode,
-    pub lifecycle: PrepareLifecycle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PreparedReceipt {
-    pub version: u32,
-    pub kind: String, // "prepared"
+pub struct RegisterResponse {
     pub server_epoch: String,
     pub terminal_incarnation: String,
-    pub registration_id: String,
     pub omp_session_id: String,
     pub root_id: String,
     pub baseline_id: String,
-    pub activation_nonce: String,
-    pub captured_at_ms: u64,
-    pub prepared_ttl_ms: u64,
-    pub baseline_coverage: Coverage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureMode {
+    PreEdit,
+    Unproven,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ExistingReceipt {
-    pub version: u32,
-    pub kind: String, // "existing"
-    pub status: Status,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ActivationRequest {
+pub struct CaptureRequest {
     pub version: u32,
     pub server_epoch: String,
-    pub registration_id: String,
+    pub terminal_incarnation: String,
     pub omp_session_id: String,
     pub root_id: String,
     pub baseline_id: String,
-    pub activation_nonce: String,
+    pub capture_id: String,
+    pub paths: Vec<String>,
+    pub mode: CaptureMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PathCaptureStatus {
+    Captured,
+    AlreadyKnown,
+    Unknown,
+    Unproven,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PathPresence {
+    Present,
+    AbsentAtFirstTouch,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ActivationReceipt {
-    pub version: u32,
-    pub server_epoch: String,
-    pub registration_id: String,
-    pub omp_session_id: String,
-    pub root_id: String,
-    pub baseline_id: String,
-    pub activation_nonce: String,
-    pub activated: bool,
-    pub activation_receipt_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReceiptRequest {
-    pub version: u32,
-    pub server_epoch: String,
-    pub registration_id: String,
-    pub omp_session_id: String,
-    pub root_id: String,
-    pub baseline_id: String,
-    pub activation_nonce: String,
-    pub activation_receipt_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReceiptResponse {
-    pub version: u32,
-    pub accepted: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FailureRequest {
-    pub version: u32,
-    pub omp_session_id: String,
-    pub registration_id: String,
+pub struct PathCaptureDisposition {
+    pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub server_epoch: Option<String>,
+    pub file_id: Option<String>,
+    pub status: PathCaptureStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub baseline_id: Option<String>,
-    pub reason: FailureReason,
+    pub presence: Option<PathPresence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FailureResponse {
+pub struct CaptureResponse {
     pub version: u32,
-    pub accepted: bool,
+    pub capture_id: String,
+    pub results: Vec<PathCaptureDisposition>,
 }
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -527,10 +499,13 @@ pub enum LookupResult {
 pub struct SettledRequest {
     pub version: u32,
     pub server_epoch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_incarnation: Option<String>,
     pub baseline_id: String,
     pub omp_session_id: String,
     pub root_id: String,
-    pub origin: Origin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
     pub turn_id: String,
     pub outcome: SettledOutcome,
 }
@@ -641,17 +616,6 @@ pub struct RetainedSessionList {
     pub sessions: Vec<RetainedSessionEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FromNowRequest {
-    pub version: u32,
-    pub terminal_incarnation: String,
-    pub omp_session_id: String,
-    pub root_id: String,
-    pub request_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_server_epoch: Option<String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -659,7 +623,13 @@ pub struct RefreshRequest {
     pub version: u32,
     pub terminal_incarnation: String,
     pub omp_session_id: String,
+    #[serde(default = "default_root_id")]
+    pub root_id: String,
     pub server_epoch: String,
     pub baseline_id: String,
     pub request_id: String,
+}
+
+fn default_root_id() -> String {
+    ".".into()
 }

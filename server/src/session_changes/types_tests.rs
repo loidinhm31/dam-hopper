@@ -11,23 +11,23 @@ fn test_fixture_parses() {
 }
 
 #[test]
-fn test_valid_prepare_request() {
+fn test_valid_register_request() {
     let fixture: Value = serde_json::from_str(FIXTURE_JSON).unwrap();
-    let val = &fixture["valid"]["prepareRequest"];
-    let req: PrepareRequest = serde_json::from_value(val.clone()).unwrap();
+    let val = &fixture["valid"]["registerRequest"];
+    let req: RegisterRequest = serde_json::from_value(val.clone()).unwrap();
     assert_eq!(req.version, 1);
-    assert_eq!(req.registration_id, "reg-123");
-    assert_eq!(req.mode, PrepareMode::Capture);
-    assert_eq!(req.lifecycle, PrepareLifecycle::InitialFresh);
+    assert_eq!(req.omp_session_id, "omp-session-456");
+    assert_eq!(req.root_id, ".");
 }
 
 #[test]
-fn test_valid_prepared_receipt() {
+fn test_valid_register_response() {
     let fixture: Value = serde_json::from_str(FIXTURE_JSON).unwrap();
-    let val = &fixture["valid"]["preparedReceipt"];
-    let receipt: PreparedReceipt = serde_json::from_value(val.clone()).unwrap();
-    assert_eq!(receipt.kind, "prepared");
-    assert_eq!(receipt.baseline_coverage.state, CoverageState::Complete);
+    let val = &fixture["valid"]["registerResponse"];
+    let res: RegisterResponse = serde_json::from_value(val.clone()).unwrap();
+    assert_eq!(res.server_epoch, "epoch-uuid-1");
+    assert_eq!(res.terminal_incarnation, "1");
+    assert_eq!(res.baseline_id, "base-uuid-1");
 }
 
 #[test]
@@ -79,6 +79,8 @@ fn test_valid_status_invariants() {
         "statusFromNowUnavailable",
         "statusNullOriginMissing",
         "statusNullOriginUnavailable",
+        "statusToolObservedReady",
+        "statusToolObservedIncomplete",
     ];
 
     for key in status_keys {
@@ -113,11 +115,6 @@ fn contract_round_trip_smoke() {
     let fixture: Value = serde_json::from_str(FIXTURE_JSON).unwrap();
     let valid_obj = fixture["valid"].as_object().unwrap();
 
-    // PrepareRequest
-    let prep_req: PrepareRequest = serde_json::from_value(valid_obj["prepareRequest"].clone()).unwrap();
-    let reserialized = serde_json::to_value(&prep_req).unwrap();
-    assert_eq!(prep_req, serde_json::from_value(reserialized).unwrap());
-
     // Status ready
     let status: Status = serde_json::from_value(valid_obj["statusSessionStartReady"].clone()).unwrap();
     let status_json = serde_json::to_value(&status).unwrap();
@@ -142,4 +139,22 @@ fn contract_round_trip_smoke() {
     let settled_json = serde_json::to_value(&settled).unwrap();
     let settled_back: SettledRequest = serde_json::from_value(settled_json).unwrap();
     assert_eq!(settled, settled_back);
+
+    // RegisterRequest / RegisterResponse
+    let reg_req: RegisterRequest = serde_json::from_value(valid_obj["registerRequest"].clone()).unwrap();
+    let reg_req_json = serde_json::to_value(&reg_req).unwrap();
+    assert_eq!(reg_req, serde_json::from_value(reg_req_json).unwrap());
+
+    let reg_res: RegisterResponse = serde_json::from_value(valid_obj["registerResponse"].clone()).unwrap();
+    let reg_res_json = serde_json::to_value(&reg_res).unwrap();
+    assert_eq!(reg_res, serde_json::from_value(reg_res_json).unwrap());
+
+    // CaptureRequest / CaptureResponse
+    let cap_req: CaptureRequest = serde_json::from_value(valid_obj["captureRequestPreEdit"].clone()).unwrap();
+    let cap_req_json = serde_json::to_value(&cap_req).unwrap();
+    assert_eq!(cap_req, serde_json::from_value(cap_req_json).unwrap());
+
+    let cap_res: CaptureResponse = serde_json::from_value(valid_obj["captureResponse"].clone()).unwrap();
+    let cap_res_json = serde_json::to_value(&cap_res).unwrap();
+    assert_eq!(cap_res, serde_json::from_value(cap_res_json).unwrap());
 }

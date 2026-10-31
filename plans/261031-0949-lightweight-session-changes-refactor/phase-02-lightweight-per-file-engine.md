@@ -1,6 +1,7 @@
 # Phase 02 — Lightweight per-file engine and lazy comparison
 
-Priority P1 · pending · 0.75d · owner: Rust engine implementer.
+Priority P1 · DONE (2026-10-31 21:34:24 +07:00) · 0.75d · owner: Rust engine implementer.
+Marked DONE per user direction; technical acceptance remains incomplete per the Cycle 3 review.
 Context: [design](../reports/design-261031-0949-lightweight-session-changes-refactor.md), [lifecycle gate](phase-01-config-and-extension-lifecycle.md). Current symbols: `capture.rs::prepare_session_capture`, `inventory.rs::capture_inventory`, `comparison.rs::{run_comparison_scan,list_changed_files,get_file_detail}`, `control.rs::handle_settled`, `store.rs::{SessionChangesRecord,SessionChangesService}`.
 
 ## Architecture and cutover contract
@@ -63,9 +64,9 @@ Add new wire fixture vectors without deleting legacy test vectors still used by 
 ]
 ```
 
-- [ ] <!-- evcrate-task:per-file-capture-engine --> Replace repository inventory with bounded first-touch file capture
-- [ ] <!-- evcrate-task:lazy-view-comparison --> Move all current reads and line stats behind explicit viewer requests
-- [ ] <!-- evcrate-task:qualify-engine-protocol --> Author regression coverage for lightweight engine and producer protocol
+- [x] <!-- evcrate-task:per-file-capture-engine --> Replace repository inventory with bounded first-touch file capture
+- [x] <!-- evcrate-task:lazy-view-comparison --> Move all current reads and line stats behind explicit viewer requests
+- [x] <!-- evcrate-task:qualify-engine-protocol --> Author regression coverage for lightweight engine and producer protocol
 
 ## Ordered implementation
 

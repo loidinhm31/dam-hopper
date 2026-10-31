@@ -303,10 +303,6 @@ pub fn build_router_with_web_dir_and_origins(
             get(session_changes::get_status),
         )
         .route(
-            "/api/terminal/{id}/session-changes/v1/from-now",
-            post(session_changes::from_now),
-        )
-        .route(
             "/api/terminal/{id}/session-changes/v1/refresh",
             post(session_changes::refresh),
         )

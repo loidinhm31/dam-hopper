@@ -53,10 +53,14 @@ pub fn get_retained_session_list(
             sessions.push(RetainedSessionEntry {
                 omp_session_id: k.omp_session_id.clone(),
                 root_id: Some(k.root_id.clone()),
-                baseline_id: rec.baseline_id.clone(),
-                origin: rec.origin,
-                state: rec.state,
-                captured_at_ms: rec.captured_at_ms,
+                baseline_id: Some(rec.baseline_id.clone()),
+                origin: Some(Origin::ToolObserved),
+                state: if rec.tracked_paths.values().any(|e| e.presence == Presence::Unknown) {
+                    StatusState::Incomplete
+                } else {
+                    rec.state
+                },
+                captured_at_ms: Some(rec.captured_at_ms),
             });
             if sessions.len() >= MAX_RETAINED_IDENTITIES {
                 break;

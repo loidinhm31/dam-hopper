@@ -1,6 +1,5 @@
 pub mod control;
 pub mod binding;
-pub mod absence;
 pub mod capture;
 pub mod comparison;
 pub mod inventory;
@@ -9,8 +8,6 @@ pub mod store;
 pub mod text_diff;
 pub mod types;
 
-#[cfg(test)]
-pub mod absence_tests;
 #[cfg(test)]
 pub mod capture_tests;
 #[cfg(test)]

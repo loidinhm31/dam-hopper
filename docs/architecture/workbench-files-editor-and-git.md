@@ -341,10 +341,10 @@ DamHopper provides two distinct diff and change-review capabilities with non-ove
 
 | Dimension | Git Changes (`WorkspaceGitPanel`) | Session Changes Review (`SessionChangesPanel`) |
 | --- | --- | --- |
-| **Baseline** | Git `HEAD` commit object or unmerged index | Raw, immutable session-start bytes captured at OMP agent start |
+| **Baseline** | Git `HEAD` commit object or unmerged index | Immutable pre-edit file bytes captured on first tool touch |
 | **Target** | Git working tree / index | Current working tree disk bytes |
 | **Capability** | Writable (stage, unstage, discard, commit, push, resolve) | Strictly read-only (capability-free Monaco, no mutations) |
-| **Absence Model** | Git index / HEAD tree nonmembership | Historical `AbsenceTrie` directory completeness certification |
+| **Absence Model** | Git index / HEAD tree nonmembership | First-touch safe probe certification (`absentAtFirstTouch`) with validated directory hierarchy |
 | **Lifecycle Authority** | Repository Git refs and porcelain operations | PTY terminal ID and incarnation; retained 60s post-exit |
 | **Persistence** | Permanent Git object database on disk | In-memory server process lifetime; no cross-restart archiving |
 | **Host Mounting** | Embedded IDE tool panel / Git page | Single `SessionChangesHost` modal above responsive shells |
@@ -352,7 +352,7 @@ DamHopper provides two distinct diff and change-review capabilities with non-ove
 ### Subsystem Boundaries and Invariants
 
 - **Capability-Free Monaco Diff Viewer:** `ReadonlyMonacoDiffViewer` renders side-by-side or inline unified diffs with `readOnly: true`, `originalEditable: false`, and `domReadOnly: true`. All edit, drop, and paste commands are disabled. Monaco models use owner-scoped URIs (`inmemory://session-changes/...`) and deferred disposal to prevent race conditions during rapid file selection.
-- **Absence Certification:** Negative proof requires historical directory certification in `AbsenceTrie`. Nonmembership in current eligible inventory alone never proves historical absence; unproven or ignored subtrees remain `unknown` / `unproven` to prevent false added-file claims when files are unignored.
+- **Absence Certification:** Negative proof requires a safe pre-edit probe proving `ENOENT` under a verified directory hierarchy without symlink ancestors (`absentAtFirstTouch`). Permission/read/race/exclusion/timeout failures yield `unknown` / `unproven`, never false originals. Nonmembership in observed paths alone never proves historical absence.
 - **Keyboard Isolation:** `SessionChangesHost` modal dialog captures keyboard events at the window capture phase, preventing keystrokes and navigation shortcuts from leaking into underlying live xterm PTYs.
 - **Non-Goals:** No attribution to specific agent prompts or tools; no undo/edit/stage/commit/reset operations; no cross-restart session archives; Windows producer is platform-unqualified; Android-native client is excluded.
 

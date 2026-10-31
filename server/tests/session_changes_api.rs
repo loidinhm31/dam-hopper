@@ -10,6 +10,7 @@ use dam_hopper_server::{
     diagnostics::DiagnosticStore,
     fs::FsSubsystem,
     pty::{BroadcastEventSink, PtySessionManager},
+    session_changes::capture::{capture_session_paths, register_session},
     session_changes::store::BoundTerminalTarget,
     session_changes::types::*,
     state::AppState,
@@ -110,34 +111,54 @@ async fn test_session_changes_public_api_flow() {
     let status: Status = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(status.state, StatusState::Missing);
 
-    // 2. Start from-now tracking
-    let from_now_body = serde_json::to_vec(&FromNowRequest {
-        version: 1,
-        terminal_incarnation: "1".into(),
-        omp_session_id: "sess-1".into(),
-        root_id: ".".into(),
-        request_id: "req-from-now".into(),
-        expected_server_epoch: None,
-    })
+    // 2. Register session and capture preEdit baseline
+    let reg = register_session(
+        &state.session_changes,
+        "term-1".into(),
+        "1".into(),
+        &repo,
+        RegisterRequest {
+            version: 1,
+            omp_session_id: "sess-1".into(),
+            root_id: ".".into(),
+            cwd_hint: None,
+        },
+    )
+    .await
     .unwrap();
 
-    let req_from_now = Request::builder()
-        .method("POST")
-        .uri("/api/terminal/term-1/session-changes/v1/from-now")
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(from_now_body))
-        .unwrap();
+    let baseline_id = reg.baseline_id;
 
-    let resp_from_now = app.clone().oneshot(req_from_now).await.unwrap();
-    assert_eq!(resp_from_now.status(), StatusCode::OK);
-    let fn_bytes = axum::body::to_bytes(resp_from_now.into_body(), usize::MAX)
-        .await
+    capture_session_paths(
+        &state.session_changes,
+        "term-1".into(),
+        "1".into(),
+        CaptureRequest {
+            version: 1,
+            server_epoch: state.session_changes.server_epoch.clone(),
+            terminal_incarnation: "1".into(),
+            omp_session_id: "sess-1".into(),
+            root_id: ".".into(),
+            baseline_id: baseline_id.clone(),
+            capture_id: "cap-1".into(),
+            paths: vec!["file1.txt".into()],
+            mode: CaptureMode::PreEdit,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Verify status is now Ready with toolObserved
+    let req_status_ready = Request::builder()
+        .method("GET")
+        .uri("/api/terminal/term-1/session-changes/v1/status?terminalIncarnation=1&ompSessionId=sess-1")
+        .body(Body::empty())
         .unwrap();
-    let fn_status: Status = serde_json::from_slice(&fn_bytes).unwrap();
-    assert_eq!(fn_status.origin, Some(Origin::FromNow));
-    assert_eq!(fn_status.acknowledgment, Acknowledgment::NotApplicable);
-    assert_eq!(fn_status.state, StatusState::Ready);
-    let baseline_id = fn_status.baseline_id.unwrap();
+    let resp_ready = app.clone().oneshot(req_status_ready).await.unwrap();
+    let r_bytes = axum::body::to_bytes(resp_ready.into_body(), usize::MAX).await.unwrap();
+    let ready_status: Status = serde_json::from_slice(&r_bytes).unwrap();
+    assert_eq!(ready_status.state, StatusState::Ready);
+    assert_eq!(ready_status.origin, Some(Origin::ToolObserved));
 
     // 3. Edit file in repo
     fs::write(repo.join("file1.txt"), "hello\nworld\n").unwrap();
@@ -147,6 +168,7 @@ async fn test_session_changes_public_api_flow() {
         version: 1,
         terminal_incarnation: "1".into(),
         omp_session_id: "sess-1".into(),
+        root_id: ".".into(),
         server_epoch: state.session_changes.server_epoch.clone(),
         baseline_id: baseline_id.clone(),
         request_id: "req-ref".into(),
@@ -243,4 +265,22 @@ async fn test_session_changes_public_api_flow() {
         .unwrap();
     let epoch_err: ErrorBody = serde_json::from_slice(&epoch_bytes).unwrap();
     assert_eq!(epoch_err.code, ErrorCode::ServerRestarted);
+
+    // 9. Query files with omitted revision (lazy first page bootstrap)
+    let req_bootstrap = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/api/terminal/term-1/session-changes/v1/files?terminalIncarnation=1&ompSessionId=sess-1&serverEpoch={}&baselineId={}",
+            state.session_changes.server_epoch, baseline_id
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp_bootstrap = app.clone().oneshot(req_bootstrap).await.unwrap();
+    assert_eq!(resp_bootstrap.status(), StatusCode::OK);
+    let boot_bytes = axum::body::to_bytes(resp_bootstrap.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let boot_page: FilePage = serde_json::from_slice(&boot_bytes).unwrap();
+    assert_eq!(boot_page.files.len(), 1);
 }

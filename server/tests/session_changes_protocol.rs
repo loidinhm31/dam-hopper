@@ -14,7 +14,7 @@ use tempfile::tempdir;
 use tower::ServiceExt;
 
 #[tokio::test]
-async fn test_full_protocol_barrier_and_lifecycle() {
+async fn test_full_protocol_register_capture_lookup_settled() {
     let tmp = tempdir().unwrap();
     let root = tmp.path().join("repo");
     fs::create_dir_all(&root).unwrap();
@@ -43,84 +43,63 @@ async fn test_full_protocol_barrier_and_lifecycle() {
     reservation.activate();
     let app = private_session_changes_router(runtime.clone(), Some(Arc::clone(&service)));
 
-    // 1. Prepare request
-    let prep_body = serde_json::to_vec(&PrepareRequest {
+    // 1. Register request
+    let reg_body = serde_json::to_vec(&RegisterRequest {
         version: 1,
-        registration_id: "reg-1".into(),
         omp_session_id: "sess-1".into(),
         root_id: ".".into(),
         cwd_hint: None,
-        expires_at_ms: 2000000000000,
-        mode: PrepareMode::Capture,
-        lifecycle: PrepareLifecycle::InitialFresh,
     })
     .unwrap();
 
     let req = Request::builder()
-        .uri("/prepare")
+        .uri("/register")
         .method("POST")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::AUTHORIZATION, format!("Bearer {}", token))
-        .body(Body::from(prep_body))
+        .body(Body::from(reg_body))
         .unwrap();
 
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = axum::body::to_bytes(resp.into_body(), 16384).await.unwrap();
-    let prepared: PreparedReceipt = serde_json::from_slice(&body).unwrap();
-    assert_eq!(prepared.kind, "prepared");
+    let registered: RegisterResponse = serde_json::from_slice(&body).unwrap();
+    assert_eq!(registered.omp_session_id, "sess-1");
+    assert!(!registered.baseline_id.is_empty());
 
-    // 2. Activate request
-    let act_body = serde_json::to_vec(&ActivationRequest {
+    // 2. Capture request (preEdit)
+    let cap_body = serde_json::to_vec(&CaptureRequest {
         version: 1,
         server_epoch: service.server_epoch.clone(),
-        registration_id: "reg-1".into(),
+        terminal_incarnation: "1".into(),
         omp_session_id: "sess-1".into(),
         root_id: ".".into(),
-        baseline_id: prepared.baseline_id.clone(),
-        activation_nonce: prepared.activation_nonce.clone(),
+        baseline_id: registered.baseline_id.clone(),
+        capture_id: "cap-1".into(),
+        paths: vec!["file.txt".into(), "absent.txt".into()],
+        mode: CaptureMode::PreEdit,
     })
     .unwrap();
 
     let req = Request::builder()
-        .uri("/activate")
+        .uri("/capture")
         .method("POST")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::AUTHORIZATION, format!("Bearer {}", token))
-        .body(Body::from(act_body))
+        .body(Body::from(cap_body))
         .unwrap();
 
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = axum::body::to_bytes(resp.into_body(), 16384).await.unwrap();
-    let act_receipt: ActivationReceipt = serde_json::from_slice(&body).unwrap();
-    assert_eq!(act_receipt.activated, true);
+    let cap_res: CaptureResponse = serde_json::from_slice(&body).unwrap();
+    assert_eq!(cap_res.results.len(), 2);
+    assert_eq!(cap_res.results[0].status, PathCaptureStatus::Captured);
+    assert_eq!(cap_res.results[0].presence, Some(PathPresence::Present));
+    assert_eq!(cap_res.results[1].status, PathCaptureStatus::Captured);
+    assert_eq!(cap_res.results[1].presence, Some(PathPresence::AbsentAtFirstTouch));
 
-    // 3. Receipt confirmation request
-    let rcpt_body = serde_json::to_vec(&ReceiptRequest {
-        version: 1,
-        server_epoch: service.server_epoch.clone(),
-        registration_id: "reg-1".into(),
-        omp_session_id: "sess-1".into(),
-        root_id: ".".into(),
-        baseline_id: prepared.baseline_id.clone(),
-        activation_nonce: prepared.activation_nonce.clone(),
-        activation_receipt_id: act_receipt.activation_receipt_id,
-    })
-    .unwrap();
-
-    let req = Request::builder()
-        .uri("/receipt")
-        .method("POST")
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::AUTHORIZATION, format!("Bearer {}", token))
-        .body(Body::from(rcpt_body))
-        .unwrap();
-
-    let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    // 4. Lookup request
+    // 3. Lookup request
     let lookup_body = serde_json::to_vec(&LookupRequest {
         version: 1,
         omp_session_id: "sess-1".into(),
@@ -144,16 +123,18 @@ async fn test_full_protocol_barrier_and_lifecycle() {
     let val: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(val["kind"], "active");
     assert_eq!(val["status"]["state"], "ready");
-    assert_eq!(val["status"]["acknowledgment"], "received");
+    assert_eq!(val["status"]["origin"], "toolObserved");
+    assert_eq!(val["status"]["acknowledgment"], "notApplicable");
 
-    // 5. Settled request
+    // 4. Settled request
     let settled_body = serde_json::to_vec(&SettledRequest {
         version: 1,
         server_epoch: service.server_epoch.clone(),
-        baseline_id: prepared.baseline_id.clone(),
+        terminal_incarnation: Some("1".into()),
+        baseline_id: registered.baseline_id.clone(),
         omp_session_id: "sess-1".into(),
         root_id: ".".into(),
-        origin: Origin::SessionStart,
+        origin: Some(Origin::ToolObserved),
         turn_id: "turn-1".into(),
         outcome: SettledOutcome::Completed,
     })
@@ -171,9 +152,9 @@ async fn test_full_protocol_barrier_and_lifecycle() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = axum::body::to_bytes(resp.into_body(), 16384).await.unwrap();
     let settled_res: SettledResponse = serde_json::from_slice(&body).unwrap();
-    assert_eq!(settled_res.duplicate, false);
+    assert!(!settled_res.duplicate);
 
-    // 6. Settled duplicate request
+    // 5. Settled duplicate request
     let req_dup = Request::builder()
         .uri("/settled")
         .method("POST")
@@ -186,5 +167,5 @@ async fn test_full_protocol_barrier_and_lifecycle() {
     assert_eq!(resp_dup.status(), StatusCode::OK);
     let body_dup = axum::body::to_bytes(resp_dup.into_body(), 16384).await.unwrap();
     let settled_dup: SettledResponse = serde_json::from_slice(&body_dup).unwrap();
-    assert_eq!(settled_dup.duplicate, true);
+    assert!(settled_dup.duplicate);
 }

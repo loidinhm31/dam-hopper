@@ -124,16 +124,16 @@ See the [Agent Status contract](./architecture/agent-status.md).
 - **Immutability & Read-Only Invariant:** Strictly read-only; never mutate repository working tree files, Git index, HEAD references, or invoke Git mutation commands (`reset`, `stash`, `checkout`, `commit`).
 - **Canonical Root Preflight & Sandbox Containment:** Enforce single relative root ID (default `.`) via direct `validate_project_root_preflight`. Enforce `MAX_PATH_BYTES` (4096) and `MAX_PATH_DEPTH` (64). Reject parent traversal (`..`), absolute paths, empty components, NUL bytes, and wildcards. Root containment must resolve within the server-bound launch target sandbox; never discover unrestricted external repositories.
 - **Resource Limits & Capacity Fences:**
-  - 32 global retained identities; reject new registrations at capacity without evicting existing originals.
-  - 10,000 distinct metadata nodes / manifest paths each; 8 MiB metadata cap.
-  - 2 MiB regular file read limit (`MAX_FILE_BYTES`).
-  - 128 MiB baseline raw storage cap, 128 MiB candidate current raw storage cap, 512 MiB global accounted storage.
+  - 32 global retained identities; max 500 tracked paths per session.
+  - 2 MiB regular file read limit (`MAX_FILE_RAW_BYTES`).
+  - 64 MiB global accounted baseline storage cap across all sessions.
   - 2 global blocking scan permits; permits held until blocking closure exits; saturation returns HTTP 409 `busy` without queuing.
 - **Origin-Qualified Status Invariants:**
-  - `sessionStart`: `initializing` (pending receipt), `ready` / `incomplete` (only with live producer receipt), `unavailable` (failed attempt or target unavailable).
-  - `fromNow`: `initializing` / `ready` / `incomplete` (always `notApplicable` acknowledgment; explicit authenticated user action, never claims session-start provenance).
-  - Never mix cross-origin states; failed originals remain latched failed.
-- **Absence Proof vs. Eligible Inventory:** Historical negative proof requires directory completeness certification in `AbsenceTrie` (`absentInVerifiedDirectory`). Nonmembership in current eligible inventory alone never proves historical absence; unproven or ignored subtrees remain `unknown`/`unproven` or `excludedAtCapture`.
+  - `toolObserved`: `ready` / `incomplete` (always `notApplicable` acknowledgment; reflects observed tool edits since session first-touch, never repository-wide baseline).
+  - `unavailable` / `missing`: when tracking disabled or identity unknown.
+- **Safe Per-File Capture vs. Bounded Comparison:**
+  - Negative proof requires verified directory hierarchy without symlink ancestors (`absentAtFirstTouch`). Unproven, permission-failed, or ignored subtrees remain `unknown`/`unproven` or `excludedAtCapture`.
+  - Zero background diffing or file reads on settled turns or status polling; current file reads and line stats compute lazily only on viewer `/files`, `/refresh`, and `/files/{fileId}` queries.
 - **Single Host & Keyboard Isolation:** `SessionChangesHost` mounts once in `WorkspacePage.tsx` above responsive shells. Must enforce window capture-phase keyboard interception (`stopPropagation()`) to prevent keystrokes, shortcuts, and Escape from leaking into underlying live xterm PTYs.
 - **Capability-Free Monaco Diff Viewer:** Monaco diff instance must set `readOnly: true`, `originalEditable: false`, and `domReadOnly: true`. Disable editing commands, drop, and paste. Model URIs must encode the full owner tuple with deferred disposal to prevent race conditions during rapid switching.
 ### Cognito Mode
