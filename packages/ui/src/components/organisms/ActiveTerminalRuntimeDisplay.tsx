@@ -2,7 +2,6 @@ import { useMemo, useState, type ReactNode } from "react";
 import { ListTree, Plus, Layers } from "lucide-react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { useGlobalConfig } from "@/api/queries.js";
-import { useSessionChangesEnabled } from "@/api/session-changes-queries.js";
 import { parseTerminalKey } from "@/api/ownership.js";
 import { useTerminalAgentStatus } from "@/stores/agent-status.js";
 import { TerminalRuntimeNavigator } from "@/components/organisms/TerminalRuntimeNavigator.js";
@@ -194,9 +193,6 @@ export function ActiveTerminalRuntimeDisplay({
   }, [activeOpenTab, activeSessionId]);
   const agentStatus = useTerminalAgentStatus(activeRef ?? undefined);
   const isOmpSession = agentStatus?.agentKind === "omp" && Boolean(agentStatus.agentSessionId);
-  const { enabled: sessionChangesEnabled } = useSessionChangesEnabled(
-    activeRef?.profileId,
-  );
   const handleMobileSelectSession = (sessionId: string) => {
     onSelectTab?.(sessionId);
     setRuntimeSheetOpen(false);
@@ -343,7 +339,7 @@ export function ActiveTerminalRuntimeDisplay({
             project={activeSession?.project}
             enabled={terminalCommitStatusEnabled}
           />
-          {onOpenSessionChanges && activeSessionId && isOmpSession && sessionChangesEnabled && (
+          {onOpenSessionChanges && activeSessionId && isOmpSession && (
             <button
               type="button"
               onClick={() => onOpenSessionChanges(activeSessionId)}
