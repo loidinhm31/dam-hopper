@@ -21,6 +21,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 | [Filesystem and media](./api/filesystem-and-media.md) | File explorer/search, media tickets, stream authorization |
 | [Workspace and settings](./api/workspace-settings.md) | Agent Store, workspace, settings, health |
 | [WebSocket](./api/websocket.md) | WebSocket endpoint and event/message contract |
+| [Session changes review](#session-changes-review-api) | Read-only session changes status, files, file diff, from-now adoption, and private lifecycle endpoints |
 
 ## Authentication
 
@@ -73,7 +74,43 @@ See [workspace and settings APIs](./api/workspace-settings.md#settings-health).
 ## WebSocket Endpoint
 
 See the [WebSocket API reference](./api/websocket.md).
+## Session Changes Review API
 
+### Public Endpoints (`/api/terminal/:tid/session-changes/v1/*`)
+
+All public endpoints require authentication and return `Cache-Control: private, no-store` and `Vary: Authorization, Cookie`.
+
+- `GET /status?terminalIncarnation=&ompSessionId=&expectedServerEpoch=`: Query session baseline status, coverage, and change counts (`Status`). If `ompSessionId` is omitted, returns `RetainedSessionList` listing retained session identities for the terminal. Missing baseline returns HTTP 200 with `state: "missing"` or `"unavailable"`, not an empty diff or 404.
+- `POST /from-now`: Adopt a fresh baseline from current disk bytes (`Status` with `origin: "fromNow"`). Request body `{ version: 1, terminalIncarnation, ompSessionId, rootId, requestId, expectedServerEpoch? }`. Explicit authenticated user fallback; does not clear original failure latch.
+- `POST /refresh`: Request a re-scan of the working tree against the existing baseline (`Comparison`). Request body `{ version: 1, terminalIncarnation, ompSessionId, serverEpoch, baselineId, requestId }`. Returns HTTP 409 `busy` if a scan is already running (does not queue).
+- `GET /files?terminalIncarnation=&ompSessionId=&rootId=&expectedServerEpoch=&baselineId=&comparisonRevision=&cursor=&limit=`: Keyset-paginated list of changed files pinned to an exact comparison revision (`FilePage`). Each `FileRow` includes change kinds (`added`, `deleted`, `modified`, `modeOnly`, `unknown`), additions/deletions counts, and verified absence proofs.
+- `GET /files/:fileId?terminalIncarnation=&ompSessionId=&rootId=&expectedServerEpoch=&baselineId=&comparisonRevision=`: Detailed file diff with original and current `ContentSide` bytes (`FileDetail`). Revision mismatch returns HTTP 409 `refreshRequired`.
+
+*Client Transport:* Web and desktop UI invoke these endpoints through `client.transport.invoke("sessionChanges:*", ...)` in `packages/ui/src/api/session-changes-client.ts`, which maps logical channel requests to authenticated REST HTTP calls with typed DTO decoders and generation-scoped TanStack Query keys.
+
+### Private Endpoints (`/private/session-changes/v1/*`)
+
+Private loopback endpoints used by the managed OMP extension adapter. All endpoints return `Cache-Control: no-store` and enforce `MAX_REQUEST_BODY_BYTES` (16 KiB):
+
+- `POST /prepare`: Capture immutable baseline snapshot for a session start (`PrepareRequest` -> `PreparedReceipt` | `ExistingReceipt`). Enforces a 10s monotonic server deadline.
+- `POST /activate`: Handshake nonce exchange to activate a captured baseline (`ActivationRequest` -> `ActivationReceipt`).
+- `POST /receipt`: Confirmation of activation receipt before model turns (`ReceiptRequest` -> `{ version: 1, accepted: true }`). Authorizes transition to public `ready` / `incomplete`.
+- `POST /fail`: Report baseline capture or handshake failure (`FailureRequest` -> `{ version: 1, accepted: true }`). Permanently latches failure tombstone for the original attempt.
+- `POST /lookup`: Status inquiry for an active session (`LookupRequest` -> `LookupResult`). Metadata-only lookup without filesystem reads or capturing new snapshots; used to adopt explicit `fromNow` baselines.
+- `POST /settled`: Report completed model tool turn (`SettledRequest` -> `{ version: 1, accepted: true, duplicate: boolean }`). Deduplicates idempotent notifications across 64 recent turn IDs, refreshing comparison revision asynchronously without re-scanning unchanged files.
+
+### Error Codes and HTTP Status Mapping
+
+Typed error codes returned in `ErrorBody`:
+- **400 Bad Request:** `invalidRequest`, `incarnationMismatch`.
+- **401 / 403 Forbidden:** `unauthorized`.
+- **404 Not Found:** `terminalMissing`, `fileMissing`.
+- **409 Conflict:** `busy`, `refreshRequired`, `sessionMismatch`, `rootMismatch`.
+- **410 Gone:** `serverRestarted`, `baselineMissing`, `originalUnavailable`, `registrationExpired`.
+- **413 Payload Too Large:** `responseLimit`.
+- **429 Too Many Requests:** `capacity`.
+- **503 Service Unavailable:** `targetUnavailable`, `registrationFailed`.
+- **504 Gateway Timeout:** `deadline`.
 ## Retired plugin API anchors
 
 ### Trusted Plugin API

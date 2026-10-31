@@ -27,6 +27,7 @@ interface TerminalRuntimeOutputProps {
   onSessionExit?: (sessionId: string) => void;
   onNewTerminal?: () => void;
   onSelectActive?: (sessionId: string) => void;
+  onOpenSessionChanges?: (sessionId: string) => void;
 }
 
 export function TerminalRuntimeOutput({
@@ -37,6 +38,7 @@ export function TerminalRuntimeOutput({
   onSessionExit,
   onNewTerminal,
   onSelectActive,
+  onOpenSessionChanges,
 }: TerminalRuntimeOutputProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [accessoryPanelState, setAccessoryPanelState] = useState<{
@@ -191,6 +193,7 @@ export function TerminalRuntimeOutput({
                 ?.terminalRef
             }
             onPanelOpenChange={handleAccessoryPanelOpenChange}
+            onOpenSessionChanges={onOpenSessionChanges}
           />
         ) : null}
       </div>

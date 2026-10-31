@@ -1115,6 +1115,9 @@ async fn main() -> anyhow::Result<()> {
     )?
     .with_workflow_store(workflow_store.clone())
     .with_agent_status(agent_status_runtime.clone());
+
+    pty_manager.set_session_changes(state.session_changes.clone());
+    agent_status_runtime.set_session_changes(state.session_changes.clone());
     if let Some(workflow_store_for_obs) = workflow_store.clone() {
         let (recorder, _dropped, _worker_handle) =
             dam_hopper_server::workflow::observation::start_observation_worker_with_diagnostics(

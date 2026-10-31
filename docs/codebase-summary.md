@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Source summary:** Repomix 1.18.1 compaction generated 2026-10-24 (`repomix-output.xml`; 3,574 files included, 8 scanner-excluded). The Phase 07 Android workspace summary was refreshed against current implementation declarations and reported closeout evidence; earlier subsystem summaries and inventory figures are retained from prior reviews, with numeric inventory dated 2026-10-05.
+**Source summary:** Repomix 1.18.0 compaction generated 2026-10-30 (`repomix-output.xml`; 3,923 files included, 11 scanner-excluded). The backend map and repository inventories have been refreshed to incorporate the delivered Read-Only Session Changes Review domain (`server/src/session_changes/`) and client review components.
 
 ## Historical Repository Inventory (2026-10-05)
 
@@ -39,6 +39,7 @@ The previous inventory counted **2,046 eligible text files and 411,852 physical 
 | `fs/` | 16 | 6,000 | Sandboxed filesystem operations, secure paths, media sessions |
 | `telemetry/` | 18 | 5,786 | Loopback OTLP collector, HMAC redaction, SQLite telemetry |
 | `workflow/` | 17 | 3,888 | Workflow domain engine, PTY observation, SQLite persistence |
+| `session_changes/` | 16 | 3,974 | Immutable session-start baseline capture, comparison engine, absence trie proofs, and REST review APIs |
 | `persistence/` | 13 | 2,844 | SQLite session persistence, migrations 001–010, restore worker |
 | `config/` | 9 | 2,749 | Multi-stage config resolution, global config, schema |
 | `auth/` | 12 | 3,070 | Authentication core: MongoDB & SQLite lite mode, V2 policy, AES-256-GCM TOTP, session inventory |

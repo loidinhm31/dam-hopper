@@ -7,7 +7,7 @@ These standards describe the current Rust backend, shared React UI, and profile-
 | Path | Responsibility |
 | --- | --- |
 | `server/src/api/` | Axum route registration, handlers, auth, and WebSocket/API transport |
-| `server/src/{auth,config,crypto,fs,git,pty,workflow,agent_status}/` | Backend domain boundaries and services |
+| `server/src/{auth,config,crypto,fs,git,pty,workflow,agent_status,session_changes}/` | Backend domain boundaries and services |
 | `server/src/state.rs` | Shared server `AppState` and service ownership |
 | `packages/ui/src/api/` | Owner-bound API clients, connections, DTOs, transports, and query keys |
 | `packages/ui/src/components/`, `hooks/`, `stores/`, `lib/` | Shared React UI and client-side domain behavior |
@@ -118,6 +118,24 @@ These standards describe the current Rust backend, shared React UI, and profile-
 
 See the [Agent Status contract](./architecture/agent-status.md).
 
+
+### Session Changes Review
+
+- **Immutability & Read-Only Invariant:** Strictly read-only; never mutate repository working tree files, Git index, HEAD references, or invoke Git mutation commands (`reset`, `stash`, `checkout`, `commit`).
+- **Canonical Root Preflight & Sandbox Containment:** Enforce single relative root ID (default `.`) via direct `validate_project_root_preflight`. Enforce `MAX_PATH_BYTES` (4096) and `MAX_PATH_DEPTH` (64). Reject parent traversal (`..`), absolute paths, empty components, NUL bytes, and wildcards. Root containment must resolve within the server-bound launch target sandbox; never discover unrestricted external repositories.
+- **Resource Limits & Capacity Fences:**
+  - 32 global retained identities; reject new registrations at capacity without evicting existing originals.
+  - 10,000 distinct metadata nodes / manifest paths each; 8 MiB metadata cap.
+  - 2 MiB regular file read limit (`MAX_FILE_BYTES`).
+  - 128 MiB baseline raw storage cap, 128 MiB candidate current raw storage cap, 512 MiB global accounted storage.
+  - 2 global blocking scan permits; permits held until blocking closure exits; saturation returns HTTP 409 `busy` without queuing.
+- **Origin-Qualified Status Invariants:**
+  - `sessionStart`: `initializing` (pending receipt), `ready` / `incomplete` (only with live producer receipt), `unavailable` (failed attempt or target unavailable).
+  - `fromNow`: `initializing` / `ready` / `incomplete` (always `notApplicable` acknowledgment; explicit authenticated user action, never claims session-start provenance).
+  - Never mix cross-origin states; failed originals remain latched failed.
+- **Absence Proof vs. Eligible Inventory:** Historical negative proof requires directory completeness certification in `AbsenceTrie` (`absentInVerifiedDirectory`). Nonmembership in current eligible inventory alone never proves historical absence; unproven or ignored subtrees remain `unknown`/`unproven` or `excludedAtCapture`.
+- **Single Host & Keyboard Isolation:** `SessionChangesHost` mounts once in `WorkspacePage.tsx` above responsive shells. Must enforce window capture-phase keyboard interception (`stopPropagation()`) to prevent keystrokes, shortcuts, and Escape from leaking into underlying live xterm PTYs.
+- **Capability-Free Monaco Diff Viewer:** Monaco diff instance must set `readOnly: true`, `originalEditable: false`, and `domReadOnly: true`. Disable editing commands, drop, and paste. Model URIs must encode the full owner tuple with deferred disposal to prevent race conditions during rapid switching.
 ### Cognito Mode
 
 - Keep activation ephemeral; persist only the user preference fields supported by configuration. Treat the overlay as a visual in-app mask, not authorization, content redaction, or an OS capture boundary.

@@ -31,7 +31,7 @@ use super::{
     agent_import, agent_memory, agent_status, agent_store, auth, auth_mfa, browser_debug, commands,
     config, diagnostics, fs as fs_api, fs_image, fs_video, git, git_blame, git_diff, host_actions,
     idle_suspend, media_session, plans as plans_api, port_forward as port_forward_api,
-    resource_events, settings, ssh, system, terminal, tunnel, usage, usage_sessions, workflow,
+    resource_events, session_changes, settings, ssh, system, terminal, tunnel, usage, usage_sessions, workflow,
     workspace, ws,
 };
 
@@ -296,6 +296,27 @@ pub fn build_router_with_web_dir_and_origins(
         .route(
             "/api/terminal/{id}/remove",
             delete(terminal::remove_session),
+        )
+        // Session changes (v1)
+        .route(
+            "/api/terminal/{id}/session-changes/v1/status",
+            get(session_changes::get_status),
+        )
+        .route(
+            "/api/terminal/{id}/session-changes/v1/from-now",
+            post(session_changes::from_now),
+        )
+        .route(
+            "/api/terminal/{id}/session-changes/v1/refresh",
+            post(session_changes::refresh),
+        )
+        .route(
+            "/api/terminal/{id}/session-changes/v1/files",
+            get(session_changes::get_files),
+        )
+        .route(
+            "/api/terminal/{id}/session-changes/v1/files/{file_id}",
+            get(session_changes::get_file_detail),
         )
         // Agent status
         .route(

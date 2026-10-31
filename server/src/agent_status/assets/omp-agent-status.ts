@@ -78,10 +78,14 @@ export interface LoggerFacade {
 export interface OmpExtensionContext {
   hasUI?: boolean;
   agent?: { kind?: "main" | "sub" | string; id?: string };
-  sessionManager?: { getSessionId?: () => string };
+  sessionManager?: {
+    getSessionId?: () => string;
+    getEntries?: () => unknown[];
+    getSessionFile?: () => string | null;
+  };
   isIdle?: () => boolean;
+  cwd?: string;
 }
-
 export interface OmpExtensionAPI {
   logger?: LoggerFacade;
   on(event: string, handler: (event: unknown, ctx: unknown) => void): void;
@@ -161,6 +165,43 @@ export function sanitizeSessionId(rawId: unknown): string {
   return clean || "session-unknown";
 }
 
+export function derivePrivateHttpUrl(wsUrl: string): string {
+  const parsed = new URL(wsUrl);
+  parsed.protocol = parsed.protocol === "wss:" ? "https:" : "http:";
+  parsed.pathname = "/private/session-changes/v1";
+  return parsed.toString();
+}
+
+export function mapSettledOutcome(
+  state: AgentState,
+  outcome: TurnOutcome,
+  isIdle: boolean,
+): "completed" | "blocked" | "error" | "aborted" | "unknown" {
+  if (state === "blocked") return "blocked";
+  if (outcome === "error") return "error";
+  if (outcome === "interrupted") return "aborted";
+  if (outcome === "ended" && isIdle) return "completed";
+  return "unknown";
+}
+
+export interface ActiveReviewMetadata {
+  serverEpoch: string;
+  baselineId: string;
+  origin: "sessionStart" | "fromNow";
+  rootId: string;
+}
+
+export interface SessionAttemptEntry {
+  originalStatus: "pending" | "success" | "failed";
+  liveToken: number;
+  registrationId?: string;
+  serverEpoch?: string;
+  baselineId?: string;
+  activationNonce?: string;
+  activationReceiptId?: string;
+  activeReview: ActiveReviewMetadata | null;
+}
+
 export function classifyStopReason(stopReason: string | undefined): {
   outcome: TurnOutcome;
   state: AgentState;
@@ -192,6 +233,7 @@ export interface AdapterOptions {
   reconnectDelays?: number[];
   webSocketFactory?: (url: string, headers: Record<string, string>) => WebSocket;
   logger?: LoggerFacade;
+  fetchImpl?: typeof fetch;
 }
 
 export class OmpAgentStatusAdapter {
@@ -235,6 +277,11 @@ export class OmpAgentStatusAdapter {
 
   public lastSentReport: ReporterReport | null = null;
 
+  private readonly sessionChangesHttpUrl: string;
+  private readonly fetchImpl: typeof fetch;
+  public readonly sessionAttempts = new Map<string, SessionAttemptEntry>();
+  private attemptLiveToken = 0;
+
   constructor(options: AdapterOptions) {
     this.wsUrl = options.wsUrl;
     this.token = options.token;
@@ -244,6 +291,11 @@ export class OmpAgentStatusAdapter {
     this.heartbeatIntervalMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
     this.reconnectDelays = options.reconnectDelays ?? DEFAULT_RECONNECT_DELAYS;
     this.logger = options.logger;
+    this.sessionChangesHttpUrl = derivePrivateHttpUrl(this.wsUrl);
+    this.fetchImpl =
+      options.fetchImpl ||
+      ((url: string | URL | Request, init?: RequestInit) =>
+        globalThis.fetch(url, init));
 
     this.webSocketFactory =
       options.webSocketFactory ||
@@ -485,6 +537,320 @@ export class OmpAgentStatusAdapter {
       outcome,
       blockedReason: this.blockedReason,
     });
+
+    const isIdle = this.state === "idle";
+    void this.sendSettledSessionControl(turnId, outcome, isIdle);
+  }
+
+  public async handleSessionStartCapture(
+    rawSessionId: string | undefined,
+    lifecycle: "initialFresh" | "new" | "fork" | "resume" | "unknown",
+    cwdHint?: string,
+  ): Promise<void> {
+    const sessionId = sanitizeSessionId(rawSessionId);
+    let entry = this.sessionAttempts.get(sessionId);
+    if (!entry) {
+      if (this.sessionAttempts.size >= 32) return;
+      this.attemptLiveToken += 1;
+      entry = {
+        originalStatus: "pending",
+        liveToken: this.attemptLiveToken,
+        activeReview: null,
+      };
+      this.sessionAttempts.set(sessionId, entry);
+    }
+
+    const currentToken = entry.liveToken;
+
+    if (lifecycle !== "initialFresh" && lifecycle !== "new" && lifecycle !== "fork") {
+      await this.lookupAndAdopt(sessionId, entry, currentToken);
+      return;
+    }
+
+    if (entry.originalStatus === "failed" || entry.originalStatus === "success") {
+      return;
+    }
+
+    const registrationId = crypto.randomUUID();
+    entry.registrationId = registrationId;
+
+    const startTime = performance.now();
+    const barrierMaxDurationMs = 12000;
+
+    try {
+      const prepareRes = (await this.fetchJson(
+        "/prepare",
+        {
+          version: 1,
+          registrationId,
+          ompSessionId: sessionId,
+          rootId: ".",
+          cwdHint: cwdHint || null,
+          expiresAtMs: Date.now() + 10000,
+          mode: "capture",
+          lifecycle,
+        },
+        10000,
+      )) as {
+        kind?: string;
+        status?: {
+          baselineId?: string;
+          serverEpoch?: string;
+          origin?: "sessionStart" | "fromNow";
+          rootId?: string;
+        };
+        serverEpoch?: string;
+        baselineId?: string;
+        activationNonce?: string;
+      };
+
+      if (entry.liveToken !== currentToken) return;
+
+      if (prepareRes.kind === "existing") {
+        if (prepareRes.status?.baselineId && prepareRes.status?.serverEpoch) {
+          entry.activeReview = {
+            serverEpoch: prepareRes.status.serverEpoch,
+            baselineId: prepareRes.status.baselineId,
+            origin: prepareRes.status.origin || "sessionStart",
+            rootId: prepareRes.status.rootId || ".",
+          };
+          entry.originalStatus = "success";
+        }
+        return;
+      }
+
+      if (prepareRes.kind !== "prepared") {
+        throw new Error("Invalid prepare response");
+      }
+
+      const { serverEpoch, baselineId, activationNonce } = prepareRes;
+      entry.serverEpoch = serverEpoch;
+      entry.baselineId = baselineId;
+      entry.activationNonce = activationNonce;
+
+      const remainingMs = Math.max(
+        1000,
+        barrierMaxDurationMs - (performance.now() - startTime),
+      );
+
+      const activateRes = (await this.fetchJson(
+        "/activate",
+        {
+          version: 1,
+          serverEpoch,
+          registrationId,
+          ompSessionId: sessionId,
+          rootId: ".",
+          baselineId,
+          activationNonce,
+        },
+        remainingMs,
+      )) as { activated?: boolean; activationReceiptId?: string };
+
+      if (entry.liveToken !== currentToken) return;
+
+      if (!activateRes.activated || !activateRes.activationReceiptId) {
+        throw new Error("Activation failed");
+      }
+
+      entry.activationReceiptId = activateRes.activationReceiptId;
+
+      const remainingReceiptMs = Math.max(
+        1000,
+        barrierMaxDurationMs - (performance.now() - startTime),
+      );
+
+      await this.fetchJson(
+        "/receipt",
+        {
+          version: 1,
+          serverEpoch,
+          registrationId,
+          ompSessionId: sessionId,
+          rootId: ".",
+          baselineId,
+          activationNonce,
+          activationReceiptId: activateRes.activationReceiptId,
+        },
+        remainingReceiptMs,
+      );
+
+      if (entry.liveToken !== currentToken) return;
+
+      entry.originalStatus = "success";
+      entry.activeReview = {
+        serverEpoch,
+        baselineId,
+        origin: "sessionStart",
+        rootId: ".",
+      };
+    } catch {
+      if (entry.liveToken === currentToken) {
+        entry.originalStatus = "failed";
+        try {
+          await this.fetchJson(
+            "/fail",
+            {
+              version: 1,
+              ompSessionId: sessionId,
+              registrationId,
+              serverEpoch: entry.serverEpoch || null,
+              baselineId: entry.baselineId || null,
+              reason: "captureFailed",
+            },
+            1000,
+          );
+        } catch {
+          // ignore fail notification errors
+        }
+      }
+    }
+  }
+
+  public async handleSessionSwitchCapture(
+    rawSessionId: string | undefined,
+    lifecycle: "initialFresh" | "new" | "fork" | "resume" | "unknown",
+    cwdHint?: string,
+  ): Promise<void> {
+    await this.handleSessionStartCapture(rawSessionId, lifecycle, cwdHint);
+  }
+
+  public async handleBeforeAgentStart(rawSessionId: string | undefined): Promise<void> {
+    const sessionId = sanitizeSessionId(rawSessionId);
+    let entry = this.sessionAttempts.get(sessionId);
+    if (!entry) {
+      if (this.sessionAttempts.size >= 32) return;
+      this.attemptLiveToken += 1;
+      entry = {
+        originalStatus: "pending",
+        liveToken: this.attemptLiveToken,
+        activeReview: null,
+      };
+      this.sessionAttempts.set(sessionId, entry);
+    }
+    await this.lookupAndAdopt(sessionId, entry, entry.liveToken);
+  }
+
+  public async lookupAndAdopt(
+    sessionId: string,
+    entry: SessionAttemptEntry,
+    currentToken: number,
+  ): Promise<void> {
+    try {
+      const lookupRes = (await this.fetchJson(
+        "/lookup",
+        {
+          version: 1,
+          ompSessionId: sessionId,
+          rootId: ".",
+          knownServerEpoch: entry.activeReview?.serverEpoch || null,
+          knownBaselineId: entry.activeReview?.baselineId || null,
+        },
+        500,
+      )) as {
+        kind?: string;
+        status?: {
+          origin?: string;
+          acknowledgment?: string;
+          baselineId?: string;
+          serverEpoch?: string;
+          rootId?: string;
+        };
+      };
+
+      if (entry.liveToken !== currentToken) return;
+
+      if (lookupRes.kind === "active" && lookupRes.status) {
+        const st = lookupRes.status;
+        if (
+          st.origin === "sessionStart" &&
+          st.acknowledgment === "received" &&
+          st.baselineId &&
+          st.serverEpoch
+        ) {
+          entry.activeReview = {
+            serverEpoch: st.serverEpoch,
+            baselineId: st.baselineId,
+            origin: "sessionStart",
+            rootId: st.rootId || ".",
+          };
+        } else if (
+          st.origin === "fromNow" &&
+          st.acknowledgment === "notApplicable" &&
+          st.baselineId &&
+          st.serverEpoch
+        ) {
+          entry.activeReview = {
+            serverEpoch: st.serverEpoch,
+            baselineId: st.baselineId,
+            origin: "fromNow",
+            rootId: st.rootId || ".",
+          };
+        }
+      }
+    } catch {
+      // ignore lookup errors
+    }
+  }
+
+  public async sendSettledSessionControl(
+    turnId: string,
+    outcome: TurnOutcome,
+    isIdle: boolean,
+  ): Promise<void> {
+    const sessionId = this.agentSessionId;
+    const entry = this.sessionAttempts.get(sessionId);
+    if (!entry) return;
+
+    await this.lookupAndAdopt(sessionId, entry, entry.liveToken);
+
+    if (!entry.activeReview) return;
+
+    const mappedOutcome = mapSettledOutcome(this.state, outcome, isIdle);
+    try {
+      await this.fetchJson(
+        "/settled",
+        {
+          version: 1,
+          serverEpoch: entry.activeReview.serverEpoch,
+          baselineId: entry.activeReview.baselineId,
+          ompSessionId: sessionId,
+          rootId: entry.activeReview.rootId,
+          origin: entry.activeReview.origin,
+          turnId,
+          outcome: mappedOutcome,
+        },
+        2000,
+      );
+    } catch {
+      // ignore settled control failure
+    }
+  }
+
+  private async fetchJson(path: string, body: unknown, timeoutMs: number): Promise<unknown> {
+    const url = `${this.sessionChangesHttpUrl}${path}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const resp = await this.fetchImpl(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      return await resp.json();
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private updateBlockedState(): void {
@@ -735,7 +1101,7 @@ export default function damHopperAgentStatusExtension(pi: OmpExtensionAPI): void
 
   let adapter: OmpAgentStatusAdapter | null = null;
 
-  pi.on("session_start", (_event: unknown, ctxUnknown: unknown) => {
+  pi.on("session_start", async (_event: unknown, ctxUnknown: unknown) => {
     const ctx = ctxUnknown as OmpExtensionContext | undefined;
     if (!ctx || ctx.hasUI !== true) {
       return;
@@ -756,16 +1122,32 @@ export default function damHopperAgentStatusExtension(pi: OmpExtensionAPI): void
     const sessionId = ctx.sessionManager?.getSessionId?.();
     const isIdle = typeof ctx.isIdle === "function" ? ctx.isIdle() : true;
     adapter.onSessionStart(sessionId, isIdle);
+
+    const hasEntries = (ctx.sessionManager?.getEntries?.()?.length ?? 0) > 0;
+    const hasSessionFile = Boolean(ctx.sessionManager?.getSessionFile?.());
+    const lifecycle = !hasEntries && !hasSessionFile ? "initialFresh" : "resume";
+    await adapter.handleSessionStartCapture(sessionId, lifecycle, ctx.cwd);
   });
 
-  pi.on("session_switch", (_event: unknown, ctxUnknown: unknown) => {
+  pi.on("session_switch", async (eventUnknown: unknown, ctxUnknown: unknown) => {
     if (!adapter) return;
     const ctx = ctxUnknown as OmpExtensionContext | undefined;
     const sessionId = ctx?.sessionManager?.getSessionId?.();
-    const isIdle = typeof ctx?.isIdle === "function" ? ctx.isIdle() : true;
+    const isIdle = typeof ctx?.isIdle === "function" ? ctx?.isIdle() : true;
     adapter.onSessionSwitch(sessionId, isIdle);
+
+    const event = (eventUnknown as { reason?: string }) || {};
+    const reason = event.reason;
+    const lifecycle = reason === "new" || reason === "fork" ? reason : "resume";
+    await adapter.handleSessionSwitchCapture(sessionId, lifecycle, ctx?.cwd);
   });
 
+  pi.on("before_agent_start", async (_eventUnknown: unknown, ctxUnknown: unknown) => {
+    if (!adapter) return;
+    const ctx = ctxUnknown as OmpExtensionContext | undefined;
+    const sessionId = ctx?.sessionManager?.getSessionId?.();
+    await adapter.handleBeforeAgentStart(sessionId);
+  });
   pi.on("agent_start", () => {
     adapter?.onAgentStart();
   });

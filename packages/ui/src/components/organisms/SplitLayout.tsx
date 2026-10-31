@@ -50,6 +50,7 @@ interface LayoutTreeProps {
   browserOpen?: boolean;
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
+  onOpenSessionChanges?: (sessionId: string) => void;
 }
 
 function LayoutTree({
@@ -70,6 +71,7 @@ function LayoutTree({
   browserOpen = false,
   renderBrowserContent,
   onCloseBrowser,
+  onOpenSessionChanges,
 }: LayoutTreeProps) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -117,6 +119,7 @@ function LayoutTree({
         browserOpen={browserOpen}
         renderBrowserContent={renderBrowserContent}
         onCloseBrowser={onCloseBrowser}
+        onOpenSessionChanges={onOpenSessionChanges}
       />
     );
   }
@@ -152,6 +155,7 @@ function LayoutTree({
           browserOpen={browserOpen}
           renderBrowserContent={renderBrowserContent}
           onCloseBrowser={onCloseBrowser}
+          onOpenSessionChanges={onOpenSessionChanges}
         />
       </Panel>
       <Separator
@@ -182,6 +186,7 @@ function LayoutTree({
           browserOpen={browserOpen}
           renderBrowserContent={renderBrowserContent}
           onCloseBrowser={onCloseBrowser}
+          onOpenSessionChanges={onOpenSessionChanges}
         />
       </Panel>
     </Group>
@@ -206,6 +211,7 @@ export interface SplitLayoutProps {
   browserOpen?: boolean;
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
+  onOpenSessionChanges?: (sessionId: string) => void;
 }
 
 function parseDockTarget(id: string): DockTarget | null {
@@ -251,6 +257,7 @@ export function SplitLayout({
   browserOpen = false,
   renderBrowserContent,
   onCloseBrowser,
+  onOpenSessionChanges,
 }: SplitLayoutProps) {
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
@@ -337,6 +344,7 @@ export function SplitLayout({
           browserOpen={browserOpen}
           renderBrowserContent={renderBrowserContent}
           onCloseBrowser={onCloseBrowser}
+          onOpenSessionChanges={onOpenSessionChanges}
         />
       </div>
       {/* Drag overlay: floating tab label following the pointer */}

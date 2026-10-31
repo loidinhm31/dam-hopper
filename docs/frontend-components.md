@@ -13,6 +13,7 @@ Design guidelines, color tokens, and typography are defined in [Platform Integra
 - [File and media components](./frontend-components/files-and-media.md) — Explorer decorations, image/video previews, and sandboxed HTML preview.
 - [Privacy and agent notifications](./frontend-components/notifications-and-privacy.md) — Cognito Privacy Mode, agent status notifications, and terminal title ordinals.
 - [Workflow Context Surface](./workflow-context-surface.md) — Responsive workflow context UI, component ownership, and interaction contracts.
+- [Session Changes Review Components](#session-changes-review-components) — Read-only Monaco review modal, keyboard isolation, and changed files list.
 
 ## Legacy Section Links
 
@@ -33,3 +34,14 @@ See [Terminal and IDE components](./frontend-components/terminal-and-ide.md#port
 ### PaneContainer
 
 See [Terminal and IDE components](./frontend-components/terminal-and-ide.md#panecontainer).
+
+## Session Changes Review Components
+
+- **`SessionChangesHost` (`packages/ui/src/components/organisms/SessionChangesHost.tsx`):** Top-level modal host dialog mounted once in `WorkspacePage.tsx` above responsive shells. Manages open/close state, renders `SessionChangesPanel`, coordinates dialog arbitration, and enforces capture-phase keyboard event isolation to prevent keystrokes and shortcuts from leaking into underlying live xterm terminals.
+- **`SessionChangesPanel` (`packages/ui/src/components/organisms/SessionChangesPanel.tsx`):** Orchestrates session baseline queries, coverage and change count chips, status error banners, manual/settled refresh actions, split vs. inline diff layout toggle, explicit `fromNow` adoption, and file list navigation.
+- **`ReadonlyMonacoDiffViewer` (`packages/ui/src/components/organisms/ReadonlyMonacoDiffViewer.tsx`):** Capability-free Monaco diff editor rendering original session-start bytes versus current working tree bytes with side-by-side or inline unified toggle. Disables edit commands, drop, and paste; isolates model URIs by full owner tuple; and uses deferred model disposal to eliminate cleanup race conditions.
+- **`SessionChangedFilesList` (`packages/ui/src/components/organisms/SessionChangedFilesList.tsx`):** Keyset-paginated and virtualized list displaying changed files with change kinds (`added`, `deleted`, `modified`, `modeOnly`, `unknown`), line addition/deletion counts, and verified historical absence proofs.
+- **Launch Entry Points:**
+  - **Desktop TabBar (`packages/ui/src/components/organisms/TabBar.tsx`):** "Session changes" action button in active terminal tab bar.
+  - **Mobile Accessory Bar (`packages/ui/src/components/organisms/MobileTerminalAccessoryBar.tsx` / `TerminalAccessoryControls.tsx`):** 44px touch-accessible action button.
+  - **Runtime Header (`packages/ui/src/components/organisms/ActiveTerminalRuntimeDisplay.tsx`):** Header action button in Runtime terminal presentation.

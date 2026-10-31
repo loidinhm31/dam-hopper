@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import damHopperAgentStatusExtension, {
   classifyStopReason,
+  derivePrivateHttpUrl,
+  mapSettledOutcome,
   OmpAgentStatusAdapter,
   sanitizeSessionId,
   validateLoopbackWsUrl,
@@ -478,4 +480,177 @@ describe("OMP Extension Factory Guards", () => {
 
   // Restore env
   Object.assign(process.env, originalEnv);
+});
+
+describe("Session Changes Private Protocol & Adapter Handshake", () => {
+  it("derives private HTTP URL from loopback WS URL", () => {
+    expect(derivePrivateHttpUrl("ws://127.0.0.1:4801/v1/agent-status")).toBe(
+      "http://127.0.0.1:4801/private/session-changes/v1",
+    );
+    expect(derivePrivateHttpUrl("wss://localhost:4801/v1/agent-status")).toBe(
+      "https://localhost:4801/private/session-changes/v1",
+    );
+  });
+
+  it("maps settled turn outcome correctly", () => {
+    expect(mapSettledOutcome("blocked", "ended", true)).toBe("blocked");
+    expect(mapSettledOutcome("idle", "ended", true)).toBe("completed");
+    expect(mapSettledOutcome("idle", "interrupted", true)).toBe("aborted");
+    expect(mapSettledOutcome("idle", "error", false)).toBe("error");
+    expect(mapSettledOutcome("working", "unknown", false)).toBe("unknown");
+  });
+
+  it("completes prepare -> activate -> receipt lifecycle for initialFresh capture", async () => {
+    const recordedCalls: Array<{ path: string; body: Record<string, unknown> }> = [];
+
+    const mockFetch = async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      const path = urlStr.replace("http://127.0.0.1:4801/private/session-changes/v1", "");
+      const body = JSON.parse((init?.body as string) || "{}");
+      recordedCalls.push({ path, body });
+
+      if (path === "/prepare") {
+        return new Response(
+          JSON.stringify({
+            version: 1,
+            kind: "prepared",
+            serverEpoch: "epoch-1",
+            terminalIncarnation: "1",
+            registrationId: body.registrationId,
+            ompSessionId: body.ompSessionId,
+            rootId: ".",
+            baselineId: "base-1",
+            activationNonce: "nonce-1",
+            capturedAtMs: Date.now(),
+            preparedTtlMs: 15000,
+            baselineCoverage: { state: "complete" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (path === "/activate") {
+        return new Response(
+          JSON.stringify({
+            version: 1,
+            serverEpoch: body.serverEpoch,
+            registrationId: body.registrationId,
+            ompSessionId: body.ompSessionId,
+            rootId: ".",
+            baselineId: body.baselineId,
+            activationNonce: body.activationNonce,
+            activated: true,
+            activationReceiptId: "rcpt-1",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (path === "/receipt") {
+        return new Response(JSON.stringify({ version: 1, accepted: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response("{}", { status: 404 });
+    };
+
+    const adapter = new OmpAgentStatusAdapter({
+      wsUrl: "ws://127.0.0.1:4801/v1/agent-status",
+      token: "test-token",
+      fetchImpl: mockFetch as unknown as typeof fetch,
+    });
+
+    await adapter.handleSessionStartCapture("session-fresh", "initialFresh");
+
+    expect(recordedCalls.length).toBe(3);
+    expect(recordedCalls[0].path).toBe("/prepare");
+    expect(recordedCalls[1].path).toBe("/activate");
+    expect(recordedCalls[2].path).toBe("/receipt");
+
+    const entry = adapter.sessionAttempts.get("session-fresh");
+    expect(entry).toBeDefined();
+    expect(entry?.originalStatus).toBe("success");
+    expect(entry?.activeReview?.baselineId).toBe("base-1");
+    expect(entry?.activeReview?.origin).toBe("sessionStart");
+  });
+
+  it("latches failure on prepare rejection and does not retry", async () => {
+    const recordedCalls: Array<{ path: string; body: Record<string, unknown> }> = [];
+
+    const mockFetch = async (url: string | URL | Request, init?: RequestInit) => {
+      const path = url.toString().replace("http://127.0.0.1:4801/private/session-changes/v1", "");
+      const body = JSON.parse((init?.body as string) || "{}");
+      recordedCalls.push({ path, body });
+
+      if (path === "/prepare") {
+        return new Response("Error", { status: 500 });
+      }
+      if (path === "/fail") {
+        return new Response(JSON.stringify({ version: 1, accepted: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("{}", { status: 404 });
+    };
+
+    const adapter = new OmpAgentStatusAdapter({
+      wsUrl: "ws://127.0.0.1:4801/v1/agent-status",
+      token: "test-token",
+      fetchImpl: mockFetch as unknown as typeof fetch,
+    });
+
+    await adapter.handleSessionStartCapture("session-fail", "initialFresh");
+
+    const entry = adapter.sessionAttempts.get("session-fail");
+    expect(entry?.originalStatus).toBe("failed");
+
+    // Subsequent call does not call prepare again
+    const beforeCalls = recordedCalls.length;
+    await adapter.handleSessionStartCapture("session-fail", "initialFresh");
+    expect(recordedCalls.length).toBe(beforeCalls);
+  });
+
+  it("adopts fromNow via lookup without clearing failure latch", async () => {
+    const mockFetch = async (url: string | URL | Request, init?: RequestInit) => {
+      const path = url.toString().replace("http://127.0.0.1:4801/private/session-changes/v1", "");
+      if (path === "/lookup") {
+        return new Response(
+          JSON.stringify({
+            version: 1,
+            kind: "active",
+            status: {
+              serverEpoch: "epoch-1",
+              baselineId: "base-from-now",
+              origin: "fromNow",
+              acknowledgment: "notApplicable",
+              rootId: ".",
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response("{}", { status: 404 });
+    };
+
+    const adapter = new OmpAgentStatusAdapter({
+      wsUrl: "ws://127.0.0.1:4801/v1/agent-status",
+      token: "test-token",
+      fetchImpl: mockFetch as unknown as typeof fetch,
+    });
+
+    // Manually latch failure
+    adapter.sessionAttempts.set("session-1", {
+      originalStatus: "failed",
+      liveToken: 1,
+      activeReview: null,
+    });
+
+    await adapter.handleBeforeAgentStart("session-1");
+
+    const entry = adapter.sessionAttempts.get("session-1");
+    expect(entry?.originalStatus).toBe("failed"); // latch retained
+    expect(entry?.activeReview?.baselineId).toBe("base-from-now");
+    expect(entry?.activeReview?.origin).toBe("fromNow");
+  });
 });

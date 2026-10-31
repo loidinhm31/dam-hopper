@@ -2308,3 +2308,89 @@ describe("Git conflict resolve REST contract", () => {
     transport.destroy();
   });
 });
+
+describe("Session changes REST channels", () => {
+  it("maps sessionChanges channels to owner-bound REST routes", async () => {
+    const transport = new WsTransport("http://localhost:4800");
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "Content-Type": "application/json" }),
+      json: async () => ({ success: true }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // 1. status
+    await transport.invoke("sessionChanges:status", {
+      terminalId: "term-1",
+      terminalIncarnation: "1",
+      ompSessionId: "omp-session-1",
+      expectedServerEpoch: "epoch-1",
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:4800/api/terminal/term-1/session-changes/v1/status?terminalIncarnation=1&ompSessionId=omp-session-1&expectedServerEpoch=epoch-1",
+    );
+
+    // 2. fromNow
+    await transport.invoke("sessionChanges:fromNow", {
+      terminalId: "term-1",
+      terminalIncarnation: "1",
+      ompSessionId: "omp-session-1",
+      rootId: ".",
+      requestId: "req-1",
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "http://localhost:4800/api/terminal/term-1/session-changes/v1/from-now",
+    );
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      version: 1,
+      terminalIncarnation: "1",
+      ompSessionId: "omp-session-1",
+      rootId: ".",
+      requestId: "req-1",
+    });
+
+    // 3. refresh
+    await transport.invoke("sessionChanges:refresh", {
+      terminalId: "term-1",
+      terminalIncarnation: "1",
+      ompSessionId: "omp-session-1",
+      serverEpoch: "epoch-1",
+      baselineId: "base-1",
+      requestId: "req-2",
+    });
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      "http://localhost:4800/api/terminal/term-1/session-changes/v1/refresh",
+    );
+
+    // 4. files
+    await transport.invoke("sessionChanges:files", {
+      terminalId: "term-1",
+      terminalIncarnation: "1",
+      ompSessionId: "omp-session-1",
+      serverEpoch: "epoch-1",
+      baselineId: "base-1",
+      comparisonRevision: "2",
+      limit: 50,
+    });
+    expect(fetchMock.mock.calls[3][0]).toBe(
+      "http://localhost:4800/api/terminal/term-1/session-changes/v1/files?terminalIncarnation=1&ompSessionId=omp-session-1&serverEpoch=epoch-1&baselineId=base-1&comparisonRevision=2&limit=50",
+    );
+
+    // 5. file
+    await transport.invoke("sessionChanges:file", {
+      terminalId: "term-1",
+      fileId: "fid-9",
+      terminalIncarnation: "1",
+      ompSessionId: "omp-session-1",
+      serverEpoch: "epoch-1",
+      baselineId: "base-1",
+      comparisonRevision: "2",
+    });
+    expect(fetchMock.mock.calls[4][0]).toBe(
+      "http://localhost:4800/api/terminal/term-1/session-changes/v1/files/fid-9?terminalIncarnation=1&ompSessionId=omp-session-1&serverEpoch=epoch-1&baselineId=base-1&comparisonRevision=2",
+    );
+
+    transport.destroy();
+  });
+});
