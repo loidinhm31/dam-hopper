@@ -1,7 +1,5 @@
 use axum::{body::Bytes, extract::State, http::StatusCode, response::IntoResponse, Json};
 
-use crate::config::read_config;
-use crate::state::project_roots_from_config;
 use crate::state::AppState;
 
 use super::error::ApiError;
@@ -11,28 +9,12 @@ use super::error::ApiError;
 // ---------------------------------------------------------------------------
 
 pub async fn cache_clear(State(state): State<AppState>) -> impl IntoResponse {
-    // In the Rust server there's no in-process cache beyond RwLock fields.
-    // Re-reading config is the closest equivalent.
     let _workspace_context = state.workspace_context_guard.write().await;
-    let config_path = state.config.read().await.config_path.clone();
-    match read_config(&config_path) {
-        Ok(mut cfg) => {
-            {
-                let timing = state.idle_suspend_timing.read().await;
-                state.idle_suspend_policy.apply_to_config(&mut cfg, &timing);
-            }
-            state.media_tickets.revoke_all();
-            state.fs.reinit_sandbox(project_roots_from_config(&cfg));
-            state
-                .host_resource_monitor
-                .reconfigure(cfg.server.host_resources.clone())
-                .await;
-            *state.config.write().await = cfg;
-            Json(serde_json::json!({ "ok": true })).into_response()
-        }
+    match crate::api::config::reload_config_locked(&state).await {
+        Ok(_) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": e.0.to_string() })),
         )
             .into_response(),
     }
@@ -232,6 +214,16 @@ pub async fn import_workspace_settings(
     crate::config::validate_protected_config_replacement(&current_cfg, &candidate_cfg)
         .map_err(ApiError::from_app)?;
 
+    let disable_applied = current_cfg.server.session_changes_enabled
+        && !candidate_cfg.server.session_changes_enabled;
+
+    if disable_applied {
+        state.session_changes.disable_and_purge();
+        if let Ok(dir) = crate::api::config::resolve_configured_omp_agent_dir(&state).await {
+            let _ = crate::agent_status::uninstall_session_changes_extension(&dir);
+        }
+    }
+
     let backup_file_name =
         create_backup(&current_path, &old_bytes).map_err(ApiError::from_app)?;
 
@@ -243,6 +235,13 @@ pub async fn import_workspace_settings(
     }
 
     if let Err(reload_err) = crate::api::config::reload_config_locked(&state).await {
+        if disable_applied {
+            return Err(ApiError::from_app(crate::error::AppError::Internal(format!(
+                "Failed to reload imported config after session changes was disabled; tracking remains runtime OFF. Backup retained at {}: {}",
+                backup_file_name,
+                reload_err.0
+            ))));
+        }
         let restore_res = crate::utils::fs::atomic_write_bytes(&current_path, &old_bytes);
         let reload_restore_res = crate::api::config::reload_config_locked(&state).await;
         let parent = current_path.parent().unwrap_or(std::path::Path::new("."));

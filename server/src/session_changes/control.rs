@@ -30,6 +30,24 @@ impl ControlRouterState {
     pub fn get_service(&self) -> Option<Arc<SessionChangesService>> {
         self.service.clone().or_else(|| self.runtime.session_changes())
     }
+
+    pub fn get_enabled_service(&self) -> Result<Arc<SessionChangesService>, Response> {
+        let service = self.get_service().ok_or_else(|| {
+            error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                ErrorCode::TargetUnavailable,
+                "Session changes service is unavailable",
+            )
+        })?;
+        if !service.is_enabled() {
+            return Err(error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                ErrorCode::TargetUnavailable,
+                "Session changes service is disabled",
+            ));
+        }
+        Ok(service)
+    }
 }
 
 fn error_response(status: StatusCode, code: ErrorCode, reason: impl Into<String>) -> Response {
@@ -135,15 +153,9 @@ async fn handle_prepare(
         }
     };
 
-    let service = match state.get_service() {
-        Some(s) => s,
-        None => {
-            return error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                ErrorCode::TargetUnavailable,
-                "Session changes service is unavailable",
-            );
-        }
+    let service = match state.get_enabled_service() {
+        Ok(s) => s,
+        Err(resp) => return resp,
     };
 
     // Determine target project root from bound target (strictly forbid falling back to '.')
@@ -205,9 +217,9 @@ async fn handle_activate(
         root_id: req.root_id.clone(),
     };
 
-    let service = match state.get_service() {
-        Some(s) => s,
-        None => return error_response(StatusCode::SERVICE_UNAVAILABLE, ErrorCode::TargetUnavailable, "Service unavailable"),
+    let service = match state.get_enabled_service() {
+        Ok(s) => s,
+        Err(resp) => return resp,
     };
     match activate_session_baseline(&service, &key, &req) {
         Ok(receipt) => success_json(receipt),
@@ -246,9 +258,9 @@ async fn handle_receipt(
         root_id: req.root_id.clone(),
     };
 
-    let service = match state.get_service() {
-        Some(s) => s,
-        None => return error_response(StatusCode::SERVICE_UNAVAILABLE, ErrorCode::TargetUnavailable, "Service unavailable"),
+    let service = match state.get_enabled_service() {
+        Ok(s) => s,
+        Err(resp) => return resp,
     };
     match receive_session_receipt(&service, &key, &req) {
         Ok(resp) => success_json(resp),
@@ -273,9 +285,9 @@ async fn handle_fail(
         root_id: ".".into(),
     };
 
-    let service = match state.get_service() {
-        Some(s) => s,
-        None => return error_response(StatusCode::SERVICE_UNAVAILABLE, ErrorCode::TargetUnavailable, "Service unavailable"),
+    let service = match state.get_enabled_service() {
+        Ok(s) => s,
+        Err(resp) => return resp,
     };
     match fail_session_capture(&service, &key, &req) {
         Ok(resp) => success_json(resp),
@@ -300,9 +312,9 @@ async fn handle_lookup(
         root_id: req.root_id.clone(),
     };
 
-    let service = match state.get_service() {
-        Some(s) => s,
-        None => return error_response(StatusCode::SERVICE_UNAVAILABLE, ErrorCode::TargetUnavailable, "Service unavailable"),
+    let service = match state.get_enabled_service() {
+        Ok(s) => s,
+        Err(resp) => return resp,
     };
     let records = service.records.lock();
     if let Some(rec) = records.get(&key) {
@@ -361,15 +373,9 @@ async fn handle_settled(
         root_id: req.root_id.clone(),
     };
 
-    let service = match state.get_service() {
-        Some(s) => s,
-        None => {
-            return error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                ErrorCode::TargetUnavailable,
-                "Service unavailable",
-            );
-        }
+    let service = match state.get_enabled_service() {
+        Ok(s) => s,
+        Err(resp) => return resp,
     };
 
     let mut is_duplicate = false;

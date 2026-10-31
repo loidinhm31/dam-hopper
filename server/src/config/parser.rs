@@ -321,6 +321,12 @@ fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
         "workflow_stale_after_hours".to_string(),
         Value::Integer(server.workflow_stale_after_hours.into()),
     );
+    if server.session_changes_enabled {
+        config.insert(
+            "session_changes_enabled".to_string(),
+            Value::Boolean(true),
+        );
+    }
     if server.telemetry != Default::default() {
         let telemetry = &server.telemetry;
         let mut table = toml::map::Map::new();

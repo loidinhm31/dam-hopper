@@ -24,7 +24,7 @@ fn setup_test_repo() -> (tempfile::TempDir, std::path::PathBuf) {
 #[tokio::test]
 async fn test_prepare_activate_receipt_lifecycle() {
     let (_tmp, root) = setup_test_repo();
-    let service = Arc::new(SessionChangesService::new().unwrap());
+    let service = Arc::new(SessionChangesService::new_enabled().unwrap());
 
     let req = PrepareRequest {
         version: 1,
@@ -110,7 +110,7 @@ async fn test_prepare_activate_receipt_lifecycle() {
 #[tokio::test]
 async fn test_fail_capture_latches_original_unavailable() {
     let (_tmp, root) = setup_test_repo();
-    let service = Arc::new(SessionChangesService::new().unwrap());
+    let service = Arc::new(SessionChangesService::new_enabled().unwrap());
 
     let req = PrepareRequest {
         version: 1,

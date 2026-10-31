@@ -1033,6 +1033,7 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
             workflow_deleted_note_retention_days: 7,
             workflow_stale_after_hours: 24,
             idle_suspend: Default::default(),
+            session_changes_enabled: false,
         },
     };
 
@@ -2308,4 +2309,60 @@ enabled = true
     let written = std::fs::read_to_string(&config_path).unwrap();
     assert!(!written.contains("[server.advisor]"));
     assert!(!written.contains("advisor"));
+}
+
+#[test]
+fn session_changes_enabled_schema_serialization_and_toml() {
+    // 1. Default is false
+    let default_cfg = super::schema::ServerConfig::default();
+    assert!(!default_cfg.session_changes_enabled);
+
+    // 2. JSON serializes as camelCase "sessionChangesEnabled"
+    let mut custom = default_cfg.clone();
+    custom.session_changes_enabled = true;
+    let json = serde_json::to_value(&custom).unwrap();
+    assert_eq!(json["sessionChangesEnabled"], true);
+    assert!(json.get("session_changes_enabled").is_none());
+
+    // 3. Deserializes from both camelCase and snake_case
+    let parsed_camel: super::schema::ServerConfig = serde_json::from_str(r#"{"sessionChangesEnabled": true}"#).unwrap();
+    assert!(parsed_camel.session_changes_enabled);
+    let parsed_snake: super::schema::ServerConfig = serde_json::from_str(r#"{"session_changes_enabled": true}"#).unwrap();
+    assert!(parsed_snake.session_changes_enabled);
+    let parsed_default: super::schema::ServerConfig = serde_json::from_str(r#"{}"#).unwrap();
+    assert!(!parsed_default.session_changes_enabled);
+
+    // 4. TOML serialization: included when true, omitted when false
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[workspace]
+name = "sc-test"
+
+[server]
+session_changes_enabled = true
+"#,
+    )
+    .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    assert!(cfg.server.session_changes_enabled);
+
+    // Write back and verify TOML contains snake_case key
+    write_config(&config_path, &cfg).unwrap();
+    let written = std::fs::read_to_string(&config_path).unwrap();
+    assert!(written.contains("session_changes_enabled = true"));
+    assert!(!written.contains("sessionChangesEnabled"));
+
+    // When disabled, rewrite and verify omission/retention
+    let mut disabled_cfg = cfg.clone();
+    disabled_cfg.server.session_changes_enabled = false;
+    write_config(&config_path, &disabled_cfg).unwrap();
+    let written_disabled = std::fs::read_to_string(&config_path).unwrap();
+    assert!(!written_disabled.contains("session_changes_enabled = true"));
+
+    let reloaded = read_config(&config_path).unwrap();
+    assert!(!reloaded.server.session_changes_enabled);
 }

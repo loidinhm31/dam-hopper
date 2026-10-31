@@ -22,6 +22,10 @@ pub async fn prepare_session_capture(
     project_root: &Path,
     req: PrepareRequest,
 ) -> Result<PrepareOutcome, ErrorCode> {
+    let (enabled, generation) = service.current_generation();
+    if !enabled {
+        return Err(ErrorCode::TargetUnavailable);
+    }
     if req.version != 1 {
         return Err(ErrorCode::InvalidRequest);
     }
@@ -72,6 +76,10 @@ pub async fn prepare_session_capture(
 
     // 2. Check existing record and atomically insert initializing placeholder
     {
+        let lifecycle = service.lifecycle.read();
+        if !lifecycle.enabled || lifecycle.generation != generation {
+            return Err(ErrorCode::TargetUnavailable);
+        }
         let mut records = service.records.lock();
 
         // Prune older sessions for the same terminal and release their storage
@@ -184,6 +192,10 @@ pub async fn prepare_session_capture(
     {
         Ok(Ok(inv)) => inv,
         _ => {
+            let lifecycle = service.lifecycle.read();
+            if !lifecycle.enabled || lifecycle.generation != generation {
+                return Err(ErrorCode::TargetUnavailable);
+            }
             let mut records = service.records.lock();
             let tombstone = SessionChangesRecord {
                 registration_id: req.registration_id.clone(),
@@ -215,7 +227,17 @@ pub async fn prepare_session_capture(
     };
 
     // Try to reserve accounted storage
-    if let Err(e) = service.try_reserve_storage(inventory.coverage.raw_bytes) {
+    let lifecycle = service.lifecycle.read();
+    if !lifecycle.enabled || lifecycle.generation != generation {
+        return Err(ErrorCode::TargetUnavailable);
+    }
+    drop(lifecycle);
+
+    if let Err(e) = service.try_reserve_storage_for_generation(generation, inventory.coverage.raw_bytes) {
+        let lifecycle = service.lifecycle.read();
+        if !lifecycle.enabled || lifecycle.generation != generation {
+            return Err(ErrorCode::TargetUnavailable);
+        }
         let mut records = service.records.lock();
         let tombstone = SessionChangesRecord {
             registration_id: req.registration_id.clone(),
@@ -276,12 +298,19 @@ pub async fn prepare_session_capture(
     };
 
     {
+        let lifecycle = service.lifecycle.read();
+        if !lifecycle.enabled || lifecycle.generation != generation {
+            drop(lifecycle);
+            service.release_storage_for_generation(generation, baseline_coverage.raw_bytes);
+            return Err(ErrorCode::TargetUnavailable);
+        }
         let mut records = service.records.lock();
         if let Some(rec) = records.get(&key) {
             // CAS check: if no longer Initializing or registration mismatch, discard without overwriting
             if rec.registration_id != req.registration_id || rec.state != StatusState::Initializing {
                 service.release_storage(baseline_coverage.raw_bytes);
                 drop(records);
+                drop(lifecycle);
                 let status = service.build_status(&key);
                 return Ok(PrepareOutcome::Existing(ExistingReceipt {
                     version: 1,
@@ -324,6 +353,10 @@ pub fn activate_session_baseline(
         return Err(ErrorCode::ServerRestarted);
     }
 
+    let lifecycle = service.lifecycle.read();
+    if !lifecycle.enabled {
+        return Err(ErrorCode::TargetUnavailable);
+    }
     let mut records = service.records.lock();
     let rec = records.get_mut(key).ok_or(ErrorCode::BaselineMissing)?;
 
@@ -386,6 +419,10 @@ pub fn receive_session_receipt(
         return Err(ErrorCode::ServerRestarted);
     }
 
+    let lifecycle = service.lifecycle.read();
+    if !lifecycle.enabled {
+        return Err(ErrorCode::TargetUnavailable);
+    }
     let mut records = service.records.lock();
     let rec = records.get_mut(key).ok_or(ErrorCode::BaselineMissing)?;
 
@@ -431,6 +468,10 @@ pub fn fail_session_capture(
 ) -> Result<FailureResponse, ErrorCode> {
     if req.server_epoch.as_deref() != Some(&service.server_epoch) {
         return Err(ErrorCode::ServerRestarted);
+    }
+    let lifecycle = service.lifecycle.read();
+    if !lifecycle.enabled {
+        return Err(ErrorCode::TargetUnavailable);
     }
     let mut records = service.records.lock();
     if let Some(rec) = records.get_mut(key) {

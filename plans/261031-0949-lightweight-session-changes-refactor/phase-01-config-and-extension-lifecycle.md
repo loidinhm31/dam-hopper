@@ -1,6 +1,6 @@
 # Phase 01 — Server config and managed extension lifecycle
 
-Priority P1 · pending · 0.35d · owner: server lifecycle implementer.
+Priority P1 · DONE (2026-10-31 19:54:51 +07:00) · 0.35d · owner: server lifecycle implementer.
 Context: [approved design](../reports/design-261031-0949-lightweight-session-changes-refactor.md), [overview](plan.md), `server/src/config/schema.rs::ServerConfig`, `server/src/api/config.rs::update_config`, `server/src/agent_status/integration.rs::{check_extension_status,install_extension,uninstall_extension}`.
 
 ## Existing behavior and architecture
@@ -36,8 +36,8 @@ The dedicated bundled asset is `server/src/agent_status/assets/omp-session-chang
 ]
 ```
 
-- [ ] <!-- evcrate-task:managed-extension-lifecycle --> Add independently owned Session Changes extension lifecycle
-- [ ] <!-- evcrate-task:server-session-changes-switch --> Wire default-off server setting to atomic enablement and purge
+- [x] <!-- evcrate-task:managed-extension-lifecycle --> Add independently owned Session Changes extension lifecycle
+- [x] <!-- evcrate-task:server-session-changes-switch --> Wire default-off server setting to atomic enablement and purge
 
 ## Ordered implementation
 

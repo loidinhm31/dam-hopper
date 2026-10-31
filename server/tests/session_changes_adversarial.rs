@@ -43,7 +43,7 @@ async fn test_adversarial_root_preflight_and_invariance() {
     assert!(bad_preflight.is_err());
 
     // 2. Baseline capture
-    let service = Arc::new(SessionChangesService::new().unwrap());
+    let service = Arc::new(SessionChangesService::new_enabled().unwrap());
     service.bind_terminal_target(
         "term-adv",
         1,
@@ -157,7 +157,7 @@ async fn test_adversarial_symlink_and_deep_paths() {
         let _ = symlink(&secret_file, &link_path);
     }
 
-    let service = Arc::new(SessionChangesService::new().unwrap());
+    let service = Arc::new(SessionChangesService::new_enabled().unwrap());
     service.bind_terminal_target(
         "term-sym",
         1,

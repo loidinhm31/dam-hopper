@@ -61,6 +61,14 @@ pub async fn get_status(
     Path(terminal_id): Path<String>,
     Query(query): Query<StatusQuery>,
 ) -> Response {
+    if !state.session_changes.is_enabled() {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::TargetUnavailable,
+            "Session changes tracking is disabled",
+        );
+    }
+
     if !is_valid_canonical_decimal_string(&query.terminal_incarnation) {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -113,6 +121,15 @@ pub async fn from_now(
     Path(terminal_id): Path<String>,
     Json(req): Json<FromNowRequest>,
 ) -> Response {
+    let (enabled, generation) = state.session_changes.current_generation();
+    if !enabled {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::TargetUnavailable,
+            "Session changes tracking is disabled",
+        );
+    }
+
     if req.version != 1 {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -239,6 +256,15 @@ pub async fn from_now(
     let baseline_coverage = inventory.coverage.clone();
     let coverage_state = baseline_coverage.state;
 
+    let lifecycle = state.session_changes.lifecycle.read();
+    if !lifecycle.enabled || lifecycle.generation != generation {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::TargetUnavailable,
+            "Session changes tracking is disabled",
+        );
+    }
+
     if let Err(e) = state.session_changes.try_reserve_storage(inventory.coverage.raw_bytes) {
         return error_response(StatusCode::TOO_MANY_REQUESTS, e, "Storage capacity exceeded");
     }
@@ -307,6 +333,14 @@ pub async fn refresh(
     Path(terminal_id): Path<String>,
     Json(req): Json<RefreshRequest>,
 ) -> Response {
+    if !state.session_changes.is_enabled() {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::TargetUnavailable,
+            "Session changes tracking is disabled",
+        );
+    }
+
     if req.version != 1 {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -387,6 +421,14 @@ pub async fn get_files(
     Path(terminal_id): Path<String>,
     Query(query): Query<FilesQuery>,
 ) -> Response {
+    if !state.session_changes.is_enabled() {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::TargetUnavailable,
+            "Session changes tracking is disabled",
+        );
+    }
+
     if query.server_epoch != state.session_changes.server_epoch {
         return error_response(
             StatusCode::GONE,
@@ -460,6 +502,14 @@ pub async fn get_file_detail(
     Path((terminal_id, file_id)): Path<(String, String)>,
     Query(query): Query<FileDetailQuery>,
 ) -> Response {
+    if !state.session_changes.is_enabled() {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::TargetUnavailable,
+            "Session changes tracking is disabled",
+        );
+    }
+
     if query.server_epoch != state.session_changes.server_epoch {
         return error_response(
             StatusCode::GONE,

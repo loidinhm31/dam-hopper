@@ -677,6 +677,8 @@ pub struct ServerConfig {
     pub workflow_stale_after_hours: u32,
     #[serde(default, alias = "idle_suspend")]
     pub idle_suspend: IdleSuspendConfig,
+    #[serde(default, alias = "session_changes_enabled")]
+    pub session_changes_enabled: bool,
 }
 pub const fn default_workflow_event_retention_days() -> u32 {
     90
@@ -718,6 +720,7 @@ impl Default for ServerConfig {
             workflow_deleted_note_retention_days: default_workflow_deleted_note_retention_days(),
             workflow_stale_after_hours: default_workflow_stale_after_hours(),
             idle_suspend: IdleSuspendConfig::default(),
+            session_changes_enabled: false,
         }
     }
 }

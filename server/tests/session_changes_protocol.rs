@@ -21,7 +21,7 @@ async fn test_full_protocol_barrier_and_lifecycle() {
     fs::create_dir_all(root.join(".git")).unwrap();
     fs::write(root.join("file.txt"), "hello initial\n").unwrap();
 
-    let service = Arc::new(SessionChangesService::new().unwrap());
+    let service = Arc::new(SessionChangesService::new_enabled().unwrap());
     let runtime = AgentStatusRuntime::new(
         AgentStatusAvailability::Ready,
         Some("ws://127.0.0.1:4801/v1/agent-status".into()),

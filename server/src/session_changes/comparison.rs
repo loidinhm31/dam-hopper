@@ -17,6 +17,10 @@ pub async fn run_comparison_scan(
     key: &SessionChangesKey,
     settled_turn_id: Option<String>,
 ) -> Result<Comparison, ErrorCode> {
+    let (enabled, generation) = service.current_generation();
+    if !enabled {
+        return Err(ErrorCode::TargetUnavailable);
+    }
     // Check record exists and is ready/incomplete
     let (canonical_root, baseline_inventory, expected_baseline_id) = {
         let records = service.records.lock();
@@ -268,6 +272,11 @@ pub async fn run_comparison_scan(
         .unwrap_or_default()
         .as_millis() as u64;
 
+    let lifecycle = service.lifecycle.read();
+    if !lifecycle.enabled || lifecycle.generation != generation {
+        return Err(ErrorCode::TargetUnavailable);
+    }
+
     let mut records = service.records.lock();
     let rec = records.get_mut(key).ok_or(ErrorCode::BaselineMissing)?;
     if rec.baseline_id.as_deref() != Some(&expected_baseline_id) {
@@ -304,6 +313,9 @@ pub fn list_changed_files(
     cursor: Option<&str>,
     limit: Option<usize>,
 ) -> Result<FilePage, ErrorCode> {
+    if !service.is_enabled() {
+        return Err(ErrorCode::TargetUnavailable);
+    }
     let records = service.records.lock();
     let rec = records.get(key).ok_or(ErrorCode::BaselineMissing)?;
 
@@ -358,6 +370,9 @@ pub fn get_file_detail(
     expected_revision: &str,
     file_id: &str,
 ) -> Result<FileDetail, ErrorCode> {
+    if !service.is_enabled() {
+        return Err(ErrorCode::TargetUnavailable);
+    }
     let records = service.records.lock();
     let rec = records.get(key).ok_or(ErrorCode::BaselineMissing)?;
 

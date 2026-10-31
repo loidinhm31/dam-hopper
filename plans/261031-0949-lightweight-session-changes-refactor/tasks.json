@@ -32,10 +32,10 @@
       ],
       "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-01-config-and-extension-lifecycle.md",
       "spec_fingerprint": "5b852ec21fbf3b1a0132386d5727b366390a185d654163ddbc998ec727d9fac4",
-      "status": "pending",
-      "owner": null,
-      "reason": "Reset to pending after review revision R1-R4",
-      "evidence": null,
+      "status": "completed",
+      "owner": "server lifecycle implementer",
+      "reason": "Marked completed per user direction.",
+      "evidence": "Marked completed per user direction (2026-10-31 19:54:51 +07:00). Cycle 3 code review (plans/reports/code-review-261031-1944-phase-01-server-config-extension-lifecycle-cycle-3.md) noted technical acceptance remains incomplete with open findings.",
       "native_bindings": [],
       "history": [
         {
@@ -55,6 +55,12 @@
           "event": "reopened",
           "owner": null,
           "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T12:54:51.000Z",
+          "event": "completed",
+          "owner": "server lifecycle implementer",
+          "reason": "Phase 01 managed-extension-lifecycle marked completed per user direction."
         }
       ]
     },
@@ -112,10 +118,10 @@
       ],
       "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-01-config-and-extension-lifecycle.md",
       "spec_fingerprint": "d2ed2558f6f9a342bd39ff7f9f8c1a1403d84667701fe4adb3597793c539ac4b",
-      "status": "pending",
-      "owner": null,
-      "reason": "Reset to pending after review revision R1-R4",
-      "evidence": null,
+      "status": "completed",
+      "owner": "server lifecycle implementer",
+      "reason": "Marked completed per user direction.",
+      "evidence": "Marked completed per user direction (2026-10-31 19:54:51 +07:00). Cycle 3 code review (plans/reports/code-review-261031-1944-phase-01-server-config-extension-lifecycle-cycle-3.md) noted technical acceptance remains incomplete with 5 High (W1–W4, W7) and 2 Medium (W5–W6) findings open.",
       "native_bindings": [],
       "history": [
         {
@@ -135,6 +141,12 @@
           "event": "reopened",
           "owner": null,
           "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T12:54:51.000Z",
+          "event": "completed",
+          "owner": "server lifecycle implementer",
+          "reason": "Phase 01 server-session-changes-switch marked completed per user direction."
         }
       ]
     },

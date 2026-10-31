@@ -71,36 +71,91 @@ pub struct SessionChangesRecord {
     pub dirty_settled_hint: bool,
     pub canonical_root: PathBuf,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LifecycleState {
+    pub enabled: bool,
+    pub generation: u64,
+}
 
 pub struct SessionChangesService {
     pub server_epoch: String,
+    pub lifecycle: parking_lot::RwLock<LifecycleState>,
     pub blocking_permits: Arc<Semaphore>,
     pub allocated_storage_bytes: AtomicU64,
     pub records: Mutex<BTreeMap<SessionChangesKey, SessionChangesRecord>>,
-    pub temp_dir: TempDir,
+    pub temp_dir: Mutex<Option<TempDir>>,
     pub bound_targets: Mutex<std::collections::HashMap<(String, u64), BoundTerminalTarget>>,
 }
 
 impl Default for SessionChangesService {
     fn default() -> Self {
-        Self::new().expect("TempDir creation for SessionChangesService should succeed")
+        Self::new().expect("Creation for SessionChangesService should succeed")
     }
 }
 
 impl SessionChangesService {
     pub fn new() -> Result<Self, std::io::Error> {
-        let temp_dir = tempfile::Builder::new()
-            .prefix("dam-hopper-session-changes-")
-            .tempdir()?;
-
         Ok(Self {
             server_epoch: Uuid::new_v4().to_string(),
+            lifecycle: parking_lot::RwLock::new(LifecycleState {
+                enabled: false,
+                generation: 0,
+            }),
             blocking_permits: Arc::new(Semaphore::new(MAX_BLOCKING_PERMITS)),
             allocated_storage_bytes: AtomicU64::new(0),
             records: Mutex::new(BTreeMap::new()),
-            temp_dir,
+            temp_dir: Mutex::new(None),
             bound_targets: Mutex::new(std::collections::HashMap::new()),
         })
+    }
+
+    pub fn new_enabled() -> Result<Self, std::io::Error> {
+        let service = Self::new()?;
+        service.enable();
+        Ok(service)
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.lifecycle.read().enabled
+    }
+
+    pub fn current_generation(&self) -> (bool, u64) {
+        let state = *self.lifecycle.read();
+        (state.enabled, state.generation)
+    }
+
+    pub fn enable(&self) -> u64 {
+        let mut state = self.lifecycle.write();
+        if !state.enabled {
+            state.generation = state.generation.wrapping_add(1);
+            state.enabled = true;
+        }
+        state.generation
+    }
+
+    pub fn disable_and_purge(&self) {
+        let mut state = self.lifecycle.write();
+        state.enabled = false;
+        state.generation = state.generation.wrapping_add(1);
+        self.records.lock().clear();
+        self.allocated_storage_bytes.store(0, Ordering::SeqCst);
+        *self.temp_dir.lock() = None;
+    }
+
+    pub fn release_storage_for_generation(&self, generation: u64, bytes: u64) {
+        let lifecycle = self.lifecycle.read();
+        if !lifecycle.enabled || lifecycle.generation != generation {
+            return;
+        }
+        self.release_storage(bytes);
+    }
+
+    pub fn try_reserve_storage_for_generation(&self, generation: u64, bytes: u64) -> Result<(), ErrorCode> {
+        let lifecycle = self.lifecycle.read();
+        if !lifecycle.enabled || lifecycle.generation != generation {
+            return Err(ErrorCode::TargetUnavailable);
+        }
+        self.try_reserve_storage(bytes)
     }
 
     pub fn try_reserve_storage(&self, bytes: u64) -> Result<(), ErrorCode> {

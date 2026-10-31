@@ -38,6 +38,9 @@ pub fn get_retained_session_list(
     terminal_id: &str,
     terminal_incarnation: &str,
 ) -> Result<RetainedSessionList, ErrorCode> {
+    if !service.is_enabled() {
+        return Err(ErrorCode::TargetUnavailable);
+    }
     if !is_valid_canonical_decimal_string(terminal_incarnation) {
         return Err(ErrorCode::IncarnationMismatch);
     }

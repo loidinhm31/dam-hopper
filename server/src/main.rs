@@ -1118,6 +1118,7 @@ async fn main() -> anyhow::Result<()> {
 
     pty_manager.set_session_changes(state.session_changes.clone());
     agent_status_runtime.set_session_changes(state.session_changes.clone());
+    dam_hopper_server::api::config::startup_reconcile_session_changes(&state).await;
     if let Some(workflow_store_for_obs) = workflow_store.clone() {
         let (recorder, _dropped, _worker_handle) =
             dam_hopper_server::workflow::observation::start_observation_worker_with_diagnostics(

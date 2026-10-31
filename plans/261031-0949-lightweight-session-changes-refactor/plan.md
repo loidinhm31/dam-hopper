@@ -32,7 +32,7 @@ Planning only; implementation and product qualification not performed by authori
 
 | Phase | Effort | Owner role | Status | Contract |
 |---|---|---|---|---|
-| 01 | 0.35d | Server lifecycle | pending | [Config and managed lifecycle](phase-01-config-and-extension-lifecycle.md) |
+| 01 | 0.35d | Server lifecycle | DONE (2026-10-31 19:54:51 +07:00) | [Config and managed lifecycle](phase-01-config-and-extension-lifecycle.md) |
 | 02 | 0.75d | Rust engine | pending | [Per-file engine and lazy comparison](phase-02-lightweight-per-file-engine.md) |
 | 03 | 0.40d | OMP producer | DONE (2026-10-31 17:23:46 +07:00) | [Tool-event extension](phase-03-omp-tool-event-extension.md) |
 | 04 | 0.50d | UI, integration, docs | pending | [Toggle and qualification](phase-04-settings-toggle-and-ui-qualification.md) |
@@ -58,13 +58,13 @@ Independent review: [cleared (0 blockers / 0 high / 0 medium)](reports/independe
 - document-lightweight-session-changes: pending
 - lazy-panel-and-triggers: pending
 - lazy-view-comparison: pending
-- managed-extension-lifecycle: pending
+- managed-extension-lifecycle: completed
 - omp-tool-event-producer: completed
 - per-file-capture-engine: pending
 - qualify-engine-protocol: pending
 - qualify-integrated-session-changes: pending
 - qualify-omp-producer: completed
-- server-session-changes-switch: pending
+- server-session-changes-switch: completed
 - settings-toggle-owner-binding: pending
 <!-- evcrate-progress:end -->
 

@@ -25,7 +25,7 @@ fn setup_repo_for_comparison() -> (tempfile::TempDir, std::path::PathBuf) {
 #[tokio::test]
 async fn test_comparison_flow_modified_added_deleted() {
     let (_tmp, root) = setup_repo_for_comparison();
-    let service = Arc::new(SessionChangesService::new().unwrap());
+    let service = Arc::new(SessionChangesService::new_enabled().unwrap());
 
     let prep_req = PrepareRequest {
         version: 1,

@@ -69,6 +69,7 @@ fn create_test_state(workspace_root: PathBuf, repo_root: PathBuf) -> AppState {
     )
     .unwrap();
 
+    state.session_changes.enable();
     // Bind terminal target
     state.session_changes.bind_terminal_target(
         "term-1",
