@@ -56,8 +56,8 @@ session_changes_enabled = false
 
 **Intended Behavior and Extension Lifecycle Design Contract:**
 
-- **Current Implementation Boundary:** Phase 01 server configuration and extension lifecycle implementation is recorded and administratively marked DONE per user direction; technical acceptance remains incomplete pending remediation of Cycle 3 code review findings (specifically around serialized effective directory changes, cleanup conflict reporting, in-flight worker buffer draining, non-destructive workspace preflight, and concurrent config writer races). Enabling this setting currently manages the extension file and in-memory service gate, but **does not yet provide operational tool-event capture or comparison** until the Phase 02 per-file engine backend cutover lands (Phase 04 subsequently supplies the Settings UI toggle and end-to-end qualification).
-- **Default Off:** The setting defaults to `false`. When disabled, the server allocates no baseline buffers or temporary directory payloads, and returns HTTP 503 `TargetUnavailable` (`"Session changes service is disabled"`) on public or private session changes routes.
+- **Current Implementation Boundary:** Phase 01 (server configuration and managed extension lifecycle), Phase 02 (lightweight per-file capture engine and lazy comparison), Phase 03 (standalone tool-event producer asset `omp-session-changes.ts`), and Phase 04 (target-server Settings UI toggle, trigger gating, and modal isolation) are implemented.
+- **Default Off:** The setting defaults to `false`. When disabled, the server allocates no baseline buffers or temporary directory payloads, and returns HTTP 503 `StatusCode::SERVICE_UNAVAILABLE` with wire error code `trackingDisabled` (`"Session changes tracking is disabled on this server"`) on public or private session changes routes.
 - **Enabling (`session_changes_enabled = true`):**
   - Automatically installs or upgrades the dedicated managed OMP extension asset into `<agent_dir>/extensions/dam-hopper-session-changes.ts` using atomic writes (via temporary file `.dam-hopper-sc-*.tmp` and `sync_all`) and SHA-256 header verification.
   - Activates the in-memory service lifecycle gate (`state.session_changes.enable()`).
@@ -74,7 +74,13 @@ session_changes_enabled = false
   - Setting changes are reconciled across server startup (`startup_reconcile_session_changes`), config PUT updates (`PUT /api/config`), settings cache-clear and TOML import/recovery (`POST /api/settings/import-toml`), and workspace initialization or switching (`POST /api/workspace/init`, `POST /api/workspace/switch`).
 - **Independent Lifecycle:**
   - The Session Changes extension lifecycle is completely independent from the Agent Status extension (`extensions/dam-hopper-agent-status.ts`) and native hooks (Codex, Claude). Toggling Session Changes has no effect on Agent Status or notification policies.
-
+- **Operator UI Toggle (`SettingsPage.tsx`):**
+  - Binds to `targetOwner` from the selected Settings Target Server (`settingsProfileId`).
+  - Updates `config.server.sessionChangesEnabled` via `useConfig(targetOwner)` and `useUpdateConfig(targetOwner)`, preserving all other server configuration fields (`[key: string]: unknown`).
+  - Fences mutations with captured `{ actionProfileId, actionGeneration }` against concurrent target switching (switching targets during in-flight mutation clears the captured target's query cache, but does not purge the switched-to target until that server is toggled or refreshed).
+  - On success, invalidates config queries and cancels/removes all `session-changes` queries for that target owner.
+  - Surfaces an honest restart notice on enable (`Restart active OMP sessions to load the Session Changes extension`) and actionable errors on failure without optimistic local state.
+  - Terminal triggers across desktop `TabBar`, `ActiveTerminalRuntimeDisplay`, and mobile `MobileTerminalAccessoryBar` query `useSessionChangesEnabled(terminalOwner)` and hide/disable when tracking is disabled, loading, or unavailable.
 ### Deferred host-action scaffolding (inactive)
 
 The current release has no supported host-action configuration or client

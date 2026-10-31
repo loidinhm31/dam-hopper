@@ -1,6 +1,7 @@
 # Phase 04 — Settings toggle, UI semantics and integrated qualification
 
-Priority P1 · pending · 0.50d · owners: settings/UI implementer, sole integration finalizer, then docs owner.
+Priority P1 · DONE (2026-11-01 00:39:00 +07:00) · 0.50d · owners: settings/UI implementer, sole integration finalizer, then docs owner.
+Marked completed / DONE per user direction (2026-11-01 00:39:00 +07:00); 104/104 passing tests reported; Cycle 3 code review scored 8/10 with delayed target cleanup warning noted; technical acceptance incomplete pending live OMP and cross-layer qualification.
 Context: [approved design](../reports/design-261031-0949-lightweight-session-changes-refactor.md), [engine DTO/lazy contract](phase-02-lightweight-per-file-engine.md), [producer lifecycle](phase-03-omp-tool-event-extension.md).
 
 ## Existing UI and boundaries
@@ -58,10 +59,10 @@ Every task below has its own local compile/typecheck (or justified Markdown-only
 ]
 ```
 
-- [ ] <!-- evcrate-task:settings-toggle-owner-binding --> Add target-server Session Changes toggle with lifecycle feedback
-- [ ] <!-- evcrate-task:lazy-panel-and-triggers --> Migrate lazy viewer contracts and gate all terminal review triggers
-- [ ] <!-- evcrate-task:qualify-integrated-session-changes --> Qualify complete default-off lifecycle and live tool-observed review
-- [ ] <!-- evcrate-task:document-lightweight-session-changes --> Document first-touch semantics, resource bounds and operator lifecycle
+- [x] <!-- evcrate-task:settings-toggle-owner-binding --> Add target-server Session Changes toggle with lifecycle feedback
+- [x] <!-- evcrate-task:lazy-panel-and-triggers --> Migrate lazy viewer contracts and gate all terminal review triggers
+- [x] <!-- evcrate-task:qualify-integrated-session-changes --> Qualify complete default-off lifecycle and live tool-observed review
+- [x] <!-- evcrate-task:document-lightweight-session-changes --> Document first-touch semantics, resource bounds and operator lifecycle
 
 ## Ordered implementation
 

@@ -14,10 +14,31 @@ declare global {
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 // Mock queries helper getBoundApiClient
-let mockStatusToReturn: unknown = fixture.valid.statusSessionStartReady;
+let mockStatusToReturn: unknown = fixture.valid.statusToolObservedReady;
+
+vi.mock("@/api/connections", () => {
+  return {
+    getConnectionSnapshot: vi.fn((profileId: string) => ({
+      status: "connected",
+      owner: { profileId, generation: 1 },
+    })),
+    useConnectionSnapshot: vi.fn((profileId: string) => ({
+      status: "connected",
+      owner: { profileId, generation: 1 },
+    })),
+  };
+});
 
 vi.mock("@/api/queries", () => {
   return {
+    resolveTargetOwner: vi.fn((owner?: unknown) =>
+      typeof owner === "string" ? { profileId: owner, generation: 1 } : owner ?? undefined,
+    ),
+    useConfig: vi.fn(() => ({
+      data: { server: { sessionChangesEnabled: true } },
+      isLoading: false,
+      error: null,
+    })),
     getBoundApiClient: vi.fn().mockImplementation((owner: ConnectionRef) => {
       return {
         transport: {
@@ -32,11 +53,7 @@ vi.mock("@/api/queries", () => {
               return fixture.valid.fileDetail;
             }
             if (channel === "sessionChanges:refresh") {
-              return fixture.valid.statusSessionStartReady.comparison;
-            }
-            if (channel === "sessionChanges:fromNow") {
-              mockStatusToReturn = fixture.valid.statusFromNowReady;
-              return fixture.valid.statusFromNowReady;
+              return fixture.valid.filePage.comparison;
             }
             throw new Error(`Unhandled mock channel: ${channel}`);
           }),
@@ -75,7 +92,7 @@ describe("SessionChangesPanel Browser Tests", () => {
   });
 
   it("renders ready state with files list and Monaco diff viewer", async () => {
-    mockStatusToReturn = fixture.valid.statusSessionStartReady;
+    mockStatusToReturn = fixture.valid.statusToolObservedReady;
     let closed = false;
 
     await act(async () => {
@@ -132,7 +149,9 @@ describe("SessionChangesPanel Browser Tests", () => {
 
     await vi.waitFor(() => {
       expect(container.textContent).toContain("No OMP Session Baseline");
-      expect(container.textContent).toContain("When an OMP agent executes commands in this terminal");
+      expect(container.textContent).toContain(
+        "Supported tools (edit, write) capture original file states on first touch",
+      );
     });
   });
 });

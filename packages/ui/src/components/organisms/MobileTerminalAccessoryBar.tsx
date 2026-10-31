@@ -31,6 +31,7 @@ import { MobileTerminalNativeKeyboardInput } from "@/components/organisms/Mobile
 import { MobileTerminalSpecialKeys } from "@/components/organisms/MobileTerminalSpecialKeys.js";
 import { TerminalAccessoryControls } from "@/components/organisms/TerminalAccessoryControls.js";
 import { TerminalFloatingControlShell } from "@/components/organisms/TerminalFloatingControlShell.js";
+import { useSessionChangesEnabled } from "@/api/session-changes-queries.js";
 
 const PANEL_SAFE_AREA_RIGHT = "max(0.5rem, var(--safe-area-right, 0px))";
 const PANEL_MAX_HEIGHT =
@@ -71,7 +72,7 @@ export function MobileTerminalAccessoryBar({
   );
   const safeSessionId = parsedRef?.id ?? sessionId;
   const ownerProfileId = parsedRef?.profileId ?? profileId;
-
+  const { enabled: sessionChangesEnabled } = useSessionChangesEnabled(ownerProfileId);
   const writeTerminal = useCallback(
     (sequence: string) => {
       if (!sequence) return;
@@ -261,7 +262,7 @@ export function MobileTerminalAccessoryBar({
           keysPanelId={keysPanelId}
           keyboardPanelId={keyboardPanelId}
           onOpenSessionChanges={
-            onOpenSessionChanges
+            onOpenSessionChanges && sessionChangesEnabled
               ? () => onOpenSessionChanges(sessionId)
               : undefined
           }

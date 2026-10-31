@@ -16,6 +16,8 @@ describe("session-changes-types", () => {
   it("decodes valid status vectors and passes invariant validation", () => {
     const valid = fixture.valid;
     const statusKeys = [
+      "statusToolObservedReady",
+      "statusToolObservedIncomplete",
       "statusSessionStartInitializing",
       "statusSessionStartReady",
       "statusSessionStartIncomplete",

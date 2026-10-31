@@ -10,7 +10,13 @@ import {
 } from "@tanstack/react-query";
 import { type ConnectionRef } from "./ownership";
 import { profileQueryKey } from "./query-client";
-import { getBoundApiClient } from "./queries";
+import {
+  getBoundApiClient,
+  useConfig,
+  resolveTargetOwner,
+  type OwnerInput,
+} from "./queries";
+import { useConnectionSnapshot } from "./connections";
 import { SessionChangesClient } from "./session-changes-client";
 import type {
   Comparison,
@@ -44,9 +50,10 @@ export const sessionChangesQueryKeys = {
     ompSessionId: string,
     serverEpoch: string,
     baselineId: string,
-    comparisonRevision: string,
+    comparisonRevision?: string | null,
     cursor: string | null = null,
     limit: number | null = null,
+    rootId: string = ".",
   ) =>
     profileQueryKey(
       owner,
@@ -57,9 +64,10 @@ export const sessionChangesQueryKeys = {
       ompSessionId,
       serverEpoch,
       baselineId,
-      comparisonRevision,
+      comparisonRevision ?? "initial",
       cursor,
       limit,
+      rootId,
     ),
   fileDetail: (
     owner: ConnectionRef,
@@ -70,6 +78,7 @@ export const sessionChangesQueryKeys = {
     baselineId: string,
     comparisonRevision: string,
     fileId: string,
+    rootId: string = ".",
   ) =>
     profileQueryKey(
       owner,
@@ -82,6 +91,7 @@ export const sessionChangesQueryKeys = {
       baselineId,
       comparisonRevision,
       fileId,
+      rootId,
     ),
 };
 
@@ -125,6 +135,7 @@ export function useSessionChangesStatus(
         terminalId,
         terminalIncarnation,
         ompSessionId,
+        rootId,
         expectedServerEpoch: options?.expectedServerEpoch,
         signal,
       });
@@ -141,9 +152,10 @@ export function useSessionChangesFiles(
   ompSessionId: string,
   serverEpoch: string,
   baselineId: string,
-  comparisonRevision: string,
+  comparisonRevision?: string | null,
   cursor: string | null = null,
   limit: number | null = null,
+  rootId: string = ".",
   options?: {
     enabled?: boolean;
   },
@@ -155,7 +167,6 @@ export function useSessionChangesFiles(
     Boolean(ompSessionId) &&
     Boolean(serverEpoch) &&
     Boolean(baselineId) &&
-    Boolean(comparisonRevision) &&
     (options?.enabled ?? true);
 
   return useQuery<FilePage, Error>({
@@ -170,6 +181,7 @@ export function useSessionChangesFiles(
           comparisonRevision,
           cursor,
           limit,
+          rootId,
         )
       : ["session-changes", "files"],
     queryFn: async ({ signal }) => {
@@ -179,6 +191,7 @@ export function useSessionChangesFiles(
         terminalId,
         terminalIncarnation,
         ompSessionId,
+        rootId,
         serverEpoch,
         baselineId,
         comparisonRevision,
@@ -201,6 +214,7 @@ export function useSessionChangesFileDetail(
   baselineId: string,
   comparisonRevision: string,
   fileId: string,
+  rootId: string = ".",
   options?: {
     enabled?: boolean;
   },
@@ -227,6 +241,7 @@ export function useSessionChangesFileDetail(
           baselineId,
           comparisonRevision,
           fileId,
+          rootId,
         )
       : ["session-changes", "file"],
     queryFn: async ({ signal }) => {
@@ -236,6 +251,7 @@ export function useSessionChangesFileDetail(
         terminalId,
         terminalIncarnation,
         ompSessionId,
+        rootId,
         serverEpoch,
         baselineId,
         comparisonRevision,
@@ -258,6 +274,7 @@ export function useSessionChangesRefreshMutation(owner: ConnectionRef | undefine
       terminalId: string;
       terminalIncarnation: string;
       ompSessionId: string;
+      rootId?: string;
       serverEpoch: string;
       baselineId: string;
       requestId: string;
@@ -276,6 +293,7 @@ export function useSessionChangesRefreshMutation(owner: ConnectionRef | undefine
           vars.terminalId,
           vars.terminalIncarnation,
           vars.ompSessionId,
+          vars.rootId ?? ".",
         ),
       });
       void qc.invalidateQueries({
@@ -285,40 +303,23 @@ export function useSessionChangesRefreshMutation(owner: ConnectionRef | undefine
   });
 }
 
-export function useSessionChangesFromNowMutation(owner: ConnectionRef | undefined) {
-  const qc = useQueryClient();
-
-  return useMutation<
-    Status,
-    Error,
-    {
-      terminalId: string;
-      terminalIncarnation: string;
-      ompSessionId: string;
-      rootId: string;
-      requestId: string;
-      expectedServerEpoch?: string;
-    }
-  >({
-    mutationFn: async (params) => {
-      if (!owner) throw new Error("ConnectionRef owner is required");
-      const client = getClient(owner);
-      return client.startFromNow(params);
-    },
-    onSuccess: (_, vars) => {
-      if (!owner) return;
-      void qc.invalidateQueries({
-        queryKey: sessionChangesQueryKeys.status(
-          owner,
-          vars.terminalId,
-          vars.terminalIncarnation,
-          vars.ompSessionId,
-          vars.rootId,
-        ),
-      });
-      void qc.invalidateQueries({
-        queryKey: sessionChangesQueryKeys.all(owner),
-      });
-    },
-  });
+export function useSessionChangesEnabled(owner?: OwnerInput): {
+  enabled: boolean;
+  isLoading: boolean;
+  error: unknown;
+} {
+  const resolved = resolveTargetOwner(owner);
+  const { data: config, isLoading, error } = useConfig(resolved);
+  const snapshot = useConnectionSnapshot(resolved?.profileId ?? "");
+  const isConnected = resolved
+    ? snapshot?.status === "connected" &&
+      snapshot.owner.generation === resolved.generation
+    : true;
+  return {
+    enabled: Boolean(
+      !isLoading && !error && config?.server?.sessionChangesEnabled && isConnected,
+    ),
+    isLoading,
+    error,
+  };
 }

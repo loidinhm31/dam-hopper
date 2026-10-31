@@ -1884,9 +1884,18 @@ export interface WorkspaceConfig {
   root: string;
 }
 
+export interface ServerConfig {
+  sessionDbPath?: string;
+  sessionBufferTtlHours?: number;
+  sessionChangesEnabled?: boolean;
+  [key: string]: unknown;
+}
+
 export interface DamHopperConfig {
   workspace: WorkspaceConfig;
   projects: ProjectConfig[];
+  server?: ServerConfig;
+  [key: string]: unknown;
 }
 
 export interface GitStatus {

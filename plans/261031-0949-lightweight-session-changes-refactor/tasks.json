@@ -501,10 +501,10 @@
       ],
       "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-04-settings-toggle-and-ui-qualification.md",
       "spec_fingerprint": "960f2e4836d1fcd90223f4f1d08e4bc9a9dc31c01d5b36a8aab9fcf4f89ba2f5",
-      "status": "pending",
-      "owner": null,
-      "reason": "Reset to pending after review revision R1-R4",
-      "evidence": null,
+      "status": "completed",
+      "owner": "settings/UI implementer",
+      "reason": "Marked completed per user direction.",
+      "evidence": "Marked completed per user direction (2026-11-01 00:39:00 +07:00). SettingsPage test suite passing (17/17 passed; pnpm --filter @dam-hopper/ui test src/components/pages/SettingsPage.test.tsx). Typecheck clean (pnpm --filter @dam-hopper/ui build). Cycle 3 code review (plans/reports/code-review-261031-2338-phase-04-cycle-3.md) noted delayed target-switch cleanup warning.",
       "native_bindings": [],
       "history": [
         {
@@ -524,6 +524,12 @@
           "event": "reopened",
           "owner": null,
           "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T17:39:00.000Z",
+          "event": "completed",
+          "owner": "settings/UI implementer",
+          "reason": "Phase 04 settings-toggle-owner-binding marked completed per user direction."
         }
       ]
     },
@@ -571,10 +577,10 @@
       ],
       "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-04-settings-toggle-and-ui-qualification.md",
       "spec_fingerprint": "529e05d6079fe49a683fb55404cbc24bb9d0b3036ce1d52f5d180a3ac02261c5",
-      "status": "pending",
-      "owner": null,
-      "reason": "Reset to pending after review revision R1-R4",
-      "evidence": null,
+      "status": "completed",
+      "owner": "settings/UI implementer",
+      "reason": "Marked completed per user direction.",
+      "evidence": "Marked completed per user direction (2026-11-01 00:39:00 +07:00). API and query unit tests passing (72/72 passed; pnpm --filter @dam-hopper/ui test src/api/session-changes-types.test.ts src/api/session-changes-client.test.ts src/api/session-changes-queries.test.tsx src/api/ws-transport.test.ts). Component browser tests passing (8/8 passed; browser-tests/session-changes-panel.browser.tsx, browser-tests/session-changes-host.browser.tsx, browser-tests/session-changes-viewer.browser.tsx). Rust wire types test passing (7/7 passed; cargo test --manifest-path server/Cargo.toml session_changes::types). UI build clean. Cycle 3 code review scored 8/10 (plans/reports/code-review-261031-2338-phase-04-cycle-3.md).",
       "native_bindings": [],
       "history": [
         {
@@ -594,6 +600,12 @@
           "event": "reopened",
           "owner": null,
           "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T17:39:00.000Z",
+          "event": "completed",
+          "owner": "settings/UI implementer",
+          "reason": "Phase 04 lazy-panel-and-triggers marked completed per user direction."
         }
       ]
     },
@@ -627,10 +639,10 @@
       ],
       "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-04-settings-toggle-and-ui-qualification.md",
       "spec_fingerprint": "6854a304e4b3bec4536fdd697002fb504ba4c556b7a8de538d6ff6c50d634a35",
-      "status": "pending",
-      "owner": null,
-      "reason": "Reset to pending after review revision R1-R4",
-      "evidence": null,
+      "status": "completed",
+      "owner": "sole integration finalizer",
+      "reason": "Administratively closed per user direction; technical acceptance incomplete.",
+      "evidence": "Marked completed per user direction (2026-11-01 00:39:00 +07:00); administratively closed with technical acceptance incomplete. 104/104 passing tests reported across focused unit, browser component, and wire fixture suites; Cycle 3 code review (plans/reports/code-review-261031-2338-phase-04-cycle-3.md) scored 8/10. Live installed OMP lifecycle journey, no-viewer I/O measurements, coherent cross-layer suites, Tauri host launch, and human visual review remain open qualification gates.",
       "native_bindings": [],
       "history": [
         {
@@ -650,6 +662,12 @@
           "event": "reopened",
           "owner": null,
           "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T17:39:00.000Z",
+          "event": "completed",
+          "owner": "sole integration finalizer",
+          "reason": "Phase 04 qualify-integrated-session-changes administratively closed per user direction; technical acceptance incomplete."
         }
       ]
     },
@@ -685,10 +703,10 @@
       ],
       "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-04-settings-toggle-and-ui-qualification.md",
       "spec_fingerprint": "1acfe76e4311d4bfcafe63dc06115bfb5eb7ddda4cefc11279440a86a19df17a",
-      "status": "pending",
-      "owner": null,
-      "reason": "Reset to pending after review revision R1-R4",
-      "evidence": null,
+      "status": "completed",
+      "owner": "docs owner",
+      "reason": "Administratively closed per user direction; documentation synchronization in progress across docs; awaiting final output and review.",
+      "evidence": "Marked completed per user direction (2026-11-01 00:39:00 +07:00); administrative closure recorded. Documentation updates delegated to Phase04DocsManager across docs/code-standards.md, docs/frontend-components.md, docs/system-architecture.md, docs/architecture/preferences-settings-and-host-resources.md, docs/configuration/server-runtime-settings.md, docs/CHANGELOG.md, docs/codebase-summary.md; roadmap updated in docs/project-roadmap.md. In progress, awaiting final agent output and review.",
       "native_bindings": [],
       "history": [
         {
@@ -708,6 +726,12 @@
           "event": "reopened",
           "owner": null,
           "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T17:39:00.000Z",
+          "event": "completed",
+          "owner": "docs owner",
+          "reason": "Phase 04 document-lightweight-session-changes marked completed per user direction."
         }
       ]
     }

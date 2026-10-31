@@ -187,7 +187,7 @@ export function ReadonlyMonacoDiffViewer({
         </h4>
         <p className="text-xs max-w-md">
           {file.change === "unknown"
-            ? "Historical presence is unknown (file was excluded or unproven at session start). Cannot display text diff."
+            ? "Historical presence is unknown (file was excluded or unproven at first touch). Cannot display text diff."
             : "Binary or non-UTF8 file content cannot be displayed in text viewer."}
         </p>
         {file.reasons.length > 0 && (

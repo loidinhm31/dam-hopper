@@ -3,10 +3,13 @@
  * Guarantees keyboard and focus isolation from active terminals underneath.
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import type { ConnectionRef } from "@/api/ownership";
+import { useSessionChangesEnabled } from "@/api/session-changes-queries";
+import { profileQueryKey } from "@/api/query-client";
 import { SessionChangesPanel } from "./SessionChangesPanel";
 export interface SessionChangesHostProps {
   isOpen: boolean;
@@ -28,11 +31,37 @@ export function SessionChangesHost({
   onClose,
 }: SessionChangesHostProps) {
   const [isMaximized, setIsMaximized] = useState(false);
+  const qc = useQueryClient();
+  const { enabled: isEnabled, isLoading } = useSessionChangesEnabled(
+    owner ?? undefined,
+  );
 
-  if (!isOpen || !owner || !terminalId || !terminalIncarnation || !ompSessionId) {
+  useEffect(() => {
+    if (isOpen && owner && !isLoading && !isEnabled) {
+      void qc.cancelQueries({
+        queryKey: profileQueryKey(owner, "session-changes"),
+      });
+      qc.removeQueries({
+        queryKey: profileQueryKey(owner, "session-changes"),
+      });
+      onClose();
+    }
+  }, [isOpen, owner, isLoading, isEnabled, qc, onClose]);
+
+  if (
+    !isOpen ||
+    !owner ||
+    !terminalId ||
+    !terminalIncarnation ||
+    !ompSessionId
+  ) {
     return null;
   }
 
+  // Fail-closed: require authoritative ON and connected owner before mounting panel
+  if (isLoading || !isEnabled) {
+    return null;
+  }
   return (
     <DialogPrimitive.Root open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogPrimitive.Portal>
@@ -69,6 +98,7 @@ export function SessionChangesHost({
             Session Changes Review
           </DialogPrimitive.Title>
           <SessionChangesPanel
+            key={`${owner.profileId}:${owner.generation}:${terminalId}:${terminalIncarnation}:${ompSessionId}:${rootId}`}
             owner={owner}
             terminalId={terminalId}
             terminalIncarnation={terminalIncarnation}

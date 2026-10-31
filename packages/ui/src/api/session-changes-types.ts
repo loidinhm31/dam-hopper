@@ -54,7 +54,7 @@ export type StatusState =
   | "incomplete"
   | "unavailable"
   | "missing";
-export type Origin = "sessionStart" | "fromNow";
+export type Origin = "toolObserved" | "sessionStart" | "fromNow";
 export type Acknowledgment = "pending" | "received" | "notApplicable";
 
 export type FileChangeKind =
@@ -66,6 +66,7 @@ export type FileChangeKind =
 export type Presence = "present" | "absent" | "unknown";
 export type Provenance =
   | "captured"
+  | "absentAtFirstTouch"
   | "absentInVerifiedDirectory"
   | "excludedAtCapture"
   | "unproven";
@@ -90,8 +91,8 @@ export type ErrorCode =
   | "deadline"
   | "refreshRequired"
   | "fileMissing"
+  | "trackingDisabled"
   | "responseLimit";
-
 export interface Coverage {
   readonly state: CoverageState;
   readonly inventoryComplete: boolean;
@@ -200,19 +201,11 @@ export interface RetainedSessionList {
   readonly sessions: readonly RetainedSessionEntry[];
 }
 
-export interface FromNowRequest {
-  readonly version: 1;
-  readonly terminalIncarnation: string;
-  readonly ompSessionId: string;
-  readonly rootId: string;
-  readonly requestId: string;
-  readonly expectedServerEpoch?: string | null;
-}
-
 export interface RefreshRequest {
   readonly version: 1;
   readonly terminalIncarnation: string;
   readonly ompSessionId: string;
+  readonly rootId: string;
   readonly serverEpoch: string;
   readonly baselineId: string;
   readonly requestId: string;
@@ -268,7 +261,30 @@ export function validateStatusInvariants(status: Status): void {
 
   const { origin, state, acknowledgment } = status;
 
-  if (origin === "sessionStart") {
+  if (origin === "toolObserved") {
+    if (acknowledgment !== "notApplicable") {
+      throw new Error(
+        `toolObserved requires notApplicable acknowledgment, got ${acknowledgment}`
+      );
+    }
+    if (state === "ready") {
+      if (!status.baselineId || status.capturedAtMs == null) {
+        throw new Error("toolObserved ready requires baselineId and capturedAtMs");
+      }
+      if (status.baselineCoverage?.state !== "complete") {
+        throw new Error("toolObserved ready requires complete baselineCoverage");
+      }
+    } else if (state === "incomplete") {
+      if (!status.baselineId || status.capturedAtMs == null) {
+        throw new Error("toolObserved incomplete requires baselineId and capturedAtMs");
+      }
+      if (status.baselineCoverage?.state !== "incomplete") {
+        throw new Error("toolObserved incomplete requires incomplete baselineCoverage");
+      }
+    } else if (state !== "unavailable" && state !== "missing") {
+      throw new Error(`Invalid state for toolObserved: ${state}`);
+    }
+  } else if (origin === "sessionStart") {
     if (state === "initializing") {
       if (acknowledgment !== "pending") {
         throw new Error(

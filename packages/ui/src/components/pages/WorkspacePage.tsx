@@ -697,10 +697,19 @@ export default function WorkspacePage() {
       const owner = captureConnection(profileId);
       if (!owner) return;
 
+      const client = getApi(owner);
+      let isEnabled = false;
+      try {
+        const cfg = await client.config.get();
+        isEnabled = Boolean(cfg.server?.sessionChangesEnabled);
+      } catch {
+        return;
+      }
+      if (!isEnabled) return;
+
       let incarnation: number | undefined = sessionMap.get(terminalOrSessionId)?.incarnation;
       if (incarnation == null) {
         try {
-          const client = getApi(owner);
           const detailed = await client.terminal.listDetailed();
           const currentOwner = captureConnection(profileId);
           if (!currentOwner || currentOwner.generation !== owner.generation) {
@@ -721,8 +730,8 @@ export default function WorkspacePage() {
         return;
       }
 
-      const currentOwner = captureConnection(profileId);
-      if (!currentOwner || currentOwner.generation !== owner.generation) {
+      const finalOwner = captureConnection(profileId);
+      if (!finalOwner || finalOwner.generation !== owner.generation) {
         return;
       }
 
@@ -733,7 +742,7 @@ export default function WorkspacePage() {
       const ompSessionId = row.agentSessionId;
       setSessionChangesState({
         isOpen: true,
-        owner,
+        owner: finalOwner,
         terminalId,
         terminalIncarnation: String(incarnation),
         ompSessionId,
@@ -1281,37 +1290,37 @@ export default function WorkspacePage() {
     () =>
       addKeyboardShortcutListener(
         window,
-        () => projectPanelShortcut,
+        () => (sessionChangesState.isOpen ? "" : projectPanelShortcut),
         () => activateTerminalPanelShortcut("project"),
       ),
-    [activateTerminalPanelShortcut, projectPanelShortcut],
+    [activateTerminalPanelShortcut, projectPanelShortcut, sessionChangesState.isOpen],
   );
   useEffect(
     () =>
       addKeyboardShortcutListener(
         window,
-        () => gitPanelShortcut,
+        () => (sessionChangesState.isOpen ? "" : gitPanelShortcut),
         () => activateTerminalPanelShortcut("git"),
       ),
-    [activateTerminalPanelShortcut, gitPanelShortcut],
+    [activateTerminalPanelShortcut, gitPanelShortcut, sessionChangesState.isOpen],
   );
   useEffect(
     () =>
       addKeyboardShortcutListener(
         window,
-        () => portsPanelShortcut,
+        () => (sessionChangesState.isOpen ? "" : portsPanelShortcut),
         () => activateTerminalPanelShortcut("ports"),
       ),
-    [activateTerminalPanelShortcut, portsPanelShortcut],
+    [activateTerminalPanelShortcut, portsPanelShortcut, sessionChangesState.isOpen],
   );
   useEffect(
     () =>
       addKeyboardShortcutListener(
         window,
-        () => fleetTerminalShortcut,
+        () => (sessionChangesState.isOpen ? "" : fleetTerminalShortcut),
         () => activateTerminalPanelShortcut("terminals"),
       ),
-    [activateTerminalPanelShortcut, fleetTerminalShortcut],
+    [activateTerminalPanelShortcut, fleetTerminalShortcut, sessionChangesState.isOpen],
   );
 
   const handleRevealActiveFile = useCallback(() => {
@@ -1406,19 +1415,25 @@ export default function WorkspacePage() {
     () =>
       addKeyboardShortcutListener(
         window,
-        () => useSettingsStore.getState().terminalWorkspaceShortcut,
+        () =>
+          sessionChangesState.isOpen
+            ? ""
+            : useSettingsStore.getState().terminalWorkspaceShortcut,
         toggleWorkspaceMode,
       ),
-    [toggleWorkspaceMode],
+    [toggleWorkspaceMode, sessionChangesState.isOpen],
   );
   useEffect(
     () =>
       addKeyboardShortcutListener(
         window,
-        () => useSettingsStore.getState().revealActiveFileShortcut,
+        () =>
+          sessionChangesState.isOpen
+            ? ""
+            : useSettingsStore.getState().revealActiveFileShortcut,
         handleRevealActiveFile,
       ),
-    [handleRevealActiveFile],
+    [handleRevealActiveFile, sessionChangesState.isOpen],
   );
 
   const openWorkspaceFile = useCallback(

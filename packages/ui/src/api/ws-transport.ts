@@ -1678,11 +1678,13 @@ function channelToEndpoint(
         terminalId: string;
         terminalIncarnation: string;
         ompSessionId: string;
+        rootId?: string;
         expectedServerEpoch?: string;
       };
       const params = new URLSearchParams();
       params.set("terminalIncarnation", query.terminalIncarnation);
       params.set("ompSessionId", query.ompSessionId);
+      params.set("rootId", query.rootId ?? ".");
       if (query.expectedServerEpoch) {
         params.set("expectedServerEpoch", query.expectedServerEpoch);
       }
@@ -1691,26 +1693,12 @@ function channelToEndpoint(
         url: `/api/terminal/${encodeURIComponent(terminalId)}/session-changes/v1/status?${params.toString()}`,
       };
     }
-    case "sessionChanges:fromNow": {
-      const { terminalId, ...body } = data as {
-        terminalId: string;
-        terminalIncarnation: string;
-        ompSessionId: string;
-        rootId: string;
-        requestId: string;
-        expectedServerEpoch?: string;
-      };
-      return {
-        method: "POST",
-        url: `/api/terminal/${encodeURIComponent(terminalId)}/session-changes/v1/from-now`,
-        body: { version: 1, ...body },
-      };
-    }
     case "sessionChanges:refresh": {
       const { terminalId, ...body } = data as {
         terminalId: string;
         terminalIncarnation: string;
         ompSessionId: string;
+        rootId?: string;
         serverEpoch: string;
         baselineId: string;
         requestId: string;
@@ -1718,7 +1706,7 @@ function channelToEndpoint(
       return {
         method: "POST",
         url: `/api/terminal/${encodeURIComponent(terminalId)}/session-changes/v1/refresh`,
-        body: { version: 1, ...body },
+        body: { version: 1, rootId: body.rootId ?? ".", ...body },
       };
     }
     case "sessionChanges:files": {
@@ -1726,18 +1714,22 @@ function channelToEndpoint(
         terminalId: string;
         terminalIncarnation: string;
         ompSessionId: string;
+        rootId?: string;
         serverEpoch: string;
         baselineId: string;
-        comparisonRevision: string;
-        cursor?: string;
-        limit?: number;
+        comparisonRevision?: string | null;
+        cursor?: string | null;
+        limit?: number | null;
       };
       const params = new URLSearchParams();
       params.set("terminalIncarnation", query.terminalIncarnation);
       params.set("ompSessionId", query.ompSessionId);
+      params.set("rootId", query.rootId ?? ".");
       params.set("serverEpoch", query.serverEpoch);
       params.set("baselineId", query.baselineId);
-      params.set("comparisonRevision", query.comparisonRevision);
+      if (query.comparisonRevision) {
+        params.set("comparisonRevision", query.comparisonRevision);
+      }
       if (query.cursor) params.set("cursor", query.cursor);
       if (query.limit != null) params.set("limit", String(query.limit));
       return {
@@ -1751,6 +1743,7 @@ function channelToEndpoint(
         fileId: string;
         terminalIncarnation: string;
         ompSessionId: string;
+        rootId?: string;
         serverEpoch: string;
         baselineId: string;
         comparisonRevision: string;
@@ -1758,6 +1751,7 @@ function channelToEndpoint(
       const params = new URLSearchParams();
       params.set("terminalIncarnation", query.terminalIncarnation);
       params.set("ompSessionId", query.ompSessionId);
+      params.set("rootId", query.rootId ?? ".");
       params.set("serverEpoch", query.serverEpoch);
       params.set("baselineId", query.baselineId);
       params.set("comparisonRevision", query.comparisonRevision);

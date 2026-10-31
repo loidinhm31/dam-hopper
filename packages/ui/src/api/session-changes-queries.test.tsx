@@ -10,7 +10,7 @@ import {
   useSessionChangesFiles,
   useSessionChangesFileDetail,
   useSessionChangesRefreshMutation,
-  useSessionChangesFromNowMutation,
+  useSessionChangesEnabled,
 } from "./session-changes-queries";
 import fixture from "../../../../server/tests/fixtures/session-changes-wire.json";
 
@@ -32,9 +32,6 @@ vi.mock("./queries", () => {
             }
             if (channel === "sessionChanges:refresh") {
               return fixture.valid.statusSessionStartReady.comparison;
-            }
-            if (channel === "sessionChanges:fromNow") {
-              return fixture.valid.statusFromNowReady;
             }
             throw new Error(`Unhandled mock channel: ${channel}`);
           }),
@@ -93,6 +90,7 @@ describe("sessionChangesQueryKeys", () => {
       "1",
       "cur1",
       50,
+      ".",
     ]);
   });
 });
@@ -246,39 +244,39 @@ describe("session-changes React Query hooks", () => {
     expect(comp.changedFileCount).toBe(1);
   });
 
-  it("executes startFromNow mutation", async () => {
-    let mutateFn:
-      | ((params: {
-          terminalId: string;
-          terminalIncarnation: string;
-          ompSessionId: string;
-          rootId: string;
-          requestId: string;
-          expectedServerEpoch?: string;
-        }) => Promise<Status>)
-      | undefined;
+  it("fetches files page lazily without revision and passes rootId", async () => {
+    let capturedData: unknown = undefined;
 
     function TestConsumer() {
-      const m = useSessionChangesFromNowMutation(owner);
-      mutateFn = m.mutateAsync;
+      const q = useSessionChangesFiles(
+        owner,
+        "t1",
+        "1",
+        "s1",
+        "ep1",
+        "b1",
+        null,
+        null,
+        200,
+        "src",
+      );
+      if (q.isSuccess) {
+        capturedData = q.data;
+      }
       return null;
     }
 
     await act(async () => {
       root.render(
-        createElement(QueryClientProvider, { client: qc }, createElement(TestConsumer)),
+        createElement(
+          QueryClientProvider,
+          { client: qc },
+          createElement(TestConsumer),
+        ),
       );
     });
-
-    expect(mutateFn).toBeDefined();
-    const status = await mutateFn({
-      terminalId: "t1",
-      terminalIncarnation: "1",
-      ompSessionId: "s1",
-      rootId: ".",
-      requestId: "r2",
+    await vi.waitFor(() => {
+      expect(capturedData).toBeDefined();
     });
-
-    expect(status.origin).toBe("fromNow");
   });
 });

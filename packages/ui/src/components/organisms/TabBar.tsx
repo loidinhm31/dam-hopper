@@ -23,7 +23,7 @@ import {
 } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { TerminalTabInsertionZone } from "@/components/organisms/TerminalTabInsertionZone.js";
 import { TerminalCommitStatusChip } from "@/components/organisms/TerminalCommitStatusChip.js";
-
+import { useSessionChangesEnabled } from "@/api/session-changes-queries.js";
 export function splitActionToPaneDirection(action: "right" | "down") {
   return action === "right" ? "horizontal" : "vertical";
 }
@@ -224,6 +224,9 @@ export function TabBar({
   }, [activeTab, activeSessionId]);
   const agentStatus = useTerminalAgentStatus(activeRef ?? undefined);
   const isOmpSession = agentStatus?.agentKind === "omp" && Boolean(agentStatus.agentSessionId);
+  const { enabled: sessionChangesEnabled } = useSessionChangesEnabled(
+    activeRef?.profileId,
+  );
   function splitPane(action: "right" | "down") {
     const direction = splitActionToPaneDirection(action);
     if (direction === "horizontal") {
@@ -300,9 +303,8 @@ export function TabBar({
           />
         </div>
       ) : null}
-      {onOpenSessionChanges && activeSessionId && isOmpSession && (
+      {onOpenSessionChanges && activeSessionId && isOmpSession && sessionChangesEnabled && (
         <button
-          type="button"
           onClick={() => onOpenSessionChanges(activeSessionId)}
           title={`Review OMP session changes (${agentStatus.agentSessionId})`}
           aria-label="Review OMP session changes"

@@ -1,16 +1,19 @@
 /**
- * Accessible list of files modified since session start or from-now baseline.
+ * Accessible list of files modified since first touch by supported tools.
  */
 
-import React, { useEffect, useRef } from "react";
+import React, { useRef } from "react";
 import { cn } from "@/lib/utils";
 import type { FileRow, FileChangeKind } from "@/api/session-changes-types";
-import { FileCode, AlertTriangle } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 
 export interface SessionChangedFilesListProps {
   files: readonly FileRow[];
   selectedFileId: string | null;
   onSelectFile: (fileId: string) => void;
+  hasMore?: boolean;
+  onLoadMore?: () => void;
+  isLoadingMore?: boolean;
   className?: string;
 }
 
@@ -48,6 +51,9 @@ export function SessionChangedFilesList({
   files,
   selectedFileId,
   onSelectFile,
+  hasMore = false,
+  onLoadMore,
+  isLoadingMore = false,
   className,
 }: SessionChangedFilesListProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -140,6 +146,19 @@ export function SessionChangedFilesList({
           </div>
         );
       })}
+      {hasMore && onLoadMore && (
+        <div className="p-2 border-t border-[var(--color-border)] flex justify-center">
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={isLoadingMore}
+            className="px-2.5 py-1 text-xs rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors disabled:opacity-50 flex items-center gap-1.5"
+          >
+            {isLoadingMore && <Loader2 className="w-3 h-3 animate-spin" />}
+            <span>Load more changed files</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

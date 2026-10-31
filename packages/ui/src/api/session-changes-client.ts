@@ -50,10 +50,11 @@ export class SessionChangesClient {
   private handleError(err: unknown): never {
     if (err && typeof err === "object") {
       const errObj = err as Record<string, unknown>;
-      // Check if server returned typed ErrorBody
-      if (errObj.response && typeof errObj.response === "object") {
+      // Check if server returned typed ErrorBody (ApiRequestError.details or Axios-style response)
+      const errorPayload = errObj.details ?? errObj.response;
+      if (errorPayload && typeof errorPayload === "object") {
         try {
-          const body = decodeErrorBody(errObj.response);
+          const body = decodeErrorBody(errorPayload);
           throw new SessionChangesClientError(
             body.reason,
             body.code,
@@ -87,6 +88,7 @@ export class SessionChangesClient {
     terminalId: string;
     terminalIncarnation: string;
     ompSessionId: string;
+    rootId?: string;
     expectedServerEpoch?: string;
     signal?: AbortSignal;
   }): Promise<Status> {
@@ -102,31 +104,11 @@ export class SessionChangesClient {
     }
   }
 
-  public async startFromNow(params: {
-    terminalId: string;
-    terminalIncarnation: string;
-    ompSessionId: string;
-    rootId: string;
-    requestId: string;
-    expectedServerEpoch?: string;
-    signal?: AbortSignal;
-  }): Promise<Status> {
-    try {
-      const res = await this.apiClient.transport.invoke<unknown>(
-        "sessionChanges:fromNow",
-        params,
-        params.signal ? { signal: params.signal } : undefined,
-      );
-      return decodeStatus(res);
-    } catch (err) {
-      this.handleError(err);
-    }
-  }
-
   public async refreshComparison(params: {
     terminalId: string;
     terminalIncarnation: string;
     ompSessionId: string;
+    rootId?: string;
     serverEpoch: string;
     baselineId: string;
     requestId: string;
@@ -148,11 +130,12 @@ export class SessionChangesClient {
     terminalId: string;
     terminalIncarnation: string;
     ompSessionId: string;
+    rootId?: string;
     serverEpoch: string;
     baselineId: string;
-    comparisonRevision: string;
-    cursor?: string;
-    limit?: number;
+    comparisonRevision?: string | null;
+    cursor?: string | null;
+    limit?: number | null;
     signal?: AbortSignal;
   }): Promise<FilePage> {
     try {
@@ -171,6 +154,7 @@ export class SessionChangesClient {
     terminalId: string;
     terminalIncarnation: string;
     ompSessionId: string;
+    rootId?: string;
     serverEpoch: string;
     baselineId: string;
     comparisonRevision: string;

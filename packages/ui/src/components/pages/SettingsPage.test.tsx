@@ -6,10 +6,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "./SettingsPage.js";
 import { useWorkbenchSelectionsStore } from "@/stores/workbench-selections.js";
 import type * as ServerConfigModule from "@/api/server-config.js";
+import type { ConnectionRef } from "@/api/ownership.js";
+import type { DamHopperConfig } from "@/api/client.js";
 
 const mockExportMutate = vi.fn();
 const mockImportMutate = vi.fn();
-
+const mockConfigQuery = vi.fn((_owner?: ConnectionRef) => ({
+  data: {
+    workspace: { name: "test-workspace", root: "." },
+    projects: [],
+    server: { sessionChangesEnabled: false },
+  } as DamHopperConfig | undefined,
+  isLoading: false,
+  error: null,
+}));
+const mockUpdateConfigMutate = vi.fn();
+const mockUpdateConfigMutation = vi.fn((owner?: ConnectionRef) => ({
+  mutateAsync: (...args: [DamHopperConfig]) =>
+    mockUpdateConfigMutate(owner, ...args),
+  isPending: false,
+  error: null,
+}));
 const mockProfiles = [
   {
     id: "profile-1",
@@ -40,20 +57,8 @@ vi.mock("@/api/server-config.js", async (importOriginal) => {
   };
 });
 vi.mock("@/api/queries.js", () => ({
-  useConfig: () => ({
-    data: {
-      workspace: { name: "test-workspace", root: "." },
-      projects: [],
-      server: {},
-    },
-    isLoading: false,
-    error: null,
-  }),
-  useUpdateConfig: () => ({
-    mutateAsync: vi.fn(),
-    isPending: false,
-    error: null,
-  }),
+  useConfig: (owner?: ConnectionRef) => mockConfigQuery(owner),
+  useUpdateConfig: (owner?: ConnectionRef) => mockUpdateConfigMutation(owner),
   useClearCache: () => ({
     mutateAsync: vi.fn(),
     isPending: false,
@@ -369,6 +374,7 @@ describe("SettingsPage accordion collapse behavior", () => {
     "Keyboard Shortcuts",
     "Usage insights",
     "Terminal Idle Suspend",
+    "Session Changes",
     "Global Settings",
     "Workspace Config",
     "Maintenance",
@@ -477,5 +483,275 @@ describe("SettingsPage accordion collapse behavior", () => {
     expect(wsPanel?.hasAttribute("hidden")).toBe(false);
     expect(maintenanceBtn?.getAttribute("aria-expanded")).toBe("true");
     expect(maintPanel?.hasAttribute("hidden")).toBe(false);
+  });
+});
+
+describe("SettingsPage Session Changes toggle integration", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    mockUpdateConfigMutate.mockReset();
+    mockUpdateConfigMutate.mockResolvedValue({
+      workspace: { name: "test-workspace", root: "." },
+      projects: [],
+      server: { sessionChangesEnabled: true },
+    });
+    mockConfigQuery.mockReset();
+    mockConfigQuery.mockImplementation((owner?: ConnectionRef) => ({
+      data: {
+        workspace: { name: "test-workspace", root: "." },
+        projects: [],
+        server: {
+          sessionChangesEnabled: owner?.profileId === "profile-1",
+        },
+      },
+      isLoading: false,
+      error: null,
+    }));
+    useWorkbenchSelectionsStore.getState().setSettingsProfileId(null);
+    useWorkbenchSelectionsStore.getState().setPreferencesProfileId(null);
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+    vi.restoreAllMocks();
+  });
+
+  async function expandSessionChangesSection() {
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]"),
+    );
+    const sessionChangesBtn = buttons.find((b) =>
+      b.textContent?.includes("Session Changes"),
+    );
+    expect(sessionChangesBtn).toBeTruthy();
+    await act(async () => {
+      sessionChangesBtn?.click();
+    });
+  }
+
+  it("reflects server.sessionChangesEnabled and defaults visually OFF until authoritative config is available", async () => {
+    mockConfigQuery.mockReturnValueOnce({
+      data: undefined,
+      isLoading: true,
+      error: null,
+    });
+
+    act(() => {
+      root.render(<SettingsPage />);
+    });
+    await expandSessionChangesSection();
+
+    let toggle = container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Toggle Session Changes tracking"]',
+    );
+    expect(toggle).toBeTruthy();
+    expect(toggle?.getAttribute("aria-checked")).toBe("false");
+    expect(toggle?.hasAttribute("disabled")).toBe(true);
+
+    mockConfigQuery.mockReturnValueOnce({
+      data: {
+        workspace: { name: "test-workspace", root: "." },
+        projects: [],
+        server: { sessionChangesEnabled: true },
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    act(() => {
+      root.render(<SettingsPage />);
+    });
+    await expandSessionChangesSection();
+
+    toggle = container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Toggle Session Changes tracking"]',
+    );
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
+    expect(toggle?.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("disables switch when target owner profile is not ready", async () => {
+    useWorkbenchSelectionsStore
+      .getState()
+      .setSettingsProfileId("unknown-profile-999");
+
+    act(() => {
+      root.render(<SettingsPage />);
+    });
+    await expandSessionChangesSection();
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Toggle Session Changes tracking"]',
+    );
+    expect(toggle).toBeTruthy();
+    expect(toggle?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("toggling ON calls updateConfig with sessionChangesEnabled: true and displays restart notice", async () => {
+    mockConfigQuery.mockReturnValue({
+      data: {
+        workspace: { name: "test-workspace", root: "." },
+        projects: [],
+        server: { sessionChangesEnabled: false, sessionDbPath: "custom.db" },
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    act(() => {
+      root.render(<SettingsPage />);
+    });
+    await expandSessionChangesSection();
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Toggle Session Changes tracking"]',
+    );
+    expect(toggle?.getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => {
+      toggle?.click();
+    });
+
+    expect(mockUpdateConfigMutate).toHaveBeenCalledTimes(1);
+    const updatedConfig = mockUpdateConfigMutate.mock.calls[0][1] as DamHopperConfig;
+    expect(updatedConfig.server?.sessionChangesEnabled).toBe(true);
+    expect(updatedConfig.server?.sessionDbPath).toBe("custom.db");
+
+    const notice = container.querySelector(
+      '[data-testid="session-changes-restart-notice"]',
+    );
+    expect(notice?.textContent).toContain(
+      "Restart active OMP sessions to load the Session Changes extension",
+    );
+  });
+
+  it("toggling OFF clears restart notice", async () => {
+    mockConfigQuery.mockReturnValue({
+      data: {
+        workspace: { name: "test-workspace", root: "." },
+        projects: [],
+        server: { sessionChangesEnabled: true },
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    act(() => {
+      root.render(<SettingsPage />);
+    });
+    await expandSessionChangesSection();
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Toggle Session Changes tracking"]',
+    );
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
+
+    await act(async () => {
+      toggle?.click();
+    });
+
+    expect(mockUpdateConfigMutate).toHaveBeenCalledTimes(1);
+    const updatedConfig = mockUpdateConfigMutate.mock.calls[0][1] as DamHopperConfig;
+    expect(updatedConfig.server?.sessionChangesEnabled).toBe(false);
+
+    const notice = container.querySelector(
+      '[data-testid="session-changes-restart-notice"]',
+    );
+    expect(notice).toBeNull();
+  });
+
+  it("surfaces mutation error honestly on failure", async () => {
+    mockUpdateConfigMutate.mockRejectedValueOnce(
+      new Error(
+        "Failed to install managed session changes extension: Permission denied",
+      ),
+    );
+
+    act(() => {
+      root.render(<SettingsPage />);
+    });
+    await expandSessionChangesSection();
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Toggle Session Changes tracking"]',
+    );
+
+    await act(async () => {
+      toggle?.click();
+    });
+
+    const errorAlert = container.querySelector(
+      '[data-testid="session-changes-error"]',
+    );
+    expect(errorAlert?.textContent).toContain(
+      "Failed to install managed session changes extension: Permission denied",
+    );
+  });
+
+  it("fences late response when target profile switches during toggle mutation", async () => {
+    const { promise, resolve } = Promise.withResolvers<DamHopperConfig>();
+    mockUpdateConfigMutate.mockImplementationOnce(() => promise);
+
+    useWorkbenchSelectionsStore.getState().setSettingsProfileId("profile-2");
+
+    act(() => {
+      root.render(<SettingsPage />);
+    });
+    await expandSessionChangesSection();
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Toggle Session Changes tracking"]',
+    );
+    // profile-2 starts with sessionChangesEnabled: false
+    expect(toggle?.getAttribute("aria-checked")).toBe("false");
+
+    act(() => {
+      toggle?.click();
+    });
+    act(() => {
+      useWorkbenchSelectionsStore.getState().setSettingsProfileId("profile-1");
+    });
+
+    await act(async () => {
+      resolve({
+        workspace: { name: "test-workspace", root: "." },
+        projects: [],
+        server: { sessionChangesEnabled: true },
+      });
+    });
+
+    const notice = container.querySelector(
+      '[data-testid="session-changes-restart-notice"]',
+    );
+    expect(notice).toBeNull();
+  });
+
+  it("isolates target profile from workbench preferences source", async () => {
+    useWorkbenchSelectionsStore.getState().setSettingsProfileId("profile-1");
+    useWorkbenchSelectionsStore.getState().setPreferencesProfileId("profile-2");
+
+    act(() => {
+      root.render(<SettingsPage />);
+    });
+    await expandSessionChangesSection();
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Toggle Session Changes tracking"]',
+    );
+
+    await act(async () => {
+      toggle?.click();
+    });
+
+    expect(mockUpdateConfigMutate).toHaveBeenCalledTimes(1);
+    const targetOwnerArg = mockUpdateConfigMutate.mock.calls[0][0] as ConnectionRef;
+    expect(targetOwnerArg?.profileId).toBe("profile-1");
   });
 });

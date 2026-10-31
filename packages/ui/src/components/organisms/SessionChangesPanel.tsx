@@ -3,7 +3,7 @@
  * Composes status, file list, and capability-free Monaco diff viewer.
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   X,
   RefreshCw,
@@ -19,6 +19,8 @@ import {
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { cn, generateUUID } from "@/lib/utils";
 import type { ConnectionRef } from "@/api/ownership";
+import { SessionChangesClientError } from "@/api/session-changes-client";
+import type { FileRow, Comparison } from "@/api/session-changes-types";
 import {
   useSessionChangesStatus,
   useSessionChangesFiles,
@@ -27,7 +29,6 @@ import {
 } from "@/api/session-changes-queries";
 import { SessionChangedFilesList } from "./SessionChangedFilesList";
 import { ReadonlyMonacoDiffViewer } from "./ReadonlyMonacoDiffViewer";
-
 export interface SessionChangesPanelProps {
   owner: ConnectionRef;
   terminalId: string;
@@ -38,6 +39,288 @@ export interface SessionChangesPanelProps {
   onToggleMaximize?: () => void;
   onClose: () => void;
   className?: string;
+}
+interface SessionChangesReadyViewProps {
+  owner: ConnectionRef;
+  terminalId: string;
+  terminalIncarnation: string;
+  ompSessionId: string;
+  rootId: string;
+  serverEpoch: string;
+  baselineId: string;
+  initialComparison: Comparison | null;
+  onRefresh: () => Promise<void>;
+  isRefreshing: boolean;
+  refreshError: Error | null;
+  renderSideBySide: boolean;
+  onToggleSideBySide: () => void;
+}
+
+function SessionChangesReadyView({
+  owner,
+  terminalId,
+  terminalIncarnation,
+  ompSessionId,
+  rootId,
+  serverEpoch,
+  baselineId,
+  initialComparison,
+  onRefresh,
+  isRefreshing,
+  refreshError,
+  renderSideBySide,
+  onToggleSideBySide,
+}: SessionChangesReadyViewProps) {
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
+  const [activeRevision, setActiveRevision] = useState<string | null>(
+    initialComparison?.comparisonRevision ?? null,
+  );
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [accumulatedFiles, setAccumulatedFiles] = useState<FileRow[]>([]);
+
+  const filesQuery = useSessionChangesFiles(
+    owner,
+    terminalId,
+    terminalIncarnation,
+    ompSessionId,
+    serverEpoch,
+    baselineId,
+    activeRevision,
+    cursor,
+    200,
+    rootId,
+  );
+
+  const activeComparison =
+    filesQuery.data?.comparison ?? initialComparison;
+  const currentRevision =
+    activeComparison?.comparisonRevision ?? activeRevision;
+
+  useEffect(() => {
+    if (initialComparison?.comparisonRevision) {
+      setActiveRevision(initialComparison.comparisonRevision);
+      setCursor(null);
+      setAccumulatedFiles([]);
+      setSelectedFileId(null);
+    }
+  }, [initialComparison?.comparisonRevision]);
+
+  useEffect(() => {
+    if (filesQuery.data?.comparison?.comparisonRevision) {
+      setActiveRevision(filesQuery.data.comparison.comparisonRevision);
+    }
+  }, [filesQuery.data?.comparison?.comparisonRevision]);
+
+  useEffect(() => {
+    if (!filesQuery.data?.files) return;
+    if (!cursor) {
+      setAccumulatedFiles(filesQuery.data.files as FileRow[]);
+    } else {
+      setAccumulatedFiles((prev) => {
+        const existingIds = new Set(prev.map((f) => f.fileId));
+        const newFiles = (filesQuery.data?.files as FileRow[]).filter(
+          (f) => !existingIds.has(f.fileId),
+        );
+        return [...prev, ...newFiles].slice(0, 500);
+      });
+    }
+  }, [filesQuery.data?.files, cursor]);
+
+  const files =
+    accumulatedFiles.length > 0
+      ? accumulatedFiles
+      : (filesQuery.data?.files ?? []);
+
+  useEffect(() => {
+    if (
+      files.length > 0 &&
+      (!selectedFileId || !files.some((f) => f.fileId === selectedFileId))
+    ) {
+      setSelectedFileId(files[0].fileId);
+    }
+  }, [files, selectedFileId]);
+
+  const detailQuery = useSessionChangesFileDetail(
+    owner,
+    terminalId,
+    terminalIncarnation,
+    ompSessionId,
+    serverEpoch,
+    baselineId,
+    currentRevision ?? "",
+    selectedFileId ?? "",
+    rootId,
+    {
+      enabled: Boolean(currentRevision && selectedFileId),
+    },
+  );
+  useEffect(() => {
+    const isStaleError = (err: unknown) => {
+      if (err instanceof SessionChangesClientError) {
+        return (
+          err.code === "refreshRequired" || err.code === "serverRestarted"
+        );
+      }
+      return false;
+    };
+    if (isStaleError(filesQuery.error) || isStaleError(detailQuery.error)) {
+      setSelectedFileId(null);
+      setActiveRevision(null);
+      setCursor(null);
+      setAccumulatedFiles([]);
+      void onRefresh();
+    }
+  }, [filesQuery.error, detailQuery.error, onRefresh]);
+
+  return (
+    <Group
+      orientation="horizontal"
+      className="flex-1 min-h-0 overflow-hidden"
+      style={{ overflow: "clip" }}
+    >
+      {/* File list sidebar */}
+      <Panel
+        id="session-changes-files"
+        defaultSize="26%"
+        minSize="15%"
+        maxSize="60%"
+        className="flex flex-col h-full bg-[var(--color-surface-2)] min-w-0"
+        style={{ overflow: "clip" }}
+      >
+        <div className="shrink-0 px-3 py-2 border-b border-[var(--color-border)] text-xs font-semibold flex items-center justify-between text-[var(--color-text-muted)]">
+          <span>Changed Files ({files.length})</span>
+          {activeComparison?.countsComplete && (
+            <div className="flex items-center gap-1 font-mono text-[10px]">
+              {activeComparison.additions != null && (
+                <span className="text-emerald-500">+{activeComparison.additions}</span>
+              )}
+              {activeComparison.deletions != null && (
+                <span className="text-rose-500">-{activeComparison.deletions}</span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {filesQuery.isError ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-xs text-rose-400 gap-2">
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <span>
+              Failed to load changed files:{" "}
+              {filesQuery.error instanceof Error
+                ? filesQuery.error.message
+                : String(filesQuery.error)}
+            </span>
+            <button
+              type="button"
+              onClick={() => void filesQuery.refetch()}
+              className="px-3 py-1.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors cursor-pointer"
+            >
+              Retry Files
+            </button>
+          </div>
+        ) : refreshError ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-xs text-rose-400 gap-2">
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <span>Failed to compute comparison: {refreshError.message || "Scan failed"}</span>
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={isRefreshing}
+              className="px-3 py-1.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors cursor-pointer"
+            >
+              Retry Scan
+            </button>
+          </div>
+        ) : filesQuery.isLoading || isRefreshing ? (
+          <div className="flex-1 flex items-center justify-center p-4 text-center text-xs text-[var(--color-text-muted)]">
+            <Loader2 className="w-4 h-4 animate-spin mr-2" />
+            <span>{isRefreshing ? "Comparing tool-observed edits against current files…" : "Loading changed files…"}</span>
+          </div>
+        ) : files.length === 0 ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-xs text-[var(--color-text-muted)] gap-2.5">
+            <span>No file changes made by OMP agent yet.</span>
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={isRefreshing}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors shadow-sm cursor-pointer"
+            >
+              <RefreshCw className={cn("w-3.5 h-3.5", isRefreshing && "animate-spin")} />
+              <span>{isRefreshing ? "Scanning..." : "Check for Changes"}</span>
+            </button>
+          </div>
+        ) : (
+          <div className="flex-1 min-h-0">
+            <SessionChangedFilesList
+              files={files}
+              selectedFileId={selectedFileId}
+              onSelectFile={setSelectedFileId}
+              hasMore={Boolean(
+                filesQuery.data?.nextCursor && files.length < 500,
+              )}
+              onLoadMore={() => {
+                if (filesQuery.data?.nextCursor) {
+                  setCursor(filesQuery.data.nextCursor);
+                }
+              }}
+              isLoadingMore={filesQuery.isFetching && Boolean(cursor)}
+            />
+          </div>
+        )}
+      </Panel>
+      <Separator
+        aria-label="Resize files and diff panels"
+        className="w-1.5 shrink-0 bg-[var(--color-border)] hover:bg-[var(--color-primary)] active:bg-[var(--color-primary)] transition-colors cursor-col-resize relative after:absolute after:inset-y-0 after:-inset-x-1.5 after:content-[''] z-10"
+      />
+
+      {/* Monaco Diff Viewer Area */}
+      <Panel
+        id="session-changes-diff"
+        defaultSize="74%"
+        minSize="35%"
+        className="flex flex-col min-h-0 bg-[var(--color-surface)] min-w-0"
+        style={{ overflow: "clip" }}
+      >
+        {detailQuery.isLoading ? (
+          <div className="flex-1 flex items-center justify-center">
+            <Loader2 className="w-6 h-6 animate-spin text-[var(--color-text-muted)]" />
+          </div>
+        ) : detailQuery.isError ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-xs text-rose-400 gap-2">
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <span>
+              Failed to load file diff:{" "}
+              {detailQuery.error instanceof Error
+                ? detailQuery.error.message
+                : String(detailQuery.error)}
+            </span>
+            <button
+              type="button"
+              onClick={() => void detailQuery.refetch()}
+              className="px-3 py-1.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors cursor-pointer"
+            >
+              Retry Diff
+            </button>
+          </div>
+        ) : detailQuery.data ? (
+          <ReadonlyMonacoDiffViewer
+            fileDetail={detailQuery.data}
+            owner={owner}
+            terminalId={terminalId}
+            terminalIncarnation={terminalIncarnation}
+            ompSessionId={ompSessionId}
+            rootId={rootId}
+            renderSideBySide={renderSideBySide}
+            onToggleSideBySide={onToggleSideBySide}
+          />
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+            Select a file to review diff
+          </div>
+        )}
+      </Panel>
+    </Group>
+  );
 }
 
 export function SessionChangesPanel({
@@ -52,7 +335,6 @@ export function SessionChangesPanel({
   className,
 }: SessionChangesPanelProps) {
   const [renderSideBySide, setRenderSideBySide] = useState(true);
-  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
 
   const refreshMutation = useSessionChangesRefreshMutation(owner);
 
@@ -66,67 +348,33 @@ export function SessionChangesPanel({
   );
 
   const status = statusQuery.data;
-  const comparison = status?.comparison ?? refreshMutation.data;
-  const revision = comparison?.comparisonRevision;
+  const isReadyOrIncomplete =
+    status?.state === "ready" || status?.state === "incomplete";
   const baselineId = status?.baselineId;
   const serverEpoch = status?.serverEpoch;
 
-  const isReadyOrIncomplete =
-    status?.state === "ready" || status?.state === "incomplete";
+  const isRefreshMatchingCurrentIdentity =
+    refreshMutation.variables?.serverEpoch === serverEpoch &&
+    refreshMutation.variables?.baselineId === baselineId;
 
-  // Files query
-  const filesQuery = useSessionChangesFiles(
-    owner,
-    terminalId,
-    terminalIncarnation,
-    ompSessionId,
-    serverEpoch ?? "",
-    baselineId ?? "",
-    revision ?? "",
-    null,
-    200,
-    {
-      enabled: Boolean(isReadyOrIncomplete && serverEpoch && baselineId && revision),
-    },
-  );
+  const currentRefreshData = isRefreshMatchingCurrentIdentity
+    ? refreshMutation.data
+    : null;
+  const currentRefreshError = isRefreshMatchingCurrentIdentity
+    ? refreshMutation.error
+    : null;
+  const isRefreshing = isRefreshMatchingCurrentIdentity
+    ? refreshMutation.isPending
+    : false;
 
-  const files = filesQuery.data?.files ?? [];
-
-  // Automatically select first file when files load and none selected
-  useEffect(() => {
-    if (files.length > 0 && (!selectedFileId || !files.some((f) => f.fileId === selectedFileId))) {
-      setSelectedFileId(files[0].fileId);
-    }
-  }, [files, selectedFileId]);
-
-  // File detail query
-  const detailQuery = useSessionChangesFileDetail(
-    owner,
-    terminalId,
-    terminalIncarnation,
-    ompSessionId,
-    serverEpoch ?? "",
-    baselineId ?? "",
-    revision ?? "",
-    selectedFileId ?? "",
-    {
-      enabled: Boolean(
-        isReadyOrIncomplete &&
-          serverEpoch &&
-          baselineId &&
-          revision &&
-          selectedFileId,
-      ),
-    },
-  );
-
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async () => {
     if (!serverEpoch || !baselineId) return;
     try {
       await refreshMutation.mutateAsync({
         terminalId,
         terminalIncarnation,
         ompSessionId,
+        rootId,
         serverEpoch,
         baselineId,
         requestId: generateUUID(),
@@ -134,25 +382,15 @@ export function SessionChangesPanel({
     } catch (err) {
       console.error("[SessionChanges] scan failed:", err);
     }
-  };
-  const hasTriggeredRef = React.useRef(false);
-  // Automatically trigger comparison scan on ready baseline if none yet computed
-  useEffect(() => {
-    if (
-      isReadyOrIncomplete &&
-      serverEpoch &&
-      baselineId &&
-      !comparison &&
-      !refreshMutation.isPending &&
-      !refreshMutation.isError &&
-      !hasTriggeredRef.current
-    ) {
-      hasTriggeredRef.current = true;
-      handleRefresh();
-    }
-  }, [isReadyOrIncomplete, serverEpoch, baselineId, comparison, refreshMutation.isPending, refreshMutation.isError]);
-
-
+  }, [
+    serverEpoch,
+    baselineId,
+    refreshMutation,
+    terminalId,
+    terminalIncarnation,
+    ompSessionId,
+    rootId,
+  ]);
   return (
     <div
       className={cn(
@@ -194,13 +432,16 @@ export function SessionChangesPanel({
             <button
               type="button"
               onClick={handleRefresh}
-              disabled={refreshMutation.isPending}
+              disabled={isRefreshing}
               aria-label="Refresh comparison"
               title="Refresh comparison against current files"
               className="p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface)] transition-colors disabled:opacity-50"
             >
               <RefreshCw
-                className={cn("w-3.5 h-3.5", refreshMutation.isPending && "animate-spin")}
+                className={cn(
+                  "w-3.5 h-3.5",
+                  isRefreshing && "animate-spin",
+                )}
               />
             </button>
           )}
@@ -237,7 +478,7 @@ export function SessionChangesPanel({
         <span className="flex items-center gap-1.5 truncate">
           <ShieldAlert className="w-3.5 h-3.5 text-amber-400 shrink-0" />
           <span>
-            Read-only comparison against session start. External writers may edit concurrently.
+            Tool-observed edits since first touch. External writers and unobserved script modifications are tracked in Git Changes.
           </span>
         </span>
         {status?.capturedAtMs && (
@@ -253,6 +494,28 @@ export function SessionChangesPanel({
         <div className="flex-1 flex items-center justify-center">
           <Loader2 className="w-8 h-8 animate-spin text-[var(--color-text-muted)]" />
         </div>
+      ) : statusQuery.isError ? (
+        <div
+          className="flex-1 flex flex-col items-center justify-center p-8 text-center text-rose-400 gap-2"
+          data-testid="session-status-error-view"
+        >
+          <AlertTriangle className="w-12 h-12 text-rose-400 mb-2 opacity-80" />
+          <h4 className="text-base font-semibold mb-1">
+            Failed to load session changes status
+          </h4>
+          <p className="text-xs text-[var(--color-text-muted)] max-w-sm mb-4">
+            {statusQuery.error instanceof Error
+              ? statusQuery.error.message
+              : String(statusQuery.error)}
+          </p>
+          <button
+            type="button"
+            onClick={() => void statusQuery.refetch()}
+            className="px-3 py-1.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors cursor-pointer"
+          >
+            Retry Status
+          </button>
+        </div>
       ) : !isReadyOrIncomplete ? (
         // Missing, Unavailable, or Initializing
         <div
@@ -267,120 +530,27 @@ export function SessionChangesPanel({
           </h4>
           <p className="text-xs text-[var(--color-text-muted)] max-w-sm mb-4">
             {status?.state === "initializing"
-              ? "The baseline is currently being captured before model turns run. Please wait a moment."
-              : "No baseline was captured for this session yet. When an OMP agent executes commands in this terminal, changes will be tracked automatically."}
+              ? "Connecting to OMP Session... Restart active OMP sessions if Session Changes was recently enabled."
+              : "No file changes made by OMP agent yet. Supported tools (edit, write) capture original file states on first touch."}
           </p>
         </div>
       ) : (
-        // Ready or Incomplete comparison view with resizable panels
-        <Group
-          orientation="horizontal"
-          className="flex-1 min-h-0 overflow-hidden"
-          style={{ overflow: "clip" }}
-        >
-          {/* File list sidebar */}
-          <Panel
-            id="session-changes-files"
-            defaultSize="26%"
-            minSize="15%"
-            maxSize="60%"
-            className="flex flex-col h-full bg-[var(--color-surface-2)] min-w-0"
-            style={{ overflow: "clip" }}
-          >
-            <div className="shrink-0 px-3 py-2 border-b border-[var(--color-border)] text-xs font-semibold flex items-center justify-between text-[var(--color-text-muted)]">
-              <span>Changed Files ({files.length})</span>
-              {comparison?.countsComplete && (
-                <div className="flex items-center gap-1 font-mono text-[10px]">
-                  {comparison.additions != null && (
-                    <span className="text-emerald-500">+{comparison.additions}</span>
-                  )}
-                  {comparison.deletions != null && (
-                    <span className="text-rose-500">-{comparison.deletions}</span>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {refreshMutation.isError ? (
-              <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-xs text-rose-400 gap-2">
-                <AlertTriangle className="w-5 h-5 text-rose-400" />
-                <span>Failed to compute comparison: {refreshMutation.error?.message || "Scan failed"}</span>
-                <button
-                  type="button"
-                  onClick={handleRefresh}
-                  disabled={refreshMutation.isPending}
-                  className="px-3 py-1.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors cursor-pointer"
-                >
-                  Retry Scan
-                </button>
-              </div>
-            ) : filesQuery.isLoading || refreshMutation.isPending ? (
-              <div className="flex-1 flex items-center justify-center p-4 text-center text-xs text-[var(--color-text-muted)]">
-                <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                <span>{refreshMutation.isPending ? "Scanning repository files against session start…" : "Loading changed files…"}</span>
-              </div>
-            ) : files.length === 0 ? (
-              <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-xs text-[var(--color-text-muted)] gap-2.5">
-                <span>
-                  {status?.state === "incomplete"
-                    ? "No changes detected yet in covered paths."
-                    : "No file changes made by OMP agent yet."}
-                </span>
-                <button
-                  type="button"
-                  onClick={handleRefresh}
-                  disabled={refreshMutation.isPending}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors shadow-sm cursor-pointer"
-                >
-                  <RefreshCw className={cn("w-3.5 h-3.5", refreshMutation.isPending && "animate-spin")} />
-                  <span>{refreshMutation.isPending ? "Scanning..." : "Check for Changes"}</span>
-                </button>
-              </div>
-            ) : (
-              <div className="flex-1 min-h-0">
-                <SessionChangedFilesList
-                  files={files}
-                  selectedFileId={selectedFileId}
-                  onSelectFile={setSelectedFileId}
-                />
-              </div>
-            )}
-          </Panel>
-          <Separator
-            aria-label="Resize files and diff panels"
-            className="w-1.5 shrink-0 bg-[var(--color-border)] hover:bg-[var(--color-primary)] active:bg-[var(--color-primary)] transition-colors cursor-col-resize relative after:absolute after:inset-y-0 after:-inset-x-1.5 after:content-[''] z-10"
-          />
-
-          {/* Monaco Diff Viewer Area */}
-          <Panel
-            id="session-changes-diff"
-            defaultSize="74%"
-            minSize="35%"
-            className="flex flex-col min-h-0 bg-[var(--color-surface)] min-w-0"
-            style={{ overflow: "clip" }}
-          >
-            {detailQuery.isLoading ? (
-              <div className="flex-1 flex items-center justify-center">
-                <Loader2 className="w-6 h-6 animate-spin text-[var(--color-text-muted)]" />
-              </div>
-            ) : detailQuery.data ? (
-              <ReadonlyMonacoDiffViewer
-                fileDetail={detailQuery.data}
-                owner={owner}
-                terminalId={terminalId}
-                terminalIncarnation={terminalIncarnation}
-                ompSessionId={ompSessionId}
-                rootId={rootId}
-                renderSideBySide={renderSideBySide}
-                onToggleSideBySide={() => setRenderSideBySide(!renderSideBySide)}
-              />
-            ) : (
-              <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-                Select a file to review diff
-              </div>
-            )}
-          </Panel>
-        </Group>
+        <SessionChangesReadyView
+          key={`${serverEpoch}:${baselineId}`}
+          owner={owner}
+          terminalId={terminalId}
+          terminalIncarnation={terminalIncarnation}
+          ompSessionId={ompSessionId}
+          rootId={rootId}
+          serverEpoch={serverEpoch!}
+          baselineId={baselineId!}
+          initialComparison={currentRefreshData ?? status?.comparison ?? null}
+          onRefresh={handleRefresh}
+          isRefreshing={isRefreshing}
+          refreshError={currentRefreshError}
+          renderSideBySide={renderSideBySide}
+          onToggleSideBySide={() => setRenderSideBySide(!renderSideBySide)}
+        />
       )}
     </div>
   );
