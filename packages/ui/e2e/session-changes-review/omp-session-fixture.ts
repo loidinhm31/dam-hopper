@@ -16,7 +16,7 @@ export interface OmpSessionFixtureMetadata {
  */
 export async function setupOmpSessionFixture(
   appContainerId: string,
-  containerTargetDir = "/e2e/workspace/session-project",
+  containerTargetDir = "/e2e/workspace/fixture-project",
 ): Promise<OmpSessionFixtureMetadata> {
   const hostStagingDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-session-e2e-fixture-"));
 
@@ -51,7 +51,7 @@ export async function setupOmpSessionFixture(
     const untrackedFilePath = path.join(hostStagingDir, "new-file.ts");
     await fs.writeFile(untrackedFilePath, "export const createdDuringSession = true;\n", "utf-8");
 
-    await copyToContainer(appContainerId, hostStagingDir, containerTargetDir);
+    await copyToContainer(hostStagingDir, appContainerId, containerTargetDir);
 
     return {
       headOid,
