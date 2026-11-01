@@ -12,6 +12,7 @@ import damHopperSessionChangesExtension, {
   rebasePathToRoot,
   sanitizeSessionId,
   validateLoopbackWsUrl,
+  MAX_CHILD_ENTRIES,
   SessionChangesProducer,
   SessionChangesProducerRegistry,
   type RootSessionRegistration,
@@ -2238,6 +2239,858 @@ describe("PR #82 Code Review Regressions", () => {
         releaseCapture1.resolve();
         server.stop(true);
       }
+    }
+  });
+
+  // ==========================================================================
+  // P1 Regressions: Live-routing authorization & unbinding on failed switch
+  // ==========================================================================
+
+  it("R15a: failed registration during session switch fail-closes live tool routing and does NOT capture against previous session", async () => {
+    const recordedCaptures: any[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/register") {
+          if (body.ompSessionId === "session-A") {
+            return Response.json({
+              serverEpoch: "epoch-1",
+              terminalIncarnation: "1",
+              ompSessionId: "session-A",
+              rootId: ".",
+              baselineId: "base-A",
+              canonicalRoot: "/repo",
+            });
+          }
+          // Session B registration fails (simulated 500 error / network failure)
+          return new Response("Internal Server Error", { status: 500 });
+        }
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          recordedCaptures.push(body);
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      // 1. Session A registers successfully
+      const rootA = await producer.registerSession("session-A", "main", "/repo");
+      expect(rootA).not.toBeNull();
+      expect(rootA?.ompSessionId).toBe("session-A");
+
+      // 2. User switches to Session B, but registration fails
+      const rootB = await producer.handleSessionSwitch("session-B", "main", "/repo");
+      expect(rootB).toBeNull();
+
+      // 3. Session B attempts to execute a supported tool call
+      const ctxB: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+      await producer.handleToolCall("write", { path: "src/new-in-b.ts" }, ctxB, "call-b-1");
+
+      // 4. Verify fail-closed routing: zero capture requests were issued, rootA was not polluted!
+      expect(recordedCaptures.length).toBe(0);
+      expect(rootA?.knownPaths.has("src/new-in-b.ts")).toBe(false);
+      expect(rootA?.unprovenPaths.has("src/new-in-b.ts")).toBe(false);
+      expect(producer.pendingCalls.has(makePendingKey("session-A", "main", "call-b-1"))).toBe(false);
+      expect(producer.pendingCalls.has(makePendingKey("session-B", "main", "call-b-1"))).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("R15b: failed switch leaves session A in-flight call attribution intact", async () => {
+    const recordedCaptures: any[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/register") {
+          if (body.ompSessionId === "session-A") {
+            return Response.json({
+              serverEpoch: "epoch-1",
+              terminalIncarnation: "1",
+              ompSessionId: "session-A",
+              rootId: ".",
+              baselineId: "base-A",
+              canonicalRoot: "/repo",
+            });
+          }
+          return new Response("Internal Server Error", { status: 500 });
+        }
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          recordedCaptures.push(body);
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      // 1. Session A registers and starts a tool call
+      const rootA = await producer.registerSession("session-A", "main", "/repo");
+      const ctxA: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+      await producer.handleToolCall("ast-edit", { files: ["src/file-a.ts"] }, ctxA, "call-a-inflight");
+      expect(producer.pendingCalls.has(makePendingKey("session-A", "main", "call-a-inflight"))).toBe(true);
+
+      // 2. Switch to Session B fails
+      const rootB = await producer.handleSessionSwitch("session-B", "main", "/repo");
+      expect(rootB).toBeNull();
+
+      // 3. Late result for session A arrives
+      await producer.handleToolResult(
+        "ast-edit",
+        { files: ["/repo/src/file-a-modified.ts"] },
+        ctxA,
+        "call-a-inflight",
+      );
+
+      // 4. Session A's late result is still attributed to Session A!
+      expect(rootA?.unprovenPaths.has("src/file-a-modified.ts")).toBe(true);
+      expect(recordedCaptures.length).toBe(1);
+      expect(recordedCaptures[0].ompSessionId).toBe("session-A");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("R15c: tool call while switch registration is in-flight fails closed", async () => {
+    const registerBReceived = createDeferred();
+    const releaseRegisterB = createDeferred();
+    const recordedCaptures: any[] = [];
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/register") {
+          if (body.ompSessionId === "session-A") {
+            return Response.json({
+              serverEpoch: "epoch-1",
+              terminalIncarnation: "1",
+              ompSessionId: "session-A",
+              rootId: ".",
+              baselineId: "base-A",
+              canonicalRoot: "/repo",
+            });
+          }
+          registerBReceived.resolve();
+          await releaseRegisterB.promise;
+          return Response.json({
+            serverEpoch: "epoch-1",
+            terminalIncarnation: "1",
+            ompSessionId: "session-B",
+            rootId: ".",
+            baselineId: "base-B",
+            canonicalRoot: "/repo",
+          });
+        }
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          recordedCaptures.push(body);
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const rootA = await producer.registerSession("session-A", "main", "/repo");
+      expect(rootA).not.toBeNull();
+
+      // Start switch to session B
+      const switchPromise = producer.handleSessionSwitch("session-B", "main", "/repo");
+      await registerBReceived.promise;
+
+      // While B's registration is in-flight, an edit is issued
+      const ctxMain: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+      await producer.handleToolCall("write", { path: "src/premature.ts" }, ctxMain, "call-premature");
+
+      // Zero captures sent to A or B
+      expect(recordedCaptures.length).toBe(0);
+      expect(rootA?.knownPaths.has("src/premature.ts")).toBe(false);
+
+      // Release B's registration
+      releaseRegisterB.resolve();
+      const rootB = await switchPromise;
+      expect(rootB?.ompSessionId).toBe("session-B");
+    } finally {
+      releaseRegisterB.resolve();
+      server.stop(true);
+    }
+  });
+
+  // ==========================================================================
+  // P2 Regressions: Resilient Invalidation Queue Retention & Coalescing
+  // ==========================================================================
+
+  it("R16a: failed invalidation request is retained in pending queue and successfully delivered on retry", async () => {
+    let captureAttempts = 0;
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          captureAttempts++;
+          if (captureAttempts === 1) {
+            // First attempt fails with 500
+            return new Response("Internal Server Error", { status: 500 });
+          }
+          // Second attempt succeeds
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const root = createRootSessionRegistration("sess-r16a", "epoch-1", "1", "base", "/repo");
+      root.pendingInvalidations.push({
+        captureId: "timed-out-r16a",
+        paths: ["retry-file.ts"],
+        timestamp: Date.now(),
+      });
+      registry.registerRoot("main", root);
+
+      // First flush: fails due to 500
+      await producer.flushPendingInvalidations(root);
+
+      // Must be RETAINED in queue!
+      expect(root.pendingInvalidations.length).toBe(1);
+      expect(root.pendingInvalidations[0].captureId).toBe("timed-out-r16a");
+
+      // Second flush: succeeds
+      await producer.flushPendingInvalidations(root);
+
+      // Fully acknowledged: queue is now empty!
+      expect(root.pendingInvalidations.length).toBe(0);
+      expect(captureAttempts).toBe(2);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("R16b: partial multi-chunk acknowledgment retains only unacknowledged paths", async () => {
+    let captureCount = 0;
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          captureCount++;
+          if (captureCount === 1) {
+            // Chunk 1 succeeds
+            return Response.json({
+              version: 1,
+              captureId: body.captureId,
+              results: (body.paths as string[]).map((p: string) => ({
+                path: p,
+                status: "captured",
+                presence: "present",
+              })),
+            });
+          }
+          // Chunk 2 fails
+          return new Response("Internal Server Error", { status: 500 });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const root = createRootSessionRegistration("sess-r16b", "epoch-1", "1", "base", "/repo");
+      // 300 nested paths forces at least 2 chunks
+      const paths = generateNestedPaths(300, "r16b");
+      root.pendingInvalidations.push({
+        captureId: "chunked-inv-1",
+        paths: [...paths],
+        timestamp: Date.now(),
+      });
+      registry.registerRoot("main", root);
+
+      // First flush: chunk 1 succeeds, chunk 2 fails
+      await producer.flushPendingInvalidations(root);
+
+      // Invalidation still exists, but acknowledged chunk 1 paths were pruned!
+      expect(root.pendingInvalidations.length).toBe(1);
+      expect(root.pendingInvalidations[0].paths.length).toBeLessThan(300);
+      expect(root.pendingInvalidations[0].paths.length).toBeGreaterThan(0);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("R16c: coalesces concurrent flush calls on the same root without duplicate requests", async () => {
+    let captureCount = 0;
+    const captureReceived = createDeferred();
+    const releaseCapture = createDeferred();
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          captureCount++;
+          captureReceived.resolve();
+          await releaseCapture.promise;
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const root = createRootSessionRegistration("sess-r16c", "epoch-1", "1", "base", "/repo");
+      root.pendingInvalidations.push({
+        captureId: "concurrent-inv",
+        paths: ["file1.ts"],
+        timestamp: Date.now(),
+      });
+      registry.registerRoot("main", root);
+
+      // Start two concurrent flushes
+      const p1 = producer.flushPendingInvalidations(root);
+      const p2 = producer.flushPendingInvalidations(root);
+
+      await captureReceived.promise;
+      releaseCapture.resolve();
+
+      await Promise.all([p1, p2]);
+
+      // Exactly 1 request on wire was sent
+      expect(captureCount).toBe(1);
+      expect(root.pendingInvalidations.length).toBe(0);
+    } finally {
+      releaseCapture.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R15d: switching to already-retained session B fail-closes live routing while B's registration is paused or failed", async () => {
+    const regB2Received = createDeferred();
+    const releaseRegB2 = createDeferred();
+    const recordedCaptures: any[] = [];
+    let bRegistrationCount = 0;
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/register") {
+          if (body.ompSessionId === "session-A") {
+            return Response.json({
+              serverEpoch: "epoch-1",
+              terminalIncarnation: "1",
+              ompSessionId: "session-A",
+              rootId: ".",
+              baselineId: "base-A",
+              canonicalRoot: "/repo",
+            });
+          }
+          bRegistrationCount++;
+          if (bRegistrationCount === 1) {
+            return Response.json({
+              serverEpoch: "epoch-1",
+              terminalIncarnation: "1",
+              ompSessionId: "session-B",
+              rootId: ".",
+              baselineId: "base-B",
+              canonicalRoot: "/repo",
+            });
+          }
+          // Second registration for B is paused
+          regB2Received.resolve();
+          await releaseRegB2.promise;
+          return new Response("Internal Server Error", { status: 500 });
+        }
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          recordedCaptures.push(body);
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      // 1. Session B registers initially with main and an independent subagent
+      const rootBInitial = await producer.registerSession("session-B", "main", "/repo");
+      expect(rootBInitial).not.toBeNull();
+      registry.registerRoot("independent-b", rootBInitial!);
+      expect(registry.agentToRoot.get("independent-b")).toBe("session-B");
+
+      // 2. User switches to Session A
+      const rootA = await producer.handleSessionSwitch("session-A", "main", "/repo");
+      expect(rootA?.ompSessionId).toBe("session-A");
+      // Session B is still retained in registry.roots, and independent-b still maps to session-B!
+      expect(registry.roots.has("session-B")).toBe(true);
+      expect(registry.agentToRoot.get("independent-b")).toBe("session-B");
+
+      // 3. User switches back to Session B, but registration is paused at peer
+      const switchB2Promise = producer.handleSessionSwitch("session-B", "main", "/repo");
+      await regB2Received.promise;
+
+      // 4. While B's registration is in flight:
+      // Even though session-B is in registry.roots, and independent-b is directly mapped to B in agentToRoot,
+      // live routing MUST be fail-closed because session-B is not authorized!
+      const ctxMain: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+      const ctxIndep: OmpExtensionContext = { agent: { kind: "sub", id: "independent-b" }, cwd: "/repo" };
+      await producer.handleToolCall("write", { path: "src/during-b-reg.ts" }, ctxMain, "call-during-b");
+      await producer.handleToolCall("write", { path: "src/worker-reg.ts" }, ctxIndep, "call-indep-b");
+      await producer.handleToolCall("write", { path: "src/agentless.ts" }, undefined, "call-agentless");
+
+      expect(recordedCaptures.length).toBe(0);
+      expect(registry.resolveRoot(ctxMain.agent)).toBeUndefined();
+      expect(registry.resolveRoot(ctxIndep.agent)).toBeUndefined();
+      expect(registry.resolveRoot(undefined)).toBeUndefined();
+
+      // Release registration with failure (simulated 500 error)
+      releaseRegB2.resolve();
+      const rootB2 = await switchB2Promise;
+      expect(rootB2).toBeNull();
+
+      // After failed registration, independent-b STILL fails closed!
+      expect(registry.resolveRoot(ctxIndep.agent)).toBeUndefined();
+      expect(registry.resolveRoot(ctxMain.agent)).toBeUndefined();
+      expect(registry.resolveRoot(undefined)).toBeUndefined();
+    } finally {
+      releaseRegB2.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R15e: multi-level descendant unbinding revokes entire subtree without affecting independent sibling agents on same or different root", async () => {
+    const registry = new SessionChangesProducerRegistry();
+    const producer = new SessionChangesProducer({
+      httpUrl: "http://127.0.0.1:0/mock",
+      token: "test-token",
+      registry,
+    });
+
+    const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+    const rootSibling = createRootSessionRegistration("session-sibling", "epoch-1", "1", "base-S", "/repo");
+    registry.registerRoot("main", rootA);
+    registry.registerRoot("unrelated-on-a", rootA);
+    registry.registerRoot("sibling-agent", rootSibling);
+
+    // Build multi-level hierarchy: main -> child-1 -> grandchild-1
+    registry.recordChildAgent("child-1", "main");
+    registry.recordChildAgent("grandchild-1", "child-1");
+
+    // Also discover lazy child through resolveRoot({ id: "lazy-child", parentId: "main" })
+    const lazyRoot = registry.resolveRoot({ kind: "sub", id: "lazy-child", parentId: "main" });
+    expect(lazyRoot).toBe(rootA);
+    expect(registry.agentToRoot.get("lazy-child")).toBe("session-A");
+    expect(registry.agentLineage.get("lazy-child")).toBe("main");
+
+    expect(registry.agentToRoot.get("child-1")).toBe("session-A");
+    expect(registry.agentToRoot.get("grandchild-1")).toBe("session-A");
+    expect(registry.agentToRoot.get("unrelated-on-a")).toBe("session-A");
+    expect(registry.agentToRoot.get("sibling-agent")).toBe("session-sibling");
+
+    // Parent switch begins and unbinds main
+    registry.unauthorizeSession();
+    registry.unbindAgent("main");
+
+    // Assert exact removal from agentToRoot and agentLineage for main and all descendants
+    expect(registry.agentToRoot.has("main")).toBe(false);
+    expect(registry.agentToRoot.has("child-1")).toBe(false);
+    expect(registry.agentToRoot.has("grandchild-1")).toBe(false);
+    expect(registry.agentToRoot.has("lazy-child")).toBe(false);
+    expect(registry.agentLineage.has("child-1")).toBe(false);
+    expect(registry.agentLineage.has("grandchild-1")).toBe(false);
+    expect(registry.agentLineage.has("lazy-child")).toBe(false);
+
+    // Sibling agents on the SAME root and DIFFERENT roots survive intact!
+    expect(registry.agentToRoot.get("unrelated-on-a")).toBe("session-A");
+    expect(registry.agentToRoot.get("sibling-agent")).toBe("session-sibling");
+  });
+
+  it("R15f: lineage eviction at capacity unbinds child so it cannot remain as a routable orphan upon reauthorization", async () => {
+    const registry = new SessionChangesProducerRegistry();
+    const producer = new SessionChangesProducer({
+      httpUrl: "http://127.0.0.1:0/mock",
+      token: "test-token",
+      registry,
+    });
+
+    const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+    registry.registerRoot("main", rootA);
+    registry.registerRoot("unrelated-direct", rootA);
+
+    registry.recordChildAgent("child-to-evict", "main");
+    expect(registry.agentToRoot.get("child-to-evict")).toBe("session-A");
+    expect(registry.agentLineage.get("child-to-evict")).toBe("main");
+
+    // 2. Fill agentLineage to capacity (MAX_CHILD_ENTRIES) with unrelated children whose parents are unresolved
+    // Because parents are unresolved, agentToRoot does NOT grow, testing lineage-map eviction in isolation!
+    for (let i = 0; i < MAX_CHILD_ENTRIES; i++) {
+      registry.recordChildAgent(`unrelated-child-${i}`, `unresolved-parent-${i}`);
+    }
+
+    // Lineage map reached capacity, while agentToRoot stayed well below capacity
+    expect(registry.agentLineage.size).toBe(MAX_CHILD_ENTRIES);
+    expect(registry.agentToRoot.size).toBeLessThan(MAX_CHILD_ENTRIES);
+
+    // child-to-evict was evicted from agentLineage at capacity.
+    // Because lineage eviction unbinds the agent, child-to-evict must NOT survive in agentToRoot!
+    expect(registry.agentLineage.has("child-to-evict")).toBe(false);
+    expect(registry.agentToRoot.has("child-to-evict")).toBe(false);
+
+    // 3. Clear authorization and re-authorize session A
+    registry.unauthorizeSession();
+    registry.authorizeSession("session-A");
+
+    // The evicted child remains unbound and cannot route tool calls
+    const ctxChild: OmpExtensionContext = { agent: { kind: "sub", id: "child-to-evict" }, cwd: "/repo" };
+    expect(registry.resolveRoot(ctxChild.agent)).toBeUndefined();
+
+    // But the unrelated direct agent on rootA and main remain routable!
+    const ctxUnrelated: OmpExtensionContext = { agent: { kind: "sub", id: "unrelated-direct" }, cwd: "/repo" };
+    expect(registry.resolveRoot(ctxUnrelated.agent)).toBe(rootA);
+  });
+
+  it("R15g: binding-map capacity eviction when parent is oldest aborts child registration so no orphan survives unbinding or reauthorization", async () => {
+    const registry = new SessionChangesProducerRegistry();
+    const producer = new SessionChangesProducer({
+      httpUrl: "http://127.0.0.1:0/mock",
+      token: "test-token",
+      registry,
+    });
+
+    const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+    // 1. "main" is inserted first (oldest entry in agentToRoot)
+    registry.registerRoot("main", rootA);
+    expect(registry.agentToRoot.get("main")).toBe("session-A");
+    // 2. Fill agentToRoot to capacity (MAX_CHILD_ENTRIES) with (MAX_CHILD_ENTRIES - 1) unrelated direct agents
+    for (let i = 0; i < MAX_CHILD_ENTRIES - 1; i++) {
+      registry.registerRoot(`unrelated-direct-${i}`, rootA);
+    }
+    expect(registry.agentToRoot.size).toBe(MAX_CHILD_ENTRIES);
+
+    // 3. Now attempt to discover/record a new child of "main"
+    // Because agentToRoot is at capacity, recording "new-child" evicts the oldest entry ("main")!
+    // Because main was evicted, new-child's parent is no longer valid, so new-child MUST NOT be cached in agentToRoot!
+    registry.recordChildAgent("new-child", "main");
+
+    // "main" was evicted, and "new-child" was NOT registered as an orphan in agentToRoot
+    expect(registry.agentToRoot.has("main")).toBe(false);
+    expect(registry.agentToRoot.has("new-child")).toBe(false);
+
+    // 4. Clear and reauthorize session A
+    registry.unauthorizeSession();
+    registry.authorizeSession("session-A");
+
+    // "new-child" remains unbound and unroutable
+    const ctxChild: OmpExtensionContext = { agent: { kind: "sub", id: "new-child", parentId: "main" }, cwd: "/repo" };
+    expect(registry.resolveRoot(ctxChild.agent)).toBeUndefined();
+  });
+
+  it("R15h: out-of-order lineage discovery preserves chain resolution when parent is recorded later", async () => {
+    const registry = new SessionChangesProducerRegistry();
+    const producer = new SessionChangesProducer({
+      httpUrl: "http://127.0.0.1:0/mock",
+      token: "test-token",
+      registry,
+    });
+
+    const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+    registry.registerRoot("main", rootA);
+    registry.authorizeSession("session-A");
+
+    // 1. Observe grandchild -> child BEFORE child is known
+    registry.recordChildAgent("grandchild", "child");
+    expect(registry.agentLineage.get("grandchild")).toBe("child");
+    expect(registry.agentToRoot.has("grandchild")).toBe(false);
+
+    // 2. Observe child -> main
+    registry.recordChildAgent("child", "main");
+    expect(registry.agentLineage.get("child")).toBe("main");
+    expect(registry.agentToRoot.get("child")).toBe("session-A");
+
+    // 3. Resolve grandchild by ID alone: resolves through lineage chain grandchild -> child -> main -> session-A
+    const ctxGrandchild: OmpExtensionContext = { agent: { kind: "sub", id: "grandchild" }, cwd: "/repo" };
+    expect(registry.resolveRoot(ctxGrandchild.agent)).toBe(rootA);
+  });
+  it("R15i: delayed call during paused registration cannot mutate lineage to become routable after switch", async () => {
+    let registrationReceived = createDeferred();
+    let releaseRegistration = createDeferred();
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/private/session-changes/v1/register") {
+          registrationReceived.resolve();
+          await releaseRegistration.promise;
+          return Response.json({
+            version: 1,
+            serverEpoch: "epoch-1",
+            terminalIncarnation: "1",
+            ompSessionId: "session-B",
+            rootId: "rootB",
+            baselineId: "base-B",
+            root: "/repo",
+            launchCwd: "/repo",
+            disabled: false,
+            rootCwd: "/repo",
+            canonicalRoot: "/repo",
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      },
+    });
+
+    const registry = new SessionChangesProducerRegistry();
+    const producer = new SessionChangesProducer({
+      httpUrl: `http://127.0.0.1:${server.port}/private/session-changes/v1`,
+      token: "test-token",
+      registry,
+    });
+
+    try {
+      const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+      registry.registerRoot("main", rootA);
+      registry.recordChildAgent("child", "main");
+      registry.authorizeSession("session-A");
+
+      // Initially, child resolves to rootA
+      const ctxChild: OmpExtensionContext = { agent: { kind: "sub", id: "child" }, cwd: "/repo" };
+      expect(registry.resolveRoot(ctxChild.agent)).toBe(rootA);
+
+      // 1. Switch to Session B (clears authorization and unbinds main & descendants synchronously)
+      const switchPromise = producer.handleSessionSwitch("session-B", "main", "/repo");
+      await registrationReceived.promise;
+
+      // Authorization is cleared, main and child were unbound
+      expect(registry.authorizedSessions.has("session-A")).toBe(false);
+      expect(registry.authorizedSessions.has("session-B")).toBe(false);
+      expect(registry.agentToRoot.has("child")).toBe(false);
+      expect(registry.agentLineage.has("child")).toBe(false);
+
+      // 2. Delayed call arrives from Session A with { id: "child", parentId: "main" }
+      const delayedCtx: OmpExtensionContext = {
+        agent: { kind: "sub", id: "child", parentId: "main" },
+        cwd: "/repo",
+      };
+      // Must fail closed because parent is not authorized
+      expect(registry.resolveRoot(delayedCtx.agent)).toBeUndefined();
+      // Lazy discovery must NOT mutate agentLineage during unauthenticated / paused switch!
+      expect(registry.agentLineage.has("child")).toBe(false);
+
+      // 3. Release Session B's registration
+      releaseRegistration.resolve();
+      await switchPromise;
+
+      // Session B is now active and authorized
+      expect(registry.authorizedSessions.has("session-B")).toBe(true);
+      const ctxMainB: OmpExtensionContext = { agent: { kind: "main" }, cwd: "/repo" };
+      expect(registry.resolveRoot(ctxMainB.agent)?.ompSessionId).toBe("session-B");
+
+      // 4. An ID-only lookup for "child" arrives in Session B
+      // It must NOT route to Session B because lazy discovery was prevented!
+      expect(registry.resolveRoot(ctxChild.agent)).toBeUndefined();
+    } finally {
+      releaseRegistration.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R16d: capacity shifting while head invalidation is paused at peer preserves object identity removal", async () => {
+    const capture1Received = createDeferred();
+    const releaseCapture1 = createDeferred();
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          if (body.captureId === "head-inv") {
+            capture1Received.resolve();
+            await releaseCapture1.promise;
+            return Response.json({
+              version: 1,
+              captureId: body.captureId,
+              results: (body.paths as string[]).map((p: string) => ({
+                path: p,
+                status: "unproven",
+              })),
+            });
+          }
+          return new Response("Internal Server Error", { status: 500 });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const root = createRootSessionRegistration("sess-r16d", "epoch-1", "1", "base", "/repo");
+      // Populate queue to capacity (64 entries: inv-0 to inv-63)
+      for (let i = 0; i < 64; i++) {
+        root.pendingInvalidations.push({ captureId: i === 0 ? "head-inv" : `inv-${i}`, paths: [`f_${i}.ts`], timestamp: Date.now() });
+      }
+      expect(root.pendingInvalidations.length).toBe(64);
+      registry.registerRoot("main", root);
+
+      const flushPromise = producer.flushPendingInvalidations(root);
+      // Wait for head-inv to be in-flight
+      await capture1Received.promise;
+
+      // While head-inv is in-flight, push 1 more entry through production recordTimedOutAttempt at capacity
+      // This shifts position 0 (head-inv) and appends extra-inv at the end
+      (producer as any).recordTimedOutAttempt(root, "extra-inv", ["extra.ts"]);
+      expect(root.pendingInvalidations.length).toBe(64);
+      expect(root.pendingInvalidations[0].captureId).toBe("inv-1");
+
+      // Release capture for head-inv
+      releaseCapture1.resolve();
+      await flushPromise;
+
+      // inv-0 (head-inv) was shifted at capacity and removed by identity
+      expect(root.pendingInvalidations.some((i) => i.captureId === "head-inv")).toBe(false);
+      // inv-1 was NOT deleted by a positional shift() bug; it survived and remains in queue!
+      expect(root.pendingInvalidations[0].captureId).toBe("inv-1");
+      expect(root.pendingInvalidations.some((i) => i.captureId === "extra-inv")).toBe(true);
+      expect(root.pendingInvalidations.length).toBe(64);
+    } finally {
+      releaseCapture1.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R16e: unacknowledged or unrecognized path statuses retain unconfirmed paths in queue", async () => {
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const body = await req.json();
+        // Server acknowledges only path-1, returns unrecognized status for path-2
+        return Response.json({
+          version: 1,
+          captureId: body.captureId,
+          results: [
+            { path: "path-1.ts", status: "unproven" },
+            { path: "path-2.ts", status: "rejectedInvalidStatus" },
+          ],
+        });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const root = createRootSessionRegistration("sess-r16e", "epoch-1", "1", "base", "/repo");
+      root.pendingInvalidations.push({
+        captureId: "inv-partial-status",
+        paths: ["path-1.ts", "path-2.ts"],
+        timestamp: Date.now(),
+      });
+      registry.registerRoot("main", root);
+
+      await producer.flushPendingInvalidations(root);
+
+      // path-1 was acknowledged and removed; path-2 remains queued!
+      expect(root.pendingInvalidations.length).toBe(1);
+      expect(root.pendingInvalidations[0].paths).toEqual(["path-2.ts"]);
+    } finally {
+      server.stop(true);
     }
   });
 });
