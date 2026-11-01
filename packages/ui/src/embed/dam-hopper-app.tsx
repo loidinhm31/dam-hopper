@@ -25,7 +25,6 @@ import {
   getAuthToken,
   setAuthToken,
   readServerProfiles,
-  isSameOriginProfile,
   subscribeToProfileChanges,
 } from "@/api/server-config.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
@@ -34,7 +33,6 @@ import { AgentStatusBridge } from "@/components/organisms/AgentStatusBridge.js";
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import { AppZoomProvider } from "@/contexts/AppZoomContext.js";
 import { AndroidChromeInputPolicyProvider } from "@/contexts/AndroidChromeInputPolicyContext.js";
-import { useSshForwardHost } from "@/contexts/SshForwardHostContext.js";
 import { AndroidChromeKeyboardNotice } from "@/components/organisms/AndroidChromeKeyboardNotice.js";
 import { TunnelReminderBanner } from "@/components/organisms/TunnelReminderBanner.js";
 import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
@@ -55,17 +53,6 @@ import {
   dismissFreshResetNotice,
   checkLegacyDeepLink,
 } from "@/lib/fresh-state-reset.js";
-export {
-  SshForwardHostProvider,
-  SshForwardScopeBridge,
-  useSshForwardHost,
-  type SshForwardHostEnvironment,
-} from "@/contexts/SshForwardHostContext.js";
-export {
-  BrowserDebugHostProvider,
-  useBrowserDebugHost,
-  type BrowserDebugHostEnvironment,
-} from "@/contexts/BrowserDebugHostContext.js";
 export {
   AppZoomProvider,
   useAppZoom,
@@ -113,11 +100,6 @@ const AgentStorePage = lazy(() =>
 const UsagePage = lazy(() =>
   import("@/components/pages/UsagePage.js").then((m) => ({
     default: m.UsagePage,
-  })),
-);
-const SshForwardingPage = lazy(() =>
-  import("@/components/pages/SshForwardingPage.js").then((m) => ({
-    default: m.SshForwardingPage,
   })),
 );
 
@@ -262,10 +244,6 @@ export function DamHopperApp() {
   const cognitoActive = useCognitoModeStore((state) => state.active);
   const qc = useQueryClient();
   const activeProfile = useServerProfile();
-  const { host: sshForwardHost, environment: sshForwardEnvironment } =
-    useSshForwardHost();
-  const sshForwardAvailable =
-    sshForwardHost !== null && sshForwardEnvironment.kind === "nativeDesktop";
   const activeProfileId = activeProfile?.id;
   const activeProfileUrl = activeProfile?.url;
   const activeProfileConnectionKey = JSON.stringify([
@@ -453,18 +431,21 @@ export function DamHopperApp() {
                   </ErrorBoundary>
                 }
               />
-              {sshForwardAvailable ? (
-                <Route
-                  path="/ssh-forwarding"
-                  element={
-                    <ErrorBoundary>
-                      <Suspense fallback={LOADING_FALLBACK}>
-                        <SshForwardingPage />
-                      </Suspense>
-                    </ErrorBoundary>
-                  }
-                />
-              ) : null}
+              <Route
+                path="/ssh-forwarding"
+                element={
+                  <div className="flex h-full items-center justify-center p-8 text-center">
+                    <div className="max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
+                      <h2 className="mb-2 text-lg font-semibold text-[var(--color-text)]">
+                        SSH Port Forwarding Retired
+                      </h2>
+                      <p className="text-sm text-[var(--color-text-muted)]">
+                        Native desktop SSH port forwarding has been removed. Use standard SSH client tunneling or server-managed port forwards.
+                      </p>
+                    </div>
+                  </div>
+                }
+              />
             </Routes>
               </div>
             </div>

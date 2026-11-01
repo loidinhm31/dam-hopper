@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11" fill="none">
+  <rect width="100%" height="100%" fill="#070B13"/>
+<title>Command palette</title>
+<rect x="10" y="10" width="880" height="380" rx="8" fill="#131B25" stroke="#3B82F6" stroke-width="1.5"/>
+<rect x="22" y="22" width="856" height="34" rx="3" fill="#070B13" stroke="#2A3746" stroke-width="1"/>
+<text x="34" y="44" fill="#F8FAFC" font-size="13">⌘ &gt;  _</text>
+<text x="780" y="44" fill="#7689A2" font-size="10">Esc</text>
+<text x="22" y="78" fill="#7689A2" font-size="10">Modes:  &gt; commands   @ agents   # windows/desktops   / files   ! recipes</text>
+<text x="22" y="110" fill="#FACC15" font-size="11" font-weight="700">! NEEDS ATTENTION</text>
+<rect x="22" y="120" width="856" height="28" rx="3" fill="#202B36" stroke="#3B82F6" stroke-width="1"/>
+<text x="34" y="139" fill="#F8FAFC" font-size="11">▸ [Claude] Jump to dam-hopper #1     [prod-eu] [D2]</text>
+<text x="800" y="139" fill="#3B82F6" font-size="10">^⌥A</text>
+<text x="34" y="169" fill="#F8FAFC" font-size="11">▸ [OMP]    Jump to vision-nav #1     [gpu-lab] [D3]</text>
+<text x="22" y="206" fill="#7689A2" font-size="11" font-weight="700">WINDOWS &amp; DESKTOPS</text>
+<text x="34" y="232" fill="#F8FAFC" font-size="11">▸ Pop out / snap back focused window</text>
+<text x="800" y="232" fill="#3B82F6" font-size="10">^⌥F</text>
+<text x="34" y="258" fill="#F8FAFC" font-size="11">▸ Split focused tile right / down</text>
+<text x="780" y="258" fill="#3B82F6" font-size="10">^⇧5 / ^⌥\</text>
+<text x="34" y="284" fill="#F8FAFC" font-size="11">▸ Review session changes for active terminal</text>
+<text x="800" y="284" fill="#3B82F6" font-size="10">^⌥D</text>
+<text x="22" y="320" fill="#F97316" font-size="11" font-weight="700">RECIPES</text>
+<text x="34" y="346" fill="#F8FAFC" font-size="11">▸ Launch: Full-Stack Feature Sprint → new desktop</text>
+<text x="780" y="346" fill="#3B82F6" font-size="10">!sprint</text>
+</svg>

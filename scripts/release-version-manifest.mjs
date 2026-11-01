@@ -1,6 +1,6 @@
 /**
  * Version synchronization manifest and file modifiers for DamHopper release files.
- * Manages the 13 required repository release files.
+ * Manages the 9 required repository release files.
  */
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -133,9 +133,6 @@ export function updateAllSynchronizedLocations(repoRoot, currentVersion, newVers
 
   const updateTargets = [
     { rel: "apps/browser-extension/package.json", type: "json" },
-    { rel: "apps/native/package.json", type: "json" },
-    { rel: "apps/native/src-tauri/Cargo.toml", type: "cargo" },
-    { rel: "apps/native/src-tauri/tauri.conf.json", type: "json" },
     { rel: "apps/web/package.json", type: "json" },
     { rel: "packages/browser-bridge/package.json", type: "json" },
     { rel: "packages/shared/package.json", type: "json" },

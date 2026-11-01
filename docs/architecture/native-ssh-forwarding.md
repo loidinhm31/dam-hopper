@@ -1,11 +1,13 @@
-# Native SSH Forwarding Architecture
+# Native SSH Forwarding Architecture (Retired)
 
-**Authority:** Native Desktop Host (`apps/native/`, `apps/native/src-tauri/src/ssh_forward/`, `packages/ui/src/contexts/SshForwardHostContext.tsx`)  
-**Status:** Maintained Architecture Specification  
+> **Retirement Notice (Phase 02 / P0a):**
+> Desktop SSH port forwarding and the Tauri 2 desktop host (`apps/native`) were permanently retired and removed under [Phase 02 of the AI Dev OS redesign](../../plans/261101-1738-ai-dev-os-redesign/phase-02-native-and-ssh-removal.md). All desktop Tauri IPC commands, Rust backend modules (`apps/native/src-tauri/src/ssh_forward/`), UI components, and host hooks were deleted. Route navigation to `/ssh-forwarding` displays retired-feature guidance in the web application. Remote Git-over-SSH authentication remains supported through server APIs and UI retry helpers.
+> This document is retained solely for historical architecture reference.
 
-This specification defines the multi-scope concurrent SSH forwarding architecture for the DamHopper native desktop host. Each server profile maps to an independent native scope. The native manager treats each profile as an isolated forwarding scope; project focus, route changes, Settings navigation, and page focus do not open, close, or replace another scope.
+**Authority:** Historical Native Desktop Host (Removed in Phase 02)  
+**Status:** Retired Architecture Specification  
 
-**Platform Boundary:** SSH forwarding is strictly a Windows desktop capability (`cfg(windows)`). The web browser and native mobile hosts receive no SSH-forward host or Tauri command fallback. Native Browser Debug is a separate child-WebView capability that consumes the explicit Browser target owner defined in [Agent Store, Ports, and Browser Architecture](./agent-store-ports-and-browser.md).
+This historical specification defines the multi-scope concurrent SSH forwarding architecture formerly implemented for the DamHopper native desktop host (`apps/native`). Each server profile mapped to an independent native scope.
 
 ## Lifecycle Contract
 

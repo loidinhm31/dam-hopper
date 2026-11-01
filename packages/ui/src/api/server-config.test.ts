@@ -6,11 +6,7 @@ import {
   getActiveProfileId,
   getAuthToken,
   createProfile,
-  getExistingNativeScopeId,
   getProfiles,
-  getNativeScopeId,
-  getNativeScopeIds,
-  completeNativeScopeDeletion,
   clearAuthToken,
   deleteProfile,
   getServerUrl,
@@ -23,8 +19,6 @@ import {
   setServerUrl,
   shouldClearAuthTokenForUrlChange,
   readServerProfiles,
-  removeNativeScopeId,
-  retireNativeScopeId,
   subscribeToProfileChanges,
   reconcileManagedProfile,
 } from "./server-config.js";
@@ -104,121 +98,6 @@ describe("server profile migration", () => {
     expect(getProfiles()).toEqual([profile]);
   });
 
-  it("aliases legacy profile IDs for native scopes without rewriting profile data", () => {
-    const legacyId = "phase5-runtime-profile";
-    const profile = {
-      id: legacyId,
-      name: "Legacy Server",
-      url: "http://legacy.test",
-      authType: "basic" as const,
-      createdAt: 1,
-    };
-    saveProfiles([profile]);
-    setActiveProfile(legacyId);
-    setAuthToken("legacy-token", legacyId);
-    const persistedProfiles = localStorage.getItem("damhopper_server_profiles");
-
-    const nativeScopeId = getNativeScopeId(legacyId);
-
-    expect(nativeScopeId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-    );
-    expect(getNativeScopeId(legacyId)).toBe(nativeScopeId);
-    expect(getNativeScopeIds([legacyId])).toEqual({
-      status: "available",
-      ids: [nativeScopeId],
-    });
-    expect(getNativeScopeId(nativeScopeId)).toBe(nativeScopeId);
-    expect(localStorage.getItem("damhopper_server_profiles")).toBe(
-      persistedProfiles,
-    );
-    expect(getActiveProfileId()).toBe(legacyId);
-    expect(getAuthToken(legacyId)).toBe("legacy-token");
-
-    expect(retireNativeScopeId(legacyId)).toBe(nativeScopeId);
-    expect(getExistingNativeScopeId(legacyId)).toBeNull();
-    expect(completeNativeScopeDeletion(legacyId, nativeScopeId)).toBe(true);
-
-    expect(removeNativeScopeId(legacyId)).toBe(true);
-    expect(localStorage.getItem("damhopper_native_scope_ids")).toBe("{}");
-  });
-
-  it("keeps UUID profile IDs as native scope IDs", () => {
-    const profileId = "22222222-2222-4222-8222-222222222222";
-
-    expect(getNativeScopeId(profileId)).toBe(profileId);
-    expect(localStorage.getItem("damhopper_native_scope_ids")).toBeNull();
-  });
-
-  it("fails closed when native scope aliases are malformed", () => {
-    localStorage.setItem("damhopper_native_scope_ids", "not-json");
-
-    expect(() => getNativeScopeId("legacy-profile")).toThrow(
-      "Native scope identity storage unavailable",
-    );
-    expect(getExistingNativeScopeId("legacy-profile")).toBeNull();
-    expect(getNativeScopeIds(["legacy-profile"])).toEqual({
-      status: "unavailable",
-    });
-    expect(removeNativeScopeId("legacy-profile")).toBe(false);
-  });
-
-  it("gives a recreated legacy profile a new native identity", () => {
-    const firstNativeId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const secondNativeId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-    vi.stubGlobal("crypto", {
-      randomUUID: vi
-        .fn()
-        .mockReturnValueOnce(firstNativeId)
-        .mockReturnValueOnce(secondNativeId),
-    });
-
-    expect(getNativeScopeId("legacy-profile")).toBe(firstNativeId);
-    expect(retireNativeScopeId("legacy-profile")).toBe(firstNativeId);
-    expect(getExistingNativeScopeId("legacy-profile")).toBeNull();
-    expect(getNativeScopeId("legacy-profile")).toBe(secondNativeId);
-
-    expect(completeNativeScopeDeletion("legacy-profile", firstNativeId)).toBe(
-      true,
-    );
-    expect(getNativeScopeId("legacy-profile")).toBe(secondNativeId);
-  });
-
-  it("hides separate-origin active profiles from unsupported native hosts", () => {
-    saveProfiles([
-      {
-        id: "remote",
-        name: "Remote",
-        url: "http://remote.example:4800",
-        authType: "basic",
-        createdAt: 1,
-      },
-    ]);
-    setActiveProfile("remote");
-    document.documentElement.dataset.appHost = "native";
-    document.documentElement.dataset.appPlatform = "android";
-
-    expect(getActiveProfile()).toBeNull();
-    expect(getServerUrl()).toBe("http://127.0.0.1:4800");
-  });
-
-  it("allows separate-origin profiles on Windows native desktop", () => {
-    saveProfiles([
-      {
-        id: "remote",
-        name: "Remote",
-        url: "http://remote.example:4800",
-        authType: "none",
-        createdAt: 1,
-      },
-    ]);
-    setActiveProfile("remote");
-    document.documentElement.dataset.appHost = "native";
-    document.documentElement.dataset.appPlatform = "windows";
-
-    expect(getActiveProfile()?.id).toBe("remote");
-    expect(getServerUrl()).toBe("http://remote.example:4800");
-  });
 
   it("normalizes equivalent URLs without treating trailing slashes as changes", () => {
     expect(normalizeServerUrl(" localhost:4800/// ")).toBe(

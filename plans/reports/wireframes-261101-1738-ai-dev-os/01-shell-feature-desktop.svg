@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900"  role="img" aria-labelledby="os-shell-title os-shell-desc" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11" fill="none">
+  <rect width="100%" height="100%" fill="#070B13"/>
+  <title id="os-shell-title">DamHopper OS Shell Anatomy at 1440x900</title>
+  <desc id="os-shell-desc">Top bar (40px) with desktop switcher, context selector, workflow ribbon, command palette trigger, and system tray; Left dock (48px) with app launchers and attention badges; Workspace canvas (1392x860) with binary tiled windows and a floating window overlay.</desc>
+  <!-- 1. OS TOP BAR (1440 x 40) -->
+  <rect x="0.5" y="0.5" width="1439" height="899" stroke="#2A3746" stroke-width="1"/>
+  <rect x="1" y="1" width="1438" height="39" fill="#131B25" stroke="#2A3746" stroke-width="1"/>
+  <text x="14" y="25" fill="#3B82F6" font-weight="700" font-size="12">DH//OS</text>
+  <line x1="68" y1="8" x2="68" y2="32" stroke="#2A3746"/>
+  <rect x="76" y="7" width="70" height="26" rx="3" stroke="#2A3746" fill="none"/>
+  <text x="84" y="24" fill="#7689A2">1:Hub</text>
+  <circle cx="136" cy="20" r="3" fill="#FACC15"/>
+  <rect x="152" y="7" width="112" height="26" rx="3" stroke="#3B82F6" stroke-width="1.5" fill="none"/>
+  <text x="160" y="24" fill="#F8FAFC" font-weight="600">2:dam-hopper*</text>
+  <rect x="244" y="12" width="14" height="15" rx="2" stroke="#FACC15" fill="none"/>
+  <text x="247" y="23" fill="#FACC15" font-size="9" font-weight="700">!1</text>
+  <rect x="270" y="7" width="66" height="26" rx="3" stroke="#2A3746" fill="none"/>
+  <text x="278" y="24" fill="#7689A2">3:core</text>
+  <circle cx="326" cy="20" r="3" fill="#22C55E"/>
+  <rect x="342" y="7" width="26" height="26" rx="3" stroke="#2A3746" fill="none"/>
+  <text x="351" y="24" fill="#7689A2">+</text>
+  <line x1="376" y1="8" x2="376" y2="32" stroke="#2A3746"/>
+  <rect x="384" y="7" width="286" height="26" rx="3" stroke="#2A3746" fill="none"/>
+  <circle cx="395" cy="20" r="3.5" fill="#22C55E"/>
+  <text x="404" y="24" fill="#3B82F6" font-size="10">prod-eu</text>
+  <text x="452" y="24" fill="#7689A2">/</text>
+  <text x="462" y="24" fill="#F8FAFC" font-weight="600">dam-hopper</text>
+  <text x="540" y="24" fill="#7689A2">:</text>
+  <text x="548" y="24" fill="#22C55E" font-size="10">wt:feat-os ▾</text>
+  <rect x="678" y="7" width="248" height="26" rx="3" stroke="#2A3746" fill="none"/>
+  <text x="688" y="24" fill="#3B82F6" font-size="10">◆ Plan: OS Shell</text>
+  <text x="794" y="24" fill="#7689A2" font-size="10">[3/5 · 18m]</text>
+  <text x="872" y="24" fill="#F8FAFC" font-size="10">+Note</text>
+  <rect x="934" y="7" width="154" height="26" rx="3" stroke="#2A3746" fill="none"/>
+  <text x="944" y="24" fill="#7689A2" font-size="10">⌘ Command...</text>
+  <text x="1026" y="24" fill="#3B82F6" font-size="9">^⌥K</text>
+  <rect x="1096" y="7" width="128" height="26" rx="3" stroke="#2A3746" fill="none"/>
+  <text x="1104" y="19" fill="#7689A2" font-size="9">CPU 42%</text>
+  <rect x="1104" y="23" width="46" height="4" stroke="#2A3746" fill="none"/>
+  <rect x="1104" y="23" width="20" height="4" fill="#22C55E"/>
+  <text x="1158" y="19" fill="#7689A2" font-size="9">MEM 78%</text>
+  <rect x="1158" y="23" width="46" height="4" stroke="#2A3746" fill="none"/>
+  <rect x="1158" y="23" width="36" height="4" fill="#FACC15"/>
+  <circle cx="1214" cy="15" r="3.5" fill="#FACC15"/>
+  <rect x="1230" y="7" width="54" height="26" rx="3" stroke="#2A3746" fill="none"/>
+  <text x="1237" y="24" fill="#7689A2" font-size="10">☾ 24m</text>
+  <rect x="1290" y="7" width="44" height="26" rx="3" stroke="#2A3746" fill="none"/>
+  <text x="1298" y="24" fill="#FACC15" font-weight="700" font-size="10">🔔 2</text>
+  <rect x="1340" y="7" width="54" height="26" rx="3" stroke="#2A3746" fill="none"/>
+  <circle cx="1350" cy="20" r="3.5" fill="#22C55E"/>
+  <text x="1358" y="24" fill="#F8FAFC" font-size="10">3/3</text>
+  <rect x="1400" y="7" width="32" height="26" rx="3" stroke="#2A3746" fill="none"/>
+  <text x="1407" y="24" fill="#7689A2" font-size="10">👁</text>
+  <!-- 2. LEFT DOCK / LAUNCHER (48 x 860) -->
+  <rect x="1" y="40" width="47" height="859" fill="#131B25" stroke="#2A3746" stroke-width="1"/>
+  <rect x="6" y="48" width="36" height="36" rx="4" stroke="#2A3746" fill="none"/>
+  <circle cx="3" cy="66" r="2" fill="#F8FAFC"/>
+  <text x="14" y="70" fill="#F8FAFC" font-size="10">HUB</text>
+  <circle cx="38" cy="52" r="5" fill="#FACC15"/>
+  <text x="36" y="55" fill="#131B25" font-size="8" font-weight="700">1</text>
+  <rect x="6" y="92" width="36" height="36" rx="4" stroke="#3B82F6" stroke-width="1.5" fill="none"/>
+  <line x1="2" y1="98" x2="2" y2="122" stroke="#3B82F6" stroke-width="2"/>
+  <text x="12" y="114" fill="#3B82F6" font-weight="700" font-size="10">&gt;_</text>
+  <circle cx="38" cy="96" r="5" fill="#FACC15"/>
+  <text x="36" y="99" fill="#131B25" font-size="8" font-weight="700">1</text>
+  <rect x="6" y="136" width="36" height="36" rx="4" stroke="#2A3746" fill="none"/>
+  <circle cx="3" cy="154" r="2" fill="#F8FAFC"/>
+  <text x="12" y="158" fill="#F8FAFC" font-size="10">DIR</text>
+  <rect x="6" y="180" width="36" height="36" rx="4" stroke="#2A3746" fill="none"/>
+  <circle cx="3" cy="198" r="2" fill="#F8FAFC"/>
+  <text x="12" y="202" fill="#F8FAFC" font-size="10">EDT</text>
+  <rect x="6" y="224" width="36" height="36" rx="4" stroke="#2A3746" fill="none"/>
+  <circle cx="3" cy="242" r="2" fill="#F8FAFC"/>
+  <text x="12" y="246" fill="#F8FAFC" font-size="10">GIT</text>
+  <rect x="6" y="268" width="36" height="36" rx="4" stroke="#2A3746" fill="none"/>
+  <text x="12" y="290" fill="#7689A2" font-size="10">DIF</text>
+  <rect x="6" y="312" width="36" height="36" rx="4" stroke="#2A3746" fill="none"/>
+  <text x="12" y="334" fill="#7689A2" font-size="10">SRC</text>
+  <rect x="6" y="356" width="36" height="36" rx="4" stroke="#2A3746" stroke-dasharray="2 2" fill="none"/>
+  <circle cx="3" cy="374" r="2" fill="#7689A2"/>
+  <text x="12" y="378" fill="#7689A2" font-size="10">WEB</text>
+  <rect x="6" y="400" width="36" height="36" rx="4" stroke="#2A3746" fill="none"/>
+  <text x="12" y="422" fill="#7689A2" font-size="10">PRT</text>
+  <rect x="6" y="444" width="36" height="36" rx="4" stroke="#2A3746" fill="none"/>
+  <text x="12" y="466" fill="#7689A2" font-size="10">PLN</text>
+  <line x1="10" y1="690" x2="38" y2="690" stroke="#2A3746"/>
+  <rect x="6" y="702" width="36" height="36" rx="4" stroke="#2A3746" fill="none"/>
+  <text x="12" y="724" fill="#3B82F6" font-size="10">RCP</text>
+  <rect x="6" y="746" width="36" height="36" rx="4" stroke="#2A3746" fill="none"/>
+  <text x="12" y="768" fill="#FACC15" font-size="10">MON</text>
+  <rect x="6" y="790" width="36" height="36" rx="4" stroke="#2A3746" fill="none"/>
+  <text x="12" y="812" fill="#7689A2" font-size="10">AGT</text>
+  <rect x="6" y="834" width="36" height="36" rx="4" stroke="#2A3746" fill="none"/>
+  <text x="12" y="856" fill="#7689A2" font-size="10">CFG</text>
+  <!-- 3. DESKTOP WORKSPACE AREA (1392 x 860) -->
+  <rect x="52" y="44" width="830" height="852" rx="4" stroke="#3B82F6" stroke-width="1.5" fill="none"/>
+  <rect x="52" y="44" width="830" height="28" fill="#131B25" stroke="#3B82F6" stroke-width="1"/>
+  <text x="62" y="62" fill="#F8FAFC" font-weight="700">&gt;_ Terminals</text>
+  <rect x="160" y="49" width="210" height="18" rx="2" stroke="#2A3746" fill="none"/>
+  <text x="166" y="61" fill="#3B82F6" font-size="10">prod-eu · dam-hopper:feat-os</text>
+  <rect x="378" y="49" width="128" height="18" rx="2" stroke="#FACC15" fill="none"/>
+  <text x="384" y="61" fill="#FACC15" font-size="10">Claude · ! Attention</text>
+  <text x="728" y="62" fill="#7689A2" font-size="10">[↗] [⊟] [⊞] [—] [□] [×]</text>
+  <line x1="276" y1="72" x2="276" y2="896" stroke="#2A3746"/>
+  <text x="64" y="92" fill="#7689A2" font-size="10">// AGENTS (3) [Filter: All ▾]</text>
+  <rect x="60" y="100" width="208" height="48" rx="2" stroke="#FACC15" fill="none"/>
+  <text x="66" y="116" fill="#FACC15" font-weight="600" font-size="10">[Claude] dam-hopper #1 · !</text>
+  <text x="66" y="132" fill="#7689A2" font-size="9">prod-eu · Needs attention</text>
+  <rect x="60" y="154" width="208" height="44" rx="2" stroke="#2A3746" fill="none"/>
+  <text x="66" y="170" fill="#22C55E" font-size="10">[OMP] dam-hopper #2 · Working</text>
+  <text x="66" y="186" fill="#7689A2" font-size="9">prod-eu</text>
+  <text x="64" y="222" fill="#7689A2" font-size="10">// PROJECTS &amp; WORKTREES</text>
+  <rect x="60" y="230" width="208" height="58" rx="2" stroke="#3B82F6" fill="none"/>
+  <text x="66" y="246" fill="#F8FAFC" font-weight="600" font-size="10">● dam-hopper [prod-eu] (2)</text>
+  <text x="66" y="262" fill="#3B82F6" font-size="9">⎇ feat/os-shell · wt:feat-os</text>
+  <text x="66" y="276" fill="#7689A2" font-size="9">↳ a91f20c Wireframe shell</text>
+  <rect x="277" y="72" width="605" height="26" fill="#131B25" stroke="#2A3746"/>
+  <text x="286" y="89" fill="#F8FAFC" font-size="10">⠿ ● [Claude·!] dam-hopper #1 📌 ×</text>
+  <text x="518" y="89" fill="#7689A2" font-size="10">| ⠿ ● [OMP·Working] dam-hopper #2 ×</text>
+  <text x="760" y="89" fill="#3B82F6" font-size="10">[Δ Changes]</text>
+  <text x="290" y="124" fill="#F8FAFC" font-size="11">$ claude</text>
+  <text x="290" y="146" fill="#FACC15" font-size="11">(live terminal output)</text>
+  <line x1="885" y1="44" x2="885" y2="896" stroke="#2A3746" stroke-width="2"/>
+  <rect x="888" y="44" width="548" height="380" rx="4" stroke="#2A3746" fill="none"/>
+  <rect x="888" y="44" width="548" height="28" fill="#131B25" stroke="#2A3746"/>
+  <text x="898" y="62" fill="#F8FAFC" font-weight="600">DIR Files*</text>
+  <text x="974" y="62" fill="#7689A2">| SRC Search</text>
+  <rect x="1068" y="49" width="196" height="18" rx="2" stroke="#2A3746" fill="none"/>
+  <text x="1074" y="61" fill="#7689A2" font-size="10">prod-eu · dam-hopper:feat-os</text>
+  <text x="1334" y="62" fill="#7689A2" font-size="10">[↗] [—] [□] [×]</text>
+  <text x="902" y="94" fill="#F8FAFC" font-size="10">▾ packages/ui/src/components/</text>
+  <text x="918" y="114" fill="#3B82F6" font-size="10">▸ os/ (proposed)</text>
+  <text x="918" y="134" fill="#F8FAFC" font-size="10">▾ organisms/</text>
+  <text x="934" y="154" fill="#F8FAFC" font-size="10">  SplitLayout.tsx [M]</text>
+  <text x="934" y="174" fill="#F8FAFC" font-size="10">  TopNav.tsx [M]</text>
+  <line x1="888" y1="427" x2="1436" y2="427" stroke="#2A3746" stroke-width="2"/>
+  <rect x="888" y="430" width="548" height="466" rx="4" stroke="#2A3746" fill="none"/>
+  <rect x="888" y="430" width="548" height="28" fill="#131B25" stroke="#2A3746"/>
+  <text x="898" y="448" fill="#F8FAFC" font-weight="600">GIT Git*</text>
+  <text x="964" y="448" fill="#7689A2">| DIF Changes (4)</text>
+  <rect x="1084" y="435" width="196" height="18" rx="2" stroke="#2A3746" fill="none"/>
+  <text x="1090" y="447" fill="#7689A2" font-size="10">prod-eu · dam-hopper:feat-os</text>
+  <text x="1334" y="448" fill="#7689A2" font-size="10">[↗] [—] [□] [×]</text>
+  <text x="902" y="480" fill="#22C55E" font-size="10">* a91f20c (HEAD -&gt; feat/os-shell) Wireframe shell</text>
+  <text x="902" y="500" fill="#3B82F6" font-size="10">* 71e04b2 (origin/main) Merge worktree delta</text>
+  <text x="902" y="516" fill="#7689A2" font-size="10">| * 4c82d19 SessionChangesHost tuple fence</text>
+  <!-- 4. FLOATING WINDOW LAYER (Z-ORDERED OVERLAY) -->
+  <rect x="460" y="536" width="620" height="314" rx="8" fill="#131B25" stroke="#3B82F6" stroke-width="1.5"/>
+  <rect x="460" y="536" width="620" height="28" rx="8" fill="#131B25" stroke="#2A3746"/>
+  <text x="474" y="554" fill="#F8FAFC" font-weight="700">EDT Editor — SplitLayout.tsx</text>
+  <rect x="678" y="541" width="196" height="18" rx="2" stroke="#2A3746" fill="none"/>
+  <text x="684" y="553" fill="#3B82F6" font-size="10">prod-eu · dam-hopper:feat-os</text>
+  <text x="942" y="554" fill="#3B82F6" font-size="10">[↙ Snap] [—] [□] [×]</text>
+  <text x="476" y="584" fill="#7689A2" font-size="10">  1 | import { Group, Panel, Separator } from "react-resizable-panels";</text>
+  <text x="476" y="604" fill="#22C55E" font-size="10">+ 2 | import type { OsWindowNode } from "@/types/os-layout.js";</text>
+  <text x="476" y="624" fill="#F8FAFC" font-size="10">  3 | export function SplitLayout({ root, layout }: SplitLayoutProps) {</text>
+  <text x="476" y="836" fill="#7689A2" font-size="9">Ln 2, Col 42 · UTF-8 · TypeScript React · Blame: loidinh (2m ago)</text>
+</svg>

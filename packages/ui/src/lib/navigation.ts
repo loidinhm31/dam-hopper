@@ -5,7 +5,6 @@ import {
   Package,
   Code2,
   ChartNoAxesCombined,
-  GitBranch,
   ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
@@ -26,16 +25,6 @@ export const BASE_NAV: NavEntry[] = [
   { to: "/settings", icon: Settings, label: "SETTINGS" },
 ];
 
-const SSH_FORWARD_NAV: NavEntry = {
-  to: "/ssh-forwarding",
-  icon: GitBranch,
-  label: "SSH FORWARDS",
-};
-
-export function getNavEntries({
-  sshForwardHostAvailable,
-}: {
-  sshForwardHostAvailable: boolean;
-}): NavEntry[] {
-  return sshForwardHostAvailable ? [...BASE_NAV, SSH_FORWARD_NAV] : BASE_NAV;
+export function getNavEntries(): NavEntry[] {
+  return BASE_NAV;
 }

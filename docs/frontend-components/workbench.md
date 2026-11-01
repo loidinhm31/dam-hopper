@@ -2,8 +2,7 @@
 
 Shared shell, owner selection, Git history, and Settings composition details moved from the [component index](../frontend-components.md).
 
-Architecture and documentation for the shared React UI used by the DamHopper
-browser host and Tauri native host.
+Architecture and documentation for the shared React UI used by the DamHopper web host (`apps/web`). (The desktop Tauri host `apps/native` was retired in Phase 02).
 
 ## Overview
 
@@ -12,10 +11,8 @@ The frontend is split into thin hosts plus a shared React 19 UI package:
 - `apps/web` performs fresh browser-state reset and profile migration, reconciles
   runtime configuration, creates an ordinary `QueryClient`, and renders the
   shared shell once.
-- `apps/native` performs the same reset/migration, creates an ordinary
-  `QueryClient`, mounts native providers, and renders the shared shell once.
 - `packages/ui` owns the shared shell, keyed profile runtimes, components,
-  hooks, stores, API clients, styles, and tests consumed by both hosts.
+  hooks, stores, API clients, styles, and tests. (The former desktop host `apps/native` was retired in Phase 02).
 
 Shared runtime libraries:
 

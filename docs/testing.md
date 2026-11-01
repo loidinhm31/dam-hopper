@@ -256,6 +256,6 @@ The following workflows represent documented gaps in full-application E2E covera
 | **P1** | **Terminal & Workflow Continuity** | xterm fit adapter, replay notifications, workflow context tests | Live PTY reconnection, PTY output stream continuity across route transitions, bell notification click navigation. |
 | **P2** | **File Editing & Git Mutations** | Monaco editor wrappers, Git dialog component tests, backend Git tests | In-app file creation, dirty tab preservation, Git commit/squash/push with real conflict dialog resolution. |
 | **P2** | **Media Sessions & Token Revocation** | Explorer image/video ticket fixtures, native ticket issuance | Media ticket expiration, cookie-based token rotation, client-initiated logout and revocation. |
-| **P2** | **Native Desktop Host & WebView2** | Tauri Rust tests, SSH-forward E2E, native smoke scripts | Visual qualification of Tauri window decorations, native menu interactions, and platform-specific dialogs. |
+| **P2** | **Native Desktop Host & WebView2 (Retired)** | Historical Tauri Rust tests, SSH-forward E2E, native smoke scripts | Retired under Phase 02 (P0a); desktop Tauri host and desktop SSH forwarding removed. |
 
 *Note: Historical manual qualifications and targeted component mounts must not be conflated with automated full-application Playwright journeys.*

@@ -3,14 +3,9 @@ import { createPortal } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AppZoomProvider, useAppZoom } from "@/contexts/AppZoomContext.js";
-import { BrowserDebugHostProvider } from "@/contexts/BrowserDebugHostContext.js";
 import { BrowserDebugKeepAliveHost } from "@/components/organisms/BrowserDebugKeepAliveHost.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import type { BrowserDebugController } from "@/hooks/use-browser-debug.js";
-import type {
-  BrowserDebugHost,
-  BrowserDebugHostViewport,
-} from "@/lib/browser-debug-host.js";
 import { APP_ZOOM_STORAGE_KEY } from "@/lib/app-zoom.js";
 import { getBrowserDebugViewportGeometry } from "@/lib/browser-debug-keep-alive.js";
 import {
@@ -55,26 +50,13 @@ function BrowserGeometryHarness() {
   const { level } = useAppZoom();
   const viewportRef = useRef<HTMLDivElement>(null);
   const viewportStageRef = useRef<HTMLDivElement>(null);
-  const [viewport, setViewport] = useState<BrowserDebugHostViewport | null>(
-    null,
-  );
-  const host = useMemo<BrowserDebugHost>(
-    () => ({
-      setTarget: () => {},
-      setViewport,
-      command: () => {},
-      subscribe: () => () => {},
-      destroy: () => {},
-    }),
-    [],
-  );
   const browser = useMemo(
     () => ({ target: null }) as BrowserDebugController,
     [],
   );
 
   return (
-    <BrowserDebugHostProvider host={host} environment={{ kind: "native" }}>
+    <div>
       <TopNavAppZoomControls />
       <div ref={viewportStageRef} style={{ height: "400px", width: "600px" }}>
         <div ref={viewportRef} style={{ height: "180px", width: "320px" }} />
@@ -86,12 +68,7 @@ function BrowserGeometryHarness() {
         viewportVersion={level}
         isViewportVisible
       />
-      <output data-testid="browser-host-viewport">
-        {viewport
-          ? `${Math.round(viewport.width)}x${Math.round(viewport.height)}`
-          : "none"}
-      </output>
-    </BrowserDebugHostProvider>
+    </div>
   );
 }
 
@@ -250,10 +227,15 @@ describe("shared app layout zoom in Chromium", () => {
       ),
     );
 
-    expect(
-      container.querySelector("[data-testid=browser-host-viewport]")
-        ?.textContent,
-    ).toBe("320x180");
+    const getHostFrame = () => {
+      const hostDiv = container.querySelector<HTMLDivElement>(
+        'div[style*="position: fixed"]',
+      );
+      if (!hostDiv) return "none";
+      return `${Math.round(parseFloat(hostDiv.style.width))}x${Math.round(parseFloat(hostDiv.style.height))}`;
+    };
+
+    expect(getHostFrame()).toBe("320x180");
 
     await act(async () => {
       container
@@ -264,10 +246,7 @@ describe("shared app layout zoom in Chromium", () => {
     });
 
     expect(document.documentElement.style.zoom).toBe("110%");
-    expect(
-      container.querySelector("[data-testid=browser-host-viewport]")
-        ?.textContent,
-    ).toBe("352x198");
+    expect(getHostFrame()).toBe("320x180");
   });
 
   it("lets decreased zoom cross the compact workspace breakpoint", async () => {

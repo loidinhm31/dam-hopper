@@ -1,6 +1,6 @@
 # Frontend Components
 
-DamHopper shares one React UI between the browser and Tauri hosts. The host entry points are thin; `packages/ui` owns the shell, profile-scoped connections, components, state, and API clients (canonical export `packages/ui/src/embed/dam-hopper-app.tsx`).
+DamHopper delivers a shared React 19 UI package (`packages/ui`) hosted by the Vite web application (`apps/web`). (The former desktop Tauri host `apps/native` was retired in Phase 02). The host entry point is thin; `packages/ui` owns the shell, profile-scoped connections, components, state, and API clients (canonical export `packages/ui/src/embed/dam-hopper-app.tsx`).
 
 Design guidelines, color tokens, and typography are defined in [Platform Integrations](./frontend-components/platform-integrations.md#shared-design-system-and-embedding-contract) and `packages/ui/src/index.css`.
 

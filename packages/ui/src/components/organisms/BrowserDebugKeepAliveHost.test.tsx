@@ -7,11 +7,6 @@ import {
   type BrowserDebugKeepAliveHandle,
 } from "./BrowserDebugKeepAliveHost.js";
 import type { BrowserDebugController } from "@/hooks/use-browser-debug.js";
-import { BrowserDebugHostProvider } from "@/contexts/BrowserDebugHostContext.js";
-import type {
-  BrowserDebugHost,
-  BrowserDebugHostEvent,
-} from "@/lib/browser-debug-host.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 const target = {
   url: "http://localhost:3000",
@@ -51,26 +46,6 @@ function controller(): BrowserDebugController {
   };
 }
 
-function nativeHost() {
-  let listener: ((event: BrowserDebugHostEvent) => void) | null = null;
-  const host: BrowserDebugHost = {
-    setTarget: vi.fn(),
-    setViewport: vi.fn(),
-    setZoom: vi.fn(),
-    command: vi.fn(),
-    subscribe: vi.fn((next) => {
-      listener = next;
-      return () => {
-        listener = null;
-      };
-    }),
-    destroy: vi.fn(),
-  };
-  return {
-    host,
-    emit: (event: BrowserDebugHostEvent) => listener?.(event),
-  };
-}
 
 describe("BrowserDebugKeepAliveHost", () => {
   let root: ReturnType<typeof createRoot> | null = null;
@@ -277,215 +252,55 @@ describe("BrowserDebugKeepAliveHost", () => {
     expect(overlay?.style.pointerEvents).toBe("none");
   });
 
-  it("keeps native bounds at the requested size while remeasuring stage visibility", async () => {
-    container = document.createElement("div");
-    document.body.appendChild(container);
-    const viewport = document.createElement("div");
-    const stage = document.createElement("div");
-    document.body.append(stage, viewport);
-    document.documentElement.style.zoom = "80%";
-    const viewportRef = { current: viewport };
-    const viewportStageRef = { current: stage };
-    const native = nativeHost();
-    const browser = controller();
-    let viewportRect = { top: 20, left: 10, width: 500, height: 400 };
-
-    Object.defineProperty(viewport, "getBoundingClientRect", {
-      value: () => viewportRect,
-    });
-    Object.defineProperty(stage, "getBoundingClientRect", {
-      value: () => ({ top: 50, left: 40, width: 200, height: 160 }),
-    });
-
-    root = createRoot(container);
-    await act(async () => {
-      root?.render(
-        <BrowserDebugHostProvider
-          host={native.host}
-          environment={{ kind: "native", platform: "android" }}
-        >
-          <BrowserDebugKeepAliveHost
-            browser={browser}
-            viewportRef={viewportRef}
-            viewportStageRef={viewportStageRef}
-            viewportVersion={0}
-            isViewportVisible
-          />
-        </BrowserDebugHostProvider>,
-      );
-    });
-    expect(native.host.setZoom).toHaveBeenLastCalledWith(0.8);
-
-    expect(native.host.setViewport).toHaveBeenLastCalledWith({
-      top: 20,
-      left: 10,
-      width: 500,
-      height: 400,
-    });
-
-    viewportRect = { top: 60, left: 20, width: 500, height: 400 };
-    await act(async () => {
-      stage.dispatchEvent(new Event("scroll"));
-    });
-
-    expect(native.host.setViewport).toHaveBeenLastCalledWith({
-      top: 60,
-      left: 20,
-      width: 500,
-      height: 400,
-    });
-
-    viewportRect = { top: -120, left: -30, width: 500, height: 400 };
-    await act(async () => {
-      stage.dispatchEvent(new Event("scroll"));
-    });
-
-    expect(native.host.setViewport).toHaveBeenLastCalledWith({
-      top: -120,
-      left: -30,
-      width: 500,
-      height: 400,
-    });
-  });
-
-  it("recreates the native child when the server profile changes", async () => {
-    container = document.createElement("div");
-    document.body.appendChild(container);
-    const viewportRef = { current: null as HTMLDivElement | null };
-    const browser = controller();
-    const native = nativeHost();
-    root = createRoot(container);
-
-    const render = (profileId: string) =>
-      root?.render(
-        <BrowserDebugHostProvider
-          host={native.host}
-          environment={{ kind: "native", platform: "windows" }}
-        >
-          <BrowserDebugKeepAliveHost
-            browser={browser}
-            profileId={profileId}
-            viewportRef={viewportRef}
-            viewportVersion={0}
-            isViewportVisible
-          />
-        </BrowserDebugHostProvider>,
-      );
-
-    await act(async () => render("profile-a"));
-    await act(async () => render("profile-b"));
-
-    expect(vi.mocked(native.host.setTarget).mock.calls).toEqual([
-      [browser.target],
-      [null],
-      [browser.target],
-    ]);
-    expect(browser.setBridgeStatus).toHaveBeenLastCalledWith("loading");
-    expect(browser.setBridgeCapabilities).toHaveBeenLastCalledWith([]);
-    expect(browser.setSelection).toHaveBeenLastCalledWith(null);
-    expect(browser.setPickerActive).toHaveBeenLastCalledWith(false);
-    expect(browser.setError).toHaveBeenLastCalledWith(null);
-  });
-
-  it("accepts generation zero after the native host instance is replaced", async () => {
-    container = document.createElement("div");
-    document.body.appendChild(container);
-    const viewportRef = { current: null as HTMLDivElement | null };
-    const browser = controller();
-    const first = nativeHost();
-    const second = nativeHost();
-    root = createRoot(container);
-
-    const render = (host: BrowserDebugHost) =>
-      root?.render(
-        <BrowserDebugHostProvider
-          host={host}
-          environment={{ kind: "native", platform: "windows" }}
-        >
-          <BrowserDebugKeepAliveHost
-            browser={browser}
-            viewportRef={viewportRef}
-            viewportVersion={0}
-            isViewportVisible
-          />
-        </BrowserDebugHostProvider>,
-      );
-
-    await act(async () => render(first.host));
-    first.emit({ type: "status", status: "loading", generation: 4 });
-    first.emit({ type: "ready", capabilities: ["picker"], generation: 4 });
-    expect(browser.setBridgeStatus).toHaveBeenCalledWith("ready");
-
-    await act(async () => render(second.host));
-    second.emit({ type: "status", status: "loading", generation: 0 });
-    second.emit({ type: "ready", capabilities: ["picker"], generation: 0 });
-    expect(browser.setBridgeStatus).toHaveBeenLastCalledWith("ready");
-  });
-
-  it("sets native viewport to null when Cognito mode activates and restores frame on dismissal", async () => {
+  it("hides the iframe overlay when Cognito mode activates", async () => {
     useCognitoModeStore.getState().reset();
     container = document.createElement("div");
     document.body.appendChild(container);
     const viewport = document.createElement("div");
-    viewport.getBoundingClientRect = () =>
-      ({
-        left: 10,
+    Object.defineProperty(viewport, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
         top: 20,
-        right: 410,
-        bottom: 320,
+        left: 10,
         width: 400,
         height: 300,
-        x: 10,
-        y: 20,
-        toJSON: () => {},
-      }) as DOMRect;
+        right: 410,
+        bottom: 320,
+      }),
+    });
     document.body.appendChild(viewport);
     const viewportRef = { current: viewport };
     root = createRoot(container);
     const browser = controller();
-    const { host } = nativeHost();
 
     await act(async () => {
       root?.render(
-        <BrowserDebugHostProvider
-          host={host}
-          environment={{ kind: "native", platform: "linux" }}
-        >
-          <BrowserDebugKeepAliveHost
-            browser={browser}
-            viewportRef={viewportRef}
-            viewportVersion={0}
-            isViewportVisible
-          />
-        </BrowserDebugHostProvider>,
+        <BrowserDebugKeepAliveHost
+          browser={browser}
+          viewportRef={viewportRef}
+          viewportVersion={0}
+          isViewportVisible
+        />,
       );
     });
 
-    expect(host.setViewport).toHaveBeenCalledWith({
-      left: 10,
-      top: 20,
-      width: 400,
-      height: 300,
-    });
+    const overlay = container.firstElementChild as HTMLElement | null;
+    expect(overlay?.style.visibility).toBe("visible");
+    expect(overlay?.getAttribute("aria-hidden")).toBe("false");
 
     await act(async () => {
       useCognitoModeStore.getState().toggle("Mod+Alt+KeyB");
     });
 
-    expect(host.setViewport).toHaveBeenLastCalledWith(null);
-    expect(host.setTarget).toHaveBeenCalledTimes(1);
+    expect(overlay?.style.visibility).toBe("hidden");
+    expect(overlay?.getAttribute("aria-hidden")).toBe("true");
 
     await act(async () => {
       useCognitoModeStore.getState().toggle("Mod+Alt+KeyB");
     });
 
-    expect(host.setViewport).toHaveBeenLastCalledWith({
-      left: 10,
-      top: 20,
-      width: 400,
-      height: 300,
-    });
-    expect(host.setTarget).toHaveBeenCalledTimes(1);
+    expect(overlay?.style.visibility).toBe("visible");
+    expect(overlay?.getAttribute("aria-hidden")).toBe("false");
 
     viewport.remove();
     useCognitoModeStore.getState().reset();

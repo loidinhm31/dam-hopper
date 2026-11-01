@@ -67,7 +67,6 @@ import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicy
 import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import { useTerminalManager } from "@/hooks/use-terminal-manager.js";
 import { useBrowserDebug } from "@/hooks/use-browser-debug.js";
-import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
 import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
@@ -434,7 +433,6 @@ export default function WorkspacePage() {
     useState<GitCommitRevealRequest | null>(null);
   const [browserOpen, setBrowserOpen] = useState(false);
   const browserDebug = useBrowserDebug();
-  const browserDebugHost = useBrowserDebugHost();
   const { allProjects } = useAggregatedProjects();
   const activeProfile = useServerProfile();
   const activeProfileId = selectedProject?.profileId ?? activeProfile?.id ?? null;
@@ -458,12 +456,7 @@ export default function WorkspacePage() {
   const browserViewportRef = useRef<HTMLDivElement>(null);
   const browserViewportStageRef = useRef<HTMLDivElement>(null);
   const browserKeepAliveRef = useRef<BrowserDebugKeepAliveHandle>(null);
-  const browserViewportPlatform =
-    browserDebugHost.environment.platform ??
-    (typeof document === "undefined"
-      ? undefined
-      : document.documentElement.dataset.appPlatform) ??
-    (browserDebugHost.environment.kind === "web" ? "web" : undefined);
+  const browserViewportPlatform = "web";
   const [browserViewportState, setBrowserViewportState] = useState(() =>
     loadBrowserDebugViewport(browserViewportPlatform),
   );
@@ -1599,11 +1592,7 @@ export default function WorkspacePage() {
         url={browserDebug.inputUrl}
         bridgeStatus={browserDebug.bridgeStatus}
         extensionPresence={browserDebug.extensionPresence}
-        hostEnvironment={browserDebugHost.environment}
-        captureAvailable={
-          browserDebugHost.environment.kind === "web" ||
-          browserDebug.bridgeCapabilities.includes("capture")
-        }
+        captureAvailable={true}
         onReloadPage={() => window.location.reload()}
         viewportRef={browserViewportRef}
         viewportStageRef={browserViewportStageRef}
@@ -1667,7 +1656,6 @@ export default function WorkspacePage() {
     [
       activeBrowserTerminalTarget,
       browserDebug,
-      browserDebugHost.environment,
       browserViewportState,
       browserTerminalTargets,
       discardBrowserTerminalArtifact,

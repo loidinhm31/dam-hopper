@@ -182,26 +182,6 @@ describe("TerminalKeepAliveHost", () => {
     ]);
   });
 
-  it("disables WebGL for the native Windows WebView2 host", () => {
-    document.documentElement.dataset.appHost = "native";
-    document.documentElement.dataset.appPlatform = "windows";
-
-    renderToStaticMarkup(
-      <TerminalKeepAliveHost
-        mountedSessions={[
-          { sessionId: "visible", project: "web", command: "bash" },
-        ]}
-        webglEnabledSessionIds={new Set(["visible"])}
-      />,
-    );
-
-    expect(renderedPanelProps[0]).toEqual(
-      expect.objectContaining({
-        sessionId: "visible",
-        webglEnabled: false,
-      }),
-    );
-  });
 
   it("disables WebGL whenever app zoom is not 100%", () => {
     for (const level of [50, 80, 120]) {

@@ -1,6 +1,6 @@
 # DamHopper
 
-DamHopper is a multi-profile development workbench for web and desktop. An Axum/Tokio Rust server provides project, Git, filesystem, PTY, workflow, and host services; a shared React 19 UI is hosted by Vite on the web or by a Tauri 2 desktop app.
+DamHopper is a multi-profile development workbench. An Axum/Tokio Rust server provides project, Git, filesystem, PTY, workflow, and host services; a shared React 19 UI is hosted by Vite on the web (`apps/web`), with a companion Android client (`native/android-app`). (The former desktop Tauri host `apps/native` was retired in Phase 02).
 
 ## What it Provides
 
@@ -9,7 +9,7 @@ DamHopper is a multi-profile development workbench for web and desktop. An Axum/
 - Safe Git workflows, including compare-and-swap commit rewriting, inactive local branch editing/squash, and explicitly leased publication.
 - Real-time agent status (OMP loopback WebSocket; Codex and Claude protected Unix sockets), workflow tracking, Agent Store distribution, browser debugging, and host-resource monitoring.
 - Optional Linux terminal idle suspend with privileged RTC wake helper, and encrypted file uploads via OPAQUE PAKE. Cognito Mode is an in-browser visual privacy mask, not authentication or content redaction.
-- Native desktop local SSH port forwarding (supported strictly on Windows desktop; non-Windows native desktop enforces exact same-origin profile URLs).
+- Safe remote Git SSH authentication through server APIs and UI retry helpers. (Desktop local SSH port forwarding was retired in Phase 02).
 
 ## Repository Map
 
@@ -18,7 +18,7 @@ DamHopper is a multi-profile development workbench for web and desktop. An Axum/
 | `server/`                  | Rust Axum/Tokio API, PTYs, Git, filesystem, auth, workflow, telemetry, and host services                          |
 | `packages/ui/`             | Shared React UI, state, API/transport clients, and browser tests (canonical entry `src/embed/dam-hopper-app.tsx`) |
 | `apps/web/`                | Vite browser host                                                                                                 |
-| `apps/native/`             | Tauri 2 desktop host and Windows-native SSH port forwarding                                                       |
+| `apps/native/` *(retired)* | Former Tauri 2 desktop host and Windows SSH forwarding (removed in Phase 02)                                      |
 | `packages/shared/`         | Shared utilities, including sensitive-metadata logging redaction                                                  |
 | `packages/browser-bridge/` | Browser debugging runtime and version 1 protocol                                                                  |
 | `deploy/release/`          | Linux systemd and Windows release packaging, installers, and service templates                                    |
@@ -26,7 +26,7 @@ DamHopper is a multi-profile development workbench for web and desktop. An Axum/
 ## Requirements
 
 - Node.js 22.13.0 or newer (Node.js 24 recommended) and pnpm 10 or newer for development workflows (release installations use self-contained native binaries without Node.js).
-- Current stable Rust toolchain (container builder pinned to 1.97.1) for server and native builds; platform development headers (`libwebkit2gtk-4.1-dev` on Linux) are needed for native desktop builds.
+- Current stable Rust toolchain (container builder pinned to 1.97.1) for server builds.
 
 ## Port & Network Topology
 
@@ -97,14 +97,12 @@ To run with authentication enabled under the **Development profile** (see [Serve
 
 | Command             | Action                                                    |
 | ------------------- | --------------------------------------------------------- |
-| `pnpm dev:native`   | Run the Tauri desktop development host                    |
 | `pnpm build`        | Build the web application (`apps/web`)                    |
-| `pnpm build:native` | Build native desktop package (Linux deb/rpm)              |
 | `pnpm build:server` | Build the Rust server in release mode                     |
 | `pnpm test`         | Run Rust server unit and integration tests                |
 | `pnpm test:all`     | Run the repository test runner script across all packages |
 | `pnpm lint`         | Lint code across `apps/` and `packages/`                  |
-| `pnpm check`        | Run web build, native build, lint, and server tests       |
+| `pnpm check`        | Run web build, lint, and server tests                     |
 
 ## Documentation
 

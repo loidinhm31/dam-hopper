@@ -14,8 +14,6 @@ const KEY_TOKEN = "damhopper_auth_token";
 const KEY_USERNAME = "damhopper_auth_username";
 const KEY_PROFILES = "damhopper_server_profiles";
 const KEY_ACTIVE_PROFILE = "damhopper_active_profile_id";
-const KEY_NATIVE_SCOPE_IDS = "damhopper_native_scope_ids";
-const KEY_NATIVE_SCOPE_TOMBSTONES = "damhopper_native_scope_tombstones";
 const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PROFILE_CHANGED_EVENT = "damhopper:profile-changed";
@@ -102,13 +100,6 @@ export function getServerUrl(): string {
   const activeProfile = getActiveProfile();
   if (activeProfile) {
     return activeProfile.url.replace(/\/$/, "");
-  }
-
-  // Native mobile and unknown native hosts stay same-origin until a native
-  // HTTP/WebSocket transport exists. Windows desktop uses the existing
-  // browser transport with an exact backend CORS allowlist.
-  if (isNativeBrowserHost() && !isNativeWindowsHost()) {
-    return `${location.protocol}//${location.host}`;
   }
 
   // Priority 2: Legacy localStorage (for migration period)
@@ -463,185 +454,6 @@ function isUuidV4(value: unknown): value is string {
   return typeof value === "string" && UUID_V4.test(value);
 }
 
-type NativeScopeIds =
-  | { status: "available"; ids: string[] }
-  | { status: "unavailable" };
-
-function readNativeScopeAliases(): Record<string, string> | null {
-  let stored: string | null;
-  try {
-    stored = localStorage.getItem(KEY_NATIVE_SCOPE_IDS);
-  } catch {
-    return null;
-  }
-  if (stored === null) return Object.create(null) as Record<string, string>;
-  try {
-    const parsed: unknown = JSON.parse(stored);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-      return null;
-    const aliases: Record<string, string> = Object.create(null);
-    const nativeScopeIds = new Set<string>();
-    for (const [profileId, nativeScopeId] of Object.entries(parsed)) {
-      if (
-        !profileId ||
-        !isUuidV4(nativeScopeId) ||
-        nativeScopeIds.has(nativeScopeId)
-      )
-        return null;
-      aliases[profileId] = nativeScopeId;
-      nativeScopeIds.add(nativeScopeId);
-    }
-    return aliases;
-  } catch {
-    return null;
-  }
-}
-
-function readNativeScopeTombstones(): Record<string, string[]> | null {
-  let stored: string | null;
-  try {
-    stored = localStorage.getItem(KEY_NATIVE_SCOPE_TOMBSTONES);
-  } catch {
-    return null;
-  }
-  if (stored === null) return Object.create(null) as Record<string, string[]>;
-  try {
-    const parsed: unknown = JSON.parse(stored);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-      return null;
-    const tombstones: Record<string, string[]> = Object.create(null);
-    const nativeScopeIds = new Set<string>();
-    for (const [profileId, nativeScopeIdsForProfile] of Object.entries(
-      parsed,
-    )) {
-      if (
-        !profileId ||
-        !Array.isArray(nativeScopeIdsForProfile) ||
-        nativeScopeIdsForProfile.length === 0 ||
-        nativeScopeIdsForProfile.some(
-          (nativeScopeId) =>
-            !isUuidV4(nativeScopeId) || nativeScopeIds.has(nativeScopeId),
-        )
-      )
-        return null;
-      tombstones[profileId] = [...nativeScopeIdsForProfile];
-      for (const nativeScopeId of nativeScopeIdsForProfile)
-        nativeScopeIds.add(nativeScopeId);
-    }
-    return tombstones;
-  } catch {
-    return null;
-  }
-}
-
-function persistNativeScopeAliases(aliases: Record<string, string>): void {
-  if (!writeLocalStorage(KEY_NATIVE_SCOPE_IDS, JSON.stringify(aliases)))
-    throw new Error("Native scope identity storage unavailable");
-}
-
-function persistNativeScopeTombstones(
-  tombstones: Record<string, string[]>,
-): boolean {
-  return writeLocalStorage(
-    KEY_NATIVE_SCOPE_TOMBSTONES,
-    JSON.stringify(tombstones),
-  );
-}
-
-/** Resolve a server profile ID to the UUID required by the native scope store. */
-export function getNativeScopeId(profileId: null): null;
-export function getNativeScopeId(profileId: string): string;
-export function getNativeScopeId(profileId: string | null): string | null;
-export function getNativeScopeId(profileId: string | null): string | null {
-  if (profileId === null || isUuidV4(profileId)) return profileId;
-  const aliases = readNativeScopeAliases();
-  if (!aliases) throw new Error("Native scope identity storage unavailable");
-  const tombstones = readNativeScopeTombstones();
-  if (!tombstones) throw new Error("Native scope identity storage unavailable");
-  const existing = aliases[profileId];
-  const retired = tombstones[profileId] ?? [];
-  if (existing && !retired.includes(existing)) return existing;
-  const nativeScopeId = uuid();
-  aliases[profileId] = nativeScopeId;
-  persistNativeScopeAliases(aliases);
-  return nativeScopeId;
-}
-
-/** Resolve an existing alias without creating one during deletion/retry flows. */
-export function getExistingNativeScopeId(profileId: string): string | null {
-  if (isUuidV4(profileId)) return profileId;
-  const aliases = readNativeScopeAliases();
-  const tombstones = readNativeScopeTombstones();
-  if (!aliases || !tombstones) return null;
-  const nativeScopeId = aliases[profileId];
-  return nativeScopeId && !(tombstones[profileId] ?? []).includes(nativeScopeId)
-    ? nativeScopeId
-    : null;
-}
-
-/** Reserve a deleted legacy scope so a recreated profile receives a new identity. */
-export function retireNativeScopeId(profileId: string): string | null {
-  if (isUuidV4(profileId)) return profileId;
-  const aliases = readNativeScopeAliases();
-  const tombstones = readNativeScopeTombstones();
-  if (!aliases || !tombstones) return null;
-  const nativeScopeId = aliases[profileId];
-  if (!nativeScopeId) return null;
-  const retired = tombstones[profileId] ?? [];
-  if (!retired.includes(nativeScopeId)) {
-    tombstones[profileId] = [...retired, nativeScopeId];
-    if (!persistNativeScopeTombstones(tombstones)) return null;
-  }
-  delete aliases[profileId];
-  writeLocalStorage(KEY_NATIVE_SCOPE_IDS, JSON.stringify(aliases));
-  return nativeScopeId;
-}
-
-/** Complete a retired-scope purge without deleting a newer recreated alias. */
-export function completeNativeScopeDeletion(
-  profileId: string,
-  nativeScopeId: string,
-): boolean {
-  if (isUuidV4(profileId)) return true;
-  const aliases = readNativeScopeAliases();
-  const tombstones = readNativeScopeTombstones();
-  if (!aliases || !tombstones) return false;
-  const retired = tombstones[profileId] ?? [];
-  const remaining = retired.filter((id) => id !== nativeScopeId);
-  if (remaining.length > 0) tombstones[profileId] = remaining;
-  else delete tombstones[profileId];
-  if (aliases[profileId] === nativeScopeId) delete aliases[profileId];
-  const aliasesWritten = writeLocalStorage(
-    KEY_NATIVE_SCOPE_IDS,
-    JSON.stringify(aliases),
-  );
-  const tombstonesWritten = persistNativeScopeTombstones(tombstones);
-  return aliasesWritten && tombstonesWritten;
-}
-
-/** Resolve a complete profile ID list, failing closed if storage cannot persist aliases. */
-export function getNativeScopeIds(
-  profileIds: readonly string[],
-): NativeScopeIds {
-  try {
-    const ids = profileIds.map((profileId) => getNativeScopeId(profileId));
-    if (new Set(ids).size !== ids.length)
-      throw new Error("Duplicate native scope identity");
-    return { status: "available", ids };
-  } catch {
-    return { status: "unavailable" };
-  }
-}
-
-/** Remove a legacy alias only after its native scope has been purged. */
-export function removeNativeScopeId(profileId: string): boolean {
-  if (isUuidV4(profileId)) return true;
-  const aliases = readNativeScopeAliases();
-  if (!aliases) return false;
-  if (!(profileId in aliases)) return true;
-  delete aliases[profileId];
-  return writeLocalStorage(KEY_NATIVE_SCOPE_IDS, JSON.stringify(aliases));
-}
 
 /** Reads profiles without confusing unavailable storage with an empty list. */
 export function readServerProfiles(): KnownServerProfiles {
@@ -759,42 +571,12 @@ export function getActiveProfileId(): string | null {
   }
 }
 
-function isNativeBrowserHost(): boolean {
-  return (
-    typeof document !== "undefined" &&
-    document.documentElement.dataset.appHost === "native"
-  );
-}
-
-/** Whether this is the supported Windows desktop native host. */
-export function isNativeWindowsHost(): boolean {
-  return (
-    isNativeBrowserHost() &&
-    document.documentElement.dataset.appPlatform === "windows"
-  );
-}
-
-export function isSameOriginProfile(profile: ServerProfile): boolean {
-  if (!isNativeBrowserHost() || isNativeWindowsHost()) return true;
-  if (typeof window === "undefined") return true;
-
-  try {
-    return (
-      new URL(normalizeServerUrl(profile.url), window.location.href).origin ===
-      window.location.origin
-    );
-  } catch {
-    return false;
-  }
-}
 
 /** Get the currently active profile */
 export function getActiveProfile(): ServerProfile | null {
   const id = getActiveProfileId();
   if (!id) return null;
-  return (
-    getProfiles().find((p) => p.id === id && isSameOriginProfile(p)) ?? null
-  );
+  return getProfiles().find((p) => p.id === id) ?? null;
 }
 
 /** Set the active profile by ID */

@@ -179,40 +179,12 @@ authentication failures. After the key loads, only failed targets are retried;
 successful targets are retained and are not replayed. A changed connection
 generation cancels the retry.
 
-## Native Forwarding Scopes
+## Native Forwarding Scopes (Retired in Phase 02)
 
-On Windows desktop, each saved server profile has an independent native SSH
-forwarding scope. Two connected profiles can keep forwarding concurrently, even
-when they contain equal imported connection or rule IDs. Project selection,
-route changes, Settings focus, and SSH-page focus do not switch or restart a
-scope.
+> **Retirement Notice (Phase 02 / P0a):**
+> The native desktop SSH forwarding subsystem and its UI routes were permanently retired in Phase 02 (P0a) of the AI Dev OS redesign. Route navigation to `/ssh-forwarding` displays retired-feature guidance in the web application. Remote Git-over-SSH operations and credentials remain supported through the Git page and server APIs (see [Git and SSH retry](#git-and-ssh-retry) above).
 
-The native lifecycle is:
-
-1. The desktop host opens one client epoch.
-2. Each profile that needs forwarding opens its own scope and receives a
-   `NativeScopeRef`.
-3. Profile/rule/connection, credential, and trust actions use that scope
-   reference.
-4. Disconnect, profile removal, or explicit scope close tears down only that
-   profile's live workers, connections, listeners, challenges, and session
-   credentials.
-5. A profile deletion can purge retained native data only after the profile list
-   is confirmed absent and browser storage is available.
-
-Network loss enters bounded reconnect handling; it does not delete the profile
-or close its scope. A new client epoch, native app shutdown, or Windows process
-exit is the global teardown boundary. Native SSH forwards bind local
-`127.0.0.1` ports, and a port already used by another active scope is rejected.
-
-Native SSH forwarding is unavailable in browser, Android, iOS, Linux, and macOS
-hosts; none receives a fallback Tauri call or alternate transport. Native
-Browser Debug is separate and keeps the explicit Browser target owner from
-[Agent Store, Ports, and Browser Architecture](./architecture/agent-store-ports-and-browser.md). It is not selected by the
-active SSH scope or by project focus.
-
-See [Native SSH Forwarding Architecture](./architecture/native-ssh-forwarding.md)
-for the IPC, counter, persistence, and Windows qualification contract.
+For historical documentation of the former desktop SSH forwarding lifecycle, IPC command surface, and credential storage model, see the retired [Native SSH Forwarding Architecture](./architecture/native-ssh-forwarding.md).
 ## Integration and Qualification Gate
 
 Integrated qualification covers the web workbench and Linux-hosted shared behavior

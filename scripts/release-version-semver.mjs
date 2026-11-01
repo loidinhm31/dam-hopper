@@ -120,19 +120,15 @@ Options:
   --allow-dirty          Allow running with existing uncommitted working tree changes
   -h, --help             Show this help information
 
-Synchronized Release Locations (13):
+Synchronized Release Locations (9):
   1. apps/browser-extension/package.json
-  2. apps/native/package.json
-  3. apps/native/src-tauri/Cargo.toml
-  4. apps/native/src-tauri/Cargo.lock
-  5. apps/native/src-tauri/tauri.conf.json
-  6. apps/web/package.json
-  7. packages/browser-bridge/package.json
-  8. packages/shared/package.json
-  9. packages/ui/package.json
- 10. server/Cargo.toml
- 11. server/Cargo.lock
- 12. scripts/run-uat.sh
- 13. tests/deploy/linux-release-rootless-smoke.sh
+  2. apps/web/package.json
+  3. packages/browser-bridge/package.json
+  4. packages/shared/package.json
+  5. packages/ui/package.json
+  6. server/Cargo.toml
+  7. server/Cargo.lock
+  8. scripts/run-uat.sh
+  9. tests/deploy/linux-release-rootless-smoke.sh
 `);
 }

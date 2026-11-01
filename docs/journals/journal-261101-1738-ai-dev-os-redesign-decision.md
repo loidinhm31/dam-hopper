@@ -1,0 +1,9 @@
+# AI-centered development OS redesign — approved design & plan
+
+- **Mode:** decision-summary
+- **Problem & outcome:** Redesign DamHopper web UI into an AI-centered development "OS" (ROS-inspired) reusing existing features. Constraints: additive API only, desktop-only (min 1024x640, Android out of scope), remove Tauri and Usage, fold Dashboard/Host resources into OS metrics.
+- **Key decisions & trade-offs:** Tiling+float hybrid desktop generalizing SplitLayout tree (rejected free-floating, dockview); client-only OS services (WindowManager, AppRegistry/intents, Context, KeepAlive, InputArbiter, TopicFacade, Notifications, os:v1 localStorage, RecipeEngine) with 17 apps; Agent Hub + Launch Recipes (graph view deferred). Phased /os hidden route then cutover; P0 removals ship early; prototype-first; future server ROS layer deferred. Full Usage removal (server /api/usage, manual telemetry.db/HMAC deletion, docs scrubbed; Android Usage UI removed).
+- **Key evidence:** POST /api/terminal with existing ID kills/replaces active sessions -> RecipeEngine transitions to outcomeUnknown and forbids unverified reposts.
+- **Design status:** **Approved**. Artifacts: [design report](../../plans/reports/brainstorm-261101-1738-ai-dev-os-redesign.md), [UI design](../../plans/reports/ui-ux-designer-261101-1738-ai-dev-os-initial-ui.md), [wireframes](../../plans/reports/wireframes-261101-1738-ai-dev-os/index.html).
+- **Planning consent & result:** User consented (prototype-first). Hard-route plan created at [plans/261101-1738-ai-dev-os-redesign/plan.md](../../plans/261101-1738-ai-dev-os-redesign/plan.md) (10 phases, 26 contracts). Independent review resolved 1 high + 1 medium risk (READY); validation interview completed (9 questions, V1-V6 propagated).
+- **Next step:** Execute `/evc-cmd-code plans/261101-1738-ai-dev-os-redesign/plan.md` once implementation is authorized (not authorized yet).

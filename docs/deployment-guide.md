@@ -224,9 +224,6 @@ Contributors and source packagers can build the backend and web frontend directl
 - Git
 - Node.js 20+ and pnpm 10+
 - Current stable Rust toolchain (container builder pinned to 1.97.1; locked dependency MSRV 1.95)
-- For native desktop host builds (`apps/native`):
-  - **Browser Bridge Bundle:** Must run `pnpm --filter @dam-hopper/browser-bridge build` prior to building `apps/native` (required by `apps/native/src-tauri/build.rs`).
-  - **Linux Platform Headers:** `webkit2gtk-4.1` development headers (`libwebkit2gtk-4.1-dev` on Debian/Ubuntu, `webkit2gtk4.1-devel` on Fedora).
 
 ### Build Steps
 

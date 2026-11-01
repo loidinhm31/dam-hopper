@@ -1,5 +1,4 @@
 import { getNavEntries } from "@/lib/navigation.js";
-import { useSshForwardHost } from "@/contexts/SshForwardHostContext.js";
 import { cn } from "@/lib/utils.js";
 import { TopNavRouteLink } from "@/components/molecules/TopNavRouteLink.js";
 
@@ -16,11 +15,7 @@ export function TopNavRouteMenu({
   compactTextClass,
   isCompactWorkspace,
 }: TopNavRouteMenuProps) {
-  const { host, environment } = useSshForwardHost();
-  const navEntries = getNavEntries({
-    sshForwardHostAvailable:
-      host !== null && environment.kind === "nativeDesktop",
-  });
+  const navEntries = getNavEntries();
 
   return (
     <>

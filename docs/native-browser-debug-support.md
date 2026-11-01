@@ -1,11 +1,11 @@
-# Native Browser Debug support
+# Native Browser Debug support (Retired)
 
-The native Browser Debug host is a least-privileged Tauri child WebView. The
-target receives only the document-start bridge and a narrow relay; it does not
-receive Tauri commands, filesystem access, shell access, opener access, or
-generic IPC capabilities. The existing web iframe adapter remains the
-fallback and rollback path.
+> **Retirement Notice (Phase 02 / P0a):**
+> The native desktop Tauri child WebView host (`apps/native`) was permanently retired in Phase 02 (P0a) of the AI Dev OS redesign. `BrowserDebugKeepAliveHost` was collapsed to its standard web iframe path, `BrowserDebugHostContext` was deleted, and all native child-WebView controllers and IPC commands were removed.
+> Browser Debug now runs exclusively via the web iframe host (`BrowserDebugKeepAliveHost`) with optional browser extension sync. See [Agent Store, Ports, and Browser Architecture](./architecture/agent-store-ports-and-browser.md) and [Platform Integrations](./frontend-components/platform-integrations.md) for current maintained documentation.
+> This document is retained solely for historical reference.
 
+The historical native Browser Debug host was a least-privileged Tauri child WebView.
 Integrated web qualification passed the Browser ownership and handoff
 scenarios. The Windows native S13 gate remains blocked until a real packaged
 runtime records WebView2, DPAPI, SSH-scope, and Browser relay evidence; this

@@ -3,7 +3,6 @@
 @import "@xterm/xterm/css/xterm.css";
 @source "./**/*.{ts,tsx}";
 @source "../../apps/web/src/**/*.{ts,tsx}";
-@source "../../apps/native/src/**/*.{ts,tsx}";
 
 /* Tailwind Theme Configuration — Developer Tool Dark Theme */
 @theme {

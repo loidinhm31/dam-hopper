@@ -30,7 +30,6 @@ vi.mock("@/api/server-config.js", () => ({
   getAuthToken: () => null,
   setAuthToken: vi.fn(),
   readServerProfiles: () => ({ status: "available", profiles: [] }),
-  isSameOriginProfile: () => false,
   subscribeToProfileChanges: vi.fn(() => () => {}),
 }));
 
@@ -38,16 +37,6 @@ vi.mock("@/hooks/use-server-profile.js", () => ({
   useServerProfile: () => null,
 }));
 
-vi.mock("@/contexts/SshForwardHostContext.js", () => ({
-  SshForwardHostProvider: ({ children }: { children: React.ReactNode }) => children,
-  SshForwardScopeBridge: () => null,
-  useSshForwardHost: () => ({ host: null, environment: { kind: "web" } }),
-}));
-
-vi.mock("@/contexts/BrowserDebugHostContext.js", () => ({
-  BrowserDebugHostProvider: ({ children }: { children: React.ReactNode }) => children,
-  useBrowserDebugHost: () => null,
-}));
 
 vi.mock("@/components/pages/DashboardPage.js", () => ({
   DashboardPage: () => <div data-testid="dashboard-page">Dashboard</div>,
@@ -145,5 +134,29 @@ describe("DamHopperApp Cognito Mode root boundary", () => {
     expect(contentDiv?.hasAttribute("inert")).toBe(false);
     expect(contentDiv?.getAttribute("aria-hidden")).toBeNull();
     expect(document.querySelector("[data-cognito-mode-overlay]")).toBeNull();
+  });
+
+  it("renders retirement notice for /ssh-forwarding deep link", async () => {
+    window.history.pushState({}, "", "/ssh-forwarding");
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(container.textContent).toContain("SSH Port Forwarding Retired");
+    expect(container.textContent).toContain(
+      "Native desktop SSH port forwarding has been removed",
+    );
+
+    await act(async () => root.unmount());
+    container.remove();
+    window.history.pushState({}, "", "/");
   });
 });

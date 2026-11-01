@@ -104,7 +104,6 @@ try {
   // Test full synchronized locations in mock workspace
   const mockWorkspace = join(tempDir, "workspace");
   mkdirSync(join(mockWorkspace, "apps/browser-extension"), { recursive: true });
-  mkdirSync(join(mockWorkspace, "apps/native/src-tauri"), { recursive: true });
   mkdirSync(join(mockWorkspace, "apps/web"), { recursive: true });
   mkdirSync(join(mockWorkspace, "packages/browser-bridge"), { recursive: true });
   mkdirSync(join(mockWorkspace, "packages/shared"), { recursive: true });
@@ -115,7 +114,6 @@ try {
 
   const pkgPaths = [
     "apps/browser-extension/package.json",
-    "apps/native/package.json",
     "apps/web/package.json",
     "packages/browser-bridge/package.json",
     "packages/shared/package.json",
@@ -124,14 +122,12 @@ try {
   for (const rel of pkgPaths) {
     writeFileSync(join(mockWorkspace, rel), JSON.stringify({ version: "0.11.0" }, null, 2) + "\n");
   }
-  writeFileSync(join(mockWorkspace, "apps/native/src-tauri/tauri.conf.json"), JSON.stringify({ version: "0.11.0" }, null, 2) + "\n");
-  writeFileSync(join(mockWorkspace, "apps/native/src-tauri/Cargo.toml"), '[package]\nname = "dam-hopper-native"\nversion = "0.11.0"\n');
   writeFileSync(join(mockWorkspace, "server/Cargo.toml"), '[package]\nname = "dam-hopper-server"\nversion = "0.11.0"\n');
   writeFileSync(join(mockWorkspace, "scripts/run-uat.sh"), '"releaseVersion": "0.11.0"\n--release-version "0.11.0"');
   writeFileSync(join(mockWorkspace, "tests/deploy/linux-release-rootless-smoke.sh"), 'RELEASE_VERSION="${DAM_HOPPER_RELEASE_VERSION:-0.11.0}"');
 
   const processed = updateAllSynchronizedLocations(mockWorkspace, "0.11.0", "0.12.0", false);
-  assert.equal(processed.length, 11);
+  assert.equal(processed.length, 8);
 
   // Verify all files were updated
   for (const rel of pkgPaths) {

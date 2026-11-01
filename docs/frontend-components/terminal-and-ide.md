@@ -105,24 +105,9 @@ The iframe is hosted by a singleton `BrowserDebugKeepAliveHost` outside the cond
 
 The panel renders bridge status, a live address bar, Back/Forward/Reload controls, a bounded local console, picker controls, and bounded selection metadata. Successfully loaded browser targets are retained as 12 local-only recent-address suggestions in the address input; saved entries contain only origin and path (never credentials, query strings, or hashes), are deduplicated, and are revalidated before each load. The bridge reports full same-origin paths after document loads, History API changes, browser back/forward, and hash changes, so the address bar tracks the actual iframe location. Navigation and console forwarding require an extension built for the exact DamHopper parent origin; they are unavailable to generic loopback parents. Console data is bounded, redacted for common credentials, rendered as text, retained only in the browser session, and never included in terminal artifacts. It does not execute page commands or expose raw HTML, cookies, storage, credentials, or other browser secrets. In wide Terminal and IDE mode, the Browser is a resizable sibling of the focused terminal; that ready terminal is selected automatically for artifact preparation, and a prepared artifact remains bound to it through review/insertion. The compact Browser surface retains its explicit live-terminal chooser. When a selection exists, capture controls can request a browser-tab capture from an explicit user gesture, crop the selected region locally, or accept a PNG/JPEG file or pasted image. Manual JPEG input is converted to PNG locally because the authenticated artifact endpoint accepts PNG only. Capture is optional: denial, unsupported APIs, wrong-surface selection, or crop failure leave semantic selection available. Images remain local until the explicit artifact attach action; closing the Browser surface stops every capture track but intentionally does not unload the iframe.
 
-The native Tauri host preserves this UI contract with a Rust-owned child WebView
-instead of the singleton iframe and extension setup. Its controller keeps one
-browsing context while changing bounds or visibility, invalidates selection and
-capture state on navigation-generation changes, and uses profile-scoped storage.
-The extension setup below applies only to the web/browser host; native clients
-use the embedded bridge asset.
+The former desktop Tauri child WebView host was permanently retired in Phase 02 (P0a). `BrowserDebugKeepAliveHost` collapsed to its standard web iframe path across all platforms.
 
-Both native and web hosts expose Responsive and Custom viewport controls.
-Custom width and height are whole CSS-pixel values bounded to 160–4096. The
-top-bar `+` probe and the symmetric stepper buttons change both dimensions by
-16px, with state persisted in browser-local storage under a platform-scoped
-key. Keyboard shortcuts are intentionally not part of this feature. A custom
-stage may overflow and scroll; the native child and fallback iframe both use
-stage-aware remeasurement. The native child receives the complete requested
-viewport rectangle so responsive layout keeps the selected width and height;
-only the fallback iframe is clipped to the visible stage intersection. This
-does not resize the main window; main-window resizing is a separate native
-shell concern.
+The web host exposes Responsive and Custom viewport controls. Custom width and height are whole CSS-pixel values bounded to 160–4096. The top-bar `+` probe and the symmetric stepper buttons change both dimensions by 16px, with state persisted in browser-local storage under a platform-scoped key. Keyboard shortcuts are intentionally not part of this feature. A custom stage may overflow and scroll with stage-aware remeasurement.
 
 #### Browser Debug extension
 
@@ -144,39 +129,10 @@ The iframe still must be embeddable: target `X-Frame-Options` or restrictive
 `Content-Security-Policy: frame-ancestors` can reject the preview before the
 extension runs.
 
-### Native SSH forwarding host
+### Native SSH forwarding host (Retired in Phase 02)
 
-**Locations:** `apps/native/src/native-ssh-forward-host.ts`,
-`packages/ui/src/lib/ssh-forward-host.ts`,
-`packages/ui/src/contexts/SshForwardHostContext.tsx`,
-`packages/ui/src/hooks/use-ssh-forward.ts`
-
-The native host is constructed only for enabled Windows desktop support. It
-opens one client context, stores a `ScopeHandle` per server-profile scope, and
-passes an explicit `NativeScopeRef` with every snapshot, connection, rule,
-credential, and trust operation. Mutations serialize per scope; equal IDs in
-different scopes remain independent. The host validates exact DTO keys, UUIDs,
-counters, timestamps, identity, scope generation, and revisions before state
-enters React.
-
-`SshForwardScopeBridge` derives native scope IDs from the saved profile list,
-calls `reconcileKnownScopes` when that list changes, and purges a deleted scope
-only after profile absence and available storage are confirmed. `useSshForward`
-can consume an explicit scope reference or open the requested scope through the
-host. Project focus, route changes, Settings focus, and SSH-page focus do not
-switch native scope. Browser and mobile hosts render the shared UI without an
-SSH-forward host.
-
-`ssh-forward:changed` is a bounded refetch hint. It must match the current
-desktop/manager/client context, activation token, scope, generation, and
-numeric revisions before a scoped snapshot is requested; events never patch
-React state directly.
-
-Native Browser Debug is independent: `NativeBrowserDebugHost.setTarget` receives
-the `BrowserDebugTarget` with explicit `owner`, creates one
-`browser-debug` child, and rejects stale owner/origin/session/generation relay
-messages. It must not infer Browser ownership from the most recently opened SSH
-scope or active project.
+> **Retirement Notice (Phase 02 / P0a):**
+> The native Windows desktop SSH forwarding host (`apps/native/src/native-ssh-forward-host.ts`), UI contexts (`SshForwardHostContext.tsx`), hooks (`use-ssh-forward.ts`), and contract libraries (`ssh-forward-host.ts`) were deleted in Phase 02 (P0a). Route navigation to `/ssh-forwarding` displays retired-feature guidance in the web application. Remote Git-over-SSH authentication remains supported through server APIs and UI retry helpers.
 
 ### Multi Terminal Display
 

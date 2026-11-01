@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { isNativeWindowsHost } from "@/api/server-config.js";
 import { terminalKey } from "@/api/ownership.js";
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
@@ -32,7 +31,7 @@ export function TerminalKeepAliveHost({
   const { isAndroidChromeNativeInputSuppressed } =
     useAndroidChromeInputPolicy();
   const { level: appZoomLevel } = useAppZoom();
-  const disableWebgl = isNativeWindowsHost() || appZoomLevel !== 100;
+  const disableWebgl = appZoomLevel !== 100;
   const shouldSuppressNativeKeyboard =
     isAndroidChromeNativeInputSuppressed || suppressNativeKeyboard;
   const shouldSuppressTerminalFocus =

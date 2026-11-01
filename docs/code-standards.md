@@ -11,7 +11,7 @@ These standards describe the current Rust backend, shared React UI, and profile-
 | `server/src/state.rs` | Shared server `AppState` and service ownership |
 | `packages/ui/src/api/` | Owner-bound API clients, connections, DTOs, transports, and query keys |
 | `packages/ui/src/components/`, `hooks/`, `stores/`, `lib/` | Shared React UI and client-side domain behavior |
-| `apps/web/`, `apps/native/` | Vite browser and Tauri desktop hosts |
+| `apps/web/` | Vite browser host (former desktop Tauri host `apps/native/` retired in Phase 02) |
 | `server/tests/`, colocated Rust tests, `packages/ui/browser-tests/` | Backend and browser-level behavioral coverage |
 | `native/android-app/` | Kotlin Multiplatform + Jetpack Compose Android client; current root flow is Profile Login → Project List → Project Terminal |
 
@@ -36,7 +36,7 @@ These standards describe the current Rust backend, shared React UI, and profile-
 
 ### React and TypeScript
 
-- Use shared components from `packages/ui/`; keep web/native hosts thin and avoid duplicate application state.
+- Use shared components from `packages/ui/`; keep the web host thin and avoid duplicate application state.
 - Keep server state in owner-qualified TanStack Query keys and local interaction state in the narrowest appropriate component/store. A single ordinary QueryClient per host is not a substitute for owner-qualified query keys.
 - Use typed API methods and DTO decoders at transport boundaries. Normalize once at the boundary; avoid loosely typed response branches in components.
 - Cancel superseded requests when supported and discard late results when request ID, provider, target, or owner generation has changed.
@@ -183,7 +183,7 @@ See the [Agent Status contract](./architecture/agent-status.md).
   - **Tier 4 — Application E2E Journeys (`@playwright/test`):** Full end-to-end user journeys under `packages/ui/e2e/**/*.spec.ts` against built web SPAs and production server containers with real MongoDB instances or isolated SQLite lite mode (`authBackend: "sqlite"`, starting no MongoDB container).
 - **Deterministic Auth Seeding:** Application E2E tests bootstrap sessions using the canonical `application_e2e_seed` tool (supporting both MongoDB and `--sqlite-path` / `DAM_HOPPER_AUTH_SQLITE_PATH`) and browser `storageState`, preventing test coupling to login UI flows. `--no-auth` must not be used for authenticated application journeys.
 - **Visual Evidence Capture Policy (`capture-policy.ts`):** E2E evidence must capture the complete viewport (1440x900 default, 320px narrow dock), validate PNG IHDR dimensions, and colocate machine-readable `evidence.json` and human `review.md` records in `packages/ui/e2e/<case>/`. Visual capture is disabled by default in CI (`CI=true` / `E2E_CAPTURE=0`) for functional parity without artifact bloat. Green automation does not bypass mandatory human visual review.
-- **Version Alignment (13-File Invariant):** Repository version bumps require synchronizing 13 distinct version files across Cargo manifests, npm manifests, Tauri configs, and installer metadata. Localized utilities like `apps/native/scripts/bump-version.js` update only 4 native files and must always be validated against `node deploy/release/check-version-alignment.mjs`.
+- **Version Alignment (9-Location Invariant):** Repository version bumps require synchronizing 9 distinct release locations across Cargo manifests, npm manifests, installer scripts, smoke tests, and the server lockfile (`server/Cargo.lock`), managed by `scripts/bump-version.mjs` and verified by `node deploy/release/check-version-alignment.mjs`. (The obsolete 13-location Tauri/native manifests were pruned in Phase 02).
 
 ## Retired plugin documentation
 

@@ -7,10 +7,7 @@ import type { BrowserDebugHostMessage } from "./browser-debug-host.js";
 export interface BrowserBridgeTrust {
   /** Exact currently trusted target origin for this iframe load. */
   origin: string;
-  /**
-   * Exact, stable source evidence for this load. Web uses WindowProxy;
-   * native uses an opaque relay identity validated by its controller.
-   */
+  /** Exact, stable source evidence (WindowProxy) for this load. */
   source: unknown;
   /** Replaced on every iframe navigation or parent reconnect. */
   nonce: string;

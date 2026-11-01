@@ -1,0 +1,25 @@
+# Final validated plan authoring receipt
+
+## Deliverable / status
+- Canonical: `/home/loidinh/WS/dam-hopper/plans/261101-1738-ai-dev-os-redesign/plan.md`.
+- 10 phases; 26 durable task contracts; overview62 lines with required pending YAML and Validation Summary.
+- Caller supplied completed final validation: 2026-11-01,9 questions, decisions V1–V6. Those decisions supersede conflicting earlier design/report/authoring prose. Implementation, actual releases, manual operation, runtime checks and human visual evidence remain pending.
+
+## Propagated user decisions
+- V1 corrected interpretation RETAINS PROTOTYPE FIRST: independently ready remove-native-ui shared-host prune -> generic tree/lifecycle core, concurrently with remaining native-build/Usage/server/Android/docs/manual/P0 release work. Core has no P0 receipt or docs/manual/version prerequisite. New integrate-os-prototype-route owns ONLY dam-hopper-app.tsx and its test after core + retire-usage-web, isolating genuine overlap rather than delaying all prototype work. Chrome depends only on prototype gate; P0 receipt joins OS parity at Phase08 root cutover. P0 has no OS ancestors and keeps own check/bump/alignment/publication receipt; source-pinned P0 host/embed states captured at handoff enable isolated artifact qualification while prototype proceeds.
+- V2: ordinary intermediate builds ship authenticated /os URL-only, no old-shell nav/palette discovery link and no build flag; old UI default until08. Contracts/checks cover intermediate and final route behavior.
+- V3: Save subset chooses server+project, matching/excluded names/contexts/reasons preview BEFORE confirmation; confirm/cancel/empty subset/same-project worktrees/pruned topology/source-unchanged tests. Whole mixed-desktop rejection replaced everywhere.
+- V4: Resolver informational/old native AC12 superseded, no external-plan blocker or phase08 disposition prerequisite; normal web app qualification in09. Actual shared writer claims still serialize.
+- V5: no migrations/exporter ownership/legacy collector reader/retained cleanup code or writable migration path. Separate human-only manual task documents deleting exactly THIS MACHINE's telemetry.db and telemetry-hmac-key after old writer stopped during P0 install. User verified no collector token/no Codex exporter block; no re-probe/config/token/other-machine action. allowed_files=[] grants no agent HOME write authority; no deletion performed by author. Neutral DB helpers and both legacy TOML/PUT guard removals retained.
+- V6: entire mixed Usage API guide deleted; only non-Usage agent/PTY facts relocated into existing guides. Usage/telemetry/OTLP collector current sections/mentions AND old CHANGELOG entries scrubbed completely; no new Usage Removed/migration entry. Tauri/SSH removal handling retained. Final docs cannot recreate deleted guide/sections/history.
+
+## Retained accepted independent-review corrections
+- F1: pending/dispatched/confirmed/failed/outcomeUnknown durable state, cross-tab locked re-read and exact original profile+epoch+id+incarnation reconciliation. Empty lists/time/user acknowledgement/dismissal never permit replacement; held create through lost response/reload/second-tab retry yields zero extra requests and exact late-success adoption. Actual server reserves identity before live publication.
+- F2: every placement-only operation retains same xterm and zero additional terminal:attach/buffer replay/reset; real transport reconnect separately allows necessary fenced stream attach/replay without parked instance destruction.
+- Commands explicitly authored/confirmed, export warns commands+paths, imports validate schema/appIds/topology/bounds before inert review. User validation did not weaken these guards.
+
+## Exercised authoring-contract inspection only
+Actual all10 phases parsed after ordering correction:26 unique stable task IDs, one exact-schema fence per phase, matching markers, literal file/action parity, nonempty acceptance/verification, acyclic graph and ZERO unordered writable overlaps. Prototype entry ancestors exactly remove-native-ui; core adds only generic-tree task. Route depends core+Usage web for exact two-file handoff; neither prototype gate nor chrome depends P0 receipt. Chrome has only prototype-gate dependency; P0 ancestors contain only Phase02/03; root cutover explicitly joins P0 receipt + OS feature completion. Overview62<80; V1–V6/F1/F2 retained, version gate no CHANGELOG path, no migration paths/deleted-guide recreation. Plan-artifact inspection only; no implementation tests/Git/runtime action.
+
+## Execution boundaries / unresolved questions
+No code changes, builds, product tests, Git operations, task hydration, runtime probe, manual file deletion or release/publication executed by author. Only selected-plan artifacts written; unrelated plans/approved report untouched. No unresolved user product questions. Actual implementation/early-P0/publication/manual/human and later OS qualification evidence remain coordinator-owned execution work, not inferred from user validation or structural inspection.
