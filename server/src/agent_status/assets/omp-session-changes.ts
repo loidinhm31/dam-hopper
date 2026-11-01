@@ -16,10 +16,25 @@ export const CAPTURE_TIMEOUT_MS = 1500;
 export const MAX_RETAINED_ROOTS = 32;
 export const MAX_PATHS_PER_ROOT = 500;
 export const MAX_CHILD_ENTRIES = 128;
+export const MAX_REVOKED_ENTRIES = 2048;
 export const MAX_PENDING_CALLS = 128;
 export const MAX_PENDING_INVALIDATIONS = 64;
 export const MAX_CAPTURE_BODY_BYTES = 12 * 1024; // 12 KiB bound (server enforces 16 KiB)
 export const MAX_RESPONSE_BYTES = 64 * 1024;
+
+function createDeferredPromise<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 const textEncoder = new TextEncoder();
 
@@ -453,6 +468,7 @@ export interface RootSessionRegistration {
   reservedPaths: Set<string>;
   pendingInvalidations: TimedOutAttempt[];
   activeFlushPromise?: Promise<void>;
+  flushRequestedWhileActive?: boolean;
 }
 export function createRootSessionRegistration(
   ompSessionId: string,
@@ -504,6 +520,8 @@ export class SessionChangesProducerRegistry {
   public readonly roots = new Map<string, RootSessionRegistration>();
   public readonly agentToRoot = new Map<string, string>();
   public readonly agentLineage = new Map<string, string>();
+  public readonly revokedAgents = new Set<string>();
+  public readonly agentOriginSession = new Map<string, string>();
   public activeSessionId: string | null = null;
   public readonly authorizedSessions = new Set<string>();
   public globalGeneration = 0;
@@ -512,6 +530,17 @@ export class SessionChangesProducerRegistry {
   public readonly pendingCalls = new Map<string, PendingToolCall>();
   public readonly consumedCallKeys = new Set<string>();
   public readonly ambiguousCallHistory = new Set<string>();
+
+  public isAgentRevoked(agentId: string): boolean {
+    let curr: string | undefined = agentId;
+    let depth = 0;
+    while (curr && depth < 20) {
+      if (this.revokedAgents.has(curr)) return true;
+      curr = this.agentLineage.get(curr);
+      depth++;
+    }
+    return false;
+  }
 
   public registerRoot(
     agentId: string,
@@ -526,6 +555,12 @@ export class SessionChangesProducerRegistry {
       this.activeSessionId = root.ompSessionId;
     }
     if (agentId) {
+      this.revokedAgents.delete(agentId);
+      if (this.agentOriginSession.size >= MAX_CHILD_ENTRIES && !this.agentOriginSession.has(agentId)) {
+        const oldestOrigin = this.agentOriginSession.keys().next().value;
+        if (oldestOrigin) this.agentOriginSession.delete(oldestOrigin);
+      }
+      this.agentOriginSession.set(agentId, root.ompSessionId);
       this.setAgentRoot(agentId, root.ompSessionId);
     }
     this.authorizedSessions.add(root.ompSessionId);
@@ -545,6 +580,19 @@ export class SessionChangesProducerRegistry {
 
   public recordChildAgent(agentId: string, parentId: string): void {
     if (!agentId || !parentId) return;
+    if (this.isAgentRevoked(agentId) || this.isAgentRevoked(parentId)) {
+      return;
+    }
+
+    const rootSessionId = this.resolveRootSessionId(parentId);
+    if (
+      rootSessionId &&
+      agentId !== "main" &&
+      this.agentOriginSession.has(agentId) &&
+      this.agentOriginSession.get(agentId) !== rootSessionId
+    ) {
+      return;
+    }
 
     // 1. Lineage capacity check: evict oldest lineage edge and unbind its tree
     if (this.agentLineage.size >= MAX_CHILD_ENTRIES && !this.agentLineage.has(agentId)) {
@@ -555,7 +603,6 @@ export class SessionChangesProducerRegistry {
     this.agentLineage.set(agentId, parentId);
 
     // 2. Check if parent chain currently resolves to a root session
-    const rootSessionId = this.resolveRootSessionId(parentId);
     if (rootSessionId) {
       // 3. Before caching root binding, perform binding map capacity check
       if (this.agentToRoot.size >= MAX_CHILD_ENTRIES && !this.agentToRoot.has(agentId)) {
@@ -565,10 +612,18 @@ export class SessionChangesProducerRegistry {
       // Revalidate: did capacity eviction break the parent chain?
       const revalidatedRoot = this.resolveRootSessionId(parentId);
       if (revalidatedRoot) {
+        if (agentId !== "main") {
+          if (this.agentOriginSession.size >= MAX_CHILD_ENTRIES && !this.agentOriginSession.has(agentId)) {
+            const oldestOrigin = this.agentOriginSession.keys().next().value;
+            if (oldestOrigin) this.agentOriginSession.delete(oldestOrigin);
+          }
+          this.agentOriginSession.set(agentId, revalidatedRoot);
+        }
         this.agentToRoot.set(agentId, revalidatedRoot);
       }
     }
   }
+
   public unbindAgent(agentId: string): void {
     const toUnbind = new Set<string>([agentId]);
     let added = true;
@@ -584,6 +639,16 @@ export class SessionChangesProducerRegistry {
     for (const id of toUnbind) {
       this.agentToRoot.delete(id);
       this.agentLineage.delete(id);
+      // Retention invariant: revokedAgents tracks up to MAX_REVOKED_ENTRIES (2048) identities.
+      // While retained, revoked agents cannot be rebound or routed in any session. If churn
+      // evicts an entry from both revokedAgents and agentOriginSession, an untracked agent
+      // presenting only { id, parentId: "main" } cannot be distinguished from a fresh child
+      // under the OMP event protocol, which is a known retention limitation.
+      if (this.revokedAgents.size >= MAX_REVOKED_ENTRIES && !this.revokedAgents.has(id)) {
+        const oldestRevoked = this.revokedAgents.keys().next().value;
+        if (oldestRevoked) this.revokedAgents.delete(oldestRevoked);
+      }
+      this.revokedAgents.add(id);
     }
   }
 
@@ -594,12 +659,32 @@ export class SessionChangesProducerRegistry {
     }
     this.agentToRoot.set(agentId, rootSessionId);
   }
+
   public resolveRootSessionId(agentId: string): string | undefined {
+    if (this.isAgentRevoked(agentId)) return undefined;
     let curr: string | undefined = agentId;
     let depth = 0;
     while (curr && depth < 20) {
+      if (this.isAgentRevoked(curr)) return undefined;
       const rootId = this.agentToRoot.get(curr);
-      if (rootId) return rootId;
+      if (rootId) {
+        if (curr !== "main" && this.agentOriginSession.has(curr) && this.agentOriginSession.get(curr) !== rootId) {
+          return undefined;
+        }
+        if (agentId !== "main") {
+          if (this.agentOriginSession.has(agentId) && this.agentOriginSession.get(agentId) !== rootId) {
+            return undefined;
+          }
+          if (!this.agentOriginSession.has(agentId)) {
+            if (this.agentOriginSession.size >= MAX_CHILD_ENTRIES) {
+              const oldestOrigin = this.agentOriginSession.keys().next().value;
+              if (oldestOrigin) this.agentOriginSession.delete(oldestOrigin);
+            }
+            this.agentOriginSession.set(agentId, rootId);
+          }
+        }
+        return rootId;
+      }
       curr = this.agentLineage.get(curr);
       depth++;
     }
@@ -616,12 +701,21 @@ export class SessionChangesProducerRegistry {
     } else {
       const agentId = agent.id || (agent.kind === "main" ? "main" : undefined);
       if (agentId) {
+        if (this.isAgentRevoked(agentId)) {
+          return undefined;
+        }
         targetSessionId = this.resolveRootSessionId(agentId);
       }
       if (!targetSessionId && agent.parentId) {
+        if (this.isAgentRevoked(agent.parentId) || (agentId && this.isAgentRevoked(agentId))) {
+          return undefined;
+        }
         const parentRoot = this.resolveRootSessionId(agent.parentId);
         if (parentRoot && this.authorizedSessions.has(parentRoot)) {
           if (agentId) {
+            if (agentId !== "main" && this.agentOriginSession.has(agentId) && this.agentOriginSession.get(agentId) !== parentRoot) {
+              return undefined;
+            }
             this.recordChildAgent(agentId, agent.parentId);
             targetSessionId = this.resolveRootSessionId(agentId);
           } else {
@@ -631,6 +725,10 @@ export class SessionChangesProducerRegistry {
       }
     }
     if (!targetSessionId) return undefined;
+
+    if (agent?.id && agent.id !== "main" && this.agentOriginSession.has(agent.id) && this.agentOriginSession.get(agent.id) !== targetSessionId) {
+      return undefined;
+    }
 
     // Live routing requires that targetSessionId is an explicitly authorized session!
     if (!this.authorizedSessions.has(targetSessionId)) {
@@ -655,6 +753,7 @@ export class SessionChangesProducerRegistry {
       if (rootId === ompSessionId) {
         this.agentToRoot.delete(agentId);
         this.agentLineage.delete(agentId);
+        this.unbindAgent(agentId);
       }
     }
   }
@@ -665,6 +764,8 @@ export class SessionChangesProducerRegistry {
     this.roots.clear();
     this.agentToRoot.clear();
     this.agentLineage.clear();
+    this.revokedAgents.clear();
+    this.agentOriginSession.clear();
     this.pendingCalls.clear();
     this.consumedCallKeys.clear();
     this.ambiguousCallHistory.clear();
@@ -875,6 +976,16 @@ export class SessionChangesProducer {
       return null;
     }
 
+    const existingRoot = this.registry.roots.get(ompSessionId);
+    const canPreserveState =
+      existingRoot !== undefined &&
+      !existingRoot.disabled &&
+      existingRoot.serverEpoch === reg.serverEpoch &&
+      existingRoot.terminalIncarnation === reg.terminalIncarnation &&
+      existingRoot.baselineId === reg.baselineId &&
+      existingRoot.canonicalRoot === reg.canonicalRoot &&
+      (existingRoot.rootId || ".") === (reg.rootId || ".");
+
     const root: RootSessionRegistration = {
       serverEpoch: reg.serverEpoch,
       terminalIncarnation: reg.terminalIncarnation,
@@ -885,14 +996,25 @@ export class SessionChangesProducer {
       launchCwd: cwd,
       disabled: false,
       rootCwd: reg.canonicalRoot,
-      knownPaths: new Set(),
-      unprovenPaths: new Set(),
+      knownPaths: canPreserveState ? new Set(existingRoot.knownPaths) : new Set(),
+      unprovenPaths: canPreserveState ? new Set(existingRoot.unprovenPaths) : new Set(),
       reservedPaths: new Set(),
-      pendingInvalidations: [],
+      pendingInvalidations: canPreserveState
+        ? existingRoot.pendingInvalidations.map((inv) => ({
+            captureId: inv.captureId,
+            paths: [...inv.paths],
+            timestamp: inv.timestamp,
+          }))
+        : [],
     };
 
     this.registry.registerRoot(agentId, root);
     this.registry.authorizeSession(ompSessionId);
+
+    if (root.pendingInvalidations.length > 0) {
+      void this.flushPendingInvalidations(root).catch(() => {});
+    }
+
     return root;
   }
 
@@ -1418,21 +1540,14 @@ export class SessionChangesProducer {
   /**
    * Dedicated flush helper: sends timed-out attempts with their EXACT original captureId (W2).
    */
-  public async flushPendingInvalidations(root: RootSessionRegistration): Promise<void> {
+  public flushPendingInvalidations(
+    root: RootSessionRegistration,
+    excludedAttempts?: Set<TimedOutAttempt>,
+  ): Promise<void> {
     if (root.activeFlushPromise) {
+      root.flushRequestedWhileActive = true;
       return root.activeFlushPromise;
     }
-    const flushPromise = this.doFlushPendingInvalidations(root);
-    root.activeFlushPromise = flushPromise;
-    try {
-      await flushPromise;
-    } finally {
-      delete root.activeFlushPromise;
-    }
-  }
-
-  private async doFlushPendingInvalidations(root: RootSessionRegistration): Promise<void> {
-    if (root.pendingInvalidations.length === 0 || root.disabled) return;
 
     const originalRoot = root;
     const targetSessionId = root.ompSessionId;
@@ -1466,11 +1581,103 @@ export class SessionChangesProducer {
       return true;
     };
 
-    // Process a snapshot batch of pending invalidations to bound this flush pass
-    const batch = [...root.pendingInvalidations];
-    for (const inv of batch) {
-      if (!isFlushValid()) return;
-      // Skip if evicted by capacity shifting during pre-edit timeouts
+    if (!isFlushValid()) return;
+
+    const failedInRun = excludedAttempts ? new Set(excludedAttempts) : new Set<TimedOutAttempt>();
+    const { promise, resolve, reject } = createDeferredPromise<void>();
+    root.activeFlushPromise = promise;
+
+    (async () => {
+      let needsContinuation = false;
+      try {
+        let passCount = 0;
+        const MAX_DRAIN_PASSES = 5;
+
+        while (passCount < MAX_DRAIN_PASSES) {
+          if (!isFlushValid()) {
+            break;
+          }
+          const hasUnattempted = root.pendingInvalidations.some((inv) => !failedInRun.has(inv));
+          if (!hasUnattempted) {
+            if (!root.flushRequestedWhileActive) {
+              break;
+            }
+            root.flushRequestedWhileActive = false;
+            if (!root.pendingInvalidations.some((inv) => !failedInRun.has(inv))) {
+              break;
+            }
+          }
+
+          root.flushRequestedWhileActive = false;
+          passCount++;
+          const batchOk = await this.doFlushBatch(root, failedInRun, isFlushValid, callEpoch);
+          if (!batchOk || !isFlushValid()) {
+            break;
+          }
+
+          if (root.pendingInvalidations.every((inv) => failedInRun.has(inv))) {
+            break;
+          }
+        }
+
+        if (isFlushValid() && root.pendingInvalidations.some((inv) => !failedInRun.has(inv))) {
+          needsContinuation = true;
+        }
+      } catch (err) {
+        reject(err);
+        return;
+      } finally {
+        if (root.activeFlushPromise === promise) {
+          delete root.activeFlushPromise;
+          // Edge case: if a flush request was coalesced right at settlement, ensure continuation
+          if (
+            isFlushValid() &&
+            root.flushRequestedWhileActive &&
+            root.pendingInvalidations.some((inv) => !failedInRun.has(inv))
+          ) {
+            needsContinuation = true;
+          }
+          root.flushRequestedWhileActive = false;
+        }
+      }
+
+      resolve();
+
+      // Schedule continuation strictly AFTER releasing the activeFlushPromise slot,
+      // carrying failedInRun across the handoff to prevent retry tight-loops
+      if (needsContinuation && isFlushValid()) {
+        queueMicrotask(() => {
+          if (isFlushValid()) {
+            void this.flushPendingInvalidations(root, failedInRun).catch(() => {});
+          }
+        });
+      }
+    })();
+
+    return promise;
+  }
+
+  private async doFlushBatch(
+    root: RootSessionRegistration,
+    failedInRun: Set<TimedOutAttempt>,
+    isFlushValid: () => boolean,
+    callEpoch: number,
+  ): Promise<boolean> {
+    if (root.pendingInvalidations.length === 0 || root.disabled) return false;
+    if (!isFlushValid()) return false;
+
+    const originalRoot = root;
+    const targetSessionId = root.ompSessionId;
+    const targetServerEpoch = root.serverEpoch;
+    const targetTerminalIncarnation = root.terminalIncarnation;
+    const targetRootId = root.rootId;
+    const targetBaselineId = root.baselineId;
+
+    const candidates = root.pendingInvalidations.filter((inv) => !failedInRun.has(inv));
+    if (candidates.length === 0) return true;
+
+    for (const inv of candidates) {
+      if (!isFlushValid()) return false;
       if (!root.pendingInvalidations.includes(inv)) continue;
 
       const basePayload = {
@@ -1480,7 +1687,7 @@ export class SessionChangesProducer {
         ompSessionId: targetSessionId,
         rootId: targetRootId,
         baselineId: targetBaselineId,
-        captureId: inv.captureId, // Preserves exact original attempt ID!
+        captureId: inv.captureId,
         mode: "unproven" as CaptureMode,
       };
 
@@ -1488,7 +1695,7 @@ export class SessionChangesProducer {
       let invCompleted = true;
 
       for (const chunk of chunks) {
-        if (!isFlushValid()) return;
+        if (!isFlushValid()) return false;
 
         const res = await this.postJson<CaptureResponse>(
           "/capture",
@@ -1497,20 +1704,19 @@ export class SessionChangesProducer {
         );
 
         if (this.registry.registryEpoch !== callEpoch) {
-          return;
+          return false;
         }
 
         if (res.status === 503) {
           originalRoot.disabled = true;
           this.isPermanentlyDisabled = true;
-          return;
+          return false;
         }
 
         if (!isFlushValid()) {
-          return;
+          return false;
         }
 
-        // Validate response acknowledgment strictly against wire protocol and sent chunk
         const sentChunk = new Set(chunk);
         const ackPaths = new Set<string>();
         if (
@@ -1540,7 +1746,6 @@ export class SessionChangesProducer {
           inv.paths = inv.paths.filter((p) => !ackPaths.has(p));
         }
 
-        // If not all paths in this chunk were acknowledged, stop processing this attempt now
         if (chunk.some((p) => !ackPaths.has(p))) {
           invCompleted = false;
           break;
@@ -1548,13 +1753,13 @@ export class SessionChangesProducer {
       }
 
       if (invCompleted && inv.paths.length === 0) {
-        // Fully acknowledged: remove exact instance by object identity (NOT by assumed position!)
         root.pendingInvalidations = root.pendingInvalidations.filter((i) => i !== inv);
       } else {
-        // Failed or partial: halt current flush run, leave unacknowledged work queued for next opportunity
-        break;
+        failedInRun.add(inv);
       }
     }
+
+    return true;
   }
 
   public async handleSessionSwitch(

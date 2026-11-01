@@ -13,6 +13,7 @@ import damHopperSessionChangesExtension, {
   sanitizeSessionId,
   validateLoopbackWsUrl,
   MAX_CHILD_ENTRIES,
+  MAX_REVOKED_ENTRIES,
   SessionChangesProducer,
   SessionChangesProducerRegistry,
   type RootSessionRegistration,
@@ -3092,5 +3093,691 @@ describe("PR #82 Code Review Regressions", () => {
     } finally {
       server.stop(true);
     }
+  });
+
+  it("R15j: delayed child tool call after session B authorized cannot rebind or capture against session B", async () => {
+    const recordedCaptures: Array<{ ompSessionId?: string; baselineId?: string; captureId?: string; paths?: string[] }> = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/private/session-changes/v1/register") {
+          const body = (await req.json()) as { ompSessionId?: string };
+          const sessId = body.ompSessionId;
+          return Response.json({
+            version: 1,
+            serverEpoch: "epoch-1",
+            terminalIncarnation: "1",
+            ompSessionId: sessId,
+            rootId: ".",
+            baselineId: sessId === "session-A" ? "base-A" : "base-B",
+            root: "/repo",
+            launchCwd: "/repo",
+            disabled: false,
+            rootCwd: "/repo",
+            canonicalRoot: "/repo",
+          });
+        }
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          const body = (await req.json()) as { ompSessionId?: string; baselineId?: string; captureId?: string; paths?: string[] };
+          recordedCaptures.push(body);
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths || []).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      // 1. Session A registers and creates child-A
+      const rootA = await producer.registerSession("session-A", "main", "/repo");
+      expect(rootA).not.toBeNull();
+      registry.recordChildAgent("child-A", "main");
+      expect(registry.resolveRootSessionId("child-A")).toBe("session-A");
+
+      // 2. Switch to Session B; registration succeeds and Session B is authorized
+      const rootB = await producer.handleSessionSwitch("session-B", "main", "/repo");
+      expect(rootB?.ompSessionId).toBe("session-B");
+      expect(registry.authorizedSessions.has("session-B")).toBe(true);
+      expect(registry.authorizedSessions.has("session-A")).toBe(false);
+
+      // 3. Delayed tool call arrives from old child-A with parentId="main"
+      const delayedCtx: OmpExtensionContext = {
+        agent: { kind: "sub", id: "child-A", parentId: "main" },
+        cwd: "/repo",
+      };
+      await producer.handleToolCall("write", { path: "src/delayed-edit.ts" }, delayedCtx, "call-delayed-1");
+
+      // Zero capture requests sent against Session B!
+      expect(recordedCaptures.length).toBe(0);
+      expect(registry.resolveRoot(delayedCtx.agent)).toBeUndefined();
+      expect(rootB?.knownPaths.has("src/delayed-edit.ts")).toBe(false);
+
+      // 4. A genuinely new child spawned under Session B routes and captures normally
+      const newCtxB: OmpExtensionContext = {
+        agent: { kind: "sub", id: "child-B-new", parentId: "main" },
+        cwd: "/repo",
+      };
+      await producer.handleToolCall("write", { path: "src/valid-b.ts" }, newCtxB, "call-b-1");
+      expect(recordedCaptures.length).toBe(1);
+      expect(recordedCaptures[0].ompSessionId).toBe("session-B");
+      expect(recordedCaptures[0].baselineId).toBe("base-B");
+      expect(rootB?.knownPaths.has("src/valid-b.ts")).toBe(true);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("R15k: descendant revocation propagates to grandchildren preventing rebinding after session switch", async () => {
+    const registry = new SessionChangesProducerRegistry();
+    const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+    registry.registerRoot("main", rootA);
+    registry.recordChildAgent("child-1", "main");
+    registry.recordChildAgent("grandchild-1", "child-1");
+    registry.authorizeSession("session-A");
+
+    expect(registry.resolveRootSessionId("grandchild-1")).toBe("session-A");
+
+    // Unbind main (as happens on session switch)
+    registry.unbindAgent("main");
+
+    // All descendants are marked revoked
+    expect(registry.isAgentRevoked("main")).toBe(true);
+    expect(registry.isAgentRevoked("child-1")).toBe(true);
+    expect(registry.isAgentRevoked("grandchild-1")).toBe(true);
+
+    // Re-register main for session B
+    const rootB = createRootSessionRegistration("session-B", "epoch-1", "1", "base-B", "/repo");
+    registry.registerRoot("main", rootB);
+    registry.authorizeSession("session-B");
+
+    // main is un-revoked, but descendants remain revoked
+    expect(registry.isAgentRevoked("main")).toBe(false);
+    expect(registry.isAgentRevoked("child-1")).toBe(true);
+    expect(registry.isAgentRevoked("grandchild-1")).toBe(true);
+
+    // Attempting to record grandchild under new parent or main fails
+    registry.recordChildAgent("grandchild-1", "main");
+    expect(registry.resolveRootSessionId("grandchild-1")).toBeUndefined();
+    expect(registry.resolveRoot({ kind: "sub", id: "grandchild-1", parentId: "main" })).toBeUndefined();
+  });
+
+  it("R16f: switch-away and switch-back preserves pending invalidations for same session tuple and flushes on re-registration", async () => {
+    const recordedCaptures: Array<{ ompSessionId?: string; baselineId?: string; captureId?: string; paths?: string[] }> = [];
+    const captureReceived = createDeferred();
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/private/session-changes/v1/register") {
+          const body = (await req.json()) as { ompSessionId?: string };
+          const sessId = body.ompSessionId;
+          return Response.json({
+            version: 1,
+            serverEpoch: "epoch-1",
+            terminalIncarnation: "1",
+            ompSessionId: sessId,
+            rootId: ".",
+            baselineId: sessId === "session-A" ? "base-A" : "base-B",
+            root: "/repo",
+            launchCwd: "/repo",
+            disabled: false,
+            rootCwd: "/repo",
+            canonicalRoot: "/repo",
+          });
+        }
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          const body = (await req.json()) as { ompSessionId?: string; baselineId?: string; captureId?: string; paths?: string[] };
+          recordedCaptures.push(body);
+          captureReceived.resolve();
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths || []).map((p: string) => ({
+              path: p,
+              status: "unproven",
+            })),
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      // 1. Session A registers initially
+      const rootA = await producer.registerSession("session-A", "main", "/repo");
+      expect(rootA).not.toBeNull();
+
+      // Enqueue an unacknowledged invalidation on rootA
+      rootA!.pendingInvalidations.push({
+        captureId: "orig-cap-1",
+        paths: ["src/unacknowledged.ts"],
+        timestamp: Date.now(),
+      });
+      rootA!.knownPaths.add("src/existing.ts");
+
+      // 2. Switch away to Session B
+      const rootB = await producer.handleSessionSwitch("session-B", "main", "/repo");
+      expect(rootB?.ompSessionId).toBe("session-B");
+      expect(registry.roots.has("session-A")).toBe(true);
+
+      // 3. Switch back to Session A with identical session tuple
+      const rootA2 = await producer.handleSessionSwitch("session-A", "main", "/repo");
+      expect(rootA2?.ompSessionId).toBe("session-A");
+      expect(rootA2?.baselineId).toBe("base-A");
+
+      // Await flushed capture deterministically via deferred promise and active flush promise
+      await captureReceived.promise;
+      if (rootA2?.activeFlushPromise) {
+        await rootA2.activeFlushPromise;
+      }
+
+      // Assert capture was issued with exact original captureId
+      expect(recordedCaptures.some((c) => c.captureId === "orig-cap-1" && c.ompSessionId === "session-A")).toBe(true);
+      // Pending invalidation was drained
+      expect(rootA2?.pendingInvalidations.length).toBe(0);
+      // Known paths were preserved
+      expect(rootA2?.knownPaths.has("src/existing.ts")).toBe(true);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("R16g: switch-back with changed baseline tuple discards stale queue", async () => {
+    let sessionACallCount = 0;
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/private/session-changes/v1/register") {
+          const body = await req.json();
+          const sessId = body.ompSessionId;
+          if (sessId === "session-A") {
+            sessionACallCount++;
+          }
+          return Response.json({
+            version: 1,
+            serverEpoch: "epoch-1",
+            terminalIncarnation: "1",
+            ompSessionId: sessId,
+            rootId: ".",
+            // On second call for session-A, baseline changed to base-A-v2
+            baselineId: sessId === "session-A" ? (sessionACallCount === 1 ? "base-A-v1" : "base-A-v2") : "base-B",
+            root: "/repo",
+            launchCwd: "/repo",
+            disabled: false,
+            rootCwd: "/repo",
+            canonicalRoot: "/repo",
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      // 1. Session A registers with baseline v1
+      const rootA = await producer.registerSession("session-A", "main", "/repo");
+      rootA!.pendingInvalidations.push({
+        captureId: "stale-cap-1",
+        paths: ["src/stale.ts"],
+        timestamp: Date.now(),
+      });
+      rootA!.knownPaths.add("src/stale-known.ts");
+
+      // 2. Switch away to Session B
+      await producer.handleSessionSwitch("session-B", "main", "/repo");
+
+      // 3. Switch back to Session A; backend returns base-A-v2 (different baseline)
+      const rootA2 = await producer.handleSessionSwitch("session-A", "main", "/repo");
+      expect(rootA2?.baselineId).toBe("base-A-v2");
+
+      // Stale invalidations and known paths for obsolete baseline are discarded
+      expect(rootA2?.pendingInvalidations.length).toBe(0);
+      expect(rootA2?.knownPaths.has("src/stale-known.ts")).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("R16h: concurrent flush queue append drains newly appended entries without requiring subsequent external event", async () => {
+    const capture1Started = createDeferred();
+    const releaseCapture1 = createDeferred();
+    const recordedCaptures: Array<{ captureId?: string; paths?: string[] }> = [];
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          const body = (await req.json()) as { captureId?: string; paths?: string[] };
+          recordedCaptures.push(body);
+          if (body.captureId === "cap-first") {
+            capture1Started.resolve();
+            await releaseCapture1.promise;
+          }
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths || []).map((p: string) => ({
+              path: p,
+              status: "unproven",
+            })),
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const root = createRootSessionRegistration("sess-r16h", "epoch-1", "1", "base", "/repo");
+      root.pendingInvalidations.push({
+        captureId: "cap-first",
+        paths: ["file-1.ts"],
+        timestamp: Date.now(),
+      });
+      registry.registerRoot("main", root);
+
+      // Caller 1 initiates flush
+      const flush1Promise = producer.flushPendingInvalidations(root);
+
+      // Wait until cap-first is in-flight at the mock server
+      await capture1Started.promise;
+
+      // While flush 1 is paused, append cap-second and initiate concurrent flush 2
+      root.pendingInvalidations.push({
+        captureId: "cap-second",
+        paths: ["file-2.ts"],
+        timestamp: Date.now(),
+      });
+      const flush2Promise = producer.flushPendingInvalidations(root);
+
+      // Release first capture
+      releaseCapture1.resolve();
+
+      // Await both promises
+      await Promise.all([flush1Promise, flush2Promise]);
+
+      // Both cap-first and cap-second were drained!
+      expect(recordedCaptures.map((c) => c.captureId)).toEqual(["cap-first", "cap-second"]);
+      expect(root.pendingInvalidations.length).toBe(0);
+    } finally {
+      releaseCapture1.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R16i: failed head entry remains queued without tight loop while newly appended unattempted entries are drained", async () => {
+    const recordedCaptures: Array<{ captureId?: string; paths?: string[] }> = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          const body = (await req.json()) as { captureId?: string; paths?: string[] };
+          recordedCaptures.push(body);
+          if (body.captureId === "cap-fail-head") {
+            // Fail head entry with 500
+            return new Response("Internal Server Error", { status: 500 });
+          }
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths || []).map((p: string) => ({
+              path: p,
+              status: "unproven",
+            })),
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const root = createRootSessionRegistration("sess-r16i", "epoch-1", "1", "base", "/repo");
+      root.pendingInvalidations.push({
+        captureId: "cap-fail-head",
+        paths: ["f-fail.ts"],
+        timestamp: Date.now(),
+      });
+      root.pendingInvalidations.push({
+        captureId: "cap-fresh-2",
+        paths: ["f-fresh.ts"],
+        timestamp: Date.now(),
+      });
+      registry.registerRoot("main", root);
+
+      await producer.flushPendingInvalidations(root);
+
+      // cap-fail-head was attempted once (not retried in tight loop)
+      const headAttempts = recordedCaptures.filter((c) => c.captureId === "cap-fail-head");
+      expect(headAttempts.length).toBe(1);
+
+      // cap-fresh-2 was attempted and acknowledged!
+      const freshAttempts = recordedCaptures.filter((c) => c.captureId === "cap-fresh-2");
+      expect(freshAttempts.length).toBe(1);
+
+      // cap-fail-head remains queued for next opportunity, while cap-fresh-2 was drained
+      expect(root.pendingInvalidations.length).toBe(1);
+      expect(root.pendingInvalidations[0].captureId).toBe("cap-fail-head");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("R16j: drain budget continuation microtask drains newly appended entries beyond pass limit without overlapping and preserves failed head exclusion", async () => {
+    const recordedCaptures: Array<{ captureId?: string }> = [];
+    let inFlightCount = 0;
+    let maxConcurrent = 0;
+    const allDrained = createDeferred();
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          inFlightCount++;
+          if (inFlightCount > maxConcurrent) {
+            maxConcurrent = inFlightCount;
+          }
+          const body = (await req.json()) as { captureId?: string; paths?: string[] };
+          recordedCaptures.push({ captureId: body.captureId });
+
+          if (body.captureId === "cap-fail-head") {
+            inFlightCount--;
+            return new Response("Internal Server Error", { status: 500 });
+          }
+
+          const match = body.captureId?.match(/^pass-(\d+)$/);
+          if (match) {
+            const num = parseInt(match[1], 10);
+            if (num < 6) {
+              // Append next entry during passes 0..5
+              const nextId = `pass-${num + 1}`;
+              root.pendingInvalidations.push({
+                captureId: nextId,
+                paths: [`f-${num + 1}.ts`],
+                timestamp: Date.now(),
+              });
+              void producer.flushPendingInvalidations(root);
+            } else {
+              // On pass-6, we stop generating new entries
+              allDrained.resolve();
+            }
+          }
+
+          inFlightCount--;
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths || []).map((p: string) => ({
+              path: p,
+              status: "unproven",
+            })),
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      },
+    });
+
+    const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+    const registry = new SessionChangesProducerRegistry();
+    const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+    const root = createRootSessionRegistration("sess-r16j", "epoch-1", "1", "base", "/repo");
+    // Permanently failing head entry
+    root.pendingInvalidations.push({
+      captureId: "cap-fail-head",
+      paths: ["f-fail.ts"],
+      timestamp: Date.now(),
+    });
+    root.pendingInvalidations.push({
+      captureId: "pass-0",
+      paths: ["f-0.ts"],
+      timestamp: Date.now(),
+    });
+    registry.registerRoot("main", root);
+
+    try {
+      // Initiate initial flush
+      await producer.flushPendingInvalidations(root);
+
+      // Await until pass-6 is delivered through the scheduled continuation
+      await allDrained.promise;
+
+      // Let active flush promise settle
+      if (root.activeFlushPromise) {
+        await root.activeFlushPromise;
+      }
+
+      // Assert cap-fail-head was attempted ONLY ONCE across the entire drain and continuation
+      const failAttempts = recordedCaptures.filter((c) => c.captureId === "cap-fail-head");
+      expect(failAttempts.length).toBe(1);
+
+      // All 7 fresh entries (pass-0 through pass-6) were processed across passes
+      const freshCaptured = recordedCaptures.filter((c) => c.captureId !== "cap-fail-head");
+      expect(freshCaptured.map((c) => c.captureId)).toEqual([
+        "pass-0",
+        "pass-1",
+        "pass-2",
+        "pass-3",
+        "pass-4",
+        "pass-5",
+        "pass-6",
+      ]);
+      // Only the failed head remains in queue
+      expect(root.pendingInvalidations.length).toBe(1);
+      expect(root.pendingInvalidations[0].captureId).toBe("cap-fail-head");
+      // Zero overlapping concurrent flush calls occurred
+      expect(maxConcurrent).toBe(1);
+    } finally {
+      allDrained.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R16k: sequential flush calls on empty queue do not leave stale resolved promise installed and drain newly appended work", async () => {
+    const recordedCaptures: Array<{ captureId?: string }> = [];
+    const captureReceived = createDeferred();
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          const body = (await req.json()) as { captureId?: string };
+          recordedCaptures.push(body);
+          captureReceived.resolve();
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: [{ path: "file-new.ts", status: "unproven" }],
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const root = createRootSessionRegistration("sess-r16k", "epoch-1", "1", "base", "/repo");
+      registry.registerRoot("main", root);
+
+      // 1. First flush is called on an empty queue
+      const first = producer.flushPendingInvalidations(root);
+
+      // 2. While first flush is active/settling, enqueue work and call second flush
+      root.pendingInvalidations.push({
+        captureId: "new-work-1",
+        paths: ["file-new.ts"],
+        timestamp: Date.now(),
+      });
+      const second = producer.flushPendingInvalidations(root);
+
+      await Promise.all([first, second]);
+
+      // 3. Await capture continuation
+      await captureReceived.promise;
+      if (root.activeFlushPromise) {
+        await root.activeFlushPromise;
+      }
+
+      // Assert that newly appended work was not lost and was drained
+      expect(recordedCaptures.map((c) => c.captureId)).toEqual(["new-work-1"]);
+      expect(root.pendingInvalidations.length).toBe(0);
+    } finally {
+      captureReceived.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R16l: second flush call while active flush is paused at peer coalesces promise and drains appended work", async () => {
+    const recordedCaptures: Array<{ captureId?: string }> = [];
+    const firstStarted = createDeferred();
+    const releaseFirst = createDeferred();
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          const body = (await req.json()) as { captureId?: string };
+          recordedCaptures.push(body);
+          if (body.captureId === "head-work") {
+            firstStarted.resolve();
+            await releaseFirst.promise;
+          }
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: [{ path: "file.ts", status: "unproven" }],
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const root = createRootSessionRegistration("sess-r16l", "epoch-1", "1", "base", "/repo");
+      root.pendingInvalidations.push({
+        captureId: "head-work",
+        paths: ["file.ts"],
+        timestamp: Date.now(),
+      });
+      registry.registerRoot("main", root);
+
+      // 1. First flush starts and pauses at mock server
+      const first = producer.flushPendingInvalidations(root);
+      await firstStarted.promise;
+
+      // 2. Verified: activeFlushPromise is present on root
+      expect(root.activeFlushPromise).toBeDefined();
+
+      // 3. Enqueue second item and invoke second flush while activeFlushPromise is active
+      root.pendingInvalidations.push({
+        captureId: "coalesced-work",
+        paths: ["file.ts"],
+        timestamp: Date.now(),
+      });
+      const second = producer.flushPendingInvalidations(root);
+
+      // Coalescing: second returns the exact same activeFlushPromise
+      expect(second).toBe(root.activeFlushPromise);
+
+      // 4. Release first capture
+      releaseFirst.resolve();
+      await Promise.all([first, second]);
+
+      // Both items were drained!
+      expect(recordedCaptures.map((c) => c.captureId)).toEqual(["head-work", "coalesced-work"]);
+      expect(root.pendingInvalidations.length).toBe(0);
+    } finally {
+      releaseFirst.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R15l: revocation set bounds to MAX_REVOKED_ENTRIES under churn and documents retention limits", async () => {
+    const registry = new SessionChangesProducerRegistry();
+    const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+    registry.registerRoot("main", rootA);
+    registry.recordChildAgent("stale-child-1", "main");
+    registry.authorizeSession("session-A");
+
+    // Initially child resolves to session-A
+    expect(registry.resolveRootSessionId("stale-child-1")).toBe("session-A");
+
+    // Unbind main -> stale-child-1 is added to revokedAgents
+    registry.unbindAgent("main");
+    expect(registry.isAgentRevoked("stale-child-1")).toBe(true);
+
+    // Re-register main so churn children resolve parent and churn agentOriginSession too
+    registry.registerRoot("main", rootA);
+
+    // Generate churn beyond MAX_REVOKED_ENTRIES (2048) and MAX_CHILD_ENTRIES (128)
+    for (let i = 0; i < 2050; i++) {
+      registry.recordChildAgent(`churn-child-${i}`, "main");
+      registry.unbindAgent(`churn-child-${i}`);
+    }
+
+    // Capacity is strictly bounded to MAX_REVOKED_ENTRIES
+    expect(registry.revokedAgents.size).toBe(MAX_REVOKED_ENTRIES);
+
+    // stale-child-1 was evicted from FIFO tombstones under extreme churn
+    expect(registry.revokedAgents.has("stale-child-1")).toBe(false);
+    expect(registry.agentOriginSession.has("stale-child-1")).toBe(false);
+
+    // Now switch to Session B
+    const rootB = createRootSessionRegistration("session-B", "epoch-1", "1", "base-B", "/repo");
+    registry.registerRoot("main", rootB);
+    registry.authorizeSession("session-B");
+
+    // Protocol boundary: once an agent is evicted from both tombstones and origin records,
+    // a presentation of { id, parentId: "main" } cannot be distinguished from a fresh child
+    const ctxStale: OmpExtensionContext = {
+      agent: { kind: "sub", id: "stale-child-1", parentId: "main" },
+      cwd: "/repo",
+    };
+    registry.recordChildAgent("stale-child-1", "main");
+    expect(registry.resolveRoot(ctxStale.agent)?.ompSessionId).toBe("session-B");
   });
 });
