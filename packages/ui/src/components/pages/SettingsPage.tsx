@@ -1,6 +1,8 @@
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
+import { Switch } from "@/components/atoms/Switch.js";
+import type { DamHopperConfig } from "@/api/client.js";
 import {
   useConfig,
   useUpdateConfig,
@@ -81,6 +83,88 @@ export function SettingsPage() {
   const [importErr, setImportErr] = useState<string | null>(null);
   const [nuclearResetConfirmOpen, setNuclearResetConfirmOpen] = useState(false);
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
+  const [sessionChangesNotice, setSessionChangesNotice] = useState<string | null>(null);
+  const [sessionChangesError, setSessionChangesError] = useState<string | null>(null);
+  const [sessionChangesMutating, setSessionChangesMutating] = useState(false);
+
+  useEffect(() => {
+    setSessionChangesNotice(null);
+    setSessionChangesError(null);
+  }, [settingsProfileId, targetOwner?.generation]);
+
+  const isTargetReady = settingsProfileId
+    ? Boolean(
+        targetProfile &&
+          (!targetSnapshot || targetSnapshot.status === "connected"),
+      )
+    : true;
+  const sessionChangesEnabled = Boolean(config?.server?.sessionChangesEnabled);
+
+  async function handleToggleSessionChanges(nextChecked: boolean) {
+    if (sessionChangesMutating || isPending || !config || !isTargetReady) {
+      return;
+    }
+    setSessionChangesMutating(true);
+    setSessionChangesNotice(null);
+    setSessionChangesError(null);
+
+    const actionProfileId = settingsProfileId;
+    const actionGeneration = targetOwner?.generation ?? 1;
+
+    try {
+      const nextConfig: DamHopperConfig = {
+        ...config,
+        server: {
+          ...config.server,
+          sessionChangesEnabled: nextChecked,
+        },
+      };
+      await updateConfig(nextConfig);
+
+      const currentSettingsProfileId =
+        useWorkbenchSelectionsStore.getState().settingsProfileId;
+      const currentSnapshot = currentSettingsProfileId
+        ? getConnectionSnapshot(currentSettingsProfileId)
+        : null;
+      const currentGeneration = currentSettingsProfileId
+        ? (currentSnapshot?.owner.generation ?? 1)
+        : 1;
+      const isStillCurrentTarget =
+        currentSettingsProfileId === actionProfileId &&
+        currentGeneration === actionGeneration;
+
+      if (isStillCurrentTarget) {
+        if (nextChecked) {
+          setSessionChangesNotice(
+            "Restart active OMP sessions to load the Session Changes extension",
+          );
+        } else {
+          setSessionChangesNotice(null);
+        }
+      }
+    } catch (err) {
+      const currentSettingsProfileId =
+        useWorkbenchSelectionsStore.getState().settingsProfileId;
+      const currentSnapshot = currentSettingsProfileId
+        ? getConnectionSnapshot(currentSettingsProfileId)
+        : null;
+      const currentGeneration = currentSettingsProfileId
+        ? (currentSnapshot?.owner.generation ?? 1)
+        : 1;
+      const isStillCurrentTarget =
+        currentSettingsProfileId === actionProfileId &&
+        currentGeneration === actionGeneration;
+
+      if (isStillCurrentTarget) {
+        setSessionChangesError(
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    } finally {
+      setSessionChangesMutating(false);
+    }
+  }
+
 
   async function handleClearCache() {
     setClearMsg(null);
@@ -332,6 +416,70 @@ export function SettingsPage() {
         >
           <SettingsIdleSuspendTimingSection owner={targetOwner} />
         </SettingsSectionAccordion>
+        <SettingsSectionAccordion
+          title="Session Changes"
+          description="Capture tool-observed pre-edit file states for lightweight review in active OMP sessions."
+        >
+          <div
+            data-testid="settings-session-changes-section"
+            className="space-y-3 p-1"
+          >
+            <div className="flex flex-col sm:flex-row gap-4 sm:items-center justify-between">
+              <div className="space-y-0.5">
+                <div className="text-sm font-semibold text-[var(--color-text)]">
+                  Session Changes Tracking
+                </div>
+                <p className="text-xs text-[var(--color-text-muted)]">
+                  Records first-touch original file content for lightweight
+                  terminal review before agent modifications.
+                </p>
+                <div className="pt-1 text-xs font-mono text-[var(--color-text-muted)]">
+                  Target Server:{" "}
+                  {targetProfile
+                    ? `${targetProfile.name} (${targetSnapshot?.serverUrl || targetProfile.url})`
+                    : "(Current / Default Server)"}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={sessionChangesEnabled}
+                  onCheckedChange={(checked) =>
+                    void handleToggleSessionChanges(checked)
+                  }
+                  ariaLabel="Toggle Session Changes tracking"
+                  disabled={
+                    isLoading ||
+                    !config ||
+                    !isTargetReady ||
+                    sessionChangesMutating ||
+                    isPending
+                  }
+                />
+              </div>
+            </div>
+
+            {sessionChangesNotice && (
+              <div
+                data-testid="session-changes-restart-notice"
+                role="status"
+                className="rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-xs text-[var(--color-warning)]"
+              >
+                {sessionChangesNotice}
+              </div>
+            )}
+
+            {sessionChangesError && (
+              <div
+                data-testid="session-changes-error"
+                role="alert"
+                className="rounded border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-3 py-2 text-xs text-[var(--color-danger)]"
+              >
+                {sessionChangesError}
+              </div>
+            )}
+          </div>
+        </SettingsSectionAccordion>
+
 
         <SettingsSectionAccordion
           title="Global Settings"

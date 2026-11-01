@@ -1,0 +1,739 @@
+{
+  "version": 1,
+  "project_root": "/home/loidinh/WS/dam-hopper",
+  "plan": "plans/261031-0949-lightweight-session-changes-refactor/plan.md",
+  "source_fingerprint": "c00f5535c1e9ffed446c1c9b836bc785901ec09f1c3d4beb2c644aef842fce29",
+  "tasks": [
+    {
+      "id": "managed-extension-lifecycle",
+      "title": "Add independently owned Session Changes extension lifecycle",
+      "blocked_by": [
+        "omp-tool-event-producer"
+      ],
+      "allowed_files": [
+        "server/src/agent_status/integration.rs",
+        "server/src/agent_status/mod.rs",
+        "server/src/api/agent_status.rs",
+        "server/tests/agent_status_integration.rs"
+      ],
+      "constraints": [
+        "Reuse managed-header SHA-256, bounded safe reads, effective-home resolution and atomic writes; never overwrite or unlink modified, unmanaged, symlink or special-file targets.",
+        "Manage dam-hopper-session-changes.ts independently from dam-hopper-agent-status.ts; no change to notification or status enablement.",
+        "Phase 03 owns the actual new TypeScript asset; no temporary stub asset or duplicate installer convention."
+      ],
+      "acceptance": [
+        "Independent status/install/uninstall helpers distinguish absent/current/outdated/modified and use the dedicated asset/path.",
+        "Install and uninstall are idempotent for absent/current owned files; user modifications and unsafe paths produce actionable conflicts without changing either extension.",
+        "Configured OMP directory and default effective-home directory use the same resolution as existing Agent Status APIs."
+      ],
+      "verification": [
+        "At this task boundary run cargo check --manifest-path server/Cargo.toml and cargo test --manifest-path server/Cargo.toml --test agent_status_integration; cover absent/current/outdated/modified, CRLF ownership and symlink cases.",
+        "Smoke the actual installer in a temporary agent directory: install/remove only Session Changes and compare Agent Status bytes before/after; collect independent local review and completion evidence before releasing the switch task. The complete bundled asset already exists from its prerequisite."
+      ],
+      "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-01-config-and-extension-lifecycle.md",
+      "spec_fingerprint": "5b852ec21fbf3b1a0132386d5727b366390a185d654163ddbc998ec727d9fac4",
+      "status": "completed",
+      "owner": "server lifecycle implementer",
+      "reason": "Marked completed per user direction.",
+      "evidence": "Marked completed per user direction (2026-10-31 19:54:51 +07:00). Cycle 3 code review (plans/reports/code-review-261031-1944-phase-01-server-config-extension-lifecycle-cycle-3.md) noted technical acceptance remains incomplete with open findings.",
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-31T05:31:10.832Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.144Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.393Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T12:54:51.000Z",
+          "event": "completed",
+          "owner": "server lifecycle implementer",
+          "reason": "Phase 01 managed-extension-lifecycle marked completed per user direction."
+        }
+      ]
+    },
+    {
+      "id": "server-session-changes-switch",
+      "title": "Wire default-off server setting to atomic enablement and purge",
+      "blocked_by": [
+        "managed-extension-lifecycle"
+      ],
+      "allowed_files": [
+        "server/src/config/schema.rs",
+        "server/src/config/parser.rs",
+        "server/src/config/tests.rs",
+        "server/src/api/config.rs",
+        "server/src/api/settings.rs",
+        "server/src/api/workspace.rs",
+        "server/src/api/agent_status.rs",
+        "server/src/persistence/restore.rs",
+        "server/src/state.rs",
+        "server/src/main.rs",
+        "server/src/agent_status/runtime.rs",
+        "server/src/session_changes/store.rs",
+        "server/src/session_changes/control.rs",
+        "server/src/session_changes/capture.rs",
+        "server/src/session_changes/comparison.rs",
+        "server/src/session_changes/capture_tests.rs",
+        "server/src/session_changes/comparison_tests.rs",
+        "server/src/api/session_changes.rs",
+        "server/tests/session_changes_lifecycle.rs",
+        "server/tests/session_changes_protocol.rs",
+        "server/tests/session_changes_controls.rs",
+        "server/tests/session_changes_api.rs",
+        "server/tests/session_changes_adversarial.rs",
+        "server/tests/agent_status_integration.rs"
+      ],
+      "constraints": [
+        "Store enablement in ServerConfig, not UI preferences/localStorage; serialize sessionChangesEnabled and persist session_changes_enabled with false default.",
+        "OFF must invalidate all in-flight producers/comparisons before purge, even when an old collector route or worker holds a service Arc.",
+        "Route config.rs update/reload, settings.rs cache-clear/import/recovery and workspace.rs init/switch through one serialized reconcile/publish helper; no direct config replacement bypass.",
+        "On modified-file uninstall conflict preserve the file but disable/purge immediately; import recovery must never restore an old ON state automatically after disable or cleanup error.",
+        "Update all owned exhaustive ServerConfig constructors, including persistence/restore.rs, and existing test setup that now needs explicit tracking opt-in before this task's local checks."
+      ],
+      "acceptance": [
+        "Missing field starts false; JSON/TOML export/import/reload retain the flag and every config replacement path reconciles runtime state.",
+        "ON installs the completed managed asset and enables the service gate; startup reconciles persisted ON/OFF without browser involvement. The new capture protocol becomes available in Phase 02, not as a prerequisite to this task's lifecycle checks.",
+        "OFF rejects producers immediately, purges retained snapshot/comparison bytes and TempDir payloads, and removes only an owned extension.",
+        "Cache-clear after externally changing ON/OFF, workspace init/switch to a missing/explicit flag and TOML import all reconcile disk/config/gate consistently; disable/cleanup import errors cannot run automatic old-ON recovery.",
+        "Restore unit-test ServerConfig literal explicitly sets session_changes_enabled false or uses an appropriate default; Rust unit-test compilation and restore tests remain intact.",
+        "Disable raced with capture/comparison cannot repopulate state; enable failures leave tracking OFF with actionable errors and status/notifications remain operational."
+      ],
+      "verification": [
+        "At this task boundary run cargo check --manifest-path server/Cargo.toml, cargo test --manifest-path server/Cargo.toml config, cargo test --manifest-path server/Cargo.toml persistence::restore and cargo test --manifest-path server/Cargo.toml --test session_changes_lifecycle; author cache-clear/workspace-init/workspace-switch/import-recovery regressions in the owned lifecycle suite.",
+        "Smoke default OFF, ON, OFF, restart, cache-clear after external TOML change, workspace init/switch and import cleanup failure against real temp config/agent paths; verify immediate refusal and zero retained bytes. Existing producer-protocol tests explicitly opt in where required and still compile; do not depend on Phase 02 tests or new endpoints.",
+        "Collect local review and fresh compile/test/smoke evidence for this task before completion; final integrated qualification is an additional downstream gate, never this task's evidence source."
+      ],
+      "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-01-config-and-extension-lifecycle.md",
+      "spec_fingerprint": "d2ed2558f6f9a342bd39ff7f9f8c1a1403d84667701fe4adb3597793c539ac4b",
+      "status": "completed",
+      "owner": "server lifecycle implementer",
+      "reason": "Marked completed per user direction.",
+      "evidence": "Marked completed per user direction (2026-10-31 19:54:51 +07:00). Cycle 3 code review (plans/reports/code-review-261031-1944-phase-01-server-config-extension-lifecycle-cycle-3.md) noted technical acceptance remains incomplete with 5 High (W1–W4, W7) and 2 Medium (W5–W6) findings open.",
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-31T05:31:10.832Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.145Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.498Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T12:54:51.000Z",
+          "event": "completed",
+          "owner": "server lifecycle implementer",
+          "reason": "Phase 01 server-session-changes-switch marked completed per user direction."
+        }
+      ]
+    },
+    {
+      "id": "per-file-capture-engine",
+      "title": "Replace repository inventory with bounded first-touch file capture",
+      "blocked_by": [
+        "server-session-changes-switch"
+      ],
+      "allowed_files": [
+        "server/src/session_changes",
+        "server/src/api/session_changes.rs",
+        "server/src/api/router.rs",
+        "server/tests/fixtures/session-changes-wire.json",
+        "server/tests/session_changes_protocol.rs",
+        "server/tests/session_changes_controls.rs",
+        "server/tests/session_changes_api.rs",
+        "server/tests/session_changes_adversarial.rs",
+        "server/tests/session_changes_lifecycle.rs"
+      ],
+      "constraints": [
+        "Delete absence.rs and absence_tests.rs and all capture_inventory traversal; no Git status/diff or shell scan replacement.",
+        "Enforce 2 MiB per original, 64 MiB global retained storage, 500 tracked paths per session and 32 retained identities before allocation/publication.",
+        "Registration is metadata-only; timeout/unproven capture is never upgraded from post-edit bytes; maintain authenticated PTY/root/generation fences.",
+        "Migrate all Rust callers, comparison storage access and existing affected unit/integration tests in this task, keeping real capture and explicit-refresh behavior working; Phase 03's prerequisite asset already exists.",
+        "Retain only legacy test fixture vectors needed by still-unmigrated TS tests until the UI task removes them; no production old-protocol fallback."
+      ],
+      "acceptance": [
+        "Register creates an empty bounded record; supported pre-edit capture stores exact original once or verified absence; repeated edits preserve it.",
+        "Concurrent same-path capture has one reservation; unknown/timeout and OFF/remove races cannot publish false originals or leak byte reservations.",
+        "No AbsenceTrie, recursive walker, from-now snapshot API, three-step barrier or obsolete inventory storage remains in server domain/API; affected Rust tests compile against new types now.",
+        "Existing comparison callers operate on the bounded observed-path map without old inventory types; explicit refresh/detail remain real and locally smoke-testable before the lazy-view successor.",
+        "Direct-path containment, symlink, ignored/nested-root, special-file and unstable-file exclusions remain explicit unknown/excluded coverage, never fabricated additions."
+      ],
+      "verification": [
+        "At this task boundary run cargo check --manifest-path server/Cargo.toml, cargo test --manifest-path server/Cargo.toml session_changes and cargo test --manifest-path server/Cargo.toml --test session_changes_protocol --test session_changes_controls --test session_changes_api --test session_changes_adversarial --test session_changes_lifecycle; update basic compile/contract expectations here, not in descendants.",
+        "Smoke real register/capture/explicit-refresh against a temp project through actual service/API: first touch, ENOENT, repeated capture, quota release and comparison of captured originals. Inspect removed traversal/barrier callsites in local review; record fresh compile/tests/smoke/review evidence before completion."
+      ],
+      "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-02-lightweight-per-file-engine.md",
+      "spec_fingerprint": "34597ca1370f3c718b4a368882d2d9eb29ebff68cdfdf0e503a82f8300fe10bf",
+      "status": "completed",
+      "owner": "Rust engine implementer",
+      "reason": "Marked completed per user direction.",
+      "evidence": "Marked completed per user direction (2026-10-31 21:34:24 +07:00). Cycle 3 tester report records 44/44 selected tests passing (plans/reports/tester-261031-2108-phase-02-session-changes-cycle-3.md); this administrative update performed no new runtime verification. Cycle 3 code review (plans/reports/code-review-261031-2113-phase-02-lightweight-per-file-engine-cycle-3.md) noted technical acceptance remains incomplete with open findings.",
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-31T05:31:10.832Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.145Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.601Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T14:34:24.000Z",
+          "event": "completed",
+          "owner": "Rust engine implementer",
+          "reason": "Phase 02 per-file-capture-engine marked completed per user direction."
+        }
+      ]
+    },
+    {
+      "id": "lazy-view-comparison",
+      "title": "Move all current reads and line stats behind explicit viewer requests",
+      "blocked_by": [
+        "per-file-capture-engine"
+      ],
+      "allowed_files": [
+        "server/src/session_changes",
+        "server/src/api/session_changes.rs",
+        "server/tests/fixtures/session-changes-wire.json",
+        "server/tests/session_changes_protocol.rs",
+        "server/tests/session_changes_controls.rs",
+        "server/tests/session_changes_api.rs",
+        "server/tests/session_changes_adversarial.rs",
+        "server/tests/session_changes_lifecycle.rs"
+      ],
+      "constraints": [
+        "Settled/status/lookup may update or project bounded metadata only; no file reads, stats, diff tasks or whole-root discovery.",
+        "Reuse text_diff bounds and blocking permits; only compare paths in the session map on files/refresh/detail requests.",
+        "Retained original/current buffers share accounting and avoid duplicate clones; transient current reads remain bounded by per-file size and concurrency permits."
+      ],
+      "acceptance": [
+        "With no viewer, session start and repeated settled/status calls perform zero file-content reads and zero diffs; settled/status perform zero disk access.",
+        "Opening files lazily reads tracked current paths and returns bounded line counts; reverting exact original bytes removes the row; new/deleted/mode-only/binary/unknown rows are honest.",
+        "Files bootstrap without an existing comparison; cursor/detail/refresh cannot mix baseline/root/revision or publish after OFF/generation change.",
+        "Detail reports presence directly from provenance, enforces text rendering bounds and handles current mutation with an explicit stale-revision response."
+      ],
+      "verification": [
+        "At this task boundary run cargo check --manifest-path server/Cargo.toml, cargo test --manifest-path server/Cargo.toml session_changes::comparison and cargo test --manifest-path server/Cargo.toml --test session_changes_protocol --test session_changes_controls --test session_changes_api --test session_changes_adversarial --test session_changes_lifecycle; author no-work and lazy-bootstrap assertions here using deterministic I/O/diff seams.",
+        "Smoke real register/capture/settled/status followed by files/refresh/detail on a temp project; prove zero unviewed reads/diffs and coherent revision/revert behavior. Collect local review and completion evidence before the expanded regression/UI successors; no browser or descendant report is required."
+      ],
+      "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-02-lightweight-per-file-engine.md",
+      "spec_fingerprint": "7e04e251f641c3c1aa5148752853a1f02ac41c765367989f61e3a650442fc732",
+      "status": "completed",
+      "owner": "Rust engine implementer",
+      "reason": "Marked completed per user direction.",
+      "evidence": "Marked completed per user direction (2026-10-31 21:34:24 +07:00). Cycle 3 tester report records 44/44 selected tests passing (plans/reports/tester-261031-2108-phase-02-session-changes-cycle-3.md); this administrative update performed no new runtime verification. Cycle 3 code review (plans/reports/code-review-261031-2113-phase-02-lightweight-per-file-engine-cycle-3.md) noted technical acceptance remains incomplete with open findings.",
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-31T05:31:10.832Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.145Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.708Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T14:34:24.000Z",
+          "event": "completed",
+          "owner": "Rust engine implementer",
+          "reason": "Phase 02 lazy-view-comparison marked completed per user direction."
+        }
+      ]
+    },
+    {
+      "id": "qualify-engine-protocol",
+      "title": "Author regression coverage for lightweight engine and producer protocol",
+      "blocked_by": [
+        "lazy-view-comparison"
+      ],
+      "allowed_files": [
+        "server/tests/session_changes_protocol.rs",
+        "server/tests/session_changes_controls.rs",
+        "server/tests/session_changes_api.rs",
+        "server/tests/session_changes_adversarial.rs",
+        "server/tests/session_changes_lifecycle.rs",
+        "server/tests/fixtures/session-changes-wire.json",
+        "server/src/session_changes/capture_tests.rs",
+        "server/src/session_changes/comparison_tests.rs",
+        "server/src/session_changes/types_tests.rs",
+        "server/src/session_changes/root_tests.rs"
+      ],
+      "constraints": [
+        "Expand existing passing scan/barrier migration tests rather than defer predecessors' first coverage here; preserve bearer/root/PTY/owner failure coverage.",
+        "Run this task's own compile/tests/local smoke/review before completion; final integrated qualification is additional cross-layer evidence.",
+        "No permanent runtime telemetry, test-only bypass of containment/auth or mocked claim of real OMP qualification."
+      ],
+      "acceptance": [
+        "Fixtures cover registration, preEdit/unproven capture, disabled response, toolObserved status and revisionless files bootstrap with root propagation.",
+        "Tests cover 2 MiB boundary and +1, 64 MiB global boundary across sessions, 500/501 paths, 32/33 sessions, duplicate requests and reservation release.",
+        "Tests prove no late publication after timeout/OFF/session switch/terminal removal and no filesystem/diff work from settled/status.",
+        "Existing retained-session exit/removal, restart fencing, invalid bearer, symlink escape, ignored paths and read-only review behaviors remain covered."
+      ],
+      "verification": [
+        "At this task boundary run cargo check --manifest-path server/Cargo.toml, cargo test --manifest-path server/Cargo.toml --test session_changes_protocol --test session_changes_controls --test session_changes_api --test session_changes_adversarial --test session_changes_lifecycle and cargo test --manifest-path server/Cargo.toml session_changes.",
+        "Smoke the new boundary/race cases through real temp-project service/API calls, collect independent local review and exact compile/test/smoke results before completion; fixture consumer review does not require UI or live OMP descendants."
+      ],
+      "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-02-lightweight-per-file-engine.md",
+      "spec_fingerprint": "2bafac8743f1d7f49f53b221f64e57b34bf91be9f137c2737e5d7cc8565db1ab",
+      "status": "completed",
+      "owner": "Rust engine implementer",
+      "reason": "Marked completed per user direction.",
+      "evidence": "Marked completed per user direction (2026-10-31 21:34:24 +07:00). Cycle 3 tester report records 44/44 selected tests passing (plans/reports/tester-261031-2108-phase-02-session-changes-cycle-3.md); this administrative update performed no new runtime verification. Cycle 3 code review (plans/reports/code-review-261031-2113-phase-02-lightweight-per-file-engine-cycle-3.md) noted technical acceptance remains incomplete with open findings.",
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-31T05:31:10.832Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.145Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.822Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T14:34:24.000Z",
+          "event": "completed",
+          "owner": "Rust engine implementer",
+          "reason": "Phase 02 qualify-engine-protocol marked completed per user direction."
+        }
+      ]
+    },
+    {
+      "id": "omp-tool-event-producer",
+      "title": "Implement standalone pre-edit capture extension and isolate Agent Status",
+      "blocked_by": [],
+      "allowed_files": [
+        "server/src/agent_status/assets/omp-session-changes.ts",
+        "server/src/agent_status/assets/omp-agent-status.ts",
+        "server/tests/omp-agent-status.test.ts",
+        "server/tests/omp-session-changes.test.ts"
+      ],
+      "constraints": [
+        "Use awaited tool_call and post-execution tool_result hooks; never change tool inputs/results, deny tools or block a tool longer than a single 1500 ms total capture deadline.",
+        "Track only write, Hashline edit including MV/REM, and concrete-file ast_edit; do not scan/glob/read originals in the extension or inspect bash/eval scripts.",
+        "Root and rebound subagent factories share bounded process registry fenced by serverEpoch, terminalIncarnation and root ompSessionId; no cross-session adoption.",
+        "Remove Session Changes capture/barrier/settled coupling from omp-agent-status.ts; preserve its existing semantic status, notification, heartbeat and settle behavior."
+      ],
+      "acceptance": [
+        "Root session start/switch registers metadata without file content reads; in-process task/nested child edits publish under the correct root OMP identity.",
+        "Pre-edit hooks capture every Hashline block source and MV destination before tool execution, plus write and literal ast_edit targets, once per path.",
+        "Timeout/error returns normally and marks paths unproven; glob/directory AST result-only concrete paths are unknown, never backfilled from post-edit bytes.",
+        "Settled agent_end only sends metadata and ignores willContinue intermediate turns; stale callbacks after switch, OFF or restart cannot mutate another record.",
+        "Agent Status standalone extension has no Session Changes HTTP/barrier work; its reporting/notification lifecycle remains intact."
+      ],
+      "verification": [
+        "Before this task completes compile both assets with bun build --target bun server/src/agent_status/assets/omp-agent-status.ts server/src/agent_status/assets/omp-session-changes.ts --outdir <isolated-temp-build-dir>, then run bun test server/tests/omp-agent-status.test.ts server/tests/omp-session-changes.test.ts. Author the basic producer tests in this task; never wait for qualify-omp-producer to create its test file.",
+        "Smoke the real extension factory/event handlers with a temporary loopback HTTP peer and actual pre-tool mutation ordering; exercise registration, capture, unknown timeout and root/child tuple routing without requiring future Rust endpoints. A boundary peer is not live server/OMP qualification.",
+        "Collect independent local review and compile/tests/smoke evidence now, then release managed-extension-lifecycle; final integrated OMP journey remains an additional descendant gate."
+      ],
+      "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-03-omp-tool-event-extension.md",
+      "spec_fingerprint": "0a340a3fc60636aaba01a6e468a30c248563dcd173b2b5fc9466cd4af3631c79",
+      "status": "completed",
+      "owner": "OMP producer implementer",
+      "reason": "Phase 03 implementation completed per coordinator directive. Standalone pre-edit capture extension created in omp-session-changes.ts and decoupled from omp-agent-status.ts.",
+      "evidence": "36/36 Bun unit tests passing as reported (17 agent-status, 19 session-changes). Bun build succeeded (32.29 KB omp-session-changes.js, 16.90 KB omp-agent-status.js). Cargo check passed with 0 errors/warnings. Real Bun.serve loopback HTTP socket smoke exercised for /register, /capture, /settled, and fail-open timeout. Reported in plans/reports/tester-261031-1718-phase-03-omp-tool-event-extension-final.md with Cycle 3 review noted in plans/reports/code-review-261031-1541-phase-03-omp-tool-event-extension-cycle-3.md; full live OMP runtime acceptance retained as downstream integrated qualification gate.",
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-31T05:31:10.832Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.145Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.283Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T10:23:46.000Z",
+          "event": "completed",
+          "owner": "OMP producer implementer",
+          "reason": "Phase 03 implementation verified by reported tests, build, loopback smoke, and marked completed per directive."
+        }
+      ]
+    },
+    {
+      "id": "qualify-omp-producer",
+      "title": "Author OMP producer parsing, fail-open and lineage regressions",
+      "blocked_by": [
+        "omp-tool-event-producer"
+      ],
+      "allowed_files": [
+        "server/tests/omp-session-changes.test.ts",
+        "server/tests/omp-agent-status.test.ts"
+      ],
+      "constraints": [
+        "Use current OMP event shapes and fixture payloads derived from local schemas; mocks prove boundary behavior only, not installed-host compatibility.",
+        "Tests and registry metadata are bounded; never retain complete tool patches/results or raw baseline bytes in producer state.",
+        "No product-source writes from this regression task; report a failing contract to its implementation owner before final execution."
+      ],
+      "acceptance": [
+        "Tests cover write, multiple Hashline headers, quoted/spaced MV targets, REM, CUT-only and register cross-file paste, and AST concrete/glob/directory/result-only paths.",
+        "Tests cover root/sub/nested factories, independent roots, child-first unresolved lineage, duplicate tool IDs in different agents and switch/restart races.",
+        "Tests prove tool runs after capture completion or deadline, one total 1.5s budget across a multi-file call, unknown sealing and no wait on unreachable collector.",
+        "Both extensions loaded together still produce one Agent Status reporter; turning Session Changes OFF never disables Agent Status or notifications."
+      ],
+      "verification": [
+        "At this task boundary compile both extension assets with bun build --target bun server/src/agent_status/assets/omp-agent-status.ts server/src/agent_status/assets/omp-session-changes.ts --outdir <isolated-temp-build-dir> and run bun test server/tests/omp-agent-status.test.ts server/tests/omp-session-changes.test.ts; record exact totals and timing-test tolerance.",
+        "Smoke real handlers against a local loopback peer with deferred/late responses, child switches and capture deadline; collect review/evidence for the expanded regressions without waiting for server or UI descendants. Real OMP task-agent journey belongs only to integrated qualification."
+      ],
+      "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-03-omp-tool-event-extension.md",
+      "spec_fingerprint": "448fbf69bb87dcc3729b03f49df26dbb51d88c3ccb49e3f0c92a5c252eddd0ab",
+      "status": "completed",
+      "owner": "OMP producer implementer",
+      "reason": "Phase 03 producer regressions authored per coordinator directive.",
+      "evidence": "19-test suite authored in server/tests/omp-session-changes.test.ts (19/19 passing as reported). Tests cover Hashline editing (PUT, MV, REM, CUT, register pastes), AST edit (concrete, glob, directory, result-only), fail-open timeout abort, lineage/generation fencing, and dual-extension isolation with omp-agent-status.ts. 95 distinct passing tests reported across Bun, Rust, and UI selected regression suites (plans/reports/tester-261031-1718-phase-03-omp-tool-event-extension-final.md). Cycle 3 review findings noted in plans/reports/code-review-261031-1541-phase-03-omp-tool-event-extension-cycle-3.md; live OMP runtime journey remains a downstream release gate.",
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-31T05:31:10.832Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.145Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.927Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T10:23:46.000Z",
+          "event": "completed",
+          "owner": "OMP producer implementer",
+          "reason": "Regression suite authoring verified by reported tests and marked completed per directive."
+        }
+      ]
+    },
+    {
+      "id": "settings-toggle-owner-binding",
+      "title": "Add target-server Session Changes toggle with lifecycle feedback",
+      "blocked_by": [
+        "server-session-changes-switch"
+      ],
+      "allowed_files": [
+        "packages/ui/src/components/pages/SettingsPage.tsx",
+        "packages/ui/src/components/pages/SettingsPage.test.tsx",
+        "packages/ui/src/api/client.ts",
+        "packages/ui/src/api/queries.ts"
+      ],
+      "constraints": [
+        "Use targetOwner with existing useConfig/useUpdateConfig; setting belongs to server config, never workbench preferences/localStorage.",
+        "Preserve all existing config fields during update; fence target profile/generation changes and prevent concurrent toggle mutations.",
+        "Do not claim tracking active in an already-running OMP session immediately after enabling; show restart notice and managed-file conflicts."
+      ],
+      "acceptance": [
+        "Accessible ON/OFF control reflects server.sessionChangesEnabled, defaults visually OFF until authoritative config is available, and disables without a valid ready owner.",
+        "Toggling only updates selected Settings Target Server; Workbench Preferences Source and active workspace selection do not redirect requests or late responses.",
+        "Successful ON shows Restart active OMP sessions to load the Session Changes extension; OFF clears this notice and surfaces any physical-uninstall conflict honestly.",
+        "Mutation failure restores authoritative config view and exposes actionable error; unrelated config fields and Agent Status settings remain unchanged."
+      ],
+      "verification": [
+        "At this task boundary run pnpm --filter @dam-hopper/ui build and pnpm --filter @dam-hopper/ui test src/components/pages/SettingsPage.test.tsx.",
+        "Smoke the actual Settings section with the completed config lifecycle against isolated server A/B or a controlled HTTP config peer: change target during delayed toggle, verify persisted flag/restart notice/errors and owner isolation. Collect local review plus compile/tests/smoke evidence now; do not require later panel or integrated OMP tasks."
+      ],
+      "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-04-settings-toggle-and-ui-qualification.md",
+      "spec_fingerprint": "960f2e4836d1fcd90223f4f1d08e4bc9a9dc31c01d5b36a8aab9fcf4f89ba2f5",
+      "status": "completed",
+      "owner": "settings/UI implementer",
+      "reason": "Marked completed per user direction.",
+      "evidence": "Marked completed per user direction (2026-11-01 00:39:00 +07:00). SettingsPage test suite passing (17/17 passed; pnpm --filter @dam-hopper/ui test src/components/pages/SettingsPage.test.tsx). Typecheck clean (pnpm --filter @dam-hopper/ui build). Cycle 3 code review (plans/reports/code-review-261031-2338-phase-04-cycle-3.md) noted delayed target-switch cleanup warning.",
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-31T05:31:10.832Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.145Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:12.029Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T17:39:00.000Z",
+          "event": "completed",
+          "owner": "settings/UI implementer",
+          "reason": "Phase 04 settings-toggle-owner-binding marked completed per user direction."
+        }
+      ]
+    },
+    {
+      "id": "lazy-panel-and-triggers",
+      "title": "Migrate lazy viewer contracts and gate all terminal review triggers",
+      "blocked_by": [
+        "settings-toggle-owner-binding",
+        "qualify-engine-protocol"
+      ],
+      "allowed_files": [
+        "packages/ui/src/api",
+        "packages/ui/src/components/pages/WorkspacePage.tsx",
+        "packages/ui/src/components/organisms/SessionChangesPanel.tsx",
+        "packages/ui/src/components/organisms/SessionChangesHost.tsx",
+        "packages/ui/src/components/organisms/SessionChangedFilesList.tsx",
+        "packages/ui/src/components/organisms/TabBar.tsx",
+        "packages/ui/src/components/organisms/ActiveTerminalRuntimeDisplay.tsx",
+        "packages/ui/src/components/organisms/TerminalAccessoryControls.tsx",
+        "packages/ui/src/components/organisms/MobileTerminalAccessoryBar.tsx",
+        "packages/ui/src/components/organisms/TerminalRuntimeOutput.tsx",
+        "packages/ui/src/components/organisms/PaneContainer.tsx",
+        "packages/ui/browser-tests/session-changes-panel.browser.tsx",
+        "packages/ui/browser-tests/session-changes-host.browser.tsx",
+        "packages/ui/browser-tests/session-changes-viewer.browser.tsx",
+        "server/tests/fixtures/session-changes-wire.json"
+      ],
+      "constraints": [
+        "Reuse existing owner-bound API/query keys and one modal host; no new global preferences store or duplicated responsive host.",
+        "No current-file/diff requests when panel closed or owning server disabled; cached data must not leak after OFF, disconnect or generation switch.",
+        "Remove obsolete fromNow/barrier clients, types, decoder vectors and transport channels, migrating every affected caller/test; preserve Git Changes and read-only Monaco.",
+        "Use tool-observed first-touch wording, explicit unknown coverage and root/revision-fenced detail; do not promise bash/eval or complete attribution."
+      ],
+      "acceptance": [
+        "Desktop tab, active-runtime and mobile triggers hide/disable when their terminal-owning server is OFF, unknown or unavailable; direct stale open callbacks are refused too.",
+        "An open panel closes or transitions to disabled immediately on authoritative OFF, cancels queries and removes retained session query data for that owner only.",
+        "Panel opens from metadata-only ready status without existing comparison, lazily fetches first files revision and supports all 500 observed paths via bounded pagination.",
+        "Files/detail/refresh propagate rootId and owner/epoch/baseline/revision fences; stale detail clears/reloads safely, not rendering mixed revisions.",
+        "Copy says tool-observed edits since first touch, explains restart/new-session availability, unknown paths and external writers, and points script mutations to Git Changes."
+      ],
+      "verification": [
+        "At this task boundary run pnpm --filter @dam-hopper/ui build and pnpm --filter @dam-hopper/ui test src/api/session-changes-types.test.ts src/api/session-changes-client.test.ts src/api/session-changes-queries.test.tsx src/api/ws-transport.test.ts, then pnpm --filter @dam-hopper/ui test:browser browser-tests/session-changes-panel.browser.tsx browser-tests/session-changes-host.browser.tsx browser-tests/session-changes-viewer.browser.tsx.",
+        "Smoke the mounted viewer against the completed server/API using seeded temp-project captures; check closed/disabled zero requests, lazy bootstrap, owner switch, pagination, revision changes and keyboard isolation. Collect local review and fresh evidence before completion; live installed OMP/Tauri/human visual release gates remain additional final qualification.",
+        "After removing legacy fixture vectors, rerun cargo test --manifest-path server/Cargo.toml session_changes::types to prove remaining shared-vector consumers still pass; the engine regression prerequisite serializes shared fixture ownership."
+      ],
+      "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-04-settings-toggle-and-ui-qualification.md",
+      "spec_fingerprint": "529e05d6079fe49a683fb55404cbc24bb9d0b3036ce1d52f5d180a3ac02261c5",
+      "status": "completed",
+      "owner": "settings/UI implementer",
+      "reason": "Marked completed per user direction.",
+      "evidence": "Marked completed per user direction (2026-11-01 00:39:00 +07:00). API and query unit tests passing (72/72 passed; pnpm --filter @dam-hopper/ui test src/api/session-changes-types.test.ts src/api/session-changes-client.test.ts src/api/session-changes-queries.test.tsx src/api/ws-transport.test.ts). Component browser tests passing (8/8 passed; browser-tests/session-changes-panel.browser.tsx, browser-tests/session-changes-host.browser.tsx, browser-tests/session-changes-viewer.browser.tsx). Rust wire types test passing (7/7 passed; cargo test --manifest-path server/Cargo.toml session_changes::types). UI build clean. Cycle 3 code review scored 8/10 (plans/reports/code-review-261031-2338-phase-04-cycle-3.md).",
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-31T05:31:10.832Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.145Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:12.132Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T17:39:00.000Z",
+          "event": "completed",
+          "owner": "settings/UI implementer",
+          "reason": "Phase 04 lazy-panel-and-triggers marked completed per user direction."
+        }
+      ]
+    },
+    {
+      "id": "qualify-integrated-session-changes",
+      "title": "Qualify complete default-off lifecycle and live tool-observed review",
+      "blocked_by": [
+        "qualify-engine-protocol",
+        "qualify-omp-producer",
+        "lazy-panel-and-triggers"
+      ],
+      "allowed_files": [
+        "plans/261031-0949-lightweight-session-changes-refactor/reports/integration-report.md"
+      ],
+      "constraints": [
+        "One finalizer runs the final coherent cross-layer suites/live journey only after evidence-backed prerequisite completion; local task checks already passed and no source/test fixes are authorized here.",
+        "Record exact commands, outcomes and actual runtime/platform versions; fixture results are not live OMP/Tauri proof.",
+        "Failure blocks release and returns to the responsible owning task; do not weaken tests or mark unsupported surfaces passed."
+      ],
+      "acceptance": [
+        "Rust domain/integration suites, Bun producer/status suites, UI typecheck/unit/browser checks execute with exact pass/fail evidence.",
+        "Real Linux OMP journey covers default OFF, physical ON install/restart notice, first-touch main/task edits, lazy review/revert, fail-open unknown and physical OFF remove/purge with Agent Status still reporting.",
+        "No-viewer run proves no session-start/settled/status content reads or diffs, while bounded tool capture alone performs expected original reads; quota/race cases remain covered.",
+        "Independent implementation review and shared web/Tauri UI qualification are recorded; unavailable platform or visual gates remain explicit blockers, never fabricated passes."
+      ],
+      "verification": [
+        "At this task boundary rerun cargo check --manifest-path server/Cargo.toml and the Rust/Bun/UI suites listed in phases as one coherent cross-layer qualification; record fresh integrated outputs in integration-report.md, distinct from prerequisite-local evidence.",
+        "Smoke real installed OMP write, multi-file Hashline edit/MV/REM, concrete AST, glob AST unknown and in-process task edits; compare displayed originals to files prepared before tools.",
+        "Use isolated loopback test server/temp project and measured I/O/diff evidence for no-viewer behavior; verify 1500 ms fail-open under unavailable capture and immediate OFF rejection/purge.",
+        "Check responsive browser and shared Tauri read-only review, focus isolation and owner changes; collect independent integrated review and human visual result before this task completes, or report the exact missing prerequisite."
+      ],
+      "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-04-settings-toggle-and-ui-qualification.md",
+      "spec_fingerprint": "6854a304e4b3bec4536fdd697002fb504ba4c556b7a8de538d6ff6c50d634a35",
+      "status": "completed",
+      "owner": "sole integration finalizer",
+      "reason": "Administratively closed per user direction; technical acceptance incomplete.",
+      "evidence": "Marked completed per user direction (2026-11-01 00:39:00 +07:00); administratively closed with technical acceptance incomplete. 104/104 passing tests reported across focused unit, browser component, and wire fixture suites; Cycle 3 code review (plans/reports/code-review-261031-2338-phase-04-cycle-3.md) scored 8/10. Live installed OMP lifecycle journey, no-viewer I/O measurements, coherent cross-layer suites, Tauri host launch, and human visual review remain open qualification gates.",
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-31T05:31:10.832Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.145Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:12.250Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T17:39:00.000Z",
+          "event": "completed",
+          "owner": "sole integration finalizer",
+          "reason": "Phase 04 qualify-integrated-session-changes administratively closed per user direction; technical acceptance incomplete."
+        }
+      ]
+    },
+    {
+      "id": "document-lightweight-session-changes",
+      "title": "Document first-touch semantics, resource bounds and operator lifecycle",
+      "blocked_by": [
+        "qualify-integrated-session-changes"
+      ],
+      "allowed_files": [
+        "docs/system-architecture.md",
+        "docs/api-reference.md",
+        "docs/configuration/server-runtime-settings.md",
+        "docs/codebase-summary.md",
+        "docs/code-standards.md",
+        "docs/CHANGELOG.md",
+        "docs/project-roadmap.md"
+      ],
+      "constraints": [
+        "Use current installed docs conventions and update existing files; do not edit prior plan history or invent verification/approval.",
+        "Replace old session-start/AbsenceTrie/barrier/background-scan descriptions everywhere affected; preserve unrelated subsystem documentation.",
+        "No version bump, release commit/push or Android-native feature scope is authorized by this task."
+      ],
+      "acceptance": [
+        "Architecture/API/config docs describe server default OFF, JSON/TOML names, separate managed extension ownership, ON restart notice and immediate OFF purge/rejection/removal.",
+        "Docs state tool-observed first-touch scope, supported tools/subagents, unknown timeout/glob paths, no bash/eval capture, lazy viewer work and 2 MiB/64 MiB/500/32 bounds.",
+        "Code standards replace obsolete Session Changes clauses at docs/code-standards.md:126-136: remove trie/128-512 MiB/receipt-qualified origins and mandate bounded first-touch provenance, metadata-only settled/status and lazy viewer work; preserve containment/read-only/Monaco safeguards.",
+        "Changelog/roadmap/codebase summary reflect actual implemented cutover and measured qualification status, including any platform or operator cleanup limitations."
+      ],
+      "verification": [
+        "Compile/typecheck is not applicable to this Markdown-only task; document that reason in its own evidence rather than borrowing a descendant compile result. Perform focused doc-to-final-schema/fixture/config checks and changed-link checks now.",
+        "Smoke operator-facing examples/links against the already qualified config/API behavior, verify OFF rollback wording and absence of obsolete Session Changes normative claims, then obtain independent local docs review before completing this task."
+      ],
+      "source_phase": "plans/261031-0949-lightweight-session-changes-refactor/phase-04-settings-toggle-and-ui-qualification.md",
+      "spec_fingerprint": "1acfe76e4311d4bfcafe63dc06115bfb5eb7ddda4cefc11279440a86a19df17a",
+      "status": "completed",
+      "owner": "docs owner",
+      "reason": "Administratively closed per user direction; documentation synchronization in progress across docs; awaiting final output and review.",
+      "evidence": "Marked completed per user direction (2026-11-01 00:39:00 +07:00); administrative closure recorded. Documentation updates delegated to Phase04DocsManager across docs/code-standards.md, docs/frontend-components.md, docs/system-architecture.md, docs/architecture/preferences-settings-and-host-resources.md, docs/configuration/server-runtime-settings.md, docs/CHANGELOG.md, docs/codebase-summary.md; roadmap updated in docs/project-roadmap.md. In progress, awaiting final agent output and review.",
+      "native_bindings": [],
+      "history": [
+        {
+          "at": "2026-10-31T05:31:10.832Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:11.145Z",
+          "event": "stale",
+          "owner": null,
+          "reason": "Source contract or dependency revision changed"
+        },
+        {
+          "at": "2026-10-31T06:02:12.373Z",
+          "event": "reopened",
+          "owner": null,
+          "reason": "Reset to pending after review revision R1-R4"
+        },
+        {
+          "at": "2026-10-31T17:39:00.000Z",
+          "event": "completed",
+          "owner": "docs owner",
+          "reason": "Phase 04 document-lightweight-session-changes marked completed per user direction."
+        }
+      ]
+    }
+  ]
+}

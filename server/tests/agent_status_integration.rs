@@ -3,12 +3,16 @@ use tempfile::tempdir;
 
 use dam_hopper_server::agent_status::{
     check_claude_status, check_codex_status, check_extension_status,
-    check_native_integration_status, install_claude, install_codex, install_extension,
-    install_native_integration, uninstall_claude, uninstall_codex, uninstall_extension,
-    uninstall_native_integration, AgentKind, IntegrationError, ManagedExtensionStatus,
+    check_native_integration_status, check_session_changes_extension_status,
+    install_claude, install_codex, install_extension,
+    install_native_integration, install_session_changes_extension,
+    uninstall_claude, uninstall_codex, uninstall_extension,
+    uninstall_native_integration, uninstall_session_changes_extension,
+    AgentKind, IntegrationError, ManagedExtensionStatus,
     ManagedInstallationStatus, ManagedReadinessStatus, CLAUDE_MANAGED_EVENTS,
-    CODEX_MANAGED_EVENTS, EXTENSION_SUBPATH, MANAGED_ADAPTER_VERSION, MANAGED_LAUNCHER_SUBPATH,
-    MANAGED_MANIFEST_SUBPATH,
+    CODEX_MANAGED_EVENTS, EXTENSION_SUBPATH, MANAGED_ADAPTER_VERSION,
+    MANAGED_LAUNCHER_SUBPATH, MANAGED_MANIFEST_SUBPATH,
+    SESSION_CHANGES_EXTENSION_SUBPATH,
 };
 
 #[test]
@@ -901,4 +905,135 @@ fn test_generic_native_integration_dispatch() {
     // OMP kind returns ConfigurationError
     let err = check_native_integration_status(AgentKind::Omp, &codex_dir).expect_err("omp fails");
     assert!(matches!(err, IntegrationError::ConfigurationError(_)));
+}
+
+#[test]
+fn test_session_changes_extension_lifecycle_and_independence() {
+    let tmp = tempdir().expect("tempdir");
+    let agent_dir = tmp.path().canonicalize().expect("canonicalize");
+
+    // 1. Initial status is Absent
+    let report = check_session_changes_extension_status(&agent_dir).expect("status check");
+    assert_eq!(report.status, ManagedExtensionStatus::Absent);
+    assert_eq!(report.target_path, agent_dir.join(SESSION_CHANGES_EXTENSION_SUBPATH));
+    assert!(report.version.is_none());
+
+    // 2. Install Agent Status first and record its content/bytes
+    install_extension(&agent_dir).expect("install agent status");
+    let agent_status_path = agent_dir.join(EXTENSION_SUBPATH);
+    let agent_status_bytes_before = std::fs::read(&agent_status_path).expect("read agent status");
+
+    // 3. Install Session Changes
+    let install_report = install_session_changes_extension(&agent_dir).expect("install session changes");
+    assert_eq!(install_report.status, ManagedExtensionStatus::Current);
+    assert_eq!(install_report.version.as_deref(), Some(MANAGED_ADAPTER_VERSION));
+    assert!(install_report.target_path.is_file());
+
+    // 4. Verify Agent Status bytes are exactly identical before/after
+    let agent_status_bytes_after = std::fs::read(&agent_status_path).expect("read agent status");
+    assert_eq!(agent_status_bytes_before, agent_status_bytes_after);
+
+    // 5. Both extensions report Current independently
+    let sc_status = check_session_changes_extension_status(&agent_dir).expect("sc status");
+    assert_eq!(sc_status.status, ManagedExtensionStatus::Current);
+    let as_status = check_extension_status(&agent_dir).expect("as status");
+    assert_eq!(as_status.status, ManagedExtensionStatus::Current);
+
+    // 6. Idempotent install of Session Changes
+    let re_install = install_session_changes_extension(&agent_dir).expect("re-install");
+    assert_eq!(re_install.status, ManagedExtensionStatus::Current);
+
+    // 7. Uninstall Session Changes
+    let uninstall_report = uninstall_session_changes_extension(&agent_dir).expect("uninstall");
+    assert_eq!(uninstall_report.status, ManagedExtensionStatus::Absent);
+    assert!(!agent_dir.join(SESSION_CHANGES_EXTENSION_SUBPATH).exists());
+
+    // Verify Agent Status is still Current and intact
+    assert_eq!(
+        std::fs::read(&agent_status_path).expect("read agent status"),
+        agent_status_bytes_before
+    );
+    let as_status_final = check_extension_status(&agent_dir).expect("as status");
+    assert_eq!(as_status_final.status, ManagedExtensionStatus::Current);
+}
+
+#[test]
+fn test_session_changes_modified_and_outdated_handling() {
+    let tmp = tempdir().expect("tempdir");
+    let agent_dir = tmp.path().canonicalize().expect("canonicalize");
+
+    // Install cleanly
+    install_session_changes_extension(&agent_dir).expect("clean install");
+    let target_path = agent_dir.join(SESSION_CHANGES_EXTENSION_SUBPATH);
+
+    // Tamper with content
+    let mut content = std::fs::read_to_string(&target_path).expect("read");
+    content.push_str("\n// Custom user modification\n");
+    std::fs::write(&target_path, &content).expect("write modified");
+
+    // Status is Modified
+    let report = check_session_changes_extension_status(&agent_dir).expect("status");
+    assert_eq!(report.status, ManagedExtensionStatus::Modified);
+
+    // Refuse overwrite
+    let install_err = install_session_changes_extension(&agent_dir).expect_err("refuse overwrite");
+    assert!(matches!(install_err, IntegrationError::RefusingOverwriteModified(_)));
+
+    // Refuse delete
+    let uninstall_err = uninstall_session_changes_extension(&agent_dir).expect_err("refuse delete");
+    assert!(matches!(uninstall_err, IntegrationError::RefusingDeleteModified(_)));
+
+    // Simulate outdated valid managed file
+    let old_body = "export const VERSION = '0.9.0';";
+    let old_hash = dam_hopper_server::agent_status::integration::sha256_hex(old_body);
+    let outdated_file = format!(
+        "// @generated by dam-hopper-server integration omp\n// dam-hopper-managed-version: 0.9.0\n// dam-hopper-content-sha256: {old_hash}\n\n{old_body}"
+    );
+    std::fs::write(&target_path, outdated_file).expect("write outdated");
+
+    let out_report = check_session_changes_extension_status(&agent_dir).expect("outdated status");
+    assert_eq!(out_report.status, ManagedExtensionStatus::Outdated);
+    assert_eq!(out_report.version.as_deref(), Some("0.9.0"));
+
+    // Upgrades successfully
+    let upgrade_report = install_session_changes_extension(&agent_dir).expect("upgrade");
+    assert_eq!(upgrade_report.status, ManagedExtensionStatus::Current);
+
+    // CRLF line endings on current content remain Current
+    let current_content = std::fs::read_to_string(&target_path).expect("read");
+    let crlf_content = current_content.replace('\n', "\r\n");
+    std::fs::write(&target_path, crlf_content).expect("write crlf");
+    let crlf_report = check_session_changes_extension_status(&agent_dir).expect("crlf status");
+    assert_eq!(crlf_report.status, ManagedExtensionStatus::Current);
+}
+
+#[test]
+fn test_session_changes_symlink_and_relative_rejection() {
+    let rel_path = Path::new("relative/agent/path");
+    let err = check_session_changes_extension_status(rel_path).expect_err("reject relative");
+    assert!(matches!(err, IntegrationError::NonAbsolutePath(_)));
+
+    let tmp = tempdir().expect("tempdir");
+    let base = tmp.path().canonicalize().expect("canonicalize");
+
+    #[cfg(unix)]
+    {
+        let real_agent = base.join("real_agent");
+        std::fs::create_dir_all(&real_agent).expect("create real agent");
+        let symlink_agent = base.join("symlink_agent");
+        std::os::unix::fs::symlink(&real_agent, &symlink_agent).expect("symlink agent");
+
+        let err = check_session_changes_extension_status(&symlink_agent).expect_err("reject symlink");
+        assert!(matches!(err, IntegrationError::SymlinkNotAllowed(_)));
+
+        let agent_dir_2 = base.join("agent_2");
+        std::fs::create_dir_all(&agent_dir_2).expect("create agent_2");
+        let real_ext = base.join("real_ext");
+        std::fs::create_dir_all(&real_ext).expect("create real_ext");
+        let symlink_ext = agent_dir_2.join("extensions");
+        std::os::unix::fs::symlink(&real_ext, &symlink_ext).expect("symlink ext");
+
+        let err2 = install_session_changes_extension(&agent_dir_2).expect_err("reject symlink ext dir");
+        assert!(matches!(err2, IntegrationError::SymlinkNotAllowed(_)));
+    }
 }

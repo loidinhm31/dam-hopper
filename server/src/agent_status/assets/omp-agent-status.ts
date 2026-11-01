@@ -78,10 +78,14 @@ export interface LoggerFacade {
 export interface OmpExtensionContext {
   hasUI?: boolean;
   agent?: { kind?: "main" | "sub" | string; id?: string };
-  sessionManager?: { getSessionId?: () => string };
+  sessionManager?: {
+    getSessionId?: () => string;
+    getEntries?: () => unknown[];
+    getSessionFile?: () => string | null;
+  };
   isIdle?: () => boolean;
+  cwd?: string;
 }
-
 export interface OmpExtensionAPI {
   logger?: LoggerFacade;
   on(event: string, handler: (event: unknown, ctx: unknown) => void): void;
@@ -234,6 +238,7 @@ export class OmpAgentStatusAdapter {
   private settleTimer: TimerToken = null;
 
   public lastSentReport: ReporterReport | null = null;
+
 
   constructor(options: AdapterOptions) {
     this.wsUrl = options.wsUrl;
@@ -485,7 +490,9 @@ export class OmpAgentStatusAdapter {
       outcome,
       blockedReason: this.blockedReason,
     });
+
   }
+
 
   private updateBlockedState(): void {
     if (this.blockers.size > 0) {
@@ -758,14 +765,13 @@ export default function damHopperAgentStatusExtension(pi: OmpExtensionAPI): void
     adapter.onSessionStart(sessionId, isIdle);
   });
 
-  pi.on("session_switch", (_event: unknown, ctxUnknown: unknown) => {
+  pi.on("session_switch", (_eventUnknown: unknown, ctxUnknown: unknown) => {
     if (!adapter) return;
     const ctx = ctxUnknown as OmpExtensionContext | undefined;
     const sessionId = ctx?.sessionManager?.getSessionId?.();
-    const isIdle = typeof ctx?.isIdle === "function" ? ctx.isIdle() : true;
+    const isIdle = typeof ctx?.isIdle === "function" ? ctx?.isIdle() : true;
     adapter.onSessionSwitch(sessionId, isIdle);
   });
-
   pi.on("agent_start", () => {
     adapter?.onAgentStart();
   });

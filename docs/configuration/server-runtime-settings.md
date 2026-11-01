@@ -9,6 +9,7 @@ Optional: configure SQLite path and retention for terminal restart recovery. Ses
 [server]
 session_db_path = "~/.config/dam-hopper/sessions.db"  # Database file location
 session_buffer_ttl_hours = 24  # TTL for dead session buffers in hours (default: 24)
+session_changes_enabled = false  # Master switch for lightweight session changes tracking (default: false)
 ```
 
 **Fields:**
@@ -17,6 +18,7 @@ session_buffer_ttl_hours = 24  # TTL for dead session buffers in hours (default:
 | ------------------------ | ------ | -------------------------------- | -------------------------------------------------------------------------------------- |
 | session_db_path          | string | ~/.config/dam-hopper/sessions.db | SQLite database path (supports ~ expansion); must be on local filesystem               |
 | session_buffer_ttl_hours | u64    | 24                               | Hours before dead session buffers are auto-deleted; prevents unbounded database growth |
+| session_changes_enabled  | bool   | false                            | Master switch for tool-event session changes tracking and managed extension lifecycle |
 
 **Security Note:** On Unix systems, database files are created with 0o600 permissions (user-only access). Ensure the directory containing `session_db_path` is not world-readable.
 
@@ -37,6 +39,48 @@ When the database opens successfully:
 - Exact shell/process memory continuity is not guaranteed across server or host restart
 - Dead sessions are kept for 60 seconds to allow reconnection; buffers are cleaned up per TTL
 
+### Session Changes Configuration
+
+Lightweight Session Changes tracking is opt-in and disabled by default. The master switch is configured under `[server]` in `dam-hopper.toml`.
+
+```toml
+[server]
+session_changes_enabled = false
+```
+
+**Fields:**
+
+| Field | Type | Default | Wire format (JSON) | TOML key | Notes |
+| ----- | ---- | ------- | ------------------ | -------- | ----- |
+| `session_changes_enabled` | bool | `false` | `sessionChangesEnabled` | `session_changes_enabled` | Master switch controlling tool-event tracking, service gating, and managed extension installation |
+
+**Intended Behavior and Extension Lifecycle Design Contract:**
+
+- **Current Implementation Boundary:** Phase 01 (server configuration and managed extension lifecycle), Phase 02 (lightweight per-file capture engine and lazy comparison), Phase 03 (standalone tool-event producer asset `omp-session-changes.ts`), and Phase 04 (target-server Settings UI toggle, trigger gating, and modal isolation) are implemented.
+- **Default Off:** The setting defaults to `false`. When disabled, the server allocates no baseline buffers or temporary directory payloads, and returns HTTP 503 `StatusCode::SERVICE_UNAVAILABLE` with wire error code `trackingDisabled` (`"Session changes tracking is disabled on this server"`) on public or private session changes routes.
+- **Enabling (`session_changes_enabled = true`):**
+  - Automatically installs or upgrades the dedicated managed OMP extension asset into `<agent_dir>/extensions/dam-hopper-session-changes.ts` using atomic writes (via temporary file `.dam-hopper-sc-*.tmp` and `sync_all`) and SHA-256 header verification.
+  - Activates the in-memory service lifecycle gate (`state.session_changes.enable()`).
+  - Active OMP terminal sessions must be restarted for OMP to load the newly installed extension.
+- **Disabling (`session_changes_enabled = false`):**
+  - Flips the service lifecycle gate to disabled and increments its generation counter (`state.session_changes.disable_and_purge()`).
+  - Advances the generation to invalidate in-flight capture or comparison tasks.
+  - Clears stored session records, baseline buffers, and temporary directory payloads from the service instance.
+  - Uninstalls and removes the managed file `extensions/dam-hopper-session-changes.ts` if uncorrupted and matching recorded SHA-256 ownership.
+- **Conflict Safety:**
+  - If `extensions/dam-hopper-session-changes.ts` is user-modified, unmanaged, or a symlink, installation and uninstallation refuse to overwrite or delete it, preserving the user's file.
+  - On removal conflict, the server remains runtime OFF and logs/surfaces the conflict status.
+- **Config Lifecycle Reconciliation:**
+  - Setting changes are reconciled across server startup (`startup_reconcile_session_changes`), config PUT updates (`PUT /api/config`), settings cache-clear and TOML import/recovery (`POST /api/settings/import-toml`), and workspace initialization or switching (`POST /api/workspace/init`, `POST /api/workspace/switch`).
+- **Independent Lifecycle:**
+  - The Session Changes extension lifecycle is completely independent from the Agent Status extension (`extensions/dam-hopper-agent-status.ts`) and native hooks (Codex, Claude). Toggling Session Changes has no effect on Agent Status or notification policies.
+- **Operator UI Toggle (`SettingsPage.tsx`):**
+  - Binds to `targetOwner` from the selected Settings Target Server (`settingsProfileId`).
+  - Updates `config.server.sessionChangesEnabled` via `useConfig(targetOwner)` and `useUpdateConfig(targetOwner)`, preserving all other server configuration fields (`[key: string]: unknown`).
+  - Fences mutations with captured `{ actionProfileId, actionGeneration }` against concurrent target switching (switching targets during in-flight mutation clears the captured target's query cache, but does not purge the switched-to target until that server is toggled or refreshed).
+  - On success, invalidates config queries and cancels/removes all `session-changes` queries for that target owner.
+  - Surfaces an honest restart notice on enable (`Restart active OMP sessions to load the Session Changes extension`) and actionable errors on failure without optimistic local state.
+  - Terminal triggers across desktop `TabBar`, `ActiveTerminalRuntimeDisplay`, and mobile `MobileTerminalAccessoryBar` query `useSessionChangesEnabled(terminalOwner)` and hide/disable when tracking is disabled, loading, or unavailable.
 ### Deferred host-action scaffolding (inactive)
 
 The current release has no supported host-action configuration or client

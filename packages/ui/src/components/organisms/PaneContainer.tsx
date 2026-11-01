@@ -50,6 +50,7 @@ interface PaneContainerProps {
   browserOpen?: boolean;
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
+  onOpenSessionChanges?: (sessionId: string) => void;
 }
 
 export const PaneContainer = memo(function PaneContainer({
@@ -64,6 +65,7 @@ export const PaneContainer = memo(function PaneContainer({
   onCloseTab,
   onOpenDiagnosticsMenu,
   onRenameSession,
+  onOpenSessionChanges,
   activeSessionId = null,
   suppressTerminalFocus = false,
   browserOpen = false,
@@ -397,6 +399,7 @@ export const PaneContainer = memo(function PaneContainer({
                 ?.terminalRef
             }
             onPanelOpenChange={handleAccessoryPanelOpenChange}
+            onOpenSessionChanges={onOpenSessionChanges}
           />
         ) : null}
       </div>
@@ -431,6 +434,7 @@ export const PaneContainer = memo(function PaneContainer({
         onSplitPaneHorizontal={() => layout.splitPane(node.id, "horizontal")}
         onSplitPaneVertical={() => layout.splitPane(node.id, "vertical")}
         onClosePane={() => layout.closePane(node.id)}
+        onOpenSessionChanges={onOpenSessionChanges}
       />
 
       {/* The focused terminal owns the browser split, so handoff never asks to choose a terminal. */}

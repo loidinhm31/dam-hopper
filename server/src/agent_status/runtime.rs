@@ -147,6 +147,7 @@ struct Inner {
     lease_abort_handle: Mutex<Option<tokio::task::AbortHandle>>,
     registered_roots: Mutex<HashMap<(String, u64), ProcessIdentity>>,
     hook_rate_limiters: Mutex<HashMap<(String, u64), TokenRateLimiter>>,
+    session_changes: RwLock<Option<Arc<crate::session_changes::store::SessionChangesService>>>,
 }
 
 /// Shared runtime managing agent status credentials, loopback admission, and semantic broadcast.
@@ -231,6 +232,7 @@ impl AgentStatusRuntime {
             lease_abort_handle: Mutex::new(None),
             registered_roots: Mutex::new(HashMap::new()),
             hook_rate_limiters: Mutex::new(HashMap::new()),
+            session_changes: RwLock::new(None),
         }))
     }
 
@@ -257,6 +259,19 @@ impl AgentStatusRuntime {
     /// Listener URL if collector is actively bound.
     pub fn listener_url(&self) -> Option<String> {
         self.0.listener_url.read().clone()
+    }
+
+    pub fn set_session_changes(
+        &self,
+        service: Arc<crate::session_changes::store::SessionChangesService>,
+    ) {
+        *self.0.session_changes.write() = Some(service);
+    }
+
+    pub fn session_changes(
+        &self,
+    ) -> Option<Arc<crate::session_changes::store::SessionChangesService>> {
+        self.0.session_changes.read().clone()
     }
 
     /// Check if collector is ready and available for reporting.

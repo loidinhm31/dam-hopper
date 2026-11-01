@@ -1,0 +1,44 @@
+{
+  "run_id": "e2e-run-session-changes-review-initial",
+  "command": "pnpm --filter @dam-hopper/ui test:e2e",
+  "started_at": "2026-10-30T15:10:00.000Z",
+  "completed_at": "2026-10-30T15:10:15.000Z",
+  "case_name": "session-changes-review",
+  "route": "/workspace",
+  "browser": "chromium",
+  "browser_version": "151.0.7922.173",
+  "os": "linux",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_pixel_ratio": 1,
+  "checkpoints": [
+    {
+      "checkpoint": "screenshot",
+      "file_name": "screenshot.png",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "narrow",
+      "file_name": "narrow.png",
+      "dimensions": {
+        "width": 768,
+        "height": 1024
+      }
+    },
+    {
+      "checkpoint": "compact",
+      "file_name": "compact.png",
+      "dimensions": {
+        "width": 390,
+        "height": 844
+      }
+    }
+  ],
+  "functional_outcome": "passed",
+  "cleanup_outcome": "passed"
+}

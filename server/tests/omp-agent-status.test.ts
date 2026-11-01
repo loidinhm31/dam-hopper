@@ -479,3 +479,4 @@ describe("OMP Extension Factory Guards", () => {
   // Restore env
   Object.assign(process.env, originalEnv);
 });
+

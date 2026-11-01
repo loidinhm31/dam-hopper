@@ -7,7 +7,7 @@ These standards describe the current Rust backend, shared React UI, and profile-
 | Path | Responsibility |
 | --- | --- |
 | `server/src/api/` | Axum route registration, handlers, auth, and WebSocket/API transport |
-| `server/src/{auth,config,crypto,fs,git,pty,workflow,agent_status}/` | Backend domain boundaries and services |
+| `server/src/{auth,config,crypto,fs,git,pty,workflow,agent_status,session_changes}/` | Backend domain boundaries and services |
 | `server/src/state.rs` | Shared server `AppState` and service ownership |
 | `packages/ui/src/api/` | Owner-bound API clients, connections, DTOs, transports, and query keys |
 | `packages/ui/src/components/`, `hooks/`, `stores/`, `lib/` | Shared React UI and client-side domain behavior |
@@ -118,6 +118,42 @@ These standards describe the current Rust backend, shared React UI, and profile-
 
 See the [Agent Status contract](./architecture/agent-status.md).
 
+
+### Session Changes Review
+
+- **Immutability & Read-Only Invariant:** Strictly read-only; never mutate repository working tree files, Git index, HEAD references, or invoke Git mutation commands (`reset`, `stash`, `checkout`, `commit`).
+- **Canonical Root Preflight & Sandbox Containment:** Enforce single relative root ID (default `.`) via direct `validate_project_root_preflight`. Enforce `MAX_PATH_BYTES` (4096) and `MAX_PATH_DEPTH` (64). Reject parent traversal (`..`), absolute paths, empty components, NUL bytes, and wildcards. Root containment must resolve within the server-bound launch target sandbox; never discover unrestricted external repositories.
+- **Resource Limits & Capacity Fences:**
+  - 32 global retained identities (`MAX_RETAINED_IDENTITIES`); max 500 tracked paths per session (`MAX_PATHS_PER_SESSION`).
+  - 2 MiB regular file read limit (`MAX_FILE_RAW_BYTES`).
+  - 64 MiB global accounted baseline storage cap across all sessions (`MAX_GLOBAL_STORAGE_BYTES`).
+  - 2 global blocking scan permits; permits held until blocking closure exits; saturation returns HTTP 409 `busy` without queuing.
+- **Origin-Qualified Status Invariants:**
+  - `toolObserved`: `ready` / `incomplete` (always `notApplicable` acknowledgment; reflects observed tool edits since session first-touch, never repository-wide baseline).
+  - `unavailable` / `missing`: when tracking disabled or identity unknown.
+- **Safe First-Touch Capture & Tool-Event Provenance:**
+  - First-touch pre-edit capture intercepts supported tool events (`write`, Hashline `edit` including `MV`/`REM`, and concrete-file `ast_edit`) with 1500 ms fail-open timeout. Arbitrary script mutations (`bash`/`eval`) are not captured here and remain tracked in Git Changes.
+  - Negative proof requires verified directory hierarchy without symlink ancestors (`absentAtFirstTouch`). Unproven, permission-failed, or ignored subtrees remain `unknown`/`unproven` or `excludedAtCapture`.
+  - Zero background diffing or file reads on settled turns or status polling; current file reads and line stats compute lazily only on viewer `/files`, `/refresh`, and `/files/{fileId}` queries.
+- **Target-Server Session Changes Setting Pattern:**
+  - Authority: Controlled by `server.sessionChangesEnabled` (`server.session_changes_enabled` in TOML) in `DamHopperConfig` on the target server (`targetOwner`), never client-side workbench preferences or localStorage.
+  - Target Binding & Concurrency: `SettingsPage` resolves `targetOwner` from the selected Settings Target Server (`settingsProfileId`). Full config replacement via `useUpdateConfig` must preserve all unrelated server fields (`[key: string]: unknown`). Mutation captures action profile and generation (`actionProfileId`, `actionGeneration`) to avoid applying late state when an explicit target is switched mid-flight (default target check resolves null/generation 1). Switching targets during an in-flight toggle clears the captured target's query cache, but does not purge the newly selected target until that server is toggled or refreshed.
+  - Cache Invalidation & Purge: On successful mutation, UI invalidates config queries and explicitly cancels and removes all `session-changes` queries for that target owner (`profileQueryKey(targetOwner, "session-changes")`), preventing stale state or memory leaks.
+  - Honest Lifecycle Feedback: Enabling displays a notice instructing the operator to restart active OMP sessions (`Restart active OMP sessions to load the Session Changes extension`). Disabling clears this notice. Failures preserve authoritative server state and surface actionable conflict/permission errors rather than optimistically toggling UI state.
+  - Trigger Gating: All review triggers (`TabBar`, `ActiveTerminalRuntimeDisplay`, `MobileTerminalAccessoryBar`, and `WorkspacePage.handleOpenSessionChanges`) verify `useSessionChangesEnabled(terminalOwner)` before displaying or opening, hiding/disabling when the owning server is disabled, loading, disconnected, or unavailable.
+- **Lazy Diff Viewer Pattern:**
+  - Viewer Boundary: Opening `SessionChangesHost` is the explicit viewer boundary. Settled turns and status polling are strictly metadata-only.
+  - Initial Comparison Bootstrap: Panel mounts from metadata-only ready status (`state === "ready" | "incomplete"`). Initial `useSessionChangesFiles` requests `/files` without requiring a prior comparison revision; the backend computes comparison and returns `comparisonRevision` alongside the first page.
+  - Fenced Detail Loading: Detail query `useSessionChangesFileDetail` is strictly gated (`enabled: Boolean(currentRevision && selectedFileId)`); it never mounts or fetches without a valid comparison revision.
+  - Stale Revision Recovery: Stale revision errors (`refreshRequired`, `serverRestarted`) clear selected file, active revision, cursor, and accumulated files, then trigger `onRefresh` to re-fetch a coherent comparison revision without displaying mismatched or mixed-revision diffs.
+  - Bounded Cursor Pagination: File list supports keyset/cursor pagination up to the session limit (500 paths display bound, current UI page size 200). `accumulatedFiles` deduplicates by `fileId` and caps at 500 rows.
+- **Modal Isolation Pattern:**
+  - Single Host & Ownership Lifecycle: Exactly one `SessionChangesHost` mounts in `WorkspacePage.tsx` above responsive shells. The mounted `SessionChangesPanel` is keyed by the full terminal tuple (`profileId:generation:terminalId:terminalIncarnation:ompSessionId:rootId`) to guarantee clean teardown and recreation across session or server transitions.
+  - Fail-Closed Gating: Host requires authoritative enablement and connection (`isEnabled && !isLoading`). If the target server becomes disabled, disconnected, or encounters config errors while the modal is open, it cancels/removes all `session-changes` queries for that owner and closes immediately.
+  - Modal Event Containment: Dialog content intercepts keyboard events with `e.stopPropagation()` on `DialogPrimitive.Content` `onKeyDown`, stopping key events, shortcuts, and Escape from bubbling to document listeners or leaking into underlying live xterm PTYs while preserving internal list navigation and Monaco editor shortcuts (full physical PTY input isolation and focus recovery remain governed by live journey qualification).
+  - Window Shortcut Suppression: While `sessionChangesState.isOpen` is true, all window-level keyboard shortcut listeners in `WorkspacePage` (`project`, `git`, `ports`, `terminals`, `terminalWorkspaceShortcut`, `revealActiveFileShortcut`) return an empty shortcut string, completely suppressing global workbench shortcut dispatch.
+  - Focus Trapping & Radix Dialog: Uses Radix UI Dialog primitives (`DialogPrimitive.Root`, `Portal`, `Overlay`, `Content`) to trap focus within the modal.
+- **Capability-Free Monaco Diff Viewer:** Monaco diff instance (`ReadonlyMonacoDiffViewer`) must set `readOnly: true`, `originalEditable: false`, and `domReadOnly: true`. Disable editing commands, drop, and paste. Model URIs must encode the full owner tuple with deferred disposal to prevent race conditions during rapid switching.
 ### Cognito Mode
 
 - Keep activation ephemeral; persist only the user preference fields supported by configuration. Treat the overlay as a visual in-app mask, not authorization, content redaction, or an OS capture boundary.

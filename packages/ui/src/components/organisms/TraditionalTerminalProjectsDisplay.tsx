@@ -81,6 +81,7 @@ export interface TraditionalTerminalProjectsDisplayProps {
   browserOpen?: boolean;
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
+  onOpenSessionChanges?: (sessionId: string) => void;
 }
 
 export function TraditionalTerminalProjectsDisplay({
@@ -104,6 +105,7 @@ export function TraditionalTerminalProjectsDisplay({
   browserOpen = false,
   renderBrowserContent,
   onCloseBrowser,
+  onOpenSessionChanges,
 }: TraditionalTerminalProjectsDisplayProps) {
   const isCompactWorkspace = useCompactWorkspace();
   const {
@@ -343,6 +345,7 @@ export function TraditionalTerminalProjectsDisplay({
         onNewTerminal={handleNewTerminal}
         onSelectTab={handleSelectTab}
         onToggleTabPin={onToggleTabPin}
+        onOpenSessionChanges={onOpenSessionChanges}
         onCloseTab={handleCloseTerminalTab}
         onRenameSession={onRenameSession}
         onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}

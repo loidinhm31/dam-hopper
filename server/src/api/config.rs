@@ -4,7 +4,7 @@ use axum::{
     Json,
 };
 use serde_json::Value;
-use std::path::{Path as FsPath, Path as StdPath};
+use std::path::{Path as FsPath, Path as StdPath, PathBuf};
 
 use crate::config::parser::project_path_for_toml;
 use crate::config::schema::DamHopperConfig;
@@ -35,6 +35,7 @@ pub async fn update_config(
     State(state): State<AppState>,
     Json(mut body): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let _workspace_context = state.workspace_context_guard.write().await;
     let current = state.config.read().await.clone();
     preserve_and_reject_telemetry_mutation(&mut body, &current)?;
     preserve_and_reject_idle_suspend_mutation(&mut body, &current)?;
@@ -42,8 +43,56 @@ pub async fn update_config(
     let config_dir = config_path.parent().unwrap_or(StdPath::new("/"));
     relativize_project_paths(&mut body, config_dir);
     normalize_config_json_for_toml(&mut body);
-    write_json_as_toml(&config_path, &body)?;
-    reload_config(&state).await?;
+
+    // Validate rendered candidate before filesystem mutation
+    let tv = json_to_toml(&body).ok_or_else(|| {
+        ApiError::from_app(AppError::InvalidInput("Cannot convert JSON to TOML".into()))
+    })?;
+    let toml_str = toml::to_string_pretty(&tv)
+        .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
+    let candidate = crate::config::parse_config_str_at_path(&toml_str, &config_path)
+        .map_err(ApiError::from_app)?;
+
+    let target_agent_dir = resolve_configured_omp_agent_dir(&state).await;
+
+    let newly_installed_for_enable = if candidate.server.session_changes_enabled
+        && !current.server.session_changes_enabled
+    {
+        let dir = target_agent_dir.as_ref().map_err(|e| {
+            ApiError::from_app(crate::error::AppError::Config(format!(
+                "Cannot resolve OMP agent directory to enable session changes: {e}"
+            )))
+        })?;
+        let pre_status = crate::agent_status::check_session_changes_extension_status(dir)
+            .map_err(|e| ApiError::from_app(crate::error::AppError::Config(e.to_string())))?;
+        let was_absent = pre_status.status == crate::agent_status::ManagedExtensionStatus::Absent;
+        crate::agent_status::install_session_changes_extension(dir)
+            .map_err(|e| {
+                ApiError::from_app(crate::error::AppError::Config(format!(
+                    "Failed to install managed session changes extension: {e}"
+                )))
+            })?;
+        was_absent
+    } else {
+        false
+    };
+
+    if !candidate.server.session_changes_enabled && current.server.session_changes_enabled {
+        state.session_changes.disable_and_purge();
+        if let Ok(dir) = &target_agent_dir {
+            let _ = crate::agent_status::uninstall_session_changes_extension(dir);
+        }
+    }
+
+    if let Err(write_err) = atomic_write(&config_path, &toml_str).map_err(ApiError::from_app) {
+        if newly_installed_for_enable {
+            if let Ok(dir) = &target_agent_dir {
+                let _ = crate::agent_status::uninstall_session_changes_extension(dir);
+            }
+        }
+        return Err(write_err);
+    }
+    reload_config_locked(&state).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -329,8 +378,18 @@ pub(crate) async fn update_global_ui_at_path(
         // Validate agentSettingsPaths if provided
         if let Some(paths) = ui.agent_settings_paths.as_ref() {
             if let Some(omp_dir) = paths.omp_agent_dir.as_deref().filter(|s| !s.trim().is_empty()) {
-                crate::api::agent_status::expand_and_validate_path(omp_dir, Some(&home))
+                let validated = crate::api::agent_status::expand_and_validate_path(omp_dir, Some(&home))
                     .map_err(|e| AppError::Config(format!("Invalid OMP agent directory: {e}")))?;
+                if state.session_changes.is_enabled() {
+                    let current = resolve_configured_omp_agent_dir(state).await.ok();
+                    if let Some(current_p) = current {
+                        if current_p != validated {
+                            return Err(AppError::Config(
+                                "Cannot change OMP agent directory while Session Changes is enabled; disable Session Changes first".to_string()
+                            ));
+                        }
+                    }
+                }
             }
             if let Some(codex_dir) = paths.codex_dir.as_deref().filter(|s| !s.trim().is_empty()) {
                 crate::api::agent_status::expand_and_validate_path(codex_dir, Some(&home))
@@ -542,14 +601,6 @@ fn read_toml_value(path: &std::path::Path) -> Result<toml::Value, ApiError> {
     toml::from_str(&content).map_err(|e| ApiError::from_app(AppError::Config(e.to_string())))
 }
 
-fn write_json_as_toml(path: &std::path::Path, v: &Value) -> Result<(), ApiError> {
-    let tv = json_to_toml(v).ok_or_else(|| {
-        ApiError::from_app(AppError::InvalidInput("Cannot convert JSON to TOML".into()))
-    })?;
-    let toml_str = toml::to_string_pretty(&tv)
-        .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
-    atomic_write(path, &toml_str).map_err(ApiError::from_app)
-}
 
 fn patch_project(doc: &mut toml::Value, name: &str, patch: &Value) -> Result<(), ApiError> {
     let projects = doc
@@ -589,6 +640,11 @@ fn normalize_config_json_for_toml(value: &mut Value) {
     if let Some(projects) = value.get_mut("projects").and_then(Value::as_array_mut) {
         for project in projects {
             normalize_project_json_for_toml(project);
+        }
+    }
+    if let Some(server) = value.get_mut("server").and_then(Value::as_object_mut) {
+        if let Some(sc) = server.remove("sessionChangesEnabled") {
+            server.insert("session_changes_enabled".to_string(), sc);
         }
     }
 }
@@ -698,9 +754,19 @@ pub(crate) async fn reload_config(state: &AppState) -> Result<(), ApiError> {
     reload_config_locked(state).await
 }
 
-pub(crate) async fn reload_config_locked(state: &AppState) -> Result<(), ApiError> {
+pub async fn reload_config_locked(state: &AppState) -> Result<(), ApiError> {
     let config_path = state.config.read().await.config_path.clone();
-    let mut new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
+    let new_cfg: DamHopperConfig = read_config(&config_path).map_err(ApiError::from_app)?;
+    reconcile_and_publish_config_locked(state, new_cfg).await
+}
+
+pub async fn reconcile_and_publish_config_locked(
+    state: &AppState,
+    mut new_cfg: DamHopperConfig,
+) -> Result<(), ApiError> {
+    let current_cfg = state.config.read().await.clone();
+    reconcile_session_changes_lifecycle(state, &current_cfg, &new_cfg).await?;
+
     {
         let timing = state.idle_suspend_timing.read().await;
         state
@@ -716,4 +782,101 @@ pub(crate) async fn reload_config_locked(state: &AppState) -> Result<(), ApiErro
         .await;
     *state.config.write().await = new_cfg;
     Ok(())
+}
+
+pub(crate) async fn reconcile_session_changes_lifecycle(
+    state: &AppState,
+    _current_cfg: &DamHopperConfig,
+    new_cfg: &DamHopperConfig,
+) -> Result<(), ApiError> {
+    if new_cfg.server.session_changes_enabled {
+        let agent_dir = resolve_configured_omp_agent_dir(state).await
+            .map_err(|e| ApiError::from_app(crate::error::AppError::Config(
+                format!("Failed to resolve OMP agent directory for session changes: {e}")
+            )))?;
+        match crate::agent_status::install_session_changes_extension(&agent_dir) {
+            Ok(_) => {
+                state.session_changes.enable();
+            }
+            Err(e) => {
+                state.session_changes.disable_and_purge();
+                return Err(ApiError::from_app(crate::error::AppError::Config(
+                    format!("Failed to install managed session changes extension: {e}")
+                )));
+            }
+        }
+    } else {
+        state.session_changes.disable_and_purge();
+        if let Ok(agent_dir) = resolve_configured_omp_agent_dir(state).await {
+            match crate::agent_status::uninstall_session_changes_extension(&agent_dir) {
+                Ok(_) => {}
+                Err(crate::agent_status::IntegrationError::RefusingDeleteModified(path)) => {
+                    tracing::warn!(
+                        "Preserving locally modified session changes extension at '{}' during disable",
+                        path.display()
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to safely uninstall session changes extension: {e}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn resolve_configured_omp_agent_dir(
+    state: &AppState,
+) -> Result<PathBuf, crate::agent_status::IntegrationError> {
+    let global_cfg = state.global_config.read().await;
+    let explicit = global_cfg
+        .ui
+        .as_ref()
+        .and_then(|u| u.agent_settings_paths.as_ref())
+        .and_then(|p| p.omp_agent_dir.as_deref());
+    crate::api::agent_status::resolve_target_agent_dir(explicit)
+}
+
+pub async fn startup_reconcile_session_changes(state: &AppState) {
+    let cfg = state.config.read().await;
+    if cfg.server.session_changes_enabled {
+        match resolve_configured_omp_agent_dir(state).await {
+            Ok(agent_dir) => {
+                match crate::agent_status::install_session_changes_extension(&agent_dir) {
+                    Ok(_) => {
+                        state.session_changes.enable();
+                        tracing::info!("Session changes tracking enabled and managed extension reconciled");
+                    }
+                    Err(e) => {
+                        state.session_changes.disable_and_purge();
+                        tracing::error!(
+                            "Failed to install session changes extension at startup: {e}"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                state.session_changes.disable_and_purge();
+                tracing::error!(
+                    "Failed to resolve agent directory for session changes at startup: {e}"
+                );
+            }
+        }
+    } else {
+        state.session_changes.disable_and_purge();
+        if let Ok(agent_dir) = resolve_configured_omp_agent_dir(state).await {
+            match crate::agent_status::uninstall_session_changes_extension(&agent_dir) {
+                Ok(_) => {}
+                Err(crate::agent_status::IntegrationError::RefusingDeleteModified(path)) => {
+                    tracing::warn!(
+                        "Preserving locally modified session changes extension at '{}' during startup",
+                        path.display()
+                    );
+                }
+                Err(e) => {
+                    tracing::debug!("No session changes extension removed during startup: {e}");
+                }
+            }
+        }
+    }
 }

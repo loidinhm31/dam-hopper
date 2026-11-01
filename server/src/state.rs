@@ -137,6 +137,8 @@ pub struct AppState {
     pub git_blame_semaphore: Arc<tokio::sync::Semaphore>,
     /// Shared in-memory LRU cache retaining historical git blame baselines.
     pub git_blame_cache: Arc<crate::git::blame_cache::BlameBaselineCache>,
+    /// Bounded in-memory session changes tracking service.
+    pub session_changes: Arc<crate::session_changes::store::SessionChangesService>,
 }
 
 impl AppState {
@@ -381,6 +383,10 @@ impl AppState {
         // The selected store is the only authentication authority: without one the
         // service reports authentication unavailable rather than inventing an account.
         let auth_service = Arc::new(crate::auth::AuthService::with_system_clock(auth_store, mfa_key));
+        let session_changes = Arc::new(
+            crate::session_changes::store::SessionChangesService::new()
+                .map_err(|e| anyhow::anyhow!("Session changes service unavailable: {e}"))?,
+        );
 
         Ok(Self {
             workspace_dir,
@@ -427,6 +433,7 @@ impl AppState {
             agent_status: crate::agent_status::AgentStatusRuntime::platform_unqualified(),
             git_blame_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
             git_blame_cache: Arc::new(crate::git::blame_cache::BlameBaselineCache::new()),
+            session_changes,
         })
     }
     /// Override the auth service handle (used for testing or custom clock injection).
@@ -448,6 +455,14 @@ impl AppState {
         agent_status: crate::agent_status::AgentStatusRuntime,
     ) -> Self {
         self.agent_status = agent_status;
+        self
+    }
+    /// Attach custom session changes service (e.g. for testing).
+    pub fn with_session_changes(
+        mut self,
+        session_changes: Arc<crate::session_changes::store::SessionChangesService>,
+    ) -> Self {
+        self.session_changes = session_changes;
         self
     }
     /// Attach the optional workflow repository using the existing session DB connection.

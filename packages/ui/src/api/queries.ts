@@ -90,6 +90,7 @@ import {
   getConnectionSnapshot,
   isCurrentConnection,
 } from "./connections.js";
+import { getActiveProfileId } from "./server-config.js";
 import { profileQueryKey, profileQueryPrefix } from "./query-client.js";
 import {
   ConnectionOwnerError,
@@ -1187,24 +1188,59 @@ export function useUpdateUiConfig(options?: OwnerInput) {
 
 export function useUpdateConfig(options?: OwnerInput) {
   const qc = useQueryClient();
-  const owner = resolveTargetOwner(options);
-  return useMutation<DamHopperConfig, Error, DamHopperConfig>({
+  const explicitOwner = resolveTargetOwner(options);
+  const activeProfileId = getActiveProfileId();
+  const ambientSnapshot = activeProfileId
+    ? getConnectionSnapshot(activeProfileId)
+    : null;
+  const owner =
+    explicitOwner ??
+    ambientSnapshot?.owner ??
+    (activeProfileId ? { profileId: activeProfileId, generation: 1 } : undefined);
+
+  return useMutation<
+    DamHopperConfig,
+    Error,
+    DamHopperConfig,
+    { targetOwner: ConnectionRef | undefined; explicitOwner: ConnectionRef | undefined }
+  >({
+    onMutate: () => ({
+      targetOwner: owner,
+      explicitOwner,
+    }),
     mutationFn: (config: DamHopperConfig) =>
       getBoundApiClient(owner).config.update(config),
-    onSuccess: () => {
+    onSuccess: (_data, _variables, context) => {
+      const targetExplicit = context ? context.explicitOwner : explicitOwner;
+      const targetOwner = context ? context.targetOwner : owner;
       void qc.invalidateQueries({
-        queryKey: owner ? profileQueryKey(owner, "config") : ["config"],
+        queryKey: targetExplicit
+          ? profileQueryKey(targetExplicit, "config")
+          : ["config"],
       });
       void qc.invalidateQueries({
-        queryKey: owner ? profileQueryKey(owner, "workspace") : ["workspace"],
+        queryKey: targetExplicit
+          ? profileQueryKey(targetExplicit, "workspace")
+          : ["workspace"],
       });
       void qc.invalidateQueries({
-        queryKey: owner ? profileQueryKey(owner, "projects") : ["projects"],
+        queryKey: targetExplicit
+          ? profileQueryKey(targetExplicit, "projects")
+          : ["projects"],
       });
+      if (targetOwner) {
+        void qc.cancelQueries({
+          queryKey: profileQueryKey(targetOwner, "session-changes"),
+        });
+        qc.removeQueries({
+          queryKey: profileQueryKey(targetOwner, "session-changes"),
+        });
+      }
+      void qc.cancelQueries({ queryKey: ["session-changes"] });
+      qc.removeQueries({ queryKey: ["session-changes"] });
     },
   });
 }
-
 export function useUpdateProject(options?: OwnerInput) {
   const qc = useQueryClient();
   const owner = resolveTargetOwner(options);

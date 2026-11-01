@@ -40,6 +40,7 @@ Project navigation does not change any of these selections. Usage totals and hos
 - Export requests target the selected server and download raw TOML through a Blob with a server-labelled filename. Import accepts `.toml` only, keeps the 1 MiB client limit, confirms the workspace and target, reads the file after confirmation, and rejects a changed target or connection generation before dispatch. The server remains responsible for validation, backup, atomic publication, and rollback.
 - `SettingsUsageInsightsSection` sends setup/configuration mutations to the target owner and redacts bearer tokens and local endpoints from displayed errors.
 - `SettingsIdleSuspendTimingSection` edits the complete bounded quiet/wake pair for the target server. Handoff conflicts, no-auth rejection, disabled actors, and capability errors remain visible; the UI never widens backend bounds.
+- `SettingsPage` includes a dedicated **Session Changes** section binding to `targetOwner` (`config.server.sessionChangesEnabled`). Full configuration updates preserve all other server fields (`[key: string]: unknown`). Async mutation captures `{ actionProfileId, actionGeneration }` to avoid applying late notices if the operator switches targets. On successful mutation, the UI invalidates the target owner's config queries and cancels/removes all cached `session-changes` queries for that owner. Enabling displays an honest notice to restart active OMP sessions; failures surface actionable server error messages without optimistic UI state.
 
 ## Owner-Qualified Usage
 

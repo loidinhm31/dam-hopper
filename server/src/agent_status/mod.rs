@@ -22,13 +22,18 @@ pub use codex_integration::{
     check_codex_status, install_codex, uninstall_codex, CODEX_MANAGED_EVENTS,
 };
 pub use integration::{
-    check_extension_status, check_native_integration_status, install_extension,
-    install_native_integration, uninstall_extension, uninstall_native_integration,
+    bundled_session_changes_asset_hash, check_extension_status,
+    check_native_integration_status, check_session_changes_extension_status,
+    generate_session_changes_extension_file_content, install_extension,
+    install_native_integration, install_session_changes_extension,
+    resolve_session_changes_target_path, uninstall_extension,
+    uninstall_native_integration, uninstall_session_changes_extension,
     AgentPathsVerification, ExtensionStatusReport, IntegrationError, ManagedExtensionStatus,
     ManagedHookManifest, ManagedInstallationStatus, ManagedReadinessStatus,
     NativeIntegrationStatusReport, EXTENSION_SUBPATH, MANAGED_ADAPTER_VERSION,
     MANAGED_LAUNCHER_SUBPATH, MANAGED_MANIFEST_SUBPATH, MAX_CONFIG_FILE_BYTES,
-    NATIVE_LAUNCHER_ASSET, OMP_AGENT_STATUS_ASSET,
+    NATIVE_LAUNCHER_ASSET, OMP_AGENT_STATUS_ASSET, OMP_SESSION_CHANGES_ASSET,
+    SESSION_CHANGES_EXTENSION_SUBPATH,
 };
 pub use integration::read_bounded_safe_file;
 pub use reducer::{AgentStatusRegistry, ReducerOutput, TerminalAgentReducer};

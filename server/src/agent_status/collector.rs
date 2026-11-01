@@ -69,8 +69,14 @@ impl AgentStatusCollector {
 
         let app = Router::new()
             .route(AGENT_STATUS_WS_PATH, get(ws_upgrade_handler))
-            .with_state(runtime.clone());
-
+            .with_state(runtime.clone())
+            .nest(
+                "/private/session-changes/v1",
+                crate::session_changes::control::private_session_changes_router(
+                    runtime.clone(),
+                    runtime.session_changes(),
+                ),
+            );
         #[cfg(target_os = "linux")]
         let (socket_path, socket_dir, uds_task) = {
             let (dir, sock) = create_private_socket_dir()?;

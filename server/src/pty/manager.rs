@@ -592,6 +592,9 @@ pub struct PtySessionManager {
     pub port_forward_manager: Arc<std::sync::RwLock<Option<Arc<PortForwardManager>>>>,
     /// Agent status runtime — set after construction via `set_agent_status_runtime`.
     pub agent_status: Arc<parking_lot::RwLock<Option<crate::agent_status::AgentStatusRuntime>>>,
+    /// Session changes tracking service — set after construction via `set_session_changes`.
+    pub session_changes:
+        Arc<std::sync::RwLock<Option<Arc<crate::session_changes::store::SessionChangesService>>>>,
     /// Backend diagnostics store — set after construction via `set_diagnostics`.
     /// Reader threads and lifecycle methods record terminal events here (Phase 03).
     diagnostics: Arc<std::sync::RwLock<Option<DiagnosticStore>>>,
@@ -1061,6 +1064,7 @@ impl PtySessionManager {
             port_forward_manager: Arc::new(std::sync::RwLock::new(None)),
             agent_status: Arc::new(parking_lot::RwLock::new(None)),
             diagnostics: Arc::new(std::sync::RwLock::new(None)),
+            session_changes: Arc::new(std::sync::RwLock::new(None)),
             target_context: Arc::new(std::sync::RwLock::new(None)),
             workflow_recorder: Arc::new(std::sync::RwLock::new(Arc::new(
                 crate::workflow::NoopWorkflowObservationRecorder,
@@ -1453,6 +1457,14 @@ impl PtySessionManager {
         self.agent_status.read().clone()
     }
 
+    /// Wire the session changes tracking service after construction.
+    pub fn set_session_changes(
+        &self,
+        service: Arc<crate::session_changes::store::SessionChangesService>,
+    ) {
+        *self.session_changes.write().unwrap() = Some(service);
+    }
+
     /// Best-effort diagnostic event recording. Clones the cheap Arc-backed store
     /// out of the RwLock so no lock is held during `record_event`.
     fn record_diag(&self, source: &str, message: &str, fields: BTreeMap<String, String>) {
@@ -1692,6 +1704,7 @@ impl PtySessionManager {
         let shutdown = session.shutdown_ref();
         let lifecycle = session.lifecycle.clone();
         let published_editing = session.published_editing_ref();
+        let session_cwd = session.meta.cwd.clone();
 
         #[cfg(test)]
         self.create_test_hook.wait_if_paused();
@@ -1734,6 +1747,17 @@ impl PtySessionManager {
             inner.publish_activity_invalidation();
             creation_generation
         };
+        if let Some(sc) = self.session_changes.read().unwrap().clone() {
+            sc.bind_terminal_target(
+                &opts.id,
+                incarnation,
+                crate::session_changes::store::BoundTerminalTarget {
+                    project_name: opts.project.clone(),
+                    worktree_path: opts.worktree_path.clone(),
+                    launch_cwd: std::path::PathBuf::from(session_cwd),
+                },
+            );
+        }
         if let Some(res) = status_reservation {
             if let Some(root) = status_root_identity {
                 if let Some(runtime) = self.agent_status_runtime() {
@@ -2318,6 +2342,9 @@ impl PtySessionManager {
         if let Some(incarnation) = removed_incarnation {
             if let Some(pfm) = self.port_forward_manager.read().unwrap().clone() {
                 pfm.unregister_session(id, incarnation);
+            }
+            if let Some(sc) = self.session_changes.read().unwrap().clone() {
+                sc.remove_terminal_records(id, &incarnation.to_string());
             }
         }
         self.record_diag(

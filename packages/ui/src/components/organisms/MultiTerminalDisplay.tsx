@@ -46,6 +46,7 @@ interface Props {
   browserOpen?: boolean;
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
+  onOpenSessionChanges?: (sessionId: string) => void;
 }
 
 export function MultiTerminalDisplay({
@@ -67,6 +68,7 @@ export function MultiTerminalDisplay({
   browserOpen = false,
   renderBrowserContent,
   onCloseBrowser,
+  onOpenSessionChanges,
 }: Props) {
   const layout = useTerminalLayout(layoutStorageKey);
   const { isAndroidChromeNativeInputSuppressed } =
@@ -215,6 +217,7 @@ export function MultiTerminalDisplay({
           browserOpen={browserOpen}
           renderBrowserContent={renderBrowserContent}
           onCloseBrowser={onCloseBrowser}
+          onOpenSessionChanges={onOpenSessionChanges}
         />
       </div>
     </div>

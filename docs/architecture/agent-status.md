@@ -50,6 +50,15 @@ and notification services connect over authenticated WebSocket and REST snapshot
 - Every callback/close/timeout is fenced by captured terminal incarnation and reporter epoch. An old socket cannot clear or overwrite its replacement.
 - This is scoped local reporting, not a sandbox against malicious code running as the same OS account. The adapter ignores `OMPCODE=1` nested sessions and non-main agent contexts to avoid accidental parent overwrites; capabilities do not prove model truth.
 
+### Decoupling of Agent Status and Session Changes Extensions
+
+In the lightweight Session Changes refactor (Phase 03), the OMP Session Changes producer is authored as an independent asset, fully separated from the Agent Status extension:
+- **Standalone Single-Purpose Extensions:** The Agent Status extension (`server/src/agent_status/assets/omp-agent-status.ts`) and the Session Changes extension (`server/src/agent_status/assets/omp-session-changes.ts`) are structured as independent extension files.
+- **Agent Status Code Isolation (`omp-agent-status.ts`):** Strictly manages semantic lifecycle reporting (`unknown`, `idle`, `working`, `blocked`), approval requests, 5s heartbeats, and 15s leases over the private loopback WebSocket (`/v1/agent-status`). All previous Session Changes coupling (HTTP prepare/activate/receipt handshake barriers, failure latching, and turn settling) has been removed from this file.
+- **Session Changes Tool-Event Producer Asset (`omp-session-changes.ts`):** Standalone producer asset implemented in Phase 03. It hooks `tool_call` and `tool_result` events to capture pre-edit file states per-file before tool execution (`write`, Hashline `edit` including MV and REM operations, and concrete-file `ast_edit`) with a 1500 ms capture timeout and fail-open handling. It targets private HTTP endpoints (`/private/session-changes/v1/{register,capture,settled}`) using the injected environment credentials (`DAM_HOPPER_AGENT_STATUS_URL`, `DAM_HOPPER_AGENT_STATUS_TOKEN`) without acquiring a competing WebSocket connection.
+- **Lineage and In-Process Registry:** Root and rebound subagent (`task`) factories share an in-process bounded registry keyed by root agent lineage, server epoch, and terminal incarnation. Root `session_start` and `session_switch` register session metadata independently without file-content reads, and settled `agent_end` reports turn completion metadata.
+- **Independent Managed Extension Lifecycle (Phase 01):** Server configuration `server.session_changes_enabled` (default `false`) controls installation and uninstallation at `extensions/dam-hopper-session-changes.ts` via dedicated helpers in `server/src/agent_status/integration.rs` (`check_session_changes_extension_status`, `install_session_changes_extension`, `uninstall_session_changes_extension`). The lifecycle verifies SHA-256 hashes against the bundled asset (`OMP_SESSION_CHANGES_ASSET`), performs safe atomic writes via `.dam-hopper-sc-*.tmp` and `sync_all`, refuses to overwrite or delete user-modified or symlinked targets, and operates completely independently from the Agent Status extension (`extensions/dam-hopper-agent-status.ts`). Active OMP sessions require restart after enabling.
+- **Integration Status:** Phase 01 and Phase 02 implementations are recorded and administratively marked DONE per user direction (with technical acceptance pending Cycle 3 code review findings); Phase 03 delivered standalone producer asset code isolation and unit tests; Phase 02 delivered the Rust backend lightweight per-file engine (`/register`, `/capture`, `/lookup`, `/settled`, zero-diff turn settling, lazy viewer comparison, and resource bounds); live OMP runtime journeys and Phase 04 Settings UI toggle with end-to-end qualification remain pending.
 ## Implemented semantic contract v1
 
 Version 1 uses camelCase JSON. Rust `ReporterHello` and `ReporterReport` reject
@@ -202,10 +211,9 @@ server configuration or a running server.
 
 Duplicate `turn-ended` reports on inactive turns are guarded in `omp-agent-status.ts`; CRLF headers are normalized across LF and CRLF in `server/src/agent_status/integration.rs`.
 
-Implementation and focused tests: `server/src/agent_status/assets/omp-agent-status.ts`,
-`server/src/agent_status/integration.rs`, `server/src/main.rs`,
-`server/tests/omp-agent-status.test.ts`, and
-`server/tests/agent_status_integration.rs`.
+Implementation and focused tests:
+- Agent Status: `server/src/agent_status/assets/omp-agent-status.ts`, `server/src/agent_status/integration.rs`, `server/src/main.rs`, `server/tests/omp-agent-status.test.ts` (17 tests covering isolated status adapter lifecycle, reconnects, approvals, heartbeats, and notifications), and `server/tests/agent_status_integration.rs`.
+- Session Changes Producer: `server/src/agent_status/assets/omp-session-changes.ts` and `server/tests/omp-session-changes.test.ts` (19 tests covering standalone tool-event parsing, Hashline edits, AST edits, fail-open timeout, lineage routing, and settling).
 ## Frontend, reconnect, and notifications
 
 - One app-root bridge mounted in `packages/ui/src/embed/dam-hopper-app.tsx`, beside the existing notification viewport, watches connected profiles. Not in TerminalPanel or KeepAliveHost.

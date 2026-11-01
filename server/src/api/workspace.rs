@@ -18,7 +18,7 @@ use crate::config::{
     CONFIG_FILENAME,
 };
 use crate::pty::EventSink as _;
-use crate::state::{project_roots_from_config, AppState};
+use crate::state::AppState;
 
 use super::error::{ApiError, AppJson};
 
@@ -168,14 +168,9 @@ pub async fn init_workspace(
     }
 
     let _workspace_context = state.workspace_context_guard.write().await;
-    state.media_tickets.revoke_all();
-    state.fs.reinit_sandbox(project_roots_from_config(&cfg));
-    *state.workspace_dir.write().await = workspace_dir_from_config(&cfg);
-    state
-        .host_resource_monitor
-        .reconfigure(cfg.server.host_resources.clone())
-        .await;
-    *state.config.write().await = cfg;
+    let next_workspace_dir = workspace_dir_from_config(&cfg);
+    crate::api::config::reconcile_and_publish_config_locked(&state, cfg).await?;
+    *state.workspace_dir.write().await = next_workspace_dir;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -193,19 +188,19 @@ pub async fn switch_workspace(
         let timing = state.idle_suspend_timing.read().await;
         state.idle_suspend_policy.apply_to_config(&mut cfg, &timing);
     }
-    state.pty_manager.dispose().map_err(ApiError::from_app)?;
-
     let _workspace_context = state.workspace_context_guard.write().await;
-    state.media_tickets.revoke_all();
-    state.fs.reinit_sandbox(project_roots_from_config(&cfg));
-
-    *state.workspace_dir.write().await = workspace_dir_from_config(&cfg);
-    state
-        .host_resource_monitor
-        .reconfigure(cfg.server.host_resources.clone())
-        .await;
-    *state.config.write().await = cfg;
-
+    let next_workspace_dir = workspace_dir_from_config(&cfg);
+    // Preflight extension resolution if enabled
+    if cfg.server.session_changes_enabled {
+        let _ = crate::api::config::resolve_configured_omp_agent_dir(&state)
+            .await
+            .map_err(|e| ApiError::from_app(crate::error::AppError::Config(format!(
+                "Cannot resolve OMP agent directory for target workspace: {e}"
+            ))))?;
+    }
+    state.pty_manager.dispose().map_err(ApiError::from_app)?;
+    crate::api::config::reconcile_and_publish_config_locked(&state, cfg).await?;
+    *state.workspace_dir.write().await = next_workspace_dir;
     state.event_sink.broadcast(
         "workspace:changed",
         serde_json::json!({ "path": body.path }),

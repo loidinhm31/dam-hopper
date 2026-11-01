@@ -11,11 +11,17 @@ pub const OMP_AGENT_STATUS_ASSET: &str = include_str!("assets/omp-agent-status.t
 /// Bundled native launcher template asset.
 pub const NATIVE_LAUNCHER_ASSET: &str = include_str!("assets/native-agent-status.sh");
 
+/// Bundled standalone OMP session changes tool-event producer TypeScript extension source.
+pub const OMP_SESSION_CHANGES_ASSET: &str = include_str!("assets/omp-session-changes.ts");
+
 /// Current managed adapter version.
 pub const MANAGED_ADAPTER_VERSION: &str = "1.0.0";
 
 /// Relative subpath within the OMP agent directory.
 pub const EXTENSION_SUBPATH: &str = "extensions/dam-hopper-agent-status.ts";
+
+/// Relative subpath for Session Changes extension within the OMP agent directory.
+pub const SESSION_CHANGES_EXTENSION_SUBPATH: &str = "extensions/dam-hopper-session-changes.ts";
 
 /// Subpath to native launcher script within agent directory.
 pub const MANAGED_LAUNCHER_SUBPATH: &str = "hooks/dam-hopper-agent-status";
@@ -204,6 +210,11 @@ pub fn bundled_asset_hash() -> String {
     sha256_hex(OMP_AGENT_STATUS_ASSET)
 }
 
+/// Calculate SHA-256 hex digest of the bundled OMP session changes producer asset.
+pub fn bundled_session_changes_asset_hash() -> String {
+    sha256_hex(OMP_SESSION_CHANGES_ASSET)
+}
+
 /// Validate that a path is an absolute, non-symlink existing directory.
 pub fn validate_safe_dir(dir: &Path) -> Result<(), IntegrationError> {
     if !dir.is_absolute() {
@@ -361,16 +372,28 @@ pub fn atomic_write_file(
     Ok(())
 }
 
-/// Format the complete generated file content including the managed header.
-pub fn generate_extension_file_content() -> String {
-    let hash = bundled_asset_hash();
+/// Format the complete generated file content including the managed header for an asset.
+pub fn generate_extension_content_for(asset: &str) -> String {
+    let hash = sha256_hex(asset);
     format!(
-        "{MANAGED_HEADER_PREFIX}\n{VERSION_PREFIX}{MANAGED_ADAPTER_VERSION}\n{HASH_PREFIX}{hash}\n\n{OMP_AGENT_STATUS_ASSET}"
+        "{MANAGED_HEADER_PREFIX}\n{VERSION_PREFIX}{MANAGED_ADAPTER_VERSION}\n{HASH_PREFIX}{hash}\n\n{asset}"
     )
 }
 
-/// Resolve and validate the target extension file path for an agent directory.
-pub fn resolve_target_path(agent_dir: &Path) -> Result<PathBuf, IntegrationError> {
+/// Format the complete generated file content including the managed header for Agent Status.
+pub fn generate_extension_file_content() -> String {
+    generate_extension_content_for(OMP_AGENT_STATUS_ASSET)
+}
+
+/// Format the complete generated file content including the managed header for Session Changes.
+pub fn generate_session_changes_extension_file_content() -> String {
+    generate_extension_content_for(OMP_SESSION_CHANGES_ASSET)
+}
+
+fn resolve_subpath_in_agent_dir(
+    agent_dir: &Path,
+    subpath: &str,
+) -> Result<PathBuf, IntegrationError> {
     if !agent_dir.is_absolute() {
         return Err(IntegrationError::NonAbsolutePath(agent_dir.to_path_buf()));
     }
@@ -386,13 +409,35 @@ pub fn resolve_target_path(agent_dir: &Path) -> Result<PathBuf, IntegrationError
         return Err(IntegrationError::InvalidAgentDirectory(agent_dir.to_path_buf()));
     }
 
-    Ok(agent_dir.join(EXTENSION_SUBPATH))
+    Ok(agent_dir.join(subpath))
 }
 
-/// Check the status of the managed extension in the specified agent directory.
-pub fn check_extension_status(agent_dir: &Path) -> Result<ExtensionStatusReport, IntegrationError> {
-    let target_path = resolve_target_path(agent_dir)?;
-    let bundled_hash = bundled_asset_hash();
+/// Resolve and validate the target extension file path for an agent directory.
+pub fn resolve_target_path(agent_dir: &Path) -> Result<PathBuf, IntegrationError> {
+    resolve_subpath_in_agent_dir(agent_dir, EXTENSION_SUBPATH)
+}
+
+/// Resolve and validate the target Session Changes extension file path for an agent directory.
+pub fn resolve_session_changes_target_path(agent_dir: &Path) -> Result<PathBuf, IntegrationError> {
+    resolve_subpath_in_agent_dir(agent_dir, SESSION_CHANGES_EXTENSION_SUBPATH)
+}
+
+fn check_extension_status_internal(
+    target_path: PathBuf,
+    bundled_hash: String,
+    expected_content: String,
+) -> Result<ExtensionStatusReport, IntegrationError> {
+    if let Some(extensions_dir) = target_path.parent() {
+        if extensions_dir.exists() {
+            let ext_meta = std::fs::symlink_metadata(extensions_dir)?;
+            if ext_meta.file_type().is_symlink() {
+                return Err(IntegrationError::SymlinkNotAllowed(extensions_dir.to_path_buf()));
+            }
+            if !ext_meta.is_dir() {
+                return Err(IntegrationError::InvalidAgentDirectory(extensions_dir.to_path_buf()));
+            }
+        }
+    }
 
     let meta = match std::fs::symlink_metadata(&target_path) {
         Ok(m) => m,
@@ -416,9 +461,15 @@ pub fn check_extension_status(agent_dir: &Path) -> Result<ExtensionStatusReport,
         return Err(IntegrationError::NotRegularFile(target_path));
     }
 
-    let existing_content = std::fs::read_to_string(&target_path)?;
-    let expected_content = generate_extension_file_content();
+    if meta.len() > MAX_CONFIG_FILE_BYTES {
+        return Err(IntegrationError::ConfigurationError(format!(
+            "Extension file '{}' exceeds maximum allowed size of {MAX_CONFIG_FILE_BYTES} bytes (got {} bytes)",
+            target_path.display(),
+            meta.len()
+        )));
+    }
 
+    let existing_content = std::fs::read_to_string(&target_path)?;
     let normalized_existing = existing_content.replace("\r\n", "\n");
     let normalized_expected = expected_content.replace("\r\n", "\n");
 
@@ -441,19 +492,33 @@ pub fn check_extension_status(agent_dir: &Path) -> Result<ExtensionStatusReport,
         (normalized_existing.as_str(), "")
     };
 
+    let mut has_managed_marker = false;
     let mut recorded_version: Option<String> = None;
     let mut recorded_hash: Option<String> = None;
 
     for line in header_part.lines() {
-        if let Some(v) = line.strip_prefix(VERSION_PREFIX) {
+        let trimmed = line.trim();
+        if trimmed == MANAGED_HEADER_PREFIX {
+            has_managed_marker = true;
+        } else if let Some(v) = trimmed.strip_prefix(VERSION_PREFIX) {
             recorded_version = Some(v.trim().to_string());
-        } else if let Some(h) = line.strip_prefix(HASH_PREFIX) {
+        } else if let Some(h) = trimmed.strip_prefix(HASH_PREFIX) {
             recorded_hash = Some(h.trim().to_string());
         }
     }
 
+    if !has_managed_marker {
+        return Ok(ExtensionStatusReport {
+            status: ManagedExtensionStatus::Modified,
+            target_path,
+            version: None,
+            bundled_version: MANAGED_ADAPTER_VERSION.to_string(),
+            content_hash: None,
+            bundled_hash,
+        });
+    }
+
     let (Some(ver), Some(hash)) = (recorded_version, recorded_hash) else {
-        // Missing managed header markers => unmanaged/modified
         return Ok(ExtensionStatusReport {
             status: ManagedExtensionStatus::Modified,
             target_path,
@@ -463,6 +528,7 @@ pub fn check_extension_status(agent_dir: &Path) -> Result<ExtensionStatusReport,
             bundled_hash,
         });
     };
+
     let actual_body_hash = sha256_hex(actual_body);
 
     if actual_body_hash != hash {
@@ -475,7 +541,7 @@ pub fn check_extension_status(agent_dir: &Path) -> Result<ExtensionStatusReport,
             content_hash: Some(actual_body_hash),
             bundled_hash,
         })
-    } else {
+    } else if hash != bundled_hash {
         // Body matches recorded hash cleanly, but hash != bundled_hash => outdated version
         Ok(ExtensionStatusReport {
             status: ManagedExtensionStatus::Outdated,
@@ -485,17 +551,26 @@ pub fn check_extension_status(agent_dir: &Path) -> Result<ExtensionStatusReport,
             content_hash: Some(hash),
             bundled_hash,
         })
+    } else {
+        Ok(ExtensionStatusReport {
+            status: ManagedExtensionStatus::Current,
+            target_path,
+            version: Some(ver),
+            bundled_version: MANAGED_ADAPTER_VERSION.to_string(),
+            content_hash: Some(hash),
+            bundled_hash,
+        })
     }
 }
 
-/// Atomically install or upgrade the managed OMP extension in the specified agent directory.
-pub fn install_extension(agent_dir: &Path) -> Result<ExtensionStatusReport, IntegrationError> {
-    let report = check_extension_status(agent_dir)?;
+fn install_extension_internal(
+    report: ExtensionStatusReport,
+    agent_dir: &Path,
+    content: &str,
+    temp_prefix: &str,
+) -> Result<ExtensionStatusReport, IntegrationError> {
     match report.status {
-        ManagedExtensionStatus::Current => {
-            // Already current and valid
-            Ok(report)
-        }
+        ManagedExtensionStatus::Current => Ok(report),
         ManagedExtensionStatus::Modified => {
             Err(IntegrationError::RefusingOverwriteModified(report.target_path))
         }
@@ -517,16 +592,13 @@ pub fn install_extension(agent_dir: &Path) -> Result<ExtensionStatusReport, Inte
                 }
             }
 
-            let file_content = generate_extension_file_content();
-
-            // Atomic write: write to tempfile in the same directory, then persist/rename
             use std::io::Write;
             let mut temp = tempfile::Builder::new()
-                .prefix(".dam-hopper-omp-")
+                .prefix(temp_prefix)
                 .suffix(".tmp")
                 .tempfile_in(extensions_dir)?;
 
-            temp.write_all(file_content.as_bytes())?;
+            temp.write_all(content.as_bytes())?;
             temp.flush()?;
             temp.as_file().sync_all()?;
             temp.persist(target_path).map_err(|e| e.error)?;
@@ -543,14 +615,11 @@ pub fn install_extension(agent_dir: &Path) -> Result<ExtensionStatusReport, Inte
     }
 }
 
-/// Uninstall the managed OMP extension if present and uncorrupted.
-pub fn uninstall_extension(agent_dir: &Path) -> Result<ExtensionStatusReport, IntegrationError> {
-    let report = check_extension_status(agent_dir)?;
+fn uninstall_extension_internal(
+    report: ExtensionStatusReport,
+) -> Result<ExtensionStatusReport, IntegrationError> {
     match report.status {
-        ManagedExtensionStatus::Absent => {
-            // Already absent
-            Ok(report)
-        }
+        ManagedExtensionStatus::Absent => Ok(report),
         ManagedExtensionStatus::Modified => {
             Err(IntegrationError::RefusingDeleteModified(report.target_path))
         }
@@ -566,6 +635,66 @@ pub fn uninstall_extension(agent_dir: &Path) -> Result<ExtensionStatusReport, In
             })
         }
     }
+}
+
+/// Check the status of the managed extension in the specified agent directory.
+pub fn check_extension_status(agent_dir: &Path) -> Result<ExtensionStatusReport, IntegrationError> {
+    let target_path = resolve_target_path(agent_dir)?;
+    check_extension_status_internal(
+        target_path,
+        bundled_asset_hash(),
+        generate_extension_file_content(),
+    )
+}
+
+/// Atomically install or upgrade the managed OMP extension in the specified agent directory.
+pub fn install_extension(agent_dir: &Path) -> Result<ExtensionStatusReport, IntegrationError> {
+    let report = check_extension_status(agent_dir)?;
+    install_extension_internal(
+        report,
+        agent_dir,
+        &generate_extension_file_content(),
+        ".dam-hopper-omp-",
+    )
+}
+
+/// Uninstall the managed OMP extension if present and uncorrupted.
+pub fn uninstall_extension(agent_dir: &Path) -> Result<ExtensionStatusReport, IntegrationError> {
+    let report = check_extension_status(agent_dir)?;
+    uninstall_extension_internal(report)
+}
+
+/// Check the status of the managed Session Changes extension in the specified agent directory.
+pub fn check_session_changes_extension_status(
+    agent_dir: &Path,
+) -> Result<ExtensionStatusReport, IntegrationError> {
+    let target_path = resolve_session_changes_target_path(agent_dir)?;
+    check_extension_status_internal(
+        target_path,
+        bundled_session_changes_asset_hash(),
+        generate_session_changes_extension_file_content(),
+    )
+}
+
+/// Atomically install or upgrade the managed Session Changes extension in the specified agent directory.
+pub fn install_session_changes_extension(
+    agent_dir: &Path,
+) -> Result<ExtensionStatusReport, IntegrationError> {
+    let report = check_session_changes_extension_status(agent_dir)?;
+    install_extension_internal(
+        report,
+        agent_dir,
+        &generate_session_changes_extension_file_content(),
+        ".dam-hopper-sc-",
+    )
+}
+
+/// Uninstall the managed Session Changes extension if present and uncorrupted.
+pub fn uninstall_session_changes_extension(
+    agent_dir: &Path,
+) -> Result<ExtensionStatusReport, IntegrationError> {
+    let report = check_session_changes_extension_status(agent_dir)?;
+    uninstall_extension_internal(report)
 }
 
 /// Dispatch status check for native agent integrations (Codex, Claude).
