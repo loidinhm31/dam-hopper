@@ -505,14 +505,13 @@ export class SessionChangesProducerRegistry {
   public readonly roots = new Map<string, RootSessionRegistration>();
   public readonly agentToRoot = new Map<string, string>();
   public readonly agentLineage = new Map<string, string>();
-
-  // Shared process-level generation and active session tracking
   public activeSessionId: string | null = null;
   public globalGeneration = 0;
   public isPermanentlyDisabled = false;
+  public registryEpoch = 0;
   public readonly pendingCalls = new Map<string, PendingToolCall>();
   public readonly consumedCallKeys = new Set<string>();
-  public readonly sharedAmbiguousCalls = new Set<string>();
+  public readonly ambiguousCallHistory = new Set<string>();
 
   public registerRoot(
     agentId: string,
@@ -616,10 +615,13 @@ export class SessionChangesProducerRegistry {
   }
 
   public clear(): void {
+    this.registryEpoch++;
     this.roots.clear();
     this.agentToRoot.clear();
     this.agentLineage.clear();
     this.pendingCalls.clear();
+    this.consumedCallKeys.clear();
+    this.ambiguousCallHistory.clear();
     this.activeSessionId = null;
     this.globalGeneration = 0;
     this.isPermanentlyDisabled = false;
@@ -686,8 +688,11 @@ export class SessionChangesProducer {
   public get consumedCallKeys(): Set<string> {
     return this.registry.consumedCallKeys;
   }
-  public get sharedAmbiguousCalls(): Set<string> {
-    return this.registry.sharedAmbiguousCalls;
+  public get ambiguousCallHistory(): Set<string> {
+    return this.registry.ambiguousCallHistory;
+  }
+  public get registryEpoch(): number {
+    return this.registry.registryEpoch;
   }
 
   public async postJson<T>(
@@ -696,6 +701,7 @@ export class SessionChangesProducer {
     timeoutMs: number,
   ): Promise<{ ok: boolean; status: number; data?: T; error?: string }> {
     const url = `${this.httpUrl}${path}`;
+    const requestEpoch = this.registry.registryEpoch;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -713,7 +719,9 @@ export class SessionChangesProducer {
       });
 
       if (res.status === 503) {
-        this.isPermanentlyDisabled = true;
+        if (this.registry.registryEpoch === requestEpoch) {
+          this.isPermanentlyDisabled = true;
+        }
         return { ok: false, status: 503, error: "trackingDisabled" };
       }
 
@@ -754,6 +762,7 @@ export class SessionChangesProducer {
   ): Promise<RootSessionRegistration | null> {
     if (this.isPermanentlyDisabled) return null;
 
+    const startEpoch = this.registry.registryEpoch;
     const currentGen = ++this.globalGeneration;
     this.activeSessionId = ompSessionId;
 
@@ -766,11 +775,14 @@ export class SessionChangesProducer {
 
     const res = await this.postJson<RegisterResponse>("/register", req, this.captureTimeoutMs);
 
-    // W1: Monotonic generation check — discard response if session switched or restarted
-    if (this.globalGeneration !== currentGen || this.activeSessionId !== ompSessionId) {
+    // W1: Monotonic generation & epoch check — discard response if session switched, cleared, or restarted
+    if (
+      this.registry.registryEpoch !== startEpoch ||
+      this.globalGeneration !== currentGen ||
+      this.activeSessionId !== ompSessionId
+    ) {
       return null;
     }
-
     if (!res.ok || !res.data) {
       if (res.status === 503) {
         const disabledRoot: RootSessionRegistration = {
@@ -843,7 +855,7 @@ export class SessionChangesProducer {
       if (!toolName) return;
 
       const captureStartTime = performance.now();
-
+      const callEpoch = this.registry.registryEpoch;
       const normalizedTool = toolName.toLowerCase().replace(/_/g, "-");
       const isSupported =
         normalizedTool === "write" ||
@@ -890,11 +902,22 @@ export class SessionChangesProducer {
         return;
       }
 
-      // Track whether callId is ever shared across multiple descriptors
+      // Record historical ambiguity when admitting a new descriptor whose callId matches any existing pending descriptor
+      let isCollidingWithPending = false;
       for (const desc of this.pendingCalls.values()) {
         if (desc.toolCallId === callId) {
-          this.sharedAmbiguousCalls.add(callId);
+          isCollidingWithPending = true;
+          break;
         }
+      }
+      if (isCollidingWithPending) {
+        if (this.ambiguousCallHistory.has(callId)) {
+          this.ambiguousCallHistory.delete(callId);
+        } else if (this.ambiguousCallHistory.size >= MAX_PENDING_CALLS) {
+          const oldest = this.ambiguousCallHistory.values().next().value;
+          if (oldest) this.ambiguousCallHistory.delete(oldest);
+        }
+        this.ambiguousCallHistory.add(callId);
       }
 
       if (this.pendingCalls.size >= MAX_PENDING_CALLS) {
@@ -1000,8 +1023,9 @@ export class SessionChangesProducer {
             Math.max(10, Math.floor(remainingTimeoutMs)),
           );
 
-          // Post-await generation check: if session switched or restarted while in flight, discard!
+          // Post-await generation & epoch check: if session switched, cleared, or restarted while in flight, discard!
           if (
+            this.registry.registryEpoch !== callEpoch ||
             this.globalGeneration !== callGen ||
             (this.activeSessionId !== null && this.activeSessionId !== root.ompSessionId)
           ) {
@@ -1140,24 +1164,28 @@ export class SessionChangesProducer {
           return;
         }
       } else {
-        // Agentless result: permit lookup ONLY if toolCallId was never shared and uniquely identifies an outstanding descriptor
-        if (this.sharedAmbiguousCalls.has(toolCallId)) {
-          // Shared across multiple agents/sessions: agentless result is ambiguous, reject!
-          return;
-        }
-        const matches: Array<[string, PendingToolCall]> = [];
+        // Agentless result:
+        // Scope 1: Live outstanding ambiguity directly from pendingCalls.
+        // If 2 or more descriptors currently exist with this toolCallId, REJECT regardless of history!
+        const matchingPending: Array<[string, PendingToolCall]> = [];
         for (const [key, desc] of this.pendingCalls.entries()) {
           if (desc.toolCallId === toolCallId) {
-            matches.push([key, desc]);
+            matchingPending.push([key, desc]);
           }
         }
-        if (matches.length === 1) {
-          matchedKey = matches[0][0];
-          pending = matches[0][1];
-        } else {
-          // 0 matches = missing origin; >1 matches = ambiguous. Reject.
+        if (matchingPending.length !== 1) {
+          // 0 matches = missing origin; >1 matches = live collision. Reject!
           return;
         }
+
+        // Scope 2: Recent-history ambiguity.
+        // If this callId was ever involved in a collision in recent history, reject agentless resolution!
+        if (this.ambiguousCallHistory.has(toolCallId)) {
+          return;
+        }
+
+        matchedKey = matchingPending[0][0];
+        pending = matchingPending[0][1];
       }
 
       if (!pending || !matchedKey) {
@@ -1257,13 +1285,38 @@ export class SessionChangesProducer {
         root.unprovenPaths.add(p);
       }
 
+      const originalRoot = root;
+      const targetSessionId = root.ompSessionId;
+      const targetServerEpoch = root.serverEpoch;
+      const targetTerminalIncarnation = root.terminalIncarnation;
+      const targetRootId = root.rootId;
+      const targetBaselineId = root.baselineId;
+      const capturedEpoch = this.registry.registryEpoch;
+
+      const isResultChainValid = (): boolean => {
+        if (originalRoot.disabled) return false;
+        if (this.registry.registryEpoch !== capturedEpoch) return false;
+        const currentRoot = this.registry.roots.get(targetSessionId);
+        if (currentRoot !== originalRoot) return false;
+        if (
+          currentRoot.ompSessionId !== targetSessionId ||
+          currentRoot.serverEpoch !== targetServerEpoch ||
+          currentRoot.terminalIncarnation !== targetTerminalIncarnation ||
+          currentRoot.rootId !== targetRootId ||
+          currentRoot.baselineId !== targetBaselineId
+        ) {
+          return false;
+        }
+        return true;
+      };
+
       const basePayload = {
         version: SESSION_CHANGES_PROTOCOL_VERSION,
-        serverEpoch: root.serverEpoch,
-        terminalIncarnation: root.terminalIncarnation,
-        ompSessionId: root.ompSessionId,
-        rootId: root.rootId,
-        baselineId: root.baselineId,
+        serverEpoch: targetServerEpoch,
+        terminalIncarnation: targetTerminalIncarnation,
+        ompSessionId: targetSessionId,
+        rootId: targetRootId,
+        baselineId: targetBaselineId,
         captureId: crypto.randomUUID(),
         mode: "unproven" as CaptureMode,
       };
@@ -1273,6 +1326,7 @@ export class SessionChangesProducer {
       for (const chunk of chunks) {
         const remainingMs = this.captureTimeoutMs - (performance.now() - resultStartTime);
         if (remainingMs <= 0) break;
+        if (this.isPermanentlyDisabled || !isResultChainValid()) break;
 
         const captureReq: CaptureRequest = {
           ...basePayload,
@@ -1285,17 +1339,19 @@ export class SessionChangesProducer {
           Math.max(10, Math.floor(remainingMs)),
         );
 
-        if (
-          this.globalGeneration !== callGen ||
-          (this.activeSessionId !== null && this.activeSessionId !== root.ompSessionId)
-        ) {
+        // Crucial: check epoch before ANY caller-level state mutation or 503 check!
+        if (this.registry.registryEpoch !== capturedEpoch) {
           return;
         }
 
         if (res.status === 503) {
-          root.disabled = true;
+          originalRoot.disabled = true;
           this.isPermanentlyDisabled = true;
           break;
+        }
+
+        if (this.isPermanentlyDisabled || !isResultChainValid()) {
+          return;
         }
       }
     } catch (err: unknown) {
@@ -1311,36 +1367,70 @@ export class SessionChangesProducer {
     const invalidations = [...root.pendingInvalidations];
     root.pendingInvalidations = [];
 
+    const originalRoot = root;
+    const targetSessionId = root.ompSessionId;
+    const targetServerEpoch = root.serverEpoch;
+    const targetTerminalIncarnation = root.terminalIncarnation;
+    const targetRootId = root.rootId;
+    const targetBaselineId = root.baselineId;
     const callGen = this.globalGeneration;
+    const callEpoch = this.registry.registryEpoch;
+
+    const isFlushValid = (): boolean => {
+      if (this.isPermanentlyDisabled || originalRoot.disabled) return false;
+      if (this.registry.registryEpoch !== callEpoch) return false;
+      if (
+        this.globalGeneration !== callGen ||
+        (this.activeSessionId !== null && this.activeSessionId !== targetSessionId)
+      ) {
+        return false;
+      }
+      const currentRoot = this.registry.roots.get(targetSessionId);
+      if (currentRoot !== originalRoot) return false;
+      if (
+        currentRoot.ompSessionId !== targetSessionId ||
+        currentRoot.serverEpoch !== targetServerEpoch ||
+        currentRoot.terminalIncarnation !== targetTerminalIncarnation ||
+        currentRoot.rootId !== targetRootId ||
+        currentRoot.baselineId !== targetBaselineId
+      ) {
+        return false;
+      }
+      return true;
+    };
 
     for (const inv of invalidations) {
+      if (!isFlushValid()) return;
+
       const basePayload = {
         version: SESSION_CHANGES_PROTOCOL_VERSION,
-        serverEpoch: root.serverEpoch,
-        terminalIncarnation: root.terminalIncarnation,
-        ompSessionId: root.ompSessionId,
-        rootId: root.rootId,
-        baselineId: root.baselineId,
+        serverEpoch: targetServerEpoch,
+        terminalIncarnation: targetTerminalIncarnation,
+        ompSessionId: targetSessionId,
+        rootId: targetRootId,
+        baselineId: targetBaselineId,
         captureId: inv.captureId, // Preserves exact original attempt ID!
         mode: "unproven" as CaptureMode,
       };
 
       const chunks = chunkCapturePaths(basePayload, inv.paths, MAX_CAPTURE_BODY_BYTES);
       for (const chunk of chunks) {
+        if (!isFlushValid()) return;
+
         const res = await this.postJson<CaptureResponse>(
           "/capture",
           { ...basePayload, paths: chunk },
           1000,
         );
-        if (
-          this.globalGeneration !== callGen ||
-          (this.activeSessionId !== null && this.activeSessionId !== root.ompSessionId)
-        ) {
+        if (this.registry.registryEpoch !== callEpoch) {
           return;
         }
         if (res.status === 503) {
-          root.disabled = true;
+          originalRoot.disabled = true;
           this.isPermanentlyDisabled = true;
+          return;
+        }
+        if (!isFlushValid()) {
           return;
         }
       }
@@ -1373,9 +1463,44 @@ export class SessionChangesProducer {
       const root = this.registry.resolveRoot(ctx?.agent);
       if (!root || root.disabled) return;
 
-      // Flush any remaining pending invalidations before settled
-      await this.flushPendingInvalidations(root).catch(() => {});
+      const originalRoot = root;
+      const targetSessionId = root.ompSessionId;
+      const targetServerEpoch = root.serverEpoch;
+      const targetTerminalIncarnation = root.terminalIncarnation;
+      const targetRootId = root.rootId;
+      const targetBaselineId = root.baselineId;
+      const callGen = this.globalGeneration;
+      const callEpoch = this.registry.registryEpoch;
 
+      const isRootValid = (): boolean => {
+        if (this.isPermanentlyDisabled || originalRoot.disabled) return false;
+        if (this.registry.registryEpoch !== callEpoch) return false;
+        if (
+          this.globalGeneration !== callGen ||
+          (this.activeSessionId !== null && this.activeSessionId !== targetSessionId)
+        ) {
+          return false;
+        }
+        const currentRoot = this.registry.roots.get(targetSessionId);
+        if (currentRoot !== originalRoot) return false;
+        if (
+          currentRoot.ompSessionId !== targetSessionId ||
+          currentRoot.serverEpoch !== targetServerEpoch ||
+          currentRoot.terminalIncarnation !== targetTerminalIncarnation ||
+          currentRoot.rootId !== targetRootId ||
+          currentRoot.baselineId !== targetBaselineId
+        ) {
+          return false;
+        }
+        return true;
+      };
+
+      // Flush any remaining pending invalidations before settled
+      await this.flushPendingInvalidations(originalRoot).catch(() => {});
+
+      if (!isRootValid()) {
+        return;
+      }
       // W7: Classify stop reason from assistant messages; default to unknown
       let stopReason: string | undefined;
       if (Array.isArray(event?.messages)) {
@@ -1399,18 +1524,21 @@ export class SessionChangesProducer {
 
       const settledReq: SettledRequest = {
         version: SESSION_CHANGES_PROTOCOL_VERSION,
-        serverEpoch: root.serverEpoch,
-        terminalIncarnation: root.terminalIncarnation,
-        ompSessionId: root.ompSessionId,
-        rootId: root.rootId,
-        baselineId: root.baselineId,
+        serverEpoch: originalRoot.serverEpoch,
+        terminalIncarnation: originalRoot.terminalIncarnation,
+        ompSessionId: originalRoot.ompSessionId,
+        rootId: originalRoot.rootId,
+        baselineId: originalRoot.baselineId,
         turnId: event?.turnId || crypto.randomUUID(),
         outcome,
       };
 
       const res = await this.postJson("/settled", settledReq, 1000);
+      if (!isRootValid()) {
+        return;
+      }
       if (res.status === 503) {
-        root.disabled = true;
+        originalRoot.disabled = true;
         this.isPermanentlyDisabled = true;
       }
     } catch (err: unknown) {

@@ -873,4 +873,1371 @@ describe("PR #82 Code Review Regressions", () => {
     expect(rootA.unprovenPaths.has("ambig.ts")).toBe(false);
     expect(rootB.unprovenPaths.has("ambig.ts")).toBe(false);
   });
+
+  // ==========================================================================
+  // PR #82 Re-review Deterministic Regression Matrix (R1 - R13)
+  // ==========================================================================
+
+  function createDeferred<T = void>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: any) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function generateNestedPaths(count: number, prefix: string): string[] {
+    const paths: string[] = [];
+    for (let i = 0; i < count; i++) {
+      paths.push(`src/modules/submodule_${i}/nested_feature_${i}/component_${prefix}_${i}.ts`);
+    }
+    return paths;
+  }
+
+  it("R1: multi-chunk late result delivery posts all chunks to session A across session switch", async () => {
+    const recordedCaptures: any[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/register") {
+          return Response.json({
+            serverEpoch: "epoch-1",
+            terminalIncarnation: "1",
+            ompSessionId: body.ompSessionId,
+            rootId: ".",
+            baselineId: `base-${body.ompSessionId}`,
+            canonicalRoot: "/repo",
+          });
+        }
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          recordedCaptures.push(body);
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      // 1. Register Session A
+      const rootA = await producer.registerSession("session-A", "main", "/repo");
+      expect(rootA).not.toBeNull();
+
+      // 2. Begin tool call in Session A (glob only, no pre-edit captures)
+      const ctxA: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+      await producer.handleToolCall("ast-edit", { files: ["src/**/*.ts"] }, ctxA, "call-multi-1");
+
+      // 3. Switch to Session B
+      const rootB = await producer.handleSessionSwitch("session-B", "main", "/repo");
+      expect(rootB?.ompSessionId).toBe("session-B");
+
+      // 4. Deliver late result with 300 nested paths (> 16 KiB total JSON body)
+      const paths = generateNestedPaths(300, "r1");
+      await producer.handleToolResult(
+        "ast-edit",
+        { files: paths.map((p) => `/repo/${p}`) },
+        ctxA,
+        "call-multi-1",
+      );
+
+      // Verify at least 2 chunks were posted
+      expect(recordedCaptures.length).toBeGreaterThanOrEqual(2);
+
+      // Flatten and verify all paths posted
+      const allPostedPaths = recordedCaptures.flatMap((c) => c.paths);
+      expect(allPostedPaths).toHaveLength(paths.length);
+      expect(new Set(allPostedPaths)).toEqual(new Set(paths));
+
+      // Verify every capture named session A with complete original tuple
+      for (const cap of recordedCaptures) {
+        expect(cap.version).toBe(1);
+        expect(cap.serverEpoch).toBe("epoch-1");
+        expect(cap.terminalIncarnation).toBe("1");
+        expect(cap.ompSessionId).toBe("session-A");
+        expect(cap.rootId).toBe(".");
+        expect(cap.baselineId).toBe("base-session-A");
+        expect(cap.mode).toBe("unproven");
+      }
+      // Session B received 0 paths
+      expect(rootB?.unprovenPaths.size).toBe(0);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("R2: paused chunk 1 followed by switch to B still delivers chunk 2 to session A", async () => {
+    const chunk1Received = createDeferred();
+    const releaseChunk1 = createDeferred();
+    const recordedCaptures: any[] = [];
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/register") {
+          return Response.json({
+            serverEpoch: "epoch-1",
+            terminalIncarnation: "1",
+            ompSessionId: body.ompSessionId,
+            rootId: ".",
+            baselineId: `base-${body.ompSessionId}`,
+            canonicalRoot: "/repo",
+          });
+        }
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          recordedCaptures.push(body);
+          if (recordedCaptures.length === 1) {
+            chunk1Received.resolve();
+            await releaseChunk1.promise;
+          }
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const rootA = await producer.registerSession("session-A", "main", "/repo");
+      const ctxA: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+      await producer.handleToolCall("ast-edit", { files: ["src/**/*.ts"] }, ctxA, "call-r2");
+
+      const paths = generateNestedPaths(300, "r2");
+      const resultPromise = producer.handleToolResult(
+        "ast-edit",
+        { files: paths.map((p) => `/repo/${p}`) },
+        ctxA,
+        "call-r2",
+      );
+
+      // Wait for chunk 1 to arrive at peer
+      await chunk1Received.promise;
+
+      // Switch to Session B while chunk 1 is paused
+      const rootB = await producer.handleSessionSwitch("session-B", "main", "/repo");
+      expect(rootB?.ompSessionId).toBe("session-B");
+
+      // Release chunk 1
+      releaseChunk1.resolve();
+      await resultPromise;
+
+      // Both chunks must be delivered to Session A with full tuple
+      expect(recordedCaptures.length).toBeGreaterThanOrEqual(2);
+      const allPostedPaths = recordedCaptures.flatMap((c) => c.paths);
+      expect(allPostedPaths).toHaveLength(paths.length);
+      expect(new Set(allPostedPaths)).toEqual(new Set(paths));
+
+      for (const cap of recordedCaptures) {
+        expect(cap.version).toBe(1);
+        expect(cap.serverEpoch).toBe("epoch-1");
+        expect(cap.terminalIncarnation).toBe("1");
+        expect(cap.ompSessionId).toBe("session-A");
+        expect(cap.rootId).toBe(".");
+        expect(cap.baselineId).toBe("base-session-A");
+        expect(cap.mode).toBe("unproven");
+      }
+      expect(rootB?.unprovenPaths.size).toBe(0);
+    } finally {
+      releaseChunk1.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R3: paused chunk 1 followed by session removal aborts chunk 2", async () => {
+    const chunk1Received = createDeferred();
+    const releaseChunk1 = createDeferred();
+    const recordedCaptures: any[] = [];
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          recordedCaptures.push(body);
+          if (recordedCaptures.length === 1) {
+            chunk1Received.resolve();
+            await releaseChunk1.promise;
+          }
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+      registry.registerRoot("main", rootA);
+
+      const ctxA: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+      await producer.handleToolCall("ast-edit", { files: ["src/**/*.ts"] }, ctxA, "call-r3");
+
+      const paths = generateNestedPaths(300, "r3");
+      const resultPromise = producer.handleToolResult(
+        "ast-edit",
+        { files: paths.map((p) => `/repo/${p}`) },
+        ctxA,
+        "call-r3",
+      );
+
+      await chunk1Received.promise;
+      // Remove session A from registry
+      registry.removeRoot("session-A");
+      releaseChunk1.resolve();
+      await resultPromise;
+
+      // Exactly 1 request posted; chunk 2 was rejected
+      expect(recordedCaptures.length).toBe(1);
+    } finally {
+      releaseChunk1.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R4: paused chunk 1 followed by object replacement aborts chunk 2", async () => {
+    const chunk1Received = createDeferred();
+    const releaseChunk1 = createDeferred();
+    const recordedCaptures: any[] = [];
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          recordedCaptures.push(body);
+          if (recordedCaptures.length === 1) {
+            chunk1Received.resolve();
+            await releaseChunk1.promise;
+          }
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+      registry.registerRoot("main", rootA);
+
+      const ctxA: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+      await producer.handleToolCall("ast-edit", { files: ["src/**/*.ts"] }, ctxA, "call-r4");
+
+      const paths = generateNestedPaths(300, "r4");
+      const resultPromise = producer.handleToolResult(
+        "ast-edit",
+        { files: paths.map((p) => `/repo/${p}`) },
+        ctxA,
+        "call-r4",
+      );
+
+      await chunk1Received.promise;
+      // Replace with new object with identical tuple
+      const replacementRoot = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+      registry.roots.set("session-A", replacementRoot);
+      releaseChunk1.resolve();
+      await resultPromise;
+
+      expect(recordedCaptures.length).toBe(1);
+      expect(replacementRoot.unprovenPaths.size).toBe(0);
+    } finally {
+      releaseChunk1.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R5: parameterized in-place tuple and identity mutation on same object aborts chunk 2", async () => {
+    const fieldsToMutate = ["ompSessionId", "serverEpoch", "terminalIncarnation", "rootId", "baselineId"] as const;
+
+    for (const field of fieldsToMutate) {
+      const chunk1Received = createDeferred();
+      const releaseChunk1 = createDeferred();
+      const recordedCaptures: any[] = [];
+
+      const server = Bun.serve({
+        port: 0,
+        hostname: "127.0.0.1",
+        async fetch(req) {
+          const url = new URL(req.url);
+          const body = await req.json();
+          if (url.pathname === "/private/session-changes/v1/capture") {
+            recordedCaptures.push(body);
+            if (recordedCaptures.length === 1) {
+              chunk1Received.resolve();
+              await releaseChunk1.promise;
+            }
+            return Response.json({
+              version: 1,
+              captureId: body.captureId,
+              results: (body.paths as string[]).map((p: string) => ({
+                path: p,
+                status: "captured",
+                presence: "present",
+              })),
+            });
+          }
+          return new Response("Not found", { status: 404 });
+        },
+      });
+
+      try {
+        const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+        const registry = new SessionChangesProducerRegistry();
+        const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+        const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+        registry.registerRoot("main", rootA);
+
+        const ctxA: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+        await producer.handleToolCall("ast-edit", { files: ["src/**/*.ts"] }, ctxA, `call-r5-${field}`);
+
+        const paths = generateNestedPaths(300, `r5-${field}`);
+        const resultPromise = producer.handleToolResult(
+          "ast-edit",
+          { files: paths.map((p) => `/repo/${p}`) },
+          ctxA,
+          `call-r5-${field}`,
+        );
+
+        await chunk1Received.promise;
+        // In-place mutate the specific field
+        (rootA as any)[field] = "MUTATED";
+        releaseChunk1.resolve();
+        await resultPromise;
+
+        // Exactly 1 request posted; chunk 2 was rejected due to identity mismatch
+        expect(recordedCaptures.length).toBe(1);
+      } finally {
+        releaseChunk1.resolve();
+        server.stop(true);
+      }
+    }
+  });
+
+  it("R5b: paused chunk 1 followed by clear() and new registration: old 503 does NOT disable new lifecycle", async () => {
+    const chunk1Received = createDeferred();
+    const releaseChunk1 = createDeferred();
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/register") {
+          return Response.json({
+            serverEpoch: "epoch-new",
+            terminalIncarnation: "1",
+            ompSessionId: body.ompSessionId,
+            rootId: ".",
+            baselineId: "base-new",
+            canonicalRoot: "/repo",
+          });
+        }
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          chunk1Received.resolve();
+          await releaseChunk1.promise;
+          return new Response("Service Unavailable", { status: 503 });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const rootOld = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+      registry.registerRoot("main", rootOld);
+
+      const ctxA: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+      await producer.handleToolCall("ast-edit", { files: ["src/**/*.ts"] }, ctxA, "call-r5b");
+
+      const paths = generateNestedPaths(300, "r5b");
+      const resultPromise = producer.handleToolResult(
+        "ast-edit",
+        { files: paths.map((p) => `/repo/${p}`) },
+        ctxA,
+        "call-r5b",
+      );
+
+      // Wait for chunk 1 to arrive at peer
+      await chunk1Received.promise;
+
+      // Reset lifecycle and register new session while old capture is paused
+      registry.clear();
+      expect(registry.registryEpoch).toBe(1);
+      const rootNew = await producer.registerSession("session-A", "main", "/repo");
+      expect(rootNew).not.toBeNull();
+      expect(rootNew?.disabled).toBe(false);
+      expect(producer.isPermanentlyDisabled).toBe(false);
+
+      // Release old chunk 1 with 503
+      releaseChunk1.resolve();
+      await resultPromise;
+
+      // Stale 503 must NOT permanently disable new lifecycle, and rootNew must remain enabled!
+      expect(producer.isPermanentlyDisabled).toBe(false);
+      expect(rootNew?.disabled).toBe(false);
+    } finally {
+      releaseChunk1.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R6: paused chunk 1 followed by clear() and reinserting same object aborts chunk 2", async () => {
+    const chunk1Received = createDeferred();
+    const releaseChunk1 = createDeferred();
+    const recordedCaptures: any[] = [];
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = await req.json();
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          recordedCaptures.push(body);
+          if (recordedCaptures.length === 1) {
+            chunk1Received.resolve();
+            await releaseChunk1.promise;
+          }
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+      registry.registerRoot("main", rootA);
+
+      const ctxA: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+      await producer.handleToolCall("ast-edit", { files: ["src/**/*.ts"] }, ctxA, "call-r6");
+
+      const paths = generateNestedPaths(300, "r6");
+      const resultPromise = producer.handleToolResult(
+        "ast-edit",
+        { files: paths.map((p) => `/repo/${p}`) },
+        ctxA,
+        "call-r6",
+      );
+
+      await chunk1Received.promise;
+      // Clear registry and reinsert the exact same object
+      registry.clear();
+      registry.registerRoot("main", rootA);
+      releaseChunk1.resolve();
+      await resultPromise;
+
+      expect(recordedCaptures.length).toBe(1);
+    } finally {
+      releaseChunk1.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R7: paused chunk 1 followed by disabled root or 503 aborts chunk 2", async () => {
+    // Case A: root.disabled set during pause
+    {
+      const chunk1Received = createDeferred();
+      const releaseChunk1 = createDeferred();
+      const recordedCaptures: any[] = [];
+
+      const server = Bun.serve({
+        port: 0,
+        hostname: "127.0.0.1",
+        async fetch(req) {
+          const body = await req.json();
+          recordedCaptures.push(body);
+          if (recordedCaptures.length === 1) {
+            chunk1Received.resolve();
+            await releaseChunk1.promise;
+          }
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        },
+      });
+
+      try {
+        const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+        const registry = new SessionChangesProducerRegistry();
+        const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+        const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+        registry.registerRoot("main", rootA);
+
+        const ctxA: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+        await producer.handleToolCall("ast-edit", { files: ["src/**/*.ts"] }, ctxA, "call-r7a");
+
+        const paths = generateNestedPaths(300, "r7a");
+        const resultPromise = producer.handleToolResult(
+          "ast-edit",
+          { files: paths.map((p) => `/repo/${p}`) },
+          ctxA,
+          "call-r7a",
+        );
+
+        await chunk1Received.promise;
+        rootA.disabled = true;
+        releaseChunk1.resolve();
+        await resultPromise;
+
+        expect(recordedCaptures.length).toBe(1);
+      } finally {
+        releaseChunk1.resolve();
+        server.stop(true);
+      }
+    }
+
+    // Case B: chunk 1 returns 503
+    {
+      const recordedCaptures: any[] = [];
+      const server = Bun.serve({
+        port: 0,
+        hostname: "127.0.0.1",
+        async fetch(req) {
+          const body = await req.json();
+          recordedCaptures.push(body);
+          return new Response("Service Unavailable", { status: 503 });
+        },
+      });
+
+      try {
+        const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+        const registry = new SessionChangesProducerRegistry();
+        const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+        const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+        registry.registerRoot("main", rootA);
+
+        const ctxA: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+        await producer.handleToolCall("ast-edit", { files: ["src/**/*.ts"] }, ctxA, "call-r7b");
+
+        const paths = generateNestedPaths(300, "r7b");
+        await producer.handleToolResult(
+          "ast-edit",
+          { files: paths.map((p) => `/repo/${p}`) },
+          ctxA,
+          "call-r7b",
+        );
+
+        expect(recordedCaptures.length).toBe(1);
+        expect(rootA.disabled).toBe(true);
+        expect(producer.isPermanentlyDisabled).toBe(true);
+      } finally {
+        server.stop(true);
+      }
+    }
+  });
+
+  it("R8: deadline exhaustion halts chunk processing without issuing expired requests", async () => {
+    // Case A: start with deadline already exhausted -> 0 requests
+    {
+      const recordedCaptures: any[] = [];
+      const server = Bun.serve({
+        port: 0,
+        hostname: "127.0.0.1",
+        async fetch(req) {
+          const body = await req.json();
+          recordedCaptures.push(body);
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        },
+      });
+
+      try {
+        const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+        const registry = new SessionChangesProducerRegistry();
+        const producer = new SessionChangesProducer({
+          httpUrl,
+          token: "test-token",
+          registry,
+          captureTimeoutMs: 10,
+        });
+
+        const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+        registry.registerRoot("main", rootA);
+        const ctxA: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+        await producer.handleToolCall("ast-edit", { files: ["src/**/*.ts"] }, ctxA, "call-r8a");
+
+        const originalNow = performance.now;
+        try {
+          const paths = generateNestedPaths(300, "r8a");
+          let callIndex = 0;
+          performance.now = () => {
+            callIndex++;
+            if (callIndex === 1) return 1000; // start time
+            return 1050; // remaining <= 0 immediately
+          };
+
+          await producer.handleToolResult(
+            "ast-edit",
+            { files: paths.map((p) => `/repo/${p}`) },
+            ctxA,
+            "call-r8a",
+          );
+
+          expect(recordedCaptures.length).toBe(0);
+        } finally {
+          performance.now = originalNow;
+        }
+      } finally {
+        server.stop(true);
+      }
+    }
+
+    // Case B: advance time while chunk 1 is in-flight -> chunk 2 is halted
+    {
+      const recordedCaptures: any[] = [];
+      let simulatedTime = 1000;
+      const originalNow = performance.now;
+      performance.now = () => simulatedTime;
+
+      const server = Bun.serve({
+        port: 0,
+        hostname: "127.0.0.1",
+        async fetch(req) {
+          const body = await req.json();
+          recordedCaptures.push(body);
+          // Advance simulated time past deadline
+          simulatedTime = 5000;
+          return Response.json({
+            version: 1,
+            captureId: body.captureId,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        },
+      });
+
+      try {
+        const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+        const registry = new SessionChangesProducerRegistry();
+        const producer = new SessionChangesProducer({
+          httpUrl,
+          token: "test-token",
+          registry,
+          captureTimeoutMs: 10,
+        });
+
+        const rootA = createRootSessionRegistration("session-A", "epoch-1", "1", "base-A", "/repo");
+        registry.registerRoot("main", rootA);
+        const ctxA: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+        await producer.handleToolCall("ast-edit", { files: ["src/**/*.ts"] }, ctxA, "call-r8b");
+
+        try {
+          const paths = generateNestedPaths(300, "r8b");
+          await producer.handleToolResult(
+            "ast-edit",
+            { files: paths.map((p) => `/repo/${p}`) },
+            ctxA,
+            "call-r8b",
+          );
+
+          // Only chunk 1 issued before simulated time expired
+          expect(recordedCaptures.length).toBe(1);
+        } finally {
+          performance.now = originalNow;
+        }
+      } finally {
+        server.stop(true);
+      }
+    }
+  });
+
+  it("R9: ambiguity history overflow retains pending collision rejection for live descriptors", async () => {
+    const registry = new SessionChangesProducerRegistry();
+    const producer = new SessionChangesProducer({
+      httpUrl: "http://127.0.0.1:0/mock",
+      token: "test-token",
+      registry,
+    });
+    const root1 = createRootSessionRegistration("sess-1", "epoch-1", "1", "base-1", "/repo");
+    const root2 = createRootSessionRegistration("sess-2", "epoch-1", "1", "base-2", "/repo");
+    registry.registerRoot("agent-1", root1);
+    registry.registerRoot("agent-2", root2);
+
+    const ctx1: OmpExtensionContext = { agent: { kind: "sub", id: "agent-1" }, cwd: "/repo" };
+    const ctx2: OmpExtensionContext = { agent: { kind: "sub", id: "agent-2" }, cwd: "/repo" };
+
+    // 1. Target call ID "target-X" held by both agent-1 and agent-2
+    await producer.handleToolCall("ast-edit", { files: ["src/target.ts"] }, ctx1, "target-X");
+    await producer.handleToolCall("ast-edit", { files: ["src/target.ts"] }, ctx2, "target-X");
+    expect(producer.ambiguousCallHistory.has("target-X")).toBe(true);
+
+    // 2. Churn 520 distinct collision IDs, consuming each pair immediately
+    for (let i = 0; i < 520; i++) {
+      const churnId = `churn-${i}`;
+      await producer.handleToolCall("ast-edit", { files: ["src/c.ts"] }, ctx1, churnId);
+      await producer.handleToolCall("ast-edit", { files: ["src/c.ts"] }, ctx2, churnId);
+      // Consume both immediately so pendingCalls does not hit capacity
+      await producer.handleToolResult("ast-edit", { files: ["/repo/src/c.ts"] }, ctx1, churnId);
+      await producer.handleToolResult("ast-edit", { files: ["/repo/src/c.ts"] }, ctx2, churnId);
+    }
+
+    // "target-X" was evicted from bounded ambiguousCallHistory (capacity <= 500)
+    expect(producer.ambiguousCallHistory.has("target-X")).toBe(false);
+
+    // But both descriptors for "target-X" are STILL pending in pendingCalls!
+    expect(producer.pendingCalls.has(makePendingKey("sess-1", "agent-1", "target-X"))).toBe(true);
+    expect(producer.pendingCalls.has(makePendingKey("sess-2", "agent-2", "target-X"))).toBe(true);
+
+    // 3. Agentless result for "target-X" must STILL be rejected due to Scope 1 live collision
+    await producer.handleToolResult("ast-edit", { files: ["/repo/src/target-edit.ts"] }, undefined, "target-X");
+
+    expect(root1.unprovenPaths.has("src/target-edit.ts")).toBe(false);
+    expect(root2.unprovenPaths.has("src/target-edit.ts")).toBe(false);
+    expect(producer.pendingCalls.has(makePendingKey("sess-1", "agent-1", "target-X"))).toBe(true);
+    expect(producer.pendingCalls.has(makePendingKey("sess-2", "agent-2", "target-X"))).toBe(true);
+  });
+
+  it("R10: retained history rejects duplicate agentless resolution even after one descriptor is consumed", async () => {
+    const registry = new SessionChangesProducerRegistry();
+    const producer = new SessionChangesProducer({
+      httpUrl: "http://127.0.0.1:0/mock",
+      token: "test-token",
+      registry,
+    });
+    const root1 = createRootSessionRegistration("sess-1", "epoch-1", "1", "base-1", "/repo");
+    const root2 = createRootSessionRegistration("sess-2", "epoch-1", "1", "base-2", "/repo");
+    registry.registerRoot("agent-1", root1);
+    registry.registerRoot("agent-2", root2);
+
+    const ctx1: OmpExtensionContext = { agent: { kind: "sub", id: "agent-1" }, cwd: "/repo" };
+    const ctx2: OmpExtensionContext = { agent: { kind: "sub", id: "agent-2" }, cwd: "/repo" };
+
+    // Register call-Y for both agents
+    await producer.handleToolCall("write", { path: "f1.ts" }, ctx1, "call-Y");
+    await producer.handleToolCall("write", { path: "f2.ts" }, ctx2, "call-Y");
+    expect(producer.ambiguousCallHistory.has("call-Y")).toBe(true);
+
+    // Explicitly consume agent-1's descriptor
+    await producer.handleToolResult("edit", { path: "/repo/f1.ts" }, ctx1, "call-Y");
+    expect(root1.unprovenPaths.has("f1.ts")).toBe(true);
+    expect(producer.pendingCalls.has(makePendingKey("sess-1", "agent-1", "call-Y"))).toBe(false);
+
+    // Now only agent-2's descriptor remains in pendingCalls.
+    // An agentless result for call-Y must still be REJECTED because call-Y is in ambiguousCallHistory!
+    await producer.handleToolResult("edit", { path: "/repo/f2-agentless.ts" }, undefined, "call-Y");
+    expect(root2.unprovenPaths.has("f2-agentless.ts")).toBe(false);
+    expect(producer.pendingCalls.has(makePendingKey("sess-2", "agent-2", "call-Y"))).toBe(true);
+
+    // But an explicit agent-2 result succeeds
+    await producer.handleToolResult("edit", { path: "/repo/f2-explicit.ts" }, ctx2, "call-Y");
+    expect(root2.unprovenPaths.has("f2-explicit.ts")).toBe(true);
+    expect(producer.pendingCalls.has(makePendingKey("sess-2", "agent-2", "call-Y"))).toBe(false);
+
+    // A unique never-collided call-Z resolves agentless without issue
+    await producer.handleToolCall("write", { path: "unique.ts" }, ctx1, "call-Z");
+    await producer.handleToolResult("edit", { path: "/repo/unique.ts" }, undefined, "call-Z");
+    expect(root1.unprovenPaths.has("unique.ts")).toBe(true);
+  });
+
+  it("R11: capacity limits enforce FIFO eviction and recency refresh", async () => {
+    const registry = new SessionChangesProducerRegistry();
+    const producer = new SessionChangesProducer({
+      httpUrl: "http://127.0.0.1:0/mock",
+      token: "test-token",
+      registry,
+    });
+    const root = createRootSessionRegistration("sess", "epoch-1", "1", "base", "/repo");
+    registry.registerRoot("main", root);
+    const ctx: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+
+    // 1. Test pendingCalls FIFO eviction capped at MAX_PENDING_CALLS (128)
+    for (let i = 0; i < 150; i++) {
+      await producer.handleToolCall("write", { path: `p_${i}.ts` }, ctx, `call-pending-${i}`);
+    }
+    expect(producer.pendingCalls.size).toBe(128);
+    expect(producer.pendingCalls.has(makePendingKey("sess", "main", "call-pending-0"))).toBe(false);
+    expect(producer.pendingCalls.has(makePendingKey("sess", "main", "call-pending-149"))).toBe(true);
+
+    // 2. Test consumedCallKeys FIFO eviction capped at MAX_PENDING_CALLS (128)
+    for (let i = 0; i < 150; i++) {
+      const cId = `call-consumed-${i}`;
+      await producer.handleToolCall("write", { path: `c_${i}.ts` }, ctx, cId);
+      await producer.handleToolResult("edit", { path: `/repo/c_${i}.ts` }, ctx, cId);
+    }
+    expect(producer.consumedCallKeys.size).toBe(128);
+    expect(producer.consumedCallKeys.has(makePendingKey("sess", "main", "call-consumed-0"))).toBe(false);
+    expect(producer.consumedCallKeys.has(makePendingKey("sess", "main", "call-consumed-149"))).toBe(true);
+
+    // 3. Test ambiguousCallHistory capacity limit & recency refresh ordering
+    const freshRegistry = new SessionChangesProducerRegistry();
+    const freshProducer = new SessionChangesProducer({
+      httpUrl: "http://127.0.0.1:0/mock",
+      token: "test-token",
+      registry: freshRegistry,
+    });
+    const rA = createRootSessionRegistration("sess-A", "epoch-1", "1", "base", "/repo");
+    const rB = createRootSessionRegistration("sess-B", "epoch-1", "1", "base", "/repo");
+    freshRegistry.registerRoot("agent-A", rA);
+    freshRegistry.registerRoot("agent-B", rB);
+    const ctxA: OmpExtensionContext = { agent: { kind: "sub", id: "agent-A" }, cwd: "/repo" };
+    const ctxB: OmpExtensionContext = { agent: { kind: "sub", id: "agent-B" }, cwd: "/repo" };
+
+    // Fill ambiguousCallHistory to exact capacity 128 (IDs 0..127)
+    for (let i = 0; i < 128; i++) {
+      await freshProducer.handleToolCall("write", { path: "f.ts" }, ctxA, `shared-${i}`);
+      await freshProducer.handleToolCall("write", { path: "f.ts" }, ctxB, `shared-${i}`);
+      // Consume descriptors so pendingCalls doesn't hit cap
+      await freshProducer.handleToolResult("edit", { path: "/repo/f.ts" }, ctxA, `shared-${i}`);
+      await freshProducer.handleToolResult("edit", { path: "/repo/f.ts" }, ctxB, `shared-${i}`);
+    }
+    expect(freshProducer.ambiguousCallHistory.size).toBe(128);
+    expect(freshProducer.ambiguousCallHistory.has("shared-0")).toBe(true);
+
+    // Recency refresh: re-collide on "shared-0". It must update recency without growing size!
+    await freshProducer.handleToolCall("write", { path: "f.ts" }, ctxA, "shared-0");
+    await freshProducer.handleToolCall("write", { path: "f.ts" }, ctxB, "shared-0");
+    await freshProducer.handleToolResult("edit", { path: "/repo/f.ts" }, ctxA, "shared-0");
+    await freshProducer.handleToolResult("edit", { path: "/repo/f.ts" }, ctxB, "shared-0");
+    expect(freshProducer.ambiguousCallHistory.size).toBe(128);
+
+    // Now insert collision 128 ("shared-128"):
+    // Because "shared-0" was refreshed to MRU, the OLDEST entry is now "shared-1"!
+    await freshProducer.handleToolCall("write", { path: "f.ts" }, ctxA, "shared-128");
+    await freshProducer.handleToolCall("write", { path: "f.ts" }, ctxB, "shared-128");
+    expect(freshProducer.ambiguousCallHistory.size).toBe(128);
+    expect(freshProducer.ambiguousCallHistory.has("shared-1")).toBe(false); // EVICTED!
+    expect(freshProducer.ambiguousCallHistory.has("shared-0")).toBe(true);  // RETAINED because refreshed!
+    expect(freshProducer.ambiguousCallHistory.has("shared-128")).toBe(true); // NEWLY ADDED!
+  });
+
+  it("R12: clear() purges all maps and sets, increments epoch, and allows clean re-registration", async () => {
+    const registry = new SessionChangesProducerRegistry();
+    const producer = new SessionChangesProducer({
+      httpUrl: "http://127.0.0.1:0/mock",
+      token: "test-token",
+      registry,
+    });
+
+    const root = createRootSessionRegistration("sess-old", "epoch-1", "1", "base", "/repo");
+    const root2 = createRootSessionRegistration("sess-other", "epoch-1", "1", "base", "/repo");
+    registry.registerRoot("main", root);
+    registry.registerRoot("other", root2);
+    const ctx: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+    const ctxOther: OmpExtensionContext = { agent: { kind: "sub", id: "other" }, cwd: "/repo" };
+
+    // Collide on "old-call" so ambiguousCallHistory is populated
+    await producer.handleToolCall("write", { path: "old.ts" }, ctx, "old-call");
+    await producer.handleToolCall("write", { path: "old.ts" }, ctxOther, "old-call");
+    // Consume descriptor for main so consumedCallKeys has makePendingKey("sess-old", "main", "old-call")
+    await producer.handleToolResult("edit", { path: "/repo/old.ts" }, ctx, "old-call");
+
+    expect(registry.roots.size).toBe(2);
+    expect(registry.consumedCallKeys.size).toBe(1);
+    expect(registry.ambiguousCallHistory.size).toBe(1);
+    expect(registry.registryEpoch).toBe(0);
+
+    // Call clear() twice
+    registry.clear();
+    expect(registry.registryEpoch).toBe(1);
+    expect(registry.roots.size).toBe(0);
+    expect(registry.pendingCalls.size).toBe(0);
+    expect(registry.consumedCallKeys.size).toBe(0);
+    expect(registry.ambiguousCallHistory.size).toBe(0);
+    expect(registry.activeSessionId).toBeNull();
+    expect(registry.isPermanentlyDisabled).toBe(false);
+
+    registry.clear();
+    expect(registry.registryEpoch).toBe(2);
+
+    // Re-register session using the EXACT SAME sessionId "sess-old", agent "main", and toolCallId "old-call"
+    const newRoot = createRootSessionRegistration("sess-old", "epoch-2", "1", "base-2", "/repo");
+    registry.registerRoot("main", newRoot);
+
+    await producer.handleToolCall("write", { path: "new.ts" }, ctx, "old-call");
+    await producer.handleToolResult("edit", { path: "/repo/new.ts" }, undefined, "old-call");
+
+    // Succeeds agentless because both consumedCallKeys tombstone and ambiguousCallHistory were purged
+    expect(newRoot.unprovenPaths.has("new.ts")).toBe(true);
+  });
+
+  it("R13: paused /register during clear(): old 503 and old 200 responses are discarded without poisoning new lifecycle", async () => {
+    // Case A: old /register returns 503
+    {
+      const registerReceived = createDeferred();
+      const releaseRegister = createDeferred();
+
+      const server = Bun.serve({
+        port: 0,
+        hostname: "127.0.0.1",
+        async fetch(req) {
+          const url = new URL(req.url);
+          const body = await req.json();
+          if (url.pathname === "/private/session-changes/v1/register") {
+            registerReceived.resolve();
+            await releaseRegister.promise;
+            return new Response("Service Unavailable", { status: 503 });
+          }
+          return new Response("Not found", { status: 404 });
+        },
+      });
+
+      try {
+        const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+        const registry = new SessionChangesProducerRegistry();
+        const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+        // Start registration in lifecycle 0
+        const oldRegPromise = producer.registerSession("session-1", "main", "/repo");
+        await registerReceived.promise;
+
+        // Lifecycle reset while old /register is awaiting
+        registry.clear();
+        expect(registry.registryEpoch).toBe(1);
+
+        // New lifecycle establishes healthy registration
+        const freshRoot = createRootSessionRegistration("session-1", "epoch-fresh", "1", "base-fresh", "/repo");
+        registry.registerRoot("main", freshRoot);
+        expect(producer.isPermanentlyDisabled).toBe(false);
+
+        // Release old /register with 503
+        releaseRegister.resolve();
+        const oldResult = await oldRegPromise;
+
+        // Old registration discarded
+        expect(oldResult).toBeNull();
+        // New lifecycle NOT permanently disabled by old 503!
+        expect(producer.isPermanentlyDisabled).toBe(false);
+        expect(registry.roots.get("session-1")).toBe(freshRoot);
+      } finally {
+        releaseRegister.resolve();
+        server.stop(true);
+      }
+    }
+
+    // Case B: old /register returns 200 OK after new registration with same session and equal generation
+    {
+      const register1Received = createDeferred();
+      const releaseRegister1 = createDeferred();
+      let regCount = 0;
+
+      const server = Bun.serve({
+        port: 0,
+        hostname: "127.0.0.1",
+        async fetch(req) {
+          const url = new URL(req.url);
+          const body = await req.json();
+          if (url.pathname === "/private/session-changes/v1/register") {
+            regCount++;
+            if (regCount === 1) {
+              register1Received.resolve();
+              await releaseRegister1.promise;
+              return Response.json({
+                serverEpoch: "epoch-OLD",
+                terminalIncarnation: "1",
+                ompSessionId: body.ompSessionId,
+                rootId: ".",
+                baselineId: "base-OLD",
+                canonicalRoot: "/repo",
+              });
+            } else {
+              return Response.json({
+                serverEpoch: "epoch-NEW",
+                terminalIncarnation: "1",
+                ompSessionId: body.ompSessionId,
+                rootId: ".",
+                baselineId: "base-NEW",
+                canonicalRoot: "/repo",
+              });
+            }
+          }
+          return new Response("Not found", { status: 404 });
+        },
+      });
+
+      try {
+        const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+        const registry = new SessionChangesProducerRegistry();
+        const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+        // 1. First registration starts in lifecycle epoch 0, globalGeneration becomes 1
+        const oldRegPromise = producer.registerSession("session-same", "main", "/repo");
+        await register1Received.promise;
+
+        // 2. Clear registry: registryEpoch becomes 1, globalGeneration resets to 0
+        registry.clear();
+        expect(registry.registryEpoch).toBe(1);
+
+        // 3. Second registration in lifecycle epoch 1: globalGeneration becomes 1, activeSessionId becomes "session-same"
+        const newRoot = await producer.registerSession("session-same", "main", "/repo");
+        expect(newRoot).not.toBeNull();
+        expect(newRoot?.baselineId).toBe("base-NEW");
+        // Notice: ordinary globalGeneration is 1, activeSessionId is "session-same"!
+        expect(producer.globalGeneration).toBe(1);
+        expect(producer.activeSessionId).toBe("session-same");
+
+        // 4. Release old registration response (issued with generation 1 and "session-same")
+        releaseRegister1.resolve();
+        const oldResult = await oldRegPromise;
+
+        // StartEpoch check rejects the old response despite equal generation and session identity!
+        expect(oldResult).toBeNull();
+        expect(registry.roots.get("session-same")).toBe(newRoot);
+        expect(registry.roots.get("session-same")?.baselineId).toBe("base-NEW");
+      } finally {
+        releaseRegister1.resolve();
+        server.stop(true);
+      }
+    }
+  });
+
+  it("R14a: paused invalidation flush during handleAgentEnd followed by clear(): NO settled request is issued", async () => {
+    const flushReceived = createDeferred();
+    const releaseFlush = createDeferred();
+    const recordedRequests: string[] = [];
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        recordedRequests.push(url.pathname);
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          flushReceived.resolve();
+          await releaseFlush.promise;
+          return Response.json({
+            version: 1,
+            captureId: "timed-out-1",
+            results: [{ path: "pending.ts", status: "captured", presence: "present" }],
+          });
+        }
+        if (url.pathname === "/private/session-changes/v1/settled") {
+          return Response.json({ accepted: true });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const root = createRootSessionRegistration("sess-flush", "epoch-1", "1", "base", "/repo");
+      // Add a pending invalidation so handleAgentEnd executes flushPendingInvalidations
+      root.pendingInvalidations.push({
+        captureId: "timed-out-1",
+        paths: ["pending.ts"],
+        timestamp: Date.now(),
+      });
+      registry.registerRoot("main", root);
+
+      const ctx: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+      const endPromise = producer.handleAgentEnd(
+        { willContinue: false, messages: [{ role: "assistant", stopReason: "stop" }] },
+        ctx,
+      );
+
+      // Wait for flush /capture to arrive at peer
+      await flushReceived.promise;
+
+      // Clear registry while invalidation flush is paused
+      registry.clear();
+      expect(registry.registryEpoch).toBe(1);
+
+      // Release flush
+      releaseFlush.resolve();
+      await endPromise;
+
+      // Assert that /capture was recorded, but /settled was NEVER issued!
+      expect(recordedRequests).toContain("/private/session-changes/v1/capture");
+      expect(recordedRequests).not.toContain("/private/session-changes/v1/settled");
+    } finally {
+      releaseFlush.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R14b: paused /settled during clear() followed by 503 response: new lifecycle is NOT permanently disabled", async () => {
+    const settledReceived = createDeferred();
+    const releaseSettled = createDeferred();
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/private/session-changes/v1/settled") {
+          settledReceived.resolve();
+          await releaseSettled.promise;
+          return new Response("Service Unavailable", { status: 503 });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const rootOld = createRootSessionRegistration("sess-settled-old", "epoch-1", "1", "base", "/repo");
+      registry.registerRoot("main", rootOld);
+
+      const ctx: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+      const endPromise = producer.handleAgentEnd(
+        { willContinue: false, messages: [{ role: "assistant", stopReason: "stop" }] },
+        ctx,
+      );
+
+      // Wait for /settled to arrive at peer
+      await settledReceived.promise;
+
+      // Clear registry while /settled is paused
+      registry.clear();
+      expect(registry.registryEpoch).toBe(1);
+
+      // Establish new registration in new lifecycle
+      const rootNew = createRootSessionRegistration("sess-settled-new", "epoch-2", "1", "base-2", "/repo");
+      registry.registerRoot("main", rootNew);
+      expect(producer.isPermanentlyDisabled).toBe(false);
+
+      // Release /settled with 503
+      releaseSettled.resolve();
+      await endPromise;
+
+      // Stale /settled 503 must NOT disable the new lifecycle or new root!
+      expect(producer.isPermanentlyDisabled).toBe(false);
+      expect(rootNew.disabled).toBe(false);
+    } finally {
+      releaseSettled.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R14c: paused invalidation flush during handleAgentEnd followed by root replacement: NO settled request is issued", async () => {
+    const flushReceived = createDeferred();
+    const releaseFlush = createDeferred();
+    const recordedRequests: string[] = [];
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        recordedRequests.push(url.pathname);
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          flushReceived.resolve();
+          await releaseFlush.promise;
+          return Response.json({
+            version: 1,
+            captureId: "timed-out-r14c",
+            results: [{ path: "pending.ts", status: "captured", presence: "present" }],
+          });
+        }
+        if (url.pathname === "/private/session-changes/v1/settled") {
+          return Response.json({ accepted: true });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+      const rootOriginal = createRootSessionRegistration("sess-r14c", "epoch-1", "1", "base", "/repo");
+      rootOriginal.pendingInvalidations.push({
+        captureId: "timed-out-r14c",
+        paths: ["pending.ts"],
+        timestamp: Date.now(),
+      });
+      registry.registerRoot("main", rootOriginal);
+
+      const ctx: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+      const endPromise = producer.handleAgentEnd(
+        { willContinue: false, messages: [{ role: "assistant", stopReason: "stop" }] },
+        ctx,
+      );
+
+      // Wait for flush to arrive at peer
+      await flushReceived.promise;
+
+      // Replace root in registry with new object with same session ID (no clear)
+      const replacementRoot = createRootSessionRegistration("sess-r14c", "epoch-1", "1", "base", "/repo");
+      registry.roots.set("sess-r14c", replacementRoot);
+
+      // Release flush
+      releaseFlush.resolve();
+      await endPromise;
+
+      // Assert that /capture was recorded, but /settled was NEVER issued for the superseded root!
+      expect(recordedRequests).toContain("/private/session-changes/v1/capture");
+      expect(recordedRequests).not.toContain("/private/session-changes/v1/settled");
+    } finally {
+      releaseFlush.resolve();
+      server.stop(true);
+    }
+  });
+
+  it("R14d: paused multi-request invalidation flush followed by root replacement or tuple mutation aborts subsequent capture requests", async () => {
+    type MutationAction = { type: "replaceIdentical" } | { type: "mutateField"; field: "ompSessionId" | "serverEpoch" | "terminalIncarnation" | "rootId" | "baselineId" };
+    const cases: MutationAction[] = [
+      { type: "replaceIdentical" },
+      { type: "mutateField", field: "ompSessionId" },
+      { type: "mutateField", field: "serverEpoch" },
+      { type: "mutateField", field: "terminalIncarnation" },
+      { type: "mutateField", field: "rootId" },
+      { type: "mutateField", field: "baselineId" },
+    ];
+
+    for (const c of cases) {
+      const capture1Received = createDeferred();
+      const releaseCapture1 = createDeferred();
+      const recordedCaptures: any[] = [];
+
+      const server = Bun.serve({
+        port: 0,
+        hostname: "127.0.0.1",
+        async fetch(req) {
+          const url = new URL(req.url);
+          const body = await req.json();
+          if (url.pathname === "/private/session-changes/v1/capture") {
+            recordedCaptures.push(body);
+            if (recordedCaptures.length === 1) {
+              capture1Received.resolve();
+              await releaseCapture1.promise;
+            }
+            return Response.json({
+              version: 1,
+              captureId: body.captureId,
+              results: (body.paths as string[]).map((p: string) => ({
+                path: p,
+                status: "captured",
+                presence: "present",
+              })),
+            });
+          }
+          return new Response("Not found", { status: 404 });
+        },
+      });
+
+      try {
+        const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+        const registry = new SessionChangesProducerRegistry();
+        const producer = new SessionChangesProducer({ httpUrl, token: "test-token", registry });
+
+        const root = createRootSessionRegistration("sess-r14d", "epoch-1", "1", "base", "/repo");
+        // Add two distinct pending invalidations so flushPendingInvalidations issues multiple /capture requests
+        root.pendingInvalidations.push(
+          { captureId: "flush-1", paths: ["file1.ts"], timestamp: Date.now() },
+          { captureId: "flush-2", paths: ["file2.ts"], timestamp: Date.now() },
+        );
+        registry.registerRoot("main", root);
+
+        const flushPromise = producer.flushPendingInvalidations(root);
+
+        // Wait for first capture request to arrive
+        await capture1Received.promise;
+
+        if (c.type === "replaceIdentical") {
+          // Replace root with a NEW object carrying the EXACT SAME identical tuple
+          const replacementRoot = createRootSessionRegistration("sess-r14d", "epoch-1", "1", "base", "/repo");
+          registry.roots.set("sess-r14d", replacementRoot);
+        } else {
+          // In-place mutate the specific tuple field
+          (root as any)[c.field] = "MUTATED";
+        }
+
+        // Release capture 1
+        releaseCapture1.resolve();
+        await flushPromise;
+
+        // Exactly 1 capture request was recorded; the second invalidation was aborted!
+        expect(recordedCaptures.length).toBe(1);
+        expect(recordedCaptures[0].captureId).toBe("flush-1");
+      } finally {
+        releaseCapture1.resolve();
+        server.stop(true);
+      }
+    }
+  });
 });
