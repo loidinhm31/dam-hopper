@@ -28,6 +28,7 @@ fn test_valid_register_response() {
     assert_eq!(res.server_epoch, "epoch-uuid-1");
     assert_eq!(res.terminal_incarnation, "1");
     assert_eq!(res.baseline_id, "base-uuid-1");
+    assert_eq!(res.canonical_root, "/home/user/project");
 }
 
 #[test]

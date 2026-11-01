@@ -21,7 +21,14 @@ pub async fn run_comparison_scan(
         return Err(ErrorCode::TrackingDisabled);
     }
 
-    let (canonical_root, root_file_opt, expected_baseline_id, tracked_entries) = {
+    let (
+        canonical_root,
+        root_file_opt,
+        expected_baseline_id,
+        input_capture_generation,
+        input_comp_revision,
+        tracked_entries,
+    ) = {
         let lifecycle = service.lifecycle.read();
         if !lifecycle.enabled || lifecycle.generation != generation {
             return Err(ErrorCode::TrackingDisabled);
@@ -35,6 +42,8 @@ pub async fn run_comparison_scan(
             rec.canonical_root.clone(),
             rec.root_dir_file.clone(),
             rec.baseline_id.clone(),
+            rec.capture_generation,
+            rec.comparison_revision,
             rec.tracked_paths.values().cloned().collect::<Vec<_>>(),
         )
     };
@@ -404,6 +413,14 @@ pub async fn run_comparison_scan(
         .unwrap_or_default()
         .as_millis() as u64;
 
+    #[cfg(test)]
+    {
+        let handshake_opt = service.test_publication_handshake.lock().clone();
+        if let Some(handshake) = handshake_opt {
+            handshake.pause_barrier.wait().await;
+            handshake.resume_barrier.wait().await;
+        }
+    }
     let lifecycle = service.lifecycle.read();
     if !lifecycle.enabled || lifecycle.generation != generation {
         return Err(ErrorCode::TrackingDisabled);
@@ -412,6 +429,12 @@ pub async fn run_comparison_scan(
     let mut records = service.records.lock();
     let rec = records.get_mut(key).ok_or(ErrorCode::BaselineMissing)?;
     if rec.baseline_id != expected_baseline_id {
+        return Err(ErrorCode::RefreshRequired);
+    }
+    if rec.capture_generation != input_capture_generation {
+        return Err(ErrorCode::RefreshRequired);
+    }
+    if rec.comparison_revision != input_comp_revision {
         return Err(ErrorCode::RefreshRequired);
     }
 

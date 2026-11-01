@@ -1,8 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import damHopperSessionChangesExtension, {
   chunkCapturePaths,
+  createRootSessionRegistration,
   derivePrivateHttpUrl,
   isGlobPattern,
+  makePendingKey,
   mapSettledOutcome,
   normalizeRelativePath,
   parseAstEditTargets,
@@ -323,6 +325,7 @@ describe("Session Changes Real Loopback HTTP Smoke Suite", () => {
             ompSessionId: body.ompSessionId,
             rootId: ".",
             baselineId: "base-live-1",
+            canonicalRoot: "/workspace",
           });
         }
         if (url.pathname === "/private/session-changes/v1/capture") {
@@ -463,6 +466,7 @@ describe("Session Changes Real Loopback HTTP Smoke Suite", () => {
           ompSessionId: body.ompSessionId,
           rootId: ".",
           baselineId: `base-${body.ompSessionId}`,
+          canonicalRoot: "/workspace",
         });
       },
     });
@@ -572,5 +576,301 @@ describe("Dual Extension Factory Isolation & Combined Harness Smoke", () => {
     } finally {
       process.env = savedEnv;
     }
+  });
+});
+
+// ============================================================================
+// 6. PR #82 Code Review Regression Suite
+// ============================================================================
+
+describe("PR #82 Code Review Regressions", () => {
+  it("Issue 1: subdirectory launch anchors to canonicalRoot and falls back to launchCwd if ctx.cwd omitted", async () => {
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/private/session-changes/v1/register") {
+          const body = (await req.json()) as Record<string, unknown>;
+          return Response.json({
+            serverEpoch: "epoch-sub",
+            terminalIncarnation: "1",
+            ompSessionId: body.ompSessionId as string,
+            rootId: ".",
+            baselineId: "base-sub-1",
+            canonicalRoot: "/repo",
+          });
+        }
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          const body = (await req.json()) as Record<string, unknown>;
+          return Response.json({
+            version: 1,
+            captureId: body.captureId as string,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({
+        httpUrl,
+        token: "sub-test-token",
+        registry,
+      });
+
+      // Terminal launched OMP in /repo/src subdirectory
+      const root = await producer.registerSession("session-subdir", "main", "/repo/src");
+      expect(root).not.toBeNull();
+      expect(root?.canonicalRoot).toBe("/repo");
+      expect(root?.launchCwd).toBe("/repo/src");
+      expect(root?.rootCwd).toBe("/repo");
+
+      // Case A: tool call with explicit ctx.cwd in subdirectory
+      const ctxWithCwd: OmpExtensionContext = {
+        agent: { kind: "main", id: "main" },
+        cwd: "/repo/src",
+      };
+      await producer.handleToolCall("write", { path: "app.ts" }, ctxWithCwd, "call-sub-1");
+      expect(root?.knownPaths.has("src/app.ts")).toBe(true);
+      expect(root?.knownPaths.has("app.ts")).toBe(false);
+
+      // Case B: tool call with MISSING ctx.cwd (falls back to launchCwd /repo/src)
+      const ctxWithoutCwd: OmpExtensionContext = {
+        agent: { kind: "main", id: "main" },
+      };
+      await producer.handleToolCall("write", { path: "utils.ts" }, ctxWithoutCwd, "call-sub-2");
+      expect(root?.knownPaths.has("src/utils.ts")).toBe(true);
+      expect(root?.knownPaths.has("utils.ts")).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("Issue 1: rejects registration if server canonicalRoot is missing or empty", async () => {
+    const server = Bun.serve({
+      port: 0,
+      async fetch() {
+        return Response.json({
+          serverEpoch: "epoch-1",
+          terminalIncarnation: "1",
+          ompSessionId: "session-bad",
+          rootId: ".",
+          baselineId: "base-bad",
+          // missing canonicalRoot
+        });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({
+        httpUrl,
+        token: "test-token",
+        registry,
+      });
+
+      const root = await producer.registerSession("session-bad", "main", "/repo");
+      expect(root).toBeNull();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("Issue 2: preserves pendingCalls across session switch, attributes late result to origin session A, and rejects unoriginating results", async () => {
+    const capturedBatches: Array<{ sessionId: string; paths: string[] }> = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = (await req.json()) as Record<string, unknown>;
+        if (url.pathname === "/private/session-changes/v1/register") {
+          return Response.json({
+            serverEpoch: "epoch-1",
+            terminalIncarnation: "1",
+            ompSessionId: body.ompSessionId as string,
+            rootId: ".",
+            baselineId: `base-${body.ompSessionId as string}`,
+            canonicalRoot: "/repo",
+          });
+        }
+        if (url.pathname === "/private/session-changes/v1/capture") {
+          capturedBatches.push({ sessionId: body.ompSessionId as string, paths: body.paths as string[] });
+          return Response.json({
+            version: 1,
+            captureId: body.captureId as string,
+            results: (body.paths as string[]).map((p: string) => ({
+              path: p,
+              status: "captured",
+              presence: "present",
+            })),
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const httpUrl = `http://127.0.0.1:${server.port}/private/session-changes/v1`;
+      const registry = new SessionChangesProducerRegistry();
+      const producer = new SessionChangesProducer({
+        httpUrl,
+        token: "test-token",
+        registry,
+      });
+
+      // 1. Register Session A
+      const rootA = await producer.registerSession("session-A", "main", "/repo");
+      expect(rootA).not.toBeNull();
+
+      // 2. Session A starts a tool call
+      const ctxA: OmpExtensionContext = {
+        agent: { kind: "main", id: "main" },
+        cwd: "/repo",
+      };
+      await producer.handleToolCall("ast-edit", { files: ["src/a.ts"] }, ctxA, "call-A-1");
+      expect(producer.pendingCalls.has(makePendingKey("session-A", "main", "call-A-1"))).toBe(true);
+
+      // 3. Switch to Session B via handleSessionSwitch
+      const rootB = await producer.handleSessionSwitch("session-B", "main", "/repo");
+      expect(rootB?.ompSessionId).toBe("session-B");
+
+      // Verify pendingCalls preserved "call-A-1" (was NOT cleared)
+      expect(producer.pendingCalls.has(makePendingKey("session-A", "main", "call-A-1"))).toBe(true);
+
+      // 4. Late tool result arrives for Session A's call-A-1
+      await producer.handleToolResult(
+        "ast-edit",
+        { files: ["/repo/src/late-from-a.ts"] },
+        ctxA,
+        "call-A-1",
+      );
+
+      // Path MUST be attributed to Session A, NOT Session B!
+      expect(rootA?.unprovenPaths.has("src/late-from-a.ts")).toBe(true);
+      expect(rootB?.unprovenPaths.has("src/late-from-a.ts")).toBe(false);
+
+      // 5. Tool result with missing/unknown origin is rejected immediately
+      await producer.handleToolResult(
+        "ast-edit",
+        { files: ["/repo/src/unknown-origin.ts"] },
+        { agent: { kind: "main", id: "main" } },
+        "call-nonexistent",
+      );
+      expect(rootA?.unprovenPaths.has("src/unknown-origin.ts")).toBe(false);
+      expect(rootB?.unprovenPaths.has("src/unknown-origin.ts")).toBe(false);
+
+      // 6. Tool result without toolCallId is rejected immediately
+      await producer.handleToolResult(
+        "ast-edit",
+        { files: ["/repo/src/no-id.ts"] },
+        { agent: { kind: "main", id: "main" } },
+        undefined,
+      );
+      expect(rootA?.unprovenPaths.has("src/no-id.ts")).toBe(false);
+      expect(rootB?.unprovenPaths.has("src/no-id.ts")).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("Issue 2: isolates duplicate toolCallId across different agents", async () => {
+    const registry = new SessionChangesProducerRegistry();
+    const producer = new SessionChangesProducer({
+      httpUrl: "http://127.0.0.1:4801/private/session-changes/v1",
+      token: "test-token",
+      registry,
+    });
+
+    const root1 = createRootSessionRegistration("sess-1", "epoch-1", "1", "base-1", "/repo");
+    const root2 = createRootSessionRegistration("sess-2", "epoch-1", "1", "base-2", "/repo");
+    registry.registerRoot("agent-1", root1);
+    registry.registerRoot("agent-2", root2);
+
+    // Both agent-1 and agent-2 issue tool calls with the identical toolCallId "call-shared"
+    const ctx1: OmpExtensionContext = { agent: { kind: "sub", id: "agent-1" }, cwd: "/repo" };
+    const ctx2: OmpExtensionContext = { agent: { kind: "sub", id: "agent-2" }, cwd: "/repo" };
+
+    await producer.handleToolCall("write", { path: "file-1.ts" }, ctx1, "call-shared");
+    await producer.handleToolCall("write", { path: "file-2.ts" }, ctx2, "call-shared");
+
+    expect(producer.pendingCalls.has(makePendingKey("sess-1", "agent-1", "call-shared"))).toBe(true);
+    expect(producer.pendingCalls.has(makePendingKey("sess-2", "agent-2", "call-shared"))).toBe(true);
+
+    // Test A: Mismatched agent lookup is rejected (agent-2 cannot consume agent-1's call)
+    await producer.handleToolCall("write", { path: "only-1.ts" }, ctx1, "call-only-1");
+    const ctxMismatched: OmpExtensionContext = { agent: { kind: "sub", id: "agent-2" }, cwd: "/repo" };
+    await producer.handleToolResult("edit", { path: "/repo/mismatched-target.ts" }, ctxMismatched, "call-only-1");
+    expect(root1.unprovenPaths.has("mismatched-target.ts")).toBe(false);
+    expect(root2.unprovenPaths.has("mismatched-target.ts")).toBe(false);
+    expect(producer.pendingCalls.has(makePendingKey("sess-1", "agent-1", "call-only-1"))).toBe(true);
+
+    // Test B: Ambiguous agentless lookup: context omits agent, but both agent-1 and agent-2 have "call-shared"
+    await producer.handleToolResult("edit", { path: "/repo/ambiguous.ts" }, undefined, "call-shared");
+    // Ambiguous lookup rejected: neither root receives the path, and both descriptors remain intact!
+    expect(root1.unprovenPaths.has("ambiguous.ts")).toBe(false);
+    expect(root2.unprovenPaths.has("ambiguous.ts")).toBe(false);
+    expect(producer.pendingCalls.has(makePendingKey("sess-1", "agent-1", "call-shared"))).toBe(true);
+    expect(producer.pendingCalls.has(makePendingKey("sess-2", "agent-2", "call-shared"))).toBe(true);
+
+    // Test C: Resolve result for agent-1 explicitly
+    await producer.handleToolResult("edit", { path: "/repo/file-1-edit.ts" }, ctx1, "call-shared");
+    expect(root1.unprovenPaths.has("file-1-edit.ts")).toBe(true);
+    expect(root2.unprovenPaths.has("file-1-edit.ts")).toBe(false);
+    // Authoritative key deleted atomically
+    expect(producer.pendingCalls.has(makePendingKey("sess-1", "agent-1", "call-shared"))).toBe(false);
+
+    // Test D: Agentless duplicate from agent-1 cannot consume agent-2's descriptor because "call-shared" was ever ambiguous
+    await producer.handleToolResult("edit", { path: "/repo/file-2-agentless.ts" }, undefined, "call-shared");
+    expect(root2.unprovenPaths.has("file-2-agentless.ts")).toBe(false);
+    expect(producer.pendingCalls.has(makePendingKey("sess-2", "agent-2", "call-shared"))).toBe(true);
+
+    // Test E: Legitimate explicit agent-2 result resolves correctly
+    await producer.handleToolResult("edit", { path: "/repo/file-2-edit.ts" }, ctx2, "call-shared");
+    expect(root2.unprovenPaths.has("file-2-edit.ts")).toBe(true);
+    expect(producer.pendingCalls.has(makePendingKey("sess-2", "agent-2", "call-shared"))).toBe(false);
+
+    // Test F: Duplicate delivery after consumption is rejected
+    await producer.handleToolResult("edit", { path: "/repo/duplicate.ts" }, ctx2, "call-shared");
+    expect(root2.unprovenPaths.has("duplicate.ts")).toBe(false);
+  });
+
+  it("Issue 2: prevents descriptor collision when the same agent reuses callId across sessions", async () => {
+    const registry = new SessionChangesProducerRegistry();
+    const producer = new SessionChangesProducer({
+      httpUrl: "http://127.0.0.1:4801/private/session-changes/v1",
+      token: "test-token",
+      registry,
+    });
+
+    const rootA = createRootSessionRegistration("sess-A", "epoch-1", "1", "base-A", "/repo");
+    const rootB = createRootSessionRegistration("sess-B", "epoch-1", "1", "base-B", "/repo");
+    registry.registerRoot("main", rootA);
+
+    const ctxMain: OmpExtensionContext = { agent: { kind: "main", id: "main" }, cwd: "/repo" };
+
+    // 1. Session A issues call-1
+    await producer.handleToolCall("write", { path: "file-A.ts" }, ctxMain, "call-1");
+    expect(producer.pendingCalls.has(makePendingKey("sess-A", "main", "call-1"))).toBe(true);
+
+    // 2. Switch to Session B; main issues call-1 again in Session B
+    registry.registerRoot("main", rootB);
+    await producer.handleToolCall("write", { path: "file-B.ts" }, ctxMain, "call-1");
+
+    // Attempt to overwrite in session A while in-flight is rejected: session B gets its own distinct key!
+    expect(producer.pendingCalls.has(makePendingKey("sess-A", "main", "call-1"))).toBe(true);
+
+    // 3. Late result arriving for call-1 without disambiguation is rejected as ambiguous across sessions
+    await producer.handleToolResult("edit", { path: "/repo/ambig.ts" }, ctxMain, "call-1");
+    // Neither session adopts the ambiguous result!
+    expect(rootA.unprovenPaths.has("ambig.ts")).toBe(false);
+    expect(rootB.unprovenPaths.has("ambig.ts")).toBe(false);
   });
 });

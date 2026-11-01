@@ -3,7 +3,7 @@
  * Composes status, file list, and capability-free Monaco diff viewer.
  */
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   X,
   RefreshCw,
@@ -77,7 +77,8 @@ function SessionChangesReadyView({
   );
   const [cursor, setCursor] = useState<string | null>(null);
   const [accumulatedFiles, setAccumulatedFiles] = useState<FileRow[]>([]);
-
+  const lastRecoveredFailedKeyRef = useRef<string | null>(null);
+  const isAutoRecoveringRef = useRef(false);
   const filesQuery = useSessionChangesFiles(
     owner,
     terminalId,
@@ -155,7 +156,7 @@ function SessionChangesReadyView({
     },
   );
   useEffect(() => {
-    const isStaleError = (err: unknown) => {
+    const isStaleError = (err: unknown): err is SessionChangesClientError => {
       if (err instanceof SessionChangesClientError) {
         return (
           err.code === "refreshRequired" || err.code === "serverRestarted"
@@ -163,14 +164,49 @@ function SessionChangesReadyView({
       }
       return false;
     };
-    if (isStaleError(filesQuery.error) || isStaleError(detailQuery.error)) {
-      setSelectedFileId(null);
-      setActiveRevision(null);
-      setCursor(null);
-      setAccumulatedFiles([]);
-      void onRefresh();
+
+    const filesStale = isStaleError(filesQuery.error);
+    const detailStale = isStaleError(detailQuery.error);
+
+    if (!filesStale && !detailStale) {
+      return;
     }
-  }, [filesQuery.error, detailQuery.error, onRefresh]);
+
+    if (isAutoRecoveringRef.current || isRefreshing) {
+      return;
+    }
+
+    const requestedRev = filesStale
+      ? (activeRevision ?? "bootstrap")
+      : (currentRevision ?? "bootstrap");
+    const failureKey = `${serverEpoch}:${baselineId}:${requestedRev}`;
+
+    if (lastRecoveredFailedKeyRef.current === failureKey) {
+      return;
+    }
+
+    lastRecoveredFailedKeyRef.current = failureKey;
+    isAutoRecoveringRef.current = true;
+
+    void (async () => {
+      try {
+        await onRefresh();
+      } catch (err) {
+        console.error("[SessionChanges] auto-recovery refresh failed:", err);
+      } finally {
+        isAutoRecoveringRef.current = false;
+      }
+    })();
+  }, [
+    filesQuery.error,
+    detailQuery.error,
+    onRefresh,
+    isRefreshing,
+    serverEpoch,
+    baselineId,
+    activeRevision,
+    currentRevision,
+  ]);
 
   return (
     <Group
@@ -367,10 +403,11 @@ export function SessionChangesPanel({
     ? refreshMutation.isPending
     : false;
 
+  const { mutateAsync } = refreshMutation;
   const handleRefresh = useCallback(async () => {
     if (!serverEpoch || !baselineId) return;
     try {
-      await refreshMutation.mutateAsync({
+      await mutateAsync({
         terminalId,
         terminalIncarnation,
         ompSessionId,
@@ -385,7 +422,7 @@ export function SessionChangesPanel({
   }, [
     serverEpoch,
     baselineId,
-    refreshMutation,
+    mutateAsync,
     terminalId,
     terminalIncarnation,
     ompSessionId,

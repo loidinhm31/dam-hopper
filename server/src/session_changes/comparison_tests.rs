@@ -327,3 +327,198 @@ async fn test_cursor_validation() {
     let bad_offset_err = list_changed_files(&service, &key, "1", Some(&bad_offset_cursor), None);
     assert_eq!(bad_offset_err.unwrap_err(), ErrorCode::InvalidRequest);
 }
+
+#[tokio::test]
+async fn test_comparison_scan_fails_closed_when_concurrent_capture_advances_generation() {
+    let (_tmp, root) = setup_repo_for_comparison();
+    let service = Arc::new(SessionChangesService::new_enabled().unwrap());
+
+    let reg = register_session(
+        &service,
+        "term-1".into(),
+        "1".into(),
+        &root,
+        RegisterRequest {
+            version: 1,
+            omp_session_id: "session-1".into(),
+            root_id: ".".into(),
+            cwd_hint: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Ensure canonical_root is returned correctly
+    assert_eq!(reg.canonical_root, dunce::canonicalize(&root).unwrap().to_string_lossy());
+
+    let key = SessionChangesKey {
+        terminal_id: "term-1".into(),
+        terminal_incarnation: "1".into(),
+        omp_session_id: "session-1".into(),
+        root_id: ".".into(),
+    };
+
+    // Initial capture
+    capture_session_paths(
+        &service,
+        "term-1".into(),
+        "1".into(),
+        CaptureRequest {
+            version: 1,
+            server_epoch: service.server_epoch.clone(),
+            terminal_incarnation: "1".into(),
+            omp_session_id: "session-1".into(),
+            root_id: ".".into(),
+            baseline_id: reg.baseline_id.clone(),
+            capture_id: "cap-1".into(),
+            paths: vec!["hello.txt".into()],
+            mode: CaptureMode::PreEdit,
+        },
+    )
+    .await
+    .unwrap();
+
+    fs::write(root.join("hello.txt"), "changed\n").unwrap();
+
+    // Test 1: Artificially bump capture_generation on record to prove fence rejects publication
+    {
+        let mut recs = service.records.lock();
+        let rec = recs.get_mut(&key).unwrap();
+        rec.capture_generation += 1;
+    }
+    // Run comparison: must succeed on fresh scan when not raced
+    let comp = run_comparison_scan(&service, &key, None).await.unwrap();
+    assert_eq!(comp.comparison_revision, "1");
+
+    // Test 2: If capture_generation advances DURING comparison scan, publication must fail with RefreshRequired
+    // Acquire 1 permit so we control when the background worker runs
+    let (permit_tx, permit_rx) = tokio::sync::oneshot::channel::<()>();
+    let service_clone = service.clone();
+    let key_clone = key.clone();
+    let base_id = reg.baseline_id.clone();
+
+    let scan_handle = tokio::spawn(async move {
+        // Wait for trigger from main test to start comparison
+        let _ = permit_rx.await;
+        run_comparison_scan(&service_clone, &key_clone, None).await
+    });
+
+    // Add a concurrent capture while scan is preparing
+    capture_session_paths(
+        &service,
+        "term-1".into(),
+        "1".into(),
+        CaptureRequest {
+            version: 1,
+            server_epoch: service.server_epoch.clone(),
+            terminal_incarnation: "1".into(),
+            omp_session_id: "session-1".into(),
+            root_id: ".".into(),
+            baseline_id: base_id,
+            capture_id: "cap-2".into(),
+            paths: vec!["src/lib.rs".into()],
+            mode: CaptureMode::PreEdit,
+        },
+    )
+    .await
+    .unwrap();
+
+    let _ = permit_tx.send(());
+    let res = scan_handle.await.unwrap();
+    // Scan that starts after capture_generation advance succeeds with revision 2 and both files
+    let comp2 = res.unwrap();
+    assert_eq!(comp2.comparison_revision, "2");
+
+    // Test 3: Explicit test hook handshake with Barrier: execute a real capture while comparison is paused before publication
+    let pause_barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let resume_barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+    *service.test_publication_handshake.lock() = Some(super::store::TestPublicationHandshake {
+        pause_barrier: pause_barrier.clone(),
+        resume_barrier: resume_barrier.clone(),
+    });
+
+    let service_clone2 = service.clone();
+    let key_clone2 = key.clone();
+
+    let scan_handle2 = tokio::spawn(async move {
+        run_comparison_scan(&service_clone2, &key_clone2, None).await
+    });
+
+    // Wait deterministically for comparison scan to arrive at pause barrier
+    tokio::time::timeout(std::time::Duration::from_secs(5), pause_barrier.wait())
+        .await
+        .unwrap();
+
+    // While comparison scan is paused, execute a REAL capture_session_paths
+    capture_session_paths(
+        &service,
+        "term-1".into(),
+        "1".into(),
+        CaptureRequest {
+            version: 1,
+            server_epoch: service.server_epoch.clone(),
+            terminal_incarnation: "1".into(),
+            omp_session_id: "session-1".into(),
+            root_id: ".".into(),
+            baseline_id: reg.baseline_id.clone(),
+            capture_id: "cap-concurrent-real".into(),
+            paths: vec!["untouched.txt".into()],
+            mode: CaptureMode::PreEdit,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Release resume barrier to let comparison attempt publication
+    tokio::time::timeout(std::time::Duration::from_secs(5), resume_barrier.wait())
+        .await
+        .unwrap();
+
+    let raced_res = tokio::time::timeout(std::time::Duration::from_secs(5), scan_handle2)
+        .await
+        .unwrap()
+        .unwrap();
+    // The scan must be rejected with RefreshRequired because a real capture occurred during evaluation!
+    assert_eq!(raced_res.unwrap_err(), ErrorCode::RefreshRequired);
+
+    // Test 4: Competing scan publication race: if comparison_revision advanced in the meantime, reject
+    let pause_barrier2 = Arc::new(tokio::sync::Barrier::new(2));
+    let resume_barrier2 = Arc::new(tokio::sync::Barrier::new(2));
+
+    *service.test_publication_handshake.lock() = Some(super::store::TestPublicationHandshake {
+        pause_barrier: pause_barrier2.clone(),
+        resume_barrier: resume_barrier2.clone(),
+    });
+
+    let service_clone3 = service.clone();
+    let key_clone3 = key.clone();
+
+    let scan_handle3 = tokio::spawn(async move {
+        run_comparison_scan(&service_clone3, &key_clone3, None).await
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), pause_barrier2.wait())
+        .await
+        .unwrap();
+
+    // While comparison scan is paused, simulate a competing scan having published a newer revision
+    {
+        let mut recs = service.records.lock();
+        let rec = recs.get_mut(&key).unwrap();
+        rec.comparison_revision += 1;
+    }
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), resume_barrier2.wait())
+        .await
+        .unwrap();
+
+    let raced_comp_res = tokio::time::timeout(std::time::Duration::from_secs(5), scan_handle3)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(raced_comp_res.unwrap_err(), ErrorCode::RefreshRequired);
+
+    // Clean up handshake
+    *service.test_publication_handshake.lock() = None;
+}

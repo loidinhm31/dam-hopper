@@ -79,6 +79,7 @@ pub struct SessionChangesRecord {
     pub retained_bytes: u64,
     pub comparison: Option<ComparisonArtifact>,
     pub comparison_revision: u64,
+    pub capture_generation: u64,
     pub reason: Option<ErrorCode>,
     pub recent_turn_ids: BTreeSet<String>,
     pub last_settled_turn_id: Option<String>,
@@ -99,6 +100,15 @@ pub struct SessionChangesService {
     pub records: Mutex<BTreeMap<SessionChangesKey, SessionChangesRecord>>,
     pub temp_dir: Mutex<Option<TempDir>>,
     pub bound_targets: Mutex<std::collections::HashMap<(String, u64), BoundTerminalTarget>>,
+    #[cfg(test)]
+    pub test_publication_handshake: Mutex<Option<TestPublicationHandshake>>,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+pub struct TestPublicationHandshake {
+    pub pause_barrier: Arc<tokio::sync::Barrier>,
+    pub resume_barrier: Arc<tokio::sync::Barrier>,
 }
 
 impl Default for SessionChangesService {
@@ -120,6 +130,8 @@ impl SessionChangesService {
             records: Mutex::new(BTreeMap::new()),
             temp_dir: Mutex::new(None),
             bound_targets: Mutex::new(std::collections::HashMap::new()),
+            #[cfg(test)]
+            test_publication_handshake: Mutex::new(None),
         })
     }
 

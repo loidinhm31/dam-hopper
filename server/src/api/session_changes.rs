@@ -183,6 +183,9 @@ pub async fn refresh(
         Err(ErrorCode::TrackingDisabled) => {
             error_response(StatusCode::SERVICE_UNAVAILABLE, ErrorCode::TrackingDisabled, "Tracking disabled")
         }
+        Err(ErrorCode::RefreshRequired) => {
+            error_response(StatusCode::CONFLICT, ErrorCode::RefreshRequired, "Comparison superseded, refresh required")
+        }
         Err(code) => {
             error_response(StatusCode::BAD_REQUEST, code, "Refresh comparison failed")
         }
@@ -299,6 +302,9 @@ pub async fn get_files(
                 Ok(comp) => comp.comparison_revision,
                 Err(ErrorCode::Busy) => {
                     return error_response(StatusCode::CONFLICT, ErrorCode::Busy, "Comparison busy");
+                }
+                Err(ErrorCode::RefreshRequired) => {
+                    return error_response(StatusCode::CONFLICT, ErrorCode::RefreshRequired, "Comparison superseded, refresh required");
                 }
                 Err(code) => {
                     return error_response(StatusCode::BAD_REQUEST, code, "Lazy comparison failed");

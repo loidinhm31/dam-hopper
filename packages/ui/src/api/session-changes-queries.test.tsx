@@ -1,18 +1,26 @@
 // @vitest-environment jsdom
-import { act, createElement, type ReactNode } from "react";
+import { act, createElement, useState, useCallback, useRef, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ConnectionRef } from "./ownership";
+import { SessionChangesClientError } from "./session-changes-client";
+import { ApiRequestError } from "./client";
 import {
   sessionChangesQueryKeys,
   useSessionChangesStatus,
   useSessionChangesFiles,
   useSessionChangesFileDetail,
   useSessionChangesRefreshMutation,
-  useSessionChangesEnabled,
 } from "./session-changes-queries";
 import fixture from "../../../../server/tests/fixtures/session-changes-wire.json";
+
+declare global {
+  var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
+}
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+let customInvokeMock: ((channel: string, data?: unknown) => Promise<unknown>) | null = null;
 
 // Mock queries helper getBoundApiClient
 vi.mock("./queries", () => {
@@ -21,6 +29,9 @@ vi.mock("./queries", () => {
       return {
         transport: {
           invoke: vi.fn().mockImplementation(async (channel: string, data?: unknown) => {
+            if (customInvokeMock) {
+              return customInvokeMock(channel, data);
+            }
             if (channel === "sessionChanges:status") {
               return fixture.valid.statusSessionStartReady;
             }
@@ -107,6 +118,7 @@ describe("session-changes React Query hooks", () => {
         queries: { retry: false },
       },
     });
+    customInvokeMock = null;
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -278,5 +290,112 @@ describe("session-changes React Query hooks", () => {
     await vi.waitFor(() => {
       expect(capturedData).toBeDefined();
     });
+  });
+
+  it("cooperates across stale files error, refresh mutation, invalidation, and revision advancement without loop", async () => {
+    let filesCalls = 0;
+    let refreshCalls = 0;
+    let shouldFailStale = true;
+
+    customInvokeMock = async (channel: string) => {
+      if (channel === "sessionChanges:files") {
+        filesCalls++;
+        if (shouldFailStale) {
+          throw new ApiRequestError("Revision is stale", 409, "refreshRequired", {
+            version: 1,
+            code: "refreshRequired",
+            reason: "Revision is stale",
+            retryable: false,
+            currentRevision: "2",
+          });
+        }
+        return {
+          ...fixture.valid.filePage,
+          comparison: {
+            ...fixture.valid.filePage.comparison,
+            comparisonRevision: "2",
+          },
+        };
+      }
+      if (channel === "sessionChanges:refresh") {
+        refreshCalls++;
+        shouldFailStale = false;
+        return {
+          ...fixture.valid.statusSessionStartReady.comparison,
+          comparisonRevision: "2",
+        };
+      }
+      return fixture.valid.statusSessionStartReady;
+    };
+
+    function TestLifecycleConsumer() {
+      const [rev, setRev] = useState<string | null>("1");
+      const filesQuery = useSessionChangesFiles(owner, "t1", "1", "s1", "ep1", "b1", rev);
+      const refreshMutation = useSessionChangesRefreshMutation(owner);
+      const { mutateAsync } = refreshMutation;
+      const lastRecoveredKeyRef = useRef<string | null>(null);
+      const handleRefresh = useCallback(async () => {
+        const comp = await mutateAsync({
+          terminalId: "t1",
+          terminalIncarnation: "1",
+          ompSessionId: "s1",
+          serverEpoch: "ep1",
+          baselineId: "b1",
+          requestId: "req-1",
+        });
+        setRev(comp.comparisonRevision);
+      }, [mutateAsync]);
+
+      useEffect(() => {
+        if (
+          filesQuery.error instanceof SessionChangesClientError &&
+          filesQuery.error.code === "refreshRequired"
+        ) {
+          const requestedRev = rev ?? "bootstrap";
+          const key = `ep1:b1:${requestedRev}`;
+          if (lastRecoveredKeyRef.current === key) return;
+          lastRecoveredKeyRef.current = key;
+          queueMicrotask(() => {
+            void handleRefresh();
+          });
+        }
+      }, [filesQuery.error, handleRefresh, rev]);
+
+      return createElement("div", {
+        "data-testid": "lifecycle-state",
+        "data-rev": rev,
+        "data-success": String(filesQuery.isSuccess),
+      });
+    }
+
+    await act(async () => {
+      root.render(
+        createElement(
+          QueryClientProvider,
+          { client: qc },
+          createElement(TestLifecycleConsumer),
+        ),
+      );
+    });
+
+    // Wait for auto-recovery cycle to settle
+    await vi.waitFor(() => {
+      expect(refreshCalls).toBe(1);
+      expect(filesCalls).toBeGreaterThanOrEqual(2);
+    }, { timeout: 2000 });
+
+    // Extra rerender
+    await act(async () => {
+      root.render(
+        createElement(
+          QueryClientProvider,
+          { client: qc },
+          createElement(TestLifecycleConsumer),
+        ),
+      );
+    });
+
+    // Refresh calls strictly bounded to 1
+    expect(refreshCalls).toBe(1);
   });
 });

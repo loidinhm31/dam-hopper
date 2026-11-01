@@ -387,6 +387,7 @@ pub async fn register_session(
             omp_session_id: req.omp_session_id,
             root_id: req.root_id,
             baseline_id: existing.baseline_id.clone(),
+            canonical_root: existing.canonical_root.to_string_lossy().to_string(),
         });
     }
 
@@ -424,7 +425,7 @@ pub async fn register_session(
         baseline_id: baseline_id.clone(),
         omp_session_id: req.omp_session_id.clone(),
         root_id: req.root_id.clone(),
-        canonical_root: validated_root.canonical_root,
+        canonical_root: validated_root.canonical_root.clone(),
         root_dir_file,
         generation,
         created_at_ms: now_ms,
@@ -434,6 +435,7 @@ pub async fn register_session(
         retained_bytes: 0,
         comparison: None,
         comparison_revision: 0,
+        capture_generation: 0,
         reason: None,
         recent_turn_ids: BTreeSet::new(),
         last_settled_turn_id: None,
@@ -448,6 +450,7 @@ pub async fn register_session(
         omp_session_id: req.omp_session_id,
         root_id: req.root_id,
         baseline_id,
+        canonical_root: validated_root.canonical_root.to_string_lossy().to_string(),
     })
 }
 
@@ -535,6 +538,7 @@ pub async fn capture_session_paths(
                         entry.acknowledged = false;
                         rec.comparison = None;
                         rec.comparison_revision += 1;
+                        rec.capture_generation += 1;
                     }
                     results.push(PathCaptureDisposition {
                         path: path.clone(),
@@ -563,6 +567,7 @@ pub async fn capture_session_paths(
                             acknowledged: false,
                         },
                     );
+                    rec.capture_generation += 1;
                     results.push(PathCaptureDisposition {
                         path,
                         file_id: Some(file_id),
@@ -636,6 +641,7 @@ pub async fn capture_session_paths(
                             existing.provenance = Provenance::Unproven;
                             existing.reservation = CaptureReservationState::Sealed;
                             existing.acknowledged = false;
+                            rec.capture_generation += 1;
                             results.push(PathCaptureDisposition {
                                 path: path.clone(),
                                 file_id: Some(existing.file_id.clone()),
@@ -675,6 +681,7 @@ pub async fn capture_session_paths(
                                 acknowledged: false,
                             },
                         );
+                        rec.capture_generation += 1;
                         paths_to_probe.push((path, file_id));
                     }
                 }
@@ -738,6 +745,7 @@ pub async fn capture_session_paths(
                         entry.provenance = Provenance::Unproven;
                         entry.reservation = CaptureReservationState::Sealed;
                         entry.acknowledged = false;
+                        rec.capture_generation += 1;
                     }
                     let path_presence = match entry.presence {
                         Presence::Present => Some(PathPresence::Present),
@@ -755,7 +763,7 @@ pub async fn capture_session_paths(
                 }
 
                 entry.reservation = CaptureReservationState::Sealed;
-
+                rec.capture_generation += 1;
                 match probe_res {
                     ProbeResult::Present {
                         bytes,

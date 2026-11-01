@@ -11,7 +11,8 @@
       "terminalIncarnation": "1",
       "ompSessionId": "omp-session-456",
       "rootId": ".",
-      "baselineId": "base-uuid-1"
+      "baselineId": "base-uuid-1",
+      "canonicalRoot": "/home/user/project"
     },
     "captureRequestPreEdit": {
       "version": 1,

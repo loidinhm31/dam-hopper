@@ -38,6 +38,7 @@ async fn test_terminal_metadata_retention_and_removal() {
         retained_bytes: 500,
         comparison: None,
         comparison_revision: 0,
+        capture_generation: 0,
         reason: None,
         recent_turn_ids: BTreeSet::new(),
         last_settled_turn_id: None,

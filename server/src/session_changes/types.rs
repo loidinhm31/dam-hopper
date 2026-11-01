@@ -392,6 +392,7 @@ pub struct RegisterResponse {
     pub omp_session_id: String,
     pub root_id: String,
     pub baseline_id: String,
+    pub canonical_root: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

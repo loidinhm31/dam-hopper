@@ -98,6 +98,7 @@ export interface RegisterResponse {
   ompSessionId: string;
   rootId: string;
   baselineId: string;
+  canonicalRoot: string;
 }
 
 export type CaptureMode = "preEdit" | "unproven";
@@ -445,6 +446,8 @@ export interface RootSessionRegistration {
   rootId: string;
   baselineId: string;
   disabled: boolean;
+  canonicalRoot?: string;
+  launchCwd?: string;
   rootCwd?: string;
   knownPaths: Set<string>;
   unprovenPaths: Set<string>;
@@ -457,8 +460,10 @@ export function createRootSessionRegistration(
   serverEpoch: string = "epoch-1",
   terminalIncarnation: string = "1",
   baselineId: string = "base-1",
-  rootCwd?: string,
+  canonicalRoot?: string,
+  launchCwd?: string,
 ): RootSessionRegistration {
+  const root = canonicalRoot || launchCwd;
   return {
     serverEpoch,
     terminalIncarnation,
@@ -466,7 +471,9 @@ export function createRootSessionRegistration(
     rootId: ".",
     baselineId,
     disabled: false,
-    rootCwd,
+    canonicalRoot: root,
+    launchCwd: launchCwd || root,
+    rootCwd: root,
     knownPaths: new Set(),
     unprovenPaths: new Set(),
     reservedPaths: new Set(),
@@ -478,13 +485,20 @@ export interface PendingToolCall {
   toolCallId: string;
   agentId: string;
   ompSessionId: string;
+  rootId: string;
   serverEpoch: string;
   terminalIncarnation: string;
   baselineId: string;
+  canonicalRoot?: string;
+  launchCwd?: string;
   rootCwd?: string;
   childCwd?: string;
   candidatePaths: string[];
   timestamp: number;
+}
+
+export function makePendingKey(sessionId: string, agentId: string, toolCallId: string): string {
+  return `${sessionId}\0${agentId}\0${toolCallId}`;
 }
 
 export class SessionChangesProducerRegistry {
@@ -497,6 +511,8 @@ export class SessionChangesProducerRegistry {
   public globalGeneration = 0;
   public isPermanentlyDisabled = false;
   public readonly pendingCalls = new Map<string, PendingToolCall>();
+  public readonly consumedCallKeys = new Set<string>();
+  public readonly sharedAmbiguousCalls = new Set<string>();
 
   public registerRoot(
     agentId: string,
@@ -667,6 +683,12 @@ export class SessionChangesProducer {
   public get pendingCalls(): Map<string, PendingToolCall> {
     return this.registry.pendingCalls;
   }
+  public get consumedCallKeys(): Set<string> {
+    return this.registry.consumedCallKeys;
+  }
+  public get sharedAmbiguousCalls(): Set<string> {
+    return this.registry.sharedAmbiguousCalls;
+  }
 
   public async postJson<T>(
     path: string,
@@ -779,7 +801,9 @@ export class SessionChangesProducer {
       !reg.terminalIncarnation ||
       reg.ompSessionId !== ompSessionId ||
       typeof reg.baselineId !== "string" ||
-      !reg.baselineId
+      !reg.baselineId ||
+      typeof reg.canonicalRoot !== "string" ||
+      !reg.canonicalRoot.trim()
     ) {
       return null;
     }
@@ -790,8 +814,10 @@ export class SessionChangesProducer {
       ompSessionId: reg.ompSessionId,
       rootId: reg.rootId || ".",
       baselineId: reg.baselineId,
+      canonicalRoot: reg.canonicalRoot,
+      launchCwd: cwd,
       disabled: false,
-      rootCwd: cwd,
+      rootCwd: reg.canonicalRoot,
       knownPaths: new Set(),
       unprovenPaths: new Set(),
       reservedPaths: new Set(),
@@ -837,41 +863,60 @@ export class SessionChangesProducer {
       const root = this.registry.resolveRoot(ctx?.agent);
       if (!root || root.disabled) return;
 
-      const rootCwd = root.rootCwd;
-      const childCwd = ctx?.cwd || rootCwd;
+      const canonicalRoot = root.canonicalRoot || root.rootCwd;
+      const launchCwd = root.launchCwd || canonicalRoot;
+      const childCwd = ctx?.cwd || launchCwd;
 
       // Extract candidate paths based on tool, properly rebased to root
       let candidatePaths: string[] = [];
 
       if (normalizedTool === "write") {
         const rawPath = input?.path as string | undefined;
-        const norm = rebasePathToRoot(rawPath, childCwd, rootCwd);
+        const norm = rebasePathToRoot(rawPath, childCwd, canonicalRoot);
         if (norm) candidatePaths.push(norm);
       } else if (normalizedTool === "edit") {
         const patchInput = (input?.input ?? input?.patch) as string | undefined;
-        candidatePaths = parseHashlineEdits(patchInput, childCwd, rootCwd);
+        candidatePaths = parseHashlineEdits(patchInput, childCwd, canonicalRoot);
       } else if (normalizedTool === "ast-edit" || normalizedTool === "ast_edit") {
-        candidatePaths = parseAstEditTargets(input, childCwd, rootCwd);
+        candidatePaths = parseAstEditTargets(input, childCwd, canonicalRoot);
       }
 
-      // Always store pending call descriptor so tool_result knows the originating agent and root tuple!
+      // Always store pending call descriptor under authoritative structured key!
       const callId = toolCallId || crypto.randomUUID();
+      const authoritativeKey = makePendingKey(root.ompSessionId, agentId, callId);
+
+      // Reject overlapping identity reuse collision across sessions/agents
+      if (this.pendingCalls.has(authoritativeKey)) {
+        return;
+      }
+
+      // Track whether callId is ever shared across multiple descriptors
+      for (const desc of this.pendingCalls.values()) {
+        if (desc.toolCallId === callId) {
+          this.sharedAmbiguousCalls.add(callId);
+        }
+      }
+
       if (this.pendingCalls.size >= MAX_PENDING_CALLS) {
         const oldest = this.pendingCalls.keys().next().value;
         if (oldest) this.pendingCalls.delete(oldest);
       }
-      this.pendingCalls.set(callId, {
+      const descriptor: PendingToolCall = {
         toolCallId: callId,
         agentId,
         ompSessionId: root.ompSessionId,
+        rootId: root.rootId,
         serverEpoch: root.serverEpoch,
         terminalIncarnation: root.terminalIncarnation,
         baselineId: root.baselineId,
-        rootCwd,
+        canonicalRoot,
+        launchCwd,
+        rootCwd: canonicalRoot,
         childCwd,
         candidatePaths,
         timestamp: Date.now(),
-      });
+      };
+      this.pendingCalls.set(authoritativeKey, descriptor);
 
       if (candidatePaths.length === 0) return;
 
@@ -1068,49 +1113,94 @@ export class SessionChangesProducer {
     try {
       if (this.isPermanentlyDisabled) return;
       if (!toolName) return;
+      if (!toolCallId) return;
       const normalizedTool = toolName.toLowerCase().replace(/_/g, "-");
 
       const resultStartTime = performance.now();
       const callGen = this.globalGeneration;
 
-      // Look up exact root tuple from pending descriptor if available
-      let root: RootSessionRegistration | undefined;
-      let rootCwd: string | undefined;
-      let childCwd = ctx?.cwd;
+      const agentId = ctx?.agent?.id || (ctx?.agent?.kind === "main" ? "main" : undefined);
 
-      if (toolCallId && this.pendingCalls.has(toolCallId)) {
-        const pending = this.pendingCalls.get(toolCallId)!;
-        this.pendingCalls.delete(toolCallId);
-        root = this.registry.roots.get(pending.ompSessionId);
-        if (
-          root &&
-          (root.serverEpoch !== pending.serverEpoch ||
-            root.terminalIncarnation !== pending.terminalIncarnation)
-        ) {
-          // Stale call from prior epoch/incarnation
+      let pending: PendingToolCall | undefined;
+      let matchedKey: string | undefined;
+
+      if (agentId) {
+        // Find matching pending calls for this agent and toolCallId across sessions
+        const matches: Array<[string, PendingToolCall]> = [];
+        for (const [key, desc] of this.pendingCalls.entries()) {
+          if (desc.agentId === agentId && desc.toolCallId === toolCallId) {
+            matches.push([key, desc]);
+          }
+        }
+        if (matches.length === 1) {
+          matchedKey = matches[0][0];
+          pending = matches[0][1];
+        } else {
+          // 0 matches (missing origin or already consumed) or >1 matches (ambiguous collision): reject
           return;
         }
-        rootCwd = pending.rootCwd;
-        childCwd = childCwd || pending.childCwd;
       } else {
-        root = this.registry.resolveRoot(ctx?.agent);
-        // Only accept if root matches current active session (no arbitrary adoption)
-        if (root && this.activeSessionId !== null && root.ompSessionId !== this.activeSessionId) {
+        // Agentless result: permit lookup ONLY if toolCallId was never shared and uniquely identifies an outstanding descriptor
+        if (this.sharedAmbiguousCalls.has(toolCallId)) {
+          // Shared across multiple agents/sessions: agentless result is ambiguous, reject!
           return;
         }
-        rootCwd = root?.rootCwd;
+        const matches: Array<[string, PendingToolCall]> = [];
+        for (const [key, desc] of this.pendingCalls.entries()) {
+          if (desc.toolCallId === toolCallId) {
+            matches.push([key, desc]);
+          }
+        }
+        if (matches.length === 1) {
+          matchedKey = matches[0][0];
+          pending = matches[0][1];
+        } else {
+          // 0 matches = missing origin; >1 matches = ambiguous. Reject.
+          return;
+        }
       }
 
-      if (!root || root.disabled) return;
+      if (!pending || !matchedKey) {
+        return;
+      }
+
+      // Check if this exact descriptor was already consumed (duplicate safety)
+      if (this.consumedCallKeys.has(matchedKey)) {
+        return;
+      }
+
+      // Atomically remove authoritative descriptor and record tombstone
+      this.pendingCalls.delete(matchedKey);
+      if (this.consumedCallKeys.size >= MAX_PENDING_CALLS) {
+        const oldest = this.consumedCallKeys.keys().next().value;
+        if (oldest) this.consumedCallKeys.delete(oldest);
+      }
+      this.consumedCallKeys.add(matchedKey);
+
+      const root = this.registry.roots.get(pending.ompSessionId);
+      if (
+        !root ||
+        root.disabled ||
+        root.serverEpoch !== pending.serverEpoch ||
+        root.terminalIncarnation !== pending.terminalIncarnation ||
+        root.baselineId !== pending.baselineId ||
+        root.rootId !== pending.rootId
+      ) {
+        // Stale call or session invalidated/disabled/re-registered with new baseline
+        return;
+      }
+
+      const effectiveRootCwd = pending.canonicalRoot || pending.rootCwd;
+      const effectiveChildCwd = pending.childCwd || pending.launchCwd || effectiveRootCwd;
 
       const newlyDiscoveredPaths: string[] = [];
 
       if (normalizedTool === "ast-edit" || normalizedTool === "ast_edit") {
         const astDetails = details as { files?: string[]; cwd?: string } | undefined;
         if (Array.isArray(astDetails?.files)) {
-          const effectiveChildCwd = astDetails?.cwd || childCwd;
+          const effectiveAstChildCwd = astDetails?.cwd || effectiveChildCwd;
           for (const f of astDetails.files) {
-            const norm = rebasePathToRoot(f, effectiveChildCwd, rootCwd);
+            const norm = rebasePathToRoot(f, effectiveAstChildCwd, effectiveRootCwd);
             if (norm && !root.knownPaths.has(norm) && !root.unprovenPaths.has(norm)) {
               if (
                 root.knownPaths.size +
@@ -1146,7 +1236,7 @@ export class SessionChangesProducer {
         }
 
         for (const raw of touchedPaths) {
-          const norm = rebasePathToRoot(raw, childCwd, rootCwd);
+          const norm = rebasePathToRoot(raw, effectiveChildCwd, effectiveRootCwd);
           if (norm && !root.knownPaths.has(norm) && !root.unprovenPaths.has(norm)) {
             if (
               root.knownPaths.size +
@@ -1263,7 +1353,7 @@ export class SessionChangesProducer {
     cwd?: string,
   ): Promise<RootSessionRegistration | null> {
     this.globalGeneration++;
-    this.pendingCalls.clear();
+    // Preserve pendingCalls across session switch so in-flight tool calls retain their origin identity
     return this.registerSession(ompSessionId, agentId, cwd);
   }
 
