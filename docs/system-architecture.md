@@ -239,6 +239,26 @@ Phase 04 builds upon the Phase 01 prototype to establish shell chrome and operat
 - **4-Namespace Envelope Persistence (`packages/ui/src/os/persistence.ts`):**
   - `exportOsEnvelope` and `importOsEnvelope` support four namespaces (`session`, `dock`, `shortcuts`, `notifications_prefs`) under `dam-hopper:os:v1:*` localStorage keys.
   - Serialized session data strips credentials, output buffers, and dirty text, projecting allowlisted view attributes only. Autosave suspends (`autosaveSuspended = true`) on corrupt bytes to protect disk state. The importer validates and projects envelope records without directly applying namespaces to storage or Settings (namespace schema validation and Settings wiring tracked as open W3).
+
+## AI Dev OS Application Catalog & Deep Link Infrastructure (Phase 05)
+
+**Status:** Phase 05 implementation under the [AI Dev OS Redesign Plan](../plans/261101-1738-ai-dev-os-redesign/plan.md) reached administrative completion per user direction (Task 1 `migrate-workspace-apps`, Task 2 `migrate-git-and-reviews`, and Task 3 `migrate-management-apps` completed in source). Technical acceptance is incomplete; live lifecycle oracles, Monaco model continuity, and caller integrations carry forward to Phase 09. Full details are documented in [OS Application Catalog & Deep Links Architecture](./architecture/os-application-catalog-and-deep-links.md).
+
+Phase 05 migrates existing workbench and management panels into the OS windowing system, establishing the 14-application catalog, typed deep link URL query parsing, standard project desktop layouts, and single-transport generation fences:
+
+### 1. 14-Application Manifest Registry & Adapter Architecture
+- **Catalog Registry (`packages/ui/src/os/app-registry.ts`):** `APP_MANIFESTS` statically registers all 14 retained applications (`terminals`, `editor`, `browser`, `files`, `search`, `changes`, `git`, `conflict-resolver`, `session-changes`, `workflow-plans`, `ports-tunnels`, `project-info`, `agent-store`, `settings`). Each manifest specifies `appId`, `displayName`, `instancing`, `minimumCtx`, `defaultPlacement`, `minSize`, and supported `intents`.
+- **Application Adapters (`packages/ui/src/os/apps/`):** 11 new adapter components wrap canonical organism and page bodies (`FilesApp`, `SearchApp`, `ChangesApp`, `GitApp`, `ConflictResolverApp`, `SessionChangesApp`, `WorkflowPlansApp`, `PortsTunnelsApp`, `ProjectInfoApp`, `AgentStoreApp`, `SettingsApp`), maintaining existing state and database layers without duplicate business logic.
+- **Instancing Granularity (`findExistingWindowForApp`):** Deduplicates windows across 6 instancing models: `single-instance` (Settings), `profile-instance` (Ports & Tunnels, Agent Store), `project-instance` (Workflow & Plans, Project Info; specialized operation-matching for Conflict Resolver), `worktree-instance` (Files, Search, Changes, Git), `tuple-instance` (Session Changes), and `multi-instance` (Terminals, Editor, Browser).
+
+### 2. Typed Deep Link URL Protocol & Desktop Templates
+- **URL Query Parser (`packages/ui/src/os/deep-links.ts`):** Evaluates `/os?<query>` links with strict profile existence validation, minimum context enforcement, positive integer line parsing, and full tuple requirements for Session Changes (`terminal`, `incarnation`, `ompSession`). Generates typed `OsIntent` records without executing ambient shell commands or duplicating existing windows.
+- **Project Desktop Template (`packages/ui/src/os/desktop-templates.ts`):** `createProjectDesktopTemplate` generates the standard 60/40 binary split layout: 60% Terminals on the left; 40% on the right split into Files tabbed with Search (top 50%) above Git tabbed with Changes (bottom 50%). All windows are bound to the desktop's `WindowContext`.
+
+### 3. Single-Transport Routing & Generation-Fencing Hardening
+- **DiffViewer Partial Hardening (`packages/ui/src/components/organisms/DiffViewer.tsx`):** Resolves transport strictly via `getBoundTransport(targetRef)`, checks connection generation after stat preflight and after write, and increments `saveRevisionRef` on model edits. Open review finding W0a notes that revision equality is not checked after `fsWriteFile` (allowing edits during write to be marked clean) and pre-write revision changes leave the saving state locked.
+- **Search & Replace Hardening (`use-file-search.ts`, `use-search-panel-replace.ts`):** Captures profile connection with `isCurrentConnection` assertion upon result arrival; empty federated search returns empty results safely without ambient fallback. Replace Next checks match generation against current connection snapshot and preserves the captured owner through write completion.
+- **Session Changes App (`packages/ui/src/os/apps/SessionChangesApp.tsx`):** Requires complete 6-part owner tuple, acquires `session-changes` resource claim, and purges query cache and closes the window immediately if Session Changes becomes disabled or disconnected.
 ## Multi-Profile Ownership Model
 
 A browser-side `profileId` selects one saved server endpoint/identity. A monotonically replaced connection `generation` identifies the current runtime for that profile. UI work captures both before issuing requests.

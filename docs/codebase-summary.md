@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Source summary:** Repomix 1.18.0 compaction generated 2026-11-02 (`repomix-output.xml`; 3,956 files included, 10 scanner-excluded, 9,629,828 tokens, 41,843,719 chars). The repository inventory reflects Phase 02 (P0a: Tauri desktop host and SSH-forwarding UI removal), Phase 03 (P0b: Usage and server telemetry retirement, neutral DB path helpers, and early release preparation), Phase 01 OS lifecycle prototype, and Phase 04 OS shell chrome and services implementation baseline of the AI Dev OS redesign.
+**Source summary:** Repomix 1.18.0 compaction generated 2026-11-02 (`repomix-output.xml`; 3,985 files included, 10 scanner-excluded, 9,697,653 tokens, 42,137,195 chars). The repository inventory reflects Phase 02 (P0a: Tauri desktop host and SSH-forwarding UI removal), Phase 03 (P0b: Usage and server telemetry retirement, neutral DB path helpers, and early release preparation), Phase 01 OS lifecycle prototype, Phase 04 OS shell chrome and services, and Phase 05 application catalog and deep links baseline of the AI Dev OS redesign.
 
 ## Historical Repository Inventory (2026-10-05)
 
@@ -218,17 +218,32 @@ Phase 04 implementation under [AI Dev OS Redesign Plan](../plans/261101-1738-ai-
 | **Typed OS Intents** | `packages/ui/src/os/intents.ts` | Typed OS intent routing (`globalIntentRouter`, `dispatchIntent`, `registerIntentHandler`, `createIntent`) supporting 11 actions (`terminal:open`, `terminal:focus`, `file:open`, `file:edit`, `browser:preview`, `browser:open`, `git:status`, `git:diff`, `git:history`, `system:monitor`, `recipes:launch`); unregistered intents return safe unhandled no-op results without process reuse. |
 | **4-Namespace Envelope Persistence** | `packages/ui/src/os/persistence.ts` | `exportOsEnvelope` and `importOsEnvelope` support four namespaces (`session`, `dock`, `shortcuts`, `notifications_prefs`) under `dam-hopper:os:v1:*` keys with allowlisted appState view projection and corrupt-byte autosave suspension (`autosaveSuspended`). Importer validates/projects envelope without directly modifying storage or Settings. |
 
+## AI Dev OS Application Catalog & Deep Links Phase 05 Implementation Checkpoint (2026-11-02)
+
+Phase 05 implementation under [AI Dev OS Redesign Plan](../plans/261101-1738-ai-dev-os-redesign/plan.md) reached administrative completion per user direction (Task 1 `migrate-workspace-apps`, Task 2 `migrate-git-and-reviews`, and Task 3 `migrate-management-apps` completed in source). Technical acceptance is incomplete; live lifecycle oracles, Monaco model continuity, and caller integrations carry forward to Phase 09.
+
+| Subsystem / Module | Source Path | Architectural Invariants & Role |
+| --- | --- | --- |
+| **Application Manifest Registry** | `packages/ui/src/os/app-registry.ts` | Statically registers 14 retained applications (`APP_MANIFESTS`), specifies metadata (`appId`, `displayName`, `instancing`, `minimumCtx`, `defaultPlacement`, `minSize`, `intents`), and provides window deduplication via `findExistingWindowForApp` across 6 instancing rules (`single-instance`, `profile-instance`, `project-instance`, `worktree-instance`, `tuple-instance`, `multi-instance`). |
+| **Workspace App Adapters** | `packages/ui/src/os/apps/` | Adapters wrapping existing organisms: `FilesApp.tsx` (`FileTree` with `file:reveal`), `SearchApp.tsx` (`SearchPanel` with `search:query`), `ChangesApp.tsx` (`ChangedFilesList`, `GitLocalChanges`, `DiffViewer`), and `ProjectInfoApp.tsx` (`ProjectOverview`, `ConfigEditor`). |
+| **Review App Adapters** | `packages/ui/src/os/apps/` | `GitApp.tsx` (`WorkspaceGitPanel`), `ConflictResolverApp.tsx` (fail-closed operation matching, `ConflictResolverPanel`, `MergeConflictEditor`), and `SessionChangesApp.tsx` (6-part owner tuple gating, `useResourceClaim`, fail-closed query cache purge on disable/disconnect, input isolation). |
+| **Management App Adapters** | `packages/ui/src/os/apps/` | `WorkflowPlansApp.tsx` (`WorkflowContextSurface`), `PortsTunnelsApp.tsx` (`PortsPanel`), `AgentStoreApp.tsx` (`AgentStorePage`), and `SettingsApp.tsx` (`SettingsPage` with independent server target and preferences source). |
+| **Typed Deep Links Parser** | `packages/ui/src/os/deep-links.ts` | Evaluates `/os?<query>` queries: validates profile existence, enforces `minimumCtx: "project"`, parses positive integer line numbers, checks Session Changes 6-part tuple, and creates typed `OsIntent` records without ambient shell commands. |
+| **Project Desktop Template** | `packages/ui/src/os/desktop-templates.ts` | `createProjectDesktopTemplate` creates the approved 60/40 binary split layout: 60% Terminals left pane; 40% side split with Files/Search (top 50%) and Git/Changes (bottom 50%), bound to the desktop's `WindowContext`. |
+| **Single-Transport & Generation Fencing** | `DiffViewer.tsx`, `use-file-search.ts`, `use-search-panel-replace.ts`, `use-ports.ts` | Hardens server communication: `DiffViewer` binds to authoritative profile transport with `saveRevisionRef` edit tracking; `useFileSearch` enforces connection currency with safe empty federated returns; `useSearchPanelReplace` validates match generations across Replace Next; `usePorts` checks target owner currency on cloudflared install. |
+| **OS Unit & Browser Test Suites** | `src/os/*.test.ts`, `browser-tests/os-*.browser.tsx` | 61 unit tests (`app-registry.test.ts`, `deep-links.test.ts`, etc.) and 9 browser component tests (`os-workspace-apps.browser.tsx`, `os-review-apps.browser.tsx`, `os-management-apps.browser.tsx`). |
+
 ## Shared UI Map
 
 `packages/ui/` exports the shared application via `packages/ui/src/embed/dam-hopper-app.tsx` (`packages/ui/src/index.ts` does not exist).
 - **Components (`packages/ui/src/components/`):** 238 files, ~53k LOC across atoms, molecules, organisms, templates, and pages (including `GenericTileRenderer` in `SplitLayout.tsx`).
-- **OS Subsystem (`packages/ui/src/os/`):** 35 files, ~7.1k LOC implementing OS shell, top bar, dock, desktop switcher, window list, command palette, notification center, window frame, desktop canvas, topics broker, intents router, notifications store, input arbiter, persistence, and tests.
+- **OS Subsystem (`packages/ui/src/os/`):** 50 files, ~10.2k LOC implementing OS shell, top bar, dock, desktop switcher, window list, command palette, notification center, window frame, desktop canvas, topics broker, intents router, notifications store, input arbiter, persistence, app registry, deep links, desktop templates, 14 application adapters, and tests.
 - **API & Transports (`packages/ui/src/api/`):** 26 files, ~18.4k LOC managing ownership tuples, connection registry, WebSocket transport, React Query hooks, and SSE parser.
 - **Hooks (`packages/ui/src/hooks/`):** 51 files, ~13k LOC covering Git operations, terminal managers, cognitive privacy guards, and SSE streams.
 - **Core Library (`packages/ui/src/lib/`):** 122 files, ~17k LOC implementing generic tile tree algorithms, terminal wire codecs, OPAQUE PAKE, AES-256-GCM crypto, terminal registries, and diagnostics.
 - **State Stores (`packages/ui/src/stores/`):** 11 files, ~4k LOC managing editor tabs, explorer expansion, Git history selection, and privacy mode.
 - **Types (`packages/ui/src/types/`):** Generic `TileTree<T>` data model (`tile-tree.ts`) and terminal layout definitions.
-- **Browser Component Regressions (`packages/ui/browser-tests/`):** Headless Chromium suites, including `os-lifecycle.browser.tsx` (9 tests), `os-shell.browser.tsx` (4 tests), `os-input-isolation.browser.tsx` (3 tests), and `cognito-mode.browser.tsx`.
+- **Browser Component Regressions (`packages/ui/browser-tests/`):** Headless Chromium suites, including `os-lifecycle.browser.tsx` (9 tests), `os-shell.browser.tsx` (4 tests), `os-input-isolation.browser.tsx` (3 tests), `os-workspace-apps.browser.tsx` (2 tests), `os-review-apps.browser.tsx` (5 tests), `os-management-apps.browser.tsx` (2 tests), and `cognito-mode.browser.tsx`.
 - **Design Guidelines:** Defined in `packages/ui/src/index.css` and `docs/frontend-components/platform-integrations.md` (JetBrains Mono, dark slate palette, Radix UI primitives with `@radix-ui/react-compose-refs` React 19 patch).
 
 ## Workflow Tracking
@@ -266,6 +281,6 @@ DamHopper enforces a **4-tier testing architecture** (see [Testing Guide](./test
 
 Deployment artifacts are located in `deploy/release/` and documented in the [Installation and Deployment Guide](./deployment-guide.md).
 ## Codebase Compaction Snapshot
-Repomix compaction artifact generated at `./repomix-output.xml` (3,956 files, 9,629,828 tokens packed, 41,843,719 chars, excluding dot-folders, build artifacts, lockfiles, and 10 security-flagged test/config assets as of 2026-11-02). Reflects Phase 02 (P0a) removal of `apps/native/` and desktop SSH forwarding, alongside the Phase 01 OS lifecycle architecture and Phase 04 shell chrome and services.
+Repomix compaction artifact generated at `./repomix-output.xml` (3,985 files, 9,697,653 tokens packed, 42,137,195 chars, excluding dot-folders, build artifacts, lockfiles, and 10 security-flagged test/config assets as of 2026-11-02). Reflects Phase 02 (P0a) removal of `apps/native/` and desktop SSH forwarding, alongside the Phase 01 OS lifecycle architecture, Phase 04 shell chrome and services, and Phase 05 application catalog and deep links baseline.
 
 *Note on Compaction Timing:* The Repomix metrics above reflect the compaction snapshot generated during this documentation update pass on 2026-11-02.

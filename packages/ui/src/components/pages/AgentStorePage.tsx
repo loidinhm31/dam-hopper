@@ -53,7 +53,13 @@ const EMPTY_PROFILES: ServerProfile[] = [];
 const getEmptyProfiles = () => EMPTY_PROFILES;
 
 
-export function AgentStorePage() {
+export function AgentStorePage({
+  noLayout = false,
+  profileId: explicitProfileId,
+}: {
+  noLayout?: boolean;
+  profileId?: string;
+} = {}) {
   const [searchParams, setSearchParams] = useSearchParams();
   const location = parseAgentStoreLocation(searchParams.toString());
   const profiles = useSyncExternalStore(
@@ -65,21 +71,29 @@ export function AgentStorePage() {
   const [defaultProfileId] = useState<string | null>(() => {
     const initialProfiles = getProfiles();
     const activeId = getActiveProfileId();
-    return initialProfiles.find((profile) => profile.id === activeId)?.id
-      ?? initialProfiles[0]?.id
-      ?? null;
+    return (
+      initialProfiles.find((profile) => profile.id === activeId)?.id ??
+      initialProfiles[0]?.id ??
+      null
+    );
   });
-  const selectedProfileId = location.profile.kind === "explicit"
-    ? location.profile.profileId
-    : location.profile.kind === "default"
-      ? defaultProfileId
-      : null;
-  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
+  const selectedProfileId =
+    explicitProfileId ??
+    (location.profile.kind === "explicit"
+      ? location.profile.profileId
+      : location.profile.kind === "default"
+        ? defaultProfileId
+        : null);
+  const selectedProfile = profiles.find(
+    (profile) => profile.id === selectedProfileId,
+  );
   const snapshot = useConnectionSnapshot(selectedProfileId ?? "");
-  const owner = selectedProfile && snapshot?.status === "connected"
-    && snapshot.owner.profileId === selectedProfile.id
-    ? snapshot.owner
-    : null;
+  const owner =
+    selectedProfile &&
+    snapshot?.status === "connected" &&
+    snapshot.owner.profileId === selectedProfile.id
+      ? snapshot.owner
+      : null;
 
   const handleProfileChange = (profileId: string) => {
     if (!profiles.some((profile) => profile.id === profileId)) return;
@@ -97,13 +111,84 @@ export function AgentStorePage() {
     }
     setSearchParams(params);
   };
-  const unavailableMessage = location.profile.kind === "invalid"
-    ? "Invalid profile target. Choose a server profile to continue."
-    : selectedProfileId === null
-      ? "Choose a server profile to continue."
-      : !selectedProfile
-        ? `Profile ${selectedProfileId} is no longer available. Choose another server profile.`
-        : `Profile ${selectedProfile.name || selectedProfile.id} is unavailable (${snapshot?.status ?? "disconnected"}). Connect this profile to continue or choose another server profile.`;
+  const unavailableMessage =
+    location.profile.kind === "invalid"
+      ? "Invalid profile target. Choose a server profile to continue."
+      : selectedProfileId === null
+        ? "Choose a server profile to continue."
+        : !selectedProfile
+          ? `Profile ${selectedProfileId} is no longer available. Choose another server profile.`
+          : `Profile ${selectedProfile.name || selectedProfile.id} is unavailable (${snapshot?.status ?? "disconnected"}). Connect this profile to continue or choose another server profile.`;
+
+  const content = (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex rounded border border-[var(--color-border)] overflow-hidden">
+          {(["store", "memory", "settings", "import"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => handleTabChange(tab)}
+              disabled={location.profile.kind === "choose"}
+              aria-pressed={location.tab === tab}
+              className={[
+                "px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer capitalize disabled:cursor-not-allowed disabled:opacity-50",
+                location.tab === tab
+                  ? "bg-[var(--color-primary)] text-white"
+                  : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)]",
+              ].join(" ")}
+            >
+              {tab === "store"
+                ? "Store"
+                : tab === "memory"
+                  ? "Memory Files"
+                  : tab === "settings"
+                    ? "Agent Settings"
+                    : "Import"}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <label
+            htmlFor="agent-store-profile-select"
+            className="text-xs text-[var(--color-text-muted)] font-medium"
+          >
+            Profile:
+          </label>
+          <select
+            id="agent-store-profile-select"
+            value={selectedProfile?.id ?? ""}
+            onChange={(event) => handleProfileChange(event.target.value)}
+            className="text-xs bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-2 py-1 text-[var(--color-text)] outline-none"
+          >
+            <option value="" disabled>
+              Choose a profile
+            </option>
+            {profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name || profile.id}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {owner && selectedProfile ? (
+        <ConnectedAgentStore
+          key={connectionKey(owner)}
+          owner={owner}
+          profileId={selectedProfile.id}
+          activeTab={location.tab}
+        />
+      ) : (
+        <p className="rounded-lg border border-[var(--color-border)] p-4 text-xs text-[var(--color-text-muted)]">
+          {unavailableMessage}
+        </p>
+      )}
+    </div>
+  );
+
+  if (noLayout) {
+    return content;
+  }
 
   return (
     <AppLayout
@@ -121,56 +206,7 @@ export function AgentStorePage() {
         />
       }
     >
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center gap-4 flex-wrap">
-          <div className="flex rounded border border-[var(--color-border)] overflow-hidden">
-            {(["store", "memory", "settings", "import"] as const).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => handleTabChange(tab)}
-                disabled={location.profile.kind === "choose"}
-                aria-pressed={location.tab === tab}
-                className={[
-                  "px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer capitalize disabled:cursor-not-allowed disabled:opacity-50",
-                  location.tab === tab
-                    ? "bg-[var(--color-primary)] text-white"
-                    : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)]",
-                ].join(" ")}
-              >
-                {tab === "store" ? "Store" : tab === "memory" ? "Memory Files" : tab === "settings" ? "Agent Settings" : "Import"}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-1.5">
-            <label htmlFor="agent-store-profile-select" className="text-xs text-[var(--color-text-muted)] font-medium">
-              Profile:
-            </label>
-            <select
-              id="agent-store-profile-select"
-              value={selectedProfile?.id ?? ""}
-              onChange={(event) => handleProfileChange(event.target.value)}
-              className="text-xs bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-2 py-1 text-[var(--color-text)] outline-none"
-            >
-              <option value="" disabled>Choose a profile</option>
-              {profiles.map((profile) => (
-                <option key={profile.id} value={profile.id}>{profile.name || profile.id}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-        {owner && selectedProfile ? (
-          <ConnectedAgentStore
-            key={connectionKey(owner)}
-            owner={owner}
-            profileId={selectedProfile.id}
-            activeTab={location.tab}
-          />
-        ) : (
-          <p className="rounded-lg border border-[var(--color-border)] p-4 text-xs text-[var(--color-text-muted)]">
-            {unavailableMessage}
-          </p>
-        )}
-      </div>
+      {content}
     </AppLayout>
   );
 }

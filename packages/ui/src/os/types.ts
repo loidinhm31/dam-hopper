@@ -1,11 +1,28 @@
 import type { TileNode } from "@/types/tile-tree.js";
 
-export type OsAppId = "terminals" | "editor" | "browser";
+export type OsAppId =
+  | "terminals"
+  | "editor"
+  | "browser"
+  | "files"
+  | "search"
+  | "changes"
+  | "project-info"
+  | "git"
+  | "conflict-resolver"
+  | "session-changes"
+  | "workflow-plans"
+  | "ports-tunnels"
+  | "agent-store"
+  | "settings";
 
 export interface WindowContext {
   profileId: string;
+  generation?: number;
   projectId?: string;
   worktreeId?: string;
+  gitRootId?: string;
+  operation?: string;
 }
 
 export type WindowMode = "tile" | "float";
@@ -54,7 +71,13 @@ export interface OsSessionV1 {
 }
 
 export interface ResourceClaimKey {
-  resourceKind: "terminal" | "editor" | "browser";
+  resourceKind:
+    | "terminal"
+    | "editor"
+    | "browser"
+    | "conflict-resolver"
+    | "session-changes"
+    | string;
   resourceId: string;
   profileId: string;
   generation: number;
@@ -65,7 +88,13 @@ export interface ResourceClaimKey {
 export interface AppManifest {
   appId: OsAppId;
   displayName: string;
-  instancing: "single-instance" | "multi-instance" | "project-instance";
+  instancing:
+    | "single-instance"
+    | "multi-instance"
+    | "profile-instance"
+    | "project-instance"
+    | "worktree-instance"
+    | "tuple-instance";
   minimumCtx: "none" | "profile" | "project";
   defaultPlacement: WindowMode;
   minSize: { width: number; height: number };

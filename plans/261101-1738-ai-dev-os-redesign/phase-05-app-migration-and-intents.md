@@ -1,9 +1,9 @@
 # Phase 05: P2 — Migrate application catalog and deep links
 
-Estimate: 88h; implementation status: **pending**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
+Estimate: 88h; implementation status: **DONE (2026-11-02)** (technical acceptance incomplete). [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
 
 ## Context / objective
-Priority P1; status pending. Every retained placement-map feature reachable through an app/intent before legacy-shell deletion. [17-app catalog](../reports/brainstorm-261101-1738-ai-dev-os-redesign.md#47-app-catalog-17-apps), [acceptance ledger](acceptance.md), [source baseline](source-evidence.md).
+Priority P1; status: **DONE (2026-11-02)** (technical acceptance incomplete). Every retained placement-map feature reachable through an app/intent before legacy-shell deletion. [17-app catalog](../reports/brainstorm-261101-1738-ai-dev-os-redesign.md#47-app-catalog-17-apps), [acceptance ledger](acceptance.md), [source baseline](source-evidence.md).
 
 ## Architecture / app contracts
 Registry manifests implement approved catalog exactly. Existing component bodies remain canonical; extract navigation chrome/controller composition, not duplicate feature logic. No new server endpoints. Pure session/window state owns only restorable view state (scroll/filter/selected tab or commit); unsaved editor and resolver drafts remain in their existing memory stores/root resources. App providers must not fake owner scoping over hooks that still read ambient profile: thread owner/client through every listed manager/hook and request completion.
@@ -43,6 +43,52 @@ Registry manifests implement approved catalog exactly. Existing component bodies
 ## Success / commands
 AC5/6 and deep-link foundation AC10. Every row above has a reachable launch and representative happy/error/target-change journey; registry tests assert catalog metadata. Test same project/path/session IDs on two profiles and worktrees; retired generation callbacks cannot save/stage/kill/open secret review. Session Changes focus and Escape sends zero input to background PTY; disable/disconnect closes and purges. File/media/encrypted transfers keep original owner and capabilities. Main runs listed checks at joined task boundaries; old shell parity tests retained until rewritten at Phase 09.
 
+### Verification Record — Phase 05 Completion (2026-11-02)
+- **Status:** Phase 05 marked **DONE per user direction (2026-11-02)**; technical acceptance incomplete (Cycle 5 review scored 5/10, 0 Critical, 11 warnings W0–W10 noted; open source remediation items tracked as release qualification gates before Phase 08 root cutover and Phase 09 qualification).
+- **Task Dispositions:**
+  - `migrate-workspace-apps` (Task 1): **DONE per user direction (2026-11-02)**. Delivered baseline implementations of `FilesApp.tsx`, `SearchApp.tsx`, `ChangesApp.tsx`, and `ProjectInfoApp.tsx` adapters; updated `TerminalsApp.tsx`, `EditorApp.tsx`, and `BrowserApp.tsx`; wired typed intents (`file:open`, `file:reveal`, `changes:diff`, `ports:browser`, `terminal:focus`); isolated file subscriptions and owner bindings (QA reported `browser-tests/os-workspace-apps.browser.tsx` passed; open limitations in advertised intent consumers W1 and DiffViewer save invalidation W0a noted).
+  - `migrate-git-and-reviews` (Task 2): **DONE per user direction (2026-11-02)**. Delivered baseline implementations of `GitApp.tsx`, `ConflictResolverApp.tsx`, and `SessionChangesApp.tsx`; wired Git safety/branch/history persistence; implemented Conflict Resolver operation claim preference with active-operation mismatch handling; added Session Changes `{profileId, generation, terminalId, incarnation, ompSessionId, root}` tuple keying, disabled/disconnect cache purging, and initial PTY input containment (QA reported `browser-tests/os-review-apps.browser.tsx` passed; open limitations in generation capture durability/offscreen review retirement W2, focus trap/PTY input gating W3, and unavailable requested operation fail-closed handling W4 noted).
+  - `migrate-management-apps` (Task 3): **DONE per user direction (2026-11-02)**. Delivered baseline implementations of `WorkflowPlansApp.tsx`, `PortsTunnelsApp.tsx`, `AgentStoreApp.tsx`, and `SettingsApp.tsx`; registered all 14 retained app manifests in `app-registry.ts` with instancing and context rules; implemented typed `/os?open=...&profile=...&project=...` parser in `deep-links.ts` and approved 60/40 binary split project desktop template in `desktop-templates.ts` (QA reported `browser-tests/os-management-apps.browser.tsx`, `app-registry.test.ts`, and `deep-links.test.ts` passed; open limitations in management URL decoupling W5, navigation consumption W6, template validation W8, and installer lifecycle W10 noted).
+- **Phase 05 Final Validation Evidence (`Phase05TesterCycle5` report):**
+  - **Overall Status:** QA reported `PASS` (70 / 70 passed, 100% pass rate across declared 12-file scope).
+  - **OS Unit Tests (`src/os/`, QA reported 61 / 61 passed across 9 files):**
+    - `src/os/intents.test.ts`: 3/3 passed
+    - `src/os/app-registry.test.ts`: 6/6 passed (14 retained app manifests, instancing, context rules, `findExistingWindowForApp`)
+    - `src/os/resource-registry.test.ts`: 5/5 passed
+    - `src/os/topics.test.ts`: 2/2 passed
+    - `src/os/notifications.test.ts`: 3/3 passed
+    - `src/os/window-ops.test.ts`: 11/11 passed
+    - `src/os/deep-links.test.ts`: 13/13 passed (fail-closed validation, project/profile scoping, 60/40 desktop layout)
+    - `src/os/input-arbiter.test.ts`: 6/6 passed
+    - `src/os/persistence.test.ts`: 12/12 passed
+  - **OS Browser Apps Suite (QA reported 9 / 9 passed across 3 files):**
+    - `browser-tests/os-workspace-apps.browser.tsx`: 2/2 passed (workspace apps mounting, `file:reveal` intent)
+    - `browser-tests/os-review-apps.browser.tsx`: 5/5 passed (GitApp context, ConflictResolverApp fail-closed, SessionChangesApp tuple/input isolation & cache purge, multi-profile project collision isolation)
+    - `browser-tests/os-management-apps.browser.tsx`: 2/2 passed (management apps mounting, 60/40 desktop template application)
+  - **TypeScript Build:**
+    - `pnpm --filter @dam-hopper/ui build` (`tsc -p tsconfig.json`): QA reported Exit 0, 0 type errors.
+- **Cycle 5 Code Review & Carried Technical Acceptance Items (`Phase05ReviewerCycle5` report):**
+  - **Score:** 5/10 — request changes (0 Critical, 11 warnings W0–W10 noted).
+  - **Resolved / Hardened Elements:**
+    - C1: Direct cross-profile DiffViewer transport routing resolved with single qualified transport.
+    - C2: Qualified project-search fallback and empty-federation ambient fallback resolved.
+    - Strict positive-integer line parsing and optional generation parsing in deep links.
+    - Fail-closed requested-operation claim preference in ConflictResolver.
+    - Authoritative tunnel row profile forwarded to browser.
+    - Multi-profile collision isolation verified across identical project names.
+  - **Carried Technical Debt & Remediation Items (active release qualification gates before Phase 08 cutover and Phase 09 qualification):**
+    - W0a: Post-write revision check in DiffViewer to prevent unsaved newer edits being marked clean.
+    - W0b: Match generation checks in Replace All to prevent operating across retired generations.
+    - W1: Advertised intent action consumers for terminal focus, file edit, browser preview, and search query.
+    - W2: Window creation generation capture durability and offscreen review cache purge.
+    - W3: Focus trap refinement (all roots, tabbable elements, containment recovery) and background PTY write dispatch gating.
+    - W4: Uniform fail-closed rejection for unavailable/missing requested operations in ConflictResolver.
+    - W5: Management windows URL-state decoupling (controlled props for AgentStore/Settings/Devices).
+    - W6: Navigation consumption with router/location awareness and safe-bounded numeric IDs.
+    - W7: Editable diff and view state canonical draft retention in memory resources.
+    - W8: Project desktop template context validation and lazy catalog imports.
+    - W9: Test depth for delayed-save, stale Replace All, focus containment, and installer journeys.
+    - W10: Installer lifecycle single-operation identity and failed-row owner tracking.
 ## Risks / security / rollback
 Audit ambient ownership in controllers/callbacks/async work. Resolver has normal migration/Phase09 web qualification, NOT external native/upstream-plan blocker; fix actual OS failures under ordinary task ownership. Bodies unmount while resources/drafts persist; capabilities fail closed. Roll back adapters/registry to prior hidden OS state, retaining shipped P0/default old UI. Next Monitor then Hub/Recipes.
 
@@ -263,6 +309,6 @@ Exactly one authored fence; no execution state/hydration, completion or test rec
 ]
 ```
 
-- [ ] <!-- evcrate-task:migrate-workspace-apps --> Migrate workspace apps and all file terminal browser cross-actions
-- [ ] <!-- evcrate-task:migrate-git-and-reviews --> Migrate Git conflict and session review with exact identity guards
-- [ ] <!-- evcrate-task:migrate-management-apps --> Migrate management apps and qualified OS deep-link intents
+- [x] <!-- evcrate-task:migrate-workspace-apps --> Migrate workspace apps and all file terminal browser cross-actions (DONE 2026-11-02)
+- [x] <!-- evcrate-task:migrate-git-and-reviews --> Migrate Git conflict and session review with exact identity guards (DONE 2026-11-02)
+- [x] <!-- evcrate-task:migrate-management-apps --> Migrate management apps and qualified OS deep-link intents (DONE 2026-11-02)

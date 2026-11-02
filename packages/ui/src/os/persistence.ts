@@ -58,6 +58,43 @@ function sanitizeAppState(
     if (typeof rawState.url === "string") projected.url = rawState.url;
     return Object.keys(projected).length > 0 ? projected : undefined;
   }
+  if (appId === "files") {
+    const projected: Record<string, unknown> = {};
+    if (typeof rawState.selectedPath === "string")
+      projected.selectedPath = rawState.selectedPath;
+    return Object.keys(projected).length > 0 ? projected : undefined;
+  }
+  if (appId === "search") {
+    const projected: Record<string, unknown> = {};
+    if (typeof rawState.query === "string") projected.query = rawState.query;
+    return Object.keys(projected).length > 0 ? projected : undefined;
+  }
+  if (appId === "changes") {
+    const projected: Record<string, unknown> = {};
+    if (typeof rawState.selectedFile === "string")
+      projected.selectedFile = rawState.selectedFile;
+    return Object.keys(projected).length > 0 ? projected : undefined;
+  }
+  if (appId === "git") {
+    const projected: Record<string, unknown> = {};
+    if (typeof rawState.selectedCommit === "string")
+      projected.selectedCommit = rawState.selectedCommit;
+    if (typeof rawState.selectedBranch === "string")
+      projected.selectedBranch = rawState.selectedBranch;
+    return Object.keys(projected).length > 0 ? projected : undefined;
+  }
+  if (appId === "workflow-plans") {
+    const projected: Record<string, unknown> = {};
+    if (typeof rawState.selectedItemId === "string")
+      projected.selectedItemId = rawState.selectedItemId;
+    return Object.keys(projected).length > 0 ? projected : undefined;
+  }
+  if (appId === "settings" || appId === "agent-store" || appId === "project-info") {
+    const projected: Record<string, unknown> = {};
+    if (typeof rawState.activeTab === "string")
+      projected.activeTab = rawState.activeTab;
+    return Object.keys(projected).length > 0 ? projected : undefined;
+  }
   return undefined;
 }
 

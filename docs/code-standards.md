@@ -173,6 +173,20 @@ See the [Agent Status contract](./architecture/agent-status.md).
 - **Input Precedence:** Input arbitration must follow the 5-tier precedence model: (1) Cognito privacy blocking, (2) IME/dead/AltGr passthrough without chord interception, (3) OS global shortcut (`Ctrl+Alt+Escape`) window cycling without PTY bytes, (4) frame chrome focus, (5) app body passthrough.
 - **Storage-Key vs Payload Version Separation:** Maintain unchanged `terminal-layout:v3:*` keys containing `{ version: 2, root }` payloads with `sessionIds`/`activeSessionId`. Layout mutations and wire codecs must losslessly map between `LayoutNode` and generic `TileNode<T>` (`items`/`active`) without disk migration.
 
+### AI Dev OS Application Adapters & Deep Link Protocols
+
+- **Adapter Composition Over Duplication:** Application adapters under `packages/ui/src/os/apps/` must wrap existing canonical organisms and page components without duplicating domain logic, state machines, or database calls. Adapters extract navigation chrome, bind the window context (`WindowContext`), and connect user actions to typed intents.
+- **Exact Instancing Granularity:** Every application declared in `APP_MANIFESTS` must specify its exact instancing rule:
+  - `single-instance`: Singleton across session (e.g. `settings`).
+  - `profile-instance`: Deduplicated by `profileId` (e.g. `ports-tunnels`, `agent-store`).
+  - `project-instance`: Deduplicated by `(profileId, projectId)` (e.g. `workflow-plans`, `project-info`; `conflict-resolver` adds `(worktreeId, gitRootId, operation)`).
+  - `worktree-instance`: Deduplicated by `(profileId, projectId, worktreeId)` (e.g. `files`, `search`, `changes`, `git`).
+  - `tuple-instance`: Deduplicated by full 6-part process tuple (e.g. `session-changes`).
+  - `multi-instance`: Unrestricted independent window creation (e.g. `terminals`, `editor`, `browser`).
+  Deduplication checks must execute through `findExistingWindowForApp` before creating a new window.
+- **Deep Link Fail-Closed Validation:** Deep link parameters parsed via `parseOsDeepLink` must strictly validate profile existence in `knownProfiles`, enforce `minimumCtx: "project"`, validate line numbers as positive decimals, and verify the full owner tuple for Session Changes. Deep links synthesize typed `OsIntent` records; they must never run ambient shell commands or spawn unattended processes.
+- **Single-Transport & Generation Fencing Invariant:** UI components and hooks performing server communication (`DiffViewer`, `useFileSearch`, `useSearchPanelReplace`, `usePorts`, `SessionChangesApp`) must bind strictly to the authoritative profile transport (`getBoundTransport` / `getConnectionsTransport`). When federated profiles are empty, return safe empty results without ambient fallback. Increment edit revisions (`saveRevisionRef`) on model mutations and recheck connection generation before and after asynchronous I/O to prevent superseded saves from marking newer text clean.
+
 ## Git, auth, and transport security
 
 - Derive actor identity and role from validated server authentication state; never trust request-body actor or role claims, and never treat the server's `server-token` JWT signing secret as a client bearer credential.

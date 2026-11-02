@@ -8,7 +8,8 @@ import {
 } from "react";
 import { useWindowStore } from "./window-store.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
-import { APP_MANIFESTS } from "./app-registry.js";
+import { APP_MANIFESTS, findExistingWindowForApp } from "./app-registry.js";
+import { createProjectDesktopTemplate } from "./desktop-templates.js";
 import type { OsAppId } from "./types.js";
 import { generateUUID } from "@/lib/utils.js";
 
@@ -42,6 +43,7 @@ export function CommandPalette({
 }: CommandPaletteProps) {
   const isCognitoActive = useCognitoModeStore((state) => state.active);
   const session = useWindowStore((state) => state.session);
+  const setSession = useWindowStore((state) => state.setSession);
   const openWindow = useWindowStore((state) => state.openWindow);
   const focusWindow = useWindowStore((state) => state.focusWindow);
   const switchDesktop = useWindowStore((state) => state.switchDesktop);
@@ -102,65 +104,44 @@ export function CommandPalette({
 
   // Built-in Commands Provider
   const commandItems = useMemo<PaletteItem[]>(() => {
+    const appLaunchCommands: PaletteItem[] = Object.values(APP_MANIFESTS).map(
+      (manifest) => ({
+        id: `cmd-new-${manifest.appId}`,
+        mode: "commands" as const,
+        title: `Open ${manifest.displayName}`,
+        description: `Open ${manifest.displayName} window (${manifest.defaultPlacement})`,
+        shortcut: manifest.appId === "terminals" ? "Ctrl+`" : undefined,
+        onSelect: () => {
+          const desktopCtx =
+            activeDesktop?.defaultCtx ?? { profileId: "default" };
+          const existing = findExistingWindowForApp(
+            session.windows,
+            manifest.appId,
+            desktopCtx,
+          );
+          if (existing) {
+            if (existing.minimized) restoreWindow(existing.id);
+            focusWindow(existing.id);
+            onClose();
+            return;
+          }
+          openWindow(
+            {
+              id: `${manifest.appId}-${generateUUID().slice(0, 8)}`,
+              appId: manifest.appId,
+              title: manifest.displayName,
+              ctx: activeDesktop?.defaultCtx ?? { profileId: "default" },
+              mode: manifest.defaultPlacement,
+            },
+            session.activeDesktopId,
+          );
+          onClose();
+        },
+      }),
+    );
+
     const items: PaletteItem[] = [
-      {
-        id: "cmd-new-terminal",
-        mode: "commands",
-        title: "New Terminal Window",
-        description: "Open an xterm terminal in current desktop",
-        shortcut: "Ctrl+`",
-        onSelect: () => {
-          openWindow(
-            {
-              id: `terminals-${generateUUID().slice(0, 8)}`,
-              appId: "terminals",
-              title: "Terminals",
-              ctx: activeDesktop?.defaultCtx ?? { profileId: "default" },
-              mode: "tile",
-            },
-            session.activeDesktopId,
-          );
-          onClose();
-        },
-      },
-      {
-        id: "cmd-new-editor",
-        mode: "commands",
-        title: "New Monaco Editor",
-        description: "Open editor in current desktop",
-        onSelect: () => {
-          openWindow(
-            {
-              id: `editor-${generateUUID().slice(0, 8)}`,
-              appId: "editor",
-              title: "Editor",
-              ctx: activeDesktop?.defaultCtx ?? { profileId: "default" },
-              mode: "tile",
-            },
-            session.activeDesktopId,
-          );
-          onClose();
-        },
-      },
-      {
-        id: "cmd-new-browser",
-        mode: "commands",
-        title: "New Browser Preview",
-        description: "Open floating browser preview window",
-        onSelect: () => {
-          openWindow(
-            {
-              id: `browser-${generateUUID().slice(0, 8)}`,
-              appId: "browser",
-              title: "Browser Preview",
-              ctx: activeDesktop?.defaultCtx ?? { profileId: "default" },
-              mode: "float",
-            },
-            session.activeDesktopId,
-          );
-          onClose();
-        },
-      },
+      ...appLaunchCommands,
       {
         id: "cmd-new-desktop",
         mode: "commands",
@@ -168,6 +149,36 @@ export function CommandPalette({
         description: "Create an empty virtual desktop",
         onSelect: () => {
           addDesktop();
+          onClose();
+        },
+      },
+      {
+        id: "cmd-apply-project-template",
+        mode: "commands",
+        title: "Create Project Desktop",
+        description:
+          "Add new desktop with approved 60/40 layout (Terminals + Files/Search + Git/Changes)",
+        onSelect: () => {
+          const newDesktopId = `desktop-${generateUUID().slice(0, 8)}`;
+          const desktopCtx =
+            activeDesktop?.defaultCtx ?? { profileId: "default" };
+          const { desktop, windows } = createProjectDesktopTemplate(
+            `Project (${desktopCtx.projectId ?? "Workspace"})`,
+            desktopCtx,
+            newDesktopId,
+          );
+          const current = session;
+          const updatedDesktops = [...current.desktops, desktop];
+          const updatedWindows = { ...current.windows };
+          for (const w of windows) {
+            updatedWindows[w.id] = w;
+          }
+          setSession({
+            ...current,
+            desktops: updatedDesktops,
+            windows: updatedWindows,
+            activeDesktopId: newDesktopId,
+          });
           onClose();
         },
       },

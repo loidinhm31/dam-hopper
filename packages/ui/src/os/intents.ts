@@ -11,11 +11,32 @@ export type IntentAction =
   | "terminal:focus"
   | "file:open"
   | "file:edit"
+  | "file:reveal"
   | "browser:preview"
   | "browser:open"
+  | "search:query"
+  | "changes:stage"
+  | "changes:unstage"
+  | "changes:discard"
+  | "changes:commit"
+  | "changes:diff"
   | "git:status"
   | "git:diff"
   | "git:history"
+  | "git:branch"
+  | "git:reveal-commit"
+  | "conflict:resolve"
+  | "conflict:reveal"
+  | "session-changes:open"
+  | "workflow:open-item"
+  | "workflow:open-plan"
+  | "ports:open"
+  | "ports:open-tunnel"
+  | "project:info"
+  | "project:config"
+  | "agent-store:open"
+  | "settings:open"
+  | "settings:devices"
   | "system:monitor"
   | "recipes:launch";
 
@@ -35,8 +56,16 @@ export interface IntentPayloadMap {
     projectId: string;
     worktreeId?: string;
     filePath: string;
+    line?: number;
   };
   "file:edit": {
+    profileId: string;
+    projectId: string;
+    worktreeId?: string;
+    filePath: string;
+    line?: number;
+  };
+  "file:reveal": {
     profileId: string;
     projectId: string;
     worktreeId?: string;
@@ -65,6 +94,113 @@ export interface IntentPayloadMap {
     profileId: string;
     projectId: string;
     worktreeId?: string;
+  };
+  "git:branch": {
+    profileId: string;
+    projectId: string;
+    worktreeId?: string;
+    branchName?: string;
+  };
+  "git:reveal-commit": {
+    profileId: string;
+    projectId: string;
+    worktreeId?: string;
+    commitHash: string;
+    rootId?: string;
+  };
+  "search:query": {
+    profileId: string;
+    projectId: string;
+    worktreeId?: string;
+    query: string;
+  };
+  "changes:stage": {
+    profileId: string;
+    projectId: string;
+    worktreeId?: string;
+    path: string;
+  };
+  "changes:unstage": {
+    profileId: string;
+    projectId: string;
+    worktreeId?: string;
+    path: string;
+  };
+  "changes:discard": {
+    profileId: string;
+    projectId: string;
+    worktreeId?: string;
+    path: string;
+  };
+  "changes:commit": {
+    profileId: string;
+    projectId: string;
+    worktreeId?: string;
+    message?: string;
+  };
+  "changes:diff": {
+    profileId: string;
+    projectId: string;
+    worktreeId?: string;
+    filePath: string;
+  };
+  "conflict:resolve": {
+    profileId: string;
+    projectId: string;
+    worktreeId?: string;
+    operation?: string;
+    root?: string;
+    filePath?: string;
+  };
+  "conflict:reveal": {
+    profileId: string;
+    projectId: string;
+    worktreeId?: string;
+    filePath: string;
+  };
+  "session-changes:open": {
+    profileId: string;
+    generation?: number;
+    terminalId: string;
+    terminalIncarnation: string;
+    ompSessionId: string;
+    rootId?: string;
+  };
+  "workflow:open-item": {
+    profileId: string;
+    projectId?: string;
+    itemId: string;
+  };
+  "workflow:open-plan": {
+    profileId: string;
+    projectId?: string;
+    planId: string;
+  };
+  "ports:open": {
+    profileId: string;
+  };
+  "ports:open-tunnel": {
+    profileId: string;
+    url: string;
+  };
+  "project:info": {
+    profileId: string;
+    projectId: string;
+  };
+  "project:config": {
+    profileId: string;
+    projectId: string;
+  };
+  "agent-store:open": {
+    profileId: string;
+    tab?: string;
+  };
+  "settings:open": {
+    profileId?: string;
+    tab?: string;
+  };
+  "settings:devices": {
+    profileId?: string;
   };
   "system:monitor": {
     profileId: string;
@@ -131,11 +267,17 @@ class IntentRouter {
       };
     }
 
-    // Execute first registered handler
+    let lastUnhandledReason = `No active handler processed intent '${intent.action}'.`;
     for (const handler of set) {
       try {
         const result = await handler(intent);
-        return result;
+        if (result.status === "handled") {
+          return result;
+        }
+        if (result.status === "invalid") {
+          return result;
+        }
+        lastUnhandledReason = result.reason;
       } catch (err) {
         return {
           status: "invalid",
@@ -146,10 +288,9 @@ class IntentRouter {
 
     return {
       status: "unhandled",
-      reason: `No active handler processed intent '${intent.action}'.`,
+      reason: lastUnhandledReason,
     };
   }
-
   public clear(): void {
     this.handlers.clear();
   }

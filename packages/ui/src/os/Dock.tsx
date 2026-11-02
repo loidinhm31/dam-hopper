@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import type { OsAppId } from "./types.js";
 import { useWindowStore } from "./window-store.js";
 import { loadDockPins, saveDockPins } from "./persistence.js";
-import { APP_MANIFESTS } from "./app-registry.js";
+import { APP_MANIFESTS, findExistingWindowForApp } from "./app-registry.js";
 import { generateUUID } from "@/lib/utils.js";
 
 export interface DockProps {
@@ -14,6 +14,17 @@ const APP_ICONS: Record<OsAppId, string> = {
   terminals: ">_",
   editor: "{ }",
   browser: "🌐",
+  files: "📁",
+  search: "🔍",
+  changes: "±",
+  git: "⎇",
+  "conflict-resolver": "⚡",
+  "session-changes": "Δ",
+  "workflow-plans": "📋",
+  "ports-tunnels": "🔌",
+  "project-info": "ℹ",
+  "agent-store": "🛒",
+  settings: "⚙",
 };
 
 export function Dock({ onLaunchApp, className = "" }: DockProps) {
@@ -40,19 +51,13 @@ export function Dock({ onLaunchApp, className = "" }: DockProps) {
       const manifest = APP_MANIFESTS[appId];
       if (!manifest) return;
 
-      // Single-instance check
-      if (manifest.instancing === "single-instance") {
-        const existing = Object.values(session.windows).find(
-          (w) => w.appId === appId,
-        );
-        if (existing) {
-          if (existing.minimized) restoreWindow(existing.id);
-          focusWindow(existing.id);
-          return;
-        }
-      }
-
       const desktopCtx = activeDesktop?.defaultCtx ?? { profileId: "default" };
+      const existing = findExistingWindowForApp(session.windows, appId, desktopCtx);
+      if (existing) {
+        if (existing.minimized) restoreWindow(existing.id);
+        focusWindow(existing.id);
+        return;
+      }
       openWindow(
         {
           id: `${appId}-${generateUUID().slice(0, 8)}`,

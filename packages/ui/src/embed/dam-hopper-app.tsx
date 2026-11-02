@@ -254,6 +254,7 @@ function FreshResetBanner() {
 
 function LegacyDeepLinkNotice() {
   const location = useLocation();
+  if (location.pathname.startsWith("/os")) return null;
   const check = checkLegacyDeepLink(location);
 
   if (!check.isLegacy) return null;

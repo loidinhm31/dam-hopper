@@ -103,6 +103,9 @@ export function useFileSearch(
     : [
         mode === "filename" ? "fs-path-search" : "fs-search",
         targetRef?.profileId ?? "__local__",
+        targetRef?.profileId
+          ? (getConnectionSnapshot(targetRef.profileId)?.owner.generation ?? 0)
+          : ((targetRef as { generation?: number })?.generation ?? 0),
         project,
         targetKey,
         trimmedQuery,
@@ -117,12 +120,8 @@ export function useFileSearch(
         let t: WsTransport;
         let conn: ConnectionRef | undefined;
         if (targetRef?.profileId) {
-          try {
-            conn = captureConnection(targetRef.profileId);
-            t = getConnectionsTransport(conn) as WsTransport;
-          } catch {
-            t = getTransport() as WsTransport;
-          }
+          conn = captureConnection(targetRef.profileId);
+          t = getConnectionsTransport(conn) as WsTransport;
         } else {
           t = getTransport() as WsTransport;
         }
@@ -134,10 +133,15 @@ export function useFileSearch(
           case: caseSensitive || undefined,
         })) as SearchResponse | PathSearchResponse;
 
+        if (conn && !isCurrentConnection(conn)) {
+          throw new Error("Connection changed during project search");
+        }
         const matches = (resp.matches ?? []).map((m) => ({
           ...m,
           profileId: targetRef?.profileId,
-          generation: conn?.generation,
+          generation:
+            conn?.generation ??
+            (targetRef as { generation?: number })?.generation,
           targetRef: targetRef ?? undefined,
         }));
 
@@ -150,18 +154,10 @@ export function useFileSearch(
 
       // Federated search across up to 4 eligible connected profiles
       if (eligibleProfiles.length === 0) {
-        // Fallback for single server / unconfigured profile
-        const t = getTransport() as WsTransport;
-        const channel = mode === "filename" ? "fs:searchPaths" : "fs:search";
-        const resp = (await t.invoke(channel, {
-          q: trimmedQuery,
-          case: caseSensitive || undefined,
-          scope: "workspace",
-        })) as SearchResponse | PathSearchResponse;
         return {
-          query: resp.query,
-          matches: resp.matches ?? [],
-          truncated: Boolean(resp.truncated),
+          query: trimmedQuery,
+          matches: [],
+          truncated: false,
         };
       }
 

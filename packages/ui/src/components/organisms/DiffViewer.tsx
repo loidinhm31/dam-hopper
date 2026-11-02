@@ -37,12 +37,25 @@ import {
   projectTargetCacheKey,
   type ProjectTargetInput,
 } from "@/api/client.js";
-import { getTransport } from "@/api/transport.js";
+import { getTransport as getAmbientTransport } from "@/api/transport.js";
+import {
+  getConnectionSnapshot,
+  getTransport as getConnectionTransport,
+} from "@/api/connections.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
-function transport(): WsTransport {
-  return getTransport() as WsTransport;
+function getBoundTransport(targetRef: { profileId?: string }): WsTransport {
+  if (targetRef.profileId) {
+    const snapshot = getConnectionSnapshot(targetRef.profileId);
+    if (!snapshot || snapshot.status !== "connected") {
+      throw new Error(
+        `Connection not connected for profile ${targetRef.profileId}`,
+      );
+    }
+    return getConnectionTransport(snapshot.owner) as WsTransport;
+  }
+  return getAmbientTransport() as WsTransport;
 }
 
 interface DiffViewerProps {
@@ -152,6 +165,7 @@ export function DiffViewer({
   // Snapshot of content at last load/save — source of truth for dirty detection.
   // Avoids false-dirty when data refetches between an edit and a save.
   const savedContentRef = useRef<string>("");
+  const saveRevisionRef = useRef<number>(0);
   const qc = useQueryClient();
 
   const isDeleted = fileStatus === "deleted";
@@ -187,11 +201,17 @@ export function DiffViewer({
 
   // Reset state when file selection changes
   useEffect(() => {
+    saveRevisionRef.current += 1;
     setIsDirty(false);
     setSaveState("idle");
     setSaveError(null);
   }, [diffIdentityKey]);
 
+  useEffect(() => {
+    return () => {
+      saveRevisionRef.current += 1;
+    };
+  }, []);
   // Auto-dismiss save error after 5 s
   useEffect(() => {
     if (saveState !== "error") return;
@@ -252,10 +272,10 @@ export function DiffViewer({
       savedContentRef.current = modifiedEditor.getValue();
 
       modifiedEditor.onDidChangeModelContent(() => {
+        saveRevisionRef.current += 1;
         const current = modifiedEditor.getValue();
         setIsDirty(current !== savedContentRef.current);
       });
-
       // Manual ResizeObserver layout instead of automaticLayout polling.
       const container = editorContainerRef.current;
       if (container) {
@@ -326,17 +346,44 @@ export function DiffViewer({
       !editor ||
       !isDirty ||
       saveState === "saving"
-    )
+    ) {
       return;
+    }
     const content = editor.getModifiedEditor().getValue();
+    const currentSaveRevision = saveRevisionRef.current + 1;
+    saveRevisionRef.current = currentSaveRevision;
+    const initialSnap = targetRef.profileId
+      ? getConnectionSnapshot(targetRef.profileId)
+      : null;
+    const initialGeneration =
+      (targetRef as { generation?: number }).generation ??
+      initialSnap?.owner.generation;
     setSaveState("saving");
     setSaveError(null);
     try {
+      const boundTransport = getBoundTransport(targetRef);
       // Stat the file to get current mtime — server rejects stale writes
-      const readResult = await transport().fsRead(targetRef, filePath, {
+      const readResult = await boundTransport.fsRead(targetRef, filePath, {
         offset: 0,
         len: 0,
       });
+      if (saveRevisionRef.current !== currentSaveRevision) return;
+      if (targetRef.profileId) {
+        const snap = getConnectionSnapshot(targetRef.profileId);
+        if (!snap || snap.status !== "connected") {
+          throw new Error(
+            `Connection lost or changed for profile ${targetRef.profileId}`,
+          );
+        }
+        if (
+          initialGeneration !== undefined &&
+          snap.owner.generation !== initialGeneration
+        ) {
+          throw new Error(
+            `Connection generation changed for profile ${targetRef.profileId}`,
+          );
+        }
+      }
       if (!readResult.ok && readResult.code !== "TOO_LARGE") {
         const readMessage =
           (readResult as { message?: string }).message ?? "Failed to read file";
@@ -346,7 +393,7 @@ export function DiffViewer({
         throw new Error(readMessage);
       }
       const mtime = (readResult as { mtime: number }).mtime;
-      const writeResult = await transport().fsWriteFile(
+      const writeResult = await boundTransport.fsWriteFile(
         targetRef,
         filePath,
         content,
@@ -364,7 +411,19 @@ export function DiffViewer({
         }
         throw new Error(writeMessage);
       }
-      // Update snapshot so dirty state resets correctly
+      if (targetRef.profileId) {
+        const postSnap = getConnectionSnapshot(targetRef.profileId);
+        if (
+          !postSnap ||
+          postSnap.status !== "connected" ||
+          (initialGeneration !== undefined &&
+            postSnap.owner.generation !== initialGeneration)
+        ) {
+          throw new Error(
+            `Connection lost or changed for profile ${targetRef.profileId}`,
+          );
+        }
+      }
       savedContentRef.current = content;
       setSaveState("idle");
       setIsDirty(false);
@@ -378,8 +437,10 @@ export function DiffViewer({
       if (isProjectTargetError(code, message)) {
         onTargetUnavailable?.();
       }
-      setSaveState("error");
-      setSaveError(message);
+      if (saveRevisionRef.current === currentSaveRevision) {
+        setSaveState("error");
+        setSaveError(message);
+      }
     }
   }, [
     filePath,

@@ -32,7 +32,11 @@ const SETTINGS_DIAGNOSTICS_SCOPE = {
   frontendScopes: ["SettingsPage", "settings"],
 };
 
-export function SettingsPage() {
+export function SettingsPage({
+  noLayout = false,
+}: {
+  noLayout?: boolean;
+} = {}) {
   const profilesResult = readServerProfiles();
   const profiles: ServerProfile[] =
     profilesResult.status === "available" ? profilesResult.profiles : [];
@@ -282,17 +286,8 @@ export function SettingsPage() {
     }, 6000);
   }
 
-  return (
-    <AppLayout
-      title="Settings"
-      actions={
-        <DiagnosticsExportButton
-          compact
-          terminalIds={[]}
-          scope={SETTINGS_DIAGNOSTICS_SCOPE}
-        />
-      }
-    >
+  const content = (
+    <>
       <div className="max-w-4xl space-y-3">
         <section
           data-testid="settings-profile-targets"
@@ -571,6 +566,25 @@ export function SettingsPage() {
         variant="danger"
         loading={importSettings.isPending}
       />
+    </>
+  );
+
+  if (noLayout) {
+    return content;
+  }
+
+  return (
+    <AppLayout
+      title="Settings"
+      actions={
+        <DiagnosticsExportButton
+          compact
+          terminalIds={[]}
+          scope={SETTINGS_DIAGNOSTICS_SCOPE}
+        />
+      }
+    >
+      {content}
     </AppLayout>
   );
 }

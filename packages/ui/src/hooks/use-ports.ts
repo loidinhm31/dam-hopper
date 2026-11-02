@@ -7,7 +7,7 @@ import {
 } from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
-import { getTransport, getTransportGeneration } from "../api/transport.js";
+import { getTransport, getTransportGeneration, type Transport } from "../api/transport.js";
 import { getActiveProfileId, getProfiles, subscribeToProfileChanges, type ServerProfile } from "../api/server-config.js";
 import { getTransport as getBoundTransport, getConnectionSnapshot, isCurrentConnection, subscribeConnections } from "../api/connections.js";
 import { profilePortsQueryKey, profileTunnelsQueryKey } from "../api/query-client.js";
@@ -346,15 +346,25 @@ export function usePorts(options?: {
   }, [qc, transportGeneration, updateInstallState]);
 
   const installCloudflared = useCallback(async () => {
-    const requestGeneration = transportGeneration;
-    const requestTransport = transport;
+    const targetOwner = targetOwners[0];
+    const requestGeneration = targetOwner?.generation ?? transportGeneration;
+    const requestTransport = targetOwner
+      ? (getBoundTransport(targetOwner) as Transport)
+      : transport;
     updateInstallState({ status: "installing", downloaded: 0, total: 0 });
     try {
       await requestTransport.invoke("tunnel:install");
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       if (msg.toLowerCase().includes("already in progress")) return;
-      if (
+      if (targetOwner) {
+        if (
+          !isCurrentConnection(targetOwner) ||
+          targetOwner.generation !== requestGeneration
+        ) {
+          return;
+        }
+      } else if (
         getTransport() !== requestTransport ||
         getTransportGeneration() !== requestGeneration
       ) {
@@ -367,8 +377,7 @@ export function usePorts(options?: {
         error: msg || "Install request failed",
       });
     }
-  }, [transport, transportGeneration, updateInstallState]);
-
+  }, [targetOwners, transport, transportGeneration, updateInstallState]);
   const createTunnel = useCallback(
     async (port: number, label: string, targetProfileId?: string) => {
       const profileId = targetProfileId ?? options?.owner?.profileId ?? options?.profileId ?? getActiveProfileId();

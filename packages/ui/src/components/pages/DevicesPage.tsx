@@ -8,18 +8,23 @@ import {
 import { LoginDevicesSection } from "@/components/organisms/LoginDevicesSection.js";
 import { ShieldCheck, Server } from "lucide-react";
 
-export function DevicesPage() {
+export function DevicesPage({
+  noLayout = false,
+  profileId: explicitProfileId,
+}: {
+  noLayout?: boolean;
+  profileId?: string;
+} = {}) {
   const profilesResult = readServerProfiles();
   const profiles: ServerProfile[] =
     profilesResult.status === "available" ? profilesResult.profiles : [];
   const activeProfileId = getActiveProfileId();
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(
-    () => activeProfileId ?? profiles[0]?.id ?? null,
+    () => explicitProfileId ?? activeProfileId ?? profiles[0]?.id ?? null,
   );
 
-  return (
-    <AppLayout title="Devices">
-      <div className="mx-auto max-w-4xl space-y-6">
+  const content = (
+    <div className="mx-auto max-w-4xl space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/40 p-5">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
@@ -67,6 +72,15 @@ export function DevicesPage() {
           />
         </div>
       </div>
+    );
+
+  if (noLayout) {
+    return content;
+  }
+
+  return (
+    <AppLayout title="Devices">
+      {content}
     </AppLayout>
   );
 }

@@ -47,10 +47,14 @@ export function SearchPanel({
 }: SearchPanelProps) {
   const worktreePath = target?.worktreePath;
   const targetProject = target?.project ?? project;
-  const requestTarget =
-    worktreePath == null
-      ? targetProject
-      : { project: targetProject, worktreePath };
+  const targetProfileId = target?.profileId;
+  const requestTarget = useMemo(() => {
+    const base =
+      worktreePath == null
+        ? { project: targetProject }
+        : { project: targetProject, worktreePath };
+    return targetProfileId ? { ...base, profileId: targetProfileId } : base;
+  }, [targetProject, worktreePath, targetProfileId]);
   const localInputRef = useRef<HTMLInputElement>(null);
   const resolvedRef = inputRef ?? localInputRef;
   const {

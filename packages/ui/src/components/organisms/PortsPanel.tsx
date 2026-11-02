@@ -170,7 +170,11 @@ function PortRow({
   isLocal: boolean;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
-  onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
+  onOpenTunnelInBrowser?: (
+    url: string,
+    tunnel: TunnelInfo,
+    profileId?: string,
+  ) => void;
   onKillSession: (sessionId: string) => Promise<void>;
 }) {
   const [showQr, setShowQr] = useState(false);
@@ -391,9 +395,12 @@ function PortRow({
                     <button
                       type="button"
                       onClick={() =>
-                        onOpenTunnelInBrowser(entry.tunnel!.url!, entry.tunnel!)
+                        onOpenTunnelInBrowser(
+                          entry.tunnel!.url!,
+                          entry.tunnel!,
+                          entry.profileId,
+                        )
                       }
-                      title={`Open ${entry.tunnel.url} in embedded Browser`}
                       aria-label={`Open ${entry.tunnel.url} in embedded Browser`}
                       className="rounded p-1 hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
                     >
@@ -594,8 +601,14 @@ function AddPortForm({
 
 export function PortsPanel({
   onOpenTunnelInBrowser,
+  profileId,
 }: {
-  onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
+  onOpenTunnelInBrowser?: (
+    url: string,
+    tunnel: TunnelInfo,
+    profileId?: string,
+  ) => void;
+  profileId?: string;
 } = {}) {
   const {
     ports,
@@ -606,7 +619,7 @@ export function PortsPanel({
     killPortSession,
     installCloudflared,
     installState,
-  } = usePorts();
+  } = usePorts(profileId ? { profileId } : undefined);
   const [binaryMissing, setBinaryMissing] = useState(false);
   const [warned, setWarned] = useState(
     () => !!localStorage.getItem(WARNED_KEY),

@@ -81,6 +81,7 @@ export interface WindowStoreState {
     fromIndex: number,
     toIndex: number,
   ) => void;
+  updateAppState: (windowId: string, patch: Record<string, unknown>) => void;
   splitWindow: (
     sourceWindowId: string,
     targetWindowId: string,
@@ -255,5 +256,24 @@ export const useWindowStore = create<WindowStoreState>((set, get) => ({
         direction,
       ),
     }));
+  },
+
+  updateAppState: (windowId, patch) => {
+    set((state) => {
+      const win = state.session.windows[windowId];
+      if (!win) return state;
+      return {
+        session: {
+          ...state.session,
+          windows: {
+            ...state.session.windows,
+            [windowId]: {
+              ...win,
+              appState: { ...win.appState, ...patch },
+            },
+          },
+        },
+      };
+    });
   },
 }));
