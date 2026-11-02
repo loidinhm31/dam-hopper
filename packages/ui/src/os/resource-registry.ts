@@ -144,7 +144,7 @@ export function useResourceClaim(
       unsubscribe();
       globalResourceRegistry.release(key, windowId);
     };
-  }, [formattedKey, windowId]);
+  }, [key, formattedKey, windowId]);
 
   return useSyncExternalStore(
     useCallback(
@@ -153,7 +153,7 @@ export function useResourceClaim(
     ),
     useCallback(
       () => getClaimStatus(globalResourceRegistry, key, windowId),
-      [formattedKey, windowId],
+      [key, windowId],
     ),
     () => PENDING_STATUS,
   );

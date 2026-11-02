@@ -97,6 +97,11 @@ const AgentStorePage = lazy(() =>
     default: m.AgentStorePage,
   })),
 );
+const OsShell = lazy(() =>
+  import("@/os/OsShell.js").then((m) => ({
+    default: m.OsShell,
+  })),
+);
 
 const LOADING_FALLBACK = (
   <div className="app-screen-height flex items-center justify-center text-xs text-[var(--color-text-muted)]">
@@ -113,10 +118,13 @@ function LegacyRedirect({ to }: { to: string }) {
 /** Registers Ctrl+` as a global shortcut to open a new free terminal in workspace. */
 function GlobalShortcuts() {
   const navigate = useNavigate();
+  const location = useLocation();
   const activeProject = useWorkspaceStore((state) => state.activeProject);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      if (e.defaultPrevented) return;
+      if (location.pathname.startsWith("/os")) return;
       if (matchesNewTerminalShortcut(e)) {
         e.preventDefault();
         const params = new URLSearchParams({ action: "new-terminal" });
@@ -126,9 +134,37 @@ function GlobalShortcuts() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeProject, navigate]);
+  }, [activeProject, navigate, location.pathname]);
 
   return null;
+}
+
+function AuthenticatedOsRoute() {
+  const profile = useServerProfile();
+  const token = profile ? getAuthToken(profile.id) : null;
+  const isAuthenticated = Boolean(
+    profile && (profile.authType === "none" || token),
+  );
+
+  if (!isAuthenticated) {
+    return (
+      <div
+        data-testid="os-unauthenticated"
+        className="flex h-full w-full items-center justify-center p-8 text-center bg-[var(--color-bg)]"
+      >
+        <div className="max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
+          <h2 className="mb-2 text-lg font-semibold text-[var(--color-text)]">
+            Authentication Required
+          </h2>
+          <p className="text-sm text-[var(--color-text-muted)]">
+            You must connect to an active authenticated server profile to access DamHopper OS.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return <OsShell />;
 }
 
 /** Applies terminal font-size shortcuts anywhere in the current page. */
@@ -429,6 +465,16 @@ export function DamHopperApp() {
                       </p>
                     </div>
                   </div>
+                }
+              />
+              <Route
+                path="/os"
+                element={
+                  <ErrorBoundary>
+                    <Suspense fallback={LOADING_FALLBACK}>
+                      <AuthenticatedOsRoute />
+                    </Suspense>
+                  </ErrorBoundary>
                 }
               />
             </Routes>

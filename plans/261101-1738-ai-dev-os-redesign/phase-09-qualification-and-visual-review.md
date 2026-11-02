@@ -5,6 +5,15 @@ Estimate: 56h; implementation status: **pending**. [Overview](plan.md) · [Owner
 ## Context / objective
 Priority P1; pending. This gate qualifies the LATER OS cutover, not the independently shipped P0 release in Phase03. Every app, including Conflict Resolver, follows ordinary web qualification; old native AC12 is superseded, no external resolver blocker. Before cutover intermediate builds served URL-only `/os` without discovery links/build flag. [Policy](../../AGENTS.md#7-testing-guidelines), [ledger](acceptance.md). No execution performed during planning.
 
+### Carried Phase 01 Qualification & Remediation Ingress
+Per user approval (2026-11-02), Phase 01 was marked DONE on the component DOM continuity checkpoint; the following technical acceptance items and remediation gates are formally received by Phase 09:
+- **H1 (Live Lifecycle Oracle):** E2E live streaming PTY, outbound zero-attach/replay/reset counters across window placement and desktop moves, dirty Monaco model/undo preservation, and controlled preview JS execution continuity under running container daemon.
+- **H2 (Behavioral Privacy Oracle):** Physical behavioral input-isolation assertions under Cognito mode verifying zero received PTY bytes, zero editor mutations, zero preview events, and clean restored input upon mask removal.
+- **C1 (Editor Save Fencing & Plaintext Risk):** Editor save generation fencing, potential plaintext writes (hard-coded generation 1 encryption policy lookup), async upload race clearing newer edits, and fabricated empty tab state (Cycle 3 W1). Requires authorized source-remediation handoff.
+- **C2 (Terminal Owner Retirement & Cross-Profile Risk):** Ambient transport fallback (`ambient:<generation>`) for retired profile connections risking cross-profile read/write across equal raw terminal IDs, and retained-focus keyboard/paste exposure under CSS pointer suppression. Requires authorized source-remediation handoff.
+- **Cycle 3 Carried Warnings:** Monaco DOM reparenting cleanup during unmount (W2), real resource controller integration (W3), rendered-slot/shortcut-capture input regressions (W4).
+- **Cycle 4 Carried Warnings:** Connected parking-host containment assertions (W1; registry retention alone permits detached DOM), reactive profile notification boundary without explicit test re-render (W2), visual review ledger completion (`review.md`; W3), React 19 test harness `act(...)` warning elimination (W4).
+
 ## Ordered implementation by task ID
 ### migrate-application-journeys
 1. Retain useful component/browser regressions; remove only deleted shell/mobile/native/Usage presentation tests. Rewrite remaining WorkspacePage/IdeShell/AppLayout/HostResourcePopover imports and selectors to actual OS apps/frames, preserving original assertions (no skipped suites/mock-shell substitution).

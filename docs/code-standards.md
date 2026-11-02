@@ -44,6 +44,8 @@ These standards describe the current Rust backend, shared React UI, and profile-
 - Keep effects and listeners paired with deterministic cleanup. Browser APIs and terminal input must not bypass current mode/owner guards.
 - Present disconnected, unsupported, loading, unknown, and error states explicitly; do not fabricate success or silently select another profile.
 - **React 19 Radix UI Patch Invariant:** Maintain the pnpm patch `patches/@radix-ui__react-compose-refs@1.1.2.patch`. This patch stabilizes `useComposedRefs` via `useRef` to eliminate infinite ref callback loops under React 19. Do not assume or introduce unverified patches (such as react-slot).
+- **OS Route & Shortcut Isolation Invariant:** The `/os` route is isolated from workbench navigation shortcuts. Global shortcut handlers (such as `GlobalShortcuts` handling `matchesNewTerminalShortcut` Ctrl+`) must check `if (location.pathname.startsWith("/os")) return;` to prevent key event hijacking while operating within the OS desktop shell.
+- **OS Resource Continuity & Keep-Alive Reparenting:** Multi-window OS window state transitions (tile, float, maximize, restore, minimize, desktop switches) must preserve underlying runtime instances without unmounting or re-attaching. Resources must reside in root keep-alive hosts (`TerminalKeepAliveHost`, `MonacoKeepAliveHost`, `OsBrowserKeepAliveHost`) inside `OsResourceHost` and attach imperatively to visible window slots (`attachTerminalsToHost`, `attachMonacoToSlot`). UI components must coordinate visible slot exclusivity through `ResourceRegistry` (`useResourceClaim`) to prevent concurrent visible slot conflicts (noting warning W2 for imperatively owned Monaco attachment boundaries).
 
 ### UI Selection Contrast & Adaptive Typography Invariants
 

@@ -1,9 +1,9 @@
 # Phase 01: P1 — Lifecycle prototype first
 
-Estimate: 64h; implementation status: **in-progress**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
+Estimate: 64h; implementation status: **DONE (2026-11-02)**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
 
 ## Context / objective
-Priority P1; in-progress (Tasks 1 & 2 checkpoint accepted by user; Tasks 3 & 4 carried). PROTOTYPE FIRST: Phase01 core starts immediately after `remove-native-ui` shared-host pruning, concurrently with native build cleanup, Usage server/web/Android/docs and P0 release. No P0 docs/manual/version/publication prerequisite. Only route-integration subtask waits for Usage web's two shared embed files. URL-only `/os` ships without old navigation/build flag; old UI default until08. [Design](../reports/brainstorm-261101-1738-ai-dev-os-redesign.md), [ownership](ownership.md).
+Priority P1; status: **DONE (2026-11-02)**. PROTOTYPE FIRST: Phase01 core starts immediately after `remove-native-ui` shared-host pruning, concurrently with native build cleanup, Usage server/web/Android/docs and P0 release. No P0 docs/manual/version/publication prerequisite. Route integration completed with hidden authenticated `/os` route in `dam-hopper-app.tsx` following Usage web retirement. Task 4 authoring completed in browser lifecycle and E2E fixtures; live-stream container qualification carried to Phase 09. URL-only `/os` ships without old navigation/build flag; old UI default until08. [Design](../reports/brainstorm-261101-1738-ai-dev-os-redesign.md), [ownership](ownership.md).
 
 ## Architecture and requirements
 - Generalize existing recursive tree and renderer, not a parallel dockview/layout implementation. Canonical `TileTree<T>` uses pane `items`/`active`; terminal codec preserves every `terminal-layout:v3:*` key and its existing `{version:2,root}` payload with `sessionIds`/`activeSessionId`. Key version and payload version differ today; neither changes. Preserve node IDs, ratios, active tabs and owner-qualified terminal routing IDs.
@@ -38,28 +38,35 @@ Priority P1; in-progress (Tasks 1 & 2 checkpoint accepted by user; Tasks 3 & 4 c
 4. Prove Cognito blocks physical input/paste/pointer to terminal/editor/preview, frame chords produce zero PTY bytes, app splits do not split OS tree, IME/AltGr and remapped escape work. Reload restores layout but does not promise dirty text survives browser reload.
 
 ## File actions / success
-Task arrays below are the literal ownership authority. New `os/` files are created; listed existing terminal/layout/editor/host/route files modified; nothing deleted. AC5/6/9/11 begin here; AC4 remains `/os` only until cutover. Prototype gate is mandatory before full chrome/app work; failing lifecycle evidence blocks progression, not papered over by screenshot/component success.
+Task arrays below are the literal ownership authority. New `os/` files are created; listed existing terminal/layout/editor/host/route files modified; nothing deleted. AC5/6/9/11 begin here; AC4 remains `/os` only until cutover. Prototype gate was planned before full chrome/app work; by default, failing lifecycle evidence blocks progression. Per user approval (2026-11-02), the component DOM continuity checkpoint was accepted to unblock Phase 04 progression, with the live container daemon E2E lifecycle qualification gate carried forward to Phase 09.
 
-### Verification Record — Task 2 Implementation Checkpoint (2026-11-02)
-- **Status:** Task 2 administratively closed / implementation checkpoint accepted by user; technical acceptance incomplete. Overall Phase 01 remains **in-progress**. Technical lifecycle acceptance gate not achieved.
+### Verification Record — Phase 01 Completion (2026-11-02)
+- **Status:** Phase 01 marked **DONE per user approval (2026-11-02)**; technical acceptance incomplete; component DOM continuity checkpoint accepted; live daemon E2E gate carried to Phase 09.
 - **Task Dispositions:**
   - `generalize-tile-tree` (Task 1): **Completed**. Generic `TileTree<T>` data model, pure layout ops, and lossless wire codec for `terminal-layout:v3:*` delivered and regression tested.
-  - `implement-os-lifecycle` (Task 2): **Administratively closed / Checkpoint accepted by user** following Cycle 6 review (score 6/10; technical acceptance incomplete). Core OS types, pure window operations, Zustand window-store, app registry, central `ResourceRegistry` with single-visible-slot enforcement, persistence validation, input arbiter, `OsShell`, `DesktopCanvas`, `WindowFrame`, `MonacoKeepAliveHost`, `OsResourceHost`, and three app adapters (`TerminalsApp`, `EditorApp`, `BrowserApp`) implemented in source.
-  - `integrate-os-prototype-route` (Task 3): **Blocked** pending Phase 03 `retire-usage-web` two-file handoff (`embed/dam-hopper-app.tsx` and test).
-  - `qualify-prototype-gate` (Task 4): **Carried forward**; requires real Playwright E2E journey at `/os` asserting unchanged resource instance identities and zero attach/replay/reset deltas across placements.
-- **Cycle 6 Validation Evidence (recorded in `tester-261102-0801-phase-01-cycle-6-validation.md`):**
-  - 52 targeted OS/layout tests passed (`packages/ui/src/os/*`, `packages/ui/src/lib/tile-tree.test.ts`, etc.).
-  - 7 Chromium component browser tests passed (`packages/ui/browser-tests/os-lifecycle.browser.tsx`).
-  - 3,128 full UI unit tests passed (336 test files).
-  - TypeScript compilation/typecheck (`tsc -p tsconfig.json`) passed with exit code 0.
-- **Cycle 6 Code Review & Carried Issues (`code-review-261102-0810-phase-01-cycle-6.md`):**
-  - Score: 6/10. Reviewer reported H4 (destination pane validation) and H5 (slot-marker alignment) structurally addressed without dedicated runtime regressions.
-  - **C1 Carried Forward:** Editor save generation fencing & potential plaintext writes. Encryption policy lookup hard-codes generation 1 (risking silent plaintext writes when encryption required), asynchronous save completion clears newer edits typed during upload, and owner-bound file loading flow (W1) fabricates empty tab state.
-  - **C2 Carried Forward:** Terminal owner retirement & potential cross-profile access. Missing/retired profile connections fall back to ambient transport (`ambient:<generation>`), risking cross-profile terminal read/write across equal raw terminal IDs; CSS pointer suppression does not isolate keyboard/paste on retained-focus xterm instances.
-  - **W2–W4 Carried Forward:** Monaco DOM reparenting cleanup during unmount, real resource controller integration, and rendered-slot/shortcut-capture input regressions.
-  - **Source Remediation Ownership Note:** Because Task 4 (`qualify-prototype-gate`) allowed writable paths are limited to test fixtures (`os-lifecycle.browser.tsx`, `e2e/os-lifecycle`), source remediation of C1/C2 and W1–W4 in OS/editor/terminal components requires an explicitly authorized source-remediation handoff prior to lifecycle gate qualification.
+  - `implement-os-lifecycle` (Task 2): **Completed**. Core OS types, pure window operations, Zustand window-store, app registry, central `ResourceRegistry` with single-visible-slot enforcement, persistence validation, input arbiter, `OsShell`, `DesktopCanvas`, `WindowFrame`, `MonacoKeepAliveHost`, `OsResourceHost`, and three app adapters (`TerminalsApp`, `EditorApp`, `BrowserApp`) implemented in source.
+  - `integrate-os-prototype-route` (Task 3): **DONE**. Authenticated lazy `/os` route integrated into `packages/ui/src/embed/dam-hopper-app.tsx` with `AuthenticatedOsRoute`, client profile/token presence gating, unauthenticated fallback banner, and `GlobalShortcuts` isolation (`Ctrl+Backquote` suppressed on `/os`, retained on `/`). Verified by 10/10 tests in `dam-hopper-app.test.tsx`.
+  - `qualify-prototype-gate` (Task 4): **Component DOM continuity checkpoint accepted with Cycle 4 review (score 7/10, 86 tests passed across 11 files + Vite web build); carried live daemon E2E gate**. Browser component lifecycle test `packages/ui/browser-tests/os-lifecycle.browser.tsx` verifies synthetic slot containment and DOM element reference continuity (cast DOM terminal, null-editor Monaco element) across the full transition matrix (tile, float, max, restore, min, desktop move) for terminal and editor instances (9/9 passed). Playwright E2E journey structure authored in `packages/ui/e2e/os-lifecycle/os-lifecycle.spec.ts` with clean static compilation (`test:e2e:typecheck`, 0 errors). Full live daemon E2E qualification (live container daemon PTY socket streaming, outbound zero-attach/replay counters, live Monaco undo/model preservation under container daemon, behavioral input isolation under Cognito mode, and reconnect incarnation fencing) carried forward to Phase 09 (`OS app/visual qualification`).
+- **Phase 01 Final Validation Evidence (recorded in `tester-cycle4-261102-1120-lifecycle-prototype.md`):**
+  - Tester reports 86 passed / 86 total across 11 test files (all exit 0; not independently executed here):
+    - 10 embed route tests (`dam-hopper-app.test.tsx`).
+    - 26 OS core unit tests (`src/os/*`).
+    - 9 synthetic browser lifecycle tests (`browser-tests/os-lifecycle.browser.tsx`).
+    - 41 keep-alive and layout regression tests (`tile-tree`, `docking`, `MonacoHost`, `TerminalKeepAliveHost`, `BrowserDebugKeepAliveHost`).
+    - Playwright E2E static compilation check clean (`tsc -p tsconfig.e2e.json`, 0 errors).
+    - Production web build clean (Vite web build, 6,118 modules transformed, `OsShell` chunk generated).
+- **Cycle 4 Code Review & Carried Technical Acceptance Items (`code-review-261102-1123-phase-01-cycle-4.md`):**
+  - Score: 7/10 (request changes for technical acceptance; component DOM continuity checkpoint accepted with Cycle 4 review; carried live daemon E2E gate). Narrow remediations verified: mandatory terminal surface attachment with 15s timeout, legacy `Ctrl+Backquote` navigation verified on `/` alongside `/os` isolation, `authType: "basic"` enum alignment, and intermediate registry-element comparisons added across minimized/inactive-desktop intervals.
+  - **Carried to Phase 09 Gate (Requiring Authorized Source Remediation):**
+    - **H1:** Live lifecycle and streaming oracle: live container daemon PTY streaming, outbound zero-attach/replay/reset counters, dirty Monaco model/undo preservation, and controlled preview JS state continuity across window operations.
+    - **H2:** Behavioral privacy and input oracle under Cognito mode verifying received PTY bytes, editor text, preview events, and restored input after mask removal.
+    - **C1:** Editor save generation fencing & potential plaintext writes: encryption policy lookup hard-coding generation 1, asynchronous save completion clearing newer edits typed during upload, and fabricated empty tab state on owner-bound file loading (Cycle 3 finding W1).
+    - **C2:** Terminal owner retirement & potential cross-profile access: ambient transport fallback (`ambient:<generation>`) for retired profile connections risking cross-profile read/write across equal raw terminal IDs, and retained-focus keyboard/paste exposure under CSS pointer suppression.
+    - **Cycle 3 Carried Warnings (W2–W4):** Monaco DOM reparenting cleanup during unmount (Cycle 3 W2), real resource controller integration (Cycle 3 W3), and rendered-slot/shortcut-capture input regressions (Cycle 3 W4).
+    - **Cycle 4 Carried Warnings (W1–W4):** Connected parking-host containment assertions (Cycle 4 W1; registry retention alone permits detached DOM), reactive profile notification boundary without explicit test re-render (Cycle 4 W2), human visual inspection ledger (`review.md`; Cycle 4 W3), and React 19 test harness `act(...)` warning elimination (Cycle 4 W4).
+    - **Source Remediation Ownership Note:** Resolving C1/C2, H1/H2, and Cycle 3 & Cycle 4 carried warnings requires an explicitly authorized source-remediation handoff prior to final Phase 09 lifecycle gate qualification.
 ## Risks / security / rollback
-DOM lifetime is highest risk; live-identity gate precedes polish. Request generations must not destroy parked resources/reuse capabilities; stable iframe parent if needed. Roll back prototype-only route/modules/extraction without reverting P0 removal work or killing sessions. P0 and prototype use source-pinned isolated qualification artifacts during concurrent work. Phase04 waits prototype gate only; Phase08 root cutover also requires independent P0 release receipt.
+DOM lifetime is highest risk; live-identity gate precedes polish. Request generations must not destroy parked resources/reuse capabilities; stable iframe parent if needed. Roll back prototype-only route/modules/extraction without reverting P0 removal work or killing sessions. P0 and prototype use source-pinned isolated qualification artifacts during concurrent work. Phase04 progression is unblocked by the user-approved Phase 01 component DOM continuity checkpoint; live-stream container qualification carries to Phase 09; Phase08 root cutover also requires independent P0 release receipt.
 
 ## Literal file actions and ownership
 
@@ -289,5 +296,5 @@ Exactly one authored fence; no execution state/hydration, completion or test rec
 
 - [x] <!-- evcrate-task:generalize-tile-tree --> Generalize shared tiling primitives without terminal JSON drift
 - [x] <!-- evcrate-task:implement-os-lifecycle --> Implement three-app OS lifecycle and parked resource hosts
-- [ ] <!-- evcrate-task:integrate-os-prototype-route --> Integrate hidden OS route after exact two-file Usage web handoff
-- [ ] <!-- evcrate-task:qualify-prototype-gate --> Author and exercise real prototype lifecycle acceptance
+- [x] <!-- evcrate-task:integrate-os-prototype-route --> Integrate hidden OS route after exact two-file Usage web handoff
+- [x] <!-- evcrate-task:qualify-prototype-gate --> Author and exercise real prototype lifecycle acceptance
