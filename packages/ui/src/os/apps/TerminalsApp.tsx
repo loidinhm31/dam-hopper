@@ -17,6 +17,7 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
   const focusWindow = useWindowStore((state) => state.focusWindow);
   const sessionId =
     (window.appState?.sessionId as string | undefined) ??
+    (window.appState?.terminalId as string | undefined) ??
     `${window.ctx.profileId}:default`;
 
   const incarnation = latestTerminalSessionIncarnation({

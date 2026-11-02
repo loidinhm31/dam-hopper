@@ -1,16 +1,43 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { OsWindow } from "../types.js";
 import { SettingsPage } from "@/components/pages/SettingsPage.js";
 import { DevicesPage } from "@/components/pages/DevicesPage.js";
+import { useWindowStore } from "../window-store.js";
 
 export interface SettingsAppProps {
   window: OsWindow;
 }
 
 export function SettingsApp({ window }: SettingsAppProps) {
-  const [activeTab, setActiveTab] = useState<"general" | "devices">(
-    (window.appState?.activeTab as "general" | "devices" | undefined) ?? "general",
-  );
+  const requestedTab =
+    (window.appState?.activeTab as "general" | "devices" | undefined) ??
+    (window.appState?.tab as "general" | "devices" | undefined) ??
+    "general";
+
+  const [activeTab, setActiveTab] =
+    useState<"general" | "devices">(requestedTab);
+
+  useEffect(() => {
+    setActiveTab(requestedTab);
+  }, [requestedTab]);
+
+  const hasTargetProfile = "targetProfileId" in (window.appState ?? {});
+  const targetProfileId: string | null = hasTargetProfile
+    ? (window.appState?.targetProfileId as string | null)
+    : (window.appState?.profileId as string | undefined) ??
+      (window.ctx.profileId === "default" ? null : (window.ctx.profileId ?? null));
+
+  const handleTabChange = (tab: "general" | "devices") => {
+    setActiveTab(tab);
+    useWindowStore.getState().updateAppState(window.id, { activeTab: tab });
+  };
+
+  const handleTargetProfileChange = (profileId: string | null) => {
+    useWindowStore.getState().updateAppState(window.id, {
+      targetProfileId: profileId,
+      profileId: profileId ?? undefined,
+    });
+  };
 
   return (
     <div
@@ -21,7 +48,7 @@ export function SettingsApp({ window }: SettingsAppProps) {
       <div className="flex items-center gap-1 px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-2)] shrink-0 text-xs font-medium">
         <button
           type="button"
-          onClick={() => setActiveTab("general")}
+          onClick={() => handleTabChange("general")}
           className={`px-3 py-1.5 rounded transition-colors ${
             activeTab === "general"
               ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-xs"
@@ -32,7 +59,7 @@ export function SettingsApp({ window }: SettingsAppProps) {
         </button>
         <button
           type="button"
-          onClick={() => setActiveTab("devices")}
+          onClick={() => handleTabChange("devices")}
           className={`px-3 py-1.5 rounded transition-colors ${
             activeTab === "devices"
               ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-xs"
@@ -44,11 +71,18 @@ export function SettingsApp({ window }: SettingsAppProps) {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-4">
-        {activeTab === "general" && <SettingsPage noLayout={true} />}
+        {activeTab === "general" && (
+          <SettingsPage
+            noLayout={true}
+            targetProfileId={targetProfileId}
+            onTargetProfileChange={handleTargetProfileChange}
+          />
+        )}
         {activeTab === "devices" && (
           <DevicesPage
             noLayout={true}
-            profileId={window.ctx.profileId === "default" ? undefined : window.ctx.profileId}
+            profileId={targetProfileId}
+            onProfileChange={handleTargetProfileChange}
           />
         )}
       </div>

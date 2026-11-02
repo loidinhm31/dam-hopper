@@ -29,6 +29,8 @@ const testProfile: ServerProfile = {
 
 function createTestTransport(): WsTransport {
   return {
+    invoke: vi.fn().mockResolvedValue([]),
+    request: vi.fn().mockResolvedValue([]),
     terminalWrite: vi.fn(),
     terminalResize: vi.fn(),
     terminalAttach: vi.fn().mockReturnValue(true),
@@ -191,5 +193,132 @@ describe("OS Workspace Apps Browser Tests", () => {
     if (result.status === "handled") {
       expect(result.targetWindowId).toBe("win-files-reveal");
     }
+  });
+
+  it("handles search:query intent by launching and delivering query to SearchApp", async () => {
+    await renderOs();
+
+    const result = await dispatchIntent(
+      createIntent("search:query", {
+        profileId: testProfile.id,
+        projectId: "demo-project",
+        query: "mySearchQuery",
+      }),
+    );
+
+    expect(result.status).toBe("handled");
+    if (result.status === "handled") {
+      const win = useWindowStore.getState().session.windows[result.targetWindowId];
+      expect(win).toBeDefined();
+      expect(win.appId).toBe("search");
+      expect(win.appState?.query).toBe("mySearchQuery");
+    }
+  });
+
+  it("handles changes:diff intent by selecting file and switching to diff tab", async () => {
+    await renderOs();
+
+    const result = await dispatchIntent(
+      createIntent("changes:diff", {
+        profileId: testProfile.id,
+        projectId: "demo-project",
+        filePath: "src/utils.ts",
+      }),
+    );
+
+    expect(result.status).toBe("handled");
+    if (result.status === "handled") {
+      const win = useWindowStore.getState().session.windows[result.targetWindowId];
+      expect(win).toBeDefined();
+      expect(win.appId).toBe("changes");
+      expect(win.appState?.filePath).toBe("src/utils.ts");
+      expect(win.appState?.activeTab).toBe("diff");
+    }
+  });
+
+  it("handles terminal:focus safely by rejecting unknown terminal without creating PTY", async () => {
+    await renderOs();
+
+    const result = await dispatchIntent(
+      createIntent("terminal:focus", {
+        profileId: testProfile.id,
+        terminalId: "nonexistent-terminal",
+      }),
+    );
+
+    expect(result.status).toBe("unhandled");
+  });
+
+  it("rejects terminal:focus for unknown terminal without disturbing existing terminal window", async () => {
+    await renderOs();
+
+    // Open existing terminal window
+    await act(async () => {
+      useWindowStore.getState().openWindow({
+        id: "win-term-existing",
+        appId: "terminals",
+        title: "Terminal",
+        ctx: { profileId: testProfile.id },
+        mode: "tile",
+        appState: { sessionId: "valid-session", terminalId: "valid-session" },
+      });
+    });
+
+    const result = await dispatchIntent(
+      createIntent("terminal:focus", {
+        profileId: testProfile.id,
+        terminalId: "unknown-session",
+      }),
+    );
+
+    expect(result.status).toBe("unhandled");
+
+    // Existing terminal window's appState was NOT mutated
+    const existing =
+      useWindowStore.getState().session.windows["win-term-existing"];
+    expect(existing.appState?.sessionId).toBe("valid-session");
+  });
+
+  it("reactivates diff tab on repeated identical changes:diff intent", async () => {
+    await renderOs();
+
+    // First changes:diff
+    const result1 = await dispatchIntent(
+      createIntent("changes:diff", {
+        profileId: testProfile.id,
+        projectId: "demo-project",
+        filePath: "src/utils.ts",
+        status: "M",
+      }),
+    );
+    expect(result1.status).toBe("handled");
+    const targetWinId = (result1 as { targetWindowId: string }).targetWindowId;
+
+    // Switch tab to "changes"
+    await act(async () => {
+      useWindowStore.getState().updateAppState(targetWinId, {
+        activeTab: "changes",
+      });
+    });
+    expect(
+      useWindowStore.getState().session.windows[targetWinId]?.appState
+        ?.activeTab,
+    ).toBe("changes");
+
+    // Second changes:diff with identical filePath
+    const result2 = await dispatchIntent(
+      createIntent("changes:diff", {
+        profileId: testProfile.id,
+        projectId: "demo-project",
+        filePath: "src/utils.ts",
+        status: "M",
+      }),
+    );
+    expect(result2.status).toBe("handled");
+
+    // Must be reactivated to "diff"
+    const win = useWindowStore.getState().session.windows[targetWinId];
+    expect(win.appState?.activeTab).toBe("diff");
+    expect(win.appState?.filePath).toBe("src/utils.ts");
   });
 });

@@ -76,6 +76,13 @@ export function ConflictResolverApp({ window }: ConflictResolverAppProps) {
   }, [conflicts, selectedFilePath]);
 
   const handleContinue = useCallback(async () => {
+    const liveOp = resolver.operation?.operation;
+    if (
+      requestedOperation !== undefined &&
+      (!liveOp || liveOp === "none" || liveOp !== requestedOperation)
+    ) {
+      return;
+    }
     setIsContinuing(true);
     setOperationError(null);
     try {
@@ -92,10 +99,17 @@ export function ConflictResolverApp({ window }: ConflictResolverAppProps) {
     } finally {
       setIsContinuing(false);
     }
-  }, [resolver]);
+  }, [resolver, requestedOperation]);
 
   const handleAbort = useCallback(async () => {
-    const op = resolver.operation?.operation ?? "operation";
+    const liveOp = resolver.operation?.operation;
+    if (
+      requestedOperation !== undefined &&
+      (!liveOp || liveOp === "none" || liveOp !== requestedOperation)
+    ) {
+      return;
+    }
+    const op = liveOp ?? "operation";
     if (
       !globalThis.confirm(
         `Abort ${op.toUpperCase()}? This will discard uncommitted merge resolutions and clean the worktree.`,
@@ -117,7 +131,7 @@ export function ConflictResolverApp({ window }: ConflictResolverAppProps) {
     } finally {
       setIsAborting(false);
     }
-  }, [resolver, closeWindow, window.id]);
+  }, [resolver, requestedOperation, closeWindow, window.id]);
 
   if (!claimStatus.success) {
     return (
@@ -130,13 +144,27 @@ export function ConflictResolverApp({ window }: ConflictResolverAppProps) {
       </div>
     );
   }
-  const operationMismatch =
-    requestedOperation !== undefined &&
-    Boolean(resolver.operation) &&
-    resolver.operation?.operation !== "none" &&
-    resolver.operation?.operation !== requestedOperation;
+  if (resolver.isLoading) {
+    return (
+      <div
+        data-os-conflict-resolver-loading="true"
+        data-testid="conflict-resolver-loading"
+        className="flex h-full items-center justify-center gap-2 text-xs text-[var(--color-text-muted)] bg-[var(--color-surface)]"
+      >
+        <Loader2 className="h-4 w-4 animate-spin text-amber-400" />
+        Loading conflict status…
+      </div>
+    );
+  }
 
-  if (operationMismatch) {
+  const liveOperation = resolver.operation?.operation;
+  const requestedOperationUnavailable =
+    requestedOperation !== undefined &&
+    (!liveOperation ||
+      liveOperation === "none" ||
+      liveOperation !== requestedOperation);
+
+  if (requestedOperationUnavailable) {
     return (
       <div
         data-os-operation-mismatch="true"
@@ -147,16 +175,16 @@ export function ConflictResolverApp({ window }: ConflictResolverAppProps) {
           Operation Mismatch
         </p>
         <p className="max-w-md">
-          Requested operation &quot;{requestedOperation}&quot; does not match the active git operation &quot;{resolver.operation?.operation}&quot;.
+          {liveOperation && liveOperation !== "none"
+            ? `Requested operation "${requestedOperation}" does not match the active git operation "${liveOperation}".`
+            : `Requested operation "${requestedOperation}" is not currently active for this repository.`}
         </p>
       </div>
     );
   }
 
   const isNoOperation =
-    !resolver.isLoading &&
-    (!resolver.operation || resolver.operation.operation === "none") &&
-    conflicts.length === 0;
+    (!liveOperation || liveOperation === "none") && conflicts.length === 0;
   return (
     <div
       data-os-conflict-resolver-app={window.id}
@@ -208,12 +236,7 @@ export function ConflictResolverApp({ window }: ConflictResolverAppProps) {
 
       {/* Body */}
       <div className="flex-1 min-h-0 relative">
-        {resolver.isLoading ? (
-          <div className="flex h-full items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]">
-            <Loader2 className="h-4 w-4 animate-spin text-amber-400" />
-            Loading conflict status…
-          </div>
-        ) : isNoOperation ? (
+        {isNoOperation ? (
           <div
             data-testid="resolver-no-operation"
             className="flex flex-col items-center justify-center h-full p-6 text-center text-xs text-[var(--color-text-muted)] gap-3"

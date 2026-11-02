@@ -17,7 +17,12 @@ import { PortsTunnelsApp } from "./apps/PortsTunnelsApp.js";
 import { ProjectInfoApp } from "./apps/ProjectInfoApp.js";
 import { AgentStoreApp } from "./apps/AgentStoreApp.js";
 import { SettingsApp } from "./apps/SettingsApp.js";
-import { APP_MANIFESTS, findExistingWindowForApp } from "./app-registry.js";
+import {
+  APP_MANIFESTS,
+  findExistingWindowForApp,
+  getAppManifest,
+} from "./app-registry.js";
+import { getTerminal } from "@/lib/terminal-registry.js";
 import { parseOsDeepLink } from "./deep-links.js";
 import { readServerProfiles } from "@/api/server-config.js";
 import { getConnectionSnapshot } from "@/api/connections.js";
@@ -233,10 +238,27 @@ export function OsShell() {
         return { status: "handled", targetWindowId: id };
       }),
       registerIntentHandler("file:open", (intent) => {
+        if (
+          intent.payload.profileId &&
+          intent.payload.generation !== undefined
+        ) {
+          const snap = getConnectionSnapshot(intent.payload.profileId);
+          if (
+            !snap ||
+            snap.status !== "connected" ||
+            snap.owner.generation !== intent.payload.generation
+          ) {
+            return {
+              status: "unhandled",
+              reason: `File open rejected: target profile ${intent.payload.profileId} generation ${intent.payload.generation} is retired`,
+            };
+          }
+        }
         const targetCtx: WindowContext = {
           profileId: intent.payload.profileId,
           projectId: intent.payload.projectId,
           worktreeId: intent.payload.worktreeId,
+          generation: intent.payload.generation,
         };
         const targetRef = normalizeProjectTarget({
           profileId: targetCtx.profileId,
@@ -479,22 +501,31 @@ export function OsShell() {
         return { status: "handled", targetWindowId: id };
       }),
       registerIntentHandler("settings:open", (intent) => {
+        const currentWindows = useWindowStore.getState().session.windows;
         const existing = findExistingWindowForApp(
-          session.windows,
+          currentWindows,
           "settings",
           { profileId: intent.payload.profileId ?? "default" },
         );
         if (existing) {
           if (existing.minimized) restoreWindow(existing.id);
           focusWindow(existing.id);
+          const nextAppState: Record<string, unknown> = {};
           if (intent.payload.tab) {
-            useWindowStore.getState().updateAppState(existing.id, {
-              activeTab: intent.payload.tab,
-            });
+            nextAppState.activeTab = intent.payload.tab;
+          }
+          if (intent.payload.profileId !== undefined) {
+            nextAppState.profileId = intent.payload.profileId;
+            nextAppState.targetProfileId = intent.payload.profileId;
+          }
+          if (Object.keys(nextAppState).length > 0) {
+            useWindowStore.getState().updateAppState(existing.id, nextAppState);
           }
           return { status: "handled", targetWindowId: existing.id };
         }
         const id = `settings-${generateUUID().slice(0, 8)}`;
+        const activeDesktopId =
+          useWindowStore.getState().session.activeDesktopId;
         openWindow(
           {
             id,
@@ -502,11 +533,13 @@ export function OsShell() {
             title: "Settings",
             ctx: { profileId: intent.payload.profileId ?? "default" },
             mode: "tile",
-            appState: intent.payload.tab
-              ? { activeTab: intent.payload.tab }
-              : undefined,
+            appState: {
+              activeTab: intent.payload.tab ?? "general",
+              profileId: intent.payload.profileId,
+              targetProfileId: intent.payload.profileId ?? null,
+            },
           },
-          session.activeDesktopId,
+          activeDesktopId,
         );
         return { status: "handled", targetWindowId: id };
       }),
@@ -568,6 +601,197 @@ export function OsShell() {
             appState: intent.payload.tab
               ? { tab: intent.payload.tab }
               : undefined,
+          },
+          session.activeDesktopId,
+        );
+        return { status: "handled", targetWindowId: id };
+      }),
+      registerIntentHandler("terminal:focus", (intent) => {
+        const existingTerminal = getTerminal({
+          profileId: intent.payload.profileId,
+          id: intent.payload.terminalId,
+        });
+        if (!existingTerminal) {
+          return {
+            status: "unhandled",
+            reason: `Terminal session "${intent.payload.terminalId}" not found in registry`,
+          };
+        }
+        const windowList = Object.values(
+          useWindowStore.getState().session.windows,
+        );
+        const existing = windowList.find(
+          (w) =>
+            w.appId === "terminals" &&
+            w.ctx.profileId === intent.payload.profileId &&
+            ((w.appState?.sessionId as string | undefined) ===
+              intent.payload.terminalId ||
+              (w.appState?.terminalId as string | undefined) ===
+                intent.payload.terminalId),
+        );
+        if (existing) {
+          if (existing.minimized) restoreWindow(existing.id);
+          focusWindow(existing.id);
+          return { status: "handled", targetWindowId: existing.id };
+        }
+        const anyTerminalWindow = windowList.find(
+          (w) =>
+            w.appId === "terminals" &&
+            w.ctx.profileId === intent.payload.profileId,
+        );
+        if (anyTerminalWindow) {
+          if (anyTerminalWindow.minimized) restoreWindow(anyTerminalWindow.id);
+          focusWindow(anyTerminalWindow.id);
+          useWindowStore.getState().updateAppState(anyTerminalWindow.id, {
+            sessionId: intent.payload.terminalId,
+            terminalId: intent.payload.terminalId,
+          });
+          return { status: "handled", targetWindowId: anyTerminalWindow.id };
+        }
+        const manifest = getAppManifest("terminals");
+        const id = `terminals-${generateUUID().slice(0, 8)}`;
+        const activeDesktopId =
+          useWindowStore.getState().session.activeDesktopId;
+        openWindow(
+          {
+            id,
+            appId: "terminals",
+            title: manifest?.displayName ?? "Terminal",
+            ctx: { profileId: intent.payload.profileId },
+            mode: manifest?.defaultPlacement ?? "tile",
+            appState: {
+              sessionId: intent.payload.terminalId,
+              terminalId: intent.payload.terminalId,
+            },
+          },
+          activeDesktopId,
+        );
+        focusWindow(id);
+        return { status: "handled", targetWindowId: id };
+      }),
+      registerIntentHandler("search:query", (intent) => {
+        const targetCtx: WindowContext = {
+          profileId: intent.payload.profileId,
+          projectId: intent.payload.projectId,
+          worktreeId: intent.payload.worktreeId,
+        };
+        const currentWindows = useWindowStore.getState().session.windows;
+        const existing = findExistingWindowForApp(
+          currentWindows,
+          "search",
+          targetCtx,
+          intent.payload,
+        );
+        if (existing) {
+          if (existing.minimized) restoreWindow(existing.id);
+          focusWindow(existing.id);
+          useWindowStore.getState().updateAppState(existing.id, {
+            query: intent.payload.query,
+            deliveryId: generateUUID(),
+          });
+          return { status: "handled", targetWindowId: existing.id };
+        }
+        const manifest = getAppManifest("search");
+        const id = `search-${generateUUID().slice(0, 8)}`;
+        const activeDesktopId =
+          useWindowStore.getState().session.activeDesktopId;
+        openWindow(
+          {
+            id,
+            appId: "search",
+            title: manifest?.displayName ?? "Search",
+            ctx: targetCtx,
+            mode: manifest?.defaultPlacement ?? "tile",
+            appState: {
+              query: intent.payload.query,
+              deliveryId: generateUUID(),
+            },
+          },
+          activeDesktopId,
+        );
+        focusWindow(id);
+        return { status: "handled", targetWindowId: id };
+      }),
+      registerIntentHandler("changes:diff", (intent) => {
+        const targetCtx: WindowContext = {
+          profileId: intent.payload.profileId,
+          projectId: intent.payload.projectId,
+          worktreeId: intent.payload.worktreeId,
+        };
+        const currentWindows = useWindowStore.getState().session.windows;
+        const existing = findExistingWindowForApp(
+          currentWindows,
+          "changes",
+          targetCtx,
+          intent.payload,
+        );
+        if (existing) {
+          if (existing.minimized) restoreWindow(existing.id);
+          focusWindow(existing.id);
+          useWindowStore.getState().updateAppState(existing.id, {
+            filePath: intent.payload.filePath,
+            status: intent.payload.status,
+            additions: intent.payload.additions,
+            deletions: intent.payload.deletions,
+            gitRootId: intent.payload.gitRootId,
+            diffPath: intent.payload.diffPath,
+            activeTab: "diff",
+            deliveryId: generateUUID(),
+          });
+          return { status: "handled", targetWindowId: existing.id };
+        }
+        const manifest = getAppManifest("changes");
+        const id = `changes-${generateUUID().slice(0, 8)}`;
+        const activeDesktopId =
+          useWindowStore.getState().session.activeDesktopId;
+        openWindow(
+          {
+            id,
+            appId: "changes",
+            title: manifest?.displayName ?? "Changes",
+            ctx: targetCtx,
+            mode: manifest?.defaultPlacement ?? "tile",
+            appState: {
+              filePath: intent.payload.filePath,
+              status: intent.payload.status,
+              additions: intent.payload.additions,
+              deletions: intent.payload.deletions,
+              gitRootId: intent.payload.gitRootId,
+              diffPath: intent.payload.diffPath,
+              activeTab: "diff",
+              deliveryId: generateUUID(),
+            },
+          },
+          activeDesktopId,
+        );
+        focusWindow(id);
+        return { status: "handled", targetWindowId: id };
+      }),
+      registerIntentHandler("git:status", (intent) => {
+        const targetCtx: WindowContext = {
+          profileId: intent.payload.profileId,
+          projectId: intent.payload.projectId,
+          worktreeId: intent.payload.worktreeId,
+        };
+        const existing = findExistingWindowForApp(
+          session.windows,
+          "git",
+          targetCtx,
+          intent.payload,
+        );
+        if (existing) {
+          if (existing.minimized) restoreWindow(existing.id);
+          focusWindow(existing.id);
+          return { status: "handled", targetWindowId: existing.id };
+        }
+        const id = `git-${generateUUID().slice(0, 8)}`;
+        openWindow(
+          {
+            id,
+            appId: "git",
+            title: "Source Control",
+            ctx: targetCtx,
+            mode: "tile",
           },
           session.activeDesktopId,
         );

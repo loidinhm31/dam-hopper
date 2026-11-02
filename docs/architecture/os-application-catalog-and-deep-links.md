@@ -29,22 +29,21 @@ The 14 retained applications span workspace, review, and system management capab
 
 All 14 application adapters reside under `packages/ui/src/os/apps/`. Adapters compose canonical organisms and page bodies without replicating business logic or database operations:
 - **`FilesApp.tsx`:** Embeds `FileTree`, connecting file clicks to `file:edit` intents and directory context to `useFileWatch` subscriptions.
-- **`SearchApp.tsx`:** Embeds `SearchPanel`, connecting search match selections to `file:open` or `file:edit` intents.
-- **`ChangesApp.tsx`:** Embeds `ChangedFilesList`, `GitLocalChanges`, and `DiffViewer`, routing file diff selections to `changes:diff` and conflict handoffs to `conflict:resolve`.
+- **`SearchApp.tsx`:** Embeds `SearchPanel` with `isolatedState: true` and delivery keying, decoupling search queries per mode (files vs content) without mutating global search stores, and routing match selections with generation metadata to `file:open` or `file:edit` intents.
+- **`ChangesApp.tsx`:** Embeds `ChangedFilesList`, `GitLocalChanges`, and `DiffViewer`. Canonical path resolution matches canonical project paths first via `createChangedFileSelection`. Consumes delivered `changes:diff` intents via `consumedDeliveryIdRef` to prevent repeating tab activation on unrelated query refreshes.
 - **`GitApp.tsx`:** Embeds `WorkspaceGitPanel` with commit history search, branch operations, and commit inspection.
-- **`ConflictResolverApp.tsx`:** Embeds `ConflictResolverPanel` and `MergeConflictEditor`, requiring an active conflict operation on the claimed git root; unmerged paths without an active operation display a fail-closed notice (open carryover W4 tracks uniformly rejecting missing/`none` requested operations).
-- **`SessionChangesApp.tsx`:** Embeds `SessionChangesPanel`, enforcing an exact 6-part owner tuple (`profileId`, `generation`, `terminalId`, `terminalIncarnation`, `ompSessionId`, `rootId`), resource claim acquisition, and fail-closed query cache purging on disable or disconnect (subject to W2/W3 open lifecycle and focus containment limitations).
+- **`ConflictResolverApp.tsx`:** Embeds `ConflictResolverPanel` and `MergeConflictEditor`. Verifies active conflict operations against `requestedOperation` (`requestedOperation !== undefined && (!liveOp || liveOp === "none" || liveOp !== requestedOperation)`), uniformly displaying fail-closed notices and blocking abort/continue actions when the requested operation is inactive or mismatched.
+- **`SessionChangesApp.tsx`:** Embeds `SessionChangesPanel`, enforcing an exact 6-part owner tuple (`profileId`, `generation`, `terminalId`, `terminalIncarnation`, `ompSessionId`, `rootId`), stable generation capture via `useState`, resource claim acquisition, and fail-closed query cache purging on disable or disconnect.
 - **`WorkflowPlansApp.tsx`:** Embeds `WorkflowContextSurface`, routing plan selections and task tracking.
 - **`PortsTunnelsApp.tsx`:** Embeds `PortsPanel`, providing discovered port status, cloudflared tunnel lifecycle controls, and browser launch intents.
 - **`ProjectInfoApp.tsx`:** Embeds `ProjectOverview` and `ConfigEditor`, binding edits to the current project owner.
-- **`AgentStoreApp.tsx`:** Embeds `AgentStorePage` without legacy plugin runner dependencies (open carryover W5 tracks remaining route-query coupling).
-- **`SettingsApp.tsx`:** Embeds `SettingsPage` with independent server target and preferences source selectors (open carryover W5 tracks singleton target reactivity).
-
+- **`AgentStoreApp.tsx`:** Embeds `AgentStorePage` with controlled props (`AgentStorePageProps`), managing tab and profile selections in window `appState` without mutating global route query parameters.
+- **`SettingsApp.tsx`:** Embeds `SettingsPage` with controlled props (`SettingsPageProps`), managing target profile selection in window `appState` without mutating global `useWorkbenchSelectionsStore.settingsProfileId`.
 ## 2. Instancing Rules & Window Matching
 
 Window deduplication and reuse logic is governed by `findExistingWindowForApp` in `packages/ui/src/os/app-registry.ts`:
 
-1. **`single-instance`:** Exactly one window exists across the entire OS session (`settings`). Matches by `w.appId === appId`. (Note W5: target updates to the existing window do not reactively re-target local settings page state).
+1. **`single-instance`:** Exactly one window exists across the entire OS session (`settings`). Matches by `w.appId === appId`. Window `appState` (`activeTab`, `targetProfileId`) stores instance state; `SettingsApp` and `SettingsPage` reactively reflect prop updates without mutating global stores.
 2. **`profile-instance`:** One window per server profile (`ports-tunnels`, `agent-store`). Matches by `w.appId === appId && w.ctx.profileId === ctx.profileId`.
 3. **`project-instance`:** One window per project (`workflow-plans`, `project-info`). Matches `appId`, `profileId`, and `projectId`.
    - *Specialization for `conflict-resolver`:* Matches `profileId`, `projectId`, `worktreeId`, `root` (or `gitRootId`), and `operation`. Differing conflict operations spawn separate windows.
@@ -118,50 +117,61 @@ Phase 05 hardened UI components and data hooks against cross-profile leaks, reti
 
 ### DiffViewer (`packages/ui/src/components/organisms/DiffViewer.tsx`)
 - **Authoritative Bound Transport:** `getBoundTransport(targetRef)` resolves transport strictly through `getConnectionSnapshot(profileId)` and `getConnectionTransport(owner)`. Missing or disconnected profiles throw immediately rather than falling back to ambient transport.
-- **Partial Generation Fencing & Stale Save Invalidation:** Connection snapshot and generation are verified **after `fsRead`** and **after `fsWriteFile`** (aborting if disconnected or generation rotated). `saveRevisionRef` increments on file switch, unmount, and model edits (`onDidChangeModelContent`), discarding pre-write save results if typing occurs during the read stat.
-- **Open Hardening Gap (W0a):** Revision equality is currently checked after `fsRead`, but not after `fsWriteFile`. Consequently, user edits during write completion can still be marked clean, and a revision mismatch during the stat call returns without clearing the `"saving"` state, potentially locking the save button until the component unmounts. Full post-write revision fencing and delayed-save regressions remain open under W0a.
+- **Active Save Invariants & In-Flight Reset:** Tracks `documentIdentityRef`, `editRevisionRef`, and `activeSaveRef`. Connection snapshot and generation are verified before read, after read, and after `fsWriteFile`. If user typing occurs while a stat or write is in-flight, `editRevisionRef` increments and `saveState` resets from `"saving"` to `"idle"` to reflect that newer edits supersede the pending save (an already-dispatched server write is not cancelled and concurrent writes remain guarded).
+- **Authoritative Modified Pinning & Clean-Save Reconciliation:** Upon successful write acknowledgement, `authoritativeModified` pins the saved content as the clean baseline. Local dirty edits made after save are preserved over external refetches, and post-write query updates reconcile cleanly without leaving saveState locked. (In-memory draft retention across window/tab unmounts remains open under W7).
 
 ### File Search & Replace Hooks
 - **`useFileSearch` (`packages/ui/src/hooks/use-file-search.ts`):** Project-scoped queries capture the profile connection and assert `isCurrentConnection(conn)` upon response arrival. Empty federated profile sets return empty results immediately without ambient fallback. Search matches are stamped with authoritative `profileId` and `generation`.
-- **`useSearchPanelReplace` (`packages/ui/src/hooks/use-search-panel-replace.ts`):** `runReplaceNext` checks match generation against current connection snapshot (`snap.owner.generation !== nextMatch.generation`). The captured connection reference is preserved through read and write stages via `replaceOperationConnectionRef`, asserting connection currency across the operation. Open carryover W0b notes that batch Replace All groups without match generation and does not fence final publication.
+- **`SearchPanel` (`packages/ui/src/components/organisms/SearchPanel.tsx`):** Enforces query-result binding via `isSearchMatchingInput` (`data.query === query.slice(0, 200)` and `!isLoading`). When live typing diverges from completed search results, Replace buttons are disabled (`replaceDisabled: true`) and displayed matches are cleared. Supports `isolatedState: true` for independent per-mode query state.
+- **`useSearchPanelReplace` (`packages/ui/src/hooks/use-search-panel-replace.ts`):** `runReplaceNext` checks match generation against current connection snapshot (`snap.owner.generation !== nextMatch.generation`). Batch Replace All verifies that all matches in a group have matching `profileId` and valid, current `generation` (`allMatchesValid`), rejecting stale generations fail-closed while skipping dirty open tabs.
 
 ### Ports & Cloudflared Tunnels (`packages/ui/src/hooks/use-ports.ts`)
 - **Authoritative Target Owner:** `installCloudflared` captures `targetOwner` from the explicit target owners list and binds to `getBoundTransport(targetOwner)`.
-- **Generation & Currency Checks:** Catch handlers verify `isCurrentConnection(targetOwner)` and generation equality before publishing error states. Open carryover W10 notes that aggregate installer views select `targetOwners[0]` rather than the failed row.
+- **Generation & Currency Checks:** Catch handlers verify `isCurrentConnection(targetOwner)` and generation equality before publishing error states.
 
 ### Session Changes App (`packages/ui/src/os/apps/SessionChangesApp.tsx`)
 - **Resource Claim Contract:** Obtains a deterministic claim key `session-changes/${profileId}/${generation}/${resourceId}` via `useResourceClaim`.
-- **Fail-Closed Teardown:** Listens to `useSessionChangesEnabled`; if the service becomes disabled or disconnected, all owner queries under `profileQueryKey(owner, "session-changes")` are cancelled and removed, and the window closes immediately. Open carryover W2 notes that offscreen/hidden reviews do not retire or purge cache until mounted.
-- **Focus & Input Trapping:** Focus is directed to the modal container on mount and state transitions. Open carryover W3 notes that the claim-denied branch lacks `ref={rootRef}`, the loading branch contains zero tabbable controls (allowing Tab to escape), negative-tabindex controls are not excluded, and background terminal writes are not intercepted at the PTY dispatch layer.
+- **Mounted-Window Teardown:** Listens to `useSessionChangesEnabled`; if the service becomes disabled or disconnected, all owner queries under `profileQueryKey(owner, "session-changes")` are cancelled and removed, and the mounted window closes immediately. Offscreen/hidden review retirement and background cache purging remain open (W2).
+- **Focus & Input Trapping:** Focus is directed to the modal container on mount and state transitions, and initial generation is captured via `useState` on mount. (Durable pre-open generation capture, removal of generation-wildcard matching, and physical PTY focus isolation remain open under W2/W3).
 
+### Management Pages Controlled Props Decoupling
+- **`AgentStorePage`:** Exposes `AgentStorePageProps` (`noLayout`, `profileId`, `tab`, `onTabChange`, `onProfileChange`). Operates in controlled mode inside `AgentStoreApp`, isolating tab and profile selection from route query parameters.
+- **`SettingsPage`:** Exposes `SettingsPageProps` (`noLayout`, `targetProfileId`, `onTargetProfileChange`). When rendered in `noLayout` or explicit `targetProfileId`, maintains local state and updates window `appState`. Operations follow capture-and-recheck: `{ profileId, generation }` is captured before I/O, and `getCurrentEffectiveProfileId()` confirms target currency before applying post-await mutations rather than retargeting an in-flight action.
+- **`DevicesPage`:** Exposes `DevicesPageProps` (`noLayout`, `profileId`, `onProfileChange`). Server picker renders for `profiles.length > 0` with explicit `(Current / Default Server)` fallback option.
 ### Verification Note
-Automated verification results (70 tests across 12 files, clean typecheck) are reported in `plans/reports/tester-261102-1706-phase-05-cycle-5.md` and were not independently rerun during this documentation update.
+Automated verification results (115 tests across 15 files, clean typecheck) are reported in `plans/reports/tester-261102-1911-phase05-cycle5-validation.md` and were not independently rerun during this documentation update.
 
-## 6. Verification & Open Qualification Gates
+## 6. Verification & Code Review Remediation Disposition
 
-### Automated Test Coverage (Phase 05 Cycle 5)
-Automated verification reported 70 passed checks across 12 test files:
-- **OS Unit Tests (`src/os/`):** 61 passed / 61 total across 9 test files, including:
+### Automated Test Coverage (Phase 05 Remediation)
+Automated verification reported 115 passed checks across 15 test files:
+- **OS Unit & Component Tests (`src/os/`, `organisms/`, `hooks/`):** 99 passed / 99 total across 12 test files, including:
   - `src/os/app-registry.test.ts` (manifest completeness, minimumCtx checks, instancing rules, window matching)
   - `src/os/deep-links.test.ts` (query parameter parsing, profile gating, line parsing, owner tuple validation, template layout generation)
+  - `DiffViewer.test.tsx` (authoritative transport binding, in-flight stat/save revision reset, local dirty edit retention)
+  - `use-search-panel-replace.test.tsx` (target recovery, stale generation rejection in Replace All, dirty tab skipping)
   - `src/os/intents.test.ts`, `src/os/resource-registry.test.ts`, `src/os/window-ops.test.ts`, `src/os/persistence.test.ts`, `src/os/input-arbiter.test.ts`
-- **Browser Component Regressions (`packages/ui/browser-tests/`):** 9 passed / 9 total across 3 files:
-  - `os-workspace-apps.browser.tsx`: Shell mounting of workspace adapters, context binding, and `file:reveal` intent routing.
-  - `os-review-apps.browser.tsx`: GitApp mounting, ConflictResolverApp fail-closed no-operation view, SessionChangesApp tuple validation & input isolation, and multi-profile project collision isolation.
-  - `os-management-apps.browser.tsx`: Management apps mounting inside OS windows, and 60/40 binary split project desktop template application.
+- **Browser Component Regressions (`packages/ui/browser-tests/`):** 16 passed / 16 total across 3 files:
+  - `os-workspace-apps.browser.tsx` (7 tests): Shell mounting of workspace adapters, context binding, `file:reveal` intent routing, `search:query` delivery, `changes:diff` delivery and repeat activation, `terminal:focus` safe validation.
+  - `os-review-apps.browser.tsx` (6 tests): GitApp mounting, ConflictResolverApp fail-closed no-operation view, operation mismatch rejection, SessionChangesApp tuple validation & input isolation, disable cache purging, and multi-profile project collision isolation.
+  - `os-management-apps.browser.tsx` (3 tests): Management apps mounting inside OS windows, 60/40 binary split project desktop template application, and AgentStoreApp window appState decoupling without route URL mutation.
 - **TypeScript Typecheck:** Clean build via `pnpm --filter @dam-hopper/ui build` (`tsc -p tsconfig.json`, 0 type errors).
 
-### Carried-Forward Review Findings (Reviewer Cycle 5, Score 5/10)
-Technical acceptance is carried forward with open qualification gates to Phase 09:
-- **W0a (DiffViewer Save Revision):** Revision equality rechecking after `fsWriteFile` and delayed-stat/write edge case testing.
-- **W0b (Search Replace All):** Grouping and validating originating generation across batch replace matches.
-- **W1 (Catalog Intent Delivery):** Production consumers for remaining catalog actions and canonical payload delivery across cold and reused windows.
-- **W2 (Generation Capture & Offscreen Purge):** Durable in-memory generation capture at pre-open, wildcard matching removal, and background review retirement.
+### Code Review Remediation Disposition (Cycle 4, Score 7/10)
+Implementation and remediation checkpoint reached completion per user direction (0 Critical, 2 High, 2 Medium warnings addressed):
+- **W0a / C4-W1 (DiffViewer Save Reconciliation):** `editRevisionRef` and `activeSaveRef` track in-flight edits, resetting `saveState` from `"saving"` to `"idle"` on typing during stat/save without cancelling already-dispatched server writes. `authoritativeModified` pinning protects post-save baseline while preserving newer local dirty edits against query refetches.
+- **W0b / C3-W1 (Search Result-Query Binding & Generation Fencing):** `isSearchMatchingInput` binds matches to active results within 200-char normalization, disabling replace when typing diverges. `useSearchPanelReplace` enforces `allMatchesValid` across batch replace and checks dirty tabs.
+- **W1 / C4-W3 (Intent Routing & Delivery Consumption):** `OsShell.tsx` registers active handlers for `search:query`, `changes:diff`, `terminal:focus`, `file:open` (generation fenced), `git:status`, and `settings:open`. Unique `deliveryId` in window `appState` provides once-per-delivery consumption to prevent stale intent replays on unrelated query refetches.
+- **C4-W2 (Canonical Changes Selection):** `ChangesApp` prioritizes canonical project paths before root-relative aliases using `createChangedFileSelection`.
+- **W4 (Conflict Resolver Operation Verification):** `ConflictResolverApp` strictly verifies `requestedOperation` against live operation state, blocking actions fail-closed when inactive or mismatched.
+- **W5 (Management Target & State Decoupling):** Controlled props on `AgentStorePage`, `SettingsPage`, and `DevicesPage` decouple window state from global URL search parameters and singleton stores; `SettingsPage` enforces capture-and-recheck async ownership.
+
+### Open Carryover Qualification Gates (Tracked for Phase 09)
+Technical acceptance remains incomplete; the following carryover gates remain open:
+- **W2 (Generation Capture & Offscreen Purge):** Durable in-memory generation capture at pre-open, removal of generation-wildcard matching, and background/offscreen review retirement.
 - **W3 (Focus Trap & PTY Isolation):** Live physical PTY focus isolation, loading-state Tab containment, and terminal autofocus suppression.
-- **W4 (Conflict Resolver Active Operation):** Uniformly rejecting requested operations when active operation is `none` or missing.
-- **W5 (Management Target Independence):** Controlled URL-free body props for Agent Store, Settings, and Devices.
-- **W6 (Deep Link Navigation Consumption):** Router/basename-aware navigation identity and supported action white-listing.
-- **W7 (Unsaved Diff/View Retention):** In-memory draft retention for DiffViewer across tab switches and desktop transitions.
+- **W6 (Deep Link Navigation Consumption):** Router/basename-aware navigation identity and supported action whitelisting.
+- **W7 (Unsaved Diff/View Retention Across Unmounts):** In-memory draft retention for DiffViewer across window/tab switches and desktop transitions (distinguished from local dirty-edit retention during query refetches).
 - **W8 (Template Context & Lazy Catalog):** Enforcing non-empty project context on templates and lazy/Suspense catalog loading.
-- **W9 (Regression Coverage):** Regressions for delayed-await safety, real browser input transitions, and live PTY streaming.
+- **W9 (Live Lifecycle Regressions):** Regressions for live xterm object continuity, zero attach/replay counters, dirty Monaco undo continuity, and live Playwright journey qualification.
 - **W10 (Tunnel Installer Owner Scope):** Per-row failed owner retention in aggregate tunnel installer views.

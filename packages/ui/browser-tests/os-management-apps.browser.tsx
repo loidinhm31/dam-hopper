@@ -202,4 +202,31 @@ describe("OS Management Apps Browser Tests", () => {
     expect(canvas).not.toBeNull();
     expect(windows).toHaveLength(5);
   });
+
+  it("mounts AgentStoreApp and manages tab in window appState without mutating route URL", async () => {
+    await renderOs();
+
+    await act(async () => {
+      useWindowStore.getState().openWindow({
+        id: "win-store-decoupled",
+        appId: "agent-store",
+        title: "Agent Store",
+        ctx: { profileId: testProfile.id },
+        mode: "tile",
+        appState: { tab: "memory" },
+      });
+    });
+
+    const storeEl = container?.querySelector(
+      '[data-os-agent-store-app="win-store-decoupled"]',
+    );
+    expect(storeEl).not.toBeNull();
+
+    const win =
+      useWindowStore.getState().session.windows["win-store-decoupled"];
+    expect(win.appState?.tab).toBe("memory");
+
+    const memoryBtn = storeEl?.querySelector('button[aria-pressed="true"]');
+    expect(memoryBtn?.textContent).toContain("Memory Files");
+  });
 });

@@ -61,3 +61,20 @@ Phase 01 of the AI Dev OS redesign introduces modular windowing and resource man
   - `TerminalsApp`: Terminal slot attachment via `attachTerminalsToHost`, visible slot claim via `useResourceClaim` (reactively refreshed via `[key, formattedKey, windowId]` and `[key, windowId]` dependencies), disconnected profile banner, and denied-claim fallback overlay.
   - `EditorApp`: Owner-qualified tab key derivation (`editorFileTabKey`), Monaco slot attachment via `attachMonacoToSlot`, and claim conflict resolution.
   - `BrowserApp`: Coordinates iframe slot geometry and visibility with `OsResourceHost` via slot registration (`registerBrowserSlot`, `updateBrowserSlot`).
+  - `FilesApp`: Embeds `FileTree`, connecting file clicks to `file:edit` intents and directory context to `useFileWatch` subscriptions.
+  - `SearchApp`: Embeds `SearchPanel` with `isolatedState: true` and delivery keying, decoupling search queries per mode (files vs content) without mutating global search stores, and routing match selections with generation metadata to `file:open` or `file:edit` intents.
+  - `ChangesApp`: Embeds `ChangedFilesList`, `GitLocalChanges`, and `DiffViewer`. Canonical path resolution matches canonical project paths first via `createChangedFileSelection`. Consumes delivered `changes:diff` intents once per delivery ID to prevent repeating tab activation on unrelated query refreshes.
+  - `GitApp`: Embeds `WorkspaceGitPanel` with commit history search, branch operations, and commit inspection.
+  - `ConflictResolverApp`: Embeds `ConflictResolverPanel` and `MergeConflictEditor`. Verifies active conflict operations against `requestedOperation` (`requestedOperation !== undefined && (!liveOp || liveOp === "none" || liveOp !== requestedOperation)`), uniformly displaying fail-closed notices and blocking abort/continue actions when the requested operation is inactive or mismatched.
+  - `SessionChangesApp`: Embeds `SessionChangesPanel`, enforcing an exact 6-part owner tuple (`profileId`, `generation`, `terminalId`, `terminalIncarnation`, `ompSessionId`, `rootId`), stable generation capture via `useState` on mount, resource claim acquisition, and mounted-window teardown and query cache purge on disable or disconnect (offscreen/hidden review retirement remains open).
+  - `WorkflowPlansApp`: Embeds `WorkflowContextSurface`, routing plan selections and task tracking.
+  - `PortsTunnelsApp`: Embeds `PortsPanel`, providing discovered port status, cloudflared tunnel lifecycle controls, and browser launch intents.
+  - `ProjectInfoApp`: Embeds `ProjectOverview` and `ConfigEditor`, binding edits to the current project owner.
+  - `AgentStoreApp`: Embeds `AgentStorePage` with controlled props (`AgentStorePageProps`), managing tab and profile selections in window `appState` without mutating global route query parameters.
+  - `SettingsApp`: Embeds `SettingsPage` with controlled props (`SettingsPageProps`), managing target profile selection in window `appState` without mutating global `useWorkbenchSelectionsStore.settingsProfileId`.
+
+## Decoupled Management Page Components
+
+- **`AgentStorePage` (`packages/ui/src/components/pages/AgentStorePage.tsx`):** Supports `AgentStorePageProps` (`noLayout`, `profileId`, `tab`, `onTabChange`, `onProfileChange`). When embedded in OS windows, operates in controlled mode without writing to `useSearchParams`.
+- **`SettingsPage` (`packages/ui/src/components/pages/SettingsPage.tsx`):** Supports `SettingsPageProps` (`noLayout`, `targetProfileId`, `onTargetProfileChange`). When in controlled/noLayout mode, maintains local target selection and enforces capture-and-recheck async ownership via `getCurrentEffectiveProfileId()` before applying post-await mutations to avoid mutating global store state or experiencing stale profile references.
+- **`DevicesPage` (`packages/ui/src/components/pages/DevicesPage.tsx`):** Supports `DevicesPageProps` (`noLayout`, `profileId`, `onProfileChange`). Displays server selector whenever `profiles.length > 0` with explicit `(Current / Default Server)` fallback option.

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { OsWindow } from "../types.js";
 import { useWindowOwner } from "../window-context.js";
 import { SearchPanel } from "@/components/organisms/SearchPanel.js";
@@ -6,7 +6,7 @@ import { dispatchIntent, createIntent } from "../intents.js";
 import { normalizeProjectTarget } from "@/api/client.js";
 import type { SearchResultItem } from "@/lib/search-matches.js";
 import { isContentSearchMatch, isPathSearchMatch } from "@/lib/search-matches.js";
-
+import { useWindowStore } from "../window-store.js";
 export interface SearchAppProps {
   window: OsWindow;
 }
@@ -16,7 +16,8 @@ export function SearchApp({ window }: SearchAppProps) {
   const profileId = owner.profileId;
   const project = window.ctx.projectId ?? "";
   const worktreeId = window.ctx.worktreeId;
-
+  const requestedQuery = window.appState?.query as string | undefined;
+  const deliveryId = window.appState?.deliveryId;
   const target = useMemo(
     () =>
       normalizeProjectTarget({
@@ -49,6 +50,7 @@ export function SearchApp({ window }: SearchAppProps) {
               worktreeId: match.targetRef?.worktreePath ?? undefined,
               filePath,
               line,
+              generation: match.generation,
             },
             window.id,
           ),
@@ -66,10 +68,13 @@ export function SearchApp({ window }: SearchAppProps) {
     >
       <div className="flex-1 min-h-0 relative">
         <SearchPanel
+          key={`${window.id}:${deliveryId ?? "initial"}`}
           project={project}
           target={target}
+          initialQuery={requestedQuery}
           onResultClick={handleResultClick}
           autoFocus={false}
+          isolatedState={true}
         />
       </div>
     </div>

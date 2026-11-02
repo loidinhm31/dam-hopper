@@ -34,6 +34,12 @@ Project navigation does not change any of these selections. Host values are prof
 
 `SettingsPage` renders separate **Settings Target Server** and **Workbench Preferences Source** selectors. Target labels include the profile name and server URL. Every config, workspace, known-workspace, maintenance, import, export, and idle-suspend hook receives the target owner; an absent target uses the existing compatibility/default-server path only when no explicit profile is selected.
 
+### Controlled Mode & OS Window Decoupling
+When hosted within OS windows (`SettingsApp`), `SettingsPage` operates in controlled mode via `SettingsPageProps` (`noLayout`, `targetProfileId`, `onTargetProfileChange`):
+- **Window AppState Isolation:** Target profile changes update window-local state and trigger `onTargetProfileChange`, leaving global `useWorkbenchSelectionsStore.settingsProfileId` unmodified.
+- **Async Boundary Currency:** Handlers capture target references via `getCurrentEffectiveProfileId()`, ensuring async configuration writes and TOML imports recheck the effective target upon completion rather than referencing stale global store properties.
+- **Devices Page Controlled Props:** `DevicesPage` (`DevicesPageProps`) provides `noLayout`, `profileId`, and `onProfileChange`, rendering the server selector for `profiles.length > 0` and offering `(Current / Default Server)`.
+
 - `GlobalConfigEditor` and `ConfigEditor` pass `OwnerInput` to their queries and mutations; server-local defaults, projects, commands, and terminal profiles are never copied to the preference source or another profile.
 - Maintenance cache clearing invalidates only the target profile's query prefix. Nuclear reset is target-labelled and explicit about terminal disposal; it is not a connection-management operation.
 - Export requests target the selected server and download raw TOML through a Blob with a server-labelled filename. Import accepts `.toml` only, keeps the 1 MiB client limit, confirms the workspace and target, reads the file after confirmation, and rejects a changed target or connection generation before dispatch. The server remains responsible for validation, backup, atomic publication, and rollback.

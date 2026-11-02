@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useCallback, useRef } from "react";
+import { useEffect, useMemo, useCallback, useRef, useState } from "react";
 import type { OsWindow, ResourceClaimKey } from "../types.js";
 import { useWindowOwner } from "../window-context.js";
 import { useResourceClaim } from "../resource-registry.js";
@@ -21,12 +21,12 @@ export function SessionChangesApp({ window }: SessionChangesAppProps) {
   const rootRef = useRef<HTMLDivElement>(null);
 
 
-  const capturedGenerationRef = useRef<number>(
-    window.ctx.generation ??
+  const [capturedGeneration] = useState<number>(
+    () =>
+      window.ctx.generation ??
       (window.appState?.generation as number | undefined) ??
       windowOwner.generation,
   );
-  const capturedGeneration = capturedGenerationRef.current;
 
   const owner: ConnectionRef = useMemo(
     () => ({

@@ -35,6 +35,7 @@ import {
   isProjectTargetError,
   normalizeProjectTarget,
   projectTargetCacheKey,
+  type ProjectTargetRef,
   type ProjectTargetInput,
 } from "@/api/client.js";
 import { getTransport as getAmbientTransport } from "@/api/transport.js";
@@ -153,6 +154,9 @@ export function DiffViewer({
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
+  const [authoritativeModified, setAuthoritativeModified] = useState<
+    string | null
+  >(null);
   const diffEditorRef = useRef<monacoNs.editor.IStandaloneDiffEditor | null>(
     null,
   );
@@ -165,7 +169,21 @@ export function DiffViewer({
   // Snapshot of content at last load/save — source of truth for dirty detection.
   // Avoids false-dirty when data refetches between an edit and a save.
   const savedContentRef = useRef<string>("");
-  const saveRevisionRef = useRef<number>(0);
+  interface ActiveSaveOperation {
+    id: number;
+    documentIdentity: string;
+    editRevision: number;
+    content: string;
+    targetRef: ProjectTargetRef;
+    filePath: string;
+    initialGeneration?: number;
+  }
+  const activeSaveRef = useRef<ActiveSaveOperation | null>(null);
+  const editRevisionRef = useRef<number>(0);
+  const documentIdentityRef = useRef<string>("");
+  const isMountedRef = useRef<boolean>(true);
+  const pendingSaveRefetchRef = useRef<boolean>(false);
+  const preSaveServerModifiedRef = useRef<string | undefined>(undefined);
   const qc = useQueryClient();
 
   const isDeleted = fileStatus === "deleted";
@@ -185,6 +203,7 @@ export function DiffViewer({
     gitRootId ?? ".",
     diffPath ?? filePath,
   ]);
+  documentIdentityRef.current = diffIdentityKey;
 
   useEffect(() => {
     if (
@@ -201,15 +220,37 @@ export function DiffViewer({
 
   // Reset state when file selection changes
   useEffect(() => {
-    saveRevisionRef.current += 1;
+    editRevisionRef.current += 1;
+    activeSaveRef.current = null;
     setIsDirty(false);
     setSaveState("idle");
     setSaveError(null);
+    setAuthoritativeModified(null);
+    pendingSaveRefetchRef.current = false;
+    preSaveServerModifiedRef.current = undefined;
   }, [diffIdentityKey]);
 
   useEffect(() => {
+    if (authoritativeModified !== null) {
+      if (data?.modified !== preSaveServerModifiedRef.current) {
+        if (!isDirty) {
+          setAuthoritativeModified(null);
+          savedContentRef.current = data?.modified ?? "";
+          pendingSaveRefetchRef.current = false;
+        } else if (data?.modified === authoritativeModified) {
+          setAuthoritativeModified(null);
+          pendingSaveRefetchRef.current = false;
+        }
+      }
+    }
+  }, [data?.modified, authoritativeModified, isDirty]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
     return () => {
-      saveRevisionRef.current += 1;
+      isMountedRef.current = false;
+      editRevisionRef.current += 1;
+      activeSaveRef.current = null;
     };
   }, []);
   // Auto-dismiss save error after 5 s
@@ -272,7 +313,7 @@ export function DiffViewer({
       savedContentRef.current = modifiedEditor.getValue();
 
       modifiedEditor.onDidChangeModelContent(() => {
-        saveRevisionRef.current += 1;
+        editRevisionRef.current += 1;
         const current = modifiedEditor.getValue();
         setIsDirty(current !== savedContentRef.current);
       });
@@ -350,16 +391,53 @@ export function DiffViewer({
       return;
     }
     const content = editor.getModifiedEditor().getValue();
-    const currentSaveRevision = saveRevisionRef.current + 1;
-    saveRevisionRef.current = currentSaveRevision;
+    const editRevision = editRevisionRef.current;
+    const documentIdentity = diffIdentityKey;
     const initialSnap = targetRef.profileId
       ? getConnectionSnapshot(targetRef.profileId)
       : null;
-    const initialGeneration =
-      (targetRef as { generation?: number }).generation ??
-      initialSnap?.owner.generation;
+    const targetGen =
+      targetRef &&
+      typeof targetRef === "object" &&
+      "generation" in targetRef &&
+      typeof targetRef.generation === "number"
+        ? targetRef.generation
+        : undefined;
+    const initialGeneration = targetGen ?? initialSnap?.owner.generation;
+
+    const opId = (activeSaveRef.current?.id ?? 0) + 1;
+    const operation: ActiveSaveOperation = {
+      id: opId,
+      documentIdentity,
+      editRevision,
+      content,
+      targetRef,
+      filePath,
+      initialGeneration,
+    };
+    activeSaveRef.current = operation;
     setSaveState("saving");
     setSaveError(null);
+
+    const ownsSave = () => activeSaveRef.current === operation;
+    const sameDocument = () =>
+      isMountedRef.current &&
+      documentIdentityRef.current === operation.documentIdentity;
+    const sameRevision = () =>
+      editRevisionRef.current === operation.editRevision;
+    const capturedOwnerIsCurrent = () => {
+      if (!operation.targetRef.profileId) return true;
+      const snap = getConnectionSnapshot(operation.targetRef.profileId);
+      if (!snap || snap.status !== "connected") return false;
+      if (
+        operation.initialGeneration !== undefined &&
+        snap.owner.generation !== operation.initialGeneration
+      ) {
+        return false;
+      }
+      return true;
+    };
+
     try {
       const boundTransport = getBoundTransport(targetRef);
       // Stat the file to get current mtime — server rejects stale writes
@@ -367,68 +445,90 @@ export function DiffViewer({
         offset: 0,
         len: 0,
       });
-      if (saveRevisionRef.current !== currentSaveRevision) return;
-      if (targetRef.profileId) {
-        const snap = getConnectionSnapshot(targetRef.profileId);
-        if (!snap || snap.status !== "connected") {
-          throw new Error(
-            `Connection lost or changed for profile ${targetRef.profileId}`,
-          );
-        }
-        if (
-          initialGeneration !== undefined &&
-          snap.owner.generation !== initialGeneration
-        ) {
-          throw new Error(
-            `Connection generation changed for profile ${targetRef.profileId}`,
-          );
-        }
+      if (!ownsSave() || !sameDocument()) {
+        return;
+      }
+      if (!sameRevision()) {
+        // User typed while stat was in flight
+        return;
+      }
+      if (!capturedOwnerIsCurrent()) {
+        throw new Error(
+          `Connection lost or changed for profile ${targetRef.profileId}`,
+        );
       }
       if (!readResult.ok && readResult.code !== "TOO_LARGE") {
         const readMessage =
-          (readResult as { message?: string }).message ?? "Failed to read file";
+          readResult &&
+          typeof readResult === "object" &&
+          "message" in readResult &&
+          typeof readResult.message === "string"
+            ? readResult.message
+            : "Failed to read file";
         if (isProjectTargetError(readResult.code, readMessage)) {
-          onTargetUnavailable?.();
+          if (ownsSave() && sameDocument()) {
+            onTargetUnavailable?.();
+          }
         }
         throw new Error(readMessage);
       }
-      const mtime = (readResult as { mtime: number }).mtime;
+      const mtime =
+        readResult &&
+        typeof readResult === "object" &&
+        "mtime" in readResult &&
+        typeof readResult.mtime === "number"
+          ? readResult.mtime
+          : 0;
       const writeResult = await boundTransport.fsWriteFile(
         targetRef,
         filePath,
         content,
         mtime,
       );
+      if (!ownsSave() || !sameDocument()) {
+        return;
+      }
+      if (!capturedOwnerIsCurrent()) {
+        throw new Error(
+          `Connection lost or changed for profile ${targetRef.profileId}`,
+        );
+      }
       if (!writeResult.ok) {
         if ("conflict" in writeResult && writeResult.conflict) {
           throw new Error("File modified externally — reload the diff");
         }
         const writeMessage =
-          ("error" in writeResult ? writeResult.error : undefined) ??
-          "Write failed";
+          writeResult &&
+          typeof writeResult === "object" &&
+          "error" in writeResult &&
+          typeof writeResult.error === "string"
+            ? writeResult.error
+            : "Write failed";
         if (isProjectTargetError(writeMessage)) {
-          onTargetUnavailable?.();
+          if (ownsSave() && sameDocument()) {
+            onTargetUnavailable?.();
+          }
         }
         throw new Error(writeMessage);
       }
-      if (targetRef.profileId) {
-        const postSnap = getConnectionSnapshot(targetRef.profileId);
-        if (
-          !postSnap ||
-          postSnap.status !== "connected" ||
-          (initialGeneration !== undefined &&
-            postSnap.owner.generation !== initialGeneration)
-        ) {
-          throw new Error(
-            `Connection lost or changed for profile ${targetRef.profileId}`,
-          );
-        }
-      }
+      // Successful write for this document and owner.
       savedContentRef.current = content;
-      setSaveState("idle");
-      setIsDirty(false);
-      await invalidateGitFileOperation(qc, targetRef, filePath);
+      preSaveServerModifiedRef.current = data?.modified;
+      setAuthoritativeModified(content);
+      pendingSaveRefetchRef.current = true;
+      // If user typed during write, keep the newer edits dirty:
+      const currentVal = editor.getModifiedEditor().getValue();
+      setIsDirty(currentVal !== content);
+
+      try {
+        await invalidateGitFileOperation(qc, targetRef, filePath);
+      } catch {
+        // Cache invalidation failure must not turn a successful write into an error
+      }
     } catch (e) {
+      if (!ownsSave() || !sameDocument() || !capturedOwnerIsCurrent()) {
+        return;
+      }
       const code =
         e && typeof e === "object" && "code" in e
           ? String((e as { code?: unknown }).code ?? "")
@@ -437,12 +537,18 @@ export function DiffViewer({
       if (isProjectTargetError(code, message)) {
         onTargetUnavailable?.();
       }
-      if (saveRevisionRef.current === currentSaveRevision) {
-        setSaveState("error");
-        setSaveError(message);
+      setSaveState("error");
+      setSaveError(message);
+    } finally {
+      if (ownsSave()) {
+        activeSaveRef.current = null;
+        if (sameDocument()) {
+          setSaveState((prev) => (prev === "saving" ? "idle" : prev));
+        }
       }
     }
   }, [
+    diffIdentityKey,
     filePath,
     isAndroidChromeNativeInputSuppressed,
     isDirty,
@@ -675,7 +781,13 @@ export function DiffViewer({
           keepCurrentOriginalModel
           keepCurrentModifiedModel
           original={data.original ?? ""}
-          modified={isDeleted ? "" : (data.modified ?? "")}
+          modified={
+            isDeleted
+              ? ""
+              : isDirty && diffEditorRef.current
+                ? diffEditorRef.current.getModifiedEditor().getValue()
+                : (authoritativeModified ?? data.modified ?? "")
+          }
           language={data.language}
           theme="vs-dark"
           onMount={handleMount}

@@ -155,6 +155,25 @@ describe("OS Review Apps Browser Tests", () => {
     expect(resolverEl).not.toBeNull();
   });
 
+  it("mounts ConflictResolverApp and shows operation mismatch when explicit requested operation is unavailable", async () => {
+    await renderOs();
+
+    await act(async () => {
+      useWindowStore.getState().openWindow({
+        id: "win-resolver-mismatch",
+        appId: "conflict-resolver",
+        title: "Conflict Resolver",
+        ctx: { profileId: testProfile.id, projectId: "review-repo", operation: "merge" },
+        mode: "float",
+      });
+    });
+
+    const mismatchEl = container?.querySelector(
+      '[data-testid="conflict-resolver-operation-mismatch"]',
+    );
+    expect(mismatchEl).not.toBeNull();
+  });
+
   it("mounts SessionChangesApp, verifies tuple requirements and traps input", async () => {
     await renderOs();
 

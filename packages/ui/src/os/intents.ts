@@ -57,6 +57,7 @@ export interface IntentPayloadMap {
     worktreeId?: string;
     filePath: string;
     line?: number;
+    generation?: number;
   };
   "file:edit": {
     profileId: string;
@@ -143,6 +144,11 @@ export interface IntentPayloadMap {
     projectId: string;
     worktreeId?: string;
     filePath: string;
+    status?: string;
+    additions?: number;
+    deletions?: number;
+    gitRootId?: string;
+    diffPath?: string;
   };
   "conflict:resolve": {
     profileId: string;

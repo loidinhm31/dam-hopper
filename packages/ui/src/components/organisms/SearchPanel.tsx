@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CaseSensitive,
@@ -7,7 +7,7 @@ import {
   X,
 } from "lucide-react";
 import { useFileSearch } from "@/hooks/use-file-search.js";
-import { useSearchUiStore } from "@/stores/search-ui.js";
+import { useSearchUiStore, type SearchScope } from "@/stores/search-ui.js";
 import type { SearchResultItem } from "@/lib/search-matches.js";
 import {
   groupContentSearchMatches,
@@ -33,6 +33,10 @@ interface SearchPanelProps {
   inputRef?: React.RefObject<HTMLInputElement | null>;
   consumeOpenSelection?: boolean;
   autoFocus?: boolean;
+  initialQuery?: string;
+  query?: string;
+  onQueryChange?: (query: string) => void;
+  isolatedState?: boolean;
 }
 
 export function SearchPanel({
@@ -44,6 +48,10 @@ export function SearchPanel({
   inputRef,
   consumeOpenSelection = Boolean(onClose),
   autoFocus = Boolean(onClose),
+  initialQuery,
+  query: controlledQuery,
+  onQueryChange: controlledOnQueryChange,
+  isolatedState = false,
 }: SearchPanelProps) {
   const worktreePath = target?.worktreePath;
   const targetProject = target?.project ?? project;
@@ -57,19 +65,39 @@ export function SearchPanel({
   }, [targetProject, worktreePath, targetProfileId]);
   const localInputRef = useRef<HTMLInputElement>(null);
   const resolvedRef = inputRef ?? localInputRef;
-  const {
-    scope,
-    setScope,
-    mode,
-    setMode,
-    queries,
-    replaceQuery,
-    setQuery,
-    setReplaceQuery,
-    selectOnOpen: shouldSelectOnOpen,
-    consumeSelectOnOpen,
-  } = useSearchUiStore();
-  const query = queries[mode];
+  const globalStore = useSearchUiStore();
+  const [localScope, setLocalScope] = useState<SearchScope>("project");
+  const [localMode, setLocalMode] = useState<"filename" | "content">("content");
+  const [localQueries, setLocalQueries] = useState<{
+    filename: string;
+    content: string;
+  }>({
+    filename: "",
+    content: controlledQuery ?? initialQuery ?? "",
+  });
+  const [localReplaceQuery, setLocalReplaceQuery] = useState("");
+
+  const scope = isolatedState ? localScope : globalStore.scope;
+  const setScope = isolatedState ? setLocalScope : globalStore.setScope;
+  const mode = isolatedState ? localMode : globalStore.mode;
+  const setMode = isolatedState ? setLocalMode : globalStore.setMode;
+  const queries = isolatedState ? localQueries : globalStore.queries;
+  const replaceQuery = isolatedState
+    ? localReplaceQuery
+    : globalStore.replaceQuery;
+  const setReplaceQuery = isolatedState
+    ? setLocalReplaceQuery
+    : globalStore.setReplaceQuery;
+  const setQuery = isolatedState
+    ? (m: "filename" | "content", val: string) =>
+        setLocalQueries((prev: { filename: string; content: string }) => ({
+          ...prev,
+          [m]: val,
+        }))
+    : globalStore.setQuery;
+  const { selectOnOpen: shouldSelectOnOpen, consumeSelectOnOpen } = globalStore;
+  const isControlledQuery = controlledQuery !== undefined;
+  const query = isControlledQuery ? controlledQuery : queries[mode];
   const {
     caseSensitive,
     setCaseSensitive,
@@ -134,6 +162,12 @@ export function SearchPanel({
     return sortContentSearchMatches(matches.filter(isContentSearchMatch));
   };
 
+  const isSearchMatchingInput =
+    data !== undefined &&
+    data.query.length >= 2 &&
+    data.query === query.slice(0, 200) &&
+    !isLoading;
+
   const {
     selectedMatchKey,
     isReplacing,
@@ -146,10 +180,11 @@ export function SearchPanel({
   } = useSearchPanelReplace({
     target: requestTarget,
     scope,
-    matches: contentMatches,
-    searchQuery: queries.content,
+    matches: isSearchMatchingInput ? contentMatches : [],
+    searchQuery: data?.query ?? "",
     replaceQuery,
     caseSensitive,
+    replaceDisabled: !isSearchMatchingInput,
     refreshMatches: refreshContentMatches,
     openMatch: (match, options) => onResultClick(match, options),
   });
@@ -233,7 +268,11 @@ export function SearchPanel({
             }
             value={query}
             // Synchronously update query state on each keystroke for controlled input
-            onChange={(event) => setQuery(mode, event.target.value)}
+            onChange={(event) =>
+              isControlledQuery
+                ? controlledOnQueryChange?.(event.target.value)
+                : setQuery(mode, event.target.value)
+            }
             className="flex-1 text-xs px-2 py-1.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)] transition-colors"
           />
           <button

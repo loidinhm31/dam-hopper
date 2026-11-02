@@ -1,11 +1,34 @@
 import type { OsWindow } from "../types.js";
-import { AgentStorePage } from "@/components/pages/AgentStorePage.js";
+import {
+  AgentStorePage,
+  type AgentStoreTab,
+} from "@/components/pages/AgentStorePage.js";
+import { useWindowStore } from "../window-store.js";
+import { createIntent, dispatchIntent } from "../intents.js";
 
 export interface AgentStoreAppProps {
   window: OsWindow;
 }
 
 export function AgentStoreApp({ window }: AgentStoreAppProps) {
+  const currentTab =
+    (window.appState?.tab as AgentStoreTab | undefined) ?? "store";
+  const targetProfileId = window.ctx.profileId;
+
+  const handleTabChange = (tab: AgentStoreTab) => {
+    useWindowStore.getState().updateAppState(window.id, { tab });
+  };
+
+  const handleProfileChange = (newProfileId: string) => {
+    if (newProfileId === window.ctx.profileId) return;
+    void dispatchIntent(
+      createIntent("agent-store:open", {
+        profileId: newProfileId,
+        tab: currentTab,
+      }),
+    );
+  };
+
   return (
     <div
       data-os-agent-store-app={window.id}
@@ -15,11 +38,10 @@ export function AgentStoreApp({ window }: AgentStoreAppProps) {
       <div className="flex-1 min-h-0 overflow-y-auto p-4">
         <AgentStorePage
           noLayout={true}
-          profileId={
-            window.ctx.profileId === "default"
-              ? undefined
-              : window.ctx.profileId
-          }
+          profileId={targetProfileId}
+          tab={currentTab}
+          onTabChange={handleTabChange}
+          onProfileChange={handleProfileChange}
         />
       </div>
     </div>

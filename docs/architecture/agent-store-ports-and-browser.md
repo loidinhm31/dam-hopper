@@ -9,7 +9,9 @@ Server catalogs, projects, tunnels, PTYs, and artifact files remain authoritativ
 
 ## 1. Agent Store Ownership
 
-`AgentStorePage` resolves reactive tab/profile URL intent and offers an explicit profile selector. `/agent-store?tab=settings&profileId=<encoded-id>` retains that exact registered target; settings without a target requires deliberate profile choice, with tab changes disabled until selection. Ordinary untargeted entry may initially select a valid active/first profile. Invalid, removed, and disconnected targets never fall back to another profile or mount query-bearing features.
+`AgentStorePage` resolves reactive tab/profile URL intent in standalone page mode, and offers controlled props (`AgentStorePageProps`: `noLayout`, `profileId`, `tab`, `onTabChange`, `onProfileChange`) when embedded in OS windows (`AgentStoreApp`). In standalone mode, `/agent-store?tab=settings&profileId=<encoded-id>` retains that exact registered target; settings without a target requires deliberate profile choice, with tab changes disabled until selection. Ordinary untargeted entry may initially select a valid active/first profile. Invalid, removed, and disconnected targets never fall back to another profile or mount query-bearing features.
+
+In controlled/embedded mode inside OS windows, tab navigation and profile selection update window `appState` and fire callbacks without modifying browser `location.search` (`useSearchParams`), completely isolating OS window state from the browser URL.
 
 Only a registered target with a current connected `ConnectionRef { profileId, generation }` mounts the page-local feature subtree. Every Agent Store, project, memory, import, and health query receives that concrete owner. The subtree is keyed by `connectionKey(owner)` so a profile or generation replacement retires selected items, dialogs, and drafts. Local profile navigation never mutates the global active profile or automatically connects/installs integrations.
 

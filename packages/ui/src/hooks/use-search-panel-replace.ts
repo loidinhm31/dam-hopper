@@ -33,8 +33,19 @@ interface UseSearchPanelReplaceOptions {
   searchQuery: string;
   replaceQuery: string;
   caseSensitive: boolean;
+  replaceDisabled?: boolean;
   refreshMatches: () => Promise<SearchMatch[]>;
   openMatch: (match: SearchMatch, options?: { closeSearch?: boolean }) => void;
+}
+export interface UseSearchPanelReplaceResult {
+  selectedMatchKey: string | null;
+  isReplacing: boolean;
+  warning: string | null;
+  error: string | null;
+  replaceDisabled: boolean;
+  selectMatch: (match: SearchMatch | null) => void;
+  replaceNext: () => Promise<void>;
+  replaceAll: () => Promise<void>;
 }
 
 function targetScopeKey(target: ProjectTargetInput): string {
@@ -45,16 +56,19 @@ function targetScopeKey(target: ProjectTargetInput): string {
   return `${prefix}::${projectTargetCacheKey(normalized)}`;
 }
 
-export function useSearchPanelReplace({
-  target,
-  scope,
-  matches,
-  searchQuery,
-  replaceQuery,
-  caseSensitive,
-  refreshMatches,
-  openMatch,
-}: UseSearchPanelReplaceOptions) {
+export function useSearchPanelReplace(
+  options: UseSearchPanelReplaceOptions,
+) {
+  const {
+    target,
+    scope,
+    matches,
+    searchQuery,
+    replaceQuery,
+    caseSensitive,
+    refreshMatches,
+    openMatch,
+  } = options;
   const targetRef = normalizeProjectTarget(target);
   const project = targetRef.project;
   const tabs = useEditorStore((state) => state.tabs);
@@ -96,7 +110,10 @@ export function useSearchPanelReplace({
   }, []);
 
   const replaceDisabled =
-    searchQuery.length < 2 || matches.length === 0 || isReplacing;
+    Boolean(options.replaceDisabled) ||
+    searchQuery.length < 2 ||
+    matches.length === 0 ||
+    isReplacing;
 
   const replaceNext = useCallback(async () => {
     if (replaceDisabled) return;
@@ -348,17 +365,20 @@ export function useSearchPanelReplace({
         );
         const normalizedMatchTarget = normalizeProjectTarget(matchTarget);
 
-        const isBlockedDirty = tabs.some(
-          (tab) =>
-            tab.project === group.project &&
-            (tab.target.profileId ?? undefined) ===
-              (normalizedMatchTarget.profileId ?? undefined) &&
-            tab.path === group.path &&
-            tab.dirty &&
-            targetScopeKey(tab.target ?? tab.project) ===
-              targetScopeKey(matchTarget),
-        );
-        if (isBlockedDirty) {
+        const checkDirtyTab = () =>
+          useEditorStore
+            .getState()
+            .tabs.some(
+              (tab) =>
+                tab.project === group.project &&
+                (tab.target.profileId ?? undefined) ===
+                  (normalizedMatchTarget.profileId ?? undefined) &&
+                tab.path === group.path &&
+                tab.dirty &&
+                targetScopeKey(tab.target ?? tab.project) ===
+                  targetScopeKey(matchTarget),
+            );
+        if (checkDirtyTab()) {
           blockedDirtyFiles++;
           continue;
         }
@@ -375,8 +395,25 @@ export function useSearchPanelReplace({
             failedFiles++;
             continue;
           }
+
+          const allMatchesValid = group.matches.every(
+            (m) =>
+              (m.profileId ?? undefined) ===
+                (normalizedMatchTarget.profileId ?? undefined) &&
+              m.generation !== undefined &&
+              m.generation === connectionRef?.generation,
+          );
+          if (!allMatchesValid || !isCurrentConnection(connectionRef)) {
+            failedFiles++;
+            continue;
+          }
         } else {
           t = getTransport() as WsTransport;
+          const allMatchesValid = group.matches.every((m) => !m.profileId);
+          if (!allMatchesValid) {
+            failedFiles++;
+            continue;
+          }
         }
 
         try {
@@ -387,6 +424,10 @@ export function useSearchPanelReplace({
           }
           if (!readResult.ok || readResult.binary) {
             failedFiles++;
+            continue;
+          }
+          if (checkDirtyTab()) {
+            blockedDirtyFiles++;
             continue;
           }
 

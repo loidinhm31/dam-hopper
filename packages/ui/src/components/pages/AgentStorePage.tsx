@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button } from "@/components/atoms/Button.js";
@@ -26,6 +26,7 @@ import {
   parseAgentStoreLocation,
   type AgentStoreTab,
 } from "@/lib/agent-store-navigation.js";
+export type { AgentStoreTab };
 
 const MemoryEditor = lazy(() =>
   import("@/components/organisms/MemoryEditor.js").then((m) => ({
@@ -53,13 +54,26 @@ const EMPTY_PROFILES: ServerProfile[] = [];
 const getEmptyProfiles = () => EMPTY_PROFILES;
 
 
+export interface AgentStorePageProps {
+  noLayout?: boolean;
+  profileId?: string;
+  tab?: AgentStoreTab;
+  onTabChange?: (tab: AgentStoreTab) => void;
+  onProfileChange?: (profileId: string) => void;
+}
+
 export function AgentStorePage({
   noLayout = false,
   profileId: explicitProfileId,
-}: {
-  noLayout?: boolean;
-  profileId?: string;
-} = {}) {
+  tab: controlledTab,
+  onTabChange: controlledOnTabChange,
+  onProfileChange: controlledOnProfileChange,
+}: AgentStorePageProps = {}) {
+  const isControlled =
+    noLayout ||
+    controlledTab !== undefined ||
+    controlledOnTabChange !== undefined ||
+    controlledOnProfileChange !== undefined;
   const [searchParams, setSearchParams] = useSearchParams();
   const location = parseAgentStoreLocation(searchParams.toString());
   const profiles = useSyncExternalStore(
@@ -77,13 +91,37 @@ export function AgentStorePage({
       null
     );
   });
-  const selectedProfileId =
-    explicitProfileId ??
-    (location.profile.kind === "explicit"
-      ? location.profile.profileId
-      : location.profile.kind === "default"
-        ? defaultProfileId
-        : null);
+  const [localTab, setLocalTab] = useState<AgentStoreTab>(
+    () => controlledTab ?? "store",
+  );
+  const [localProfileId, setLocalProfileId] = useState<string | null>(
+    () => explicitProfileId ?? null,
+  );
+
+  useEffect(() => {
+    if (controlledTab !== undefined) {
+      setLocalTab(controlledTab);
+    }
+  }, [controlledTab]);
+
+  useEffect(() => {
+    if (explicitProfileId !== undefined) {
+      setLocalProfileId(explicitProfileId);
+    }
+  }, [explicitProfileId]);
+
+  const activeTab: AgentStoreTab = isControlled
+    ? (controlledTab ?? localTab)
+    : location.tab;
+
+  const selectedProfileId = isControlled
+    ? (explicitProfileId ?? localProfileId ?? defaultProfileId)
+    : (explicitProfileId ??
+      (location.profile.kind === "explicit"
+        ? location.profile.profileId
+        : location.profile.kind === "default"
+          ? defaultProfileId
+          : null));
   const selectedProfile = profiles.find(
     (profile) => profile.id === selectedProfileId,
   );
@@ -97,12 +135,22 @@ export function AgentStorePage({
 
   const handleProfileChange = (profileId: string) => {
     if (!profiles.some((profile) => profile.id === profileId)) return;
+    if (isControlled) {
+      setLocalProfileId(profileId);
+      controlledOnProfileChange?.(profileId);
+      return;
+    }
     const params = new URLSearchParams(searchParams);
     params.set("tab", location.tab);
     params.set("profileId", profileId);
     setSearchParams(params);
   };
   const handleTabChange = (tab: AgentStoreTab) => {
+    if (isControlled) {
+      setLocalTab(tab);
+      controlledOnTabChange?.(tab);
+      return;
+    }
     const params = new URLSearchParams(searchParams);
     params.set("tab", tab);
     // A tab change retains the deliberate target, including a removed default.
@@ -112,7 +160,7 @@ export function AgentStorePage({
     setSearchParams(params);
   };
   const unavailableMessage =
-    location.profile.kind === "invalid"
+    !isControlled && location.profile.kind === "invalid"
       ? "Invalid profile target. Choose a server profile to continue."
       : selectedProfileId === null
         ? "Choose a server profile to continue."
@@ -128,11 +176,11 @@ export function AgentStorePage({
             <button
               key={tab}
               onClick={() => handleTabChange(tab)}
-              disabled={location.profile.kind === "choose"}
-              aria-pressed={location.tab === tab}
+              disabled={!isControlled && location.profile.kind === "choose"}
+              aria-pressed={activeTab === tab}
               className={[
                 "px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer capitalize disabled:cursor-not-allowed disabled:opacity-50",
-                location.tab === tab
+                activeTab === tab
                   ? "bg-[var(--color-primary)] text-white"
                   : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)]",
               ].join(" ")}
@@ -176,7 +224,7 @@ export function AgentStorePage({
           key={connectionKey(owner)}
           owner={owner}
           profileId={selectedProfile.id}
-          activeTab={location.tab}
+          activeTab={activeTab}
         />
       ) : (
         <p className="rounded-lg border border-[var(--color-border)] p-4 text-xs text-[var(--color-text-muted)]">

@@ -1,7 +1,13 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import type { OsWindow } from "../types.js";
 import { useWindowOwner } from "../window-context.js";
-import { ChangedFilesList, type ChangedFileSelection } from "@/components/organisms/ChangedFilesList.js";
+import {
+  ChangedFilesList,
+  createChangedFileSelection,
+  projectPathForEntry,
+  type ChangedFileSelection,
+} from "@/components/organisms/ChangedFilesList.js";
+import { useGitDiff } from "@/api/queries.js";
 import { GitLocalChanges } from "@/components/organisms/GitLocalChanges.js";
 import { DiffViewer } from "@/components/organisms/DiffViewer.js";
 import { dispatchIntent, createIntent } from "../intents.js";
@@ -17,13 +23,6 @@ export function ChangesApp({ window }: ChangesAppProps) {
   const project = window.ctx.projectId ?? "";
   const worktreeId = window.ctx.worktreeId;
 
-  const [selectedSelection, setSelectedSelection] =
-    useState<ChangedFileSelection | null>(null);
-  const [activeTab, setActiveTab] = useState<"changes" | "commit" | "diff">(
-    "changes",
-  );
-  const selectedFile = selectedSelection?.projectPath ?? null;
-
   const target = useMemo(
     () =>
       normalizeProjectTarget({
@@ -33,6 +32,69 @@ export function ChangesApp({ window }: ChangesAppProps) {
       }),
     [profileId, project, worktreeId],
   );
+
+  const { data: diffData, isLoading: isDiffLoading } = useGitDiff(target, "*");
+  const diffEntries = useMemo(() => {
+    if (!diffData) return [];
+    return Array.isArray(diffData) ? diffData : (diffData.entries ?? []);
+  }, [diffData]);
+
+  const [selectedSelection, setSelectedSelection] =
+    useState<ChangedFileSelection | null>(null);
+  const [activeTab, setActiveTab] = useState<"changes" | "commit" | "diff">(
+    "changes",
+  );
+  const requestedFilePath = window.appState?.filePath as string | undefined;
+  const requestedTab = window.appState?.activeTab as
+    | "changes"
+    | "commit"
+    | "diff"
+    | undefined;
+  const deliveryId = window.appState?.deliveryId;
+
+  useEffect(() => {
+    if (requestedFilePath) {
+      if (window.appState?.status !== undefined) {
+        setSelectedSelection({
+          projectPath: requestedFilePath,
+          status: (window.appState.status as string) ?? "M",
+          additions: (window.appState.additions as number) ?? 0,
+          deletions: (window.appState.deletions as number) ?? 0,
+          gitRootId:
+            (window.appState.gitRootId as string) ??
+            (window.ctx.gitRootId ?? "."),
+          diffPath:
+            (window.appState.diffPath as string) ?? requestedFilePath,
+        });
+        setActiveTab("diff");
+      } else if (diffEntries.length > 0 || !isDiffLoading) {
+        const matchingEntry = diffEntries.find(
+          (e) =>
+            projectPathForEntry(e) === requestedFilePath ||
+            e.path === requestedFilePath,
+        );
+        if (matchingEntry) {
+          setSelectedSelection(createChangedFileSelection(matchingEntry));
+          setActiveTab("diff");
+        } else if (!isDiffLoading) {
+          setSelectedSelection(null);
+          setActiveTab("changes");
+        }
+      }
+    } else if (requestedTab) {
+      setActiveTab(requestedTab);
+    }
+  }, [
+    requestedFilePath,
+    requestedTab,
+    deliveryId,
+    window.appState,
+    window.ctx.gitRootId,
+    diffEntries,
+    isDiffLoading,
+  ]);
+
+  const selectedFile = selectedSelection?.projectPath ?? null;
 
   const handleSelectFile = useCallback(
     (selection: ChangedFileSelection) => {
@@ -45,6 +107,11 @@ export function ChangesApp({ window }: ChangesAppProps) {
             projectId: project,
             worktreeId,
             filePath: selection.projectPath,
+            status: selection.status,
+            additions: selection.additions,
+            deletions: selection.deletions,
+            gitRootId: selection.gitRootId,
+            diffPath: selection.diffPath,
           },
           window.id,
         ),

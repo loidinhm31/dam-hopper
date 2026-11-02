@@ -1,5 +1,5 @@
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Switch } from "@/components/atoms/Switch.js";
 import type { DamHopperConfig } from "@/api/client.js";
@@ -32,32 +32,65 @@ const SETTINGS_DIAGNOSTICS_SCOPE = {
   frontendScopes: ["SettingsPage", "settings"],
 };
 
+export interface SettingsPageProps {
+  noLayout?: boolean;
+  targetProfileId?: string | null;
+  onTargetProfileChange?: (profileId: string | null) => void;
+}
+
 export function SettingsPage({
   noLayout = false,
-}: {
-  noLayout?: boolean;
-} = {}) {
+  targetProfileId: explicitTargetProfileId,
+  onTargetProfileChange,
+}: SettingsPageProps = {}) {
   const profilesResult = readServerProfiles();
   const profiles: ServerProfile[] =
     profilesResult.status === "available" ? profilesResult.profiles : [];
 
   const {
-    settingsProfileId,
+    settingsProfileId: globalSettingsProfileId,
     setSettingsProfileId,
     preferencesProfileId,
     preferencesStatus,
   } = useWorkbenchSelectionsStore();
+
+  const [localSettingsProfileId, setLocalSettingsProfileId] = useState<
+    string | null
+  >(() => explicitTargetProfileId ?? null);
+
+  useEffect(() => {
+    if (explicitTargetProfileId !== undefined) {
+      setLocalSettingsProfileId(explicitTargetProfileId);
+    }
+  }, [explicitTargetProfileId]);
+
+  const effectiveSettingsProfileId =
+    explicitTargetProfileId !== undefined
+      ? explicitTargetProfileId
+      : noLayout
+        ? localSettingsProfileId
+        : globalSettingsProfileId;
+
+  const effectiveSettingsProfileIdRef = useRef(effectiveSettingsProfileId);
+  effectiveSettingsProfileIdRef.current = effectiveSettingsProfileId;
+
+  function getCurrentEffectiveProfileId() {
+    if (noLayout || explicitTargetProfileId !== undefined) {
+      return effectiveSettingsProfileIdRef.current;
+    }
+    return useWorkbenchSelectionsStore.getState().settingsProfileId;
+  }
   const switchPreferenceSource = useSettingsStore(
     (s) => s.switchPreferenceSource,
   );
 
-  const targetSnapshot = settingsProfileId
-    ? getConnectionSnapshot(settingsProfileId)
+  const targetSnapshot = effectiveSettingsProfileId
+    ? getConnectionSnapshot(effectiveSettingsProfileId)
     : null;
   const targetProfile =
-    profiles.find((p) => p.id === settingsProfileId) ?? null;
-  const targetOwner = settingsProfileId
-    ? (targetSnapshot?.owner ?? { profileId: settingsProfileId, generation: 1 })
+    profiles.find((p) => p.id === effectiveSettingsProfileId) ?? null;
+  const targetOwner = effectiveSettingsProfileId
+    ? (targetSnapshot?.owner ?? { profileId: effectiveSettingsProfileId, generation: 1 })
     : undefined;
 
   const prefProfile =
@@ -93,9 +126,9 @@ export function SettingsPage({
   useEffect(() => {
     setSessionChangesNotice(null);
     setSessionChangesError(null);
-  }, [settingsProfileId, targetOwner?.generation]);
+  }, [effectiveSettingsProfileId, targetOwner?.generation]);
 
-  const isTargetReady = settingsProfileId
+  const isTargetReady = effectiveSettingsProfileId
     ? Boolean(
         targetProfile &&
           (!targetSnapshot || targetSnapshot.status === "connected"),
@@ -111,7 +144,7 @@ export function SettingsPage({
     setSessionChangesNotice(null);
     setSessionChangesError(null);
 
-    const actionProfileId = settingsProfileId;
+    const actionProfileId = effectiveSettingsProfileId;
     const actionGeneration = targetOwner?.generation ?? 1;
 
     try {
@@ -124,8 +157,7 @@ export function SettingsPage({
       };
       await updateConfig(nextConfig);
 
-      const currentSettingsProfileId =
-        useWorkbenchSelectionsStore.getState().settingsProfileId;
+      const currentSettingsProfileId = getCurrentEffectiveProfileId();
       const currentSnapshot = currentSettingsProfileId
         ? getConnectionSnapshot(currentSettingsProfileId)
         : null;
@@ -146,8 +178,7 @@ export function SettingsPage({
         }
       }
     } catch (err) {
-      const currentSettingsProfileId =
-        useWorkbenchSelectionsStore.getState().settingsProfileId;
+      const currentSettingsProfileId = getCurrentEffectiveProfileId();
       const currentSnapshot = currentSettingsProfileId
         ? getConnectionSnapshot(currentSettingsProfileId)
         : null;
@@ -252,14 +283,13 @@ export function SettingsPage({
     const file = pendingImportFile;
     setPendingImportFile(null);
 
-    const targetAtStart = settingsProfileId;
+    const targetAtStart = effectiveSettingsProfileId;
     const generationAtStart = targetSnapshot?.owner.generation ?? 1;
     const currentSnap = targetAtStart
       ? getConnectionSnapshot(targetAtStart)
       : null;
     if (
-      useWorkbenchSelectionsStore.getState().settingsProfileId !==
-        targetAtStart ||
+      getCurrentEffectiveProfileId() !== targetAtStart ||
       (currentSnap && currentSnap.owner.generation !== generationAtStart)
     ) {
       setImportErr(
@@ -319,10 +349,15 @@ export function SettingsPage({
               <select
                 id="settings-target-select"
                 className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[var(--color-text)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
-                value={settingsProfileId ?? ""}
+                value={effectiveSettingsProfileId ?? ""}
                 onChange={(e) => {
-                  const val = e.target.value;
-                  setSettingsProfileId(val || null);
+                  const val = e.target.value || null;
+                  if (noLayout || explicitTargetProfileId !== undefined) {
+                    setLocalSettingsProfileId(val);
+                    onTargetProfileChange?.(val);
+                  } else {
+                    setSettingsProfileId(val);
+                  }
                 }}
               >
                 <option value="">(Current / Default Server)</option>
