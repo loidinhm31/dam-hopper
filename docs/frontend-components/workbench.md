@@ -55,6 +55,28 @@ Query state remains memory-only. Host `QueryClient` instances use ordinary
 defaults; profile and generation ownership is encoded by
 `profileQueryKey(owner, ...)` instead of a global active-profile hash.
 
+## Application Routing and Hidden Authenticated `/os` Route
+
+**Location:** `packages/ui/src/embed/dam-hopper-app.tsx`
+
+`DamHopperApp` configures React Router (`BrowserRouter` with `basename` normalized via `normalizeRouterBasename`). It lazily mounts major workbench surfaces: `/` and `/dashboard` (`DashboardPage`), `/workspace` (`WorkspacePage`), `/git` (`GitPage`), `/settings` (`SettingsPage`), `/agent-store` (`AgentStorePage`), and `/devices` (`DevicesPage`). Legacy `/terminals` and `/ide` URLs are redirected to `/workspace` via `LegacyRedirect`. A retired feature placeholder is displayed for `/ssh-forwarding`.
+
+### Authenticated `/os` Route Boundary
+
+The unadvertised `/os` route provides access to the AI Dev OS multi-window desktop prototype, wrapped in an `ErrorBoundary` and `Suspense`:
+- **Auth Guard (`AuthenticatedOsRoute`):** Inspects the active profile via `useServerProfile()` and evaluates `Boolean(profile && (profile.authType === "none" || token))`.
+- **Authenticated Access:** If an active profile has a valid token (or `authType === "none"` for local development), dynamically loads and renders `<OsShell />`.
+- **Unauthenticated Fallback:** If no profile is connected or authentication is missing, renders an explicit fallback card (`data-testid="os-unauthenticated"`) instructing the operator to connect to an active authenticated server profile.
+- **Reactive Unmounting:** When locally observed profile or token credentials are revoked or cleared, the route reactively unmounts `<OsShell />` and restores the unauthenticated fallback card without requiring a page reload.
+
+### Global Shortcut Isolation
+
+`GlobalShortcuts` binds `Ctrl+Backquote` (backtick / `matchesNewTerminalShortcut`) to navigate to `/workspace?action=new-terminal`. To prevent workbench shortcuts from navigating away while working inside the OS shell:
+- It checks `if (location.pathname.startsWith("/os")) return;`, isolating keyboard navigation inside the `/os` route.
+- Operating system window management and keyboard shortcuts (such as `Ctrl+Alt+Escape` focus cycling) are handled within the OS shell by `WindowFrame` and `input-arbiter.ts`.
+
+See [AI Dev OS Lifecycle Architecture](../system-architecture.md#ai-dev-os-lifecycle-architecture-phase-01-prototype) for full multi-window and keep-alive specifications.
+
 ## Profile-owned enrollment and MFA UI
 
 **Locations:**
