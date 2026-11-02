@@ -21,7 +21,6 @@ const useGitCommitFileDiffMock = vi.fn();
 const useQueryClientMock = vi.fn(() => ({
   invalidateQueries: vi.fn(),
 }));
-const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 let lastDiffProps: Record<string, unknown> | null = null;
 let lastOnMount: ((editor: unknown) => void) | undefined;
 
@@ -37,11 +36,6 @@ vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => useQueryClientMock(),
 }));
 
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
-  }),
-}));
 
 vi.mock("@monaco-editor/react", () => ({
   DiffEditor: (props: Record<string, unknown>) => {
@@ -69,7 +63,6 @@ const diffData = {
 
 describe("DiffViewer", () => {
   beforeEach(() => {
-    mockPolicy.enabled = false;
     lastDiffProps = null;
     lastOnMount = undefined;
     if (!globalThis.ResizeObserver) {
@@ -134,52 +127,6 @@ describe("DiffViewer", () => {
     ).not.toThrow();
   });
 
-  it("sets the modified editor read-only and guards mount focus under Android policy", () => {
-    mockPolicy.enabled = true;
-    useGitFileDiffMock.mockReturnValue({
-      data: diffData,
-      isLoading: false,
-      isError: false,
-    });
-    useGitCommitFileDiffMock.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      isError: false,
-    });
-
-    renderToStaticMarkup(
-      <DiffViewer
-        project="demo-project"
-        filePath="src/demo.ts"
-        fileStatus="modified"
-        additions={1}
-        deletions={1}
-        onClose={() => {}}
-      />,
-    );
-
-    expect((lastDiffProps?.options as { readOnly?: boolean }).readOnly).toBe(
-      true,
-    );
-
-    const updateOptions = vi.fn();
-    const modifiedEditor = {
-      getValue: () => "after\n",
-      getDomNode: () => null,
-      updateOptions,
-      onDidChangeModelContent: vi.fn(),
-    };
-    const originalEditor = { getDomNode: () => null };
-    lastOnMount?.({
-      getModifiedEditor: () => modifiedEditor,
-      getOriginalEditor: () => originalEditor,
-      getModel: () => ({ original: null, modified: null }),
-      onDidChangeModel: vi.fn(),
-    });
-
-    expect(updateOptions).toHaveBeenCalledWith({ readOnly: true });
-    mockPolicy.enabled = false;
-  });
 
   it("resets saveState from saving to idle when in-flight stat is superseded by typing", async () => {
     useGitFileDiffMock.mockReturnValue({

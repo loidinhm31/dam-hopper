@@ -12,6 +12,83 @@ export interface ParsedOsDeepLink {
   action?: string;
   reason?: string;
 }
+export interface LegacyRouteTranslation {
+  status: "redirect" | "unqualified" | "removed" | "none";
+  targetUrl?: string;
+  guidance?: string;
+}
+
+/**
+ * Translates legacy workbench paths (/workspace, /terminals, /ide, /git, /settings,
+ * /devices, /agent-store) into qualified OS deep links.
+ *
+ * Preserves profile, project, worktree, file, line, hash, and terminal session parameters.
+ * If profileId is missing, returns "unqualified" with upgrade guidance instead of ambient fallback.
+ * For removed routes (/usage, /ssh-forwarding), returns "removed".
+ */
+export function translateLegacyRoute(
+  pathname: string,
+  search: string,
+): LegacyRouteTranslation {
+  const normPath = pathname.replace(/\/+$/, "") || "/";
+  const params = new URLSearchParams(search);
+
+  if (normPath === "/usage" || normPath === "/ssh-forwarding") {
+    return { status: "removed" };
+  }
+
+  const legacyAppMap: Record<string, string> = {
+    "/workspace": "terminals",
+    "/terminals": "terminals",
+    "/ide": "terminals",
+    "/git": "git",
+    "/settings": "settings",
+    "/devices": "devices",
+    "/agent-store": "agent-store",
+  };
+
+  const mappedApp = legacyAppMap[normPath];
+  if (!mappedApp) {
+    return { status: "none" };
+  }
+
+  const profileId = params.get("profileId") || params.get("profile");
+  if (!profileId) {
+    return {
+      status: "unqualified",
+      guidance:
+        "Legacy unqualified link detected without profileId. Please use the unified workbench navigation to select your project or terminal session.",
+    };
+  }
+
+  const newParams = new URLSearchParams();
+  newParams.set("profile", profileId);
+
+  if (mappedApp === "devices") {
+    newParams.set("open", "settings");
+    newParams.set("tab", "devices");
+  } else if (mappedApp === "terminals" && params.has("file")) {
+    newParams.set("open", "editor");
+  } else {
+    newParams.set("open", mappedApp);
+  }
+
+  for (const [key, val] of params.entries()) {
+    if (key === "profile" || key === "profileId" || (mappedApp === "devices" && key === "open")) {
+      continue;
+    }
+    if (key === "session") {
+      newParams.set("terminal", val);
+    } else {
+      newParams.set(key, val);
+    }
+  }
+
+  return {
+    status: "redirect",
+    targetUrl: `/?${newParams.toString()}`,
+  };
+}
 
 /**
  * Parses and validates an OS deep link URL query.
@@ -78,19 +155,23 @@ export function parseOsDeepLink(
     };
   }
 
-  // 3. Validate appId
-  if (!openParam || !isAppId(openParam)) {
+  // 3. Validate appId (support "devices" alias as settings with tab=devices)
+  const rawOpen = openParam;
+  const isDevices = rawOpen === "devices";
+  const effectiveAppId = isDevices ? "settings" : rawOpen;
+
+  if (!effectiveAppId || !isAppId(effectiveAppId)) {
     return {
       status: "invalid",
-      reason: `Unknown or unsupported application "${openParam}"`,
+      reason: `Unknown or unsupported application "${rawOpen}"`,
     };
   }
 
-  const manifest = getAppManifest(openParam);
+  const manifest = getAppManifest(effectiveAppId);
   if (!manifest) {
     return {
       status: "invalid",
-      reason: `Missing manifest for application "${openParam}"`,
+      reason: `Missing manifest for application "${effectiveAppId}"`,
     };
   }
 
@@ -112,7 +193,7 @@ export function parseOsDeepLink(
   const hash = params.get("hash") || params.get("commit") || undefined;
   const root = params.get("root") ?? undefined;
   const operation = params.get("operation") ?? undefined;
-  const terminal = params.get("terminal") ?? undefined;
+  const terminal = params.get("terminal") || params.get("session") || undefined;
   const incarnation = params.get("incarnation") ?? undefined;
   const ompSession = params.get("ompSession") ?? undefined;
   const url = params.get("url") ?? undefined;
@@ -136,13 +217,20 @@ export function parseOsDeepLink(
 
   let intent: OsIntent | undefined;
 
-  switch (openParam) {
+  switch (effectiveAppId) {
     case "terminals":
-      intent = createIntent("terminal:open", {
-        profileId,
-        projectId: project,
-        worktreeId: worktree,
-      });
+      if (terminal) {
+        intent = createIntent("terminal:focus", {
+          profileId,
+          terminalId: terminal,
+        });
+      } else {
+        intent = createIntent("terminal:open", {
+          profileId,
+          projectId: project,
+          worktreeId: worktree,
+        });
+      }
       break;
 
     case "editor":
@@ -286,17 +374,25 @@ export function parseOsDeepLink(
       });
       break;
 
-    case "settings":
-      intent = createIntent("settings:open", {
-        profileId,
-        tab: params.get("tab") ?? undefined,
-      });
+    case "settings": {
+      const tab = isDevices ? "devices" : (params.get("tab") ?? undefined);
+      if (tab === "devices") {
+        intent = createIntent("settings:devices", {
+          profileId,
+        });
+      } else {
+        intent = createIntent("settings:open", {
+          profileId,
+          tab,
+        });
+      }
       break;
+    }
   }
 
   return {
     status: "valid",
-    appId: openParam,
+    appId: effectiveAppId,
     intent,
     ctx,
     action: actionParam ?? undefined,

@@ -14,6 +14,17 @@ Per user approval (2026-11-02), Phase 01 was marked DONE on the component DOM co
 - **Cycle 3 Carried Warnings:** Monaco DOM reparenting cleanup during unmount (W2), real resource controller integration (W3), rendered-slot/shortcut-capture input regressions (W4).
 - **Cycle 4 Carried Warnings:** Connected parking-host containment assertions (W1; registry retention alone permits detached DOM), reactive profile notification boundary without explicit test re-render (W2), visual review ledger completion (`review.md`; W3), React 19 test harness `act(...)` warning elimination (W4).
 
+### Carried Phase 07 & Phase 08 Qualification & Remediation Ingress
+Per user approvals (Phase 07 on 2026-11-03 00:05:00 +07:00, Phase 08 on 2026-11-03), the following technical acceptance items and remediation gates are formally received by Phase 09:
+- **Phase 07 C1 (Critical — Cross-Tab Durable Run Selection):** Atomic durable run-selection/start authority covering all tabs and virtual desktops before acquiring per-record execution locks.
+- **Phase 07 C2 (Critical — Action-Time & Post-Await Epoch Fencing):** Action-time/post-await epoch checks under lock, truthful preservation of list failures, and connection owner fencing before live container qualification.
+- **Phase 07 C3 (Critical — Shared Launch Storage Blob):** Storage-wide transactional protection under Web Locks and fail-closed corrupt-storage preservation.
+- **Phase 07 AC8 / W1 (High — WM Layout Application & Live PTY Adoption):** Restoring window topology into Zustand window store (`TileTree<T>`), app instantiation, and verified alive PTY adoption.
+- **Phase 07 Warnings W2–W9 Carryover:** Reviewed recipe vs executed frozen launch snapshot mismatch (W2), incarnation enforcement on Hub Jump (W3), incomplete preflight (W4), schema/state boundaries (W5), non-binary split determinism (W6), command confirmation invariant (W7), UI/Hub gaps (W8), and test suite depth (W9).
+- **Phase 08 C2 (High — Router-Reactive Retirement Boundary):** Verify implemented `AppContentRouter` location subscription above boundary across SPA/Back/Forward navigation, ensuring zero-network/zero-mutation retirement notices for `/usage` and `/ssh-forwarding`.
+- **Phase 08 C3 (High — Intent Handler Dynamic Window Matching & Delivery Deduplication):** Verify implemented dynamic window matching (`useWindowStore.getState().session.windows`) in `OsShell.tsx` `file:open` handler, URL delivery deduplication across query-only navigation, and unhandled/invalid intent notice surfacing.
+- **Phase 08 Warnings W1–W5 Carryover:** Query-only URL delivery reactivity (W1), mobile keyboard settings cleanup in `stores/settings.ts` and `TerminalTreeView.tsx` (W2), container-aware compact density in `WorkflowContextSurface.tsx` and `ActiveTerminalRuntimeDisplay.tsx` (W3), retained browser test suite migration for 16 files with deleted legacy shell imports (W4), and independent P0 release publication receipt / production container journeys (W5).
+
 ## Ordered implementation by task ID
 ### migrate-application-journeys
 1. Retain useful component/browser regressions; remove only deleted shell/mobile/native/Usage presentation tests. Rewrite remaining WorkspacePage/IdeShell/AppLayout/HostResourcePopover imports and selectors to actual OS apps/frames, preserving original assertions (no skipped suites/mock-shell substitution).

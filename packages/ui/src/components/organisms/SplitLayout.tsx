@@ -30,7 +30,6 @@ import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 export function resolveDragOverlayTitle(tab: DisplayTabEntry | undefined) {
   return { title: tab?.title, label: tab?.label ?? "Terminal" };
 }
@@ -240,10 +239,7 @@ export function SplitLayout({
   onCloseBrowser,
   onOpenSessionChanges,
 }: SplitLayoutProps) {
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
-  const shouldSuppressTerminalFocus =
-    isAndroidChromeNativeInputSuppressed || suppressTerminalFocus;
+  const shouldSuppressTerminalFocus = Boolean(suppressTerminalFocus);
   // ── dnd-kit drag sensors (8px activation so clicks still work) ──────────
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),

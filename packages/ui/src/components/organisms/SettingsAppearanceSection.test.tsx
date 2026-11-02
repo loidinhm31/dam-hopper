@@ -13,18 +13,12 @@ const saveDebounced = vi.fn((patch: Partial<typeof settingsStore>) => {
   Object.assign(settingsStore, patch);
 });
 const saveAgentNotificationPolicy = vi.fn();
-const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 
 vi.mock("@/stores/settings.js", () => ({
   useSettingsStore: (selector?: (state: typeof settingsStore) => unknown) =>
     selector ? selector(settingsStore) : settingsStore,
 }));
 
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
-  }),
-}));
 
 const settingsStore = {
   systemFontSize: 14,
@@ -85,7 +79,6 @@ describe("SettingsAppearanceSection", () => {
     window.HTMLElement.prototype.hasPointerCapture ??= vi.fn();
     window.HTMLElement.prototype.setPointerCapture ??= vi.fn();
     window.HTMLElement.prototype.releasePointerCapture ??= vi.fn();
-    mockPolicy.enabled = false;
     settingsStore.systemFontSize = 14;
     settingsStore.editorFontSize = 14;
     settingsStore.terminalFontSize = 13;
@@ -115,18 +108,6 @@ describe("SettingsAppearanceSection", () => {
     useCognitoModeStore.getState().reset();
   });
 
-  it("forces and disables the custom keyboard setting on Android Chrome", () => {
-    mockPolicy.enabled = true;
-    settingsStore.mobileCustomKeyboardEnabled = false;
-
-    const markup = renderToStaticMarkup(<SettingsAppearanceSection />);
-
-    expect(markup).toContain("Forced on Android Chrome");
-    expect(markup).toContain('role="switch"');
-    expect(markup).toContain('aria-checked="true"');
-    expect(markup).toContain('disabled=""');
-    expect(settingsStore.mobileCustomKeyboardEnabled).toBe(false);
-  });
 
   it("renders the enabled terminal auto-switch state", () => {
     settingsStore.terminalAutoSwitchProjectEnabled = true;

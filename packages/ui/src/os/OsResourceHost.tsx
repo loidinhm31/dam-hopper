@@ -192,6 +192,7 @@ export function OsResourceHost({
 
       const sessionId =
         (w.appState?.sessionId as string | undefined) ??
+        (w.appState?.terminalId as string | undefined) ??
         `${profileId}:default`;
       sessions.push({
         sessionId,

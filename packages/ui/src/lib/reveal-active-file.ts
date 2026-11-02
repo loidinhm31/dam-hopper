@@ -1,4 +1,4 @@
-import type { WorkspaceMode } from "@/lib/workspace-mode.js";
+export type WorkspaceMode = "ide" | "terminal";
 import type { FileTreeRevealRequest } from "@/lib/file-tree-reveal.js";
 
 export interface ActivateToolRequest {

@@ -24,8 +24,8 @@ vi.mock("@/components/organisms/TerminalKeepAliveHost.js", () => ({
     return null;
   },
 }));
-vi.mock("@/lib/terminal-native-input-policy.js", () => ({
-  syncNativeKeyboardSuppression: vi.fn(),
+vi.mock("@/lib/terminal-input-policy.js", () => ({
+  syncTerminalInputSuppression: vi.fn(),
 }));
 vi.mock("@/lib/terminal-host-attachment.js", () => ({
   attachTerminalsToHost: vi.fn(),
@@ -59,12 +59,6 @@ vi.mock("@/components/organisms/TerminalScrollButtons.js", () => ({
     />
   ),
 }));
-vi.mock("@/hooks/use-compact-workspace.js", () => ({
-  useCompactWorkspace: () => mockViewport.compact,
-}));
-vi.mock("@/hooks/use-coarse-pointer.js", () => ({
-  useCoarsePointer: () => mockViewport.coarse,
-}));
 vi.mock("@/stores/settings.js", () => ({
   useSettingsStore: () => ({
     get mobileCustomKeyboardEnabled() {
@@ -73,11 +67,6 @@ vi.mock("@/stores/settings.js", () => ({
     get terminalScrollButtonsEnabled() {
       return mockSettings.scrollButtonsEnabled;
     },
-  }),
-}));
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
   }),
 }));
 
@@ -112,7 +101,7 @@ describe("TerminalRuntimeOutput", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps scroll and keyboard controls in the terminal surface", () => {
+  it("renders scroll controls in the terminal surface when active session is present", () => {
     const markup = renderToStaticMarkup(
       <TerminalRuntimeOutput
         activeSessionId="session-1"
@@ -124,71 +113,10 @@ describe("TerminalRuntimeOutput", () => {
     );
 
     expect(markup).toContain('data-testid="terminal-scroll-buttons"');
-    expect(markup).toContain('data-testid="mobile-terminal-accessory-bar"');
-    expect(markup).toContain('data-reserve-accessory-rail="true"');
     expect(markup).toContain("bg-[var(--color-background)]");
-    expect(markup).toContain("ring-inset");
-    expect(markup).not.toContain("safe-area-inline");
-  });
-  it("resets accessory geometry when the active session changes", async () => {
-    const renderSurface = (activeSessionId: string | null) => (
-      <TerminalRuntimeOutput
-        activeSessionId={activeSessionId}
-        mountedSessions={[]}
-        renderTerminals={false}
-      />
-    );
-
-    await act(async () => root.render(renderSurface("session-1")));
-    await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>('[aria-label="Show terminal keys"]')
-        ?.click();
-    });
-    expect(
-      container
-        .querySelector("[data-testid=terminal-scroll-buttons]")
-        ?.getAttribute("data-accessory-panel-open"),
-    ).toBe("true");
-
-    await act(async () => root.render(renderSurface("session-2")));
-    expect(
-      container
-        .querySelector("[data-testid=terminal-scroll-buttons]")
-        ?.getAttribute("data-accessory-panel-open"),
-    ).toBe("false");
-    expect(
-      container.querySelector('[aria-label="Hide terminal keys"]'),
-    ).toBeNull();
-  });
-
-  it("renders controls for desktop fine pointers without suppressing xterm input", () => {
-    mockViewport.compact = false;
-    mockViewport.coarse = false;
-
-    const markup = renderToStaticMarkup(
-      <TerminalRuntimeOutput
-        activeSessionId="session-1"
-        mountedSessions={[
-          { sessionId: "session-1", project: "demo", command: "shell" },
-        ]}
-        renderTerminals
-      />,
-    );
-
-    expect(markup).toContain('data-testid="mobile-terminal-accessory-bar"');
-    expect(markup).toContain('data-reserve-accessory-rail="true"');
-    expect(renderedHostProps).toEqual(
-      expect.objectContaining({
-        suppressAutoFocus: false,
-        suppressNativeKeyboard: false,
-      }),
-    );
   });
 
   it("does not mount scroll controls when disabled", () => {
-    mockViewport.compact = false;
-    mockViewport.coarse = false;
     mockSettings.scrollButtonsEnabled = false;
 
     const markup = renderToStaticMarkup(
@@ -202,8 +130,6 @@ describe("TerminalRuntimeOutput", () => {
     );
 
     expect(markup).not.toContain('data-testid="terminal-scroll-buttons"');
-    expect(markup).toContain('data-testid="mobile-terminal-accessory-bar"');
-    expect(markup).toContain("right:max(0.75rem, var(--safe-area-right, 0px))");
   });
 
   it("does not mount controls without an active session", () => {
@@ -218,53 +144,5 @@ describe("TerminalRuntimeOutput", () => {
     expect(markup).not.toContain('data-testid="mobile-terminal-accessory-bar"');
     expect(markup).not.toContain('data-testid="terminal-scroll-buttons"');
   });
-
-  it("forces the accessory and suppresses the hidden host on Android policy", () => {
-    mockPolicy.enabled = true;
-    mockSettings.customKeyboard = false;
-
-    const markup = renderToStaticMarkup(
-      <TerminalRuntimeOutput
-        activeSessionId="session-1"
-        mountedSessions={[
-          { sessionId: "session-1", project: "demo", command: "shell" },
-        ]}
-        renderTerminals
-      />,
-    );
-
-    expect(markup).toContain('aria-label="Open custom terminal keyboard"');
-    expect(renderedHostProps).toEqual(
-      expect.objectContaining({
-        suppressAutoFocus: true,
-        suppressNativeKeyboard: true,
-      }),
-    );
-  });
-
-  it("does not focus the terminal when the output surface is clicked under policy", async () => {
-    mockPolicy.enabled = true;
-
-    await act(async () => {
-      root.render(
-        <TerminalRuntimeOutput
-          activeSessionId="session-1"
-          mountedSessions={[
-            { sessionId: "session-1", project: "demo", command: "shell" },
-          ]}
-          renderTerminals={false}
-        />,
-      );
-    });
-
-    await act(async () => {
-      container
-        .querySelector<HTMLElement>(
-          "[data-testid=terminal-runtime-output-host]",
-        )
-        ?.click();
-    });
-
-    expect(mockTerminal.focus).not.toHaveBeenCalled();
-  });
 });
+

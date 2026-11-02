@@ -7,7 +7,8 @@ import { AlertTriangle, CheckCircle2, Grip, Loader2, X } from "lucide-react";
 import type { ProjectTargetInput } from "@/api/client.js";
 import { useConflictResolver } from "@/hooks/use-conflict-resolver.js";
 import { useFloatingPanelGeometry } from "@/hooks/use-floating-panel-geometry.js";
-import { TERMINAL_FLOATING_PANEL_TOPMOST_Z_INDEX } from "@/lib/terminal-workspace-panel.js";
+/** OS frame topmost z-index authority for floating conflict resolver */
+export const OS_RESOLVER_PANEL_TOPMOST_Z_INDEX = 30;
 import {
   clampResolverPanelLayout,
   handleResolverPanelKeyDown,
@@ -21,6 +22,17 @@ export interface ConflictRevealIntent {
   nonce: number;
   filePath?: string;
   root?: string;
+}
+
+export function buildConflictRevealIntent(
+  selection?: { path?: string; diffPath?: string; root?: string; gitRootId?: string } | null,
+): ConflictRevealIntent {
+  const rawRoot = selection?.root ?? selection?.gitRootId;
+  return {
+    nonce: Date.now(),
+    filePath: selection?.diffPath ?? selection?.path,
+    root: rawRoot && rawRoot !== "." ? rawRoot : undefined,
+  };
 }
 
 interface ConflictResolverPanelProps {
@@ -45,7 +57,7 @@ export function ConflictResolverPanel({
   root: propRoot,
   initialFilePath,
   revealIntent,
-  zIndex = TERMINAL_FLOATING_PANEL_TOPMOST_Z_INDEX,
+  zIndex = OS_RESOLVER_PANEL_TOPMOST_Z_INDEX,
   isTopmost = true,
   onActivate,
   onHide,

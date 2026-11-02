@@ -37,7 +37,7 @@ import {
   isTerminalFitEligible,
   scheduleTerminalFit,
 } from "@/lib/terminal-fit-scheduler.js";
-import { syncNativeKeyboardSuppression } from "@/lib/terminal-native-input-policy.js";
+import { syncTerminalInputSuppression } from "@/lib/terminal-input-policy.js";
 import {
   createTerminalRendererController,
   type TerminalRendererController,
@@ -76,9 +76,7 @@ import {
 } from "@/lib/terminal-attach-recovery-controller.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import { useTerminalSuggestions } from "@/hooks/use-terminal-suggestions.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import { TerminalFindBar } from "@/components/atoms/TerminalFindBar.js";
 import { TerminalSuggestionGhost } from "@/components/atoms/TerminalSuggestionGhost.js";
@@ -178,12 +176,9 @@ export function TerminalPanel({
     syncConnectionRef.current();
   }, [transportGeneration]);
   const { level: appZoomLevel } = useAppZoom();
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
-  const shouldSuppressNativeKeyboard =
-    isAndroidChromeNativeInputSuppressed || suppressNativeKeyboard;
+  const shouldSuppressNativeKeyboard = Boolean(suppressNativeKeyboard);
   const shouldSuppressTerminalFocus =
-    shouldSuppressNativeKeyboard || suppressAutoFocus;
+    shouldSuppressNativeKeyboard || Boolean(suppressAutoFocus);
   const terminalFontSize = useSettingsStore((state) => state.terminalFontSize);
   const appZoomFactor = appZoomLevel / 100;
   const terminalDisplayFontSize = terminalFontSize * appZoomFactor;
@@ -248,18 +243,14 @@ export function TerminalPanel({
         !gate?.isLiveStreamReady || (gate?.activeReplayWrites ?? 0) > 0;
       const effectiveSuppression =
         shouldSuppressNativeKeyboardRef.current || isReplayOrAttachActive;
-      syncNativeKeyboardSuppression(targetTerm, effectiveSuppression);
+      syncTerminalInputSuppression(targetTerm, effectiveSuppression);
     },
     [],
   );
   // Term element state — triggers re-render to mount portal after open()
   const [termElement, setTermElement] = useState<HTMLElement | null>(null);
   const findControllerRef = useRef<TerminalFindController | null>(null);
-  const isCoarsePointer = useCoarsePointer();
-  // Mobile/touch routing is not unified yet, so every coarse-pointer surface
-  // fails closed rather than relying on a compact-width heuristic.
-  const automaticSuggestionsAllowed =
-    !shouldSuppressNativeKeyboard && !isCoarsePointer;
+  const automaticSuggestionsAllowed = !shouldSuppressNativeKeyboard;
   const findUnsubscribeRef = useRef<(() => void) | null>(null);
   const [findSnapshot, setFindSnapshot] =
     useState<TerminalFindSnapshot>(EMPTY_FIND_SNAPSHOT);

@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState } from "react";
+import { useEffect, useCallback, useState, useRef } from "react";
 import type { OsWindow, OsAppId, WindowContext } from "./types.js";
 import { useWindowStore } from "./window-store.js";
 import { DesktopCanvas } from "./DesktopCanvas.js";
@@ -29,7 +29,7 @@ import { getTerminal } from "@/lib/terminal-registry.js";
 import { parseOsDeepLink } from "./deep-links.js";
 import { readServerProfiles } from "@/api/server-config.js";
 import { getConnectionSnapshot } from "@/api/connections.js";
-import { dispatchIntent, registerIntentHandler } from "./intents.js";
+import { dispatchIntent, registerIntentHandler, createIntent } from "./intents.js";
 import { TopBar } from "./TopBar.js";
 import { Dock } from "./Dock.js";
 import { CommandPalette } from "./CommandPalette.js";
@@ -64,6 +64,8 @@ export function OsShell() {
   const activeProject = useWorkspaceStore((state) => state.activeProject);
   const [notice, setNotice] = useState<PersistenceNotice | null>(null);
   const [deepLinkNotice, setDeepLinkNotice] = useState<string | null>(null);
+  const [handlersReady, setHandlersReady] = useState(false);
+  const lastProcessedSearchRef = useRef<string | null>(null);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const unreadTerminalNotifs = useTerminalNotificationsStore(
@@ -99,73 +101,81 @@ export function OsShell() {
       clearTimeout(timer);
     };
   }, [session]);
-  // Handle /os deep links
+  // Handle /os deep links once intent handlers are registered and ready
   useEffect(() => {
+    if (!handlersReady) return;
     if (typeof window === "undefined" || !window.location.search) return;
+    if (lastProcessedSearchRef.current === window.location.search) return;
+
+    const currentSearch = window.location.search;
     const profilesResult = readServerProfiles();
     const profiles =
       profilesResult.status === "available" ? profilesResult.profiles : [];
-    const parsed = parseOsDeepLink(window.location.search, profiles);
+    const parsed = parseOsDeepLink(currentSearch, profiles);
 
     if (parsed.status === "invalid") {
       setDeepLinkNotice(parsed.reason ?? "Invalid deep link");
+      lastProcessedSearchRef.current = currentSearch;
       return;
     }
 
-    if (parsed.status === "valid" && parsed.appId) {
-      const manifest = APP_MANIFESTS[parsed.appId];
-      if (!manifest) return;
-
-      const targetCtx: WindowContext = parsed.ctx ?? {
-        profileId,
-        projectId: activeProject ?? undefined,
-      };
-
-      let targetWindowId: string | undefined;
-      const existing = findExistingWindowForApp(
-        session.windows,
-        parsed.appId,
-        targetCtx,
-        parsed.intent?.payload,
-      );
-      if (existing) {
-        targetWindowId = existing.id;
-        if (existing.minimized) restoreWindow(existing.id);
-        focusWindow(existing.id);
-      }
-      if (!targetWindowId) {
-        targetWindowId = `${parsed.appId}-${generateUUID().slice(0, 8)}`;
-        openWindow(
-          {
-            id: targetWindowId,
-            appId: parsed.appId,
-            title: manifest.displayName,
-            ctx: targetCtx,
-            mode: manifest.defaultPlacement,
-            appState: parsed.intent?.payload as
-              | Record<string, unknown>
-              | undefined,
-          },
-          session.activeDesktopId,
-        );
-      }
+    if (parsed.status === "valid") {
+      lastProcessedSearchRef.current = currentSearch;
 
       if (parsed.intent) {
-        void dispatchIntent(parsed.intent);
-      }
-
-      try {
-        window.history.replaceState({}, "", window.location.pathname);
-      } catch {
-        // ignore
+        void dispatchIntent(parsed.intent).then((res) => {
+          if (res?.status === "handled") {
+            try {
+              window.history.replaceState({}, "", window.location.pathname);
+            } catch {
+              // ignore
+            }
+          } else if (res?.status === "unhandled") {
+            setDeepLinkNotice(res.reason ?? "Could not handle deep link intent");
+          }
+        });
+      } else if (parsed.appId) {
+        const manifest = APP_MANIFESTS[parsed.appId];
+        if (manifest) {
+          const currentSession = useWindowStore.getState().session;
+          const targetCtx: WindowContext = parsed.ctx ?? {
+            profileId,
+            projectId: activeProject ?? undefined,
+          };
+          const existing = findExistingWindowForApp(
+            currentSession.windows,
+            parsed.appId,
+            targetCtx,
+          );
+          if (existing) {
+            if (existing.minimized) restoreWindow(existing.id);
+            focusWindow(existing.id);
+          } else {
+            const newId = `${parsed.appId}-${generateUUID().slice(0, 8)}`;
+            openWindow(
+              {
+                id: newId,
+                appId: parsed.appId,
+                title: manifest.displayName,
+                ctx: targetCtx,
+                mode: manifest.defaultPlacement,
+              },
+              currentSession.activeDesktopId,
+            );
+          }
+          try {
+            window.history.replaceState({}, "", window.location.pathname);
+          } catch {
+            // ignore
+          }
+        }
       }
     }
   }, [
+    handlersReady,
     openWindow,
     focusWindow,
     restoreWindow,
-    session.windows,
-    session.activeDesktopId,
     profileId,
     activeProject,
   ]);
@@ -244,7 +254,7 @@ export function OsShell() {
               ? { cwd: intent.payload.cwd }
               : undefined,
           },
-          session.activeDesktopId,
+          useWindowStore.getState().session.activeDesktopId,
         );
         return { status: "handled", targetWindowId: id };
       }),
@@ -287,7 +297,7 @@ export function OsShell() {
         };
         void useEditorStore.getState().open(targetRef, fileNode);
 
-        const existing = Object.values(session.windows).find(
+        const existing = Object.values(useWindowStore.getState().session.windows).find(
           (w) =>
             w.appId === "editor" &&
             w.ctx.profileId === targetCtx.profileId &&
@@ -316,7 +326,7 @@ export function OsShell() {
               line: intent.payload.line,
             },
           },
-          session.activeDesktopId,
+          useWindowStore.getState().session.activeDesktopId,
         );
         return { status: "handled", targetWindowId: id };
       }),
@@ -331,7 +341,7 @@ export function OsShell() {
             mode: "float",
             appState: { url: intent.payload.url },
           },
-          session.activeDesktopId,
+          useWindowStore.getState().session.activeDesktopId,
         );
         return { status: "handled", targetWindowId: id };
       }),
@@ -344,7 +354,7 @@ export function OsShell() {
           operation: intent.payload.operation,
         };
         const existing = findExistingWindowForApp(
-          session.windows,
+          useWindowStore.getState().session.windows,
           "conflict-resolver",
           targetCtx,
           intent.payload,
@@ -373,7 +383,7 @@ export function OsShell() {
               operation: intent.payload.operation,
             },
           },
-          session.activeDesktopId,
+          useWindowStore.getState().session.activeDesktopId,
         );
         return { status: "handled", targetWindowId: id };
       }),
@@ -386,7 +396,7 @@ export function OsShell() {
           generation,
         };
         const existing = findExistingWindowForApp(
-          session.windows,
+          useWindowStore.getState().session.windows,
           "session-changes",
           targetCtx,
           intent.payload,
@@ -419,7 +429,7 @@ export function OsShell() {
               rootId: intent.payload.rootId,
             },
           },
-          session.activeDesktopId,
+          useWindowStore.getState().session.activeDesktopId,
         );
         return { status: "handled", targetWindowId: id };
       }),
@@ -430,7 +440,7 @@ export function OsShell() {
           worktreeId: intent.payload.worktreeId,
         };
         const existing = findExistingWindowForApp(
-          session.windows,
+          useWindowStore.getState().session.windows,
           "git",
           targetCtx,
         );
@@ -448,7 +458,7 @@ export function OsShell() {
             ctx: targetCtx,
             mode: "tile",
           },
-          session.activeDesktopId,
+          useWindowStore.getState().session.activeDesktopId,
         );
         return { status: "handled", targetWindowId: id };
       }),
@@ -458,7 +468,7 @@ export function OsShell() {
           projectId: intent.payload.projectId,
         };
         const existing = findExistingWindowForApp(
-          session.windows,
+          useWindowStore.getState().session.windows,
           "workflow-plans",
           targetCtx,
         );
@@ -480,7 +490,7 @@ export function OsShell() {
             mode: "tile",
             appState: { selectedItemId: intent.payload.itemId },
           },
-          session.activeDesktopId,
+          useWindowStore.getState().session.activeDesktopId,
         );
         return { status: "handled", targetWindowId: id };
       }),
@@ -489,7 +499,7 @@ export function OsShell() {
           profileId: intent.payload.profileId,
         };
         const existing = findExistingWindowForApp(
-          session.windows,
+          useWindowStore.getState().session.windows,
           "ports-tunnels",
           targetCtx,
         );
@@ -507,7 +517,7 @@ export function OsShell() {
             ctx: targetCtx,
             mode: "float",
           },
-          session.activeDesktopId,
+          useWindowStore.getState().session.activeDesktopId,
         );
         return { status: "handled", targetWindowId: id };
       }),
@@ -554,13 +564,21 @@ export function OsShell() {
         );
         return { status: "handled", targetWindowId: id };
       }),
+      registerIntentHandler("settings:devices", (intent) => {
+        return dispatchIntent(
+          createIntent("settings:open", {
+            profileId: intent.payload.profileId,
+            tab: "devices",
+          }),
+        );
+      }),
       registerIntentHandler("project:info", (intent) => {
         const targetCtx: WindowContext = {
           profileId: intent.payload.profileId,
           projectId: intent.payload.projectId,
         };
         const existing = findExistingWindowForApp(
-          session.windows,
+          useWindowStore.getState().session.windows,
           "project-info",
           targetCtx,
         );
@@ -578,7 +596,7 @@ export function OsShell() {
             ctx: targetCtx,
             mode: "float",
           },
-          session.activeDesktopId,
+          useWindowStore.getState().session.activeDesktopId,
         );
         return { status: "handled", targetWindowId: id };
       }),
@@ -587,7 +605,7 @@ export function OsShell() {
           profileId: intent.payload.profileId,
         };
         const existing = findExistingWindowForApp(
-          session.windows,
+          useWindowStore.getState().session.windows,
           "agent-store",
           targetCtx,
         );
@@ -613,7 +631,7 @@ export function OsShell() {
               ? { tab: intent.payload.tab }
               : undefined,
           },
-          session.activeDesktopId,
+          useWindowStore.getState().session.activeDesktopId,
         );
         return { status: "handled", targetWindowId: id };
       }),
@@ -704,16 +722,6 @@ export function OsShell() {
         return { status: "handled", targetWindowId: id };
       }),
       registerIntentHandler("terminal:focus", (intent) => {
-        const existingTerminal = getTerminal({
-          profileId: intent.payload.profileId,
-          id: intent.payload.terminalId,
-        });
-        if (!existingTerminal) {
-          return {
-            status: "unhandled",
-            reason: `Terminal session "${intent.payload.terminalId}" not found in registry`,
-          };
-        }
         const windowList = Object.values(
           useWindowStore.getState().session.windows,
         );
@@ -871,7 +879,7 @@ export function OsShell() {
           worktreeId: intent.payload.worktreeId,
         };
         const existing = findExistingWindowForApp(
-          session.windows,
+          useWindowStore.getState().session.windows,
           "git",
           targetCtx,
           intent.payload,
@@ -890,7 +898,7 @@ export function OsShell() {
             ctx: targetCtx,
             mode: "tile",
           },
-          session.activeDesktopId,
+          useWindowStore.getState().session.activeDesktopId,
         );
         return { status: "handled", targetWindowId: id };
       }),
@@ -1071,15 +1079,16 @@ export function OsShell() {
       }),
     ];
 
+    setHandlersReady(true);
     return () => {
+      setHandlersReady(false);
       unregisterList.forEach((unreg) => unreg());
     };
   }, [
     openWindow,
     focusWindow,
     restoreWindow,
-    session.windows,
-    session.activeDesktopId,
+    switchDesktop,
   ]);
 
 

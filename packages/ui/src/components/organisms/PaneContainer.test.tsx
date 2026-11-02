@@ -42,38 +42,9 @@ vi.mock("./TerminalScrollButtons.js", () => ({
   ),
 }));
 
-vi.mock("./MobileTerminalAccessoryBar.js", () => ({
-  MobileTerminalAccessoryBar: ({
-    sessionId,
-    onPanelOpenChange,
-  }: {
-    sessionId: string;
-    onPanelOpenChange?: (isOpen: boolean) => void;
-  }) => (
-    <div
-      data-testid="pane-floating-terminal-controls"
-      data-session-id={sessionId}
-    >
-      <button
-        type="button"
-        data-testid="pane-accessory-open"
-        onClick={() => onPanelOpenChange?.(true)}
-      >
-        Open accessory
-      </button>
-      <button
-        type="button"
-        data-testid="pane-accessory-close"
-        onClick={() => onPanelOpenChange?.(false)}
-      >
-        Close accessory
-      </button>
-    </div>
-  ),
-}));
 
-vi.mock("@/lib/terminal-native-input-policy.js", () => ({
-  syncNativeKeyboardSuppression: vi.fn(),
+vi.mock("@/lib/terminal-input-policy.js", () => ({
+  syncTerminalInputSuppression: vi.fn(),
 }));
 
 vi.mock("react-resizable-panels", () => ({
@@ -187,17 +158,6 @@ describe("PaneContainer browser integration", () => {
     expect(outputHost).not.toBeNull();
     expect(outputHost?.className).toContain("bg-[var(--color-background)]");
     expect(outputHost?.className).not.toContain("#0f172a");
-    expect(
-      outputHost?.parentElement?.querySelector(
-        "[data-testid=pane-floating-terminal-controls]",
-      ),
-    ).not.toBeNull();
-    expect(
-      container
-        .querySelector("[data-testid=terminal-browser-split]")
-        ?.querySelector("[data-testid=pane-floating-terminal-controls]")
-        ?.getAttribute("data-session-id"),
-    ).toBe("shell:demo");
     const divider = container.querySelector('[role="separator"]');
     expect(divider?.getAttribute("aria-orientation")).toBe("vertical");
     expect(divider?.getAttribute("aria-label")).toBe(
@@ -342,14 +302,14 @@ describe("PaneContainer browser integration", () => {
     globalSearchInput.remove();
   });
 
-  it("gates scroll controls to the global active session and mirrors accessory state", async () => {
+  it("gates scroll controls to the global active session", async () => {
     mockSettings.terminalScrollButtonsEnabled = true;
-    const accessoryPane = {
+    const scrollPane = {
       ...pane,
       sessionIds: ["shell:demo", "shell:next"],
     };
     const renderPane = async (
-      node: typeof accessoryPane,
+      node: typeof scrollPane,
       activeSessionId: string | null,
     ) => {
       await act(async () => {
@@ -374,43 +334,22 @@ describe("PaneContainer browser integration", () => {
       });
     };
 
-    await renderPane(accessoryPane, "shell:demo");
+    await renderPane(scrollPane, "shell:demo");
     const scrollButtons = () =>
       container.querySelector("[data-testid=terminal-scroll-buttons]");
-    await act(async () =>
-      container
-        .querySelector<HTMLButtonElement>("[data-testid=pane-accessory-open]")
-        ?.click(),
-    );
-    expect(scrollButtons()?.getAttribute("data-accessory-panel-open")).toBe(
-      "true",
-    );
-    await act(async () =>
-      container
-        .querySelector<HTMLButtonElement>("[data-testid=pane-accessory-close]")
-        ?.click(),
-    );
-    expect(scrollButtons()?.getAttribute("data-accessory-panel-open")).toBe(
-      "false",
-    );
-    expect(
-      container.querySelectorAll("[data-testid=terminal-scroll-buttons]"),
-    ).toHaveLength(1);
+    expect(scrollButtons()?.getAttribute("data-session-id")).toBe("shell:demo");
 
-    await renderPane(accessoryPane, "shell:other");
+    await renderPane(scrollPane, "shell:other");
     expect(scrollButtons()).toBeNull();
-    expect(
-      container.querySelector("[data-testid=pane-floating-terminal-controls]"),
-    ).toBeNull();
 
     await renderPane(
-      { ...accessoryPane, activeSessionId: "shell:next" },
+      { ...scrollPane, activeSessionId: "shell:next" },
       "shell:next",
     );
     expect(scrollButtons()?.getAttribute("data-session-id")).toBe("shell:next");
     mockSettings.terminalScrollButtonsEnabled = false;
     await renderPane(
-      { ...accessoryPane, activeSessionId: "shell:next" },
+      { ...scrollPane, activeSessionId: "shell:next" },
       "shell:next",
     );
     expect(scrollButtons()).toBeNull();

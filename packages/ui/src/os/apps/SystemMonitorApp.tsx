@@ -6,10 +6,13 @@ import {
   FolderGit2,
   Moon,
   RefreshCw,
+  RotateCw,
   Search,
   Server,
   ShieldAlert,
+  Square,
   Terminal,
+  Wrench,
 } from "lucide-react";
 import type { OsWindow } from "../types.js";
 import { useWindowStore } from "../window-store.js";
@@ -38,7 +41,120 @@ import { HostResourceDiagnosis } from "@/components/organisms/HostResourceDiagno
 import { HostIdleSuspendStatus } from "@/components/organisms/HostIdleSuspendStatus.js";
 import { ForceSleepDialog } from "@/components/organisms/ForceSleepDialog.js";
 import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
-import { SessionRow } from "@/components/pages/DashboardPage.js";
+import {
+  getSessionStatus,
+  getStatusDotColor,
+  getStatusGlowClass,
+} from "@/lib/session-status.js";
+
+const TYPE_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
+  command: Terminal,
+  service: Activity,
+  terminal: Terminal,
+  shell: Terminal,
+  custom: Wrench,
+};
+
+function formatUptime(startedAt: number): string {
+  const secs = Math.floor((Date.now() - startedAt) / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem > 0 ? `${hours}h ${rem}m` : `${hours}h`;
+}
+
+export interface SessionRowProps {
+  session: SessionInfo & { profileName?: string; profileId?: string };
+  onNavigate: (id: string, profileId?: string) => void;
+  onKill: (id: string, profileId?: string) => void;
+}
+
+export function SessionRow({
+  session,
+  onNavigate,
+  onKill,
+}: SessionRowProps) {
+  const Icon = TYPE_ICON[session.type] ?? Terminal;
+  const status = getSessionStatus(session);
+  const dotColor = getStatusDotColor(status);
+  const glowClass = getStatusGlowClass(status);
+
+  const statusTooltip = (() => {
+    if (status === "alive") return "Running";
+    if (status === "restarting") {
+      const restartInSec = session.restartInMs
+        ? Math.round(session.restartInMs / 1000)
+        : 0;
+      return `Restarting in ${restartInSec}s`;
+    }
+    if (status === "crashed")
+      return `Crashed (exit code ${session.exitCode ?? "?"})`;
+    return `Exited (code ${session.exitCode ?? 0})`;
+  })();
+
+  const showRestartBadge = (session.restartCount ?? 0) > 0;
+
+  return (
+    <li
+      role="button"
+      tabIndex={0}
+      className="flex items-center gap-3 px-3 py-2 rounded cursor-pointer hover:bg-[var(--color-surface-2)] transition-colors group"
+      onClick={() => onNavigate(session.id, session.profileId)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") onNavigate(session.id, session.profileId);
+      }}
+    >
+      <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]/60" />
+      {session.profileName && (
+        <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-[var(--color-surface)] text-[var(--color-text-muted)] truncate max-w-[20%]">
+          {session.profileName}
+        </span>
+      )}
+      <span className="text-xs font-medium text-[var(--color-text)] truncate shrink-0 max-w-[25%]">
+        {session.project}
+      </span>
+      <span className="text-xs text-[var(--color-text-muted)] truncate flex-1 min-w-0">
+        {session.name ?? session.command}
+      </span>
+      <span className="text-[10px] text-[var(--color-text-muted)]/60 tabular-nums shrink-0">
+        {formatUptime(session.startedAt)}
+      </span>
+      {showRestartBadge && (
+        <span
+          className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] bg-yellow-500/10 text-yellow-500 shrink-0"
+          title={`Restarted ${session.restartCount} time(s)`}
+        >
+          <RotateCw className="h-2.5 w-2.5" />
+          {session.restartCount}
+        </span>
+      )}
+      <span
+        className={`inline-block h-1.5 w-1.5 rounded-full ${dotColor} ${glowClass} shrink-0`}
+        title={statusTooltip}
+      />
+      <button
+        type="button"
+        className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-danger)]/60 hover:text-[var(--color-danger)]"
+        onClick={(e) => {
+          e.stopPropagation();
+          onKill(session.id, session.profileId);
+        }}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onKill(session.id, session.profileId);
+          }
+        }}
+        title="Kill session"
+      >
+        <Square className="h-3 w-3" />
+      </button>
+    </li>
+  );
+}
 import { withUiConfigDefaults } from "@/lib/ui-config.js";
 import {
   Dialog,

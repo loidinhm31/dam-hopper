@@ -1,6 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useSearchParams } from "react-router-dom";
-import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button } from "@/components/atoms/Button.js";
 import { StoreInventory } from "@/components/organisms/StoreInventory.js";
 import { ItemDetail } from "@/components/organisms/ItemDetail.js";
@@ -239,9 +238,9 @@ export function AgentStorePage({
   }
 
   return (
-    <AppLayout
-      title="Agent Store"
-      actions={
+    <div className="flex-1 flex flex-col min-h-0 overflow-y-auto p-4 gradient-bg">
+      <div className="flex items-center justify-between pb-3 border-b border-[var(--color-border)] mb-4">
+        <h1 className="text-lg font-semibold text-[var(--color-text)]">Agent Store</h1>
         <DiagnosticsExportButton
           compact
           terminalIds={[]}
@@ -252,10 +251,9 @@ export function AgentStorePage({
             frontendScopes: ["AgentStorePage", "agent-store"],
           }}
         />
-      }
-    >
+      </div>
       {content}
-    </AppLayout>
+    </div>
   );
 }
 

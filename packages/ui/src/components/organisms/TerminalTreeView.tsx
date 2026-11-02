@@ -17,13 +17,11 @@ import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
 import { inputClass } from "@/components/atoms/Button.js";
 import { CommandSuggestionInput } from "@/components/atoms/CommandSuggestionInput.js";
 import { cn } from "@/lib/utils.js";
-import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
 import type { TreeProject, TreeCommand } from "@/hooks/use-terminal-tree.js";
 import type { SessionInfo, ProjectType } from "@/api/client.js";
 import { getSessionStatus, getStatusDotColor } from "@/lib/session-status.js";
 import { terminalBaseLabel } from "@/lib/terminal-title.js";
 
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface Props {
   projects: TreeProject[];
@@ -115,19 +113,13 @@ function handleEditorKeyDown(
   }
 }
 
-function rowActionsClass(isCoarsePointer: boolean) {
-  return cn(
-    "flex items-center gap-0.5 transition-opacity shrink-0",
-    isCoarsePointer ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-  );
+function rowActionsClass(_isCoarsePointer?: boolean) {
+  return "flex items-center gap-0.5 transition-opacity shrink-0 opacity-0 group-hover:opacity-100";
 }
 
-function rowActionButtonClass(isCoarsePointer: boolean, toneClass: string) {
-  return cn(
-    "rounded transition-colors",
-    isCoarsePointer ? "flex h-8 w-8 items-center justify-center" : "p-0.5",
-    toneClass,
-  );
+function rowActionButtonClass(_isCoarsePointer: boolean | string, toneClass = "") {
+  const tone = typeof _isCoarsePointer === "string" ? _isCoarsePointer : toneClass;
+  return cn("rounded transition-colors p-0.5", tone);
 }
 
 function CommandRow({
@@ -802,9 +794,7 @@ export function TerminalTreeView({
     const left = order.terminals.indexOf(a.id), right = order.terminals.indexOf(b.id);
     return (left < 0 ? Infinity : left) - (right < 0 ? Infinity : right);
   });
-  const isCoarsePointer = useCoarsePointer();
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
+  const isCoarsePointer = false;
 
   const [activeSuggestionProject, setActiveSuggestionProject] = useState<
     string | null
@@ -1196,7 +1186,7 @@ export function TerminalTreeView({
                 onRemove={() => onRemoveFreeTerminal(session.id)}
                 onSave={() => onSaveFreeTerminal(session.id)}
                 onRenameSession={onRenameSession}
-                saveDisabled={isAndroidChromeNativeInputSuppressed}
+                saveDisabled={false}
                 onDragStart={(e) => handleDragStart(e, "free", session.id)}
                 onDragEnd={handleDragEnd}
                 onDragOver={(e) => handleDragOver(e, "free", session.id)}
@@ -1326,9 +1316,7 @@ export function TerminalTreeView({
                               }
                               onSave={saveProfileEdit}
                               onCancel={() => setEditState(null)}
-                              actionsDisabled={
-                                isAndroidChromeNativeInputSuppressed
-                              }
+                              actionsDisabled={false}
                             />
                           ) : null
                         }
@@ -1436,7 +1424,7 @@ export function TerminalTreeView({
                           }
                           onSave={saveCommandEdit}
                           onCancel={() => setEditState(null)}
-                          actionsDisabled={isAndroidChromeNativeInputSuppressed}
+                          actionsDisabled={false}
                         />
                       )}
                     </div>

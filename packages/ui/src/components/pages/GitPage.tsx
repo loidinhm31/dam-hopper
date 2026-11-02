@@ -6,7 +6,6 @@ import {
   Upload,
   AlertCircle,
 } from "lucide-react";
-import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import { SshRetryStatusMessage } from "@/components/atoms/SshRetryStatusMessage.js";
 import { ProgressList } from "@/components/organisms/ProgressList.js";
@@ -715,9 +714,9 @@ export function GitPage() {
   }, [allProjects]);
 
   return (
-    <AppLayout
-      title="Git Operations"
-      actions={
+    <div className="flex-1 flex flex-col min-h-0 overflow-y-auto p-4 gradient-bg">
+      <div className="flex items-center justify-between pb-3 border-b border-[var(--color-border)] mb-4">
+        <h1 className="text-lg font-semibold text-[var(--color-text)]">Git Operations</h1>
         <DiagnosticsExportButton
           compact
           terminalIds={[]}
@@ -729,8 +728,7 @@ export function GitPage() {
             frontendScopes: ["GitPage", "git"],
           }}
         />
-      }
-    >
+      </div>
       {/* Project selector */}
       <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-4 mb-6">
         <p className="text-sm font-medium text-[var(--color-text)] mb-3">
@@ -1165,6 +1163,6 @@ export function GitPage() {
         onClose={historyActions.clearSelectedChangesOperation}
         onConfirm={() => void historyActions.handleSelectedChangesOperation()}
       />
-    </AppLayout>
+    </div>
   );
 }

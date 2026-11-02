@@ -43,7 +43,6 @@ import {
   type ProjectTargetInput,
 } from "@/api/client.js";
 import { parseResultMarkerBlocks } from "@/lib/conflict-marker-parser.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import {
   injectConflictStylesOnce,
   buildResultDecorations,
@@ -92,8 +91,6 @@ export function MergeConflictEditor({
 }: Props) {
   const targetRef = normalizeProjectTarget(target ?? projectName);
   const targetKey = projectTargetCacheKey(targetRef);
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
 
   useInsertionEffect(() => {
     injectConflictStylesOnce();
@@ -488,7 +485,6 @@ export function MergeConflictEditor({
       theirsMouseDownDisposableRef.current?.dispose();
       theirsMouseDownDisposableRef.current = editor.onMouseDown((e) => {
         if (
-          isAndroidChromeNativeInputSuppressed ||
           !targetAvailable ||
           !activeDraftRef.current ||
           activeDraftRef.current.isRecovery
@@ -517,7 +513,7 @@ export function MergeConflictEditor({
 
       applyDecorations();
     },
-    [applyDecorations, isAndroidChromeNativeInputSuppressed, syncScroll, targetAvailable],
+    [applyDecorations, syncScroll, targetAvailable],
   );
 
   const handleResultMount: OnMount = useCallback(
@@ -526,13 +522,11 @@ export function MergeConflictEditor({
       resultDecorationsCollection.current = null;
       modelsRef.current.result = editor.getModel();
       if (
-        isAndroidChromeNativeInputSuppressed ||
         !targetAvailable ||
         !activeDraft ||
         activeDraft.isRecovery
       ) {
         editor.updateOptions({ readOnly: true });
-        if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
       }
       editor.onDidChangeModel(() => {
         modelsRef.current.result = editor.getModel();
@@ -600,9 +594,7 @@ export function MergeConflictEditor({
         const line = pendingRevealLineRef.current;
         editor.revealLineInCenter(line);
         editor.setPosition({ lineNumber: line, column: 1 });
-        if (!isAndroidChromeNativeInputSuppressed) {
-          editor.focus();
-        }
+        editor.focus();
         pendingRevealLineRef.current = null;
       }
     },
@@ -610,7 +602,6 @@ export function MergeConflictEditor({
       activeDraft?.id,
       activeDraft?.isRecovery,
       applyDecorations,
-      isAndroidChromeNativeInputSuppressed,
       resolver.redoDraft,
       resolver.undoDraft,
       resolver.updateDraftResult,
@@ -624,16 +615,13 @@ export function MergeConflictEditor({
     if (!editor) return;
     editor.updateOptions({
       readOnly:
-        isAndroidChromeNativeInputSuppressed ||
         !targetAvailable ||
         !activeDraft ||
         Boolean(activeDraft.isRecovery),
     });
-    if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
   }, [
     activeDraft?.id,
     activeDraft?.isRecovery,
-    isAndroidChromeNativeInputSuppressed,
     targetAvailable,
   ]);
 
@@ -652,7 +640,6 @@ export function MergeConflictEditor({
       oursMouseDownDisposableRef.current?.dispose();
       oursMouseDownDisposableRef.current = editor.onMouseDown((e) => {
         if (
-          isAndroidChromeNativeInputSuppressed ||
           !targetAvailable ||
           !activeDraftRef.current ||
           activeDraftRef.current.isRecovery
@@ -681,7 +668,7 @@ export function MergeConflictEditor({
 
       applyDecorations();
     },
-    [applyDecorations, isAndroidChromeNativeInputSuppressed, syncScroll, targetAvailable],
+    [applyDecorations, syncScroll, targetAvailable],
   );
 
   const handleBaseMount: OnMount = useCallback(
@@ -719,9 +706,7 @@ export function MergeConflictEditor({
         lineNumber: region.startLine,
         column: 1,
       });
-      if (!isAndroidChromeNativeInputSuppressed) {
-        editor.focus();
-      }
+      editor.focus();
       pendingRevealLineRef.current = null;
     }
     if (theirsEditorRef.current && conflictMergeRegions[index]) {
@@ -760,7 +745,6 @@ export function MergeConflictEditor({
   // Model-bound Accept actions keyed by exact regionId
   function applyAccept(regionId: string, side: "ours" | "theirs") {
     if (
-      isAndroidChromeNativeInputSuppressed ||
       !targetAvailable ||
       !activeDraft ||
       activeDraft.isRecovery ||
@@ -799,7 +783,6 @@ export function MergeConflictEditor({
     order: "ours-then-theirs" | "theirs-then-ours",
   ) {
     if (
-      isAndroidChromeNativeInputSuppressed ||
       !targetAvailable ||
       !activeDraft ||
       activeDraft.isRecovery ||
@@ -838,7 +821,6 @@ export function MergeConflictEditor({
 
   function acceptAll(side: "ours" | "theirs") {
     if (
-      isAndroidChromeNativeInputSuppressed ||
       !targetAvailable ||
       !activeDraft ||
       activeDraft.isRecovery ||
@@ -930,7 +912,6 @@ export function MergeConflictEditor({
   async function handleMarkResolved() {
     if (
       !allResolved ||
-      isAndroidChromeNativeInputSuppressed ||
       !targetAvailable
     ) {
       return;
@@ -1223,7 +1204,6 @@ export function MergeConflictEditor({
             disabled={
               !activeDraft ||
               activeDraft.history.past.length === 0 ||
-              isAndroidChromeNativeInputSuppressed ||
               !targetAvailable
             }
             onClick={() => restoreDraftHistory(resolver.undoDraft)}
@@ -1238,7 +1218,6 @@ export function MergeConflictEditor({
             disabled={
               !activeDraft ||
               activeDraft.history.future.length === 0 ||
-              isAndroidChromeNativeInputSuppressed ||
               !targetAvailable
             }
             onClick={() => restoreDraftHistory(resolver.redoDraft)}
@@ -1249,7 +1228,6 @@ export function MergeConflictEditor({
           <button
             onClick={() => acceptAll("theirs")}
             disabled={
-              isAndroidChromeNativeInputSuppressed ||
               !targetAvailable ||
               Boolean(activeDraft?.isRecovery) ||
               conflictRegions.length === 0
@@ -1262,7 +1240,6 @@ export function MergeConflictEditor({
           <button
             onClick={() => acceptAll("ours")}
             disabled={
-              isAndroidChromeNativeInputSuppressed ||
               !targetAvailable ||
               Boolean(activeDraft?.isRecovery) ||
               conflictRegions.length === 0
@@ -1293,7 +1270,6 @@ export function MergeConflictEditor({
           <button
             onClick={() => void handleMarkResolved()}
             disabled={
-              isAndroidChromeNativeInputSuppressed ||
               !targetAvailable ||
               !allResolved ||
               isResolving ||
@@ -1310,11 +1286,9 @@ export function MergeConflictEditor({
                   ? "Import recovery against a fresh snapshot before editing"
                   : activeDraft?.requiresReview
                     ? "Confirm fresh-snapshot review before Apply"
-                    : isAndroidChromeNativeInputSuppressed
-                      ? "Unavailable on Android Chrome: result is read-only"
-                      : allResolved
-                        ? "Write resolved content and stage file"
-                        : "Resolve all conflicts first"
+                    : allResolved
+                      ? "Write resolved content and stage file"
+                      : "Resolve all conflicts first"
             }
             className={cn(
               "text-[10px] px-1.5 py-0.5 rounded border transition-colors flex items-center gap-1",
@@ -1361,16 +1335,6 @@ export function MergeConflictEditor({
         </div>
       )}
 
-      {isAndroidChromeNativeInputSuppressed && (
-        <p
-          role="note"
-          className="shrink-0 border-b border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-300"
-        >
-          Text editing is unavailable on Android Chrome. Accept, apply, and
-          resolve actions are disabled; use a desktop browser to edit this
-          conflict.
-        </p>
-      )}
 
       {!targetAvailable && (
         <p
@@ -1717,7 +1681,6 @@ export function MergeConflictEditor({
                   contextmenu: false,
                   ...editorOptions,
                   readOnly:
-                    isAndroidChromeNativeInputSuppressed ||
                     !targetAvailable ||
                     !activeDraft ||
                     Boolean(activeDraft.isRecovery),
@@ -1788,7 +1751,6 @@ export function MergeConflictEditor({
                 contextmenu: false,
                 ...editorOptions,
                 readOnly:
-                  isAndroidChromeNativeInputSuppressed ||
                   !targetAvailable ||
                   !activeDraft ||
                   Boolean(activeDraft.isRecovery),
@@ -1822,7 +1784,6 @@ export function MergeConflictEditor({
         onAcceptBoth={applyAcceptBoth}
         onMarkReviewed={applyMarkReviewed}
         disabled={
-          isAndroidChromeNativeInputSuppressed ||
           !targetAvailable ||
           Boolean(activeDraft?.isRecovery)
         }

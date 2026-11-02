@@ -27,9 +27,7 @@ import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/Term
 import { TabBar } from "@/components/organisms/TabBar.js";
 import { TerminalDockPreview } from "@/components/organisms/TerminalDockPreview.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
-import { syncNativeKeyboardSuppression } from "@/lib/terminal-native-input-policy.js";
-import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTerminalAccessoryBar.js";
+import { syncTerminalInputSuppression } from "@/lib/terminal-input-policy.js";
 import { TerminalScrollButtons } from "@/components/organisms/TerminalScrollButtons.js";
 
 interface PaneContainerProps {
@@ -73,10 +71,7 @@ export const PaneContainer = memo(function PaneContainer({
   onCloseBrowser,
 }: PaneContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
-  const shouldSuppressTerminalFocus =
-    isAndroidChromeNativeInputSuppressed || suppressTerminalFocus;
+  const shouldSuppressTerminalFocus = Boolean(suppressTerminalFocus);
   const isFocused = layout.focusedPaneId === node.id;
   const configuredTerminalCommitStatusEnabled = useSettingsStore(
     (state) => state.terminalCommitStatusEnabled,
@@ -89,25 +84,6 @@ export const PaneContainer = memo(function PaneContainer({
   const activeProject = mountedSessions.find(
     (session) => session.sessionId === node.activeSessionId,
   )?.project;
-  const [accessoryPanelState, setAccessoryPanelState] = useState<{
-    sessionId: string | null;
-    isOpen: boolean;
-  }>({ sessionId: null, isOpen: false });
-  const isAccessoryPanelOpen =
-    activeSessionId !== null &&
-    accessoryPanelState.sessionId === activeSessionId &&
-    accessoryPanelState.isOpen;
-  const handleAccessoryPanelOpenChange = useCallback(
-    (isOpen: boolean) => {
-      if (!activeSessionId) return;
-      setAccessoryPanelState((current) =>
-        current.sessionId === activeSessionId && current.isOpen === isOpen
-          ? current
-          : { sessionId: activeSessionId, isOpen },
-      );
-    },
-    [activeSessionId],
-  );
 
   // Track drag state to show/hide drop zones
   const [isDragging, setIsDragging] = useState(false);
@@ -135,7 +111,7 @@ export const PaneContainer = memo(function PaneContainer({
         suppressTerminalFocus: shouldSuppressTerminalFocus,
       });
       for (const sessionId of node.sessionIds) {
-        syncNativeKeyboardSuppression(
+        syncTerminalInputSuppression(
           getTerminal(sessionId)?.terminal ?? null,
           shouldSuppressTerminalFocus,
         );
@@ -372,37 +348,17 @@ export const PaneContainer = memo(function PaneContainer({
   const terminalPane = (
     <div className="relative flex h-full min-h-0 flex-col">
       {terminalHost}
-      <div
-        className={
-          isAccessoryPanelOpen ? "relative w-full shrink-0" : "w-full shrink-0"
-        }
-      >
-        {node.activeSessionId &&
-        node.activeSessionId === activeSessionId &&
-        terminalScrollButtonsEnabled ? (
+      {node.activeSessionId &&
+      node.activeSessionId === activeSessionId &&
+      terminalScrollButtonsEnabled ? (
+        <div className="w-full shrink-0">
           <TerminalScrollButtons
             sessionId={node.activeSessionId}
-            reserveAccessoryRail={Boolean(node.activeSessionId)}
-            accessoryPanelOpen={isAccessoryPanelOpen}
+            reserveAccessoryRail={false}
+            accessoryPanelOpen={false}
           />
-        ) : null}
-        {node.activeSessionId && node.activeSessionId === activeSessionId ? (
-          <MobileTerminalAccessoryBar
-            key={node.activeSessionId}
-            sessionId={node.activeSessionId}
-            profileId={
-              mountedSessions.find((s) => s.sessionId === node.activeSessionId)
-                ?.profileId
-            }
-            terminalRef={
-              mountedSessions.find((s) => s.sessionId === node.activeSessionId)
-                ?.terminalRef
-            }
-            onPanelOpenChange={handleAccessoryPanelOpenChange}
-            onOpenSessionChanges={onOpenSessionChanges}
-          />
-        ) : null}
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 

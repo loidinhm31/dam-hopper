@@ -1,4 +1,7 @@
 import { useCallback, useState } from "react";
+import { Server } from "lucide-react";
+import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
+import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import { useWindowStore } from "./window-store.js";
 import { DesktopSwitcher } from "./DesktopSwitcher.js";
 import { WindowList } from "./WindowList.js";
@@ -37,6 +40,8 @@ export function TopBar({
   const activeProject = useWorkspaceStore((state) => state.activeProject);
 
   const [isCtxMenuOpen, setIsCtxMenuOpen] = useState(false);
+  const [isProfilesDialogOpen, setIsProfilesDialogOpen] = useState(false);
+  const [editingProfile, setEditingProfile] = useState<ServerProfile | null | undefined>(undefined);
 
   // Default context for new windows on active desktop
   const currentDefaultCtx = activeDesktop?.defaultCtx ?? {
@@ -138,6 +143,19 @@ export function TopBar({
                   );
                 })}
               </div>
+              <div className="border-t border-[var(--color-border)] mt-1 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCtxMenuOpen(false);
+                    setIsProfilesDialogOpen(true);
+                  }}
+                  className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded text-left text-[11px] text-[var(--color-primary)] hover:bg-[var(--color-surface-hover)] transition-colors"
+                >
+                  <Server className="h-3.5 w-3.5" />
+                  <span>Manage Profiles…</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -194,6 +212,20 @@ export function TopBar({
           )}
         </button>
       </div>
+      {isProfilesDialogOpen && (
+        <ServerProfilesDialog
+          open={isProfilesDialogOpen}
+          onClose={() => setIsProfilesDialogOpen(false)}
+          onEditProfile={(p) => setEditingProfile(p)}
+        />
+      )}
+      {editingProfile !== undefined && (
+        <ServerSettingsDialog
+          open={editingProfile !== undefined}
+          profile={editingProfile}
+          onClose={() => setEditingProfile(undefined)}
+        />
+      )}
     </header>
   );
 }

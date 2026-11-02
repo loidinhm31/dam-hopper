@@ -6,7 +6,6 @@ import type {
   ServiceConfig,
   TerminalProfile,
 } from "@/api/client.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 // ── Small helpers ──────────────────────────────────────────────────────────
 
@@ -778,8 +777,6 @@ export function ConfigEditor({
   serverUrl,
   serverName,
 }: Props) {
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
   const [draft, setDraft] = useState<DamHopperConfig>(() =>
     structuredClone(config),
   );
@@ -873,7 +870,6 @@ export function ConfigEditor({
 
   // C2: wrap save in try/catch
   async function handleSave() {
-    if (isAndroidChromeNativeInputSuppressed) return;
     if (!validate()) return;
     setSaved(false);
     try {
@@ -960,7 +956,7 @@ export function ConfigEditor({
               })
             }
             placeholder="my-workspace"
-            disabled={isSaving || isAndroidChromeNativeInputSuppressed}
+            disabled={isSaving}
           />
         </Field>
       </section>
@@ -1005,7 +1001,6 @@ export function ConfigEditor({
                     .map(([k, v]) => [k.replace(`projects.${i}.`, ""), v]),
                 )}
                 disabled={isSaving}
-                textDisabled={isAndroidChromeNativeInputSuppressed}
               />
             ))}
           </div>
@@ -1025,12 +1020,7 @@ export function ConfigEditor({
           onClick={() => void handleSave()}
           loading={isSaving}
           disabled={
-            !isDirty || isSaving || isAndroidChromeNativeInputSuppressed
-          }
-          title={
-            isAndroidChromeNativeInputSuppressed
-              ? "Unavailable on Android Chrome: configuration editing is disabled"
-              : undefined
+            !isDirty || isSaving
           }
         >
           Save changes

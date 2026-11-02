@@ -4,7 +4,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MultiTerminalDisplay } from "./MultiTerminalDisplay.js";
 
-const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 const mockSettings = vi.hoisted(() => ({ customKeyboard: true }));
 const mockSplitProps = vi.hoisted(() => ({
   suppressTerminalFocus: undefined as boolean | undefined,
@@ -60,27 +59,11 @@ vi.mock("@/hooks/use-terminal-layout.js", () => ({
     return mockLayout;
   },
 }));
-vi.mock("@/hooks/use-compact-workspace.js", () => ({
-  useCompactWorkspace: () => false,
-}));
-vi.mock("@/hooks/use-coarse-pointer.js", () => ({
-  useCoarsePointer: () => false,
-}));
-vi.mock("@/stores/settings.js", () => ({
-  useSettingsStore: (
-    selector: (state: { mobileCustomKeyboardEnabled: boolean }) => unknown,
-  ) => selector({ mobileCustomKeyboardEnabled: mockSettings.customKeyboard }),
-}));
 vi.mock("@/lib/terminal-fit-scheduler.js", () => ({
   fitAllTerminals: vi.fn(),
 }));
 vi.mock("@/lib/terminal-registry.js", () => ({
   terminalRegistry: { values: () => [] },
-}));
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
-  }),
 }));
 
 describe("MultiTerminalDisplay floating controls", () => {
@@ -89,7 +72,6 @@ describe("MultiTerminalDisplay floating controls", () => {
 
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    mockPolicy.enabled = false;
     mockSettings.customKeyboard = true;
     mockSplitProps.suppressTerminalFocus = undefined;
     mockSplitProps.activeSessionId = undefined;

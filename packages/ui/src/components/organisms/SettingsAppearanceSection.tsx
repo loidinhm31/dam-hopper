@@ -10,7 +10,6 @@ import {
   SelectValue,
 } from "@/components/ui/Select.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import {
   clearHistory,
   isHistoryEnabled,
@@ -19,8 +18,6 @@ import {
 import { isCognitoModeStyle } from "@/lib/ui-config.js";
 export function SettingsAppearanceSection() {
   const [historyEnabled, setHistoryEnabledState] = useState(isHistoryEnabled);
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
   const {
     systemFontSize,
     editorFontSize,
@@ -32,10 +29,6 @@ export function SettingsAppearanceSection() {
     terminalAutoSwitchProjectEnabled,
     terminalScrollStep,
     explorerShowHidden,
-    mobileCustomKeyboardEnabled,
-    mobileCustomKeyboardFontSize,
-    mobileCustomKeyboardPadding,
-    mobileCustomKeyboardRowGap,
     cognitoModeStyle,
     saveDebounced,
   } = useSettingsStore();
@@ -207,72 +200,6 @@ export function SettingsAppearanceSection() {
           min={1}
           max={50}
           onChange={(v) => saveDebounced({ terminalScrollStep: v })}
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="Custom mobile terminal keyboard"
-        description={
-          isAndroidChromeNativeInputSuppressed
-            ? "Forced on Android Chrome because native text entry is unavailable; this setting is controlled by the platform policy."
-            : "Use the compact in-app keyboard instead of opening the device keyboard"
-        }
-      >
-        <Switch
-          checked={
-            isAndroidChromeNativeInputSuppressed || mobileCustomKeyboardEnabled
-          }
-          disabled={isAndroidChromeNativeInputSuppressed}
-          ariaLabel="Enable custom mobile terminal keyboard"
-          onCheckedChange={(checked) => {
-            if (!isAndroidChromeNativeInputSuppressed) {
-              saveDebounced({ mobileCustomKeyboardEnabled: checked });
-            }
-          }}
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="Mobile keyboard font size"
-        description="Range: 9-18 px"
-      >
-        <NumberStepper
-          value={mobileCustomKeyboardFontSize}
-          min={9}
-          max={18}
-          onChange={(value) =>
-            saveDebounced({ mobileCustomKeyboardFontSize: value })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow title="Mobile keyboard padding" description="Range: 2-14 px">
-        <NumberStepper
-          value={mobileCustomKeyboardPadding}
-          min={2}
-          max={14}
-          onChange={(value) =>
-            saveDebounced({ mobileCustomKeyboardPadding: value })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow title="Mobile keyboard row gap" description="Range: 2-12 px">
-        <NumberStepper
-          value={mobileCustomKeyboardRowGap}
-          min={2}
-          max={12}
-          onChange={(value) =>
-            saveDebounced({ mobileCustomKeyboardRowGap: value })
-          }
         />
       </SettingRow>
 

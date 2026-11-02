@@ -9,13 +9,7 @@ import {
   PassphraseDialog,
 } from "./PassphraseDialog.js";
 
-const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
-  }),
-}));
 
 let root: Root | null = null;
 
@@ -36,7 +30,6 @@ afterEach(() => {
 
 describe("PassphraseDialog", () => {
   beforeEach(() => {
-    mockPolicy.enabled = false;
   });
 
   it("renders the save-for-later copy when open", () => {
@@ -105,25 +98,6 @@ describe("PassphraseDialog", () => {
     );
   });
 
-  it("disables passphrase submission with an accessible explanation on Android Chrome", () => {
-    mockPolicy.enabled = true;
-    const markup = renderToStaticMarkup(
-      createElement(PassphraseDialog, {
-        open: true,
-        onSubmit: vi.fn(),
-        onCancel: vi.fn(),
-      }),
-    );
-
-    expect(markup).toContain(
-      "Text entry and Load Key &amp; Retry are unavailable",
-    );
-    expect(markup).toContain(
-      'aria-describedby="passphrase-dialog-android-description"',
-    );
-    expect(markup).toContain('type="submit"');
-    expect(markup).toContain('disabled=""');
-  });
 
   it("builds a submission payload that preserves save-for-later", () => {
     expect(

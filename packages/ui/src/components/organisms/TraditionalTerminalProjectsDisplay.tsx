@@ -33,7 +33,7 @@ import {
 import { TraditionalTerminalProjectsNavigator } from "@/components/organisms/TraditionalTerminalProjectsNavigator.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
-import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+import { useOsViewport } from "@/os/use-os-viewport.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
 import { useTraditionalTerminalProjectSelection } from "@/hooks/use-traditional-terminal-project-selection.js";
 import {
@@ -109,7 +109,7 @@ export function TraditionalTerminalProjectsDisplay({
   onOpenSessionChanges,
   isCompact,
 }: TraditionalTerminalProjectsDisplayProps) {
-  const defaultCompact = useCompactWorkspace();
+  const { isCompact: defaultCompact } = useOsViewport();
   const isCompactWorkspace =
     isCompact !== undefined ? isCompact : defaultCompact;
   const {

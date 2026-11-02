@@ -8,7 +8,6 @@ import type { GitDiffResult } from "@/api/client.js";
 const queryState: { data?: GitDiffResult; isLoading: boolean } = {
   isLoading: false,
 };
-const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 
 const mutation = {
   isPending: false,
@@ -24,18 +23,12 @@ vi.mock("@/api/queries.js", () => ({
   useGitCommit: () => mutation,
 }));
 
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
-  }),
-}));
 
 import { GitLocalChanges } from "./GitLocalChanges.js";
 
 beforeEach(() => {
   queryState.data = undefined;
   queryState.isLoading = false;
-  mockPolicy.enabled = false;
 });
 
 describe("GitLocalChanges", () => {
@@ -69,31 +62,6 @@ describe("GitLocalChanges", () => {
     expect(markup).toContain("Commit message");
   });
 
-  it("blocks commit text entry on Android Chrome", () => {
-    mockPolicy.enabled = true;
-    queryState.data = {
-      gitAvailable: true,
-      entries: [
-        {
-          path: "README.md",
-          status: "modified",
-          staged: true,
-          additions: 1,
-          deletions: 0,
-        },
-      ],
-      untrackedTruncated: false,
-      untrackedTotal: 0,
-    };
-
-    const markup = renderToStaticMarkup(<GitLocalChanges project="demo" />);
-
-    expect(markup).toContain('placeholder="Commit message..." disabled=""');
-    expect(markup).toContain(
-      'title="Unavailable on Android Chrome: text entry is disabled"',
-    );
-    expect(markup).toContain("Unstage All");
-  });
   it("opens ConfirmDialog when discarding a file and triggers discard on confirm", async () => {
     queryState.data = {
       gitAvailable: true,

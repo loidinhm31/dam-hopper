@@ -8,10 +8,10 @@ import { ApiRequestError, api, type ApiClient } from "@/api/client.js";
 import * as connections from "@/api/connections.js";
 import type { OverviewDto } from "@/api/workflow-dto-types.js";
 import { WorkflowContextSurface } from "./WorkflowContextSurface.js";
-import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+import { useOsViewport } from "@/os/use-os-viewport.js";
 
-vi.mock("@/hooks/use-compact-workspace.js", () => ({
-  useCompactWorkspace: vi.fn(() => false),
+vi.mock("@/os/use-os-viewport.js", () => ({
+  useOsViewport: vi.fn(() => ({ isCompact: false, isStandard: true })),
 }));
 
 const mockOverview: OverviewDto = {
@@ -81,7 +81,7 @@ describe("WorkflowContextSurface", () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
-    vi.mocked(useCompactWorkspace).mockReturnValue(false);
+    vi.mocked(useOsViewport).mockReturnValue({ isCompact: false, isStandard: true } as never);
     window.HTMLElement.prototype.scrollIntoView = vi.fn();
     window.HTMLElement.prototype.hasPointerCapture = vi.fn();
     window.HTMLElement.prototype.setPointerCapture = vi.fn();
@@ -163,7 +163,7 @@ describe("WorkflowContextSurface", () => {
   ] as const)(
     "preserves typed %s %s drafts across overview failure and recovery",
     async (layout, form) => {
-      vi.mocked(useCompactWorkspace).mockReturnValue(layout === "mobile");
+      vi.mocked(useOsViewport).mockReturnValue({ isCompact: layout === "mobile", isStandard: layout !== "mobile" } as never);
       await act(async () => {
         root.render(
           <QueryClientProvider client={queryClient}>

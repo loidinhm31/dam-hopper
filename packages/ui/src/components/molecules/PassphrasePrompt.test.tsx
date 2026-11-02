@@ -2,14 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PassphrasePrompt } from "./PassphrasePrompt.js";
 
-let androidChromeSuppressed = false;
 let prompting = true;
-
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: androidChromeSuppressed,
-  }),
-}));
 
 vi.mock("@/contexts/EncryptContext.js", () => ({
   useEncryptMode: () => ({
@@ -20,21 +13,17 @@ vi.mock("@/contexts/EncryptContext.js", () => ({
   }),
 }));
 
-describe("PassphrasePrompt Android Chrome text actions", () => {
+describe("PassphrasePrompt", () => {
   beforeEach(() => {
-    androidChromeSuppressed = false;
     prompting = true;
   });
 
-  it("disables passphrase entry and submission when native text input is suppressed", () => {
-    androidChromeSuppressed = true;
+  it("renders enabled passphrase input and submit button", () => {
     const markup = renderToStaticMarkup(<PassphrasePrompt />);
 
     expect(markup).toContain('id="pp-input"');
-    expect(markup).toMatch(/<input[^>]*id="pp-input"[^>]*disabled=""/);
-    expect(markup).toContain(
-      'title="Passphrase entry is unavailable in Android Chrome"',
-    );
-    expect(markup).toMatch(/<button[^>]*type="submit"[^>]*disabled=""/);
+    expect(markup).not.toMatch(/<input[^>]*id="pp-input"[^>]*disabled=""/);
+    expect(markup).toMatch(/<button[^>]*type="submit"[^>]*>/);
+    expect(markup).not.toMatch(/<button[^>]*type="submit"[^>]*disabled=""/);
   });
 });

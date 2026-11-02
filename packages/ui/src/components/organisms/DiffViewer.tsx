@@ -44,7 +44,6 @@ import {
   getTransport as getConnectionTransport,
 } from "@/api/connections.js";
 import type { WsTransport } from "@/api/ws-transport.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 function getBoundTransport(targetRef: { profileId?: string }): WsTransport {
   if (targetRef.profileId) {
@@ -132,8 +131,6 @@ export function DiffViewer({
 }: DiffViewerProps) {
   const targetRef = normalizeProjectTarget(target ?? projectName);
   const targetKey = projectTargetCacheKey(targetRef);
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
   const root = gitRootId && gitRootId !== "." ? gitRootId : undefined;
   const localDiff = useGitFileDiff(
     targetRef,
@@ -189,7 +186,6 @@ export function DiffViewer({
   const isDeleted = fileStatus === "deleted";
   const isAdded = fileStatus === "added";
   const modifiedEditorReadOnly =
-    isAndroidChromeNativeInputSuppressed ||
     !targetAvailable ||
     isDeleted ||
     isAdded ||
@@ -288,10 +284,6 @@ export function DiffViewer({
       diffEditorRef.current = editor;
       const modifiedEditor = editor.getModifiedEditor();
       modifiedEditor.updateOptions({ readOnly: modifiedEditorReadOnly });
-      if (isAndroidChromeNativeInputSuppressed) {
-        blurEditorSurface(editor.getOriginalEditor());
-        blurEditorSurface(modifiedEditor);
-      }
 
       // Save model refs for manual disposal on unmount.
       const model = editor.getModel();
@@ -328,7 +320,7 @@ export function DiffViewer({
           ro.disconnect();
       }
     },
-    [isAndroidChromeNativeInputSuppressed, modifiedEditorReadOnly],
+    [modifiedEditorReadOnly],
   );
 
   useEffect(() => {
@@ -337,11 +329,7 @@ export function DiffViewer({
     editor
       .getModifiedEditor()
       .updateOptions({ readOnly: modifiedEditorReadOnly });
-    if (isAndroidChromeNativeInputSuppressed) {
-      blurEditorSurface(editor.getOriginalEditor());
-      blurEditorSurface(editor.getModifiedEditor());
-    }
-  }, [isAndroidChromeNativeInputSuppressed, modifiedEditorReadOnly]);
+  }, [modifiedEditorReadOnly]);
 
   const navigateHunk = useCallback(
     (direction: "prev" | "next") => {
@@ -374,15 +362,14 @@ export function DiffViewer({
       if (!line) return;
       modEditor.revealLineInCenter(line, 0);
       modEditor.setPosition({ lineNumber: line, column: 1 });
-      if (!isAndroidChromeNativeInputSuppressed) modEditor.focus();
+      modEditor.focus();
     },
-    [isAndroidChromeNativeInputSuppressed],
+    [],
   );
 
   const handleSave = useCallback(async () => {
     const editor = diffEditorRef.current;
     if (
-      isAndroidChromeNativeInputSuppressed ||
       !targetAvailable ||
       !editor ||
       !isDirty ||
@@ -550,7 +537,6 @@ export function DiffViewer({
   }, [
     diffIdentityKey,
     filePath,
-    isAndroidChromeNativeInputSuppressed,
     isDirty,
     onTargetUnavailable,
     qc,
@@ -697,17 +683,14 @@ export function DiffViewer({
               onClick={() => void handleSave()}
               aria-label="Save diff changes"
               disabled={
-                isAndroidChromeNativeInputSuppressed ||
                 !targetAvailable ||
                 !isDirty ||
                 saveState === "saving"
               }
               title={
-                isAndroidChromeNativeInputSuppressed
-                  ? "Unavailable on Android Chrome: editor is read-only"
-                  : !targetAvailable
-                    ? "Target unavailable: edits cannot be saved until it returns"
-                    : "Save to disk (Ctrl+S)"
+                !targetAvailable
+                  ? "Target unavailable: edits cannot be saved until it returns"
+                  : "Save to disk (Ctrl+S)"
               }
               className={cn(
                 "p-1 rounded transition-colors",
@@ -736,16 +719,6 @@ export function DiffViewer({
         </div>
       </div>
 
-      {isAndroidChromeNativeInputSuppressed && (
-        <p
-          role="note"
-          className="shrink-0 border-b border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-300"
-        >
-          Editing and Save are unavailable on Android Chrome. Use a desktop
-          browser to change this file; viewing, scrolling, and navigation remain
-          available.
-        </p>
-      )}
 
       {!targetAvailable && (
         <p

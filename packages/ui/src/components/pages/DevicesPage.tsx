@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { AppLayout } from "@/components/templates/AppLayout.js";
 import {
   readServerProfiles,
   getActiveProfileId,
@@ -96,8 +95,11 @@ export function DevicesPage({
   }
 
   return (
-    <AppLayout title="Devices">
+    <div data-testid="app-layout" data-title="Devices" className="flex-1 flex flex-col min-h-0 overflow-y-auto p-4 gradient-bg">
+      <div className="flex items-center justify-between pb-3 border-b border-[var(--color-border)] mb-4">
+        <h1 className="text-lg font-semibold text-[var(--color-text)]">Devices</h1>
+      </div>
       {content}
-    </AppLayout>
+    </div>
   );
 }

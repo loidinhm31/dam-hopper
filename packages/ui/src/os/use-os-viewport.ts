@@ -11,8 +11,9 @@ export interface OsViewportState {
 }
 
 export function useOsViewport(): OsViewportState {
-  const viewport = useWindowStore((state) => state.viewport);
-  const { width, height } = viewport;
+  const viewport = useWindowStore((state) => state?.viewport);
+  const width = viewport?.width || (typeof window !== "undefined" ? window.innerWidth : 1440);
+  const height = viewport?.height || (typeof window !== "undefined" ? window.innerHeight : 900);
 
   return {
     width,

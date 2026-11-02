@@ -1,9 +1,9 @@
 # Phase 08: P5 — Cut over root and delete legacy web shells
 
-Estimate: 40h; implementation status: **pending**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
+Estimate: 40h; implementation status: **DONE** (2026-11-03 per user approval; Cycle 3 review 6/10 with carryovers tracked to Phase 09). [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
 
 ## Context / objective
-Priority P1; pending. Prototype and OS apps progress concurrently with independent P0. Only this ROOT CUTOVER waits for P0 release receipt in addition to lifecycle/full17/Hub/recipe parity, ensuring P0 ships early without delaying prototype/chrome. Resolver remains ordinary Phase09 web qualification, no native AC12 blocker. [Ownership](ownership.md), [acceptance](acceptance.md).
+Priority P1; status DONE per user approval (2026-11-03) with technical carryovers tracked into Phase 09. Prototype and OS apps progress concurrently with independent P0. Only this ROOT CUTOVER waits for P0 release receipt in addition to lifecycle/full17/Hub/recipe parity, ensuring P0 ships early without delaying prototype/chrome. Resolver remains ordinary Phase09 web qualification, no native AC12 blocker. [Ownership](ownership.md), [acceptance](acceptance.md).
 
 ## Architecture / requirements
 Root `/` renders OsShell. `/os` remains valid same-shell entry (or basename-safe canonical redirect preserving its intent params), not a fork. Legacy `/workspace`, `/git`, `/settings`, `/agent-store`, `/devices`, `/terminals`, `/ide` translate through existing LegacyRedirect/LegacyDeepLinkNotice mechanics into qualified OS intents. Devices -> Settings Devices section; terminals/ide/workspace -> Terminals or supported explicit open/action; Git -> Git. Preserve qualified profile/project/worktree/file/line/hash/terminal identity where supported. Missing legacy qualification uses existing guidance rather than ambient fallback. Removed `/usage` and `/ssh-forwarding` show clear removed-feature notice without network/mutation.
@@ -329,5 +329,26 @@ Exactly one authored fence; no execution state/hydration, completion or test rec
 ]
 ```
 
-- [ ] <!-- evcrate-task:cutover-root-shell --> Switch root and legacy routes to OS and delete obsolete shell composition
-- [ ] <!-- evcrate-task:remove-web-mobile-paths --> Delete web mobile policy and keyboard paths while preserving generic isolation
+- [x] <!-- evcrate-task:cutover-root-shell --> Switch root and legacy routes to OS and delete obsolete shell composition
+- [x] <!-- evcrate-task:remove-web-mobile-paths --> Delete web mobile policy and keyboard paths while preserving generic isolation
+
+## Phase 08 Closure & Carried Technical Findings (2026-11-03)
+
+Phase 08 is marked DONE per recorded user approval with technical acceptance carryovers tracked into Phase 09 qualification. Technical review Cycle 3 ([plans/reports/code-review-261103-0206-phase-08-cutover-and-legacy-deletion-cycle-3.md](../reports/code-review-261103-0206-phase-08-cutover-and-legacy-deletion-cycle-3.md)) scored 6/10 (request changes; findings C2/C3 and warnings W1–W5 noted).
+
+Delivered implementation:
+- Task 1 (`cutover-root-shell`): Root `/` and `/os` route cut over to `OsShell` via `DamHopperAppInner` in `dam-hopper-app.tsx` with basename-safe routing and legacy path translation (`/workspace`, `/git`, `/settings`, `/agent-store`, `/devices`, `/terminals`, `/ide` via `deep-links.ts` and legacy feature notices); deleted legacy shells and obsolete composition (`WorkspacePage`, `DashboardPage`, `IdeShell`, `TerminalWorkspaceShell`, `MobileWorkspaceShell`, `AppLayout`, `HostResourcePopover`, `TopNav`, and 45+ deleted shell/mobile files); updated `ConflictResolverPanel` to use OS frame z-index authority.
+- Task 2 (`remove-web-mobile-paths`): Retired web mobile policy, mobile terminal accessory bar, virtual keyboards, coarse-pointer/compact-workspace hooks; preserved generic terminal stdin suppression via `terminal-input-policy.ts` (Cognito, disconnect, frame-focus gating).
+- QA / Verification baseline: Scoped UI unit tests passed (324 files, 2,997 tests passed); UI and web builds passed with ConfigEditor chunk warning; browser component suite passed for `os-input-isolation.browser.tsx` and `os-shell.browser.tsx`.
+
+### Carried Implementation Defects & Qualification Gates to Phase 09:
+1. **C2 (High) — Router-Reactive Retirement Boundary:**
+   `DamHopperAppInner` isolates network hooks on cold load, but outer `DamHopperApp` reads `window.location.pathname` once per render without a router location subscription. Retirement notice (`/usage`, `/ssh-forwarding`) needs location-reactive subscription above boundary across SPA/Back/Forward navigation.
+2. **C3 (High) — Intent Handler Stale Window Session Closure:**
+   `OsShell.tsx` `file:open` handler closure captured initial session windows; requires reading `useWindowStore.getState().session.windows` dynamically to avoid missing hydrated/new windows. Navigation-triggered intent delivery deduplication and invalid-result surfacing carried forward.
+3. **Warnings W1–W5 Carryover:**
+   - **W1:** Query-only URL delivery reactivity and deduplication in `OsShell.tsx`.
+   - **W2:** Remaining web mobile keyboard ownership/serialization in `stores/settings.ts` and dead coarse-pointer props in `TerminalTreeView.tsx`.
+   - **W3:** Container-aware compact density in `WorkflowContextSurface.tsx`, `ActiveTerminalRuntimeDisplay.tsx`, and Traditional navigator.
+   - **W4:** Retained browser test suite migration (updating deleted legacy shell imports in `app-zoom`, `project-worktree-target`, `search-panel-focus`, `host-resource-monitoring`, `host-resource-sse-cutover`).
+   - **W5:** Source-pinned independent P0 publication receipt and end-to-end container qualification.

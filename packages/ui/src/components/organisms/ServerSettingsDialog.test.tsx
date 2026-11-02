@@ -13,13 +13,7 @@ import {
 } from "@/api/server-config.js";
 import { ServerSettingsDialog } from "./ServerSettingsDialog.js";
 
-const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
-  }),
-}));
 
 let root: Root | null = null;
 
@@ -34,7 +28,6 @@ function setInputValue(input: HTMLInputElement, value: string): void {
 
 describe("ServerSettingsDialog Android Chrome policy", () => {
   beforeEach(() => {
-    mockPolicy.enabled = false;
   });
 
   afterEach(() => {
@@ -92,21 +85,6 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
     expect(container.innerHTML).toBe("");
   });
 
-  it("blocks profile name text field while exempting auth fields on Android Chrome", () => {
-    mockPolicy.enabled = true;
-    const markup = renderToStaticMarkup(
-      createElement(ServerSettingsDialog, {
-        open: true,
-        profile: null,
-        onClose: vi.fn(),
-      }),
-    );
-
-    expect(markup).toContain('placeholder="My Server" disabled=""');
-    expect(markup).toContain('placeholder="Username" data-auth-input="true"');
-    expect(markup).toContain('placeholder="Password" data-auth-input="true"');
-    expect(markup).toContain(">Cancel</button>");
-  });
 
   it("clears the old profile token when saving a changed server URL", async () => {
     const profile = {

@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { terminalKey } from "@/api/ownership.js";
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import { subscribeToTerminalAppZoomChanges } from "@/lib/terminal-zoom-invalidation.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
@@ -28,14 +27,11 @@ export function TerminalKeepAliveHost({
   suppressNativeKeyboard = suppressAutoFocus,
   webglEnabledSessionIds,
 }: TerminalKeepAliveHostProps) {
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
   const { level: appZoomLevel } = useAppZoom();
   const disableWebgl = appZoomLevel !== 100;
-  const shouldSuppressNativeKeyboard =
-    isAndroidChromeNativeInputSuppressed || suppressNativeKeyboard;
+  const shouldSuppressNativeKeyboard = Boolean(suppressNativeKeyboard);
   const shouldSuppressTerminalFocus =
-    shouldSuppressNativeKeyboard || suppressAutoFocus;
+    shouldSuppressNativeKeyboard || Boolean(suppressAutoFocus);
 
   useEffect(() => subscribeToTerminalAppZoomChanges(), []);
 

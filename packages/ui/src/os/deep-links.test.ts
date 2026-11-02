@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseOsDeepLink } from "./deep-links.js";
+import { parseOsDeepLink, translateLegacyRoute } from "./deep-links.js";
 import { createProjectDesktopTemplate } from "./desktop-templates.js";
 import type { ServerProfile } from "@/api/server-config.js";
 
@@ -168,6 +168,98 @@ describe("deep-links parser", () => {
     expect(res.action).toBe("new-terminal");
     expect(res.ctx?.profileId).toBe("prof-1");
     expect(res.ctx?.projectId).toBe("test-proj");
+  });
+  it("parses terminals deep link with session or terminal parameter into terminal:focus intent", () => {
+    const resWithTerminal = parseOsDeepLink(
+      "?open=terminals&profile=prof-1&project=dam-hopper&terminal=term-123",
+      TEST_PROFILES,
+    );
+    expect(resWithTerminal.status).toBe("valid");
+    expect(resWithTerminal.intent?.action).toBe("terminal:focus");
+    expect(resWithTerminal.intent?.payload).toMatchObject({
+      profileId: "prof-1",
+      terminalId: "term-123",
+    });
+
+    const resWithSession = parseOsDeepLink(
+      "?open=terminals&profile=prof-1&project=dam-hopper&session=sess-456",
+      TEST_PROFILES,
+    );
+    expect(resWithSession.status).toBe("valid");
+    expect(resWithSession.intent?.action).toBe("terminal:focus");
+    expect(resWithSession.intent?.payload).toMatchObject({
+      profileId: "prof-1",
+      terminalId: "sess-456",
+    });
+  });
+
+  it("translates open=devices alias into settings app with tab=devices", () => {
+    const res = parseOsDeepLink("?open=devices&profile=prof-1", TEST_PROFILES);
+    expect(res.status).toBe("valid");
+    expect(res.appId).toBe("settings");
+    expect(res.intent?.action).toBe("settings:devices");
+    expect(res.intent?.payload).toMatchObject({
+      profileId: "prof-1",
+    });
+  });
+
+  describe("translateLegacyRoute", () => {
+    it("translates legacy /workspace with profileId to open=terminals", () => {
+      const res = translateLegacyRoute("/workspace", "?profileId=prof-1&project=dam-hopper");
+      expect(res.status).toBe("redirect");
+      expect(res.targetUrl).toContain("open=terminals");
+      expect(res.targetUrl).toContain("profile=prof-1");
+      expect(res.targetUrl).toContain("project=dam-hopper");
+    });
+
+    it("translates legacy /workspace with file parameter to open=editor", () => {
+      const res = translateLegacyRoute("/workspace", "?profileId=prof-1&project=dam-hopper&file=src/main.rs&line=42");
+      expect(res.status).toBe("redirect");
+      expect(res.targetUrl).toContain("open=editor");
+      expect(res.targetUrl).toContain("file=src%2Fmain.rs");
+      expect(res.targetUrl).toContain("line=42");
+    });
+
+    it("translates legacy /terminals and maps session to terminal", () => {
+      const res = translateLegacyRoute("/terminals", "?profileId=prof-1&session=term-999");
+      expect(res.status).toBe("redirect");
+      expect(res.targetUrl).toContain("open=terminals");
+      expect(res.targetUrl).toContain("terminal=term-999");
+    });
+
+    it("translates legacy /devices to open=settings&tab=devices", () => {
+      const res = translateLegacyRoute("/devices", "?profileId=prof-1");
+      expect(res.status).toBe("redirect");
+      expect(res.targetUrl).toContain("open=settings");
+      expect(res.targetUrl).toContain("tab=devices");
+    });
+
+    it("translates legacy /git, /settings, /agent-store to qualified OS routes", () => {
+      const resGit = translateLegacyRoute("/git", "?profile=prof-1&project=dam-hopper&hash=abc");
+      expect(resGit.status).toBe("redirect");
+      expect(resGit.targetUrl).toContain("open=git");
+      expect(resGit.targetUrl).toContain("hash=abc");
+
+      const resSettings = translateLegacyRoute("/settings", "?profileId=prof-1");
+      expect(resSettings.status).toBe("redirect");
+      expect(resSettings.targetUrl).toContain("open=settings");
+
+      const resStore = translateLegacyRoute("/agent-store", "?profileId=prof-1&tab=installed");
+      expect(resStore.status).toBe("redirect");
+      expect(resStore.targetUrl).toContain("open=agent-store");
+      expect(resStore.targetUrl).toContain("tab=installed");
+    });
+
+    it("flags unqualified legacy routes missing profileId with guidance", () => {
+      const res = translateLegacyRoute("/workspace", "?project=dam-hopper");
+      expect(res.status).toBe("unqualified");
+      expect(res.guidance).toContain("Legacy unqualified link detected without profileId");
+    });
+
+    it("flags removed routes /usage and /ssh-forwarding", () => {
+      expect(translateLegacyRoute("/usage", "")).toEqual({ status: "removed" });
+      expect(translateLegacyRoute("/ssh-forwarding", "")).toEqual({ status: "removed" });
+    });
   });
 });
 

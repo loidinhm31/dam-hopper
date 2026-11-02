@@ -1,6 +1,5 @@
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 import { useState, useEffect, useRef } from "react";
-import { AppLayout } from "@/components/templates/AppLayout.js";
 import { Switch } from "@/components/atoms/Switch.js";
 import type { DamHopperConfig } from "@/api/client.js";
 import {
@@ -609,17 +608,16 @@ export function SettingsPage({
   }
 
   return (
-    <AppLayout
-      title="Settings"
-      actions={
+    <div className="flex-1 flex flex-col min-h-0 overflow-y-auto p-4 gradient-bg">
+      <div className="flex items-center justify-between pb-3 border-b border-[var(--color-border)] mb-4">
+        <h1 className="text-lg font-semibold text-[var(--color-text)]">Settings</h1>
         <DiagnosticsExportButton
           compact
           terminalIds={[]}
           scope={SETTINGS_DIAGNOSTICS_SCOPE}
         />
-      }
-    >
+      </div>
       {content}
-    </AppLayout>
+    </div>
   );
 }

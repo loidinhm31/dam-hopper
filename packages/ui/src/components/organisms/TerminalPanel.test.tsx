@@ -171,8 +171,8 @@ vi.mock("@/lib/terminal-renderer.js", () => ({
   })),
   activateTerminalWebglRenderer: vi.fn(() => ({ dispose() {} })),
 }));
-vi.mock("@/lib/terminal-native-input-policy.js", () => ({
-  syncNativeKeyboardSuppression: (
+vi.mock("@/lib/terminal-input-policy.js", () => ({
+  syncTerminalInputSuppression: (
     term?: { options: { disableStdin: boolean } } | null,
     suppress = false,
   ) => {
@@ -220,14 +220,6 @@ vi.mock("@/stores/settings.js", () => ({
       }),
     },
   ),
-}));
-vi.mock("@/hooks/use-coarse-pointer.js", () => ({
-  useCoarsePointer: () => false,
-}));
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: false,
-  }),
 }));
 vi.mock("@/contexts/AppZoomContext.js", () => ({
   useAppZoom: () => ({ level: 100 }),

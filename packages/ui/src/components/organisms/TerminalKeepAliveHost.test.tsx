@@ -15,7 +15,6 @@ const activityRegistrations = new Map<
   string,
   TerminalOutputActivityRegistration
 >();
-const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 const mockZoom = vi.hoisted(() => ({ level: 100 }));
 
 vi.mock("@/components/organisms/TerminalPanel.js", () => ({
@@ -36,11 +35,6 @@ vi.mock("@/components/organisms/TerminalPanel.js", () => ({
   },
 }));
 
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
-  }),
-}));
 
 vi.mock("@/contexts/AppZoomContext.js", () => ({
   useAppZoom: () => ({ level: mockZoom.level }),
@@ -57,35 +51,12 @@ afterEach(() => {
   }
   renderedPanelProps.length = 0;
   activityRegistrations.clear();
-  mockPolicy.enabled = false;
   mockZoom.level = 100;
   delete document.documentElement.dataset.appHost;
   delete document.documentElement.dataset.appPlatform;
 });
 
 describe("TerminalKeepAliveHost", () => {
-  it("overrides an explicit native-input opt-out when Android policy is active", () => {
-    renderedPanelProps.length = 0;
-    mockPolicy.enabled = true;
-
-    renderToStaticMarkup(
-      <TerminalKeepAliveHost
-        mountedSessions={[
-          { sessionId: "android", project: "web", command: "bash" },
-        ]}
-        suppressAutoFocus
-        suppressNativeKeyboard={false}
-      />,
-    );
-
-    expect(renderedPanelProps[0]).toEqual(
-      expect.objectContaining({
-        suppressAutoFocus: true,
-        suppressNativeKeyboard: true,
-      }),
-    );
-    mockPolicy.enabled = false;
-  });
 
   it("passes the current 1-based open-tab order to each terminal", () => {
     renderedPanelProps.length = 0;

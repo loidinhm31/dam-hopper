@@ -10,7 +10,6 @@ import {
 import { Input } from "@/components/ui/Input.js";
 import { Label } from "@/components/ui/Label.js";
 import { Button } from "@/components/atoms/Button.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface Props {
   open: boolean;
@@ -41,17 +40,15 @@ export function RenameItemDialog({
   error,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
 
   useEffect(() => {
-    if (!open || isAndroidChromeNativeInputSuppressed) return;
+    if (!open) return;
     // Radix's focus scope and jsdom recursively dispatch focus events. Real
     // browsers need the deferred focus to win over context-menu restoration.
     if (navigator.userAgent.includes("jsdom")) return;
     const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
     return () => window.clearTimeout(timer);
-  }, [isAndroidChromeNativeInputSuppressed, open]);
+  }, [open]);
 
   return (
     <Dialog
@@ -67,9 +64,7 @@ export function RenameItemDialog({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            {isAndroidChromeNativeInputSuppressed
-              ? "Text entry is unavailable on Android Chrome. Use a desktop browser to rename this item."
-              : description}
+            {description}
           </DialogDescription>
           {error && (
             <p role="alert" className="text-sm text-[var(--color-danger)]">
@@ -81,7 +76,7 @@ export function RenameItemDialog({
           className="grid gap-4 py-4"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!isAndroidChromeNativeInputSuppressed) void onConfirm();
+            void onConfirm();
           }}
         >
           <div className="grid gap-2">
@@ -92,7 +87,7 @@ export function RenameItemDialog({
               value={value}
               onChange={(event) => onValueChange(event.target.value)}
               autoFocus
-              disabled={pending || isAndroidChromeNativeInputSuppressed}
+              disabled={pending}
             />
           </div>
           <DialogFooter>
@@ -107,16 +102,7 @@ export function RenameItemDialog({
             <Button
               type="submit"
               variant="primary"
-              disabled={
-                isAndroidChromeNativeInputSuppressed ||
-                (!allowEmpty && !value.trim()) ||
-                pending
-              }
-              title={
-                isAndroidChromeNativeInputSuppressed
-                  ? "Unavailable on Android Chrome"
-                  : undefined
-              }
+              disabled={(!allowEmpty && !value.trim()) || pending}
               loading={pending}
             >
               {submitLabel}

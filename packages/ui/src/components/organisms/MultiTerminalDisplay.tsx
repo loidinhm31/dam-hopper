@@ -2,16 +2,12 @@ import { useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
 import { TerminalKeepAliveHost } from "@/components/organisms/TerminalKeepAliveHost.js";
 import { SplitLayout } from "@/components/organisms/SplitLayout.js";
-import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
-import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
-import { useSettingsStore } from "@/stores/settings.js";
 import {
   collectPanes,
   useTerminalLayout,
 } from "@/hooks/use-terminal-layout.js";
 import { fitAllTerminals } from "@/lib/terminal-fit-scheduler.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import type { TerminalRef } from "@/api/ownership.js";
@@ -71,21 +67,7 @@ export function MultiTerminalDisplay({
   onOpenSessionChanges,
 }: Props) {
   const layout = useTerminalLayout(layoutStorageKey);
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
-  const isCompactWorkspace = useCompactWorkspace();
-  const isCoarsePointer = useCoarsePointer();
-  const mobileCustomKeyboardEnabled = useSettingsStore(
-    (state) => state.mobileCustomKeyboardEnabled,
-  );
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
-  const mobileInputPolicyApplies =
-    !!activeSessionId &&
-    (isAndroidChromeNativeInputSuppressed ||
-      (isCompactWorkspace && isCoarsePointer));
-  const suppressTerminalNativeInput =
-    isAndroidChromeNativeInputSuppressed ||
-    (mobileInputPolicyApplies && mobileCustomKeyboardEnabled);
   const visibleSessionIds = useMemo(
     () =>
       new Set(
@@ -188,8 +170,8 @@ export function MultiTerminalDisplay({
           onSessionExit={onSessionExit}
           onNewTerminal={onNewTerminal}
           onTerminalReady={handleTerminalReady}
-          suppressAutoFocus={suppressTerminalNativeInput}
-          suppressNativeKeyboard={suppressTerminalNativeInput}
+          suppressAutoFocus={false}
+          suppressNativeKeyboard={false}
           webglEnabledSessionIds={visibleSessionIds}
         />
       )}
@@ -213,7 +195,7 @@ export function MultiTerminalDisplay({
           onRenameSession={onRenameSession}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           activeSessionId={activeSessionId}
-          suppressTerminalFocus={suppressTerminalNativeInput}
+          suppressTerminalFocus={false}
           browserOpen={browserOpen}
           renderBrowserContent={renderBrowserContent}
           onCloseBrowser={onCloseBrowser}

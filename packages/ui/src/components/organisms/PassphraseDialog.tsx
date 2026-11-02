@@ -2,7 +2,6 @@ import { useRef, useState } from "react";
 import { KeyRound, X } from "lucide-react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import { cn } from "@/lib/utils.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { useDialogFocusTrap } from "@/hooks/use-dialog-focus-trap.js";
 
 interface Props {
@@ -75,8 +74,6 @@ export function PassphraseDialog({
   const [authMethod, setAuthMethod] = useState<"key" | "password">("key");
   const [username, setUsername] = useState(passwordAuth?.username ?? "");
   const inputRef = useRef<HTMLInputElement>(null);
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
   const dialogRef = useDialogFocusTrap(open, loading, onCancel, inputRef);
 
   if (!open) return null;
@@ -85,7 +82,6 @@ export function PassphraseDialog({
     e.preventDefault();
     if (
       loading ||
-      isAndroidChromeNativeInputSuppressed ||
       (authMethod === "key" && requireKeySelection && !selectedKey) ||
       (authMethod === "password" &&
         (!passwordAuth || !username.trim() || !passphrase))
@@ -171,16 +167,6 @@ export function PassphraseDialog({
           {description}
         </p>
 
-        {isAndroidChromeNativeInputSuppressed && (
-          <p
-            role="note"
-            id="passphrase-dialog-android-description"
-            className="mb-3 rounded border border-amber-400/30 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-300"
-          >
-            Text entry and Load Key &amp; Retry are unavailable on Android
-            Chrome. Use a desktop browser to provide a passphrase.
-          </p>
-        )}
 
         <form onSubmit={handleSubmit} className="space-y-3">
           {passwordAuth ? (
@@ -259,7 +245,7 @@ export function PassphraseDialog({
                 autoComplete="username"
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
-                disabled={loading || isAndroidChromeNativeInputSuppressed}
+                disabled={loading}
                 className={inputClass}
               />
             </div>
@@ -287,12 +273,7 @@ export function PassphraseDialog({
               }
               value={passphrase}
               onChange={(e) => setPassphrase(e.target.value)}
-              disabled={loading || isAndroidChromeNativeInputSuppressed}
-              aria-describedby={
-                isAndroidChromeNativeInputSuppressed
-                  ? "passphrase-dialog-android-description"
-                  : undefined
-              }
+              disabled={loading}
               className={inputClass}
             />
           </div>
@@ -348,17 +329,11 @@ export function PassphraseDialog({
               size="sm"
               loading={loading}
               disabled={
-                isAndroidChromeNativeInputSuppressed ||
                 (authMethod === "key" &&
                   requireKeySelection &&
                   (!selectedKey || keyOptions?.length === 0)) ||
                 (authMethod === "password" &&
                   (!passwordAuth || !username.trim() || !passphrase))
-              }
-              title={
-                isAndroidChromeNativeInputSuppressed
-                  ? "Unavailable on Android Chrome"
-                  : undefined
               }
             >
               {submitLabel}

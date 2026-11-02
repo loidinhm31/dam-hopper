@@ -45,7 +45,6 @@ import {
   setActiveProfile,
 } from "@/api/server-config.js";
 import { connectProfile, disconnectProfile } from "@/api/connections.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface Props {
   open: boolean;
@@ -84,8 +83,6 @@ export function ServerSettingsDialog({
   profile,
   onSaved,
 }: Props) {
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [authType, setAuthType] = useState<"basic" | "none">("basic");
@@ -851,7 +848,6 @@ export function ServerSettingsDialog({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="My Server"
-                disabled={isAndroidChromeNativeInputSuppressed}
                 className="w-full rounded-lg border px-3.5 py-2 text-sm transition-colors focus:outline-none focus:ring-2"
                 style={{
                   background: "var(--color-background)",

@@ -16,8 +16,8 @@ vi.mock("@/api/queries.js", () => ({
   useProjectStatus: () => ({ data: undefined }),
 }));
 
-vi.mock("@/hooks/use-compact-workspace.js", () => ({
-  useCompactWorkspace: () => mockCompactWorkspace,
+vi.mock("@/os/use-os-viewport.js", () => ({
+  useOsViewport: () => ({ isCompact: mockCompactWorkspace, isStandard: !mockCompactWorkspace }),
 }));
 
 vi.mock("@/hooks/use-ports.js", () => ({

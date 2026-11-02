@@ -7,18 +7,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TreeProject } from "@/hooks/use-terminal-tree.js";
 import { TerminalTreeView } from "./TerminalTreeView.js";
 
-let coarsePointer = false;
-let androidChromeSuppressed = false;
-
-vi.mock("@/hooks/use-coarse-pointer.js", () => ({
-  useCoarsePointer: () => coarsePointer,
-}));
-
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: androidChromeSuppressed,
-  }),
-}));
 
 vi.mock("@/api/queries.js", () => ({
   useGlobalConfig: vi.fn(() => ({ data: { ui: {} } })),
@@ -128,8 +116,6 @@ function renderTree(
 
 describe("TerminalTreeView mobile actions", () => {
   beforeEach(() => {
-    coarsePointer = false;
-    androidChromeSuppressed = false;
     vi.stubGlobal("localStorage", storageStub());
   });
 
@@ -141,15 +127,6 @@ describe("TerminalTreeView mobile actions", () => {
     expect(markup).toContain("p-0.5 hover:bg-green-500/20");
   });
 
-  it("shows larger Fleet launch actions on coarse pointer devices", () => {
-    coarsePointer = true;
-
-    const markup = renderTree();
-
-    expect(markup).toContain('title="Launch build"');
-    expect(markup).toContain("opacity-100");
-    expect(markup).toContain("h-8 w-8 items-center justify-center");
-  });
 
   it("labels a live session whose worktree is unavailable", () => {
     const orphanedProject: TreeProject = {
@@ -178,61 +155,4 @@ describe("TerminalTreeView mobile actions", () => {
     expect(renderTree([], [orphanedProject])).toContain(">orphaned</span>");
   });
 
-  it("disables free-terminal profile saving when Android Chrome text input is blocked", () => {
-    androidChromeSuppressed = true;
-
-    const markup = renderTree([
-      {
-        id: "free-1",
-        command: "bash",
-        cwd: "/workspace",
-        type: "free",
-        alive: true,
-        startedAt: 1,
-      },
-    ]);
-
-    expect(markup).toContain(
-      'title="Saving profiles is unavailable in Android Chrome"',
-    );
-    expect(markup).toMatch(
-      /<button[^>]*disabled=""[^>]*title="Saving profiles is unavailable in Android Chrome"/,
-    );
-  });
-
-  it("disables profile and custom-command editor saves under Android policy", async () => {
-    androidChromeSuppressed = true;
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-
-    await act(async () => root.render(treeElement()));
-    await act(async () =>
-      container
-        .querySelector<HTMLButtonElement>('[title="Edit profile"]')
-        ?.click(),
-    );
-    expect(
-      container.querySelector<HTMLButtonElement>('button[type="submit"]')
-        ?.disabled,
-    ).toBe(true);
-
-    await act(async () =>
-      container
-        .querySelector<HTMLButtonElement>('form button[type="button"]')
-        ?.click(),
-    );
-    await act(async () =>
-      container
-        .querySelector<HTMLButtonElement>('[title="Edit command"]')
-        ?.click(),
-    );
-    expect(
-      container.querySelector<HTMLButtonElement>('button[type="submit"]')
-        ?.disabled,
-    ).toBe(true);
-
-    await act(async () => root.unmount());
-    container.remove();
-  });
 });

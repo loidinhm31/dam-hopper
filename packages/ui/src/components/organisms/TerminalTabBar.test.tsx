@@ -2,13 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalTabBar } from "./TerminalTabBar.js";
 
-let androidChromeSuppressed = false;
 
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: androidChromeSuppressed,
-  }),
-}));
 
 const tabs = [
   {
@@ -29,7 +23,6 @@ const baseProps = {
 
 describe("TerminalTabBar Android Chrome text actions", () => {
   beforeEach(() => {
-    androidChromeSuppressed = false;
   });
   it("renders the full accessible title and keyboard-safe controls", () => {
     const markup = renderToStaticMarkup(<TerminalTabBar {...baseProps} />);
@@ -48,20 +41,4 @@ describe("TerminalTabBar Android Chrome text actions", () => {
     expect(markup).not.toContain('title="Saving profiles is unavailable');
   });
 
-  it("disables profile save actions when native text input is suppressed", () => {
-    androidChromeSuppressed = true;
-    const markup = renderToStaticMarkup(
-      <TerminalTabBar
-        {...baseProps}
-        savePrompt={{ sessionId: "session-1", name: "" }}
-      />,
-    );
-
-    expect(markup).toContain(
-      'title="Saving profiles is unavailable in Android Chrome"',
-    );
-    expect(markup).toMatch(
-      /<button[^>]*disabled=""[^>]*title="Saving profiles is unavailable in Android Chrome"/,
-    );
-  });
 });
