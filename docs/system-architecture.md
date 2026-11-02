@@ -1,6 +1,6 @@
 # System Architecture
 
-**Status:** Current architecture overview, updated 2026-11-02 (reflecting Phase 02 / P0a native Tauri and desktop SSH-forwarding removal). Detailed subsystem contracts are linked below; source code is authoritative.
+**Status:** Current architecture overview, updated 2026-11-02 (reflecting Phase 01 OS lifecycle prototype implementation checkpoint and Phase 02 native Tauri / desktop SSH-forwarding removal). Detailed subsystem contracts are linked below; source code is authoritative.
 
 ## Runtime Overview
 
@@ -90,6 +90,79 @@ The session changes subsystem (`server/src/session_changes/`) provides an owner-
 - New terminals resolve the selected target through the owning profile's launch path (`worktreePath`). Existing PTYs, terminal grouping, splits, and editor target bindings remain completely unchanged; selection never sends `cd`, restarts a process, or checks out a branch.
 - Discovery uses profile/generation-qualified worktree queries (`useWorktrees`). Project root is explicit; unavailable, bare, or prunable paths are disabled and cannot be selected. Detached HEAD and locked worktree states are informative; failed discovery or transport errors preserve the current target selection safely.
 - Project tabs and dropdown triggers remain separate interactive controls in desktop and compact Projects-sheet layouts. Same-name cross-profile isolation, root switching, and unchanged live-terminal identity/directory are verified by focused Chromium regressions and production application PTY journeys.
+
+## AI Dev OS Lifecycle Architecture (Phase 01 Prototype)
+
+**Status:** Implementation checkpoint accepted by user following Cycle 6 review (Task 1 `generalize-tile-tree` and Task 2 `implement-os-lifecycle` completed in source). Phase 01 remains in-progress under the [AI Dev OS Redesign Plan](../plans/261101-1738-ai-dev-os-redesign/plan.md). Task 3 (`integrate-os-prototype-route`) is blocked pending the isolated Phase 03 Usage-web embed handoff (`packages/ui/src/embed/dam-hopper-app.tsx` and test). Task 4 (`qualify-prototype-gate`) lifecycle acceptance gate is not achieved and carries forward open critical issues C1 and C2, requiring an authorized source-remediation handoff before qualification.
+
+The AI Dev OS redesign establishes a web-native multi-window, multi-desktop operating environment with the architectural requirement to preserve existing live-resource identities (xterm PTY instances, Monaco editor models/undo history, and running browser preview iframes) across window repositioning, docking, floating, maximizing, and desktop switching without remounting or re-attaching.
+
+### 1. Canonical Generic TileTree & Lossless Wire Codec
+
+- **Generic Data Model (`packages/ui/src/types/tile-tree.ts`):** `TileTree<T>` establishes a canonical recursive binary tree for arbitrary pane content `T`. A `TileNode<T>` is either a `TileSplitNode<T>` (`direction: "horizontal" | "vertical"`, `sizes: [number, number]`, `children: [TileNode<T>, TileNode<T>]`) or a `TilePaneNode<T>` (`id: string`, `items: T[]`, `active: T | null`). Dock targets support `pane-center`, `pane-edge` (`top | bottom | left | right`), and `tab-index`.
+- **Wire Codec & Invariant Validation (`packages/ui/src/lib/tile-tree.ts`):** Layout transformation functions (`insertItemIntoTilePane`, `removeItemFromTilePane`, `dockItemIntoTileTree`, `pruneEmptyTileSplits`, `updateTileSizes`) operate generically across item types. Pure tree validation (`isValidTileNode`) enforces UUID presence, non-empty child arrays, positive finite sizes, and active item membership.
+- **Storage-Key vs Payload Version Separation:** Terminal layouts retain unchanged `terminal-layout:v3:*` localStorage keys containing `{ version: 2, root: LayoutNode }` with `sessionIds` and `activeSessionId`. The codec (`layoutNodeToTileNode` / `tileNodeToLayoutNode`, `parsePersistedTerminalLayout` / `serializeTerminalLayout`) provides bidirectional lossless projection between `LayoutNode` (`sessionIds`/`activeSessionId`) and `TileNode<string>` (`items`/`active`) without disk migration.
+- **Renderer Delegation (`packages/ui/src/lib/terminal-layout-tree.ts` & `SplitLayout.tsx`):** Existing terminal layout operations delegate directly to generic tile tree primitives. `SplitLayout.tsx` introduces `GenericTileRenderer<T>`, which orchestrates `react-resizable-panels` (`Group`, `Panel`, `Separator`) with debounced resize propagation and recursive rendering.
+
+### 2. OS Session State, Pure Window Operations & Zustand Store
+
+- **OS Types (`packages/ui/src/os/types.ts`):** Models multi-desktop session state `OsSessionV1` (`schema: 1`, `activeDesktopId: string`, `desktops: OsDesktop[]`, `windows: Record<string, OsWindow>`). Each `OsWindow` owns an immutable identity, application identifier (`appId: "terminals" | "editor" | "browser"`), window context (`profileId`, optional `projectId`, `worktreeId`), placement mode (`mode: "tile" | "float"`), target `desktopId`, `maximized: boolean`, `minimized: boolean`, optional `floatBounds: FloatBounds`, `restorePlacement: RestorePlacement`, and allowlisted `appState`. Desktops contain a tiled tree `tree: TileNode<string> | null`, `floatingWindowIds: string[]`, and `focusedWindowId: string | null`.
+- **Pure Window Operations (`packages/ui/src/os/window-ops.ts`):** Pure state transition functions execute atomic placement mutations: `openWindow`, `closeWindow`, `focusWindow`, `setWindowMode` (tile vs float), `toggleMaximizeWindow`, `minimizeWindow`, `restoreWindow`, `switchDesktop`, `moveWindowToDesktop`, `dockWindowInDesktopTree`, and `updateFloatBounds`. Floating coordinates are clamped to visible viewport boundaries via `clampFloatBounds` (`minWidth: 280`, `minHeight: 200`, 50px boundary inset).
+- **Zustand Window Store (`packages/ui/src/os/window-store.ts`):** `useWindowStore` manages active session state and viewport dimensions in React, triggering pure operations with single-transaction state updates. Viewport resize events automatically reclamp all floating window bounds.
+
+### 3. Central ResourceRegistry & Claim Contract
+
+- **Claim Authority (`packages/ui/src/os/resource-registry.ts`):** `ResourceRegistry` coordinates visual visible-slot exclusivity to prevent conflicting UI surfaces from rendering the same live resource concurrently.
+- **Deterministic Claim Keys:** Claim identities format deterministically as `${resourceKind}/${profileId}/${generation}/${resourceId}[/inc:${incarnation}][/ep:${epoch}]` via `formatClaimKey`.
+- **Single-Visible-Slot Enforcement:** `registry.claim(key, windowId)` grants placement if the resource is free or already held by the same window. Conflicting requests from a second window are rejected, returning `{ success: false, existingHolderWindowId }`. Windows release all claims atomically upon close (`releaseAllForWindow`).
+- **Reactive Hook (`useResourceClaim`):** App components subscribe to claim state via `useSyncExternalStore`. When a claim is denied, the adapter renders a fallback overlay indicating the session is active in another window, providing a "Focus Existing Window" action.
+- **Contract Boundary Caveat:** Single-visible-slot enforcement is a UI registry contract; as noted in Cycle 6 review, it does not itself enforce transport ownership or keyboard isolation at the network boundary.
+
+### 4. Persistence Validation & Exact-One-Placement Invariants
+
+- **Storage Target (`packages/ui/src/os/persistence.ts`):** Session state is saved under localStorage key `dam-hopper:os:v1:session` with a 300 ms debounce.
+- **Allowlisted View State Sanitization:** `sanitizeSessionForPersistence` strips runtime credentials, output buffers, dirty text, generations, and incarnations before disk writes, projecting only allowlisted view attributes: `sessionId` and `cwd` for `terminals`; `filePath` for `editor`; `url` for `browser`.
+- **Corrupt-Byte Suspension Guard:** Malformed JSON or schema corruption sets `autosaveSuspended = true`, retains unparseable raw bytes via `preservedCorruptBytes`, and displays an operator `PersistenceNotice` banner (`kind: "invalid-schema" | "storage-error" | "corrupt-data"`), preventing corrupt data from overwriting disks until explicit user reset.
+- **Strict Invariant Validation (`validateOsSession`):** Enforces rigorous structural consistency:
+  1. *Exactly-One-Placement:* Every non-minimized tiled window must appear exactly once in its desktop's `tree` and zero times in `floatingWindowIds`. Every non-minimized floating window must appear exactly once in `floatingWindowIds` and zero times in `tree`. Minimized windows must have zero placements in both.
+  2. *Desktop Ownership Alignment:* Every placed window's `desktopId` must match the desktop in which it is placed.
+  3. *Valid Desktop Focus:* If `focusedWindowId` is set, the referenced window must belong to that desktop, cannot be minimized, and must be currently placed on that desktop.
+  4. *Tile Tree Integrity:* Non-empty panes must contain valid items, non-null active items present in `items`, and zero duplicate items.
+
+### 5. Input Precedence & Arbitration
+
+- **Arbitration Engine (`packages/ui/src/os/input-arbiter.ts`):** Pure `arbitrateKeyboardEvent` establishes a 5-tier input priority model:
+  1. `cognito-blocked`: Active Cognito Privacy Mode intercepts and suppresses all physical keyboard input (`preventDefault()`, `stopPropagation()`).
+  2. `ime-passthrough`: Composition states (`isComposing`, `keyCode === 229`, `key === "Dead"`, `key === "Process"`, or `AltGraph`) pass through immediately to prevent chord interception during IME text entry.
+  3. `os-shortcut-handled`: OS global chords (specifically `Ctrl+Alt+Escape`, excluding AltGr) cycle window focus across visible desktop windows without emitting PTY bytes.
+  4. `frame-focused-handled`: Chrome toolbar and window frame header controls intercept input when focused.
+  5. `app-passthrough`: Default pass-through to the active window application body.
+- **Implementation Status & Gaps:** `WindowFrame.tsx` captures keyboard events using `data-os-window-slot`. As noted in Cycle 6 code review, iframe preview keyboard events do not traverse the React frame capture handler, and shortcut-capture bypass remains an open qualification item.
+
+### 6. Component Hierarchy & Resource Keep-Alive Architecture
+
+- **Root Keep-Alive (`packages/ui/src/os/OsResourceHost.tsx`):** Mounted above all desktop and window render branches in `OsShell.tsx`. Hosts long-lived resource containers:
+  - `TerminalKeepAliveHost`: Holds live xterm instances for derived and mounted terminal sessions.
+  - `MonacoKeepAliveHost`: Maintains an off-screen parking container (`getMonacoParkingHost()`) and registry (`parkedMonacoRegistry`) where Monaco editor DOM nodes are parked when unmounted or transferred between windows.
+  - `OsBrowserKeepAliveHost`: Renders persistent iframe overlays (`OsBrowserIframe`) positioned via absolute geometry coordinates, tracked through `registerBrowserSlot` and `updateBrowserSlot`.
+- **Canvas & Frame (`packages/ui/src/os/DesktopCanvas.tsx` & `WindowFrame.tsx`):** `DesktopCanvas` renders the active desktop's tiled layout via `GenericTileRenderer` and floating windows via `WindowFrame`. `WindowFrame` provides draggable title bars, mode toggle (tile/float), maximize/minimize controls, desktop reassignment menus, and keyboard capture listeners.
+- **Application Adapters (`packages/ui/src/os/apps/`):**
+  - `TerminalsApp`: Captures owner context via `useWindowOwner()`, claims slot via `useResourceClaim`, and attaches xterm DOM elements via `attachTerminalsToHost`. Renders a disconnected banner when owner server status is not connected.
+  - `EditorApp`: Resolves project target, computes tab key via `editorFileTabKey`, claims slot, and imperatively attaches parked Monaco DOM nodes via `attachMonacoToSlot`.
+  - `BrowserApp`: Coordinates iframe positioning and visibility with `OsResourceHost` via slot registration, hiding overlays during Cognito mode or desktop switching.
+
+### 7. Verification Evidence & Carried-Forward Qualification Gates
+
+- **Unit & Component Testing:** The Cycle 6 tester report (`plans/reports/tester-261102-0801-phase-01-cycle-6-validation.md`) records:
+  - 52 targeted OS and layout unit tests passing across 7 files (`tile-tree.test.ts`, `terminal-layout-docking.test.ts`, `SplitLayout.test.ts`, `resource-registry.test.ts`, `window-ops.test.ts`, `input-arbiter.test.ts`, `persistence.test.ts`).
+  - 7 Chromium component browser tests passing in `packages/ui/browser-tests/os-lifecycle.browser.tsx` (verifying shell mount, claim acquisition, duplicate claim denial, Cognito input blocking, pane tabs, desktop switching, and preview iframe state preservation).
+  - 3,128 UI unit tests passing across 335 files, with clean TypeScript build (`tsc -p tsconfig.json`). These verify local unit and component behavior, not mounted `/os` journey acceptance.
+- **Carried-Forward Review Findings (Cycle 6 Review, Score 6/10):**
+  - **C1 (Editor Save Generation Fencing & File Loading):** Monaco save handler constructs `{ profileId, generation: 1 }` instead of capturing the active connected owner generation, risking plaintext saves on generation mismatch; save completion can clear dirty state on newer text edits; and W1 notes fabricated empty file state instead of entering the owner-bound file load flow.
+  - **C2 (Terminal Owner Retirement & Input Isolation):** Removing or retiring a profile connection can allow `TerminalPanel` to fall back to ambient transport binding (`ambient:<generation>`), risking cross-profile terminal access if raw IDs match; `pointer-events: none` suppresses pointer targeting but does not isolate keyboard/paste on an already-focused xterm instance.
+  - **W2 (Monaco Parking Reparenting):** Moving the React-rendered Monaco host wrapper into disposable window slots risks DOM ownership and cleanup exceptions on unmount; requires an imperatively owned attachment boundary.
+  - **W3 (Real Resource & Controller Integration Open):** Resource adapters use placeholder session IDs, lack changed-incarnation recovery, and construct raw per-window preview iframes rather than integrating the planned production resource controllers.
+- **Mandatory Prototype Lifecycle Acceptance Gate (Task 4):** Not achieved by component or unit test passes. Before Phase 04 shell chrome implementation, Task 4 requires a real Playwright E2E journey at `/os` demonstrating that placement-only tile, float, maximize, minimize, and desktop moves preserve the **exact same xterm instance** with **zero additional `terminal:attach` calls** and **zero buffer replay/reset operations**, alongside persistent Monaco undo/model state and preview DOM identity.
 
 ## Multi-Profile Ownership Model
 

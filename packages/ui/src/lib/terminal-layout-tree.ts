@@ -5,6 +5,20 @@ import type {
   SplitNode,
 } from "@/types/terminal-layout.js";
 import { generateUUID } from "@/lib/utils.js";
+import {
+  collectTilePaneIds,
+  collectTilePanes,
+  findTilePaneById as findTilePaneByIdGeneric,
+  isValidLayoutNode,
+  layoutNodeToTileNode,
+  newTilePaneNode,
+  parsePersistedTerminalLayout,
+  pruneEmptyTileSplits as pruneEmptyTileSplitsGeneric,
+  removeTilePane,
+  replaceTileNode,
+  tileNodeToLayoutNode,
+  updateTileSizes,
+} from "@/lib/tile-tree.js";
 
 function normalizeActiveSessionId(
   sessionIds: string[],
@@ -28,68 +42,41 @@ export function newPaneNode(
 }
 
 export function isValidNode(node: unknown): boolean {
-  if (typeof node !== "object" || node === null) return false;
-  const candidate = node as Record<string, unknown>;
-  if (candidate.type === "pane") {
-    return (
-      typeof candidate.id === "string" &&
-      Array.isArray(candidate.sessionIds) &&
-      candidate.sessionIds.every(
-        (sessionId) => typeof sessionId === "string",
-      ) &&
-      (candidate.activeSessionId === null ||
-        typeof candidate.activeSessionId === "string")
-    );
-  }
-  if (candidate.type === "split") {
-    return (
-      typeof candidate.id === "string" &&
-      (candidate.direction === "horizontal" ||
-        candidate.direction === "vertical") &&
-      Array.isArray(candidate.sizes) &&
-      candidate.sizes.length === 2 &&
-      candidate.sizes.every((size) => typeof size === "number") &&
-      Array.isArray(candidate.children) &&
-      candidate.children.length === 2 &&
-      isValidNode(candidate.children[0]) &&
-      isValidNode(candidate.children[1])
-    );
-  }
-  return false;
+  return isValidLayoutNode(node);
 }
 
 export function loadPersistedLayout(raw: string | null): LayoutNode | null {
-  if (!raw) return null;
-  const parsed = JSON.parse(raw) as PersistedLayout;
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    (parsed.version !== 1 && parsed.version !== 2) ||
-    !isValidNode(parsed.root)
-  ) {
-    return null;
-  }
-  return parsed.root;
+  const tileRoot = parsePersistedTerminalLayout(raw);
+  return tileRoot ? tileNodeToLayoutNode(tileRoot) : null;
 }
 
 export function collectPaneIds(node: LayoutNode): string[] {
-  if (node.type === "pane") return [node.id];
-  return [
-    ...collectPaneIds(node.children[0]),
-    ...collectPaneIds(node.children[1]),
-  ];
+  return collectTilePaneIds(layoutNodeToTileNode(node));
 }
 
 export function collectPanes(node: LayoutNode): PaneNode[] {
-  if (node.type === "pane") return [node];
-  return [...collectPanes(node.children[0]), ...collectPanes(node.children[1])];
+  const tileTree = layoutNodeToTileNode(node);
+  return collectTilePanes(tileTree).map((tilePane) => ({
+    type: "pane",
+    id: tilePane.id,
+    sessionIds: [...tilePane.items],
+    activeSessionId: tilePane.active,
+  }));
 }
 
 export function findPaneById(
   node: LayoutNode,
   paneId: string,
 ): PaneNode | undefined {
-  return collectPanes(node).find((pane) => pane.id === paneId);
+  const tileTree = layoutNodeToTileNode(node);
+  const found = findTilePaneByIdGeneric(tileTree, paneId);
+  if (!found) return undefined;
+  return {
+    type: "pane",
+    id: found.id,
+    sessionIds: [...found.items],
+    activeSessionId: found.active,
+  };
 }
 
 export function pruneDeadSessions(
@@ -117,13 +104,9 @@ export function pruneDeadSessions(
 }
 
 export function pruneEmptySplits(node: LayoutNode): LayoutNode | null {
-  if (node.type === "pane") return node;
-  const left = pruneEmptySplits(node.children[0]);
-  const right = pruneEmptySplits(node.children[1]);
-  if (!left && !right) return null;
-  if (!left) return right;
-  if (!right) return left;
-  return { ...node, children: [left, right] };
+  const tileTree = layoutNodeToTileNode(node);
+  const pruned = pruneEmptyTileSplitsGeneric(tileTree);
+  return pruned ? tileNodeToLayoutNode(pruned) : null;
 }
 
 export function replaceNode(
@@ -131,29 +114,19 @@ export function replaceNode(
   paneId: string,
   replacement: LayoutNode,
 ): LayoutNode | null {
-  if (tree.type === "pane") {
-    return tree.id === paneId ? replacement : null;
-  }
-  const left = replaceNode(tree.children[0], paneId, replacement);
-  if (left) return { ...tree, children: [left, tree.children[1]] };
-  const right = replaceNode(tree.children[1], paneId, replacement);
-  if (right) return { ...tree, children: [tree.children[0], right] };
-  return null;
+  const tileTree = layoutNodeToTileNode(tree);
+  const tileReplacement = layoutNodeToTileNode(replacement);
+  const replaced = replaceTileNode(tileTree, paneId, tileReplacement);
+  return replaced ? tileNodeToLayoutNode(replaced) : null;
 }
 
 export function removePane(
   tree: LayoutNode,
   paneId: string,
 ): LayoutNode | null {
-  if (tree.type === "pane") {
-    return tree.id === paneId ? null : tree;
-  }
-  const left = removePane(tree.children[0], paneId);
-  const right = removePane(tree.children[1], paneId);
-  if (left === null && right === null) return null;
-  if (left === null) return right;
-  if (right === null) return left;
-  return { ...tree, children: [left, right] };
+  const tileTree = layoutNodeToTileNode(tree);
+  const removed = removeTilePane(tileTree, paneId);
+  return removed ? tileNodeToLayoutNode(removed) : null;
 }
 
 export function updateSizesInTree(
@@ -161,13 +134,9 @@ export function updateSizesInTree(
   nodeId: string,
   sizes: [number, number],
 ): LayoutNode {
-  if (tree.type === "pane") return tree;
-  if (tree.id === nodeId) return { ...tree, sizes };
-  const left = updateSizesInTree(tree.children[0], nodeId, sizes);
-  const right = updateSizesInTree(tree.children[1], nodeId, sizes);
-  return left === tree.children[0] && right === tree.children[1]
-    ? tree
-    : { ...tree, children: [left, right] };
+  const tileTree = layoutNodeToTileNode(tree);
+  const updated = updateTileSizes(tileTree, nodeId, sizes);
+  return tileNodeToLayoutNode(updated);
 }
 
 export function createSplitNode(

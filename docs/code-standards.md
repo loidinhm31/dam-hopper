@@ -10,7 +10,7 @@ These standards describe the current Rust backend, shared React UI, and profile-
 | `server/src/{auth,config,crypto,fs,git,pty,workflow,agent_status,session_changes}/` | Backend domain boundaries and services |
 | `server/src/state.rs` | Shared server `AppState` and service ownership |
 | `packages/ui/src/api/` | Owner-bound API clients, connections, DTOs, transports, and query keys |
-| `packages/ui/src/components/`, `hooks/`, `stores/`, `lib/` | Shared React UI and client-side domain behavior |
+| `packages/ui/src/components/`, `hooks/`, `stores/`, `lib/`, `os/` | Shared React UI, OS window management, and client-side domain behavior |
 | `apps/web/` | Vite browser host (former desktop Tauri host `apps/native/` retired in Phase 02) |
 | `server/tests/`, colocated Rust tests, `packages/ui/browser-tests/` | Backend and browser-level behavioral coverage |
 | `native/android-app/` | Kotlin Multiplatform + Jetpack Compose Android client; current root flow is Profile Login → Project List → Project Terminal |
@@ -159,6 +159,15 @@ See the [Agent Status contract](./architecture/agent-status.md).
 - Keep activation ephemeral; persist only the user preference fields supported by configuration. Treat the overlay as a visual in-app mask, not authorization, content redaction, or an OS capture boundary.
 - Maintain input isolation through event capture, the app-content inert/hidden boundary, and a usable keyboard dismissal path. Restore focus and listeners on deactivation/unmount.
 - Current checked-in Heavy Blur CSS is `blur(16px) saturate(180%)` over `rgba(148, 163, 184, 0.12)` when backdrop-filter is available. Unsupported and reduced-transparency modes use opaque black. Do not copy older values from historical notes without checking `packages/ui/src/index.css`.
+
+### AI Dev OS Lifecycle & Window Management
+
+- **Single-Transaction Placement Mutations:** Window placement, focus, docking, floating, and maximization operations must execute as pure transformations via `packages/ui/src/os/window-ops.ts`, updating the Zustand store (`packages/ui/src/os/window-store.ts`) in single atomic transactions. Floating coordinates must be clamped to viewport bounds via `clampFloatBounds`.
+- **Top-Level Keep-Alive Mounting:** Live resource hosts (`TerminalKeepAliveHost`, `MonacoKeepAliveHost`, `OsBrowserKeepAliveHost`) must mount once in `OsResourceHost` above all desktop and window render branches. App bodies supply visual mounting slots (`slotRef`), into which live DOM elements (xterm PTY instances, Monaco editor DOM nodes, and browser preview iframes) are imperatively attached or parked. Never destroy or remount a live resource during window docking, floating, maximizing, or desktop switching.
+- **Single-Visible-Slot Registry Contract:** The central `ResourceRegistry` (`packages/ui/src/os/resource-registry.ts`) enforces visual exclusivity via deterministic claim keys `${kind}/${profileId}/${generation}/${resourceId}[/inc:${inc}][/ep:${ep}]`. Conflicting requests from a second window must be rejected and offer a "Focus Existing Window" action rather than stealing attachment. Note that this registry contract governs visual placement only and does not replace network-level transport fail-closed fences.
+- **Persistence Sanitization & Placement Invariants:** OS sessions persisted to `dam-hopper:os:v1:session` must be sanitized via `sanitizeSessionForPersistence` to include only allowlisted view attributes (`sessionId`/`cwd` for terminals, `filePath` for editor, `url` for browser). Schema corruption or parse errors must suspend autosave (`autosaveSuspended`) and preserve raw corrupt bytes (`preservedCorruptBytes`). Sessions must strictly pass `validateOsSession`: non-minimized tiled windows appear exactly once in tree and zero in float; non-minimized floating windows appear exactly once in float and zero in tree; minimized windows appear in neither; window `desktopId` matches placement; and desktop focus is valid.
+- **Input Precedence:** Input arbitration must follow the 5-tier precedence model: (1) Cognito privacy blocking, (2) IME/dead/AltGr passthrough without chord interception, (3) OS global shortcut (`Ctrl+Alt+Escape`) window cycling without PTY bytes, (4) frame chrome focus, (5) app body passthrough.
+- **Storage-Key vs Payload Version Separation:** Maintain unchanged `terminal-layout:v3:*` keys containing `{ version: 2, root }` payloads with `sessionIds`/`activeSessionId`. Layout mutations and wire codecs must losslessly map between `LayoutNode` and generic `TileNode<T>` (`items`/`active`) without disk migration.
 
 ## Git, auth, and transport security
 

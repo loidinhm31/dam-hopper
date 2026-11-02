@@ -18,7 +18,7 @@ V5: zero migration/exporter cleanup/ownership/legacy-collector-read code. Manual
 ## Phases
 | # | Phase | Depends | Effort | Status |
 |---|---|---|---:|---|
-| 01 | [Lifecycle prototype](phase-01-lifecycle-prototype.md) | native shared-host prune only; route subtask after exact Usage-web embed handoff | 64h | pending |
+| 01 | [Lifecycle prototype](phase-01-lifecycle-prototype.md) | native shared-host prune only; route subtask after exact Usage-web embed handoff | 64h | in-progress |
 | 02 | [Tauri/SSH removal](phase-02-native-and-ssh-removal.md) | independent native-host prune + build lanes | 32h | DONE (2026-11-02 01:26:49 +07:00) |
 | 03 | [Usage retirement + OWN EARLY P0 RELEASE](phase-03-usage-retirement.md) | backend/Android independent; web after02 | 48h | pending |
 | 04 | [Shell chrome/services](phase-04-shell-chrome-and-services.md) | 01 gate only (all actual P0 file handoffs inherited) | 56h | pending |
@@ -30,6 +30,7 @@ V5: zero migration/exporter cleanup/ownership/legacy-collector-read code. Manual
 | 10 | [Final OS docs/handoff](phase-10-documentation-and-handoff.md) | 09 human acceptance | 24h | pending |
 
 Phase 02 marked DONE per user direction (2026-11-02 01:26:49 +07:00); technical acceptance incomplete: unit/release test suites passed (3,114–3,119 tests across UI, shared, bridge, and release test runner), handoff reports 325 component browser tests passed; Cycle 2 review scored 8/10 (0 Critical, medium findings W1/W2 noted); user approved phase closure; production journey verification retained for P0 release receipt gate.
+Phase 01 prototype lifecycle Task 2 administratively closed / implementation checkpoint accepted by user following Cycle 6 review (score 6/10; technical acceptance incomplete); Cycle 6 tester report records 52 targeted OS/layout tests, 7 Chromium component browser tests, 3,128 UI unit tests passed, and clean TypeScript compilation/typecheck; Phase 01 remains in-progress: Task 3 (`integrate-os-prototype-route`) blocked pending Phase 03 `retire-usage-web` handoff, and Task 4 (`qualify-prototype-gate`) carried forward with known critical items C1 (editor save generation fencing & potential plaintext writes; W1 file loading) and C2 (terminal owner retirement & potential cross-profile access via ambient fallback) requiring an authorized source-remediation handoff prior to lifecycle qualification. Technical lifecycle acceptance gate not achieved.
 ## Dependencies / ownership / acceptance
 [Exclusive ownership/release/rollback](ownership.md): native prune -> prototype core concurrently with remaining P0. ONLY route subtask waits Usage web's `dam-hopper-app.tsx` + test. Independent P0 checks/version/publication use source-pinned isolated P0 artifacts; no receipt dependency in prototype/chrome. P0 receipt gates root cutover only.
 Intermediate `/os` ships URL-only/no nav link/no build flag; old UI default until08. Prototype placements retain SAME xterm and ZERO attach/replay/reset; real reconnect separately fenced. Full chrome/apps wait prototype, not vice versa.

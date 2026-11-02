@@ -1,0 +1,336 @@
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
+import type { OsWindow } from "./types.js";
+import { useWindowStore } from "./window-store.js";
+import { useWindowContext } from "./window-context.js";
+import { arbitrateKeyboardEvent } from "./input-arbiter.js";
+import { useCognitoModeStore } from "@/stores/cognito-mode.js";
+import { useEditorStore } from "@/stores/editor.js";
+
+export interface WindowFrameProps {
+  window: OsWindow;
+  children: ReactNode;
+}
+
+export function WindowFrame({ window, children }: WindowFrameProps) {
+  const { isFocused } = useWindowContext();
+  const isCognitoActive = useCognitoModeStore((state) => state.active);
+  const session = useWindowStore((state) => state.session);
+  const focusWindow = useWindowStore((state) => state.focusWindow);
+  const closeWindow = useWindowStore((state) => state.closeWindow);
+  const toggleMaximizeWindow = useWindowStore(
+    (state) => state.toggleMaximizeWindow,
+  );
+  const minimizeWindow = useWindowStore((state) => state.minimizeWindow);
+  const setWindowMode = useWindowStore((state) => state.setWindowMode);
+  const moveWindowToDesktop = useWindowStore(
+    (state) => state.moveWindowToDesktop,
+  );
+  const updateFloatBounds = useWindowStore((state) => state.updateFloatBounds);
+
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (dragCleanupRef.current) {
+        dragCleanupRef.current();
+        dragCleanupRef.current = null;
+      }
+    };
+  }, []);
+
+  const handlePointerDown = useCallback(() => {
+    focusWindow(window.id);
+  }, [focusWindow, window.id]);
+
+  const handleStartDrag = useCallback(
+    (e: ReactMouseEvent) => {
+      if (window.mode !== "float" || window.maximized) return;
+      focusWindow(window.id);
+      setIsDragging(true);
+
+      const dragStart = {
+        startX: e.clientX,
+        startY: e.clientY,
+        initialX: window.floatBounds?.x ?? 60,
+        initialY: window.floatBounds?.y ?? 60,
+      };
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        const deltaX = moveEvent.clientX - dragStart.startX;
+        const deltaY = moveEvent.clientY - dragStart.startY;
+        const nextX = dragStart.initialX + deltaX;
+        const nextY = dragStart.initialY + deltaY;
+        updateFloatBounds(window.id, {
+          x: nextX,
+          y: nextY,
+          width: window.floatBounds?.width ?? 720,
+          height: window.floatBounds?.height ?? 520,
+        });
+      };
+
+      const handleMouseUp = () => {
+        setIsDragging(false);
+        globalThis.removeEventListener("mousemove", handleMouseMove);
+        globalThis.removeEventListener("mouseup", handleMouseUp);
+        dragCleanupRef.current = null;
+      };
+
+      globalThis.addEventListener("mousemove", handleMouseMove);
+      globalThis.addEventListener("mouseup", handleMouseUp);
+      dragCleanupRef.current = handleMouseUp;
+    },
+    [
+      window.mode,
+      window.maximized,
+      window.id,
+      window.floatBounds,
+      focusWindow,
+      updateFloatBounds,
+    ],
+  );
+
+  const handleClose = useCallback(() => {
+    if (window.appId === "editor") {
+      const filePath = window.appState?.filePath as string | undefined;
+      const targetProject = window.ctx.projectId;
+      const targetWorktree = window.ctx.worktreeId;
+      const targetProfile = window.ctx.profileId;
+
+      const tabs = useEditorStore.getState().tabs;
+      const isDirty = tabs.some((t) => {
+        if (!t.dirty) return false;
+        if (filePath && t.path !== filePath) return false;
+        if (targetProject && t.project !== targetProject) return false;
+        if (
+          targetProfile &&
+          t.target?.profileId &&
+          t.target.profileId !== targetProfile
+        ) {
+          return false;
+        }
+        if (
+          targetWorktree &&
+          t.target?.worktreePath &&
+          t.target.worktreePath !== targetWorktree
+        ) {
+          return false;
+        }
+        return true;
+      });
+
+      if (isDirty) {
+        if (typeof globalThis.confirm !== "function") {
+          // Fail-closed: do not close without explicit user confirmation
+          return;
+        }
+        const confirmed = globalThis.confirm(
+          `You have unsaved changes in ${filePath ?? "editor"}. Close anyway?`,
+        );
+        if (confirmed !== true) return;
+      }
+    }
+    closeWindow(window.id);
+  }, [
+    closeWindow,
+    window.appId,
+    window.id,
+    window.appState?.filePath,
+    window.ctx.projectId,
+    window.ctx.profileId,
+    window.ctx.worktreeId,
+  ]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const targetEl = e.target as HTMLElement | null;
+      const isTargetInBody =
+        targetEl?.closest?.("[data-os-window-slot]") !== null;
+      const isFrameFocused = !isTargetInBody;
+
+      const disposition = arbitrateKeyboardEvent(e.nativeEvent, {
+        isCognitoActive,
+        isComposing: Boolean(e.nativeEvent.isComposing),
+        isFrameFocused,
+      });
+      if (disposition === "cognito-blocked") {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (disposition === "os-shortcut-handled") {
+        e.preventDefault();
+        e.stopPropagation();
+        const visibleWindowIds = Object.keys(session.windows).filter(
+          (id) =>
+            !session.windows[id]?.minimized &&
+            session.windows[id]?.desktopId === window.desktopId,
+        );
+        const idx = visibleWindowIds.indexOf(window.id);
+        const nextId =
+          visibleWindowIds[(idx + 1) % visibleWindowIds.length] ?? window.id;
+        if (nextId) {
+          focusWindow(nextId);
+          const nextEl = document.querySelector(
+            `[data-os-window-frame="${CSS.escape(nextId)}"]`,
+          ) as HTMLElement | null;
+          nextEl?.focus();
+        }
+      }
+    },
+    [isCognitoActive, session.windows, window.desktopId, window.id, focusWindow],
+  );
+
+  const otherDesktops = session.desktops.filter(
+    (d) => d.id !== window.desktopId,
+  );
+
+  const frameStyle: React.CSSProperties = window.maximized
+    ? {
+        position: "fixed",
+        inset: 0,
+        zIndex: 50,
+        width: "100vw",
+        height: "100vh",
+      }
+    : window.mode === "float"
+      ? {
+          position: "absolute",
+          left: window.floatBounds?.x ?? 60,
+          top: window.floatBounds?.y ?? 60,
+          width: window.floatBounds?.width ?? 720,
+          height: window.floatBounds?.height ?? 520,
+          zIndex: isFocused ? 30 : 20,
+        }
+      : {
+          position: "relative",
+          width: "100%",
+          height: "100%",
+        };
+
+  return (
+    <div
+      data-os-window-frame={window.id}
+      data-testid={`window-frame-${window.id}`}
+      tabIndex={-1}
+      onPointerDown={handlePointerDown}
+      onKeyDownCapture={handleKeyDown}
+      style={frameStyle}
+      className={`flex flex-col overflow-hidden bg-[var(--color-surface)] border ${
+        isFocused
+          ? "border-[var(--color-primary)] shadow-xl"
+          : "border-[var(--color-border)] shadow-sm"
+      } ${window.mode === "float" ? "rounded-lg" : ""}`}
+    >
+      {/* Frame Header / Toolbar */}
+      <div
+        data-os-frame-header="true"
+        onMouseDown={handleStartDrag}
+        className={`flex items-center justify-between px-3 py-1.5 border-b border-[var(--color-border)] select-none text-xs ${
+          isFocused
+            ? "bg-[var(--color-surface-hover)]"
+            : "bg-[var(--color-surface)]"
+        } ${window.mode === "float" && !window.maximized ? "cursor-move" : "cursor-default"}`}
+      >
+        <div className="flex items-center gap-2 overflow-hidden">
+          <span className="font-medium text-[var(--color-text)] truncate">
+            {window.title}
+          </span>
+          {window.ctx.projectId && (
+            <span className="px-1.5 py-0.5 text-[10px] rounded bg-[var(--color-bg)] text-[var(--color-text-muted)] font-mono border border-[var(--color-border)]">
+              {window.ctx.projectId}
+            </span>
+          )}
+        </div>
+
+        {/* Window controls */}
+        <div className="flex items-center gap-1">
+          {/* Mode toggle (Tile <-> Float) */}
+          <button
+            type="button"
+            aria-label={
+              window.mode === "tile" ? "Switch to Float" : "Switch to Tile"
+            }
+            onClick={() =>
+              setWindowMode(
+                window.id,
+                window.mode === "tile" ? "float" : "tile",
+              )
+            }
+            className="p-1 rounded hover:bg-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-[10px]"
+          >
+            {window.mode === "tile" ? "Float" : "Tile"}
+          </button>
+
+          {/* Move to other desktop */}
+          {otherDesktops.length > 0 && (
+            <select
+              aria-label="Move to desktop"
+              value=""
+              onChange={(e) => {
+                if (e.target.value) {
+                  moveWindowToDesktop(window.id, e.target.value);
+                }
+              }}
+              className="text-[10px] bg-transparent border border-[var(--color-border)] rounded px-1 py-0.5 text-[var(--color-text-muted)]"
+            >
+              <option value="" disabled>
+                Move…
+              </option>
+              {otherDesktops.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Minimize */}
+          <button
+            type="button"
+            aria-label="Minimize"
+            onClick={() => minimizeWindow(window.id)}
+            className="p-1 rounded hover:bg-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-[10px]"
+          >
+            _
+          </button>
+
+          {/* Maximize / Restore */}
+          <button
+            type="button"
+            aria-label={window.maximized ? "Restore" : "Maximize"}
+            onClick={() => toggleMaximizeWindow(window.id)}
+            className="p-1 rounded hover:bg-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-[10px]"
+          >
+            {window.maximized ? "❐" : "□"}
+          </button>
+
+          {/* Close */}
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={handleClose}
+            className="p-1 rounded hover:bg-[var(--color-error)] text-[var(--color-text-muted)] hover:text-white text-[10px]"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      {/* Frame Body / App Slot */}
+      <div
+        data-os-window-slot={window.id}
+        className="flex-1 min-h-0 relative overflow-hidden"
+      >
+        {children}
+      </div>
+    </div>
+  );
+}

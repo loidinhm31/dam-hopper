@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Source summary:** Repomix 1.18.0 compaction generated 2026-11-02 (`repomix-output.xml`; 3,939 files included, 10 scanner-excluded). The repository inventory reflects Phase 02 (P0a: Tauri desktop host and SSH-forwarding UI removal) of the AI Dev OS redesign, alongside the four completed phases of the lightweight session changes refactor.
+**Source summary:** Repomix 1.18.0 compaction generated 2026-11-02 (`repomix-output.xml`; 3,977 files included, 10 scanner-excluded). The repository inventory reflects Phase 02 (P0a: Tauri desktop host and SSH-forwarding UI removal) and the Phase 01 OS lifecycle prototype implementation checkpoint of the AI Dev OS redesign, alongside the four completed phases of the lightweight session changes refactor.
 
 ## Historical Repository Inventory (2026-10-05)
 
@@ -168,14 +168,48 @@ The Focused Git View increment landed safe native Git capabilities into the reta
 - **Safety & Boundary Invariants:** Four distinct working identities (`profileId`, `generation`, `targetWorktree`, `root`); dirty editor draft protection on checkout/discard/switch; active terminal PTY and unsaved draft blockers on worktree removal; safe history rewrites with CAS snapshot and signature removal consent; separate leased publication (`LeasedPublishController`) verifying exact remote OIDs without blind `--force`; read-only conflict and stopped operation handoff; secondary VCS root fetch/pull restrictions. Mutating requests across dropped connections trigger no automatic client retry/replay queue; client reconciles on refresh (`GitRefreshReason.RECONCILE`).
 - **Qualification Evidence & Open Gates:** Verified against independent Git oracle fixture (`git-workspace-fixture.mjs --self-test`, 0 failures) and current-server live smoke (`--smoke-current-server`, 0 failures). All 1,168 automated unit tests reported passing (937 shared JVM + 231 Android unit tests, 0 failures/errors/skips, with predecessor terminal regressions resolved in source; reported in `plans/reports/tester-261031-0029-c1-verification.md`). Cycle 3 code review scored 6/10 with 0 Critical issues remaining (`plans/reports/code-review-261031-0035-android-focused-git-view-cycle-3.md`). Connected device qualification truthfully retained as `BLOCKED_PENDING_DEVICE` (GATE-C) pending host platform-tools (`adb`), physical ARM64 hardware, API 29 coverage, and live emulator journeys.
 
+## AI Dev OS Lifecycle Prototype Phase 01 Implementation Checkpoint (2026-11-02)
+
+Phase 01 core implementation under [AI Dev OS Redesign Plan](../plans/261101-1738-ai-dev-os-redesign/plan.md) reached an implementation checkpoint accepted by the user following Cycle 6 code review (score 6/10). Task 1 (`generalize-tile-tree`) and Task 2 (`implement-os-lifecycle`) are completed in source; Task 3 (`integrate-os-prototype-route`) is blocked pending the isolated Phase 03 Usage-web embed handoff (`embed/dam-hopper-app.tsx` and test); Task 4 (`qualify-prototype-gate`) lifecycle acceptance gate remains open and carries forward critical issues C1 and C2, requiring an authorized source-remediation handoff before qualification. Phase 01 remains in-progress.
+
+| Subsystem / Module | Source Path | Architectural Invariants & Role |
+| --- | --- | --- |
+| **Canonical Tile Tree Model** | `packages/ui/src/types/tile-tree.ts` | Generic recursive binary `TileTree<T>` data model (`TileSplitNode<T>`, `TilePaneNode<T>`), dock targets (`pane-center`, `pane-edge`, `tab-index`), and `PersistedTileTree<T>`. |
+| **Generic Tile Layout & Wire Codec** | `packages/ui/src/lib/tile-tree.ts` | Generic split/pane mutations, validation (`isValidTileNode`), and bidirectional lossless wire codec between `LayoutNode` (`sessionIds`/`activeSessionId`) and `TileNode<string>` (`items`/`active`). Distinguishes `terminal-layout:v3:*` storage key from payload `{ version: 2, root }` without disk migration. |
+| **Terminal Layout Delegation** | `packages/ui/src/lib/terminal-layout-tree.ts` | Delegates terminal layout collection, pane creation, and resizing to generic tile tree primitives while preserving existing terminal caller APIs. |
+| **Generic Split Renderer** | `packages/ui/src/components/organisms/SplitLayout.tsx` | `GenericTileRenderer<T>` wraps `react-resizable-panels` with debounced resize propagation and recursive binary rendering. |
+| **OS Session Model & Types** | `packages/ui/src/os/types.ts` | `OsSessionV1` schema, `OsDesktop`, `OsWindow`, `WindowContext`, `FloatBounds`, `RestorePlacement`, `AppManifest`, and `ResourceClaimKey`. |
+| **Pure Window Operations** | `packages/ui/src/os/window-ops.ts` | Pure state transformations: open, close, focus, tile/float mode toggle, maximize/minimize/restore, desktop migration, tree docking, and viewport coordinate clamping (`clampFloatBounds`). |
+| **Zustand Window Store** | `packages/ui/src/os/window-store.ts` | `useWindowStore` manages active multi-desktop session state with single-transaction updates and automatic float-bounds reclamping on viewport resize. |
+| **Central Resource Registry** | `packages/ui/src/os/resource-registry.ts` | `ResourceRegistry` coordinates visual slot exclusivity via deterministic claim keys `${kind}/${profileId}/${generation}/${resourceId}[/inc:${inc}][/ep:${ep}]`. `useResourceClaim` hook provides reactive claim status; denied claims trigger focus-existing UI. Contract governs visible UI exclusivity, not transport network isolation. |
+| **Persistence & Placement Invariants** | `packages/ui/src/os/persistence.ts` | Debounced persistence to `dam-hopper:os:v1:session`, allowlisted app view state sanitization, corrupt-byte suspension guard (`autosaveSuspended`), and strict `validateOsSession` checks: exactly-one-placement (tiled in tree, float in list, minimized in neither), desktop ownership match, and placed desktop focus validation. |
+| **Input Arbiter** | `packages/ui/src/os/input-arbiter.ts` | Pure 5-tier keyboard precedence: (1) `cognito-blocked`, (2) `ime-passthrough` (composition, dead keys, AltGr), (3) `os-shortcut-handled` (`Ctrl+Alt+Escape` window cycle without PTY bytes), (4) `frame-focused-handled`, (5) `app-passthrough`. |
+| **Resource Keep-Alive Root** | `packages/ui/src/os/OsResourceHost.tsx` | Top-level host mounted above desktop/window render branches in `OsShell`, hosting `TerminalKeepAliveHost`, `MonacoKeepAliveHost`, and `OsBrowserKeepAliveHost` to keep resources alive across window placement and desktop switches. |
+| **Monaco Parking Registry** | `packages/ui/src/os/MonacoKeepAliveHost.tsx` | Manages off-screen parking container (`getMonacoParkingHost()`) and registry (`parkedMonacoRegistry`) for imperatively transferring Monaco DOM elements across window slots via `attachMonacoToSlot`. |
+| **Desktop Canvas & Window Frame** | `packages/ui/src/os/DesktopCanvas.tsx`, `WindowFrame.tsx` | `DesktopCanvas` renders active desktop tiled tree and floating windows; `WindowFrame` provides draggable title bars, window controls, and keyboard capture (`data-os-window-slot`). |
+| **Application Adapters** | `packages/ui/src/os/apps/` | `TerminalsApp` (terminal host attachment, disconnected banner), `EditorApp` (owner-bound tab key, Monaco slot attachment), `BrowserApp` (iframe slot geometry registration). |
+| **Component Browser Tests** | `packages/ui/browser-tests/os-lifecycle.browser.tsx` | 7 headless Chromium tests validating shell mount, claim acquisition, duplicate claim rejection, Cognito input blocking, multi-window pane tabs, desktop switching, and live preview iframe DOM preservation. |
+
+### Qualification Status and Carryovers
+- **Cycle 6 Tester Report (`plans/reports/tester-261102-0801-phase-01-cycle-6-validation.md`):** 52 targeted unit tests passed across 7 files; 7 Chromium component tests passed; 3,128 UI unit tests passed across 335 files; clean TypeScript build (`tsc -p tsconfig.json`). These verify local unit and component behavior, not mounted `/os` journey acceptance.
+- **Carried-Forward Review Findings (Reviewer Cycle 6, Score 6/10):**
+  - **C1 (Editor Save Generation Fencing & File Loading):** Monaco save handler constructs `{ profileId, generation: 1 }` instead of capturing current connected generation, risking plaintext writes on generation mismatch; save completion can falsely mark newer text saved; and W1 identifies fabricated empty file state instead of entering owner-bound load flow.
+  - **C2 (Terminal Owner Retirement & Input Isolation):** Removing/retiring a connection can allow `TerminalPanel` to fall back to ambient transport binding (`ambient:<generation>`), risking cross-profile terminal access if raw IDs match; `pointer-events: none` suppresses pointer targeting but does not isolate keyboard/paste on an already-focused xterm instance.
+  - **W2 (Monaco Parking Reparenting):** Moving the React-rendered Monaco host wrapper into disposable window slots risks DOM ownership and cleanup exceptions on unmount; requires an imperatively owned attachment boundary.
+  - **W3 (Real Resource & Controller Integration Open):** Resource adapters use placeholder session IDs, lack changed-incarnation recovery, and construct raw per-window preview iframes rather than integrating the planned production resource controllers.
+- **Mandatory Lifecycle Acceptance Gate (Task 4):** Open. Requires real Playwright E2E journey at `/os` demonstrating that placement-only tile, float, maximize, minimize, and desktop moves preserve the exact same xterm instance with zero additional `terminal:attach` calls and zero buffer replay/reset operations, alongside persistent Monaco undo/model state and preview DOM identity.
+
 ## Shared UI Map
 
 `packages/ui/` exports the shared application via `packages/ui/src/embed/dam-hopper-app.tsx` (`packages/ui/src/index.ts` does not exist).
-- **Components (`packages/ui/src/components/`):** 238 files, ~53k LOC across atoms, molecules, organisms, templates, and pages.
+- **Components (`packages/ui/src/components/`):** 238 files, ~53k LOC across atoms, molecules, organisms, templates, and pages (including `GenericTileRenderer` in `SplitLayout.tsx`).
+- **OS Subsystem (`packages/ui/src/os/`):** 17 files, ~2.7k LOC implementing OS shell, desktop canvas, window frame, window store, resource registry, persistence, input arbiter, Monaco keep-alive host, and app adapters.
 - **API & Transports (`packages/ui/src/api/`):** 26 files, ~18.4k LOC managing ownership tuples, connection registry, WebSocket transport, React Query hooks, and SSE parser.
 - **Hooks (`packages/ui/src/hooks/`):** 51 files, ~13k LOC covering Git operations, terminal managers, cognitive privacy guards, and SSE streams.
-- **Core Library (`packages/ui/src/lib/`):** 120 files, ~16k LOC implementing OPAQUE PAKE, AES-256-GCM crypto, terminal registries, and diagnostics.
+- **Core Library (`packages/ui/src/lib/`):** 122 files, ~17k LOC implementing generic tile tree algorithms, terminal wire codecs, OPAQUE PAKE, AES-256-GCM crypto, terminal registries, and diagnostics.
 - **State Stores (`packages/ui/src/stores/`):** 11 files, ~4k LOC managing editor tabs, explorer expansion, Git history selection, and privacy mode.
+- **Types (`packages/ui/src/types/`):** Generic `TileTree<T>` data model (`tile-tree.ts`) and terminal layout definitions.
+- **Browser Component Regressions (`packages/ui/browser-tests/`):** Headless Chromium suites, including `os-lifecycle.browser.tsx` (7 tests).
 - **Design Guidelines:** Defined in `packages/ui/src/index.css` and `docs/frontend-components/platform-integrations.md` (JetBrains Mono, dark slate palette, Radix UI primitives with `@radix-ui/react-compose-refs` React 19 patch).
 
 ## Workflow Tracking
@@ -214,5 +248,6 @@ DamHopper enforces a **4-tier testing architecture** (see [Testing Guide](./test
 Deployment artifacts are located in `deploy/release/` and documented in the [Installation and Deployment Guide](./deployment-guide.md).
 
 ## Codebase Compaction Snapshot
+Repomix compaction artifact generated at `./repomix-output.xml` (3,977 files, 9,667,606 tokens packed, 42,029,060 chars, excluding dot-folders, build artifacts, lockfiles, and 10 security-flagged test/config assets as of 2026-11-02). Reflects Phase 02 (P0a) removal of `apps/native/` and desktop SSH forwarding, alongside the Phase 01 OS lifecycle architecture and components.
 
-Repomix compaction artifact generated at `./repomix-output.xml` (3,939 files, 9,589,268 tokens packed, 41,712,484 chars, excluding dot-folders, build artifacts, lockfiles, and 10 security-flagged test/config assets as of 2026-11-02). Reflects complete removal of `apps/native/` and desktop SSH forwarding UI modules under Phase 02 (P0a).
+*Note on Compaction Timing:* The Repomix metrics above reflect the pre-documentation snapshot generated at the start of this documentation update pass.

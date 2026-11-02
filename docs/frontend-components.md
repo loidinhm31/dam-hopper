@@ -14,6 +14,7 @@ Design guidelines, color tokens, and typography are defined in [Platform Integra
 - [Privacy and agent notifications](./frontend-components/notifications-and-privacy.md) — Cognito Privacy Mode, agent status notifications, and terminal title ordinals.
 - [Workflow Context Surface](./workflow-context-surface.md) — Responsive workflow context UI, component ownership, and interaction contracts.
 - [Session Changes Review Components](#session-changes-review-components) — Read-only Monaco review modal, keyboard isolation, and changed files list.
+- [AI Dev OS Lifecycle Components](#ai-dev-os-lifecycle-components) — Multi-window OS shell, desktop canvas, window frame, resource keep-alive host, and generic tile renderer.
 
 ## Legacy Section Links
 
@@ -45,3 +46,18 @@ See [Terminal and IDE components](./frontend-components/terminal-and-ide.md#pane
   - **Desktop TabBar (`packages/ui/src/components/organisms/TabBar.tsx`):** Action button in active terminal tab bar, gated by `useSessionChangesEnabled(terminalOwner)`.
   - **Mobile Accessory Bar (`packages/ui/src/components/organisms/MobileTerminalAccessoryBar.tsx` / `TerminalAccessoryControls.tsx`):** 44px touch-accessible action button, gated by `useSessionChangesEnabled(terminalOwner)`.
   - **Runtime Header (`packages/ui/src/components/organisms/ActiveTerminalRuntimeDisplay.tsx`):** Header action button in Runtime terminal presentation, gated by `useSessionChangesEnabled(terminalOwner)`.
+
+## AI Dev OS Lifecycle Components
+
+Phase 01 of the AI Dev OS redesign introduces modular windowing and resource management components (`packages/ui/src/os/`) to provide multi-window, multi-desktop operations while preserving live resource instances across layout adjustments:
+
+- **`OsShell` (`packages/ui/src/os/OsShell.tsx`):** Root shell container that renders the top header bar, application launchers (+ Terminals, + Editor, + Browser), desktop switcher tabs, debounced session persistence to `dam-hopper:os:v1:session`, and operator `PersistenceNotice` alerts. Wraps desktop rendering in `OsResourceHost`.
+- **`DesktopCanvas` (`packages/ui/src/os/DesktopCanvas.tsx`):** Container for the active desktop. Renders tiled window trees via `GenericTileRenderer` and floating windows via `WindowFrame`. Automatically tracks viewport dimensions via `ResizeObserver` and reclamps floating window coordinates on resize.
+- **`WindowFrame` (`packages/ui/src/os/WindowFrame.tsx`):** Frame chrome providing drag handles for floating windows, maximize/minimize/restore controls, tile/float mode toggling, desktop migration dropdowns, and keyboard capture (`data-os-window-slot`).
+- **`OsResourceHost` (`packages/ui/src/os/OsResourceHost.tsx`):** Top-level keep-alive boundary mounted above desktop and window render trees. Hosts `TerminalKeepAliveHost`, `MonacoKeepAliveHost`, and `OsBrowserKeepAliveHost`, designed to keep xterm instances, Monaco editor DOM nodes, and browser iframe previews mounted across window docking, floating, and desktop switches (full lifecycle preservation and zero attach/replay/reset remain an open qualification gate pending Task 4).
+- **`MonacoKeepAliveHost` (`packages/ui/src/os/MonacoKeepAliveHost.tsx`):** Off-screen parking container (`getMonacoParkingHost()`) and DOM registry (`parkedMonacoRegistry`) supporting imperative attachment (`attachMonacoToSlot`) and parking of Monaco editor elements across window movements.
+- **`GenericTileRenderer` (`packages/ui/src/components/organisms/SplitLayout.tsx`):** Generic recursive binary split renderer parameterized over arbitrary pane item type `T`. Coordinates `react-resizable-panels` with debounced resize propagation.
+- **Application Adapters (`packages/ui/src/os/apps/`):**
+  - `TerminalsApp`: Terminal slot attachment via `attachTerminalsToHost`, visible slot claim via `useResourceClaim`, disconnected profile banner, and denied-claim fallback overlay.
+  - `EditorApp`: Owner-qualified tab key derivation (`editorFileTabKey`), Monaco slot attachment via `attachMonacoToSlot`, and claim conflict resolution.
+  - `BrowserApp`: Coordinates iframe slot geometry and visibility with `OsResourceHost` via slot registration (`registerBrowserSlot`, `updateBrowserSlot`).

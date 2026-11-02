@@ -1,9 +1,9 @@
 # Phase 01: P1 — Lifecycle prototype first
 
-Estimate: 64h; implementation status: **pending**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
+Estimate: 64h; implementation status: **in-progress**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
 
 ## Context / objective
-Priority P1; pending. PROTOTYPE FIRST: Phase01 core starts immediately after `remove-native-ui` shared-host pruning, concurrently with native build cleanup, Usage server/web/Android/docs and P0 release. No P0 docs/manual/version/publication prerequisite. Only route-integration subtask waits for Usage web's two shared embed files. URL-only `/os` ships without old navigation/build flag; old UI default until08. [Design](../reports/brainstorm-261101-1738-ai-dev-os-redesign.md), [ownership](ownership.md).
+Priority P1; in-progress (Tasks 1 & 2 checkpoint accepted by user; Tasks 3 & 4 carried). PROTOTYPE FIRST: Phase01 core starts immediately after `remove-native-ui` shared-host pruning, concurrently with native build cleanup, Usage server/web/Android/docs and P0 release. No P0 docs/manual/version/publication prerequisite. Only route-integration subtask waits for Usage web's two shared embed files. URL-only `/os` ships without old navigation/build flag; old UI default until08. [Design](../reports/brainstorm-261101-1738-ai-dev-os-redesign.md), [ownership](ownership.md).
 
 ## Architecture and requirements
 - Generalize existing recursive tree and renderer, not a parallel dockview/layout implementation. Canonical `TileTree<T>` uses pane `items`/`active`; terminal codec preserves every `terminal-layout:v3:*` key and its existing `{version:2,root}` payload with `sessionIds`/`activeSessionId`. Key version and payload version differ today; neither changes. Preserve node IDs, ratios, active tabs and owner-qualified terminal routing IDs.
@@ -40,6 +40,24 @@ Priority P1; pending. PROTOTYPE FIRST: Phase01 core starts immediately after `re
 ## File actions / success
 Task arrays below are the literal ownership authority. New `os/` files are created; listed existing terminal/layout/editor/host/route files modified; nothing deleted. AC5/6/9/11 begin here; AC4 remains `/os` only until cutover. Prototype gate is mandatory before full chrome/app work; failing lifecycle evidence blocks progression, not papered over by screenshot/component success.
 
+### Verification Record — Task 2 Implementation Checkpoint (2026-11-02)
+- **Status:** Task 2 administratively closed / implementation checkpoint accepted by user; technical acceptance incomplete. Overall Phase 01 remains **in-progress**. Technical lifecycle acceptance gate not achieved.
+- **Task Dispositions:**
+  - `generalize-tile-tree` (Task 1): **Completed**. Generic `TileTree<T>` data model, pure layout ops, and lossless wire codec for `terminal-layout:v3:*` delivered and regression tested.
+  - `implement-os-lifecycle` (Task 2): **Administratively closed / Checkpoint accepted by user** following Cycle 6 review (score 6/10; technical acceptance incomplete). Core OS types, pure window operations, Zustand window-store, app registry, central `ResourceRegistry` with single-visible-slot enforcement, persistence validation, input arbiter, `OsShell`, `DesktopCanvas`, `WindowFrame`, `MonacoKeepAliveHost`, `OsResourceHost`, and three app adapters (`TerminalsApp`, `EditorApp`, `BrowserApp`) implemented in source.
+  - `integrate-os-prototype-route` (Task 3): **Blocked** pending Phase 03 `retire-usage-web` two-file handoff (`embed/dam-hopper-app.tsx` and test).
+  - `qualify-prototype-gate` (Task 4): **Carried forward**; requires real Playwright E2E journey at `/os` asserting unchanged resource instance identities and zero attach/replay/reset deltas across placements.
+- **Cycle 6 Validation Evidence (recorded in `tester-261102-0801-phase-01-cycle-6-validation.md`):**
+  - 52 targeted OS/layout tests passed (`packages/ui/src/os/*`, `packages/ui/src/lib/tile-tree.test.ts`, etc.).
+  - 7 Chromium component browser tests passed (`packages/ui/browser-tests/os-lifecycle.browser.tsx`).
+  - 3,128 full UI unit tests passed (336 test files).
+  - TypeScript compilation/typecheck (`tsc -p tsconfig.json`) passed with exit code 0.
+- **Cycle 6 Code Review & Carried Issues (`code-review-261102-0810-phase-01-cycle-6.md`):**
+  - Score: 6/10. Reviewer reported H4 (destination pane validation) and H5 (slot-marker alignment) structurally addressed without dedicated runtime regressions.
+  - **C1 Carried Forward:** Editor save generation fencing & potential plaintext writes. Encryption policy lookup hard-codes generation 1 (risking silent plaintext writes when encryption required), asynchronous save completion clears newer edits typed during upload, and owner-bound file loading flow (W1) fabricates empty tab state.
+  - **C2 Carried Forward:** Terminal owner retirement & potential cross-profile access. Missing/retired profile connections fall back to ambient transport (`ambient:<generation>`), risking cross-profile terminal read/write across equal raw terminal IDs; CSS pointer suppression does not isolate keyboard/paste on retained-focus xterm instances.
+  - **W2–W4 Carried Forward:** Monaco DOM reparenting cleanup during unmount, real resource controller integration, and rendered-slot/shortcut-capture input regressions.
+  - **Source Remediation Ownership Note:** Because Task 4 (`qualify-prototype-gate`) allowed writable paths are limited to test fixtures (`os-lifecycle.browser.tsx`, `e2e/os-lifecycle`), source remediation of C1/C2 and W1–W4 in OS/editor/terminal components requires an explicitly authorized source-remediation handoff prior to lifecycle gate qualification.
 ## Risks / security / rollback
 DOM lifetime is highest risk; live-identity gate precedes polish. Request generations must not destroy parked resources/reuse capabilities; stable iframe parent if needed. Roll back prototype-only route/modules/extraction without reverting P0 removal work or killing sessions. P0 and prototype use source-pinned isolated qualification artifacts during concurrent work. Phase04 waits prototype gate only; Phase08 root cutover also requires independent P0 release receipt.
 
@@ -269,7 +287,7 @@ Exactly one authored fence; no execution state/hydration, completion or test rec
 ]
 ```
 
-- [ ] <!-- evcrate-task:generalize-tile-tree --> Generalize shared tiling primitives without terminal JSON drift
-- [ ] <!-- evcrate-task:implement-os-lifecycle --> Implement three-app OS lifecycle and parked resource hosts
+- [x] <!-- evcrate-task:generalize-tile-tree --> Generalize shared tiling primitives without terminal JSON drift
+- [x] <!-- evcrate-task:implement-os-lifecycle --> Implement three-app OS lifecycle and parked resource hosts
 - [ ] <!-- evcrate-task:integrate-os-prototype-route --> Integrate hidden OS route after exact two-file Usage web handoff
 - [ ] <!-- evcrate-task:qualify-prototype-gate --> Author and exercise real prototype lifecycle acceptance
