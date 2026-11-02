@@ -39,6 +39,9 @@ export type IntentAction =
   | "settings:devices"
   | "system:monitor"
   | "monitor:alert"
+  | "agent-hub:open"
+  | "agent:focus"
+  | "recipes:open"
   | "recipes:launch";
 
 export interface IntentPayloadMap {
@@ -217,6 +220,19 @@ export interface IntentPayloadMap {
   "monitor:alert": {
     profileId: string;
     incidentId: string;
+  };
+  "agent-hub:open": {
+    profileId?: string;
+  };
+  "agent:focus": {
+    profileId: string;
+    terminalId: string;
+    incarnation?: number;
+    agentSessionId?: string;
+  };
+  "recipes:open": {
+    profileId?: string;
+    recipeId?: string;
   };
   "recipes:launch": {
     profileId: string;

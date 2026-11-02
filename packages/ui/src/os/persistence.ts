@@ -105,6 +105,22 @@ function sanitizeAppState(
       projected.activeTab = rawState.activeTab;
     return Object.keys(projected).length > 0 ? projected : undefined;
   }
+  if (appId === "agent-hub") {
+    const projected: Record<string, unknown> = {};
+    if (typeof rawState.urgencyFilter === "string")
+      projected.urgencyFilter = rawState.urgencyFilter;
+    if (typeof rawState.profileFilter === "string")
+      projected.profileFilter = rawState.profileFilter;
+    return Object.keys(projected).length > 0 ? projected : undefined;
+  }
+  if (appId === "recipes") {
+    const projected: Record<string, unknown> = {};
+    if (typeof rawState.selectedRecipeId === "string")
+      projected.selectedRecipeId = rawState.selectedRecipeId;
+    if (typeof rawState.activeTab === "string")
+      projected.activeTab = rawState.activeTab;
+    return Object.keys(projected).length > 0 ? projected : undefined;
+  }
   return undefined;
 }
 

@@ -1,0 +1,389 @@
+import { describe, expect, it } from "vitest";
+import type { ConnectionSnapshot } from "@/api/connections.js";
+import type { TerminalAgentStatusRow } from "@/api/agent-status-types.js";
+import { terminalKey, type ConnectionRef, type TerminalRef } from "@/api/ownership.js";
+import type { DisplayTabEntry, MountedSession } from "@/components/organisms/TerminalTabBar.js";
+import type { TraditionalTerminalProjectGroup } from "@/lib/traditional-terminal-projects.js";
+import type { AgentStatusProfilesView } from "@/lib/traditional-terminal-agents.js";
+import {
+  buildAgentHubItems,
+  classifyAgentUrgency,
+  computeAgentHubSummary,
+  filterAgentHubItems,
+  getUrgencyRank,
+  validateAgentHubJump,
+  type AgentHubItem,
+} from "./agent-hub.js";
+import type { OsWindow } from "./types.js";
+
+type ProfileView = AgentStatusProfilesView extends ReadonlyMap<string, infer Profile>
+  ? Profile
+  : never;
+
+type Group = TraditionalTerminalProjectGroup<DisplayTabEntry>;
+
+interface TestFixture {
+  group: Group;
+  tab: DisplayTabEntry;
+  mounted: MountedSession;
+  status: TerminalAgentStatusRow;
+  profile: ProfileView;
+  profiles: Map<string, ProfileView>;
+  connections: Map<string, ConnectionSnapshot>;
+  profileLabels: Map<string, string>;
+}
+
+function makeStatus(patch: Partial<TerminalAgentStatusRow> = {}): TerminalAgentStatusRow {
+  return {
+    id: "term-1",
+    incarnation: 1,
+    agentKind: "omp",
+    agentSessionId: "agent-session-1",
+    reporterEpoch: 1,
+    state: "idle",
+    source: "lifecycle",
+    attentionRevision: 0,
+    ...patch,
+  };
+}
+
+function createFixture(
+  patch: Partial<TerminalAgentStatusRow> = {},
+  profileId = "server-a",
+  termId = "term-1",
+): TestFixture {
+  const status = makeStatus({ id: termId, ...patch });
+  const terminalRef: TerminalRef = { profileId, id: status.id };
+  const tab: DisplayTabEntry = {
+    sessionId: terminalKey(terminalRef),
+    terminalRef,
+    profileId,
+    label: "Terminal Tab",
+    title: { baseLabel: "Terminal Tab", ordinal: 1, fullText: `Terminal ${termId}` },
+    session: {
+      id: status.id,
+      incarnation: status.incarnation,
+      alive: true,
+      command: "bash",
+      cwd: "/home/project",
+      type: "shell",
+      startedAt: 1000,
+    },
+  };
+  const mounted: MountedSession = {
+    sessionId: tab.sessionId,
+    terminalRef,
+    profileId,
+  };
+  const group: Group = {
+    id: `group-${profileId}`,
+    label: `Project on ${profileId}`,
+    kind: "project",
+    projectRef: { profileId, project: "main-project" },
+    profileId,
+    mountedSessions: [mounted],
+    terminalTabs: [tab],
+  };
+  const owner: ConnectionRef = { profileId, generation: 1 };
+  const profile: ProfileView = {
+    owner,
+    epoch: 1,
+    revision: 1,
+    availability: "ready",
+    rows: new Map([[status.id, status]]),
+    cursors: new Map(),
+  };
+  const connection: ConnectionSnapshot = {
+    owner,
+    status: "connected",
+    intent: true,
+    serverUrl: "http://localhost:4801",
+    error: null,
+  };
+
+  return {
+    group,
+    tab,
+    mounted,
+    status,
+    profile,
+    profiles: new Map([[profileId, profile]]),
+    connections: new Map([[profileId, connection]]),
+    profileLabels: new Map([[profileId, profileId.toUpperCase()]]),
+  };
+}
+
+describe("agent-hub", () => {
+  describe("classifyAgentUrgency and ranking", () => {
+    it("preserves strict urgency order: Needs attention -> Working -> Idle -> Unavailable", () => {
+      const pAttention = {
+        label: "Needs attention" as const,
+        reasonLabel: "Approval" as const,
+        outcomeHint: null,
+        sourceLabel: "Hook observation" as const,
+        coverageHint: null,
+      };
+      const pWorking = {
+        label: "Working" as const,
+        reasonLabel: null,
+        outcomeHint: null,
+        sourceLabel: "Lifecycle observation" as const,
+        coverageHint: null,
+      };
+      const pIdle = {
+        label: "Idle" as const,
+        reasonLabel: null,
+        outcomeHint: "Done (turn ended)" as const,
+        sourceLabel: "Hook observation" as const,
+        coverageHint: null,
+      };
+      const pUnknown = {
+        label: "Unknown" as const,
+        reasonLabel: null,
+        outcomeHint: null,
+        sourceLabel: "Lifecycle observation" as const,
+        coverageHint: null,
+      };
+
+      expect(classifyAgentUrgency(pAttention, "connected")).toBe("needs-attention");
+      expect(classifyAgentUrgency(pWorking, "connected")).toBe("working");
+      expect(classifyAgentUrgency(pIdle, "connected")).toBe("idle");
+      expect(classifyAgentUrgency(pUnknown, "connected")).toBe("unavailable");
+
+      // Disconnected overrides presentation to unavailable
+      expect(classifyAgentUrgency(pAttention, "disconnected")).toBe("unavailable");
+
+      // Verify strict ranking order
+      expect(getUrgencyRank("needs-attention")).toBeLessThan(getUrgencyRank("working"));
+      expect(getUrgencyRank("working")).toBeLessThan(getUrgencyRank("idle"));
+      expect(getUrgencyRank("idle")).toBeLessThan(getUrgencyRank("unavailable"));
+    });
+  });
+
+  describe("buildAgentHubItems multi-profile fan-in", () => {
+    it("fans in >=2 profiles with urgent items first and deterministic sorting", () => {
+      const fixA = createFixture({ state: "idle" }, "server-a", "term-a1");
+      const fixB = createFixture(
+        { state: "blocked", reason: "approval", agentKind: "codex" },
+        "server-b",
+        "term-b1",
+      );
+
+      const combinedGroups = [fixA.group, fixB.group];
+      const combinedProfiles = new Map([...fixA.profiles, ...fixB.profiles]);
+      const combinedConnections = new Map([...fixA.connections, ...fixB.connections]);
+      const combinedLabels = new Map([...fixA.profileLabels, ...fixB.profileLabels]);
+
+      const items = buildAgentHubItems({
+        groups: combinedGroups,
+        profiles: combinedProfiles,
+        connections: combinedConnections,
+        profileLabels: combinedLabels,
+      });
+
+      expect(items).toHaveLength(2);
+      // Needs attention (server-b) must sort ahead of Idle (server-a)
+      expect(items[0].profileId).toBe("server-b");
+      expect(items[0].urgency).toBe("needs-attention");
+      expect(items[0].harnessLabel).toBe("Codex");
+
+      expect(items[1].profileId).toBe("server-a");
+      expect(items[1].urgency).toBe("idle");
+      expect(items[1].harnessLabel).toBe("OMP");
+    });
+
+    it("honestly marks disconnected or generation-stale profile items as unavailable", () => {
+      const fix = createFixture({ state: "working" }, "server-a", "term-a1");
+      // Simulate disconnected server
+      fix.connections.set("server-a", {
+        ...fix.connections.get("server-a")!,
+        status: "disconnected",
+      });
+
+      const items = buildAgentHubItems({
+        groups: [fix.group],
+        profiles: fix.profiles,
+        connections: fix.connections,
+        profileLabels: fix.profileLabels,
+      });
+
+      expect(items).toHaveLength(1);
+      expect(items[0].urgency).toBe("unavailable");
+      expect(items[0].isConnected).toBe(false);
+      expect(items[0].presentation.label).toBe("Unavailable");
+    });
+  });
+
+  describe("computeAgentHubSummary and filtering", () => {
+    it("computes accurate summary counts across urgency groups", () => {
+      const fixA = createFixture({ state: "idle" }, "server-a", "term-a1");
+      const fixB = createFixture(
+        { state: "blocked", reason: "question" },
+        "server-b",
+        "term-b1",
+      );
+      const items = buildAgentHubItems({
+        groups: [fixA.group, fixB.group],
+        profiles: new Map([...fixA.profiles, ...fixB.profiles]),
+        connections: new Map([...fixA.connections, ...fixB.connections]),
+        profileLabels: new Map([...fixA.profileLabels, ...fixB.profileLabels]),
+      });
+
+      const summary = computeAgentHubSummary(items, new Map([...fixA.connections, ...fixB.connections]));
+      expect(summary.total).toBe(2);
+      expect(summary.needsAttention).toBe(1);
+      expect(summary.working).toBe(0);
+      expect(summary.idle).toBe(1);
+      expect(summary.unavailable).toBe(0);
+      expect(summary.connectedProfiles).toBe(2);
+    });
+
+    it("filters items by urgency, profile, and search query", () => {
+      const fixA = createFixture({ state: "idle" }, "server-a", "term-a1");
+      const fixB = createFixture(
+        { state: "blocked", reason: "question" },
+        "server-b",
+        "term-b1",
+      );
+      const items = buildAgentHubItems({
+        groups: [fixA.group, fixB.group],
+        profiles: new Map([...fixA.profiles, ...fixB.profiles]),
+        connections: new Map([...fixA.connections, ...fixB.connections]),
+        profileLabels: new Map([...fixA.profileLabels, ...fixB.profileLabels]),
+      });
+
+      const filteredByUrgency = filterAgentHubItems(items, { urgency: "needs-attention" });
+      expect(filteredByUrgency).toHaveLength(1);
+      expect(filteredByUrgency[0].profileId).toBe("server-b");
+
+      const filteredByProfile = filterAgentHubItems(items, { profileId: "server-a" });
+      expect(filteredByProfile).toHaveLength(1);
+      expect(filteredByProfile[0].profileId).toBe("server-a");
+
+      const filteredByQuery = filterAgentHubItems(items, { searchQuery: "term-b1" });
+      expect(filteredByQuery).toHaveLength(1);
+      expect(filteredByQuery[0].terminalRef.id).toBe("term-b1");
+    });
+  });
+
+  describe("validateAgentHubJump", () => {
+    const mockItem: AgentHubItem = {
+      key: "server-a::term-1::1",
+      sessionId: "server-a::term-1",
+      terminalRef: { profileId: "server-a", id: "term-1" },
+      incarnation: 1,
+      groupId: "group-1",
+      projectLabel: "Project",
+      profileId: "server-a",
+      profileLabel: "SERVER-A",
+      terminalTitle: "Terminal 1",
+      harnessLabel: "OMP",
+      statusOwner: { profileId: "server-a", generation: 1 },
+      availability: "ready",
+      status: makeStatus(),
+      presentation: {
+        label: "Idle",
+        reasonLabel: null,
+        outcomeHint: null,
+        sourceLabel: "Lifecycle observation",
+        coverageHint: null,
+      },
+      urgency: "idle",
+      connectionStatus: "connected",
+      isConnected: true,
+    };
+
+    it("approves jump when connection is connected and generation matches", () => {
+      const connections = new Map<string, ConnectionSnapshot>([
+        [
+          "server-a",
+          {
+            owner: { profileId: "server-a", generation: 1 },
+            status: "connected",
+            intent: true,
+            serverUrl: "http://localhost:4801",
+            error: null,
+          },
+        ],
+      ]);
+      const windows: Record<string, OsWindow> = {
+        "win-1": {
+          id: "win-1",
+          appId: "terminals",
+          title: "Terminals",
+          ctx: { profileId: "server-a" },
+          mode: "tile",
+          desktopId: "desktop-1",
+          maximized: false,
+          minimized: false,
+          appState: { sessionId: "server-a::term-1" },
+        },
+      };
+
+      const result = validateAgentHubJump(mockItem, connections, windows);
+      expect(result.valid).toBe(true);
+      expect(result.existingWindowId).toBe("win-1");
+      expect(result.targetDesktopId).toBe("desktop-1");
+    });
+
+    it("rejects jump if connection status is disconnected", () => {
+      const connections = new Map<string, ConnectionSnapshot>([
+        [
+          "server-a",
+          {
+            owner: { profileId: "server-a", generation: 1 },
+            status: "disconnected",
+            intent: true,
+            serverUrl: "http://localhost:4801",
+            error: null,
+          },
+        ],
+      ]);
+
+      const result = validateAgentHubJump(mockItem, connections, {});
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("disconnected or unavailable");
+    });
+
+    it("rejects jump if connection generation changed (retired owner)", () => {
+      const connections = new Map<string, ConnectionSnapshot>([
+        [
+          "server-a",
+          {
+            owner: { profileId: "server-a", generation: 2 }, // changed generation!
+            status: "connected",
+            intent: true,
+            serverUrl: "http://localhost:4801",
+            error: null,
+          },
+        ],
+      ]);
+
+      const result = validateAgentHubJump(mockItem, connections, {});
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("generation changed");
+    });
+
+    it("rejects jump if terminal session is dead on host", () => {
+      const connections = new Map<string, ConnectionSnapshot>([
+        [
+          "server-a",
+          {
+            owner: { profileId: "server-a", generation: 1 },
+            status: "connected",
+            intent: true,
+            serverUrl: "http://localhost:4801",
+            error: null,
+          },
+        ],
+      ]);
+      const aliveMap = new Map<string, Set<string>>([
+        ["server-a", new Set(["term-999"])], // term-1 is NOT alive!
+      ]);
+
+      const result = validateAgentHubJump(mockItem, connections, {}, aliveMap);
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("no longer alive on host");
+    });
+  });
+});

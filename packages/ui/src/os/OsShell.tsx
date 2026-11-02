@@ -18,6 +18,8 @@ import { ProjectInfoApp } from "./apps/ProjectInfoApp.js";
 import { AgentStoreApp } from "./apps/AgentStoreApp.js";
 import { SettingsApp } from "./apps/SettingsApp.js";
 import { SystemMonitorApp } from "./apps/SystemMonitorApp.js";
+import { AgentHubApp } from "./apps/AgentHubApp.js";
+import { RecipesApp } from "./apps/RecipesApp.js";
 import {
   APP_MANIFESTS,
   findExistingWindowForApp,
@@ -35,6 +37,7 @@ import { NotificationCenter } from "./NotificationCenter.js";
 import { useOsNotificationStore, ingestIpcActivityEvent } from "./notifications.js";
 import { useIpcEvent } from "@/hooks/use-sse-events.js";
 import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.js";
+import { useAgentStatusStore } from "@/stores/agent-status.js";
 import { arbitrateKeyboardEvent } from "./input-arbiter.js";
 import "./os.css";
 import {
@@ -42,6 +45,7 @@ import {
   saveOsSession,
   type PersistenceNotice,
 } from "./persistence.js";
+import { recoverDurableLaunchRecordsOnStartup } from "./recipes/launch-records.js";
 import { generateUUID } from "@/lib/utils.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
@@ -81,6 +85,7 @@ export function OsShell() {
 
   // Initial load
   useEffect(() => {
+    recoverDurableLaunchRecordsOnStartup();
     const loaded = loadOsSession(undefined, setNotice);
     setSession(loaded);
   }, [setSession]);
@@ -889,6 +894,181 @@ export function OsShell() {
         );
         return { status: "handled", targetWindowId: id };
       }),
+      registerIntentHandler("agent-hub:open", (intent) => {
+        const targetCtx: WindowContext = {
+          profileId: intent.payload.profileId ?? "",
+        };
+        const currentWindows = useWindowStore.getState().session.windows;
+        const existing = findExistingWindowForApp(
+          currentWindows,
+          "agent-hub",
+          targetCtx,
+        );
+        if (existing) {
+          if (existing.desktopId !== useWindowStore.getState().session.activeDesktopId) {
+            switchDesktop(existing.desktopId);
+          }
+          if (existing.minimized) restoreWindow(existing.id);
+          focusWindow(existing.id);
+          return { status: "handled", targetWindowId: existing.id };
+        }
+        const id = `agent-hub-${generateUUID().slice(0, 8)}`;
+        const activeDesktopId = useWindowStore.getState().session.activeDesktopId;
+        openWindow(
+          {
+            id,
+            appId: "agent-hub",
+            title: "Agent Hub",
+            ctx: targetCtx,
+            mode: "tile",
+          },
+          activeDesktopId,
+        );
+        return { status: "handled", targetWindowId: id };
+      }),
+      registerIntentHandler("agent:focus", (intent) => {
+        const targetSnap = getConnectionSnapshot(intent.payload.profileId);
+        if (!targetSnap || targetSnap.status !== "connected") {
+          return {
+            status: "unhandled",
+            reason: `Target profile "${intent.payload.profileId}" is disconnected`,
+          };
+        }
+        const existingTerminal = getTerminal({
+          profileId: intent.payload.profileId,
+          id: intent.payload.terminalId,
+        });
+        if (!existingTerminal) {
+          return {
+            status: "unhandled",
+            reason: `Terminal session "${intent.payload.terminalId}" is not live in registry`,
+          };
+        }
+        if (intent.payload.incarnation !== undefined) {
+          const agentStatus = useAgentStatusStore
+            .getState()
+            .profiles.get(intent.payload.profileId)
+            ?.rows.get(intent.payload.terminalId);
+          if (
+            agentStatus &&
+            agentStatus.incarnation !== undefined &&
+            agentStatus.incarnation !== intent.payload.incarnation
+          ) {
+            return {
+              status: "unhandled",
+              reason: `Terminal session "${intent.payload.terminalId}" incarnation changed (expected ${intent.payload.incarnation}, live ${agentStatus.incarnation})`,
+            };
+          }
+        }
+        const windowList = Object.values(useWindowStore.getState().session.windows);
+        const existing = windowList.find(
+          (w) =>
+            w.appId === "terminals" &&
+            w.ctx.profileId === intent.payload.profileId &&
+            ((w.appState?.sessionId as string | undefined) === intent.payload.terminalId ||
+              (w.appState?.terminalId as string | undefined) === intent.payload.terminalId),
+        );
+        if (existing) {
+          if (existing.desktopId !== useWindowStore.getState().session.activeDesktopId) {
+            switchDesktop(existing.desktopId);
+          }
+          if (existing.minimized) restoreWindow(existing.id);
+          focusWindow(existing.id);
+          return { status: "handled", targetWindowId: existing.id };
+        }
+        const id = `terminals-${generateUUID().slice(0, 8)}`;
+        openWindow(
+          {
+            id,
+            appId: "terminals",
+            title: `Terminal (${intent.payload.terminalId})`,
+            ctx: { profileId: intent.payload.profileId },
+            mode: "tile",
+            appState: {
+              sessionId: intent.payload.terminalId,
+              terminalId: intent.payload.terminalId,
+            },
+          },
+          useWindowStore.getState().session.activeDesktopId,
+        );
+        return { status: "handled", targetWindowId: id };
+      }),
+      registerIntentHandler("recipes:open", (intent) => {
+        const targetCtx: WindowContext = {
+          profileId: intent.payload.profileId ?? "",
+        };
+        const currentWindows = useWindowStore.getState().session.windows;
+        const existing = findExistingWindowForApp(
+          currentWindows,
+          "recipes",
+          targetCtx,
+        );
+        if (existing) {
+          if (existing.desktopId !== useWindowStore.getState().session.activeDesktopId) {
+            switchDesktop(existing.desktopId);
+          }
+          if (existing.minimized) restoreWindow(existing.id);
+          focusWindow(existing.id);
+          return { status: "handled", targetWindowId: existing.id };
+        }
+        const id = `recipes-${generateUUID().slice(0, 8)}`;
+        const activeDesktopId = useWindowStore.getState().session.activeDesktopId;
+        openWindow(
+          {
+            id,
+            appId: "recipes",
+            title: "Recipes",
+            ctx: targetCtx,
+            mode: "float",
+            appState: {
+              activeTab: "catalog",
+              selectedRecipeId: intent.payload.recipeId ?? null,
+            },
+          },
+          activeDesktopId,
+        );
+        return { status: "handled", targetWindowId: id };
+      }),
+      registerIntentHandler("recipes:launch", (intent) => {
+        const targetCtx: WindowContext = {
+          profileId: intent.payload.profileId ?? "",
+        };
+        const currentWindows = useWindowStore.getState().session.windows;
+        const existing = findExistingWindowForApp(
+          currentWindows,
+          "recipes",
+          targetCtx,
+        );
+        if (existing) {
+          if (existing.desktopId !== useWindowStore.getState().session.activeDesktopId) {
+            switchDesktop(existing.desktopId);
+          }
+          if (existing.minimized) restoreWindow(existing.id);
+          focusWindow(existing.id);
+          useWindowStore.getState().updateAppState(existing.id, {
+            activeTab: "review",
+            selectedRecipeId: intent.payload.recipeId,
+          });
+          return { status: "handled", targetWindowId: existing.id };
+        }
+        const id = `recipes-${generateUUID().slice(0, 8)}`;
+        const activeDesktopId = useWindowStore.getState().session.activeDesktopId;
+        openWindow(
+          {
+            id,
+            appId: "recipes",
+            title: "Recipes",
+            ctx: targetCtx,
+            mode: "float",
+            appState: {
+              activeTab: "review",
+              selectedRecipeId: intent.payload.recipeId,
+            },
+          },
+          activeDesktopId,
+        );
+        return { status: "handled", targetWindowId: id };
+      }),
     ];
 
     return () => {
@@ -922,6 +1102,9 @@ export function OsShell() {
         targetCtx,
       );
       if (existing) {
+        if (existing.desktopId !== session.activeDesktopId) {
+          switchDesktop(existing.desktopId);
+        }
         if (existing.minimized) restoreWindow(existing.id);
         focusWindow(existing.id);
         return;
@@ -983,6 +1166,10 @@ export function OsShell() {
         return <SettingsApp window={window} />;
       case "system-monitor":
         return <SystemMonitorApp window={window} />;
+      case "agent-hub":
+        return <AgentHubApp window={window} />;
+      case "recipes":
+        return <RecipesApp window={window} />;
       default:
         return null;
     }

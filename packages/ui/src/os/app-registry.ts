@@ -136,6 +136,24 @@ export const APP_MANIFESTS: Record<OsAppId, AppManifest> = {
     minSize: { width: 480, height: 360 },
     intents: ["system:monitor", "monitor:alert"],
   },
+  "agent-hub": {
+    appId: "agent-hub",
+    displayName: "Agent Hub",
+    instancing: "single-instance",
+    minimumCtx: "none",
+    defaultPlacement: "tile",
+    minSize: { width: 500, height: 380 },
+    intents: ["agent-hub:open", "agent:focus"],
+  },
+  recipes: {
+    appId: "recipes",
+    displayName: "Recipes",
+    instancing: "single-instance",
+    minimumCtx: "none",
+    defaultPlacement: "float",
+    minSize: { width: 520, height: 400 },
+    intents: ["recipes:open", "recipes:launch"],
+  },
 };
 
 export function getAppManifest(appId: OsAppId): AppManifest | undefined {

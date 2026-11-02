@@ -14,7 +14,8 @@ Design guidelines, color tokens, and typography are defined in [Platform Integra
 - [Privacy and agent notifications](./frontend-components/notifications-and-privacy.md) — Cognito Privacy Mode, agent status notifications, and terminal title ordinals.
 - [Workflow Context Surface](./workflow-context-surface.md) — Responsive workflow context UI, component ownership, and interaction contracts.
 - [Session Changes Review Components](#session-changes-review-components) — Read-only Monaco review modal, keyboard isolation, and changed files list.
-- [AI Dev OS Lifecycle Components](#ai-dev-os-lifecycle-components) — Multi-window OS shell, desktop canvas, window frame, resource keep-alive host, and generic tile renderer.
+- [AI Dev OS Lifecycle Components](#ai-dev-os-lifecycle-components) — Multi-window OS shell, desktop canvas, window frame, resource keep-alive host, generic tile renderer, and 17-application adapter catalog.
+- [Recipe Management & Review Components](#recipe-management--review-components-packagesuisrcosrecipes) — Declarative recipe editor, save-subset preflight, and launch review dialogs.
 
 ## Legacy Section Links
 
@@ -74,7 +75,19 @@ Phase 01 of the AI Dev OS redesign introduces modular windowing and resource man
   - `AgentStoreApp`: Embeds `AgentStorePage` with controlled props (`AgentStorePageProps`), managing tab and profile selections in window `appState` without mutating global route query parameters.
   - `SettingsApp`: Embeds `SettingsPage` with controlled props (`SettingsPageProps`), managing target profile selection in window `appState` without mutating global `useWorkbenchSelectionsStore.settingsProfileId`.
   - `SystemMonitorApp`: Embeds fleet resource monitoring, project counts, and active terminal sessions into a single window. Reuses `HostResourceFleetDeck`, `HostResourceGlance`, `HostResourceDiagnosis`, `HostIdleSuspendStatus`, and `ForceSleepDialog`. Supports profile-filtered fleet inspection (`inspectedProfileId`), alert drilldown (`selectedIncidentId`), process termination with owner-qualified generation verification dialog (client checks reject observed mismatches; authoritative replacement safety remains open under C2), terminal focus jumps (`terminal:focus`), and Cognito privacy masking for hostnames (`protected-host`) and kill commands (loaded drilldown masking remains open under C3).
+  - `AgentHubApp`: Embeds multi-profile AI agent home (`agent-hub`, `single-instance`, `none` context). Aggregates active terminals (`useAggregatedTerminalSessions`) and projects (`useAggregatedProjects`) across connected profiles via `buildTraditionalTerminalAgentRows` without eager file scanning or diff computations. Applies urgency ordering (`needs-attention` -> `working` -> `idle` -> `unavailable`), urgency/profile/harness/search filtering, and terminal focus jumps. Jump locates existing windows across desktops by terminal session ID; full action-time incarnation verification on jump remains an open carryover (W3).
+  - `RecipesApp`: Embeds declarative launch recipe manager (`recipes`, `single-instance`, `none` context, float placement). Provides catalog browsing, recipe deletion, portable JSON export/import with schema validation, and embeds `RecipeEditor` and `LaunchReview`.
 
+### Recipe Management & Review Components (`packages/ui/src/os/recipes/`)
+
+- **`RecipeEditor` (`packages/ui/src/os/recipes/RecipeEditor.tsx`):** Authoring interface for saving active desktop state to portable `RecipeV1` models or manually editing recipe steps. In save-subset mode, prompts for target server profile and project; displays pre-confirmation preview of matching windows vs. excluded windows (with explicit names, contexts, and exclusion reasons) via `calculateSaveSubset`; prunes excluded branches for canonical binary trees; and requires UI-level authoring/confirmation of command steps (noting W7 that confirmation is a UI guard, not an invariant bound to saved values across subsequent edits) and app steps.
+- **`LaunchReview` (`packages/ui/src/os/recipes/LaunchReview.tsx`):** Preflight inspection and execution review dialog. Displays step preflight checks, consent prompts for window reuse, resume of captured runs vs. independent New Run execution, step execution state progress (`pending` -> `dispatched` -> `confirmed` / `failed` / `outcomeUnknown`), and blocked unknown-outcome controls (dismiss step without relaunch, open terminal list). Note: cross-tab new-run locking and action-time epoch gating remain tracked carryovers (C1, C2).
+
+### Shell Chrome & Navigation Integrations
+
+- **`Dock` (`packages/ui/src/os/Dock.tsx`):** Launcher dock rendering pinned application launchers (`dam-hopper:os:v1:dock`) with running/minimized pip indicators (`.os-dock-pip`, `.os-dock-pip-active`). Manifest registry now registers 17 applications, adding launchers for `agent-hub` (🤖) and `recipes` (📜) with single-instance focus and restore semantics.
+- **`CommandPalette` (`packages/ui/src/os/CommandPalette.tsx`):** Operational search palette supporting 5 modes (`>` commands, `@` agents, `#` windows, `/` files, `!` recipes). In recipes mode (`!`), lists local recipes, executing launch flows via `recipes:launch` intents or opening the recipe manager.
+- **`DesktopTemplates` (`packages/ui/src/os/desktop-templates.ts`):** Supplies `createProjectDesktopTemplate` (60/40 binary split for projects) and `createAgentHubDesktopTemplate` (Desktop 1 "Hub" template hosting a maximized `agent-hub` singleton window).
 ## Decoupled Management Page Components
 
 - **`AgentStorePage` (`packages/ui/src/components/pages/AgentStorePage.tsx`):** Supports `AgentStorePageProps` (`noLayout`, `profileId`, `tab`, `onTabChange`, `onProfileChange`). When embedded in OS windows, operates in controlled mode without writing to `useSearchParams`.

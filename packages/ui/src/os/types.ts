@@ -15,7 +15,9 @@ export type OsAppId =
   | "ports-tunnels"
   | "agent-store"
   | "settings"
-  | "system-monitor";
+  | "system-monitor"
+  | "agent-hub"
+  | "recipes";
 
 export interface WindowContext {
   profileId: string;

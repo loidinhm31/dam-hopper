@@ -24,13 +24,14 @@ const EXPECTED_APPS: OsAppId[] = [
   "agent-store",
   "settings",
   "system-monitor",
+  "agent-hub",
+  "recipes",
 ];
 
 describe("app-registry", () => {
-  it("contains all 15 app manifests including system-monitor", () => {
+  it("contains all 17 app manifests including agent-hub and recipes", () => {
     const manifests = listAppManifests();
-    expect(manifests).toHaveLength(15);
-
+    expect(manifests).toHaveLength(17);
     for (const appId of EXPECTED_APPS) {
       expect(APP_MANIFESTS[appId]).toBeDefined();
       expect(isAppId(appId)).toBe(true);

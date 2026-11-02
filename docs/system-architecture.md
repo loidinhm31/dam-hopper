@@ -1,6 +1,6 @@
 # System Architecture
 
-**Status:** Current architecture overview, updated 2026-11-02 (reflecting Phase 01 OS lifecycle prototype, Phase 02 native Tauri / desktop SSH-forwarding removal, Phase 04 shell chrome, Phase 05 app migration, and Phase 06 System Monitor and tray). Detailed subsystem contracts are linked below; source code is authoritative.
+**Status:** Current architecture overview, updated 2026-11-03 (reflecting Phase 01 OS lifecycle prototype, Phase 02 native Tauri / desktop SSH-forwarding removal, Phase 04 shell chrome, Phase 05 app migration, Phase 06 System Monitor and tray, and Phase 07 Agent Hub and Launch Recipes). Detailed subsystem contracts are linked below; source code is authoritative.
 
 ## Runtime Overview
 
@@ -287,6 +287,26 @@ Phase 06 consolidates the standalone Dashboard overview and Host Resources popov
 - **C2 Replacement-Process Kill Safety:** Server-side atomic expected-incarnation kill contracts remain an open requirement; client-side revalidation protects against known cached mismatches.
 - **C3/C4 Detail Masking & Event Containment:** Thorough Cognito masking across deep diagnostic drilldowns and capture-phase modal shortcut containment remain active carryovers.
 - **C5/C6 Multi-Host Attention & Activity Schemas:** Cross-host read-state isolation and strict producer-bound typed notification contracts are tracked as release gates carried to Phase 09.
+## AI Dev OS Agent Hub & Launch Recipes (Phase 07)
+
+**Status:** User approved with noted carryovers to Phase 08 & 09 (Task 1 `implement-agent-hub` and Task 2 `implement-launch-recipes` completed in source; 126 unit tests across 6 files and 6 browser component tests across 3 files reported passing in `plans/reports/tester-261102-2354-phase-07-agent-hub-and-recipes-cycle-3.md`; this documentation update did not rerun runtime qualification). Technical acceptance is incomplete; Cycle 3 code review (`plans/reports/code-review-261102-2353-phase-07-agent-hub-and-recipes-cycle-3.md`, score 5/10) carries critical findings C1–C3 and warnings W1–W9 forward as open qualification gates.
+
+Phase 07 introduces a multi-profile fleet AI agent home and client-only declarative launch recipes:
+
+### 1. Agent Hub Read Model & Urgency Presentation (`agent-hub.ts`, `AgentHubApp.tsx`)
+- **Fleet-Wide Aggregation:** Registered in `APP_MANIFESTS` as `agent-hub` (`single-instance`, `minimumCtx: "none"`, default `tile` placement; Desktop 1 "Hub" template). Expands the static app catalog to 17 manifests. Composes canonical `buildTraditionalTerminalAgentRows` and `useAgentStatusStore`, aggregating active terminals (`useAggregatedTerminalSessions`) and projects (`useAggregatedProjects`) across connected profiles without eager diffing or file scanning.
+- **Urgency Classification:** Classifies agents into `needs-attention` -> `working` -> `idle` -> `unavailable`. Disconnected profiles are represented as unavailable rows; `idle` is not treated as task success; Codex is status-only, Claude attention-only, and expired hook leases report Unknown.
+- **Attention Routing & Jump Affordances:** Provides urgency, profile, harness, and text filters. Jump affordances locate existing windows across desktops by terminal session ID and switch focus. Incarnation verification on jump remains an open carryover (W3; the `agent:focus` intent checks observed incarnation but permits missing proof, while Hub Jump bypasses the intent).
+
+### 2. Client-Only Launch Recipes & Save Subset (`recipes/`)
+- **Declarative Recipe Model (`RecipeV1`):** Stored under `dam-hopper:os:v1:recipes`. Bounded to a single profile and project; includes `terminalSteps` (`key`, `name`, `command`, `worktreePath?`, descriptive `agent?`), `appSteps` (`key`, `appId`, `worktreePath?`, `appState?`), and binary `layout` (`tree`, `floating`).
+- **Save Subset Preflight & Topology Pruning:** Pre-save wizard prompts for target profile and project. BEFORE confirmation, `calculateSaveSubset` partitions desktop windows into matching vs. excluded windows, explicitly displaying each nonmatching window with name, context, and exclusion reason. Excluded nodes are pruned from canonical binary trees with normalized split ratios without altering active source windows (compatibility non-binary splits fall back to random node IDs; W6). Full restoration into the window manager and captured PTY adoption remain open carryovers (W1).
+- **Command & Schema Validation:** Terminal commands require explicit authoring or confirmation in the UI (W7 notes confirmation is UI-only, not an invariant bound to saved values across subsequent edits). Recipe import validates step keys, app IDs, tree depth (<= 10), and node caps (<= 64) before inert review, while schema permits non-binary splits (W5). Portable exports warn that commands and local paths are included (`RECIPE_EXPORT_WARNING`).
+
+### 3. Launch Records, Locking Scope & Execution State (`launch-records.ts`, `recipe-engine.ts`)
+- **Durable Records & Per-Launch Locking:** Stored in localStorage under `dam-hopper:os:v1:recipe-launches`. `withRecipeLaunchLock` serializes execution using `navigator.locks` keyed per `launchId` (`dam-hopper:recipe-launch:${launchId}`); missing lock support fails closed. Note: run selection and reservation occur outside cross-tab locks (C1), so separate launch IDs can permit concurrent duplicate runs; shared-blob storage transactions across different runs and unlocked startup recovery (`recoverDurableLaunchRecordsOnStartup`) remain open carryovers (C1, C3).
+- **Step State Machine:** Models step progression as `pending` -> `dispatched` -> `{confirmed | failed | outcomeUnknown}`. `pending` allocates a fresh UUID; `dispatched` records profile and render-time `serverEpoch` before dispatch.
+- **`outcomeUnknown` Handling:** Interrupted dispatch, response loss, or startup recovery transition in-flight steps to `outcomeUnknown`. Dismissal marks steps dismissed without relaunching. Action-time epoch rechecking at the network effect boundary and generation fencing during list reconciliation remain active carryovers (C2).
 ## Multi-Profile Ownership Model
 
 A browser-side `profileId` selects one saved server endpoint/identity. A monotonically replaced connection `generation` identifies the current runtime for that profile. UI work captures both before issuing requests.

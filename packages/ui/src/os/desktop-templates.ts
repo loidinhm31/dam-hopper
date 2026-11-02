@@ -130,3 +130,51 @@ export function createProjectDesktopTemplate(
     windows: [termWin, filesWin, searchWin, gitWin, changesWin],
   };
 }
+
+export interface AgentHubDesktopResult {
+  desktop: OsDesktop;
+  windows: OsWindow[];
+}
+
+/**
+ * Creates the approved Agent Hub home desktop layout:
+ * - Desktop 1 "Hub" (singleton / minimumCtx: none)
+ * - Agent Hub window tiled/maximized occupying the pane
+ */
+export function createAgentHubDesktopTemplate(
+  name: string = "Hub",
+  desktopId: string = "desktop-hub",
+): AgentHubDesktopResult {
+  const hubWinId = `agent-hub-${generateUUID().slice(0, 8)}`;
+  const tree: TileNode<string> = {
+    type: "pane",
+    id: generateUUID(),
+    items: [hubWinId],
+    active: hubWinId,
+  };
+
+  const hubWin: OsWindow = {
+    id: hubWinId,
+    appId: "agent-hub",
+    title: APP_MANIFESTS["agent-hub"].displayName,
+    ctx: { profileId: "" },
+    mode: "tile",
+    desktopId,
+    maximized: true,
+    minimized: false,
+  };
+
+  const desktop: OsDesktop = {
+    id: desktopId,
+    name,
+    defaultCtx: { profileId: "" },
+    tree,
+    floatingWindowIds: [],
+    focusedWindowId: hubWinId,
+  };
+
+  return {
+    desktop,
+    windows: [hubWin],
+  };
+}

@@ -26,6 +26,8 @@ const APP_ICONS: Record<OsAppId, string> = {
   "agent-store": "🛒",
   settings: "⚙",
   "system-monitor": "📊",
+  "agent-hub": "🤖",
+  recipes: "📜",
 };
 
 export function Dock({ onLaunchApp, className = "" }: DockProps) {

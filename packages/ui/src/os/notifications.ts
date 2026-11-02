@@ -191,3 +191,24 @@ export function ingestIpcActivityEvent(e: {
     targetTerminalId,
   });
 }
+
+export function ingestAgentAttentionNotification(params: {
+  profileId: string;
+  generation: number;
+  terminalId: string;
+  terminalTitle?: string;
+  reason?: "Approval" | "Question" | "Error" | string;
+  harnessLabel?: string;
+}): string {
+  const reasonText = params.reason ? ` - ${params.reason} required` : "";
+  const title = `Agent Attention (${params.harnessLabel ?? "Agent"})${reasonText}`;
+  return useOsNotificationStore.getState().addNotification({
+    profileId: params.profileId,
+    generation: params.generation,
+    title,
+    body: params.terminalTitle ? `Terminal: ${params.terminalTitle}` : undefined,
+    source: "agent",
+    level: "attention",
+    targetTerminalId: params.terminalId,
+  });
+}

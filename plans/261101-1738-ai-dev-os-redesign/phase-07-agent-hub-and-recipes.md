@@ -1,9 +1,9 @@
 # Phase 07: P4 — Agent Hub home and Launch Recipes
 
-Estimate: 64h; implementation status: **pending**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
+Estimate: 64h; implementation status: **administratively closed per user approval (2026-11-03 00:05:00 +07:00); technical acceptance blocked per Cycle 3 review (score 5/10 with 3 Critical findings C1–C3 and 9 warnings W1–W9)**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
 
 ## Context / objective
-Priority P1; status pending. AI-centered fleet home plus client-only declarative launch. [Hub/recipe decisions](../reports/brainstorm-261101-1738-ai-dev-os-redesign.md#43-recipes-v1-client-json-dam-hopperosv1recipes-exportimport) override illustrative designer fields. [Terminal create finding](source-evidence.md#terminal-create-is-not-idempotent).
+Priority P1; status administratively closed per user approval (2026-11-03 00:05:00 +07:00) with technical acceptance carryovers tracked into Phase 08 & Phase 09. AI-centered fleet home plus client-only declarative launch. [Hub/recipe decisions](../reports/brainstorm-261101-1738-ai-dev-os-redesign.md#43-recipes-v1-client-json-dam-hopperosv1recipes-exportimport) override illustrative designer fields. [Terminal create finding](source-evidence.md#terminal-create-is-not-idempotent).
 
 ## Architecture / requirements
 - Hub singleton/none/maximized Desktop1 “Hub”; recipe manager singleton/none/float. Static catalog totals exactly17. Existing qualified roster builder + useAgentStatusStore + provenance/status reducers, not a second interpreter of PTY lifecycle. Needs attention -> Working -> Idle -> Unknown/Unavailable; preserve Platform unqualified/Unsupported descriptions. Idle is NOT success; Codex status-only, Claude attention-only, expired hook lease Unknown. No raw tool commands, prompts, env or invented reason/timing fields from wireframe.
@@ -163,5 +163,32 @@ Exactly one authored fence; no execution state/hydration, completion or test rec
 ]
 ```
 
-- [ ] <!-- evcrate-task:implement-agent-hub --> Implement qualified multi-profile Agent Hub home
-- [ ] <!-- evcrate-task:implement-launch-recipes --> Implement safe client recipes with resumable concrete launch records
+- [x] <!-- evcrate-task:implement-agent-hub --> Implement qualified multi-profile Agent Hub home
+- [x] <!-- evcrate-task:implement-launch-recipes --> Implement safe client recipes with resumable concrete launch records
+
+## Administrative Closure & Carried Technical Findings (2026-11-03 00:05:00 +07:00)
+
+Phase 07 is administratively closed per recorded user approval with noted issues carried forward to Phase 08 & Phase 09. Technical acceptance remains blocked per Cycle 3 review ([plans/reports/code-review-261102-2353-phase-07-agent-hub-and-recipes-cycle-3.md](../reports/code-review-261102-2353-phase-07-agent-hub-and-recipes-cycle-3.md); score 5/10 with 3 Critical findings C1–C3 and 9 warnings W1–W9).
+
+Tester-reported verification records 126 unit tests across 6 files, 6 browser component tests across 3 files, and 2 clean TypeScript typechecks (`tsc --noEmit`, `test:e2e:typecheck`); user-reported context notes Vite production web build passes. Exactly 17 application manifests are registered in `app-registry.ts`.
+
+Task checkboxes above are marked checked for administrative phase closure; technical acceptance and execution safety remain open release qualification gates.
+
+### Carried Implementation Defects & Qualification Gates to Phase 08 & Phase 09:
+1. **C1 (Critical) — Cross-Tab Durable Run Selection & Reservation Authority:**
+   `LaunchReview.tsx` checks React `hasUnknown` scoped only to the current desktop outside any lock. New records get distinct per-launch locks, so engine locking does not serialize the decision to create a run. Two tabs mounted before launch or different desktops can concurrently initiate separate runs, risking duplicate PTY creation while an original request can still succeed (violating requirements 15/18/19 and AC8/F1). Requires atomic durable run-selection/start authority covering all tabs and virtual desktops.
+2. **C2 (Critical) — Action-Time & Post-Await Epoch Authority Fencing:**
+   `LaunchReview.tsx` checks epoch authority at render time, but not at the effect/resolution boundary under lock. The engine checks profile only, not current generation/epoch; it never rechecks after `terminal.create` awaits. Reconciliation fetches lists outside the lock, swallows list errors into `[]`, and passes render-time epoch without an owner tuple. Retained HTTP clients lack closed-state guards. Requires action-time/post-await epoch checks under lock and truthful preservation of list failures before live container qualification.
+3. **C3 (Critical) — Shared Launch Storage Blob & Un-Locked Startup Recovery:**
+   All launch records reside in a single `localStorage` blob under `dam-hopper:os:v1:recipe-launches`. Per-record locks do not protect whole-blob read-modify-write operations or startup recovery, risking evidence loss between concurrent tabs. Corrupt JSON or unreadable storage fails open to an empty collection, which can erase unknown tombstones and permit destructive replacement. Requires storage-wide transactional protection under Web Locks and fail-closed corrupt-storage preservation.
+4. **AC8 / W1 (High) — Window Manager Layout Restoration & Live PTY Adoption:**
+   `recipe-engine.ts` dispatches terminals but does not restore window topology into the Zustand window store (`TileTree<T>`), instantiate apps, or adopt verified alive PTYs; `capturedPtyMap` has no production caller and Save does not seed captured resume.
+5. **Warnings W2–W9 Carryover:**
+   - **W2:** Reviewed recipe vs executed frozen launch snapshot mismatch.
+   - **W3:** Incarnation enforcement fails open and is missing on Hub Jump path.
+   - **W4:** Incomplete preflight (instancing modes, project/worktree availability, central resource claims).
+   - **W5:** Permissive portable schema/state boundary (appState leakage, non-binary splits, unconstrained dimensions).
+   - **W6:** Determinism claim partial (canonical binary path only; compatibility splits generate random UUIDs).
+   - **W7:** Command confirmation is a UI-only boolean, not a saved-value invariant.
+   - **W8:** UI/Hub completeness gaps (RecipesApp export view clipping, Hub template not wired to default startup, missing workflow overview fan-in).
+   - **W9:** Test suite depth deficiencies (locked helpers not imported by unit tests, browser tests cover happy paths only, E2E spec does not import JSON, live PTY held-create / two-tab F1 checks unexercised).

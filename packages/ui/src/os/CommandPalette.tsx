@@ -12,7 +12,8 @@ import { APP_MANIFESTS, findExistingWindowForApp } from "./app-registry.js";
 import { createProjectDesktopTemplate } from "./desktop-templates.js";
 import type { OsAppId } from "./types.js";
 import { generateUUID } from "@/lib/utils.js";
-
+import { loadAllRecipes } from "./recipes/persistence.js";
+import { dispatchIntent, createIntent } from "./intents.js";
 export type PaletteMode =
   | "commands"
   | "agents"
@@ -308,19 +309,36 @@ export function CommandPalette({
     ];
   }, [activeDesktop, session.activeDesktopId, openWindow, onClose]);
 
-  // Lazy Recipes Provider (Phase 07 placeholder)
   const recipeItems = useMemo<PaletteItem[]>(() => {
-    return [
+    const recipes = loadAllRecipes();
+    const items: PaletteItem[] = [
       {
-        id: "recipe-notice",
+        id: "recipe-action-open-manager",
         mode: "recipes",
-        title: "Launch Recipes Catalog",
-        description: "Recipe execution catalog arrives in Phase 07 (Agent Hub & Recipes)",
-        disabled: true,
-        onSelect: () => {},
+        title: "Open Recipes Manager",
+        description: "Browse, import, or create launch recipes",
+        onSelect: () => {
+          onClose();
+          dispatchIntent(createIntent("recipes:open", {}));
+        },
       },
     ];
-  }, []);
+
+    for (const r of recipes) {
+      items.push({
+        id: `recipe-item-${r.id}`,
+        mode: "recipes",
+        title: `Launch: ${r.name}`,
+        description: `${r.profileId} • ${r.project} • ${r.terminalSteps.length} terminals, ${r.appSteps.length} apps`,
+        onSelect: () => {
+          onClose();
+          dispatchIntent(createIntent("recipes:launch", { profileId: r.profileId, recipeId: r.id }));
+        },
+      });
+    }
+
+    return items;
+  }, [onClose]);
 
   // Filter items by currentMode and query
   const filteredItems = useMemo(() => {
