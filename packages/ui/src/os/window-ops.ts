@@ -3,6 +3,7 @@ import type {
   OsDesktop,
   OsSessionV1,
   OsWindow,
+  WindowContext,
   WindowMode,
 } from "./types.js";
 import type { TileDockTarget, TileNode } from "@/types/tile-tree.js";
@@ -43,6 +44,65 @@ export function clampFloatBounds(
   const x = Math.max(0, Math.min(bounds.x, maxX));
   const y = Math.max(0, Math.min(bounds.y, maxY));
   return { x, y, width, height };
+}
+
+export type ResizeDirection =
+  | "n"
+  | "s"
+  | "e"
+  | "w"
+  | "ne"
+  | "nw"
+  | "se"
+  | "sw";
+
+export function resizeFloatBounds(
+  bounds: FloatBounds,
+  deltaX: number,
+  deltaY: number,
+  direction: ResizeDirection,
+  viewport?: { width: number; height: number },
+): FloatBounds {
+  let { x, y, width, height } = bounds;
+
+  if (direction.includes("e")) {
+    width += deltaX;
+  }
+  if (direction.includes("s")) {
+    height += deltaY;
+  }
+  if (direction.includes("w")) {
+    const nextWidth = width - deltaX;
+    if (nextWidth >= MIN_FLOAT_WIDTH) {
+      width = nextWidth;
+      x += deltaX;
+    } else {
+      x += width - MIN_FLOAT_WIDTH;
+      width = MIN_FLOAT_WIDTH;
+    }
+  }
+  if (direction.includes("n")) {
+    const nextHeight = height - deltaY;
+    if (nextHeight >= MIN_FLOAT_HEIGHT) {
+      height = nextHeight;
+      y += deltaY;
+    } else {
+      y += height - MIN_FLOAT_HEIGHT;
+      height = MIN_FLOAT_HEIGHT;
+    }
+  }
+
+  width = Math.max(MIN_FLOAT_WIDTH, width);
+  height = Math.max(MIN_FLOAT_HEIGHT, height);
+
+  return clampFloatBounds({ x, y, width, height }, viewport);
+}
+
+export function getVisibleFloatBounds(
+  bounds: FloatBounds,
+  viewport?: { width: number; height: number },
+): FloatBounds {
+  return clampFloatBounds(bounds, viewport);
 }
 
 export function createDefaultOsSession(
@@ -562,3 +622,211 @@ export function updateDesktopTreeSizes(
     return { ...d, tree: updateTileSizes(d.tree, splitId, sizes) };
   });
 }
+
+export function addDesktop(
+  session: OsSessionV1,
+  name?: string,
+  defaultCtx?: WindowContext,
+): OsSessionV1 {
+  const nextIndex = session.desktops.length + 1;
+  const id = `desktop-${Date.now()}-${nextIndex}`;
+  const desktopName = name?.trim() || `Desktop ${nextIndex}`;
+  const newDesktop: OsDesktop = {
+    id,
+    name: desktopName,
+    defaultCtx,
+    tree: null,
+    floatingWindowIds: [],
+    focusedWindowId: null,
+  };
+  return {
+    ...session,
+    desktops: [...session.desktops, newDesktop],
+  };
+}
+
+export function renameDesktop(
+  session: OsSessionV1,
+  desktopId: string,
+  name: string,
+): OsSessionV1 {
+  const trimmed = name.trim();
+  if (!trimmed) return session;
+  return updateDesktop(session, desktopId, (d) => ({
+    ...d,
+    name: trimmed,
+  }));
+}
+
+export function setDefaultCtx(
+  session: OsSessionV1,
+  desktopId: string,
+  defaultCtx?: WindowContext,
+): OsSessionV1 {
+  return updateDesktop(session, desktopId, (d) => ({
+    ...d,
+    defaultCtx,
+  }));
+}
+
+export function removeDesktop(
+  session: OsSessionV1,
+  desktopId: string,
+  survivingDesktopId?: string,
+): OsSessionV1 {
+  if (session.desktops.length <= 1) {
+    // Refuse to delete the only desktop
+    return session;
+  }
+  const toDelete = session.desktops.find((d) => d.id === desktopId);
+  if (!toDelete) return session;
+
+  const targetDesk = survivingDesktopId
+    ? session.desktops.find(
+        (d) => d.id === survivingDesktopId && d.id !== desktopId,
+      )
+    : session.desktops.find((d) => d.id !== desktopId);
+
+  if (!targetDesk) {
+    // Fail-closed: invalid destination desktop ID provided, refuse deletion
+    return session;
+  }
+
+  let updatedSession = session;
+  const windowsToMove = Object.values(session.windows).filter(
+    (w) => w.desktopId === desktopId,
+  );
+
+  for (const win of windowsToMove) {
+    updatedSession = moveWindowToDesktop(updatedSession, win.id, targetDesk.id);
+  }
+
+  const remainingDesktops = updatedSession.desktops.filter(
+    (d) => d.id !== desktopId,
+  );
+  const nextActive =
+    updatedSession.activeDesktopId === desktopId
+      ? targetDesk.id
+      : updatedSession.activeDesktopId;
+
+  return {
+    ...updatedSession,
+    activeDesktopId: nextActive,
+    desktops: remainingDesktops,
+  };
+}
+
+export function bringWindowToFront(
+  session: OsSessionV1,
+  windowId: string,
+): OsSessionV1 {
+  const window = session.windows[windowId];
+  if (!window || window.mode !== "float") return session;
+  return updateDesktop(session, window.desktopId, (d) => {
+    const floatingWindowIds = [
+      ...d.floatingWindowIds.filter((id) => id !== windowId),
+      windowId,
+    ];
+    return { ...d, floatingWindowIds, focusedWindowId: windowId };
+  });
+}
+
+export function sendWindowToBack(
+  session: OsSessionV1,
+  windowId: string,
+): OsSessionV1 {
+  const window = session.windows[windowId];
+  if (!window || window.mode !== "float") return session;
+  return updateDesktop(session, window.desktopId, (d) => {
+    const floatingWindowIds = [
+      windowId,
+      ...d.floatingWindowIds.filter((id) => id !== windowId),
+    ];
+    return { ...d, floatingWindowIds };
+  });
+}
+
+export function selectPaneTab(
+  session: OsSessionV1,
+  paneId: string,
+  windowId: string,
+): OsSessionV1 {
+  const window = session.windows[windowId];
+  if (!window) return session;
+  return updateDesktop(session, window.desktopId, (d) => {
+    if (!d.tree) return d;
+    const targetPane = findTilePaneById(d.tree, paneId);
+    if (!targetPane || !targetPane.items.includes(windowId)) return d;
+    const tree = updateTilePane(d.tree, paneId, (p) => ({
+      ...p,
+      active: windowId,
+    }));
+    return { ...d, tree, focusedWindowId: windowId };
+  });
+}
+
+export function moveTabWithinPane(
+  session: OsSessionV1,
+  paneId: string,
+  fromIndex: number,
+  toIndex: number,
+): OsSessionV1 {
+  const desktop = session.desktops.find((d) => d.id === session.activeDesktopId);
+  if (!desktop || !desktop.tree) return session;
+  const pane = findTilePaneById(desktop.tree, paneId);
+  if (
+    !pane ||
+    fromIndex < 0 ||
+    fromIndex >= pane.items.length ||
+    toIndex < 0 ||
+    toIndex >= pane.items.length
+  ) {
+    return session;
+  }
+  const nextItems = [...pane.items];
+  const [removed] = nextItems.splice(fromIndex, 1);
+  if (!removed) return session;
+  nextItems.splice(toIndex, 0, removed);
+  return updateDesktop(session, desktop.id, (d) => {
+    if (!d.tree) return d;
+    return {
+      ...d,
+      tree: updateTilePane(d.tree, paneId, (p) => ({
+        ...p,
+        items: nextItems,
+      })),
+    };
+  });
+}
+
+export function splitWindow(
+  session: OsSessionV1,
+  sourceWindowId: string,
+  targetWindowId: string,
+  direction: "left" | "right" | "top" | "bottom" | "center",
+): OsSessionV1 {
+  const sourceWin = session.windows[sourceWindowId];
+  const targetWin = session.windows[targetWindowId];
+  if (!sourceWin || !targetWin) return session;
+  const targetDesk = session.desktops.find((d) => d.id === targetWin.desktopId);
+  if (!targetDesk || !targetDesk.tree) return session;
+
+  const targetPane = findTilePaneContaining(
+    targetDesk.tree,
+    (id) => id === targetWindowId,
+  );
+  if (!targetPane) return session;
+
+  const target: TileDockTarget =
+    direction === "center"
+      ? { kind: "pane-center", paneId: targetPane.id }
+      : { kind: "pane-edge", paneId: targetPane.id, edge: direction };
+
+  return dockWindowInDesktopTree(
+    session,
+    targetWin.desktopId,
+    sourceWindowId,
+    target,
+  );
+}
+

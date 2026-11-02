@@ -20,7 +20,7 @@ export function DesktopCanvas({
   const setViewport = useWindowStore((state) => state.setViewport);
   const updateTreeSizes = useWindowStore((state) => state.updateTreeSizes);
   const focusWindow = useWindowStore((state) => state.focusWindow);
-
+  const selectPaneTab = useWindowStore((state) => state.selectPaneTab);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -63,6 +63,8 @@ export function DesktopCanvas({
         {/* Pane Tabs Header when multiple items exist */}
         {pane.items.length > 1 && (
           <div
+            role="tablist"
+            aria-label="Tiled window tabs"
             data-os-pane-tabs={pane.id}
             className="flex items-center gap-1 px-2 py-1 bg-[var(--color-surface)] border-b border-[var(--color-border)] overflow-x-auto text-xs select-none"
           >
@@ -74,10 +76,13 @@ export function DesktopCanvas({
                 <button
                   key={winId}
                   type="button"
-                  onClick={() => focusWindow(winId)}
+                  role="tab"
+                  aria-selected={isActive}
+                  aria-controls={`window-frame-${winId}`}
+                  onClick={() => selectPaneTab(pane.id, winId)}
                   className={`px-2 py-0.5 rounded text-xs truncate max-w-[140px] transition-colors ${
                     isActive
-                      ? "bg-[var(--color-primary)] text-white font-medium"
+                      ? "bg-[var(--color-primary)] text-white font-medium shadow-sm"
                       : "text-[var(--color-text-muted)] hover:bg-[var(--color-border)] hover:text-[var(--color-text)]"
                   }`}
                 >

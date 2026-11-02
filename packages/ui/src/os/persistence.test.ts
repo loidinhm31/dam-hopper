@@ -1,14 +1,19 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  exportOsEnvelope,
   exportOsSessionJson,
   getPreservedCorruptBytes,
+  importOsEnvelope,
   importOsSessionJson,
   isAutosaveSuspended,
+  loadDockPins,
   loadOsSession,
+  OS_DOCK_STORAGE_KEY,
   OS_SESSION_STORAGE_KEY,
   resumeAutosave,
   sanitizeSessionForPersistence,
+  saveDockPins,
   saveOsSession,
   validateOsSession,
 } from "./persistence.js";
@@ -225,5 +230,58 @@ describe("persistence", () => {
     valid.windows["w1"].minimized = true;
     valid.desktops[0].tree = null;
     expect(validateOsSession(valid).valid).toBe(false);
+  });
+
+  it("roundtrips desktop defaultCtx with worktreeId", () => {
+    const session = createDefaultOsSession("d1", "Main");
+    session.desktops[0].defaultCtx = {
+      profileId: "p1",
+      projectId: "proj-alpha",
+      worktreeId: "wt-feature-login",
+    };
+
+    const sanitized = sanitizeSessionForPersistence(session);
+    expect(sanitized.desktops[0].defaultCtx).toEqual({
+      profileId: "p1",
+      projectId: "proj-alpha",
+      worktreeId: "wt-feature-login",
+    });
+
+    saveOsSession(session);
+    const reloaded = loadOsSession();
+    expect(reloaded.desktops[0].defaultCtx?.worktreeId).toBe("wt-feature-login");
+  });
+
+  it("loads and saves dock pins under os:v1:dock key", () => {
+    const defaultPins = loadDockPins();
+    expect(defaultPins).toEqual(["terminals", "editor", "browser"]);
+
+    saveDockPins(["terminals", "editor"]);
+    expect(JSON.parse(localStorage.getItem(OS_DOCK_STORAGE_KEY)!)).toEqual([
+      "terminals",
+      "editor",
+    ]);
+
+    const loaded = loadDockPins();
+    expect(loaded).toEqual(["terminals", "editor"]);
+  });
+
+  it("exports and imports 4-namespace envelope with schema validation", () => {
+    const session = createDefaultOsSession("d1", "Main");
+    saveDockPins(["terminals", "browser"]);
+
+    const exportedJson = exportOsEnvelope(session);
+    const parsed = JSON.parse(exportedJson);
+    expect(parsed.version).toBe(1);
+    expect(parsed.namespaces.session).toBeDefined();
+    expect(parsed.namespaces.dock).toEqual(["terminals", "browser"]);
+
+    const imported = importOsEnvelope(exportedJson);
+    expect(imported.success).toBe(true);
+    expect(imported.envelope?.namespaces.session?.activeDesktopId).toBe("d1");
+
+    // Invalid envelope
+    expect(importOsEnvelope("invalid json").success).toBe(false);
+    expect(importOsEnvelope(JSON.stringify({ version: 2 })).success).toBe(false);
   });
 });

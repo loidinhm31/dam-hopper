@@ -1,11 +1,19 @@
 import { useEffect, useCallback, useState } from "react";
-import type { OsWindow, OsAppId } from "./types.js";
+import type { OsWindow, OsAppId, WindowContext } from "./types.js";
 import { useWindowStore } from "./window-store.js";
 import { DesktopCanvas } from "./DesktopCanvas.js";
 import { OsResourceHost } from "./OsResourceHost.js";
 import { TerminalsApp } from "./apps/TerminalsApp.js";
 import { EditorApp } from "./apps/EditorApp.js";
 import { BrowserApp } from "./apps/BrowserApp.js";
+import { TopBar } from "./TopBar.js";
+import { Dock } from "./Dock.js";
+import { CommandPalette } from "./CommandPalette.js";
+import { NotificationCenter } from "./NotificationCenter.js";
+import { useOsNotificationStore } from "./notifications.js";
+import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.js";
+import { arbitrateKeyboardEvent } from "./input-arbiter.js";
+import "./os.css";
 import {
   loadOsSession,
   saveOsSession,
@@ -13,8 +21,8 @@ import {
 } from "./persistence.js";
 import { generateUUID } from "@/lib/utils.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
-import { getConnectionSnapshot } from "@/api/connections.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
+import { useSettingsStore } from "@/stores/settings.js";
 export function OsShell() {
   const session = useWindowStore((state) => state.session);
   const setSession = useWindowStore((state) => state.setSession);
@@ -25,6 +33,20 @@ export function OsShell() {
   const profileId = profile?.id ?? "default";
   const activeProject = useWorkspaceStore((state) => state.activeProject);
   const [notice, setNotice] = useState<PersistenceNotice | null>(null);
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const unreadTerminalNotifs = useTerminalNotificationsStore(
+    (state) => state.notifications.filter((n) => !n.read).length,
+  );
+  const unreadOsNotifs = useOsNotificationStore(
+    (state) => state.entries.filter((e) => !e.read).length,
+  );
+  const unreadNotifs = unreadTerminalNotifs + unreadOsNotifs;
+  const osPaletteShortcut = useSettingsStore((state) => state.osPaletteShortcut);
+  const osCycleFocusShortcut = useSettingsStore(
+    (state) => state.osCycleFocusShortcut,
+  );
+  const focusWindow = useWindowStore((state) => state.focusWindow);
 
   // Initial load
   useEffect(() => {
@@ -42,6 +64,59 @@ export function OsShell() {
     };
   }, [session]);
 
+  // Shell-level global shortcut arbitration (e.g. Ctrl+Alt+K for Command Palette)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      const targetEl = e.target as HTMLElement | null;
+      if (targetEl?.closest?.('[data-shortcut-capture="true"]')) return;
+
+      const disposition = arbitrateKeyboardEvent(e, {
+        isCognitoActive: false,
+        isComposing: Boolean(e.isComposing),
+        isFrameFocused: false,
+        paletteShortcut: osPaletteShortcut,
+        cycleFocusShortcut: osCycleFocusShortcut,
+      });
+
+      if (disposition === "os-palette-handled") {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsPaletteOpen((prev) => !prev);
+      } else if (disposition === "os-shortcut-handled") {
+        e.preventDefault();
+        e.stopPropagation();
+        const currentDeskId = useWindowStore.getState().session.activeDesktopId;
+        const currentWindows = useWindowStore.getState().session.windows;
+        const visibleWindowIds = Object.keys(currentWindows).filter(
+          (id) =>
+            !currentWindows[id]?.minimized &&
+            currentWindows[id]?.desktopId === currentDeskId,
+        );
+        if (visibleWindowIds.length > 0) {
+          const focusedId =
+            useWindowStore
+              .getState()
+              .session.desktops.find((d) => d.id === currentDeskId)
+              ?.focusedWindowId;
+          const idx = focusedId ? visibleWindowIds.indexOf(focusedId) : -1;
+          const nextId =
+            visibleWindowIds[(idx + 1) % visibleWindowIds.length] ??
+            visibleWindowIds[0];
+          if (nextId) {
+            focusWindow(nextId);
+            const nextEl = document.querySelector(
+              `[data-os-window-frame="${CSS.escape(nextId)}"]`,
+            ) as HTMLElement | null;
+            nextEl?.focus();
+          }
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [osPaletteShortcut, osCycleFocusShortcut, focusWindow]);
+
 
   const activeDesktop =
     session.desktops.find((d) => d.id === session.activeDesktopId) ??
@@ -56,39 +131,32 @@ export function OsShell() {
           : appId === "editor"
             ? "Editor"
             : "Browser Preview";
-      openWindow({
-        id,
-        appId,
-        title,
-        ctx: {
-          profileId,
-          projectId: activeProject ?? undefined,
+
+      const targetCtx: WindowContext = activeDesktop?.defaultCtx ?? {
+        profileId,
+        projectId: activeProject ?? undefined,
+      };
+
+      openWindow(
+        {
+          id,
+          appId,
+          title,
+          ctx: targetCtx,
+          mode: appId === "browser" ? "float" : "tile",
         },
-        mode: appId === "browser" ? "float" : "tile",
-      });
+        session.activeDesktopId,
+      );
     },
-    [openWindow, profileId, activeProject],
+    [
+      openWindow,
+      profileId,
+      activeProject,
+      activeDesktop?.defaultCtx,
+      session.activeDesktopId,
+    ],
   );
 
-  const handleAddDesktop = useCallback(() => {
-    const nextIdx = session.desktops.length + 1;
-    const newDesktop = {
-      id: `desktop-${nextIdx}`,
-      name: `Desktop ${nextIdx}`,
-      tree: null,
-      floatingWindowIds: [],
-      focusedWindowId: null,
-    };
-    setSession({
-      ...session,
-      desktops: [...session.desktops, newDesktop],
-      activeDesktopId: newDesktop.id,
-    });
-  }, [session, setSession]);
-
-  const minimizedWindows = Object.values(session.windows).filter(
-    (w) => w.minimized && w.desktopId === session.activeDesktopId,
-  );
 
   const renderApp = (window: OsWindow) => {
     switch (window.appId) {
@@ -111,86 +179,11 @@ export function OsShell() {
         className="flex flex-col w-screen h-screen overflow-hidden bg-[var(--color-bg)] select-none"
       >
         {/* Top OS Bar */}
-        <header className="flex items-center justify-between px-3 h-10 border-b border-[var(--color-border)] bg-[var(--color-surface)] text-xs z-50">
-          <div className="flex items-center gap-3">
-            <span className="font-semibold text-[var(--color-text)] tracking-tight">
-              DamHopper OS
-            </span>
-
-            {/* Desktop Tabs */}
-            <nav
-              aria-label="Desktops"
-              className="flex items-center gap-1 border-l border-[var(--color-border)] pl-3"
-            >
-              {session.desktops.map((d) => (
-                <button
-                  key={d.id}
-                  type="button"
-                  onClick={() => switchDesktop(d.id)}
-                  className={`px-2.5 py-1 rounded text-xs transition-colors ${
-                    d.id === session.activeDesktopId
-                      ? "bg-[var(--color-primary)] text-white font-medium"
-                      : "text-[var(--color-text-muted)] hover:bg-[var(--color-border)] hover:text-[var(--color-text)]"
-                  }`}
-                >
-                  {d.name}
-                </button>
-              ))}
-              <button
-                type="button"
-                aria-label="Add Desktop"
-                onClick={handleAddDesktop}
-                className="px-2 py-1 rounded text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-border)] hover:text-[var(--color-text)]"
-              >
-                +
-              </button>
-            </nav>
-          </div>
-
-          {/* Center / Minimized Tray */}
-          {minimizedWindows.length > 0 && (
-            <div className="flex items-center gap-1.5 overflow-x-auto max-w-md px-2">
-              <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
-                Minimized:
-              </span>
-              {minimizedWindows.map((w) => (
-                <button
-                  key={w.id}
-                  type="button"
-                  onClick={() => restoreWindow(w.id)}
-                  className="px-2 py-0.5 rounded text-[11px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-primary)] truncate max-w-[120px]"
-                >
-                  {w.title}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Launch Controls */}
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => handleLaunchApp("terminals")}
-              className="px-2.5 py-1 rounded border border-[var(--color-border)] hover:bg-[var(--color-border)] text-[var(--color-text)] transition-colors"
-            >
-              + Terminal
-            </button>
-            <button
-              type="button"
-              onClick={() => handleLaunchApp("editor")}
-              className="px-2.5 py-1 rounded border border-[var(--color-border)] hover:bg-[var(--color-border)] text-[var(--color-text)] transition-colors"
-            >
-              + Editor
-            </button>
-            <button
-              type="button"
-              onClick={() => handleLaunchApp("browser")}
-              className="px-2.5 py-1 rounded border border-[var(--color-border)] hover:bg-[var(--color-border)] text-[var(--color-text)] transition-colors"
-            >
-              + Browser
-            </button>
-          </div>
-        </header>
+        <TopBar
+          onOpenPalette={() => setIsPaletteOpen(true)}
+          onOpenNotifications={() => setIsNotificationsOpen((prev) => !prev)}
+          unreadNotificationsCount={unreadNotifs}
+        />
         {notice && (
           <div
             data-os-notice="true"
@@ -209,14 +202,31 @@ export function OsShell() {
         )}
 
         {/* Desktop Canvas */}
-        <main className="flex-1 min-h-0 relative">
-          {activeDesktop && (
-            <DesktopCanvas
-              desktop={activeDesktop}
-              renderApp={renderApp}
-            />
-          )}
-        </main>
+        {/* Main Workspace: Left Dock + Desktop Canvas */}
+        <div className="flex flex-1 min-h-0 w-full overflow-hidden">
+          <Dock onLaunchApp={handleLaunchApp} />
+
+          <main className="flex-1 min-h-0 relative overflow-hidden" role="main">
+            {activeDesktop && (
+              <DesktopCanvas
+                desktop={activeDesktop}
+                renderApp={renderApp}
+              />
+            )}
+          </main>
+        </div>
+
+        {/* Command Palette Modal */}
+        <CommandPalette
+          isOpen={isPaletteOpen}
+          onClose={() => setIsPaletteOpen(false)}
+        />
+
+        {/* Notification Center Popover */}
+        <NotificationCenter
+          isOpen={isNotificationsOpen}
+          onClose={() => setIsNotificationsOpen(false)}
+        />
       </div>
       </OsResourceHost>
   );

@@ -1,5 +1,6 @@
 import type {
   FloatBounds,
+  OsAppId,
   OsDesktop,
   OsSessionV1,
   OsWindow,
@@ -125,6 +126,9 @@ export function sanitizeSessionForPersistence(
           projectId: d.defaultCtx.projectId
             ? String(d.defaultCtx.projectId)
             : undefined,
+          worktreeId: d.defaultCtx.worktreeId
+            ? String(d.defaultCtx.worktreeId)
+            : undefined,
         }
       : undefined,
     tree: d.tree,
@@ -180,8 +184,37 @@ export function validateOsSession(candidate: unknown): {
       return { valid: false, error: `Duplicate desktop id: ${desk.id}` };
     }
     desktopIds.add(desk.id);
+    if (desk.defaultCtx !== undefined) {
+      if (typeof desk.defaultCtx !== "object" || desk.defaultCtx === null) {
+        return {
+          valid: false,
+          error: `Invalid defaultCtx on desktop ${String(desk.id)}`,
+        };
+      }
+      const dctx = desk.defaultCtx as Record<string, unknown>;
+      if (typeof dctx.profileId !== "string" || !dctx.profileId) {
+        return {
+          valid: false,
+          error: `Desktop ${String(desk.id)} missing valid defaultCtx.profileId`,
+        };
+      }
+      if (dctx.projectId !== undefined && typeof dctx.projectId !== "string") {
+        return {
+          valid: false,
+          error: `Desktop ${String(desk.id)} has invalid defaultCtx.projectId`,
+        };
+      }
+      if (
+        dctx.worktreeId !== undefined &&
+        typeof dctx.worktreeId !== "string"
+      ) {
+        return {
+          valid: false,
+          error: `Desktop ${String(desk.id)} has invalid defaultCtx.worktreeId`,
+        };
+      }
+    }
   }
-
   if (!desktopIds.has(obj.activeDesktopId)) {
     return {
       valid: false,
@@ -551,6 +584,172 @@ export function importOsSessionJson(raw: string): {
       return { success: false, error: validation.error };
     }
     return { success: true, session: validation.session };
+  } catch (err) {
+    return { success: false, error: `Invalid JSON syntax: ${String(err)}` };
+  }
+}
+
+export const OS_DOCK_STORAGE_KEY = "dam-hopper:os:v1:dock";
+export const OS_SHORTCUTS_STORAGE_KEY = "dam-hopper:os:v1:shortcuts";
+export const OS_NOTIFICATION_PREFS_STORAGE_KEY =
+  "dam-hopper:os:v1:notifications_prefs";
+
+export const DEFAULT_DOCK_PINS: OsAppId[] = [
+  "terminals",
+  "editor",
+  "browser",
+];
+
+export function loadDockPins(
+  storageKey: string = OS_DOCK_STORAGE_KEY,
+): OsAppId[] {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return [...DEFAULT_DOCK_PINS];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      const valid = parsed.filter(isAppId);
+      return valid.length > 0 ? valid : [...DEFAULT_DOCK_PINS];
+    }
+    return [...DEFAULT_DOCK_PINS];
+  } catch {
+    return [...DEFAULT_DOCK_PINS];
+  }
+}
+
+export function saveDockPins(
+  pins: OsAppId[],
+  storageKey: string = OS_DOCK_STORAGE_KEY,
+): boolean {
+  try {
+    const valid = pins.filter(isAppId);
+    localStorage.setItem(storageKey, JSON.stringify(valid));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface OsExportEnvelopeV1 {
+  version: 1;
+  exportedAt: string;
+  namespaces: {
+    session?: OsSessionV1;
+    dock?: OsAppId[];
+    shortcuts?: Record<string, string>;
+    notifications_prefs?: Record<string, unknown>;
+  };
+}
+
+export function exportOsEnvelope(session: OsSessionV1): string {
+  const sanitized = sanitizeSessionForPersistence(session);
+  const dock = loadDockPins();
+  let shortcuts: Record<string, string> | undefined;
+  try {
+    const raw = localStorage.getItem(OS_SHORTCUTS_STORAGE_KEY);
+    if (raw) shortcuts = JSON.parse(raw);
+  } catch {}
+  let notifs: Record<string, unknown> | undefined;
+  try {
+    const raw = localStorage.getItem(OS_NOTIFICATION_PREFS_STORAGE_KEY);
+    if (raw) notifs = JSON.parse(raw);
+  } catch {}
+
+  const envelope: OsExportEnvelopeV1 = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    namespaces: {
+      session: sanitized,
+      dock,
+      shortcuts,
+      notifications_prefs: notifs,
+    },
+  };
+  return JSON.stringify(envelope, null, 2);
+}
+
+export function importOsEnvelope(raw: string): {
+  success: boolean;
+  envelope?: OsExportEnvelopeV1;
+  error?: string;
+} {
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      parsed.version !== 1 ||
+      !parsed.namespaces ||
+      typeof parsed.namespaces !== "object"
+    ) {
+      return { success: false, error: "Invalid envelope format or version" };
+    }
+
+    const rawNamespaces = parsed.namespaces as Record<string, unknown>;
+
+    // 1. Session projection
+    let projectedSession: OsSessionV1 | undefined;
+    if (rawNamespaces.session !== undefined) {
+      const val = validateOsSession(rawNamespaces.session);
+      if (!val.valid || !val.session) {
+        return {
+          success: false,
+          error: val.error ?? "Invalid session in envelope",
+        };
+      }
+      projectedSession = sanitizeSessionForPersistence(val.session);
+    }
+
+    // 2. Dock projection
+    let projectedDock: OsAppId[] | undefined;
+    if (Array.isArray(rawNamespaces.dock)) {
+      projectedDock = rawNamespaces.dock.filter(isAppId);
+    }
+
+    // 3. Shortcuts projection
+    let projectedShortcuts: Record<string, string> | undefined;
+    if (
+      rawNamespaces.shortcuts &&
+      typeof rawNamespaces.shortcuts === "object" &&
+      !Array.isArray(rawNamespaces.shortcuts)
+    ) {
+      projectedShortcuts = {};
+      for (const [key, val] of Object.entries(rawNamespaces.shortcuts)) {
+        if (typeof val === "string" && val.length > 0 && val.length < 50) {
+          projectedShortcuts[String(key)] = val;
+        }
+      }
+    }
+
+    // 4. Notifications preferences projection
+    let projectedNotifs: Record<string, unknown> | undefined;
+    if (
+      rawNamespaces.notifications_prefs &&
+      typeof rawNamespaces.notifications_prefs === "object" &&
+      !Array.isArray(rawNamespaces.notifications_prefs)
+    ) {
+      projectedNotifs = {};
+      for (const [key, val] of Object.entries(
+        rawNamespaces.notifications_prefs,
+      )) {
+        if (typeof val === "boolean" || typeof val === "string") {
+          projectedNotifs[String(key)] = val;
+        }
+      }
+    }
+
+    const projectedEnvelope: OsExportEnvelopeV1 = {
+      version: 1,
+      exportedAt: typeof parsed.exportedAt === "string" ? parsed.exportedAt : new Date().toISOString(),
+      namespaces: {
+        session: projectedSession,
+        dock: projectedDock,
+        shortcuts: projectedShortcuts,
+        notifications_prefs: projectedNotifs,
+      },
+    };
+
+    return { success: true, envelope: projectedEnvelope };
   } catch (err) {
     return { success: false, error: `Invalid JSON syntax: ${String(err)}` };
   }

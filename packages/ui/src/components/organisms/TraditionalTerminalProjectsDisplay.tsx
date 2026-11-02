@@ -82,6 +82,7 @@ export interface TraditionalTerminalProjectsDisplayProps {
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
   onOpenSessionChanges?: (sessionId: string) => void;
+  isCompact?: boolean;
 }
 
 export function TraditionalTerminalProjectsDisplay({
@@ -106,8 +107,11 @@ export function TraditionalTerminalProjectsDisplay({
   renderBrowserContent,
   onCloseBrowser,
   onOpenSessionChanges,
+  isCompact,
 }: TraditionalTerminalProjectsDisplayProps) {
-  const isCompactWorkspace = useCompactWorkspace();
+  const defaultCompact = useCompactWorkspace();
+  const isCompactWorkspace =
+    isCompact !== undefined ? isCompact : defaultCompact;
   const {
     width: projectsNavigatorWidth,
     handleProps: projectsNavigatorResizeProps,

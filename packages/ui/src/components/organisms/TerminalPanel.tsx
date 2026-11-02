@@ -412,13 +412,17 @@ export function TerminalPanel({
       }
       let transport: Transport;
       let isCurrent: () => boolean;
-      if (ownerProfileId && getConnectionSnapshot(ownerProfileId)) {
-        const snapshot = getConnectionSnapshot(ownerProfileId)!;
-        if (snapshot.status !== "connected") return () => {};
+      if (ownerProfileId) {
+        const snapshot = getConnectionSnapshot(ownerProfileId);
+        if (!snapshot || snapshot.status !== "connected") {
+          term.options.disableStdin = true;
+          return () => {};
+        }
         if (
           boundServerUrl !== undefined &&
           snapshot.serverUrl !== boundServerUrl
         ) {
+          term.options.disableStdin = true;
           return () => {};
         }
         boundServerUrl = snapshot.serverUrl;
@@ -1096,10 +1100,10 @@ export function TerminalPanel({
     let boundOwner: string | null = undefined as unknown as null;
     const syncConnection = () => {
       let nextOwner: string | null = null;
-      if (ownerProfileId && getConnectionSnapshot(ownerProfileId)) {
-        const snapshot = getConnectionSnapshot(ownerProfileId)!;
+      if (ownerProfileId) {
+        const snapshot = getConnectionSnapshot(ownerProfileId);
         nextOwner =
-          snapshot.status === "connected"
+          snapshot && snapshot.status === "connected"
             ? JSON.stringify(snapshot.owner)
             : null;
       } else {

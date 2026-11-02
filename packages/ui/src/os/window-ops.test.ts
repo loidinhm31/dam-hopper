@@ -1,22 +1,32 @@
 import { describe, expect, it } from "vitest";
 import {
+  addDesktop,
+  bringWindowToFront,
   clampFloatBounds,
   closeWindow,
   createDefaultOsSession,
   dockWindowInDesktopTree,
   focusWindow,
+  getVisibleFloatBounds,
   minimizeWindow,
+  moveTabWithinPane,
   moveWindowToDesktop,
   openWindow,
+  removeDesktop,
   removeWindowFromDesktopTree,
+  renameDesktop,
+  resizeFloatBounds,
   restoreWindow,
+  selectPaneTab,
+  sendWindowToBack,
+  setDefaultCtx,
   setWindowMode,
+  splitWindow,
   switchDesktop,
   toggleMaximizeWindow,
   updateDesktopTreeSizes,
   updateFloatBounds,
 } from "./window-ops.js";
-import type { WindowContext } from "./types.js";
 import { collectTilePanes, newTilePaneNode } from "@/lib/tile-tree.js";
 
 const testCtx: WindowContext = {
@@ -192,5 +202,156 @@ describe("window-ops pure functions", () => {
     expect(focusedPanes[0].items).toEqual(["win-a", "win-b"]);
     expect(focusedPanes[0].active).toBe("win-a");
     expect(session.desktops[0].focusedWindowId).toBe("win-a");
+  });
+
+  it("supports desktop CRUD (add, rename, setDefaultCtx, remove with window migration)", () => {
+    let session = createDefaultOsSession("desk-1", "Main");
+    session = addDesktop(session, "Code", { profileId: "p1", projectId: "proj1" });
+    expect(session.desktops.length).toBe(2);
+    const codeDesk = session.desktops[1];
+    expect(codeDesk.name).toBe("Code");
+    expect(codeDesk.defaultCtx?.projectId).toBe("proj1");
+
+    session = renameDesktop(session, codeDesk.id, "Workspace");
+    expect(session.desktops[1].name).toBe("Workspace");
+
+    session = setDefaultCtx(session, codeDesk.id, {
+      profileId: "p1",
+      projectId: "proj2",
+      worktreeId: "wt-feat",
+    });
+    expect(session.desktops[1].defaultCtx?.worktreeId).toBe("wt-feat");
+
+    // Open window on codeDesk
+    session = openWindow(
+      session,
+      {
+        id: "win-code",
+        appId: "editor",
+        title: "Editor",
+        ctx: { profileId: "p1" },
+        mode: "tile",
+      },
+      codeDesk.id,
+    );
+    expect(session.windows["win-code"].desktopId).toBe(codeDesk.id);
+
+    // Remove codeDesk: win-code must migrate to desk-1, not be destroyed
+    session = removeDesktop(session, codeDesk.id, "desk-1");
+    expect(session.desktops.length).toBe(1);
+    expect(session.windows["win-code"]).toBeDefined();
+    expect(session.windows["win-code"].desktopId).toBe("desk-1");
+
+    // Refuses to remove the only remaining desktop
+    const singleDeskAttempt = removeDesktop(session, "desk-1");
+    expect(singleDeskAttempt.desktops.length).toBe(1);
+  });
+
+  it("handles 8-way float resize and non-destructive visible bounds", () => {
+    const initialBounds = { x: 100, y: 100, width: 400, height: 300 };
+
+    // East resize
+    const east = resizeFloatBounds(initialBounds, 50, 0, "e");
+    expect(east.width).toBe(450);
+    expect(east.x).toBe(100);
+
+    // South-East resize
+    const se = resizeFloatBounds(initialBounds, 50, 60, "se");
+    expect(se.width).toBe(450);
+    expect(se.height).toBe(360);
+
+    // West resize (changes x and width)
+    const west = resizeFloatBounds(initialBounds, -30, 0, "w");
+    expect(west.x).toBe(70);
+    expect(west.width).toBe(430);
+
+    // Minimum bounds clamp
+    const small = resizeFloatBounds(initialBounds, -300, -200, "e");
+    expect(small.width).toBe(280); // MIN_FLOAT_WIDTH
+
+    // Non-destructive visible projection
+    const visible = getVisibleFloatBounds({ x: 2000, y: 1500, width: 500, height: 400 }, { width: 1280, height: 800 });
+    expect(visible.x).toBeLessThanOrEqual(1230);
+    expect(visible.y).toBeLessThanOrEqual(750);
+  });
+
+  it("reorders floating window Z-index via bringWindowToFront and sendWindowToBack", () => {
+    let session = createDefaultOsSession("desk-1");
+    session = openWindow(session, {
+      id: "f1",
+      appId: "terminals",
+      title: "F1",
+      ctx: testCtx,
+      mode: "float",
+    });
+    session = openWindow(session, {
+      id: "f2",
+      appId: "editor",
+      title: "F2",
+      ctx: testCtx,
+      mode: "float",
+    });
+    session = openWindow(session, {
+      id: "f3",
+      appId: "browser",
+      title: "F3",
+      ctx: testCtx,
+      mode: "float",
+    });
+
+    expect(session.desktops[0].floatingWindowIds).toEqual(["f1", "f2", "f3"]);
+
+    // Bring f1 to front
+    session = bringWindowToFront(session, "f1");
+    expect(session.desktops[0].floatingWindowIds).toEqual(["f2", "f3", "f1"]);
+    expect(session.desktops[0].focusedWindowId).toBe("f1");
+
+    // Send f1 to back
+    session = sendWindowToBack(session, "f1");
+    expect(session.desktops[0].floatingWindowIds).toEqual(["f1", "f2", "f3"]);
+  });
+
+  it("manages pane tabs and allows splitting windows via splitWindow", () => {
+    let session = createDefaultOsSession("desk-1");
+    session = openWindow(session, {
+      id: "w1",
+      appId: "terminals",
+      title: "W1",
+      ctx: testCtx,
+      mode: "tile",
+    });
+    session = openWindow(session, {
+      id: "w2",
+      appId: "editor",
+      title: "W2",
+      ctx: testCtx,
+      mode: "tile",
+    });
+
+    const panes = collectTilePanes(session.desktops[0].tree!);
+    const paneId = panes[0].id;
+
+    // Select active tab
+    session = selectPaneTab(session, paneId, "w1");
+    const afterSelect = collectTilePanes(session.desktops[0].tree!);
+    expect(afterSelect[0].active).toBe("w1");
+
+    // Move tab within pane
+    session = moveTabWithinPane(session, paneId, 0, 1);
+    const afterMove = collectTilePanes(session.desktops[0].tree!);
+    expect(afterMove[0].items).toEqual(["w2", "w1"]);
+
+    // Open floating window and split it into right of w1
+    session = openWindow(session, {
+      id: "w3",
+      appId: "browser",
+      title: "W3",
+      ctx: testCtx,
+      mode: "float",
+    });
+    session = splitWindow(session, "w3", "w1", "right");
+    expect(session.windows["w3"].mode).toBe("tile");
+    const splitPanes = collectTilePanes(session.desktops[0].tree!);
+    expect(splitPanes.length).toBe(2);
   });
 });

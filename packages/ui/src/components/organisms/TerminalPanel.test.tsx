@@ -381,6 +381,23 @@ describe("TerminalPanel owned connections", () => {
     ).toBe(true);
   });
 
+  it("fails closed without ambient fallback when qualified owner has no connection snapshot", async () => {
+    await act(async () => {
+      root.render(
+        createElement(TerminalPanel, {
+          profileId: "unconnected-profile-42",
+          sessionId: "test-term-c1",
+          project: "test-proj",
+          command: "bash",
+        }),
+      );
+    });
+
+    const term = state.terminals[state.terminals.length - 1];
+    expect(term).toBeDefined();
+    expect(term.options.disableStdin).toBe(true);
+  });
+
   it("fences outbound onData query responses during historical replay parsing", async () => {
     let replayDoneCallback: (() => void) | undefined;
 

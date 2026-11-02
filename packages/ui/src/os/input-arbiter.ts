@@ -2,6 +2,7 @@ export type InputDisposition =
   | "cognito-blocked"
   | "ime-passthrough"
   | "os-shortcut-handled"
+  | "os-palette-handled"
   | "frame-focused-handled"
   | "app-passthrough";
 
@@ -9,8 +10,15 @@ export interface InputArbiterContext {
   isCognitoActive: boolean;
   isComposing: boolean;
   isFrameFocused: boolean;
+  cycleFocusShortcut?: string;
+  paletteShortcut?: string;
 }
-
+import {
+  matchesKeyboardShortcut,
+  DEFAULT_OS_PALETTE_SHORTCUT,
+  DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
+  type ShortcutKeyEvent,
+} from "@/lib/shortcuts.js";
 export interface KeyLikeEvent {
   key: string;
   code?: string;
@@ -55,6 +63,22 @@ export function isOsGlobalShortcut(event: KeyLikeEvent): boolean {
   );
 }
 
+export function isOsPaletteShortcut(event: KeyLikeEvent): boolean {
+  if (event.repeat) return false;
+  const isAltGr =
+    typeof event.getModifierState === "function" &&
+    event.getModifierState("AltGraph");
+  if (isAltGr) return false;
+
+  return (
+    Boolean(event.ctrlKey) &&
+    Boolean(event.altKey) &&
+    !event.shiftKey &&
+    !event.metaKey &&
+    (event.key === "k" || event.key === "K" || event.code === "KeyK")
+  );
+}
+
 export function arbitrateKeyboardEvent(
   event: KeyLikeEvent,
   ctx: InputArbiterContext,
@@ -69,8 +93,34 @@ export function arbitrateKeyboardEvent(
     return "ime-passthrough";
   }
 
-  // 3. Global OS Chords (e.g. Ctrl+Alt+Escape)
-  if (isOsGlobalShortcut(event)) {
+  const normalizedEvent: ShortcutKeyEvent = {
+    code: event.code || event.key,
+    key: event.key,
+    ctrlKey: Boolean(event.ctrlKey),
+    metaKey: Boolean(event.metaKey),
+    altKey: Boolean(event.altKey),
+    shiftKey: Boolean(event.shiftKey),
+    repeat: Boolean(event.repeat),
+    isComposing: Boolean(event.isComposing),
+  };
+
+  // 3. Command Palette chord (configurable with default fallback)
+  const paletteChord = ctx.paletteShortcut || DEFAULT_OS_PALETTE_SHORTCUT;
+  if (
+    !event.repeat &&
+    (matchesKeyboardShortcut(paletteChord, normalizedEvent) ||
+      isOsPaletteShortcut(event))
+  ) {
+    return "os-palette-handled";
+  }
+
+  // 4. Focus Cycle chord (configurable with default fallback)
+  const cycleChord = ctx.cycleFocusShortcut || DEFAULT_OS_CYCLE_FOCUS_SHORTCUT;
+  if (
+    !event.repeat &&
+    (matchesKeyboardShortcut(cycleChord, normalizedEvent) ||
+      isOsGlobalShortcut(event))
+  ) {
     return "os-shortcut-handled";
   }
 

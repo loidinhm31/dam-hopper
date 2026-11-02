@@ -13,6 +13,8 @@ export const DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT =
 export const DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT = "Ctrl+Alt+Minus";
 export const EDITOR_ZOOM_WHEEL_SHORTCUT = "Mod+Wheel";
 export const DEFAULT_COGNITO_MODE_SHORTCUT = "Mod+Alt+KeyB";
+export const DEFAULT_OS_PALETTE_SHORTCUT = "Ctrl+Alt+KeyK";
+export const DEFAULT_OS_CYCLE_FOCUS_SHORTCUT = "Ctrl+Alt+Escape";
 
 const DOUBLE_SHIFT_MS = 450;
 

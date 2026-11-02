@@ -10,6 +10,11 @@ import type { OsWindow } from "./types.js";
 import { useWindowStore } from "./window-store.js";
 import { useWindowContext } from "./window-context.js";
 import { arbitrateKeyboardEvent } from "./input-arbiter.js";
+import {
+  DEFAULT_FLOAT_BOUNDS,
+  getVisibleFloatBounds,
+  type ResizeDirection,
+} from "./window-ops.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { useEditorStore } from "@/stores/editor.js";
 
@@ -19,7 +24,7 @@ export interface WindowFrameProps {
 }
 
 export function WindowFrame({ window, children }: WindowFrameProps) {
-  const { isFocused } = useWindowContext();
+  const { isFocused, owner } = useWindowContext();
   const isCognitoActive = useCognitoModeStore((state) => state.active);
   const session = useWindowStore((state) => state.session);
   const focusWindow = useWindowStore((state) => state.focusWindow);
@@ -33,9 +38,22 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
     (state) => state.moveWindowToDesktop,
   );
   const updateFloatBounds = useWindowStore((state) => state.updateFloatBounds);
+  const resizeFloatBounds = useWindowStore((state) => state.resizeFloatBounds);
+  const viewport = useWindowStore((state) => state.viewport);
+  const [isResizing, setIsResizing] = useState(false);
 
   const [isDragging, setIsDragging] = useState(false);
   const dragCleanupRef = useRef<(() => void) | null>(null);
+
+  // Cancel active drag/resize gestures immediately if Cognito activates or unmounts
+  useEffect(() => {
+    if (isCognitoActive && dragCleanupRef.current) {
+      dragCleanupRef.current();
+      dragCleanupRef.current = null;
+      setIsDragging(false);
+      setIsResizing(false);
+    }
+  }, [isCognitoActive]);
 
   useEffect(() => {
     return () => {
@@ -94,6 +112,46 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
       window.floatBounds,
       focusWindow,
       updateFloatBounds,
+    ],
+  );
+
+  const handleStartResize = useCallback(
+    (direction: ResizeDirection, e: ReactMouseEvent) => {
+      if (window.mode !== "float" || window.maximized || isCognitoActive) return;
+      e.stopPropagation();
+      e.preventDefault();
+      focusWindow(window.id);
+      setIsResizing(true);
+
+      let prevX = e.clientX;
+      let prevY = e.clientY;
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        const deltaX = moveEvent.clientX - prevX;
+        const deltaY = moveEvent.clientY - prevY;
+        prevX = moveEvent.clientX;
+        prevY = moveEvent.clientY;
+        resizeFloatBounds(window.id, deltaX, deltaY, direction);
+      };
+
+      const handleMouseUp = () => {
+        setIsResizing(false);
+        globalThis.removeEventListener("mousemove", handleMouseMove);
+        globalThis.removeEventListener("mouseup", handleMouseUp);
+        dragCleanupRef.current = null;
+      };
+
+      globalThis.addEventListener("mousemove", handleMouseMove);
+      globalThis.addEventListener("mouseup", handleMouseUp);
+      dragCleanupRef.current = handleMouseUp;
+    },
+    [
+      window.mode,
+      window.maximized,
+      window.id,
+      isCognitoActive,
+      focusWindow,
+      resizeFloatBounds,
     ],
   );
 
@@ -201,22 +259,43 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
         height: "100vh",
       }
     : window.mode === "float"
-      ? {
-          position: "absolute",
-          left: window.floatBounds?.x ?? 60,
-          top: window.floatBounds?.y ?? 60,
-          width: window.floatBounds?.width ?? 720,
-          height: window.floatBounds?.height ?? 520,
-          zIndex: isFocused ? 30 : 20,
-        }
+      ? (() => {
+          const bounds = window.floatBounds
+            ? getVisibleFloatBounds(window.floatBounds, viewport)
+            : DEFAULT_FLOAT_BOUNDS;
+          return {
+            position: "absolute" as const,
+            left: bounds.x,
+            top: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+            zIndex: isFocused ? 30 : 20,
+          };
+        })()
       : {
-          position: "relative",
+          position: "relative" as const,
           width: "100%",
           height: "100%",
         };
+  const RESIZE_HANDLES: Array<{
+    dir: ResizeDirection;
+    className: string;
+  }> = [
+    { dir: "n", className: "top-0 left-2 right-2 h-2 cursor-n-resize" },
+    { dir: "s", className: "bottom-0 left-2 right-2 h-2 cursor-s-resize" },
+    { dir: "w", className: "left-0 top-2 bottom-2 w-2 cursor-w-resize" },
+    { dir: "e", className: "right-0 top-2 bottom-2 w-2 cursor-e-resize" },
+    { dir: "nw", className: "top-0 left-0 w-3 h-3 cursor-nw-resize" },
+    { dir: "ne", className: "top-0 right-0 w-3 h-3 cursor-ne-resize" },
+    { dir: "sw", className: "bottom-0 left-0 w-3 h-3 cursor-sw-resize" },
+    { dir: "se", className: "bottom-0 right-0 w-3 h-3 cursor-se-resize" },
+  ];
 
   return (
     <div
+      role="region"
+      aria-label={window.title}
+      aria-labelledby={`window-title-${window.id}`}
       data-os-window-frame={window.id}
       data-testid={`window-frame-${window.id}`}
       tabIndex={-1}
@@ -229,7 +308,6 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
           : "border-[var(--color-border)] shadow-sm"
       } ${window.mode === "float" ? "rounded-lg" : ""}`}
     >
-      {/* Frame Header / Toolbar */}
       <div
         data-os-frame-header="true"
         onMouseDown={handleStartDrag}
@@ -240,7 +318,10 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
         } ${window.mode === "float" && !window.maximized ? "cursor-move" : "cursor-default"}`}
       >
         <div className="flex items-center gap-2 overflow-hidden">
-          <span className="font-medium text-[var(--color-text)] truncate">
+          <span
+            id={`window-title-${window.id}`}
+            className="font-medium text-[var(--color-text)] truncate"
+          >
             {window.title}
           </span>
           {window.ctx.projectId && (
@@ -249,7 +330,6 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
             </span>
           )}
         </div>
-
         {/* Window controls */}
         <div className="flex items-center gap-1">
           {/* Mode toggle (Tile <-> Float) */}
@@ -329,8 +409,38 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
         data-os-window-slot={window.id}
         className="flex-1 min-h-0 relative overflow-hidden"
       >
-        {children}
+        {!owner.targetValid ? (
+          <div
+            data-os-target-unavailable="true"
+            data-testid="window-target-unavailable"
+            className="flex flex-col items-center justify-center p-6 text-center h-full bg-[var(--color-surface)] text-xs text-[var(--color-text-muted)] gap-3 select-none"
+          >
+            <span className="text-sm font-semibold text-[var(--color-text)]">
+              Target Profile Unavailable
+            </span>
+            <p className="max-w-xs leading-relaxed">
+              {owner.repairAffordance ??
+                `Server profile '${window.ctx.profileId}' is missing or retired.`}
+            </p>
+          </div>
+        ) : (
+          children
+        )}
       </div>
+
+      {/* 8-Way Floating Resize Handles */}
+      {window.mode === "float" && !window.maximized && (
+        <>
+          {RESIZE_HANDLES.map(({ dir, className }) => (
+            <div
+              key={dir}
+              data-os-resize-handle={dir}
+              onMouseDown={(e) => handleStartResize(dir, e)}
+              className={`absolute z-40 select-none ${className}`}
+            />
+          ))}
+        </>
+      )}
     </div>
   );
 }

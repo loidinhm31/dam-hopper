@@ -406,11 +406,11 @@ describe("Cognito Mode Real-Browser Regressions", () => {
     expect(toastViewport).not.toBeNull();
     // Verify toast is stacked ABOVE the mask (z-index 10001 > overlay 10000)
     expect(toastViewport?.style.zIndex).toBe("10001");
-    expect(toastViewport?.textContent).toContain("Claude needs attention");
+    expect(toastViewport?.textContent).toContain("Notification (Protected)");
 
     // Toast button is visible above the mask, but clicks on it are intercepted by input guard
     const toastButton = page.getByRole("button", {
-      name: /Claude needs attention\. Open terminal/,
+      name: /Notification \(Protected\)\. Open terminal/,
     });
     const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
     toastButton.element().dispatchEvent(clickEvent);

@@ -41,8 +41,9 @@ import {
   DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
   DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
   DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+  DEFAULT_OS_PALETTE_SHORTCUT,
+  DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
 } from "@/lib/shortcuts.js";
-
 const FONT_MIN = 10;
 const FONT_MAX = 32;
 const KEYBOARD_FONT_MIN = 9;
@@ -108,6 +109,8 @@ interface PersistedSettingsState {
   agentSettingsPaths?: AgentSettingsPaths;
   cognitoModeShortcut: string;
   cognitoModeStyle: CognitoModeStyle;
+  osPaletteShortcut: string;
+  osCycleFocusShortcut: string;
 }
 
 interface SettingsState extends PersistedSettingsState {
@@ -204,6 +207,10 @@ function applySnapshotToStore(
   if (typeof snapshot.terminalFontSizeDecreaseShortcut === "string")
     clamped.terminalFontSizeDecreaseShortcut =
       snapshot.terminalFontSizeDecreaseShortcut;
+  if (typeof snapshot.osPaletteShortcut === "string")
+    clamped.osPaletteShortcut = snapshot.osPaletteShortcut;
+  if (typeof snapshot.osCycleFocusShortcut === "string")
+    clamped.osCycleFocusShortcut = snapshot.osCycleFocusShortcut;
   if (typeof snapshot.terminalSuggestionsEnabled === "boolean")
     clamped.terminalSuggestionsEnabled = snapshot.terminalSuggestionsEnabled;
   if (typeof snapshot.terminalAutoSwitchProjectEnabled === "boolean")
@@ -297,6 +304,9 @@ function pickPersistedSettings(
     agentSettingsPaths: state.agentSettingsPaths,
     cognitoModeShortcut: state.cognitoModeShortcut,
     cognitoModeStyle: state.cognitoModeStyle,
+    osPaletteShortcut: state.osPaletteShortcut ?? DEFAULT_OS_PALETTE_SHORTCUT,
+    osCycleFocusShortcut:
+      state.osCycleFocusShortcut ?? DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
   };
 }
 
@@ -348,6 +358,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   agentSettingsPaths: undefined,
   cognitoModeShortcut: DEFAULT_COGNITO_MODE_SHORTCUT,
   cognitoModeStyle: "heavy-blur",
+  osPaletteShortcut: DEFAULT_OS_PALETTE_SHORTCUT,
+  osCycleFocusShortcut: DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
   hydrated: false,
   sourceUnset: true,
 

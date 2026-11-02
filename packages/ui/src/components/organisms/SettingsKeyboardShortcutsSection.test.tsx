@@ -433,4 +433,20 @@ describe("SettingsKeyboardShortcutsSection", () => {
 
     expect(maskedEvent.defaultPrevented).toBe(true);
   });
+
+  it("renders OS Command Palette and Focus Cycle shortcuts with remappable capture", async () => {
+    await act(async () => {
+      root?.render(<SettingsKeyboardShortcutsSection />);
+    });
+
+    const paletteBtn = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Set shortcut for OS Command Palette"]',
+    );
+    const cycleBtn = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Set shortcut for OS Focus Cycle"]',
+    );
+
+    expect(paletteBtn).not.toBeNull();
+    expect(cycleBtn).not.toBeNull();
+  });
 });

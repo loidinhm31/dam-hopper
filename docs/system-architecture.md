@@ -181,6 +181,64 @@ The AI Dev OS redesign establishes a web-native multi-window, multi-desktop oper
   - **C1/C2 & W1–W4 Carryover:** Editor save generation fencing, terminal owner retirement, Monaco parking reparenting (W2), and real resource controller integration (W3) remain open acceptance items carried to Phase 09.
   - **Mandatory Lifecycle Acceptance Gate (Task 4):** Open. Live Playwright journey execution (`E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e -- os-lifecycle`) and human visual acceptance have not yet been executed.
 
+
+## AI Dev OS Shell Chrome & Services Infrastructure (Phase 04)
+
+**Status:** Phase 04 implementation under the [AI Dev OS Redesign Plan](../plans/261101-1738-ai-dev-os-redesign/plan.md) reached administrative completion per user direction (Task 1 `complete-os-chrome` and Task 2 `integrate-os-services` completed in source). Technical acceptance is incomplete and carried forward: live lifecycle oracles (H1/H2), Monaco model continuity, and caller integrations remain open downstream gates.
+
+Phase 04 builds upon the Phase 01 prototype to establish shell chrome and operating services: desktop and window controls, launcher dock, command palette, notification logging, typed intent routing, topic subscription infrastructure, 4-namespace persistence envelopes, and input arbitration.
+
+### 1. Shell Chrome, Window Management & Viewport Adaptation
+
+- **TopBar & Virtual Desktops (`packages/ui/src/os/TopBar.tsx` & `DesktopSwitcher.tsx`):**
+  - `DesktopSwitcher` provides horizontal virtual desktop tab navigation (`role="tablist"`), inline desktop renaming via `Enter` / `Escape`, desktop addition, and desktop removal with window migration to a surviving desktop (`removeDesktop`).
+  - Per-desktop `defaultCtx` configuration (`profileId`, optional `projectId`, `worktreeId`) is modifiable via the TopBar context dropdown. Context changes apply to newly launched windows only; existing open windows remain bound to their originating server profiles.
+  - The TopBar hosts the notification bell with unread badge counter and command palette trigger.
+- **Application Dock & Window List (`packages/ui/src/os/Dock.tsx` & `WindowList.tsx`):**
+  - `Dock` renders pinned application launchers (`dam-hopper:os:v1:dock`) with running/minimized pip indicators (`.os-dock-pip`, `.os-dock-pip-active`). Launch semantics check `APP_MANIFESTS`: single-instance apps (`terminals`) restore and focus existing instances; multi-instance apps spawn new windows using the active desktop's `defaultCtx`.
+  - `WindowList` provides quick window focus and restoration across desktops. Closing an editor window checks `useEditorStore` for unsaved dirty tabs and presents an explicit confirmation guard (`globalThis.confirm`) before window destruction.
+- **WindowFrame Controls & 5-Zone Split Layout (`packages/ui/src/os/WindowFrame.tsx` & `DesktopCanvas.tsx`):**
+  - Floating windows feature 8-way resize handles (`n`, `s`, `w`, `e`, `nw`, `ne`, `sw`, `se`) and header dragging. Active drag and resize gestures abort immediately upon Cognito activation via `dragCleanupRef`.
+  - Floating coordinates are clamped to visible viewport boundaries via `clampFloatBounds`.
+  - `DesktopCanvas` renders tiled tree panes via `GenericTileRenderer`. Multi-window panes render accessible pane tabs (`data-os-pane-tabs`), and `splitWindow` provides 5-zone docking primitives (`top`, `bottom`, `left`, `right`, `tab`).
+- **Command Palette (`packages/ui/src/os/CommandPalette.tsx`):**
+  - Provides 5 operational search modes with query prefix routing: `>` (commands), `@` (agents), `#` (windows), `/` (files), and `!` (recipes).
+  - Triggers via configurable shortcut (default `Ctrl+Alt+KeyK`). Closes immediately if Cognito Privacy Mode activates.
+- **Viewport Tiers & Container Queries (`packages/ui/src/os/use-os-viewport.ts` & `os.css`):**
+  - Shell chrome scales via CSS tokens: `--os-topbar-height` (40px standard, 36px compact, 34px narrow height) and `--os-dock-width` (48px standard, 44px compact).
+  - `useOsViewport` establishes non-destructive layout tiers: Standard ($\ge 1280\text{px}$), Compact ($1024\text{--}1279\text{px}$), Narrow Height ($640\text{--}767\text{px}$), and Unsupported ($<1024\times 640\text{px}$ notice).
+  - `useContainerQuery` provides container-width observation for embedded components, driving compact navigator layouts in `TraditionalTerminalProjectsDisplay`.
+
+### 2. Input Precedence, Remappable Shortcuts & `/os` Isolation
+
+- **5-Tier Arbitration Engine (`packages/ui/src/os/input-arbiter.ts`):**
+  1. `cognito-blocked`: Active Cognito Privacy Mode intercepts and suppresses keyboard input within the app document boundary.
+  2. `ime-passthrough`: Composition events (`isComposing`, `keyCode === 229`, `key === "Dead"`, `key === "Process"`, or `AltGraph`) pass through immediately.
+  3. `os-palette-handled` / `os-shortcut-handled`: OS Command Palette and Focus Cycle (`Ctrl+Alt+Escape`) chords intercept before application dispatch.
+  4. `frame-focused-handled`: Chrome toolbar and window frame header controls intercept when focused.
+  5. `app-passthrough`: Pass-through to active app body (xterm / Monaco / iframe).
+- **Remappable Shortcuts (`packages/ui/src/stores/settings.ts` & `lib/shortcuts.ts`):**
+  - `osPaletteShortcut` (default `Ctrl+Alt+KeyK`) and `osCycleFocusShortcut` (default `Ctrl+Alt+Escape`) are remappable in Settings > Keyboard Shortcuts (`SettingsKeyboardShortcutsSection.tsx`). In the current baseline, the arbiter continues to accept hard-coded default chords alongside configured shortcuts (tracked as limitation W1).
+  - Global isolation on `/os` avoids double dispatch: `GlobalShortcuts` ignores `matchesNewTerminalShortcut` on `/os` routes.
+
+### 3. Fenced Services, Topics, Notifications & Intents
+
+- **Explicit Window Context & Fenced Action Helper (`packages/ui/src/os/window-context.tsx`):**
+  - `WindowContextProvider` validates target server profile existence against `readServerProfiles()`; missing profiles demote the window to a read-only preserved state with a user repair affordance.
+  - Exposes `fencedAction`: an available helper capturing connection generation and status before and after execution (discarding results if disconnected or generation rotated). Note: caller integration across application mutation paths remains open.
+- **Topic Broker Infrastructure (`packages/ui/src/os/topics.ts`):**
+  - `globalTopicBroker` (`subscribeTopic`, `publishTopic`, `useTopic`) provides a lightweight topic broker for 7 OS topics: `agent:status`, `host:resources`, `host:sleep`, `ports:list`, `git:status`, `workflow:context`, `fs:watch`.
+  - Subscriptions and snapshots are strictly partitioned by `(profileId, generation)`. Late subscribers receive cached snapshots, and unsubscriptions are bound to the originating owner generation. (Note: topic broker infrastructure and tests delivered; live background subscriptions across all workbench hooks remain open).
+- **OS Notifications & Attention Routing (`packages/ui/src/os/notifications.ts` & `NotificationCenter.tsx`):**
+  - `useOsNotificationStore` maintains an in-memory bounded 50-entry FIFO log (`MAX_NOTIFICATION_ENTRIES = 50`) across 4 levels (`info`, `warning`, `error`, `attention`).
+  - Unifies OS events with terminal attention notifications, providing target window and terminal focus routing (exact-target terminal routing retaining open gaps).
+  - Immediate Cognito Redaction: `redactNotification` masks title, body, and target identifiers with protected placeholders ("Notification (Protected)") whenever Cognito Mode is active, without wiping in-memory state.
+- **Typed OS Intent Router (`packages/ui/src/os/intents.ts`):**
+  - `globalIntentRouter` (`dispatchIntent`, `registerIntentHandler`, `createIntent`) defines 11 typed actions: `terminal:open`, `terminal:focus`, `file:open`, `file:edit`, `browser:preview`, `browser:open`, `git:status`, `git:diff`, `git:history`, `system:monitor`, `recipes:launch`.
+  - Unknown or unregistered intents fail closed with a safe unhandled no-op result without process execution or side-effects.
+- **4-Namespace Envelope Persistence (`packages/ui/src/os/persistence.ts`):**
+  - `exportOsEnvelope` and `importOsEnvelope` support four namespaces (`session`, `dock`, `shortcuts`, `notifications_prefs`) under `dam-hopper:os:v1:*` localStorage keys.
+  - Serialized session data strips credentials, output buffers, and dirty text, projecting allowlisted view attributes only. Autosave suspends (`autosaveSuspended = true`) on corrupt bytes to protect disk state. The importer validates and projects envelope records without directly applying namespaces to storage or Settings (namespace schema validation and Settings wiring tracked as open W3).
 ## Multi-Profile Ownership Model
 
 A browser-side `profileId` selects one saved server endpoint/identity. A monotonically replaced connection `generation` identifies the current runtime for that profile. UI work captures both before issuing requests.

@@ -15,6 +15,8 @@ import {
   DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
   DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
   DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+  DEFAULT_OS_PALETTE_SHORTCUT,
+  DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
   DoubleShiftDetector,
   displayShortcut,
   shortcutFromKeyboardEvent,
@@ -163,6 +165,8 @@ export function SettingsKeyboardShortcutsSection() {
     projectPanelShortcut,
     fleetTerminalShortcut,
     cognitoModeShortcut,
+    osPaletteShortcut,
+    osCycleFocusShortcut,
     saveDebounced,
   } = useSettingsStore();
 
@@ -341,6 +345,38 @@ export function SettingsKeyboardShortcutsSection() {
           validate={validateCognitoModeShortcut}
           onChange={(shortcut) =>
             saveDebounced({ cognitoModeShortcut: shortcut })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="OS Command Palette"
+        description="Open the DamHopper OS command palette"
+      >
+        <ShortcutCapture
+          value={osPaletteShortcut}
+          defaultValue={DEFAULT_OS_PALETTE_SHORTCUT}
+          label="OS Command Palette"
+          onChange={(shortcut) =>
+            saveDebounced({ osPaletteShortcut: shortcut })
+          }
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="OS Focus Cycle"
+        description="Cycle focus between OS windows without emitting terminal escape bytes"
+      >
+        <ShortcutCapture
+          value={osCycleFocusShortcut}
+          defaultValue={DEFAULT_OS_CYCLE_FOCUS_SHORTCUT}
+          label="OS Focus Cycle"
+          onChange={(shortcut) =>
+            saveDebounced({ osCycleFocusShortcut: shortcut })
           }
         />
       </SettingRow>

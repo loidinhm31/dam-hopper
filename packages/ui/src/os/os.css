@@ -1,0 +1,79 @@
+/* DamHopper OS — Shell Chrome & Theme Styling */
+
+:root {
+  --os-topbar-height: 40px;
+  --os-dock-width: 48px;
+}
+
+@media (max-width: 1279px) {
+  :root {
+    --os-topbar-height: 36px;
+    --os-dock-width: 44px;
+  }
+}
+
+@media (max-height: 767px) {
+  :root {
+    --os-topbar-height: 34px;
+  }
+}
+
+/* Glass card styling */
+.os-glass {
+  background-color: var(--color-surface);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Dock indicator pips */
+.os-dock-pip {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background-color: var(--color-primary);
+}
+
+.os-dock-pip-active {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background-color: var(--color-primary);
+  box-shadow: 0 0 6px var(--color-primary);
+}
+
+/* Attention badge */
+.os-attention-badge {
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 3px;
+  background-color: var(--color-warning);
+  color: #000;
+}
+
+/* Window frame header cursor */
+.os-drag-handle {
+  cursor: grab;
+}
+
+.os-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Viewport fallback notice */
+.os-viewport-fallback {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .os-transition-none,
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

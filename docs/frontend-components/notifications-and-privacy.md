@@ -58,8 +58,9 @@ The app root mounts the overlay outside the routed content and keeps global
 shortcut services and the notification viewport mounted. A neutral content
 wrapper receives `inert` and `aria-hidden` while masked rather than unmounting
 productive routes. The terminal toast viewport remains visible above the mask
-(z-index `10001` while active), but capture listeners prevent pointer
-interaction; toast lifetime and other notification delivery are unchanged.
+(z-index `10001` while active), but displayed titles, bodies, and projects are
+redacted with protected placeholders ("Notification (Protected)"), and capture
+listeners prevent pointer interaction; toast lifetime and other notification delivery are unchanged.
 `BrowserDebugKeepAliveHost` separately hides the requested viewport: native
 hosts receive a null viewport and the iframe fallback receives
 `isViewportVisible={false}`. Dismissal restores the measured viewport without

@@ -18,6 +18,7 @@ function TerminalNotificationToast({
   const dismissToast = useTerminalNotificationsStore(
     (state) => state.dismissToast,
   );
+  const isCognitoActive = useCognitoModeStore((state) => state.active);
 
   useEffect(() => {
     const timer = window.setTimeout(() => dismissToast(id), 6_000);
@@ -36,29 +37,40 @@ function TerminalNotificationToast({
     dismissToast(id);
   };
 
+  const displayTitle = isCognitoActive
+    ? "Notification (Protected)"
+    : event.title;
+  const displayBody = isCognitoActive
+    ? "Details hidden in Cognito Mode"
+    : event.body;
+  const displayProject = isCognitoActive ? undefined : event.project;
   return (
     <article className="glass-card-blur flex overflow-hidden rounded-md border border-[var(--color-border)] shadow-2xl">
       <button
         type="button"
         onClick={selectNotification}
         className="flex min-w-0 flex-1 items-start gap-3 p-3 text-left transition-colors hover:bg-[var(--color-surface-2)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-ring)]"
-        aria-label={`${event.title}. Open terminal`}
+        aria-label={
+          isCognitoActive
+            ? "Notification (Protected). Open terminal"
+            : `${event.title}. Open terminal`
+        }
       >
         <span className="mt-0.5 rounded bg-[var(--color-primary)]/15 p-1.5 text-[var(--color-primary)]">
           <Bell aria-hidden="true" size={14} />
         </span>
         <span className="min-w-0">
           <span className="block truncate text-xs font-bold text-[var(--color-text)]">
-            {event.title}
+            {displayTitle}
           </span>
-          {event.body && (
+          {displayBody && (
             <span className="mt-1 line-clamp-2 block text-[10px] leading-relaxed text-[var(--color-text-muted)]">
-              {event.body}
+              {displayBody}
             </span>
           )}
-          {event.project && (
+          {displayProject && (
             <span className="mt-1.5 block truncate text-[9px] font-semibold uppercase tracking-wide text-[var(--color-primary)]">
-              {event.project}
+              {displayProject}
             </span>
           )}
         </span>
@@ -67,7 +79,11 @@ function TerminalNotificationToast({
         type="button"
         onClick={() => dismissToast(id)}
         className="m-1 self-start rounded p-1.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-2 focus-visible:outline-[var(--color-ring)]"
-        aria-label={`Dismiss ${event.title} notification`}
+        aria-label={
+          isCognitoActive
+            ? "Dismiss protected notification"
+            : `Dismiss ${event.title} notification`
+        }
       >
         <X aria-hidden="true" size={14} />
       </button>

@@ -1,9 +1,9 @@
 # Phase 04: P1 completion — Shell chrome and services
 
-Estimate: 56h; implementation status: **pending**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
+Estimate: 56h; implementation status: **DONE per user direction (2026-11-02 13:02:03 +07:00)** (technical acceptance incomplete). [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
 
 ## Context / objective
-Priority P1; pending. Minimal true dependency: qualified lifecycle prototype ONLY. Its ancestors already complete native shared-host and Usage-web embed handoffs; chrome files overlap no P0 docs/manual/version/release paths, so no P0 receipt prerequisite. P0 release remains independent and must precede Phase08 root cutover only. `/os` stays URL-only/no discovery/build flag. [UI](../reports/ui-ux-designer-261101-1738-ai-dev-os-initial-ui.md).
+Priority P1; status: **DONE per user direction (2026-11-02 13:02:03 +07:00)** (technical acceptance incomplete). Minimal true dependency: qualified lifecycle prototype ONLY. Its ancestors already complete native shared-host and Usage-web embed handoffs; chrome files overlap no P0 docs/manual/version/release paths, so no P0 receipt prerequisite. P0 release remains independent and must precede Phase08 root cutover only. `/os` stays URL-only/no discovery/build flag. [UI](../reports/ui-ux-designer-261101-1738-ai-dev-os-initial-ui.md).
 
 ## Architecture / requirements
 - `packages/ui/src/os/` owns services/composition. Existing status/transport/query/crypto providers stay canonical; no new bus protocol, dependency, plugin system or server API.
@@ -28,6 +28,48 @@ Priority P1; pending. Minimal true dependency: qualified lifecycle prototype ONL
 
 ## Success / verification
 AC6/9/11 and chrome part of AC4/5; context selector never resends actions to a new profile. Browser tests cover 1440x900,1920x1080,1024x640, zoom, resizing, reduced preferences, keyboard-only controls and focus after closing. No dirty buffer/output/credentials in exported JSON; corrupted or unavailable storage recovers visibly. Main runs commands below after tasks land; all new app hooks remain explicit owner-scoped.
+
+### Verification Record — Phase 04 Completion (2026-11-02 13:02:03 +07:00)
+- **Status:** Phase 04 marked **DONE per user direction (2026-11-02 13:02:03 +07:00)**; technical acceptance incomplete (Cycle 3 review scored 5/10, 0 Critical, 7 warnings W1–W7 carried forward to Phase 05/09).
+- **Task Dispositions:**
+  - `complete-os-chrome` (Task 1): **DONE (2026-11-02)**. Delivered `WindowFrame`, `DesktopCanvas`, pure window operations in `window-ops.ts`, `window-store.ts`, `TopBar` with desktop switcher and context selector, `Dock` with pinning/running/attention badges, `WindowList` popover, `CommandPalette` with commands/agents/windows modes, `use-os-viewport.ts`, and `os.css` layout styles.
+  - `integrate-os-services` (Task 2): **DONE (2026-11-02)**. Delivered `NotificationCenter` with in-memory bell log and reactive Cognito redaction, typed intents (`intents.ts`), envelope persistence with allowlisted app state (`persistence.ts`), input arbiter with global shortcut isolation and remappable OS keymap in Settings (`input-arbiter.ts`, `shortcuts.ts`, `SettingsKeyboardShortcutsSection.tsx`), and fail-closed qualified terminal transport resolving C1 (`TerminalPanel.tsx`).
+- **Phase 04 Final Validation Evidence (`Phase04Tester` report):**
+  - **Overall Status:** `PASS` (100% pass rate).
+  - **Targeted Unit Tests (62 / 62 passed across 9 files; 113 / 113 across literal command selection):**
+    - `src/os/resource-registry.test.ts`: 5/5 passed
+    - `src/os/topics.test.ts`: 2/2 passed
+    - `src/os/intents.test.ts`: 3/3 passed
+    - `src/os/notifications.test.ts`: 3/3 passed
+    - `src/os/window-ops.test.ts`: 11/11 passed
+    - `src/os/input-arbiter.test.ts`: 6/6 passed
+    - `src/os/persistence.test.ts`: 12/12 passed
+    - `src/components/organisms/SettingsKeyboardShortcutsSection.test.tsx`: 11/11 passed
+    - `src/components/organisms/TerminalPanel.test.tsx`: 9/9 passed
+  - **Browser Component Tests (26 / 26 passed):**
+    - `os-shell.browser.tsx`: 4/4 passed (landmarks, virtual desktop switching, dock launch/pip indicator, 8-way resize handles).
+    - `os-input-isolation.browser.tsx`: 3/3 passed (Cognito physical keyboard block, immediate notification redaction, IME/AltGr chord passthrough).
+    - `cognito-mode.browser.tsx`: 10/10 passed (mask overlay, toast z-index 10001 stacking, click prevention, protected labels).
+    - `os-lifecycle.browser.tsx`: 9/9 passed (desktop management, window state preservation, focus restoration).
+  - **Typecheck & Build:**
+    - `@dam-hopper/ui build` (`tsc -p tsconfig.json`): 0 TypeScript errors.
+    - Monorepo `pnpm build`: Clean production Vite build (6,126 modules transformed, 0 errors).
+- **Cycle 3 Code Review & Carried Technical Acceptance Items (`Phase04Reviewer` report):**
+  - **Score:** 5/10 (0 Critical, 7 warnings W1–W7).
+  - **Resolved / Closed Findings:**
+    - C1: Qualified terminal ambient fallback closed (terminals fail closed when connection snapshot is disconnected/missing).
+    - W5: WindowList dirty-close confirmation present.
+    - W8: `removeDesktop` validates and rejects invalid explicit destination.
+    - Bell notification ingestion and reactive Cognito title/body/aria redaction verified.
+    - Envelope import sanitized through allowlisted projection.
+  - **Carried Technical Debt & Remediation Items (to Phase 05 / Phase 09):**
+    - W1: Native keyboard event spreading in input arbiter (`input-arbiter.ts`, `src/lib/shortcuts.ts`) requires explicit key/code/modifier copying for remapped chords.
+    - W2: Notification exact-target routing (`NotificationCenter.tsx`) requires exact `{profileId, sessionId}` match and freshness checks before focus restoration.
+    - W3: Envelope schema typing and inert-reference activation (`persistence.ts`) requires strict namespace schema validation.
+    - W4: `fencedAction` caller integration and project/worktree validation (`window-context.tsx`).
+    - W5: Keyboard move/resize/split alternatives and container queries in production consumers (`DesktopCanvas.tsx`, `WindowFrame.tsx`).
+    - W6: Canonical service topic subscriptions integration (`topics.ts`).
+    - W7: Test coverage depth for C1 ambient retirement scenario (`TerminalPanel.test.tsx`).
 
 ## Risks / security / rollback
 Nested OS/terminal DnD and split handlers must consume once with distinct drag ID namespaces. A background desktop must not request terminal fits or WebGL, and still receives metadata attention without mounting all app bodies. Freeform appState serialization is forbidden; schema allowlists only. Roll back shell chrome/services as a unit to Phase01 /os without touching old web routes or local terminal v3 keys. Unknown future OS schemas default safely; never downgrade/overwrite unknown data without explicit user import/reset. Next: app migration.
@@ -186,5 +228,5 @@ Exactly one authored fence; no execution state/hydration, completion or test rec
 ]
 ```
 
-- [ ] <!-- evcrate-task:complete-os-chrome --> Complete desktop window controls, dock, palette and accessible compact chrome
-- [ ] <!-- evcrate-task:integrate-os-services --> Integrate explicit context, topics, notifications, intents and shortcut ownership
+- [x] <!-- evcrate-task:complete-os-chrome --> Complete desktop window controls, dock, palette and accessible compact chrome (DONE 2026-11-02 13:02:03 +07:00)
+- [x] <!-- evcrate-task:integrate-os-services --> Integrate explicit context, topics, notifications, intents and shortcut ownership (DONE 2026-11-02 13:02:03 +07:00)

@@ -1,23 +1,39 @@
 import { create } from "zustand";
-import type { FloatBounds, OsSessionV1, OsWindow, WindowMode } from "./types.js";
+import type {
+  FloatBounds,
+  OsSessionV1,
+  OsWindow,
+  WindowContext,
+  WindowMode,
+} from "./types.js";
 import type { TileDockTarget } from "@/types/tile-tree.js";
 import {
+  addDesktop,
+  bringWindowToFront,
   clampFloatBounds,
   closeWindow,
   createDefaultOsSession,
   dockWindowInDesktopTree,
   focusWindow,
   minimizeWindow,
+  moveTabWithinPane,
   moveWindowToDesktop,
   openWindow,
+  removeDesktop,
+  renameDesktop,
+  type ResizeDirection,
+  resizeFloatBounds,
   restoreWindow,
+  selectPaneTab,
+  setDefaultCtx,
+  sendWindowToBack,
   setWindowMode,
+  splitWindow,
   switchDesktop,
   toggleMaximizeWindow,
   updateDesktopTreeSizes,
   updateFloatBounds,
 } from "./window-ops.js";
-
 export interface WindowStoreState {
   session: OsSessionV1;
   viewport: { width: number; height: number };
@@ -47,36 +63,36 @@ export interface WindowStoreState {
     splitId: string,
     sizes: [number, number],
   ) => void;
+  addDesktop: (name?: string, defaultCtx?: WindowContext) => void;
+  removeDesktop: (desktopId: string, survivingDesktopId?: string) => void;
+  renameDesktop: (desktopId: string, name: string) => void;
+  setDefaultCtx: (desktopId: string, defaultCtx?: WindowContext) => void;
+  bringWindowToFront: (windowId: string) => void;
+  sendWindowToBack: (windowId: string) => void;
+  resizeFloatBounds: (
+    windowId: string,
+    deltaX: number,
+    deltaY: number,
+    direction: ResizeDirection,
+  ) => void;
+  selectPaneTab: (paneId: string, windowId: string) => void;
+  moveTabWithinPane: (
+    paneId: string,
+    fromIndex: number,
+    toIndex: number,
+  ) => void;
+  splitWindow: (
+    sourceWindowId: string,
+    targetWindowId: string,
+    direction: "left" | "right" | "top" | "bottom" | "center",
+  ) => void;
 }
 
 export const useWindowStore = create<WindowStoreState>((set, get) => ({
   session: createDefaultOsSession(),
   viewport: { width: 1280, height: 800 },
   setViewport: (viewport) => {
-    set((state) => {
-      const updatedWindows = { ...state.session.windows };
-      let changed = false;
-      for (const [winId, win] of Object.entries(updatedWindows)) {
-        if (win.mode === "float" && win.floatBounds) {
-          const clamped = clampFloatBounds(win.floatBounds, viewport);
-          if (
-            clamped.x !== win.floatBounds.x ||
-            clamped.y !== win.floatBounds.y ||
-            clamped.width !== win.floatBounds.width ||
-            clamped.height !== win.floatBounds.height
-          ) {
-            updatedWindows[winId] = { ...win, floatBounds: clamped };
-            changed = true;
-          }
-        }
-      }
-      return {
-        viewport,
-        session: changed
-          ? { ...state.session, windows: updatedWindows }
-          : state.session,
-      };
-    });
+    set({ viewport });
   },
   setSession: (session) => set({ session }),
 
@@ -156,6 +172,88 @@ export const useWindowStore = create<WindowStoreState>((set, get) => ({
   updateTreeSizes: (desktopId, splitId, sizes) => {
     set((state) => ({
       session: updateDesktopTreeSizes(state.session, desktopId, splitId, sizes),
+    }));
+  },
+
+  addDesktop: (name, defaultCtx) => {
+    set((state) => ({
+      session: addDesktop(state.session, name, defaultCtx),
+    }));
+  },
+
+  removeDesktop: (desktopId, survivingDesktopId) => {
+    set((state) => ({
+      session: removeDesktop(state.session, desktopId, survivingDesktopId),
+    }));
+  },
+
+  renameDesktop: (desktopId, name) => {
+    set((state) => ({
+      session: renameDesktop(state.session, desktopId, name),
+    }));
+  },
+
+  setDefaultCtx: (desktopId, defaultCtx) => {
+    set((state) => ({
+      session: setDefaultCtx(state.session, desktopId, defaultCtx),
+    }));
+  },
+
+  bringWindowToFront: (windowId) => {
+    set((state) => ({
+      session: bringWindowToFront(state.session, windowId),
+    }));
+  },
+
+  sendWindowToBack: (windowId) => {
+    set((state) => ({
+      session: sendWindowToBack(state.session, windowId),
+    }));
+  },
+
+  resizeFloatBounds: (windowId, deltaX, deltaY, direction) => {
+    const { viewport } = get();
+    set((state) => {
+      const win = state.session.windows[windowId];
+      if (!win || win.mode !== "float" || !win.floatBounds) return state;
+      const nextBounds = resizeFloatBounds(
+        win.floatBounds,
+        deltaX,
+        deltaY,
+        direction,
+        viewport,
+      );
+      return {
+        session: updateFloatBounds(
+          state.session,
+          windowId,
+          nextBounds,
+          viewport,
+        ),
+      };
+    });
+  },
+
+  selectPaneTab: (paneId, windowId) => {
+    set((state) => ({
+      session: selectPaneTab(state.session, paneId, windowId),
+    }));
+  },
+
+  moveTabWithinPane: (paneId, fromIndex, toIndex) => {
+    set((state) => ({
+      session: moveTabWithinPane(state.session, paneId, fromIndex, toIndex),
+    }));
+  },
+
+  splitWindow: (sourceWindowId, targetWindowId, direction) => {
+    set((state) => ({
+      session: splitWindow(
+        state.session,
+        sourceWindowId,
+        targetWindowId,
+        direction,
+      ),
     }));
   },
 }));

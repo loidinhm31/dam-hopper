@@ -4,6 +4,7 @@ import {
   arbitrateKeyboardEvent,
   isImeOrCompositionEvent,
   isOsGlobalShortcut,
+  isOsPaletteShortcut,
 } from "./input-arbiter.js";
 
 describe("input-arbiter", () => {
@@ -52,6 +53,23 @@ describe("input-arbiter", () => {
       isFrameFocused: false,
     });
     expect(disposition).toBe("os-shortcut-handled");
+  });
+
+  it("handles Ctrl+Alt+K as OS command palette chord", () => {
+    const event = new KeyboardEvent("keydown", {
+      key: "k",
+      code: "KeyK",
+      ctrlKey: true,
+      altKey: true,
+    });
+    expect(isOsPaletteShortcut(event)).toBe(true);
+
+    const disposition = arbitrateKeyboardEvent(event, {
+      isCognitoActive: false,
+      isComposing: false,
+      isFrameFocused: false,
+    });
+    expect(disposition).toBe("os-palette-handled");
   });
   it("handles frame focus when chrome is active", () => {
     const event = new KeyboardEvent("keydown", { key: "ArrowRight" });

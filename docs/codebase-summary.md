@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Source summary:** Repomix 1.18.0 compaction generated 2026-11-02 (`repomix-output.xml`; 3,935 files included, 10 scanner-excluded, 9,590,318 tokens, 41,680,625 chars). The repository inventory reflects Phase 02 (P0a: Tauri desktop host and SSH-forwarding UI removal), Phase 03 (P0b: Usage and server telemetry retirement, neutral DB path helpers, and early release preparation), and the Phase 01 OS lifecycle prototype implementation checkpoint of the AI Dev OS redesign.
+**Source summary:** Repomix 1.18.0 compaction generated 2026-11-02 (`repomix-output.xml`; 3,956 files included, 10 scanner-excluded, 9,629,828 tokens, 41,843,719 chars). The repository inventory reflects Phase 02 (P0a: Tauri desktop host and SSH-forwarding UI removal), Phase 03 (P0b: Usage and server telemetry retirement, neutral DB path helpers, and early release preparation), Phase 01 OS lifecycle prototype, and Phase 04 OS shell chrome and services implementation baseline of the AI Dev OS redesign.
 
 ## Historical Repository Inventory (2026-10-05)
 
@@ -200,17 +200,35 @@ Phase 01 core implementation under [AI Dev OS Redesign Plan](../plans/261101-173
   - **H2 (Privacy/Input Journey Lacks Behavioral Outcome Assertion):** Cognito test types text without establishing active app focus or asserting zero received PTY bytes / zero editor mutations under privacy mode.
   - **C1/C2 & W1–W4 Carryover:** Editor save generation fencing, terminal owner retirement, Monaco parking reparenting (W2), and real resource controller integration (W3) remain open acceptance items carried to Phase 09.
   - **Mandatory Lifecycle Acceptance Gate (Task 4):** Open. Live Playwright journey execution (`E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e -- os-lifecycle`) and human visual acceptance have not yet been executed.
+## AI Dev OS Shell Chrome & Services Phase 04 Implementation Checkpoint (2026-11-02)
+
+Phase 04 implementation under [AI Dev OS Redesign Plan](../plans/261101-1738-ai-dev-os-redesign/plan.md) reached administrative completion per user direction (Task 1 `complete-os-chrome` and Task 2 `integrate-os-services` completed in source). Technical acceptance is incomplete; live lifecycle oracles (H1/H2), Monaco model continuity, and caller integrations carry forward to downstream phases.
+
+| Subsystem / Module | Source Path | Architectural Invariants & Role |
+| --- | --- | --- |
+| **TopBar & Desktop Switcher** | `packages/ui/src/os/TopBar.tsx`, `DesktopSwitcher.tsx` | Virtual desktop tabs with inline renaming (`Enter`/`Escape`), per-desktop `defaultCtx` configuration (profile, optional project/worktree) affecting new windows only without altering existing instances, context selector dropdown, and `NotificationCenter` trigger with unread badge. |
+| **Dock & Window List** | `packages/ui/src/os/Dock.tsx`, `WindowList.tsx` | Application dock with pinned launchers (`dam-hopper:os:v1:dock`), running/minimized pip indicators (`.os-dock-pip`, `.os-dock-pip-active`), single-instance vs multi-instance launch semantics (`APP_MANIFESTS`), and window switcher dropdown with unsaved dirty editor tabs departure guard (`globalThis.confirm`). |
+| **Window Frame & Desktop Canvas** | `packages/ui/src/os/WindowFrame.tsx`, `DesktopCanvas.tsx` | 8-way floating resize handles (`n, s, w, e, nw, ne, sw, se`), viewport clamping (`clampFloatBounds`), gesture cancellation upon Cognito activation (`dragCleanupRef`), multi-window pane tabs (`[data-os-pane-tabs]`), and 5-zone split/docking primitives (`splitWindow`). |
+| **Command Palette** | `packages/ui/src/os/CommandPalette.tsx` | 5 operational search modes with query prefix shortcuts (`>` commands, `@` agents, `#` windows, `/` files, `!` recipes); instant closure on Cognito mode activation; default `Ctrl+Alt+KeyK`. |
+| **Responsive Viewport Chrome** | `packages/ui/src/os/use-os-viewport.ts`, `os.css` | CSS tokens (`--os-topbar-height`: 40/36/34px, `--os-dock-width`: 48/44px) and viewport tiers (Standard >=1280, Compact 1024-1279, Narrow Height 640-767, Unsupported <1024x640 with notice); container query support for compact terminal navigator (`useContainerQuery`, `TraditionalTerminalProjectsDisplay`). |
+| **Input Arbiter & Remappable Shortcuts** | `packages/ui/src/os/input-arbiter.ts`, `shortcuts.ts`, `stores/settings.ts` | 5-tier arbitration (`cognito-blocked` > `ime-passthrough` > `os-shortcut-handled` / `os-palette-handled` > `frame-focused-handled` > `app-passthrough`). Shortcuts configurable in Settings (`osPaletteShortcut`, `osCycleFocusShortcut`), with default chords (`Ctrl+Alt+Escape`, `Ctrl+Alt+KeyK`) accepted in the arbiter. Global shortcut isolation on `/os` avoids double dispatch. |
+| **Explicit Window Context & Fenced Actions** | `packages/ui/src/os/window-context.tsx` | `WindowContextProvider` provides `useWindowOwner()` and helper `fencedAction` (pre/post connection snapshot and generation checks; caller integration remains open). Profile existence validation preserves unavailable window states with a repair affordance. |
+| **Topic Broker** | `packages/ui/src/os/topics.ts` | `globalTopicBroker` (`subscribeTopic`, `publishTopic`, `useTopic`) strictly isolates topics by `(profileId, generation)`, caches last snapshot for late subscribers, and scopes teardown to originating owner generation. (Topic broker infrastructure delivered; live background subscriptions across workbench hooks remain open). |
+| **Notifications & Attention Routing** | `packages/ui/src/os/notifications.ts`, `NotificationCenter.tsx` | Bounded 50-entry FIFO log (`MAX_NOTIFICATION_ENTRIES = 50`) across 4 levels (`info`, `warning`, `error`, `attention`), unifies OS and terminal notifications, routes focus to target window or terminal (exact-target routing retaining open gaps), and applies immediate UI field redaction (`redactNotification`) when Cognito Privacy Mode is active (redacts title/body/profile without wiping in-memory state). |
+| **Typed OS Intents** | `packages/ui/src/os/intents.ts` | Typed OS intent routing (`globalIntentRouter`, `dispatchIntent`, `registerIntentHandler`, `createIntent`) supporting 11 actions (`terminal:open`, `terminal:focus`, `file:open`, `file:edit`, `browser:preview`, `browser:open`, `git:status`, `git:diff`, `git:history`, `system:monitor`, `recipes:launch`); unregistered intents return safe unhandled no-op results without process reuse. |
+| **4-Namespace Envelope Persistence** | `packages/ui/src/os/persistence.ts` | `exportOsEnvelope` and `importOsEnvelope` support four namespaces (`session`, `dock`, `shortcuts`, `notifications_prefs`) under `dam-hopper:os:v1:*` keys with allowlisted appState view projection and corrupt-byte autosave suspension (`autosaveSuspended`). Importer validates/projects envelope without directly modifying storage or Settings. |
+
 ## Shared UI Map
 
 `packages/ui/` exports the shared application via `packages/ui/src/embed/dam-hopper-app.tsx` (`packages/ui/src/index.ts` does not exist).
 - **Components (`packages/ui/src/components/`):** 238 files, ~53k LOC across atoms, molecules, organisms, templates, and pages (including `GenericTileRenderer` in `SplitLayout.tsx`).
-- **OS Subsystem (`packages/ui/src/os/`):** 17 files, ~2.7k LOC implementing OS shell, desktop canvas, window frame, window store, resource registry, persistence, input arbiter, Monaco keep-alive host, and app adapters.
+- **OS Subsystem (`packages/ui/src/os/`):** 35 files, ~7.1k LOC implementing OS shell, top bar, dock, desktop switcher, window list, command palette, notification center, window frame, desktop canvas, topics broker, intents router, notifications store, input arbiter, persistence, and tests.
 - **API & Transports (`packages/ui/src/api/`):** 26 files, ~18.4k LOC managing ownership tuples, connection registry, WebSocket transport, React Query hooks, and SSE parser.
 - **Hooks (`packages/ui/src/hooks/`):** 51 files, ~13k LOC covering Git operations, terminal managers, cognitive privacy guards, and SSE streams.
 - **Core Library (`packages/ui/src/lib/`):** 122 files, ~17k LOC implementing generic tile tree algorithms, terminal wire codecs, OPAQUE PAKE, AES-256-GCM crypto, terminal registries, and diagnostics.
 - **State Stores (`packages/ui/src/stores/`):** 11 files, ~4k LOC managing editor tabs, explorer expansion, Git history selection, and privacy mode.
 - **Types (`packages/ui/src/types/`):** Generic `TileTree<T>` data model (`tile-tree.ts`) and terminal layout definitions.
-- **Browser Component Regressions (`packages/ui/browser-tests/`):** Headless Chromium suites, including `os-lifecycle.browser.tsx` (9 tests).
+- **Browser Component Regressions (`packages/ui/browser-tests/`):** Headless Chromium suites, including `os-lifecycle.browser.tsx` (9 tests), `os-shell.browser.tsx` (4 tests), `os-input-isolation.browser.tsx` (3 tests), and `cognito-mode.browser.tsx`.
 - **Design Guidelines:** Defined in `packages/ui/src/index.css` and `docs/frontend-components/platform-integrations.md` (JetBrains Mono, dark slate palette, Radix UI primitives with `@radix-ui/react-compose-refs` React 19 patch).
 
 ## Workflow Tracking
@@ -248,6 +266,6 @@ DamHopper enforces a **4-tier testing architecture** (see [Testing Guide](./test
 
 Deployment artifacts are located in `deploy/release/` and documented in the [Installation and Deployment Guide](./deployment-guide.md).
 ## Codebase Compaction Snapshot
-Repomix compaction artifact generated at `./repomix-output.xml` (3,935 files, 9,590,318 tokens packed, 41,680,625 chars, excluding dot-folders, build artifacts, lockfiles, and 10 security-flagged test/config assets as of 2026-11-02). Reflects Phase 02 (P0a) removal of `apps/native/` and desktop SSH forwarding, alongside the Phase 01 OS lifecycle architecture and components.
+Repomix compaction artifact generated at `./repomix-output.xml` (3,956 files, 9,629,828 tokens packed, 41,843,719 chars, excluding dot-folders, build artifacts, lockfiles, and 10 security-flagged test/config assets as of 2026-11-02). Reflects Phase 02 (P0a) removal of `apps/native/` and desktop SSH forwarding, alongside the Phase 01 OS lifecycle architecture and Phase 04 shell chrome and services.
 
 *Note on Compaction Timing:* The Repomix metrics above reflect the compaction snapshot generated during this documentation update pass on 2026-11-02.
