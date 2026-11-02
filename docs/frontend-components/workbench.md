@@ -65,9 +65,9 @@ defaults; profile and generation ownership is encoded by
 
 The unadvertised `/os` route provides access to the AI Dev OS multi-window desktop prototype, wrapped in an `ErrorBoundary` and `Suspense`:
 - **Auth Guard (`AuthenticatedOsRoute`):** Inspects the active profile via `useServerProfile()` and evaluates `Boolean(profile && (profile.authType === "none" || token))`.
-- **Authenticated Access:** If an active profile has a valid token (or `authType === "none"` for local development), dynamically loads and renders `<OsShell />`.
+- **Authenticated Access:** If an active profile has a locally available token (or `authType === "none"` for local development), dynamically loads and renders `<OsShell />`.
 - **Unauthenticated Fallback:** If no profile is connected or authentication is missing, renders an explicit fallback card (`data-testid="os-unauthenticated"`) instructing the operator to connect to an active authenticated server profile.
-- **Reactive Unmounting:** When locally observed profile or token credentials are revoked or cleared, the route reactively unmounts `<OsShell />` and restores the unauthenticated fallback card without requiring a page reload.
+- **Reactive Unmounting:** When a locally observed change makes the guard evaluate false (such as token revocation or profile logout), the route reactively unmounts `<OsShell />` and restores the unauthenticated fallback card without requiring a page reload.
 
 ### Global Shortcut Isolation
 

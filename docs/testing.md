@@ -99,13 +99,18 @@ pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts b
 E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e device-login-management/device-login-management.spec.ts
 
 # Feature: AI Dev OS Lifecycle Prototype (Phase 01)
+# 1. Application-shell and /os route gating unit tests (10 tests: /os unauthenticated notice, token/none auth, revocation unmount, Ctrl+` isolation)
 pnpm --filter @dam-hopper/ui exec vitest run src/embed/dam-hopper-app.test.tsx
+# 2. OS logic and pure window operation unit tests (26 tests: input-arbiter, window-ops, persistence, resource-registry)
 pnpm --filter @dam-hopper/ui exec vitest run src/os/
+# 3. Browser component regressions (9 tests: full transition matrix tile/float/max/min/desktop, DOM reference continuity, hidden interval verification, iframe preservation, Cognito isolation)
 pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/os-lifecycle.browser.tsx
+# 4. E2E static typecheck (tsconfig.e2e.json)
 pnpm --filter @dam-hopper/ui test:e2e:typecheck
-# Application E2E journey (unexecuted live qualification gate, review.md PENDING_REVIEW):
+# 5. Application E2E journey (unexecuted live qualification gate, review.md PENDING_REVIEW):
 E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e os-lifecycle/os-lifecycle.spec.ts
 ```
+
 ---
 
 ## 4. Isolated Application Services
@@ -169,7 +174,7 @@ Application E2E journeys validate end-to-end user workflows across containerized
    - Traverses window placement transitions: switches to float mode, maximizes float window, restores float window, minimizes to top bar tray, and restores from tray, asserting DOM identity marker survival at each step.
    - Launches an editor window and browser preview window to establish multi-window canvas occupancy.
    - Adds Desktop 2, moves terminal window to Desktop 2, switches between Desktop 1 and Desktop 2, asserting identical terminal identity marker rendered on Desktop 2 canvas.
-   - Focuses terminal window on Desktop 2, activates Cognito Privacy Mode (`Control+Alt+KeyB`), asserts overlay visibility and `inert` attribute, clicks overlay, types input while masked, and dismisses Cognito mode (with behavioral outcome verification, such as zero written PTY bytes, recorded as an open blocker under H2).
+   - Selects terminal window on Desktop 2, activates Cognito Privacy Mode (`Control+Alt+KeyB`), asserts overlay visibility and `inert` attribute, clicks overlay, attempts typed input while masked, and dismisses Cognito mode (with behavioral outcome verification, such as zero written PTY bytes, recorded as an open blocker under H2).
    - Captures checkpoint evidence via `captureApplicationCheckpoint`. Colocated governance file `packages/ui/e2e/os-lifecycle/review.md` records `PENDING_REVIEW` pending operator visual inspection.
    - *Technical Lifecycle Qualification Boundary:* Live PTY streaming continuity across reparenting, zero attach/replay counters, Monaco model/undo stack preservation under a live daemon, and behavioral outcome assertions (zero written PTY bytes under Cognito) remain open qualification blockers (H1/H2) carried forward to Phase 09.
 ---
