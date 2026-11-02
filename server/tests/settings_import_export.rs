@@ -16,7 +16,6 @@ use dam_hopper_server::{
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
-    telemetry::TelemetryRuntime,
 };
 mod common;
 
@@ -68,7 +67,6 @@ fn make_test_state(tmp: &TempDir, initial_toml: &str) -> AppState {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut rand::rngs::OsRng),
         DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
-        TelemetryRuntime::new(),
     )
     .expect("make_test_state failed")
     .with_auth_service(std::sync::Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0))

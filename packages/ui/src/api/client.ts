@@ -1919,145 +1919,6 @@ export interface LastCommit {
   date: string;
 }
 
-export type UsageBucket = "hour" | "day";
-export type UsageWindow = "24h" | "7d" | "30d";
-/** Bounded provider model identifier. Treat as display-only opaque text. */
-export type UsageModel = string;
-
-export interface UsageSummaryQuery {
-  from?: number;
-  to?: number;
-  window?: UsageWindow;
-  bucket?: UsageBucket;
-  model?: UsageModel;
-}
-
-export interface UsageTokens {
-  inputTokens: number | null;
-  cachedInputTokens: number | null;
-  outputTokens: number | null;
-  reasoningTokens: number | null;
-  responseCount?: number;
-  durationMs?: number | null;
-}
-
-/** Privacy-safe aggregate bucket; no command, event, or conversation data. */
-export interface UsageTimeBucket {
-  startUtcMs: number;
-  codex: UsageTokens | null;
-}
-
-export interface UsageSummary {
-  range: { from: number; to: number; bucket: UsageBucket };
-  codex: UsageTokens | null;
-  timeSeries: UsageTimeBucket[];
-  health: UsageHealth;
-}
-
-export interface UsageHealth {
-  available: boolean;
-  paused: boolean;
-  writerErrors: number;
-  rejectedEvents: number;
-  sampledAt: number;
-  collector: UsageCollectorHealth;
-}
-
-export interface UsageCollectorHealth {
-  running: boolean;
-  malformed: number;
-  rejected: number;
-  queued: number;
-  dropped: number;
-  duplicate: number;
-  unverifiedVersion: number;
-  coreSchemaDrift: number;
-  unavailableTokenCoverage: number;
-  lastAcceptedAtUtcMs: number | null;
-}
-
-export interface UsageCollectorSettings {
-  enabled: boolean;
-  host: string;
-  port: number;
-}
-
-export interface UsageRuntimeStatus {
-  active: boolean;
-  collector: UsageCollectorHealth;
-  collectorError: string | null;
-}
-
-export type UsageCodexExporterStatus = "notConfigured" | "managed" | "conflict";
-
-export interface UsageCollectorSetup {
-  codexExporter: UsageCodexExporterStatus;
-  restartRequired: boolean;
-  serverRestartRequired: boolean;
-}
-
-export interface UsageSetupStatus {
-  enabled: boolean;
-  paused: boolean;
-  collectorEnabled: boolean;
-  runtime: UsageRuntimeStatus;
-  collectorSetup: UsageCollectorSetup;
-}
-
-export interface UsageSettings {
-  enabled: boolean;
-  paused: boolean;
-  detailRetentionDays: number;
-  aggregateRetentionDays: number | null;
-  collectorEnabled: boolean;
-  runtime: UsageRuntimeStatus;
-  collectorSetup: UsageCollectorSetup;
-}
-
-export interface UsageSettingsPatch {
-  enabled?: boolean;
-  paused?: boolean;
-  detailRetentionDays?: number;
-  aggregateRetentionDays?: number | null;
-  collector?: UsageCollectorSettings;
-  codexExporter?: boolean;
-  retryCollector?: boolean;
-}
-
-export interface UsageSessionQuery {
-  from?: number;
-  to?: number;
-  model?: UsageModel;
-  limit?: number;
-  cursor?: string;
-}
-
-export interface UsageSessionExecutorModel {
-  model: UsageModel | null;
-  responseCount: number;
-  tokens: UsageTokens;
-}
-
-export interface UsageSessionSummary {
-  id: string;
-  startedAtUtcMs: number;
-  endedAtUtcMs: number | null;
-  model: UsageModel | null;
-  tokens: UsageTokens;
-  models: UsageSessionExecutorModel[];
-}
-
-export interface UsageSessionPage {
-  range: { from: number; to: number };
-  sessions: UsageSessionSummary[];
-  nextCursor: string | null;
-  paused: boolean;
-}
-
-export interface UsageSessionDetail {
-  session: UsageSessionSummary;
-  paused: boolean;
-}
 
 export interface ProjectWithStatus extends ProjectConfig {
   status: GitStatus | null;
@@ -2803,15 +2664,6 @@ export function createApiClient(
     return targets.map(toWireTarget);
   }
 
-  const usageDelete = (request: {
-    confirmation: string;
-    from?: number;
-    to?: number;
-  }) =>
-    transport.invoke<{ deleted: true }>("usage:deleteAll", {
-      ...request,
-    });
-
   return {
     owner,
     transport,
@@ -3523,29 +3375,6 @@ export function createApiClient(
         return decodeConsentDecisionResponse(raw);
       },
     },
-    usage: {
-      summary: (query: UsageSummaryQuery = {}) =>
-        transport.invoke<UsageSummary>("usage:summary", query),
-      sessions: (query: UsageSessionQuery = {}) =>
-        transport.invoke<UsageSessionPage>("usage:sessions", query),
-      session: (id: string) =>
-        transport.invoke<UsageSessionDetail>("usage:session", { id }),
-      health: () => transport.invoke<UsageHealth>("usage:health"),
-      settings: () => transport.invoke<UsageSettings>("usage:settings"),
-      setupStatus: () =>
-        transport.invoke<UsageSetupStatus>("usage:setupStatus"),
-      updateSettings: (patch: UsageSettingsPatch) =>
-        transport.invoke<UsageSettings>("usage:updateSettings", patch),
-      configure: (patch: UsageSettingsPatch) =>
-        transport.invoke<UsageSetupStatus>("usage:configure", patch),
-      delete: (request: { confirmation: string; from?: number; to?: number }) =>
-        transport.invoke<{ deleted: true }>("usage:deleteAll", {
-          ...request,
-        }),
-      deleteAll: () => usageDelete({ confirmation: "delete-usage-data" }),
-      deleteRange: (from: number, to: number) =>
-        usageDelete({ confirmation: "delete-usage-data", from, to }),
-    },
     fs: {
       list: (target: ProjectTargetInput, path: string) =>
         transport.invoke<FsListResponse>("fs:list", {
@@ -4241,23 +4070,6 @@ export interface ApiClient {
     submitConsentDecision: (
       request: ConsentDecisionRequest,
     ) => Promise<ConsentDecisionResponse>;
-  };
-  usage: {
-    summary: (query?: UsageSummaryQuery) => Promise<UsageSummary>;
-    sessions: (query?: UsageSessionQuery) => Promise<UsageSessionPage>;
-    session: (id: string) => Promise<UsageSessionDetail>;
-    health: () => Promise<UsageHealth>;
-    settings: () => Promise<UsageSettings>;
-    setupStatus: () => Promise<UsageSetupStatus>;
-    updateSettings: (patch: UsageSettingsPatch) => Promise<UsageSettings>;
-    configure: (patch: UsageSettingsPatch) => Promise<UsageSetupStatus>;
-    delete: (request: {
-      confirmation: string;
-      from?: number;
-      to?: number;
-    }) => Promise<{ deleted: true }>;
-    deleteAll: () => Promise<{ deleted: true }>;
-    deleteRange: (from: number, to: number) => Promise<{ deleted: true }>;
   };
   fs: {
     list: (target: ProjectTargetInput, path: string) => Promise<FsListResponse>;

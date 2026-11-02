@@ -93,9 +93,6 @@ vi.mock("@/components/organisms/SettingsAppearanceSection.js", () => ({
 vi.mock("@/components/organisms/SettingsKeyboardShortcutsSection.js", () => ({
   SettingsKeyboardShortcutsSection: () => <div>KeyboardSection</div>,
 }));
-vi.mock("@/components/organisms/SettingsUsageInsightsSection.js", () => ({
-  SettingsUsageInsightsSection: () => <div>UsageSection</div>,
-}));
 vi.mock("@/components/organisms/DiagnosticsExportButton.js", () => ({
   DiagnosticsExportButton: () => <div>DiagnosticsButton</div>,
 }));
@@ -372,7 +369,6 @@ describe("SettingsPage accordion collapse behavior", () => {
   const SECTION_TITLES = [
     "Appearance",
     "Keyboard Shortcuts",
-    "Usage insights",
     "Terminal Idle Suspend",
     "Session Changes",
     "Global Settings",

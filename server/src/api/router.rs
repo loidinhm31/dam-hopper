@@ -31,7 +31,7 @@ use super::{
     agent_import, agent_memory, agent_status, agent_store, auth, auth_mfa, browser_debug, commands,
     config, diagnostics, fs as fs_api, fs_image, fs_video, git, git_blame, git_diff, host_actions,
     idle_suspend, media_session, plans as plans_api, port_forward as port_forward_api,
-    resource_events, session_changes, settings, ssh, system, terminal, tunnel, usage, usage_sessions, workflow,
+    resource_events, session_changes, settings, ssh, system, terminal, tunnel, workflow,
     workspace, ws,
 };
 
@@ -149,22 +149,6 @@ pub fn build_router_with_web_dir_and_origins(
         .route("/api/config", get(config::get_config))
         .route("/api/config", put(config::update_config))
         .route("/api/config/projects/{name}", patch(config::update_project))
-        // Usage analytics is aggregate-only and always protected by this router.
-        .route("/api/usage/summary", get(usage::summary))
-        .route("/api/usage/sessions", get(usage_sessions::list_sessions))
-        .route("/api/usage/sessions/{id}", get(usage_sessions::get_session))
-        .route("/api/usage/health", get(usage::health))
-        .route(
-            "/api/usage/settings",
-            get(usage::get_settings)
-                .post(usage::update_settings)
-                .patch(usage::update_settings),
-        )
-        .route(
-            "/api/usage/setup",
-            get(usage::get_setup_status).patch(usage::update_settings),
-        )
-        .route("/api/usage", delete(usage::delete_all))
         // Git
         .route("/api/git/fetch", post(git::fetch_projects))
         .route("/api/git/pull", post(git::pull_projects))

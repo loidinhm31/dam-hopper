@@ -1,6 +1,6 @@
 # Server Runtime and Settings
 
-Server-managed runtime settings for session persistence, telemetry, and diagnostic collection moved from the [server configuration index](./server-configuration.md).
+Server-managed runtime settings for session persistence and diagnostic collection moved from the [server configuration index](./server-configuration.md).
 ## Runtime and service settings
 
 Optional: configure SQLite path and retention for terminal restart recovery. Session persistence is always enabled when the database can be opened.
@@ -89,101 +89,6 @@ future approved design, but authentication, re-authentication, helper
 enrollment, lifecycle/audit, IPC, and host mutation are deferred together. Do
 not configure or call those deferred routes for monitoring; no current setting
 enables them.
-
-### Telemetry Configuration
-
-Telemetry is opt-in and disabled by default. The settings live under `[server.telemetry]` in
-the registry file. Omitting the section leaves collection and the Codex OTLP collector off;
-enabling the collector does not change the loopback-only network boundary.
-
-```toml
-[server.telemetry]
-enabled = false
-db_path = "~/.config/dam-hopper/telemetry.db"
-detail_retention_days = 90
-# aggregate_retention_days = 365
-
-[server.telemetry.collector]
-enabled = false
-host = "127.0.0.1"
-port = 4811
-```
-
-| Field                      | Type           | Default                             | Notes                                                    |
-| -------------------------- | -------------- | ----------------------------------- | -------------------------------------------------------- |
-| `enabled`                  | bool           | `false`                             | Master switch for telemetry collection and persistence   |
-| `db_path`                  | string         | `~/.config/dam-hopper/telemetry.db` | SQLite telemetry database path                           |
-| `detail_retention_days`    | u16            | `90`                                | Detailed-event retention, from 1 to 3650 days            |
-| `aggregate_retention_days` | u32 or omitted | omitted                             | Optional aggregate retention; when set, must be positive |
-| `collector.enabled`        | bool           | `false`                             | Enables the authenticated Codex OTLP/HTTP receiver       |
-| `collector.host`           | IP address     | `127.0.0.1`                         | Must be a loopback address                               |
-| `collector.port`           | u16            | `4811`                              | Must be non-zero                                         |
-
-TOML uses snake_case keys; the corresponding API representation uses camelCase (for example,
-`dbPath`, `detailRetentionDays`, and `aggregateRetentionDays`). The telemetry database is
-separate from session persistence. When enabled, startup creates/opens it and starts a bounded
-worker; initialization failures disable analytics only. SQLite and WAL/SHM files are restricted
-to owner access on Unix. Telemetry stores bounded, privacy-filtered metadata rather than command
-text, prompts, responses, or tool output; see the [telemetry architecture notes](../system-architecture.md#codex-otel-usage-analytics).
-
-Daily aggregates are retained indefinitely when `aggregate_retention_days` is omitted. Set it to
-a positive value to purge older UTC rollups. The Usage page can delete all data or a selected
-UTC-day-aligned `[from,to)` range; deletion requires explicit confirmation. Full deletion also
-rotates the shared telemetry HMAC key, while range deletion does not.
-
-Codex session summaries are flat and retention-bounded, not permanent. Raw `response.completed`
-events are applied before the configured detail-retention purge removes expired summaries and
-events. `delta` counters accumulate, while `cumulative` counters accept only newer non-regressing
-values.
-Codex CLI 0.146.1 may emit token fields without trace/span identity. Those records use a
-domain-separated HMAC fallback over bounded decoded fields, remain `unverified`, and are stable for
-replay; valid trace/span identity always takes precedence. Identical same-millisecond decoded events
-can dedupe as the documented compatibility
-tradeoff; invalid timestamps still fail closed. No receipt-time, conversation-ID-alone, random-ID,
-raw-content, or config-secret fallback is used. This does not change telemetry configuration,
-event fields, or the SQLite schema. The existing Usage health response additionally exposes
-fixed-cardinality in-memory drop counters; they reset on process restart and contain no source or
-payload values. Its legacy `droppedMissingIdentity` counter remains available for API compatibility
-and stays zero while this fallback is active.
-Telemetry uses a fresh v1 Codex-only schema containing only Codex sessions, usage events, daily
-rollups, and health state. There is no legacy-data migration or import. During development, startup
-checks the SQLite version and complete schema object set; a legacy, malformed, or otherwise
-incompatible telemetry database is reset transactionally by removing its user tables/views/triggers/
-indexes and recreating the v1 schema. A valid current database is reopened without data loss. The
-reset is bounded to the configured telemetry file, and telemetry/session database paths must resolve
-to different files. Stop DamHopper and remove the telemetry database plus its `-wal`/`-shm` sidecars
-for an explicit clean reset; never remove the separate `sessions.db`.
-
-The Usage settings API can explicitly manage the local Codex exporter with `codexExporter: true`.
-It writes only the exact DamHopper-owned shape in `~/.codex/config.toml` (loopback `/v1/logs`,
-binary OTLP, one bearer header, and `log_user_prompt = false`). The generated secret is stored
-in `~/.config/dam-hopper/codex-otlp-token` as a regular owner-only (`0600`) file; config writes
-are atomic. Foreign, malformed, or changed exporter configuration is reported as
-`codexExporter: "conflict"` and never overwritten. API responses expose status only
-(`notConfigured`, `managed`, or `conflict`), never the bearer value.
-
-Managing the config does not restart Codex: restart the existing Codex process separately for
-it to reconnect. Collector changes restart only the loopback listener, not the DamHopper server.
-Failed runtime or registry writes roll back both runtime state and the managed Codex file.
-
-`PATCH /api/usage/settings` applies validated telemetry changes to the running server before
-persisting the registry file. Enabling or disabling telemetry changes which newly accepted Codex
-events are persisted; existing summaries remain readable. Collector host/port or enabled-state
-changes stop and start the loopback listener while the server remains up. If a collector restart
-or retention operation fails, the previous live collector/configuration is restored and the failed
-update is not published.
-
-Rollback/runbook: pause collection, optionally delete a UTC range or all usage data, then leave
-the feature disabled. Existing telemetry is not removed by disabling the flag. Re-enable only
-after confirming database permissions, collector loopback binding, and the Usage health counters.
-
-The Usage page's Sessions tab is a read-only audit view over flat aggregate summaries. It keeps
-cached input separate from the primary token total and accepts dynamic provider/model identifiers.
-Session IDs are derived HMAC values; raw commands, prompts, responses, tool content, and storage
-paths are not displayed or stored in the UI. Pausing keeps existing summaries available while
-marking the view paused; deletion requires explicit confirmation. List/detail refresh runs every
-15 seconds only in a visible document (hidden browser tabs stop polling), with identical behavior
-in browser and native hosts.
 
 ### Diagnostics Storage
 

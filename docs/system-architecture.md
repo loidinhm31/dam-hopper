@@ -23,7 +23,7 @@ flowchart LR
 ### Code Boundaries
 
 - `server/src/api/` registers protected HTTP, REST-backed client operations, and authenticated WebSocket routes. `server/src/state.rs` contains shared application state.
-- `server/src/` domains include `auth`, `config`, `crypto`, `fs`, `git`, `pty`, `workflow`, `agent_status`, `agent_store`, `session_changes`, `telemetry`, `idle_suspend`, `linux_release`, `port_forward`, and `tunnel`.
+- `server/src/` domains include `auth`, `config`, `crypto`, `fs`, `git`, `pty`, `workflow`, `agent_status`, `agent_store`, `session_changes`, `idle_suspend`, `linux_release`, `port_forward`, and `tunnel`.
 - `packages/ui/src/` owns the shared React application, owner-bound API clients, transports, query keys, stores, and feature components (canonical entry `packages/ui/src/embed/dam-hopper-app.tsx`).
 - `apps/web/` is the Vite browser host; the former Tauri 2 desktop host `apps/native/` was removed in Phase 02. `packages/shared/` contains shared utilities; `packages/browser-bridge/` contains browser-debug runtime protocol v1.
 - `native/android-app/` is the native Android workbench implementation using Kotlin Multiplatform (`:shared` for core models, connection registry, and live transports; `:androidApp` for Jetpack Compose UI, `MainActivity`, and Android platform OkHttp network factory).
@@ -93,7 +93,7 @@ The session changes subsystem (`server/src/session_changes/`) provides an owner-
 
 ## AI Dev OS Lifecycle Architecture (Phase 01 Prototype)
 
-**Status:** Implementation checkpoint accepted by user following Cycle 6 review (Task 1 `generalize-tile-tree` and Task 2 `implement-os-lifecycle` completed in source). Phase 01 remains in-progress under the [AI Dev OS Redesign Plan](../plans/261101-1738-ai-dev-os-redesign/plan.md). Task 3 (`integrate-os-prototype-route`) is blocked pending the isolated Phase 03 Usage-web embed handoff (`packages/ui/src/embed/dam-hopper-app.tsx` and test). Task 4 (`qualify-prototype-gate`) lifecycle acceptance gate is not achieved and carries forward open critical issues C1 and C2, requiring an authorized source-remediation handoff before qualification.
+**Status:** Implementation checkpoint accepted by user following Cycle 6 review (Task 1 `generalize-tile-tree` and Task 2 `implement-os-lifecycle` completed in source). Phase 01 remains in-progress under the [AI Dev OS Redesign Plan](../plans/261101-1738-ai-dev-os-redesign/plan.md). Task 3 (`integrate-os-prototype-route`) is unblocked following the completed Phase 03 Usage-web embed handoff (`packages/ui/src/embed/dam-hopper-app.tsx` and test). Task 4 (`qualify-prototype-gate`) lifecycle acceptance gate is not achieved and carries forward open critical issues C1 and C2, requiring an authorized source-remediation handoff before qualification.
 
 The AI Dev OS redesign establishes a web-native multi-window, multi-desktop operating environment with the architectural requirement to preserve existing live-resource identities (xterm PTY instances, Monaco editor models/undo history, and running browser preview iframes) across window repositioning, docking, floating, maximizing, and desktop switching without remounting or re-attaching.
 
@@ -308,15 +308,6 @@ See [Workflow API Specification](./workflow-api.md).
 - Linux runtime exercised. Windows strict source/tests cross-compiled in an
   isolated harness; full cross-target build requires native MSVC tools. Windows
   runtime remains explicitly unqualified until tested on Windows.
-
-## Telemetry & OTLP Analytics
-
-<a id="codex-otel-usage-analytics"></a>
-DamHopper server includes an internal loopback OTLP collector (`server/src/telemetry/`) receiving protobuf metrics and execution traces:
-
-- **Identifier Obfuscation:** Uses HMAC-SHA256 (`~/.config/dam-hopper/telemetry-hmac-key`, regular file, mode `0600`, opened with `O_NOFOLLOW`).
-- **Strict Privacy Invariants:** Forbidden fields (`command`, `argv`, `cwd`, `environment`, `pty_output`, `prompt`, `response`, `tool_arguments`, `tool_output`) are dropped during normalization.
-- **Storage:** Persisted locally in SQLite (`~/.config/dam-hopper/telemetry.db`) with daily retention rollups.
 
 ## Agent Status
 

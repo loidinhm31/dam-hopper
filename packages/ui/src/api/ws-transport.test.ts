@@ -196,33 +196,6 @@ describe("WsTransport terminal rename", () => {
   });
 });
 
-describe("WsTransport usage setup endpoints", () => {
-  it("maps setup status and configuration to protected usage routes", async () => {
-    installMockWebSocket();
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ enabled: false }), { status: 200 }),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ enabled: true }), { status: 200 }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
-    const transport = new WsTransport("http://localhost:4800");
-
-    await transport.invoke("usage:setupStatus");
-    await transport.invoke("usage:configure", { enabled: true });
-
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      "http://localhost:4800/api/usage/setup",
-    );
-    expect(fetchMock.mock.calls[1][1]).toMatchObject({
-      method: "PATCH",
-      body: JSON.stringify({ enabled: true }),
-    });
-    transport.destroy();
-  });
-});
 
 describe("WsTransport bulk Git targets", () => {
   it("serializes selected worktrees separately from project names", async () => {
@@ -675,23 +648,6 @@ describe("WsTransport typed API errors", () => {
     transport.destroy();
   });
 
-  it("does not send removed terminal-shaped setup fields", async () => {
-    installMockWebSocket();
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const transport = new WsTransport("http://localhost:4800");
-
-    await expect(
-      transport.invoke("usage:configure", {
-        enabled: true,
-        terminalCorrelationEnabled: true,
-      }),
-    ).rejects.toThrow(
-      "Unsupported usage setup field: terminalCorrelationEnabled",
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
-    transport.destroy();
-  });
 });
 
 describe("WsTransport profile credentials", () => {
@@ -736,72 +692,6 @@ describe("WsTransport profile credentials", () => {
   });
 });
 
-describe("WsTransport usage session endpoints", () => {
-  it("maps list filters and encoded detail IDs to protected usage routes", async () => {
-    installMockWebSocket();
-    const fetchMock = vi.fn().mockImplementation(() =>
-      Promise.resolve(
-        new Response(JSON.stringify({ sessions: [], nodes: [] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const transport = new WsTransport("http://localhost:4800");
-
-    await transport.invoke("usage:sessions", {
-      from: 10,
-      to: 20,
-      model: "gpt-5.6-sol",
-      limit: 50,
-    });
-    await transport.invoke("usage:session", { id: "session/id" });
-
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      "http://localhost:4800/api/usage/sessions?from=10&to=20&model=gpt-5.6-sol&limit=50",
-    );
-    expect(fetchMock.mock.calls[1][0]).toBe(
-      "http://localhost:4800/api/usage/sessions/session%2Fid",
-    );
-    transport.destroy();
-  });
-
-  it("rejects removed session filters before making a request", async () => {
-    installMockWebSocket();
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const transport = new WsTransport("http://localhost:4800");
-
-    await expect(
-      transport.invoke("usage:sessions", { terminal: "legacy" }),
-    ).rejects.toThrow("Unsupported usage session field: terminal");
-    expect(fetchMock).not.toHaveBeenCalled();
-    transport.destroy();
-  });
-
-  it("rejects stale detail and deletion fields before making a request", async () => {
-    installMockWebSocket();
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const transport = new WsTransport("http://localhost:4800");
-
-    await expect(
-      transport.invoke("usage:session", {
-        id: "session-id",
-        terminal: "legacy",
-      } as never),
-    ).rejects.toThrow("Unsupported usage session detail field: terminal");
-    await expect(
-      transport.invoke("usage:deleteAll", {
-        confirmation: "delete-usage-data",
-        project: "legacy",
-      } as never),
-    ).rejects.toThrow("Unsupported usage deletion field: project");
-    expect(fetchMock).not.toHaveBeenCalled();
-    transport.destroy();
-  });
-});
 
 describe("WsTransport diagnostics export endpoint", () => {
   it("posts the diagnostics export request to the protected API route", async () => {

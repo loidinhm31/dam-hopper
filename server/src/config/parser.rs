@@ -327,41 +327,6 @@ fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
             Value::Boolean(true),
         );
     }
-    if server.telemetry != Default::default() {
-        let telemetry = &server.telemetry;
-        let mut table = toml::map::Map::new();
-        table.insert("enabled".to_string(), Value::Boolean(telemetry.enabled));
-        table.insert("paused".to_string(), Value::Boolean(telemetry.paused));
-        table.insert(
-            "db_path".to_string(),
-            Value::String(telemetry.db_path.clone()),
-        );
-        table.insert(
-            "detail_retention_days".to_string(),
-            Value::Integer(telemetry.detail_retention_days.into()),
-        );
-        if let Some(days) = telemetry.aggregate_retention_days {
-            table.insert(
-                "aggregate_retention_days".to_string(),
-                Value::Integer(days.into()),
-            );
-        }
-        let mut collector = toml::map::Map::new();
-        collector.insert(
-            "enabled".to_string(),
-            Value::Boolean(telemetry.collector.enabled),
-        );
-        collector.insert(
-            "host".to_string(),
-            Value::String(telemetry.collector.host.clone()),
-        );
-        collector.insert(
-            "port".to_string(),
-            Value::Integer(telemetry.collector.port.into()),
-        );
-        table.insert("collector".to_string(), Value::Table(collector));
-        config.insert("telemetry".to_string(), Value::Table(table));
-    }
     if server.host_resources != Default::default() {
         let resources = &server.host_resources;
         let mut table = toml::map::Map::new();

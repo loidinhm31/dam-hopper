@@ -117,7 +117,7 @@ Screen capture is optional and remains browser-local until handoff. It requires 
 
 > **Retirement Notice (Phase 02 / P0a):**
 > The Windows desktop Tauri SSH forwarding subsystem and its IPC commands were permanently retired and deleted under Phase 02 (P0a) of the AI Dev OS redesign. Route navigation to `/ssh-forwarding` displays retired-feature guidance in the web application. Remote Git-over-SSH authentication remains supported through server APIs and UI retry helpers.
-> For the historical IPC contract, data transfer objects, and scope lifecycle details, see the retired [Native SSH Forwarding Architecture](../architecture/native-ssh-forwarding.md).
+> The former desktop SSH forwarding subsystem, IPC commands, and credential storage were permanently retired with the desktop Tauri host.
 
 ## Backend Diagnostics Export
 

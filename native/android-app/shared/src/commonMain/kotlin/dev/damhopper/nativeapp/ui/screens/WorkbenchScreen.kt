@@ -134,8 +134,6 @@ import dev.damhopper.nativeapp.features.host.HostResourceRepository
 import dev.damhopper.nativeapp.features.host.ResourceStreamCoordinator
 import dev.damhopper.nativeapp.features.host.ResourcesSubProduct
 import dev.damhopper.nativeapp.features.host.ResourcesUnifiedPanelScreen
-import dev.damhopper.nativeapp.features.host.UsageController
-import dev.damhopper.nativeapp.features.host.UsageRepository
 import dev.damhopper.nativeapp.features.host.PortRepository
 import dev.damhopper.nativeapp.features.host.TunnelRepository
 import dev.damhopper.nativeapp.features.host.IdleSuspendRepository
@@ -256,8 +254,6 @@ fun WorkbenchScreen(
     var agentsActiveSubProduct by remember { mutableStateOf(AgentsSubProduct.STORE) }
     var hostResourceRepo by remember { mutableStateOf<HostResourceRepository?>(null) }
     var hostResourceController by remember { mutableStateOf<HostResourceController?>(null) }
-    var usageRepo by remember { mutableStateOf<UsageRepository?>(null) }
-    var usageController by remember { mutableStateOf<UsageController?>(null) }
     var resourcesActiveSubProduct by remember { mutableStateOf(ResourcesSubProduct.FLEET) }
     var portRepo by remember { mutableStateOf<PortRepository?>(null) }
     var tunnelRepo by remember { mutableStateOf<TunnelRepository?>(null) }
@@ -369,9 +365,7 @@ fun WorkbenchScreen(
                 agentMemoryController = amCtrl
                 agentImportController = aiCtrl
                 hostResourceController?.dispose()
-                usageController?.dispose()
                 val hRepo = HostResourceRepository(client)
-                val uRepo = UsageRepository(client)
                 val sseClient = HostResourceSseClient(
                     connection = client.connection,
                     baseUrl = client.normalizedBaseUrl,
@@ -385,11 +379,8 @@ fun WorkbenchScreen(
                     coroutineScope = coroutineScope,
                 )
                 val hCtrl = HostResourceController(client.connection, sCoord, hRepo, coroutineScope)
-                val uCtrl = UsageController(client.connection, uRepo, coroutineScope)
                 hostResourceRepo = hRepo
-                usageRepo = uRepo
                 hostResourceController = hCtrl
-                usageController = uCtrl
                 idleConsentController?.retire()
                 portRepo?.clear()
                 tunnelRepo?.clear()
@@ -470,10 +461,7 @@ fun WorkbenchScreen(
             hostResourceController?.dispose()
             hostResourceController = null
             hostResourceRepo = null
-            usageController?.dispose()
-            usageController = null
             activeWsConnection = null
-            usageRepo = null
             portRepo?.clear()
             portRepo = null
             tunnelRepo?.clear()
@@ -748,10 +736,9 @@ fun WorkbenchScreen(
             navigation.panelBackHandler = null
         }
     }
-    LaunchedEffect(navState.activePanel, hostResourceController, usageController) {
+    LaunchedEffect(navState.activePanel, hostResourceController) {
         val isResActive = navState.activePanel == WorkbenchPanel.RESOURCES
         hostResourceController?.setForeground(isResActive)
-        usageController?.setForeground(isResActive)
     }
     // Automatically trigger diff / merge queries on panel navigation
     LaunchedEffect(navState.activePanel, navState.activeProject, snapshot.target) {
@@ -1324,11 +1311,9 @@ fun WorkbenchScreen(
                         },
                         resourcesContent = {
                             val hCtrl = hostResourceController
-                            val uCtrl = usageController
-                            if (hCtrl != null && uCtrl != null) {
+                            if (hCtrl != null) {
                                 ResourcesUnifiedPanelScreen(
                                     hostController = hCtrl,
-                                    usageController = uCtrl,
                                     onActiveSubProductChanged = { resourcesActiveSubProduct = it }
                                 )
                             } else {

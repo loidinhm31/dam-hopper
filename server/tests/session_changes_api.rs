@@ -66,7 +66,6 @@ fn create_test_state(workspace_root: PathBuf, repo_root: PathBuf) -> AppState {
         None,
         opaque_server_setup,
         DiagnosticStore::new(workspace_root.join("diag.jsonl")),
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .unwrap();
 

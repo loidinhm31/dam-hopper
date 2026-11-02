@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::path::PathBuf;
 
 use crate::system::config::HostResourceMonitorConfig;
@@ -244,104 +243,6 @@ fn default_session_db_path() -> String {
 
 fn default_session_buffer_ttl_hours() -> u64 {
     24
-}
-
-fn default_telemetry_db_path() -> String {
-    "~/.config/dam-hopper/telemetry.db".to_string()
-}
-fn default_telemetry_detail_retention_days() -> u16 {
-    90
-}
-fn default_telemetry_collector_host() -> String {
-    "127.0.0.1".to_string()
-}
-fn default_telemetry_collector_port() -> u16 {
-    4811
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TelemetryCollectorConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_telemetry_collector_host", alias = "host")]
-    pub host: String,
-    #[serde(default = "default_telemetry_collector_port", alias = "port")]
-    pub port: u16,
-}
-
-impl Default for TelemetryCollectorConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            host: default_telemetry_collector_host(),
-            port: default_telemetry_collector_port(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TelemetryConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Stops new capture while preserving existing aggregate history.
-    #[serde(default)]
-    pub paused: bool,
-    #[serde(default = "default_telemetry_db_path", alias = "db_path")]
-    pub db_path: String,
-    #[serde(
-        default = "default_telemetry_detail_retention_days",
-        alias = "detail_retention_days"
-    )]
-    pub detail_retention_days: u16,
-    #[serde(default, alias = "aggregate_retention_days")]
-    pub aggregate_retention_days: Option<u32>,
-    #[serde(default)]
-    pub collector: TelemetryCollectorConfig,
-}
-
-impl Default for TelemetryConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            paused: false,
-            db_path: default_telemetry_db_path(),
-            detail_retention_days: default_telemetry_detail_retention_days(),
-            aggregate_retention_days: None,
-            collector: TelemetryCollectorConfig::default(),
-        }
-    }
-}
-
-impl TelemetryConfig {
-    pub fn validate(&self) -> Result<(), String> {
-        if self.db_path.trim().is_empty() {
-            return Err("server.telemetry.db_path must not be empty".to_string());
-        }
-        if !(1..=3650).contains(&self.detail_retention_days) {
-            return Err(
-                "server.telemetry.detail_retention_days must be between 1 and 3650".to_string(),
-            );
-        }
-        if self.aggregate_retention_days == Some(0) {
-            return Err(
-                "server.telemetry.aggregate_retention_days must be positive when set".to_string(),
-            );
-        }
-        if self.collector.port == 0 {
-            return Err("server.telemetry.collector.port must be non-zero".to_string());
-        }
-        let host = self.collector.host.parse::<IpAddr>().map_err(|_| {
-            "server.telemetry.collector.host must be a loopback IP address".to_string()
-        })?;
-        if !host.is_loopback() {
-            return Err(
-                "server.telemetry.collector.host must be a loopback IP address".to_string(),
-            );
-        }
-        Ok(())
-    }
 }
 
 // ──────────────────────────────────────────────
@@ -656,8 +557,6 @@ pub struct ServerConfig {
         alias = "session_buffer_ttl_hours"
     )]
     pub session_buffer_ttl_hours: u64,
-    #[serde(default)]
-    pub telemetry: TelemetryConfig,
     #[serde(default, alias = "host_resources")]
     pub host_resources: HostResourceMonitorConfig,
     #[serde(
@@ -692,7 +591,6 @@ pub const fn default_workflow_stale_after_hours() -> u32 {
 
 impl ServerConfig {
     pub fn validate(&self) -> Result<(), String> {
-        self.telemetry.validate()?;
         if !(1..=3650).contains(&self.workflow_event_retention_days) {
             return Err("server.workflow_event_retention_days must be between 1 and 3650".into());
         }
@@ -714,7 +612,6 @@ impl Default for ServerConfig {
         ServerConfig {
             session_db_path: default_session_db_path(),
             session_buffer_ttl_hours: default_session_buffer_ttl_hours(),
-            telemetry: TelemetryConfig::default(),
             host_resources: HostResourceMonitorConfig::default(),
             workflow_event_retention_days: default_workflow_event_retention_days(),
             workflow_deleted_note_retention_days: default_workflow_deleted_note_retention_days(),

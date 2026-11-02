@@ -90,7 +90,6 @@ fn create_test_state(workspace_root: PathBuf) -> AppState {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("create test AppState");
 

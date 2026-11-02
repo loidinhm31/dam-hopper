@@ -12,7 +12,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 | [Workflow tracking](./api/workflow.md) | Workflow REST routes |
 | [System services](./api/system-services.md) | Diagnostics, browser-debug artifacts, native SSH forwarding, host resources |
 | [Terminal idle suspend](./api/idle-suspend.md) | Status, timing, manual force, helper protocol and status events |
-| [Agent status, usage, and sessions](./api/agent-usage-and-sessions.md) | Agent snapshot, Codex usage, and PTY session persistence |
+| [Agent status and sessions](./api/rest-endpoints.md#agent-status-api) | Agent snapshot and PTY session persistence |
 | [Git API](./api/git.md) | Worktrees, branches, history search, commit rewrite/squash, leased publication |
 | [Client transport and events](./api/transport-and-events.md) | Reconnection, PTY subscriptions, and client event methods |
 | [REST endpoints](./api/rest-endpoints.md) | Global config, projects, terminal, Git conflict/operation routes, SSH credentials |

@@ -17,7 +17,7 @@ mod pty_tests {
 
     use std::sync::OnceLock;
 
-    use crate::config::schema::{RestartPolicy, TelemetryConfig, DEFAULT_RESTART_MAX_RETRIES};
+    use crate::config::schema::{RestartPolicy, DEFAULT_RESTART_MAX_RETRIES};
     use crate::diagnostics::DiagnosticStore;
     use crate::fs::FsSubsystem;
     use crate::persistence::{PersistCmd, PersistWorker, SessionStore};
@@ -132,93 +132,6 @@ mod pty_tests {
         git(&["commit", "-m", "init"], path);
     }
 
-    #[derive(Debug)]
-    struct PtyBenchmarkSummary {
-        p95_latency_us: u128,
-        throughput_bytes_per_sec: u128,
-    }
-
-    fn benchmark_pty_configuration(usage_enabled: bool) -> PtyBenchmarkSummary {
-        let temp = tempfile::tempdir().unwrap();
-        let runtime = crate::telemetry::TelemetryRuntime::with_paths(
-            temp.path().join("telemetry.key"),
-            temp.path().join("collector.token"),
-        );
-        let mut telemetry_config = TelemetryConfig::default();
-        telemetry_config.enabled = usage_enabled;
-        telemetry_config.db_path = temp.path().join("telemetry.db").display().to_string();
-        test_rt().block_on(async {
-            runtime
-                .apply_config(&TelemetryConfig::default(), &telemetry_config)
-                .await
-                .unwrap();
-        });
-
-        // The manager is deliberately constructed without the runtime in both
-        // cases. This is the benchmark's regression guard: enabling Codex
-        // Usage must not alter the PTY construction or reader path.
-        let manager = make_manager();
-        let id = if usage_enabled {
-            "benchmark:usage-enabled"
-        } else {
-            "benchmark:usage-disabled"
-        };
-        manager.create(opts(id, "bash")).unwrap();
-        manager.write(id, b"printf 'warmup\\n'\n").unwrap();
-        assert!(wait_for(Duration::from_secs(2), || {
-            manager
-                .get_buffer(id)
-                .is_ok_and(|buffer| buffer.contains("warmup"))
-        }));
-
-        let samples = 24;
-        let payload_bytes = 1024;
-        let mut latencies = Vec::with_capacity(samples);
-        let started = Instant::now();
-        for index in 0..samples {
-            let marker = format!("pty-benchmark-{index:02}");
-            let mut payload = marker.clone();
-            payload.push_str(&"x".repeat(payload_bytes - marker.len()));
-            let command = format!("printf '%s\\n' '{payload}'\n");
-            let sample_started = Instant::now();
-            manager.write(id, command.as_bytes()).unwrap();
-            assert!(wait_for(Duration::from_secs(2), || {
-                manager
-                    .get_buffer(id)
-                    .is_ok_and(|buffer| buffer.contains(&marker))
-            }));
-            latencies.push(sample_started.elapsed().as_micros());
-        }
-        let elapsed_us = started.elapsed().as_micros().max(1);
-        manager.remove(id).unwrap();
-        test_rt().block_on(async { runtime.shutdown().await });
-
-        latencies.sort_unstable();
-        let p95_index = ((latencies.len() * 95).div_ceil(100)).saturating_sub(1);
-        PtyBenchmarkSummary {
-            p95_latency_us: latencies[p95_index],
-            throughput_bytes_per_sec: (samples as u128 * payload_bytes as u128 * 1_000_000)
-                / elapsed_us,
-        }
-    }
-
-    #[test]
-    #[ignore = "manual PTY performance gate"]
-    fn codex_usage_enabled_and_disabled_pty_performance_is_equivalent() {
-        let disabled = benchmark_pty_configuration(false);
-        let enabled = benchmark_pty_configuration(true);
-        println!("PTY benchmark disabled: {disabled:?}");
-        println!("PTY benchmark enabled: {enabled:?}");
-
-        assert!(
-            enabled.p95_latency_us <= disabled.p95_latency_us.saturating_mul(3),
-            "enabled p95 latency regressed: disabled={disabled:?}, enabled={enabled:?}"
-        );
-        assert!(
-            enabled.throughput_bytes_per_sec.saturating_mul(4) >= disabled.throughput_bytes_per_sec,
-            "enabled throughput regressed: disabled={disabled:?}, enabled={enabled:?}"
-        );
-    }
 
     // -----------------------------------------------------------------------
     // Session ID validation

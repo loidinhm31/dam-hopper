@@ -15,7 +15,7 @@ DamHopper is a multi-profile development workbench. An Axum/Tokio Rust server pr
 
 | Path                       | Responsibility                                                                                                    |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `server/`                  | Rust Axum/Tokio API, PTYs, Git, filesystem, auth, workflow, telemetry, and host services                          |
+| `server/`                  | Rust Axum/Tokio API, PTYs, Git, filesystem, auth, workflow, and host services                                     |
 | `packages/ui/`             | Shared React UI, state, API/transport clients, and browser tests (canonical entry `src/embed/dam-hopper-app.tsx`) |
 | `apps/web/`                | Vite browser host                                                                                                 |
 | `apps/native/` *(retired)* | Former Tauri 2 desktop host and Windows SSH forwarding (removed in Phase 02)                                      |

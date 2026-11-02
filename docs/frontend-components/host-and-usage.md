@@ -1,6 +1,6 @@
-# Host Resources and Usage Components
+# Host Resources Components
 
-Host-resource, diagnostics, usage, and terminal status details moved from the [component index](../frontend-components.md).
+Host-resource, diagnostics, and terminal status details moved from the [component index](../frontend-components.md).
 ## Unified-profile integration and qualification
 
 The integrated shell keeps one explicit owner through project aggregation,
@@ -225,39 +225,6 @@ therefore replaces only its Explorer region; it does not remount the workspace
 shell, editor, or active terminal hosts. Changing the target clears a latched
 boundary error without resetting unrelated workspace state.
 
-## Usage Insights Settings
-
-**Locations:** `packages/ui/src/components/pages/SettingsPage.tsx`,
-`packages/ui/src/components/organisms/SettingsUsageInsightsSection.tsx`, and
-`packages/ui/src/components/organisms/SettingsUsageInsightsCodexRow.tsx`
-
-The Settings page exposes a **Usage insights** section backed by the authenticated
-`usage:setupStatus` and `usage:configure` transport methods. It lets users enable or pause
-privacy-safe local terminal capture, retry an unavailable loopback receiver, and explicitly
-manage optional Codex token export. Codex setup is reported as `notConfigured`, `managed`, or
-`conflict`; conflicts disable management and leave existing Codex configuration untouched.
-Managing export does not restart Codex, so the UI indicates that a new/restarted Codex session
-is required. When capture is disabled, the Usage page links back to Settings and explains that a
-new terminal is required for complete run boundaries.
-
-## Usage Session Audit
-
-**Locations:** `packages/ui/src/components/pages/UsagePage.tsx`,
-`packages/ui/src/components/usage/UsageSessionAudit.tsx`, `UsageSessionList.tsx`,
-`UsageSessionTree.tsx`, and `UsageSessionTokens.tsx`.
-
-The Usage page has Overview and Sessions tabs. Sessions shows bounded aggregate model/delegation
-summaries and a selected session's bounded node tree with lineage, token, and terminal-correlation
-status. Opaque URL parameters (`view=sessions`, `session`, and authenticated `cursor`) preserve
-selection and pagination deep links. Model values are dynamic provider-qualified display strings.
-
-Primary tokens are input + output + reasoning; cached input is displayed separately and excluded.
-Partial or unavailable lineage is surfaced, never inferred. Session and terminal identities are
-derived HMAC references; raw commands, prompts, responses, tool content, and storage paths are not
-rendered or persisted by the UI. List/detail queries poll every 15 seconds only in a visible
-document; hidden tabs stop polling. Browser and native hosts share this behavior. Paused collection
-keeps stored summaries readable and marks the view paused; deletion remains explicit and destructive.
-
 ## Latest Commit in Terminal
 
 **Locations:** `packages/ui/src/components/organisms/SettingsAppearanceSection.tsx`,
@@ -302,20 +269,13 @@ Shift+Arrow keys in 32-pixel steps, and Home/End for the minimum/maximum width.
 Compact layouts expose the same navigator in a bottom sheet without the desktop rail
 resize handle.
 
-## Android Native Resources and Usage Panel
+## Android Native Resources Panel
 
-**Locations:** `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/` (`ResourcesUnifiedPanelScreen.kt`, `FleetScreens.kt`, `FleetDetailComponents.kt`, `UsageScreens.kt`, `UsageDialogs.kt`, `UsageSettingsSection.kt`).
+**Locations:** `native-app/shared/src/commonMain/kotlin/dev/damhopper/nativeapp/features/host/` (`ResourcesUnifiedPanelScreen.kt`, `FleetScreens.kt`, `FleetDetailComponents.kt`).
 
 `ResourcesUnifiedPanelScreen` serves as the authoritative panel host for `WorkbenchPanel.RESOURCES` docked in `WorkbenchScreen.kt`. It implements the single-content-area shell pattern with zero floating action buttons (FABs) and zero embedded WebViews:
 
-- **Segmented Sub-Product Switcher:** A top horizontal segmented control switches between `ResourcesSubProduct.FLEET` ("Host Resources") and `ResourcesSubProduct.USAGE` ("Usage Insights"), updating the active subproduct and notifying `WorkbenchScreen` to support hierarchical back-stack navigation.
 - **Fleet Resources Presentation (`FleetScreens`, `FleetDetailComponents`):**
   - Displays host availability, OS/hostname, kernel, uptime, load averages, memory snapshot (cgroup, RSS, cache, pressure), and CPU/disk metrics.
   - Stream status header renders active mode (`STREAM`, `REST_FALLBACK`, `AUTH_BLOCKED`, `REST_ONLY`), fresh vs stale status, sample age, and manual refresh action.
   - Honest null presentation: missing, degraded, or unsupported values render explicitly as `--` rather than fabricating zero metrics.
-- **Usage Insights Presentation (`UsageScreens`, `UsageDialogs`, `UsageSettingsSection`):**
-  - Aggregate analytics cards: Total input/output/cached tokens, aggregate cost, and active collector health indicators.
-  - Session list & pagination: Opaque cursor pagination omitting `from`/`to` on page-2+ continuation requests; session details dialog showing model, token distribution, duration, and session timestamps.
-  - Safe deletion dialogs (`UsageDialogs`): Confirm UTC midnight floored date-range deletion (`calculateUtcDayRange`) and nuclear delete-all; re-entrancy and disposed guards prevent duplicate dispatches; generation fences (`summaryGeneration++`, `sessionsGeneration++`) prevent stale query callbacks from overwriting fresh state.
-  - Settings section (`UsageSettingsSection`): Pause/resume telemetry collection toggle; displays collector setup status and exporter configuration.
-

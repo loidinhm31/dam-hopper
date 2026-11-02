@@ -178,11 +178,11 @@ closed on unavailable projects, and reuses the shared history controller for
 single-project view. Integrated qualification across both surfaces verified
 live loopback server smoke, latency benchmarks, and Chromium browser tests.
 
-## Unified-profile Settings, Usage, and Host ownership
+## Unified-profile Settings and Host ownership
 
 The workbench keeps browser preference state separate from server-targeted work. The
 Settings page exposes `preferencesProfileId` (shared UI preference source) and
-`settingsProfileId` (configuration, maintenance, usage, and host target) as
+`settingsProfileId` (configuration, maintenance, and host target) as
 independent selectors. Project focus does not change either selector.
 
 `useSettingsStore.saveDebounced` captures the bound `ConnectionRef`, API client,
@@ -191,13 +191,10 @@ undispatched patches; already-dispatched writes finish only against their
 captured profile. Last-known allowlisted preferences remain usable offline,
 while a removed source is marked `source-removed`.
 
-Settings config, TOML import/export, maintenance, Usage insights, and idle
+Settings config, TOML import/export, maintenance, and idle
 suspend timing all receive the selected owner. Import captures owner and
 generation before confirmation and `file.text()`, rejects drift before
-dispatch, and leaves server validation/backup/rollback authoritative. Usage
-summary, sessions, health, setup, and destructive operations use
-`profileQueryKey(owner, ...)`; session audit polling stops in hidden documents.
-
+dispatch, and leaves server validation/backup/rollback authoritative.
 `HostResourcePopover` keeps explicit-owner compatibility for one configured
 profile or an explicit `owner`: snapshot, incidents, compatibility metrics,
 idle-suspend state, and `hostResourcePinnedMount` stay owner-local. With no

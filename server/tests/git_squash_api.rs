@@ -142,7 +142,6 @@ fn setup(no_auth: bool) -> TestApp {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         DiagnosticStore::new(root.join("diagnostics.jsonl")),
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .unwrap();
     TestApp {

@@ -22,7 +22,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.damhopper.nativeapp.features.host.IdleConsentController
 import dev.damhopper.nativeapp.features.host.IdleSuspendTabScreen
-import dev.damhopper.nativeapp.features.host.UsageController
 import dev.damhopper.nativeapp.features.workspace.WorkspaceRepository
 
 /**
@@ -35,7 +34,6 @@ class SettingsTargetServices(
     val configEditor: RemoteConfigEditor,
     val workspaceRepository: WorkspaceRepository,
     val agentIntegration: AgentIntegrationRepository,
-    val usageController: UsageController?,
     val idleController: IdleConsentController?,
     val mutationAuthority: HostMutationAuthority,
 )

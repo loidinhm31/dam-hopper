@@ -724,6 +724,45 @@ Notes:
 - UI usage: Consumed by `WorkspaceGitPanel` and `GitPage` squash workflows when `isViewingLocalBranch` is true. Verified pre-flight messages validate identical `headOid` and `branch`. On success, generates a receipt (`receipt.branch`, `receipt.sourceOid`) driving the leased push confirmation flow.
 - Response follows `GitActionResult`.
 
+
+### Agent Status API
+
+**GET /api/agent-status/v1/snapshot**
+Returns the current active agent status snapshot across all live managed terminals.
+
+Response:
+
+```json
+{
+  "version": 1,
+  "serverEpoch": 4305114706658182,
+  "revision": 1,
+  "availability": "ready",
+  "terminals": [
+    {
+      "id": "term-1",
+      "incarnation": 1833568411063296,
+      "agentKind": "omp",
+      "agentSessionId": "sess-1",
+      "reporterEpoch": 1,
+      "state": "working",
+      "turnId": "turn-100",
+      "attentionRevision": 0
+    }
+  ]
+}
+```
+
+- `version`: Protocol version (`1`).
+- `serverEpoch`: Random epoch generated per server process start.
+- `revision`: Monotonically increasing state sequence.
+- `availability`: `"ready" | "unavailable" | "platform-unqualified"`.
+- `terminals`: Array of active agent status rows.
+
+### Session Persistence
+
+Terminal session buffers and metadata are persisted to SQLite when `session_db_path` can be opened. Buffer snapshots are sent every 16 KB and on session exit/graceful shutdown. Up to 1 MB of scrollback is replayed on attach, and sessions alive before shutdown are relaunched on restart.
+
 ## Client-Side Profile Management
 
 <a id="client-side-profile-management"></a>

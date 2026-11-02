@@ -51,12 +51,6 @@ export function profileWorkflowOverviewQueryKey(owner: ConnectionRef): QueryKey 
   return profileQueryKey(owner, "workflow", "overview");
 }
 
-export function profileUsageQueryKey(
-  owner: ConnectionRef,
-  ...parts: unknown[]
-): QueryKey {
-  return profileQueryKey(owner, "usage", ...parts);
-}
 
 export function profileAgentStoreQueryKey(
   owner: ConnectionRef,

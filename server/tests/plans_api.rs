@@ -99,7 +99,6 @@ fn setup_test_app() -> (TestContext, axum::Router) {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("Failed to create AppState in test");
 

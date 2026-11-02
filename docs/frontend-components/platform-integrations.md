@@ -60,7 +60,6 @@ policy, handshake/load-error UX, and CSP framing guidance.
 - [System Architecture](../system-architecture.md)
 - [Configuration Guide](../configuration-guide.md)
 
-- [Native Browser Debug Support](../native-browser-debug-support.md)
 - [Media Isolation and Encryption Architecture](../architecture/media-isolation-and-encryption.md)
 
 ## Shared design-system and embedding contract

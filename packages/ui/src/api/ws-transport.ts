@@ -225,37 +225,6 @@ export interface FsPutResult {
   error?: string;
 }
 
-function usageRequestData(
-  data: unknown,
-  allowedKeys: ReadonlySet<string>,
-  label: string,
-): Record<string, unknown> {
-  if (data === undefined || data === null) return {};
-  if (typeof data !== "object" || Array.isArray(data)) {
-    throw new Error(`Invalid ${label} payload`);
-  }
-  const record = data as Record<string, unknown>;
-  for (const key of Object.keys(record)) {
-    if (record[key] !== undefined && !allowedKeys.has(key)) {
-      throw new Error(`Unsupported ${label} field: ${key}`);
-    }
-  }
-  return record;
-}
-
-const USAGE_SUMMARY_KEYS = new Set(["from", "to", "window", "bucket", "model"]);
-const USAGE_SESSION_KEYS = new Set(["from", "to", "model", "limit", "cursor"]);
-const USAGE_SETTINGS_KEYS = new Set([
-  "enabled",
-  "paused",
-  "detailRetentionDays",
-  "aggregateRetentionDays",
-  "collector",
-  "codexExporter",
-  "retryCollector",
-]);
-const USAGE_DETAIL_KEYS = new Set(["id"]);
-const USAGE_DELETE_KEYS = new Set(["confirmation", "from", "to"]);
 
 /** IPC channel → REST endpoint mapping. */
 function channelToEndpoint(
@@ -1450,72 +1419,6 @@ function channelToEndpoint(
         method: "POST",
         url: "/api/system/idle-suspend/v1/consent/decision",
         body: data,
-      };
-
-    // Usage analytics (REST only; never sent to the terminal WebSocket).
-    case "usage:summary": {
-      const params = new URLSearchParams();
-      for (const [key, value] of Object.entries(
-        usageRequestData(data, USAGE_SUMMARY_KEYS, "usage summary"),
-      )) {
-        if (value !== undefined) params.set(key, String(value));
-      }
-      const query = params.toString();
-      return {
-        method: "GET",
-        url: `/api/usage/summary${query ? `?${query}` : ""}`,
-      };
-    }
-    case "usage:sessions": {
-      const params = new URLSearchParams();
-      for (const [key, value] of Object.entries(
-        usageRequestData(data, USAGE_SESSION_KEYS, "usage session"),
-      )) {
-        if (value !== undefined) params.set(key, String(value));
-      }
-      const query = params.toString();
-      return {
-        method: "GET",
-        url: `/api/usage/sessions${query ? `?${query}` : ""}`,
-      };
-    }
-    case "usage:session": {
-      const d = usageRequestData(
-        data,
-        USAGE_DETAIL_KEYS,
-        "usage session detail",
-      );
-      if (typeof d.id !== "string" || d.id.length === 0) {
-        throw new Error("Invalid usage session detail payload");
-      }
-      return {
-        method: "GET",
-        url: `/api/usage/sessions/${encodeURIComponent(d.id)}`,
-      };
-    }
-    case "usage:health":
-      return { method: "GET", url: "/api/usage/health" };
-    case "usage:settings":
-      return { method: "GET", url: "/api/usage/settings" };
-    case "usage:setupStatus":
-      return { method: "GET", url: "/api/usage/setup" };
-    case "usage:updateSettings":
-      return {
-        method: "PATCH",
-        url: "/api/usage/settings",
-        body: usageRequestData(data, USAGE_SETTINGS_KEYS, "usage settings"),
-      };
-    case "usage:configure":
-      return {
-        method: "PATCH",
-        url: "/api/usage/setup",
-        body: usageRequestData(data, USAGE_SETTINGS_KEYS, "usage setup"),
-      };
-    case "usage:deleteAll":
-      return {
-        method: "DELETE",
-        url: "/api/usage",
-        body: usageRequestData(data, USAGE_DELETE_KEYS, "usage deletion"),
       };
 
     // Tunnels

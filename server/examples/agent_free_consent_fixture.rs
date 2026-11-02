@@ -34,7 +34,6 @@ use dam_hopper_server::{
     },
     pty::{BroadcastEventSink, PtySessionManager},
     state::AppState,
-    telemetry::TelemetryRuntime,
     tunnel::{CloudflaredDriver, TunnelSessionManager},
 };
 use opaque_ke::ServerSetup;
@@ -137,7 +136,6 @@ automatic_policy = "agent-free"
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        TelemetryRuntime::new(),
     )
     .expect("AppState::new");
 

@@ -7,7 +7,6 @@ import {
   invalidateGitHistoryDetails,
   normalizeGitMessageQuery,
   resolveGitPushTarget,
-  usageSessionPollInterval,
 } from "./queries.js";
 import {
   __setConnectionSnapshotForTests,
@@ -34,16 +33,6 @@ describe("resolveGitPushTarget", () => {
   });
 });
 
-describe("usageSessionPollInterval", () => {
-  it("polls visible documents and stops when hidden or server-rendered", () => {
-    expect(usageSessionPollInterval()).toBe(false);
-    vi.stubGlobal("document", { visibilityState: "visible" });
-    expect(usageSessionPollInterval()).toBe(15_000);
-    vi.stubGlobal("document", { visibilityState: "hidden" });
-    expect(usageSessionPollInterval()).toBe(false);
-    vi.unstubAllGlobals();
-  });
-});
 
 describe("normalizeGitMessageQuery", () => {
   it("returns undefined for null, undefined, empty, or whitespace-only input", () => {

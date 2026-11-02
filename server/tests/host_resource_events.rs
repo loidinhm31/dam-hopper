@@ -78,7 +78,6 @@ fn create_test_state(no_auth: bool, allowed_origins: Vec<String>) -> (AppState, 
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("create test AppState");
 

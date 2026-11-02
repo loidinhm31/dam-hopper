@@ -366,7 +366,6 @@ mod tests {
             server: ServerConfig {
                 session_db_path: "test.db".to_string(),
                 session_buffer_ttl_hours: 24,
-                telemetry: crate::config::TelemetryConfig::default(),
                 host_resources: crate::config::HostResourceMonitorConfig::default(),
                 workflow_event_retention_days: 90,
                 workflow_deleted_note_retention_days: 7,

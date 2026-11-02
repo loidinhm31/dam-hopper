@@ -184,7 +184,7 @@ generation cancels the retry.
 > **Retirement Notice (Phase 02 / P0a):**
 > The native desktop SSH forwarding subsystem and its UI routes were permanently retired in Phase 02 (P0a) of the AI Dev OS redesign. Route navigation to `/ssh-forwarding` displays retired-feature guidance in the web application. Remote Git-over-SSH operations and credentials remain supported through the Git page and server APIs (see [Git and SSH retry](#git-and-ssh-retry) above).
 
-For historical documentation of the former desktop SSH forwarding lifecycle, IPC command surface, and credential storage model, see the retired [Native SSH Forwarding Architecture](./architecture/native-ssh-forwarding.md).
+The former desktop SSH forwarding lifecycle, IPC command surface, and credential storage model were retired with the Tauri native host.
 ## Integration and Qualification Gate
 
 Integrated qualification covers the web workbench and Linux-hosted shared behavior
@@ -276,8 +276,8 @@ In a multi-profile environment, different pages resolve API and WebSocket endpoi
 
 - **Workspace (`/workspace`)**: Project-scoped. Terminals, editor tabs, file arbor, search, and diagnostics route to the server owning the selected workspace project (`selectedProject.profileId`).
 - **Git (`/git`)**: Aggregated multi-profile repository list. The page displays repositories from all connected profiles with profile badges for disambiguation. Selecting a project routes all Git operations (log, branch, status, roots, local changes, diffs, push) to that project's profile, and synchronizes selection to the workspace store. Bulk fetch and pull operations are partitioned per profile and executed sequentially to ensure clean SSH credential retry handling without cross-server leakage.
-- **Settings (`/settings`)**: Server administration (workspace config, global defaults, usage insights, and cache/workspace maintenance) operates against the explicitly selected **Settings Target Server** (`settingsProfileId`).
-- **Agent Store (`/agent-store`) & Usage (`/usage`)**: Dedicated on-page server switchers allow managing catalog inventory and token analytics for any connected profile independently of workspace project selection.
+- **Settings (`/settings`)**: Server administration (workspace config, global defaults, and cache/workspace maintenance) operates against the explicitly selected **Settings Target Server** (`settingsProfileId`).
+- **Agent Store (`/agent-store`)**: A dedicated on-page server switcher allows managing catalog inventory for any connected profile independently of workspace project selection.
 
 ## Host resources and health delivery across profiles
 

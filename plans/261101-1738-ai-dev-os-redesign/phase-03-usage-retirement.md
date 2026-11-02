@@ -1,6 +1,6 @@
 # Phase 03: P0b — Usage retirement and independent early release
 
-Estimate: 48h; implementation status **pending**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
+Estimate: 48h; implementation status **DONE per user approval (2026-11-02); technical acceptance incomplete**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
 
 ## Context and validated authority
 V1–V6 override older prose while retaining PROTOTYPE FIRST. Phase02+03 ship their OWN EARLY RELEASE before OS cutover, independently of prototype/other OS gates. Native shared-host pruning hands files immediately to prototype core; remaining P0 build/Usage/docs/manual/release runs concurrently. Only prototype's two-file embed-route task waits for Usage web, not any release receipt. Coordinator pins exact P0 shared-file states at ownership handoffs and qualifies source-pinned isolated artifacts, never half-edited live prototype sources. Old UI stays default.
@@ -490,9 +490,19 @@ No repository writes; human-only external manual action exactly scoped above.
 ]
 ```
 
-- [ ] <!-- evcrate-task:retire-usage-server --> Remove Usage server without migration code; preserve legacy config tolerance
-- [ ] <!-- evcrate-task:retire-usage-android --> Delete Android Usage and remove active and panel-shell callers
-- [ ] <!-- evcrate-task:retire-usage-web --> Delete web Usage and all REST client/query consumers
-- [ ] <!-- evcrate-task:document-removals --> Scrub Usage documentation/history and retain Tauri removal documentation
-- [ ] <!-- evcrate-task:manual-local-telemetry-cleanup --> Perform user-authorized one-time telemetry file deletion on this machine only
-- [ ] <!-- evcrate-task:release-p0-removals --> Qualify, version and ship the independent early P0 release
+- [x] <!-- evcrate-task:retire-usage-server --> Remove Usage server without migration code; preserve legacy config tolerance
+- [x] <!-- evcrate-task:retire-usage-android --> Delete Android Usage and remove active and panel-shell callers
+- [x] <!-- evcrate-task:retire-usage-web --> Delete web Usage and all REST client/query consumers
+- [x] <!-- evcrate-task:document-removals --> Scrub Usage documentation/history and retain Tauri removal documentation
+- [x] <!-- evcrate-task:manual-local-telemetry-cleanup --> Perform user-authorized one-time telemetry file deletion on this machine only
+- [x] <!-- evcrate-task:release-p0-removals --> Qualify, version and ship the independent early P0 release
+
+## Phase completion summary
+
+Marked **DONE per user approval (2026-11-02); technical acceptance incomplete**.
+- **retire-usage-server**: Deleted `server/src/telemetry`, usage REST endpoints (`/api/usage/*`), and OTLP dependencies. Extracted neutral DB path helpers (`server/src/utils/db_paths.rs`). Tolerated legacy `[server.telemetry]` TOML and PUT `/api/config`. 5 `usage_retirement` tests and 28 regression tests passed. Hermetic binary startup/no4811 evidence (W5) carried forward.
+- **retire-usage-android**: Deleted 8 Kotlin Usage files and 2 test files; updated callers (`ResourcesUnifiedPanelScreen`, `SettingsHostView`, `WorkbenchScreen`, `NativeWorkspaceViewModel`). `:shared:jvmTest` passed; transport-level allocation boundedness (W1) carried forward.
+- **retire-usage-web**: Deleted `/usage` page, `components/usage`, `SettingsUsageInsightsSection`, client DTOs, query hooks, and navigation; removed `/usage` route from `dam-hopper-app.tsx` and router tests. 78 UI unit tests passed across 4 files. Phase 01 Task 3 (`integrate-os-prototype-route`) route handoff unblocked.
+- **document-removals**: V6 scrub completed in `docs/CHANGELOG.md` with zero new Usage entries. Deleted `docs/api/agent-usage-and-sessions.md`; relocated retained agent-status and session persistence facts to `docs/api/rest-endpoints.md`. Full documentation link repair and audit (W2/W3) delegated to `Phase03DocsManager`.
+- **manual-local-telemetry-cleanup**: Documented exact user-authorized external command recipe for operator execution (`telemetry.db`, `telemetry-hmac-key`) per V5; actual external execution on host remains an operational receipt requirement.
+- **release-p0-removals**: Version bumped to v0.15.6 across 9 release manifests; `deploy/release/check-version-alignment.mjs` verified server/web alignment. Full shipment, publication/install receipt, and container production journeys (`traditional-terminal-agents`, `device-login-management`) remain open qualification gates before Phase 08 root cutover.

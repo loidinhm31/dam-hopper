@@ -92,8 +92,6 @@ type = "cargo"
     assert!(std::path::Path::new(&cfg.projects[0].path).is_absolute());
     #[cfg(unix)]
     assert!(cfg.projects[0].path.starts_with('/'));
-    assert!(!cfg.server.telemetry.enabled);
-    assert_eq!(cfg.server.telemetry.detail_retention_days, 90);
 }
 
 #[test]
@@ -126,28 +124,7 @@ max_alert_incidents = 12
 }
 
 #[test]
-fn telemetry_config_rejects_removed_usage_keys() {
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dam-hopper.toml");
-    std::fs::write(
-        &config_path,
-        r#"
-[workspace]
-name = "telemetry"
-
-[server.telemetry]
-enabled = true
-terminal_correlation_enabled = false
-excluded_projects = ["private"]
-"#,
-    )
-    .unwrap();
-
-    assert!(read_config(&config_path).is_err());
-}
-
-#[test]
-fn telemetry_config_uses_snake_case_toml_and_camel_case_api() {
+fn legacy_server_telemetry_is_tolerated_and_ignored() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("dam-hopper.toml");
     std::fs::write(
@@ -166,60 +143,12 @@ aggregate_retention_days = 730
 enabled = true
 host = "127.0.0.1"
 port = 4811
-    "#,
+"#,
     )
     .unwrap();
     let config = read_config(&config_path).unwrap();
-    assert!(config.server.telemetry.enabled);
-    assert_eq!(config.server.telemetry.db_path, "/tmp/telemetry.db");
-    assert_eq!(config.server.telemetry.collector.port, 4811);
-    assert_eq!(
-        serde_json::to_value(&config.server.telemetry).unwrap()["dbPath"],
-        "/tmp/telemetry.db"
-    );
-    write_config(&config_path, &config).unwrap();
-    let written = std::fs::read_to_string(&config_path).unwrap();
-    assert!(written.contains("detail_retention_days = 30"));
-    assert!(!written.contains("terminal_correlation_enabled"));
-    assert!(!written.contains("detailRetentionDays"));
+    assert_eq!(config.workspace.name, "telemetry");
 }
-
-#[test]
-fn telemetry_config_rejects_non_loopback_collector() {
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dam-hopper.toml");
-    std::fs::write(
-        &config_path,
-        r#"
-[workspace]
-name = "telemetry"
-
-[server.telemetry.collector]
-host = "0.0.0.0"
-"#,
-    )
-    .unwrap();
-    assert!(read_config(&config_path).is_err());
-}
-
-#[test]
-fn telemetry_config_rejects_invalid_retention() {
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("dam-hopper.toml");
-    std::fs::write(
-        &config_path,
-        r#"
-[workspace]
-name = "telemetry"
-
-[server.telemetry]
-detail_retention_days = 0
-"#,
-    )
-    .unwrap();
-    assert!(read_config(&config_path).is_err());
-}
-
 #[test]
 fn parse_config_with_services() {
     let dir = tempfile::tempdir().unwrap();
@@ -1027,7 +956,6 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
         server: crate::config::ServerConfig {
             session_db_path: "/tmp/sessions.db".to_string(),
             session_buffer_ttl_hours: 12,
-            telemetry: crate::config::TelemetryConfig::default(),
             host_resources: crate::config::HostResourceMonitorConfig::default(),
             workflow_event_retention_days: 90,
             workflow_deleted_note_retention_days: 7,

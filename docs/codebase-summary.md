@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Source summary:** Repomix 1.18.0 compaction generated 2026-11-02 (`repomix-output.xml`; 3,977 files included, 10 scanner-excluded). The repository inventory reflects Phase 02 (P0a: Tauri desktop host and SSH-forwarding UI removal) and the Phase 01 OS lifecycle prototype implementation checkpoint of the AI Dev OS redesign, alongside the four completed phases of the lightweight session changes refactor.
+**Source summary:** Repomix 1.18.0 compaction generated 2026-11-02 (`repomix-output.xml`; 3,923 files included, 10 scanner-excluded). The repository inventory reflects Phase 02 (P0a: Tauri desktop host and SSH-forwarding UI removal), Phase 03 (P0b: Usage and server telemetry retirement, neutral DB path helpers, and early release preparation), and the Phase 01 OS lifecycle prototype implementation checkpoint of the AI Dev OS redesign.
 
 ## Historical Repository Inventory (2026-10-05)
 
@@ -37,7 +37,6 @@ The previous inventory counted **2,046 eligible text files and 411,852 physical 
 | `git/` | 15 | 9,850 | libgit2 ODB commit rewrites, leased push, conflict resolution, operation lifecycle |
 | `system/` | 17 | 6,431 | Linux host metrics, cgroups v2, PSI, SSE publisher |
 | `fs/` | 16 | 6,000 | Sandboxed filesystem operations, secure paths, media sessions |
-| `telemetry/` | 18 | 5,786 | Loopback OTLP collector, HMAC redaction, SQLite telemetry |
 | `workflow/` | 17 | 3,888 | Workflow domain engine, PTY observation, SQLite persistence |
 | `session_changes/` | 14 | 4,626 | Session changes domain, default-off service lifecycle gate, purge-on-disable, lightweight per-file capture engine, zero-diff settled/status, lazy viewer comparison, and REST review APIs |
 | `persistence/` | 13 | 2,844 | SQLite session persistence, migrations 001–010, restore worker |
@@ -46,9 +45,9 @@ The previous inventory counted **2,046 eligible text files and 411,852 physical 
 | `port_forward/` | 5 | 1,206 | Linux `/proc/net/tcp` scanner, stdout port sniffing |
 | `host_actions/` | 6 | 1,090 | Host remediation actions (currently `helperNotEnrolled`) |
 | `tunnel/` | 7 | 847 | Cloudflared quick tunnels with Host rewrite |
+| `utils/` | 4 | 600 | Neutral SQLite DB path resolution and collision detection (`db_paths.rs`), common utilities |
 | `web_host/` | 5 | 842 | Dedicated static SPA server (`dam-hopper-web` binary) |
 | `browser_debug/` | 3 | 674 | Ephemeral debug artifact manager |
-
 *Note:* The former DamHopper plugin platform (`dam-hopper-plugin-runner`) has been completely removed from `server/`.
 
 ## Android Native Client Map (`native/android-app/`)
@@ -103,8 +102,8 @@ The Android client connects to the existing remote Rust backend through Kotlin M
 | **Unified Agents Panel** | `native-app/shared/.../features/agents/` | `AgentsUnifiedPanelScreen` (authoritative panel host for `WorkbenchPanel.AGENTS`, top horizontal scrollable segmented switcher across Store, Memory, Import, and Observation Engine; single content area, zero FABs, zero WebViews). |
 | **Host Resources & Alert Models** | `native-app/shared/.../features/host/` | `HostResourceModels`, `HostMetricsModels`, `HostResourceAlertModels` (typed DTOs for snapshot v1, availability, memory pressure, cgroups, process inventory, CPU/disk metrics, alert summaries/incidents). |
 | **Resource Streaming & Coordination** | `native-app/shared/.../features/host/` & `core/transport/` | `HostResourceSseClient` (authenticated OkHttp SSE with 256 KiB event cap), `ResourceStreamCoordinator` (per-owner subscriber counts, demand-driven visible stream vs 5s REST fallback, admission gating), `ResourceFrameCommitter` (atomic snapshot/metrics pairing, monotonic decimal revision checks, epoch restart tracking), `ResourceFailureHandler` (error latching: `AUTH_UNAVAILABLE` to AuthBlocked, `FRAME_TOO_LARGE` to RestOnly), and `ResourceStreamTimers`. |
-| **Aggregate Usage & Repositories** | `native-app/shared/.../features/host/` | `UsageRepository` (REST summaries, health, setup, settings, session pagination, and deletion), `HostResourceRepository` (REST snapshot, metrics, alert history fallback), and `UsageController` (time buckets, model filters, opaque cursor pagination, generation fencing for stale loads, and UTC midnight floored date-range/all usage deletion). |
-| **Unified Resources Panel & Zero-FAB UI** | `native-app/shared/.../features/host/` | `ResourcesUnifiedPanelScreen` (authoritative panel host for `WorkbenchPanel.RESOURCES` with top segmented switcher across Fleet and Usage), `FleetScreens`, `FleetDetailComponents`, `UsageScreens`, `UsageDialogs`, and `UsageSettingsSection` (honest null `--` presentation, zero FABs, zero WebViews). |
+| **Host Resource Repository & Fallback** | `native-app/shared/.../features/host/` | `HostResourceRepository` (REST snapshot, metrics, alert history fallback); Usage analytics subproduct permanently retired and deleted in Phase 03. |
+| **Unified Resources Panel & Zero-FAB UI** | `native-app/shared/.../features/host/` | `ResourcesUnifiedPanelScreen` (authoritative panel host for `WorkbenchPanel.RESOURCES` presenting Fleet resources with honest null `--` presentation, zero FABs, zero WebViews; Usage switcher permanently retired in Phase 03). |
 | **Host Ports & Cloudflared Tunnels** | `native-app/shared/.../features/host/` | `PortModels`, `PortRepository`, `TunnelModels`, `TunnelRepository`, `PortsPanelScreen`, `PortsDialogs`; REST routes `/api/ports`, `/api/tunnels`, `/api/tunnels/install`; WebSocket events `PortDiscovered`/`PortLost` with incarnation fencing (`msg.incarnation >= existing.incarnation`), `TunnelReady`, `TunnelFailed`, `TunnelStopped`, `TunnelReminder` (`reminderDue = true`); authoritative single content host for `WorkbenchPanel.PORTS`, zero FABs. |
 | **Idle Suspend Consent & Polling** | `native-app/shared/.../features/host/` | `IdleSuspendModels`, `IdleSuspendRepository`, `IdleConsentController`, `IdleSuspendDialogs`, `WorkbenchSleepConsentBanner`; REST routes `/api/system/idle-suspend/v1/status`, `/timing`, `/force-suspend`, `/consent/decision`; fallback normalization `decodeIdleSuspendStatusV1`; WebSocket `host:uiConnection` live receipt capability fencing; 409 conflict exception mappings; zero-delay ticking countdown with zero-expiration button lockout. |
 | **Remote SSH, Host Controls & Diagnostics** | `native-app/shared/.../features/host/` | `SshModels`, `SshRepository`, `HostActionModels`, `HostControlRepository`, `DiagnosticsModels`, `DiagnosticsRepository`, `HostControlScreens`; REST routes `/api/ssh/keys`, `/api/ssh/agent`, `/api/ssh/keys/load` with passphrase redaction, per-key credentials `/api/ssh/credentials`; host actions `/api/system/actions/v1/capabilities`, `/intents`, `/approve`, `/executions`, `/audit` (repository scaffolding; action execution flows lack UI callers); diagnostics export `/api/diagnostics/export` with privacy default `includeTerminalOutput = false` acknowledging server-daemon memory storage; authoritative single content host for `WorkbenchPanel.SSH_HOST`, zero FABs. |
@@ -170,7 +169,7 @@ The Focused Git View increment landed safe native Git capabilities into the reta
 
 ## AI Dev OS Lifecycle Prototype Phase 01 Implementation Checkpoint (2026-11-02)
 
-Phase 01 core implementation under [AI Dev OS Redesign Plan](../plans/261101-1738-ai-dev-os-redesign/plan.md) reached an implementation checkpoint accepted by the user following Cycle 6 code review (score 6/10). Task 1 (`generalize-tile-tree`) and Task 2 (`implement-os-lifecycle`) are completed in source; Task 3 (`integrate-os-prototype-route`) is blocked pending the isolated Phase 03 Usage-web embed handoff (`embed/dam-hopper-app.tsx` and test); Task 4 (`qualify-prototype-gate`) lifecycle acceptance gate remains open and carries forward critical issues C1 and C2, requiring an authorized source-remediation handoff before qualification. Phase 01 remains in-progress.
+Phase 01 core implementation under [AI Dev OS Redesign Plan](../plans/261101-1738-ai-dev-os-redesign/plan.md) reached an implementation checkpoint accepted by the user following Cycle 6 code review (score 6/10). Task 1 (`generalize-tile-tree`) and Task 2 (`implement-os-lifecycle`) are completed in source; Task 3 (`integrate-os-prototype-route`) is unblocked following the completed Phase 03 Usage-web embed handoff (`embed/dam-hopper-app.tsx` and test); Task 4 (`qualify-prototype-gate`) lifecycle acceptance gate remains open and carries forward critical issues C1 and C2, requiring an authorized source-remediation handoff before qualification. Phase 01 remains in-progress.
 
 | Subsystem / Module | Source Path | Architectural Invariants & Role |
 | --- | --- | --- |

@@ -33,6 +33,7 @@ These standards describe the current Rust backend, shared React UI, and profile-
 - Do not hold synchronous locks across `.await`; keep blocking I/O and external process work outside hot locks. Revalidate state before publishing work completed outside a lock.
 - Treat persistence and filesystem replacement as transactions: validate the target, use atomic publication where required, preserve unrelated data, and fail closed on stale revisions or unsafe paths.
 - Keep secrets, authentication material, prompt text, terminal content, and private paths out of logs. Reuse the shared redacting logger and bounded diagnostics.
+- **Database Path Isolation**: Neutral SQLite database path resolution (`server/src/utils/db_paths.rs`) enforces canonical path resolution and collision detection across subsystems (e.g. `auth.db` vs `sessions.db`). Startup checks prevent path aliasing, identical canonical targets, or hardlink collisions across distinct datastores.
 
 ### React and TypeScript
 

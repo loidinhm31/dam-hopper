@@ -9,7 +9,7 @@ Design guidelines, color tokens, and typography are defined in [Platform Integra
 - [Workbench and profile components](./frontend-components/workbench.md) — Shell modes, profile connection lifecycle, Git history, and Settings.
 - [Terminal and IDE components](./frontend-components/terminal-and-ide.md) — Terminal workspace, PaneContainer splitting, PortsPanel tunnels, and Explorer/editor UI.
 - [Platform integrations](./frontend-components/platform-integrations.md) — Shared design system, Browser Debug bridge, and native host contracts.
-- [Host resources and usage](./frontend-components/host-and-usage.md) — Host-resource fleet deck, usage analytics, idle-suspend status, and terminal integration.
+- [Host resources](./frontend-components/host-and-usage.md) — Host-resource fleet deck, idle-suspend status, and terminal integration.
 - [File and media components](./frontend-components/files-and-media.md) — Explorer decorations, image/video previews, and sandboxed HTML preview.
 - [Privacy and agent notifications](./frontend-components/notifications-and-privacy.md) — Cognito Privacy Mode, agent status notifications, and terminal title ordinals.
 - [Workflow Context Surface](./workflow-context-surface.md) — Responsive workflow context UI, component ownership, and interaction contracts.
@@ -26,7 +26,7 @@ See [Workbench and profile components](./frontend-components/workbench.md#profil
 
 ### Host-resource fleet deck and cards
 
-See [Host resources and usage](./frontend-components/host-and-usage.md#host-resource-fleet-deck-and-cards).
+See [Host resources](./frontend-components/host-and-usage.md#host-resource-fleet-deck-and-cards).
 
 ### PortsPanel
 

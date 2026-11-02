@@ -969,7 +969,6 @@ pub(crate) mod tests {
         use crate::pty::{BroadcastEventSink, PtySessionManager};
         use crate::state::AppState;
         use crate::system::resource_stream::qual_hook::{set_active_hook, QualHookState};
-        use crate::telemetry::TelemetryRuntime;
         use opaque_ke::ServerSetup;
         use rand::rngs::OsRng;
         use uuid::Uuid;
@@ -1145,7 +1144,6 @@ pub(crate) mod tests {
             None,
             ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
             diagnostics,
-            TelemetryRuntime::new(),
         )
         .expect("AppState creation failed");
 

@@ -20,8 +20,6 @@ use crate::port_forward::PortForwardManager;
 use crate::pty::{BroadcastEventSink, PtySessionManager};
 use crate::ssh::SshCredStore;
 use crate::system::HostResourceMonitor;
-use crate::telemetry::worker::TelemetryHandle;
-use crate::telemetry::{codex_otlp::CodexExporterManager, TelemetryRuntime};
 use crate::tunnel::TunnelSessionManager;
 use crate::workflow::{WorkflowService, WorkflowStore};
 use crate::workspace_target::{
@@ -97,16 +95,6 @@ pub struct AppState {
     pub diagnostics: DiagnosticStore,
     /// Short-lived browser selection bundles, isolated from workspace roots.
     pub browser_debug_artifacts: BrowserDebugArtifactManager,
-    /// Aggregate-only telemetry query and control handle. It is disabled when
-    /// telemetry initialization failed or the user has not opted in.
-    pub telemetry: Arc<std::sync::RwLock<TelemetryHandle>>,
-    /// Live owner of telemetry workers and the optional loopback collector.
-    /// PTY creation does not depend on this runtime.
-    pub telemetry_runtime: TelemetryRuntime,
-    /// Owns the narrowly-scoped, secret-safe Codex OTLP configuration mutation.
-    pub codex_exporter: CodexExporterManager,
-    /// Serializes telemetry queries, deletion, retention, and collector changes.
-    pub telemetry_coordinator: Arc<tokio::sync::Mutex<()>>,
     /// Server-authoritative, short-lived registered worktree discovery cache.
     /// Optional workflow store/service. Workflow availability never gates PTY APIs.
     pub workflow: Option<Arc<WorkflowService>>,
@@ -265,7 +253,6 @@ impl AppState {
         port_forward_manager: Option<Arc<PortForwardManager>>,
         opaque_server_setup: ServerSetup<DamHopperOpaqueSuite>,
         diagnostics: DiagnosticStore,
-        telemetry_runtime: TelemetryRuntime,
     ) -> anyhow::Result<Self> {
         pty_manager.set_diagnostics(diagnostics.clone());
         let workspace_dir = Arc::new(RwLock::new(workspace_dir));
@@ -414,11 +401,6 @@ impl AppState {
             host_actions,
             diagnostics,
             browser_debug_artifacts,
-            telemetry: telemetry_runtime.handle_cell(),
-            telemetry_runtime,
-            codex_exporter: CodexExporterManager::default_paths()
-                .map_err(|error| anyhow::anyhow!("Codex exporter manager unavailable: {error}"))?,
-            telemetry_coordinator: Arc::new(tokio::sync::Mutex::new(())),
             workflow: None,
             workspace_target_resolver: WorkspaceTargetResolver::new(),
             idle_suspend_policy,
@@ -495,11 +477,6 @@ impl AppState {
         });
         self
     }
-    #[cfg(test)]
-    pub fn with_codex_exporter(mut self, manager: CodexExporterManager) -> Self {
-        self.codex_exporter = manager;
-        self
-    }
 
     /// Whether a request carries an exact configured or same-origin browser origin.
     pub fn origin_is_allowed(&self, headers: &HeaderMap) -> bool {
@@ -541,14 +518,8 @@ impl AppState {
         }
         authority.as_str().eq_ignore_ascii_case(host)
     }
-
-    pub fn set_telemetry(&self, telemetry: TelemetryHandle) {
-        *self
-            .telemetry
-            .write()
-            .expect("telemetry state lock poisoned") = telemetry;
-    }
 }
+
 
 pub fn project_roots_from_config(config: &DamHopperConfig) -> Vec<(String, StdPathBuf)> {
     config

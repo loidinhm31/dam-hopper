@@ -203,7 +203,7 @@ impl AuthBackendConfig {
     }
 
     /// Reject an auth database that is the same file as another SQLite
-    /// database this process owns (session or telemetry), so no subsystem
+    /// database this process owns (such as session), so no subsystem
     /// ever opens another's file. Mongo selects no file and always passes.
     pub fn ensure_distinct_from(
         &self,
@@ -213,7 +213,7 @@ impl AuthBackendConfig {
             return Ok(());
         };
         for (label, other) in others {
-            if crate::telemetry::runtime::ensure_distinct_database_paths(path, other).is_err() {
+            if crate::utils::db_paths::ensure_distinct_database_paths(path, other).is_err() {
                 return Err(AuthConfigError::PathCollision(label));
             }
         }

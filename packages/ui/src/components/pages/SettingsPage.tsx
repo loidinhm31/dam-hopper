@@ -17,7 +17,6 @@ import { useWorkbenchSelectionsStore } from "@/stores/workbench-selections.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { SettingsAppearanceSection } from "@/components/organisms/SettingsAppearanceSection.js";
 import { SettingsKeyboardShortcutsSection } from "@/components/organisms/SettingsKeyboardShortcutsSection.js";
-import { SettingsUsageInsightsSection } from "@/components/organisms/SettingsUsageInsightsSection.js";
 import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
 import { SettingsIdleSuspendTimingSection } from "@/components/organisms/SettingsIdleSuspendTimingSection.js";
 import { SettingsSectionAccordion } from "@/components/pages/settings-page/SettingsSectionAccordion.js";
@@ -308,8 +307,8 @@ export function SettingsPage() {
                 Settings Target Server
               </label>
               <p className="text-xs text-[var(--color-text-muted)]">
-                Server whose workspace configuration, global defaults, usage,
-                and maintenance are inspected and modified.
+                Server whose workspace configuration, global defaults, and
+                maintenance are inspected and modified.
               </p>
               {targetProfile && (
                 <div className="flex items-center gap-2 pt-1 text-xs font-mono text-[var(--color-text-muted)]">
@@ -402,13 +401,6 @@ export function SettingsPage() {
           description="Tune command keys used across workspace navigation and terminals."
         >
           <SettingsKeyboardShortcutsSection />
-        </SettingsSectionAccordion>
-
-        <SettingsSectionAccordion
-          title="Usage insights"
-          description="Opt in to privacy-safe local Codex response telemetry and token summaries."
-        >
-          <SettingsUsageInsightsSection owner={targetOwner} />
         </SettingsSectionAccordion>
         <SettingsSectionAccordion
           title="Terminal Idle Suspend"

@@ -23,7 +23,6 @@ enum class ResourcesSubProduct(val label: String) {
 @Composable
 fun ResourcesUnifiedPanelScreen(
     hostController: HostResourceController,
-    usageController: UsageController,
     onActiveSubProductChanged: (ResourcesSubProduct) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {

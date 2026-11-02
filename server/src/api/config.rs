@@ -37,7 +37,6 @@ pub async fn update_config(
 ) -> Result<impl IntoResponse, ApiError> {
     let _workspace_context = state.workspace_context_guard.write().await;
     let current = state.config.read().await.clone();
-    preserve_and_reject_telemetry_mutation(&mut body, &current)?;
     preserve_and_reject_idle_suspend_mutation(&mut body, &current)?;
     let config_path = current.config_path.clone();
     let config_dir = config_path.parent().unwrap_or(StdPath::new("/"));
@@ -96,34 +95,6 @@ pub async fn update_config(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-fn preserve_and_reject_telemetry_mutation(
-    body: &mut Value,
-    current: &DamHopperConfig,
-) -> Result<(), ApiError> {
-    let current = serde_json::to_value(&current.server.telemetry)
-        .map_err(|error| ApiError::from_app(AppError::Internal(error.to_string())))?;
-    let root = body.as_object_mut().ok_or_else(|| {
-        ApiError::from_app(AppError::InvalidInput(
-            "Config must be an object".to_string(),
-        ))
-    })?;
-    let server = root
-        .entry("server")
-        .or_insert_with(|| Value::Object(serde_json::Map::new()))
-        .as_object_mut()
-        .ok_or_else(|| {
-            ApiError::from_app(AppError::InvalidInput(
-                "server must be an object".to_string(),
-            ))
-        })?;
-    let requested = server.entry("telemetry").or_insert_with(|| current.clone());
-    if requested != &current {
-        return Err(ApiError::from_app(AppError::InvalidInput(
-            "Update telemetry through /api/usage/settings".to_string(),
-        )));
-    }
-    Ok(())
-}
 
 fn preserve_and_reject_idle_suspend_mutation(
     body: &mut Value,

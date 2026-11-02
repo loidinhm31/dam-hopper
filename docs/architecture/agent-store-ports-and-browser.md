@@ -63,7 +63,7 @@ A `BrowserDebugTarget` is a capability snapshot, not an address string:
 
 An explicit navigation increments the target revision and clears selection, picker state, bridge capabilities, console entries, pending capture, and bridge status. Tunnel loss or revalidation failure invalidates only a target owned by that profile. Selecting a project or changing terminal focus alone does not replace the Browser target or its owner.
 
-The web Browser Debug host consumes this exact `BrowserDebugTarget`. (Former desktop Tauri adapters and native SSH scopes were retired in Phase 02; see [Native SSH Forwarding Architecture](./native-ssh-forwarding.md) for historical reference).
+The web Browser Debug host consumes this exact `BrowserDebugTarget`. (Former desktop Tauri adapters and native desktop SSH forwarding scopes were permanently retired in Phase 02).
 
 ## 4. Same-Profile Terminal Handoff
 

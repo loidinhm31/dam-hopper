@@ -291,7 +291,6 @@ fn create_test_state_with_config(workspace_root: PathBuf, config: DamHopperConfi
         None,
         opaque_server_setup,
         dam_hopper_server::diagnostics::DiagnosticStore::new(workspace_root.join("diagnostics.log")),
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .unwrap()
 }
