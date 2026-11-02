@@ -212,11 +212,16 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
       const isTargetInBody =
         targetEl?.closest?.("[data-os-window-slot]") !== null;
       const isFrameFocused = !isTargetInBody;
+      const isModalActive = Boolean(
+        typeof document !== "undefined" &&
+          document.querySelector('[data-os-modal="true"], [role="dialog"]'),
+      );
 
       const disposition = arbitrateKeyboardEvent(e.nativeEvent, {
         isCognitoActive,
         isComposing: Boolean(e.nativeEvent.isComposing),
         isFrameFocused,
+        isModalActive,
       });
       if (disposition === "cognito-blocked") {
         e.preventDefault();

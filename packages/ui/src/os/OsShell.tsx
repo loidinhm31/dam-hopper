@@ -17,6 +17,7 @@ import { PortsTunnelsApp } from "./apps/PortsTunnelsApp.js";
 import { ProjectInfoApp } from "./apps/ProjectInfoApp.js";
 import { AgentStoreApp } from "./apps/AgentStoreApp.js";
 import { SettingsApp } from "./apps/SettingsApp.js";
+import { SystemMonitorApp } from "./apps/SystemMonitorApp.js";
 import {
   APP_MANIFESTS,
   findExistingWindowForApp,
@@ -31,7 +32,8 @@ import { TopBar } from "./TopBar.js";
 import { Dock } from "./Dock.js";
 import { CommandPalette } from "./CommandPalette.js";
 import { NotificationCenter } from "./NotificationCenter.js";
-import { useOsNotificationStore } from "./notifications.js";
+import { useOsNotificationStore, ingestIpcActivityEvent } from "./notifications.js";
+import { useIpcEvent } from "@/hooks/use-sse-events.js";
 import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.js";
 import { arbitrateKeyboardEvent } from "./input-arbiter.js";
 import "./os.css";
@@ -72,6 +74,10 @@ export function OsShell() {
     (state) => state.osCycleFocusShortcut,
   );
   const focusWindow = useWindowStore((state) => state.focusWindow);
+  // Ingest typed IPC events into OS notifications authority
+  useIpcEvent("*", (e) => {
+    ingestIpcActivityEvent(e);
+  });
 
   // Initial load
   useEffect(() => {
@@ -606,6 +612,92 @@ export function OsShell() {
         );
         return { status: "handled", targetWindowId: id };
       }),
+      registerIntentHandler("system:monitor", (intent) => {
+        const targetCtx: WindowContext = {
+          profileId: intent.payload.profileId ?? "default",
+        };
+        const currentWindows = useWindowStore.getState().session.windows;
+        const existing = findExistingWindowForApp(
+          currentWindows,
+          "system-monitor",
+          targetCtx,
+        );
+        if (existing) {
+          const activeDId = useWindowStore.getState().session.activeDesktopId;
+          if (existing.desktopId !== activeDId) {
+            switchDesktop(existing.desktopId);
+          }
+          if (existing.minimized) restoreWindow(existing.id);
+          focusWindow(existing.id);
+          if (intent.payload.profileId || intent.payload.incidentId || intent.payload.tab) {
+            useWindowStore.getState().updateAppState(existing.id, {
+              ...(intent.payload.profileId ? { inspectedProfileId: intent.payload.profileId } : {}),
+              ...(intent.payload.incidentId ? { selectedIncidentId: intent.payload.incidentId } : {}),
+              ...(intent.payload.tab ? { activeTab: intent.payload.tab } : {}),
+            });
+          }
+          return { status: "handled", targetWindowId: existing.id };
+        }
+        const id = `system-monitor-${generateUUID().slice(0, 8)}`;
+        const activeDesktopId = useWindowStore.getState().session.activeDesktopId;
+        openWindow(
+          {
+            id,
+            appId: "system-monitor",
+            title: "System Monitor",
+            ctx: targetCtx,
+            mode: "tile",
+            appState: {
+              inspectedProfileId: intent.payload.profileId ?? null,
+              selectedIncidentId: intent.payload.incidentId ?? null,
+              activeTab: intent.payload.tab ?? null,
+            },
+          },
+          activeDesktopId,
+        );
+        return { status: "handled", targetWindowId: id };
+      }),
+      registerIntentHandler("monitor:alert", (intent) => {
+        const targetCtx: WindowContext = {
+          profileId: intent.payload.profileId,
+        };
+        const currentWindows = useWindowStore.getState().session.windows;
+        const existing = findExistingWindowForApp(
+          currentWindows,
+          "system-monitor",
+          targetCtx,
+        );
+        if (existing) {
+          const activeDId = useWindowStore.getState().session.activeDesktopId;
+          if (existing.desktopId !== activeDId) {
+            switchDesktop(existing.desktopId);
+          }
+          if (existing.minimized) restoreWindow(existing.id);
+          focusWindow(existing.id);
+          useWindowStore.getState().updateAppState(existing.id, {
+            inspectedProfileId: intent.payload.profileId,
+            selectedIncidentId: intent.payload.incidentId,
+          });
+          return { status: "handled", targetWindowId: existing.id };
+        }
+        const id = `system-monitor-${generateUUID().slice(0, 8)}`;
+        const activeDesktopId = useWindowStore.getState().session.activeDesktopId;
+        openWindow(
+          {
+            id,
+            appId: "system-monitor",
+            title: "System Monitor",
+            ctx: targetCtx,
+            mode: "tile",
+            appState: {
+              inspectedProfileId: intent.payload.profileId,
+              selectedIncidentId: intent.payload.incidentId,
+            },
+          },
+          activeDesktopId,
+        );
+        return { status: "handled", targetWindowId: id };
+      }),
       registerIntentHandler("terminal:focus", (intent) => {
         const existingTerminal = getTerminal({
           profileId: intent.payload.profileId,
@@ -889,6 +981,8 @@ export function OsShell() {
         return <AgentStoreApp window={window} />;
       case "settings":
         return <SettingsApp window={window} />;
+      case "system-monitor":
+        return <SystemMonitorApp window={window} />;
       default:
         return null;
     }

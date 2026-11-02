@@ -23,12 +23,13 @@ const EXPECTED_APPS: OsAppId[] = [
   "ports-tunnels",
   "agent-store",
   "settings",
+  "system-monitor",
 ];
 
 describe("app-registry", () => {
-  it("contains all 14 retained app manifests", () => {
+  it("contains all 15 app manifests including system-monitor", () => {
     const manifests = listAppManifests();
-    expect(manifests).toHaveLength(14);
+    expect(manifests).toHaveLength(15);
 
     for (const appId of EXPECTED_APPS) {
       expect(APP_MANIFESTS[appId]).toBeDefined();

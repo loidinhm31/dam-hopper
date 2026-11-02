@@ -20,8 +20,8 @@ export interface HostResourceGlanceProps {
   pinnedMount?: string | null;
   metricsStale?: boolean;
   metricsError?: boolean;
+  className?: string;
 }
-
 type Projection = Omit<HostResourceGlanceMetric, "label">;
 
 export function HostResourceGlance({
@@ -31,6 +31,7 @@ export function HostResourceGlance({
   pinnedMount = null,
   metricsStale = false,
   metricsError = false,
+  className = "",
 }: HostResourceGlanceProps) {
   const metrics = compatibilityMetrics ?? legacyMetrics ?? null;
   const compatibilityStatus = getCompatibilityStatus(
@@ -67,7 +68,7 @@ export function HostResourceGlance({
   ];
 
   return (
-    <section aria-label="Host resource glance" className="space-y-2.5">
+    <section aria-label="Host resource glance" className={`space-y-2.5 ${className}`}>
       {rows.map((row) => (
         <MetricRow key={row.label} {...row} />
       ))}

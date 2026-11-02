@@ -1,9 +1,9 @@
 # Phase 06: P3 — System Monitor and tray
 
-Estimate: 32h; implementation status: **pending**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
+Estimate: 32h; implementation status: **DONE (2026-11-02 22:10:00 +07:00)** (per user direction; technical acceptance incomplete). [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
 
 ## Context / objective
-Priority P2; status pending. Merge Dashboard + Host Resources into one fleet app; keep underlying host-resource monitoring/system actions/idle-suspend APIs. Usage analytics deletion does not delete system CPU/memory “usage”. [UI Monitor](../reports/ui-ux-designer-261101-1738-ai-dev-os-initial-ui.md#43-system-monitor-app-replaces-dashboard--host-resources-popover).
+Priority P2; status: **DONE (2026-11-02 22:10:00 +07:00)** (per user direction; technical acceptance incomplete). Merge Dashboard + Host Resources into one fleet app; keep underlying host-resource monitoring/system actions/idle-suspend APIs. Usage analytics deletion does not delete system CPU/memory “usage”. [UI Monitor](../reports/ui-ux-designer-261101-1738-ai-dev-os-initial-ui.md#43-system-monitor-app-replaces-dashboard--host-resources-popover).
 
 ## Architecture / requirements
 System Monitor = singleton/none context, explicit selected-profile filter over fleet. Reuse HostResourceFleetDeck, Glance, Diagnosis, StorageDetails, IncidentDetails, HostIdleSuspendStatus and ForceSleepDialog. Fold Dashboard project/session counts and session table (kill/jump) into app; move activity presentation to OS bell/event log. TopBar tray mini CPU/MEM meters + alert dot opens Monitor at exact profile/incident; idle timing/status tray opens correct host action. Expose online/stale/connecting/offline honestly, no metric estimate or unknown->zero conversion.
@@ -43,6 +43,16 @@ Paths below are project-root-relative (`/home/loidinh/WS/dam-hopper/`). Director
 | Modify | `packages/ui/src/components/organisms/HostResourceDiagnosis.tsx` |
 | Modify | `packages/ui/src/components/organisms/HostIdleSuspendStatus.tsx` |
 | Create | `packages/ui/browser-tests/os-system-monitor.browser.tsx` |
+| Modify | `packages/ui/src/os/types.ts` |
+| Modify | `packages/ui/src/os/OsShell.tsx` |
+| Modify | `packages/ui/src/os/Dock.tsx` |
+| Modify | `packages/ui/src/os/persistence.ts` |
+| Modify | `packages/ui/src/os/app-registry.test.ts` |
+| Modify | `packages/ui/src/os/WindowFrame.tsx` |
+| Modify | `packages/ui/src/os/input-arbiter.ts` |
+| Modify | `packages/ui/src/hooks/use-host-resource-alert-presentation.ts` |
+| Modify | `packages/ui/src/components/organisms/HostResourceIncidentDetails.tsx` |
+| Modify | `packages/ui/src/components/organisms/HostResourceFleetCard.tsx` |
 
 ## Durable task contracts
 
@@ -69,7 +79,17 @@ Exactly one authored fence; no execution state/hydration, completion or test rec
       "packages/ui/src/components/organisms/HostResourceGlance.tsx",
       "packages/ui/src/components/organisms/HostResourceDiagnosis.tsx",
       "packages/ui/src/components/organisms/HostIdleSuspendStatus.tsx",
-      "packages/ui/browser-tests/os-system-monitor.browser.tsx"
+      "packages/ui/browser-tests/os-system-monitor.browser.tsx",
+      "packages/ui/src/os/types.ts",
+      "packages/ui/src/os/OsShell.tsx",
+      "packages/ui/src/os/Dock.tsx",
+      "packages/ui/src/os/persistence.ts",
+      "packages/ui/src/os/app-registry.test.ts",
+      "packages/ui/src/os/WindowFrame.tsx",
+      "packages/ui/src/os/input-arbiter.ts",
+      "packages/ui/src/hooks/use-host-resource-alert-presentation.ts",
+      "packages/ui/src/components/organisms/HostResourceIncidentDetails.tsx",
+      "packages/ui/src/components/organisms/HostResourceFleetCard.tsx"
     ],
     "constraints": [
       "Only listed paths writable; escalate additions to coordinator before editing.",
@@ -88,4 +108,4 @@ Exactly one authored fence; no execution state/hydration, completion or test rec
 ]
 ```
 
-- [ ] <!-- evcrate-task:implement-system-monitor --> Fold Dashboard and host resources into System Monitor with shared tray stream
+- [x] <!-- evcrate-task:implement-system-monitor --> Fold Dashboard and host resources into System Monitor with shared tray stream (DONE 2026-11-02 22:10:00 +07:00 per user direction; technical acceptance incomplete)

@@ -6,10 +6,11 @@ import { readServerProfiles, type ServerProfile } from "@/api/server-config.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
-
+import { MonitorTray } from "./MonitorTray.js";
 export interface TopBarProps {
   onOpenPalette?: () => void;
   onOpenNotifications?: () => void;
+  onOpenMonitor?: (profileId?: string, incidentId?: string) => void;
   unreadNotificationsCount?: number;
   className?: string;
 }
@@ -18,6 +19,7 @@ export function TopBar({
   onOpenPalette,
   onOpenNotifications,
   unreadNotificationsCount = 0,
+  onOpenMonitor,
   className = "",
 }: TopBarProps) {
   const session = useWindowStore((state) => state.session);
@@ -154,8 +156,10 @@ export function TopBar({
         </button>
       </div>
 
-      {/* Right: Minimized tray + WindowList + Notification bell */}
+      {/* Right: MonitorTray + Minimized tray + WindowList + Notification bell */}
       <div className="flex items-center gap-2">
+        <MonitorTray onOpenMonitor={onOpenMonitor} />
+
         {/* Minimized Tray */}
         {minimizedWindows.length > 0 && (
           <div className="hidden md:flex items-center gap-1 max-w-[200px] overflow-x-auto">

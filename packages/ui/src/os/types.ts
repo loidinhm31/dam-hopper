@@ -14,7 +14,8 @@ export type OsAppId =
   | "workflow-plans"
   | "ports-tunnels"
   | "agent-store"
-  | "settings";
+  | "settings"
+  | "system-monitor";
 
 export interface WindowContext {
   profileId: string;

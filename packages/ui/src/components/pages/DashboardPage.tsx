@@ -22,6 +22,7 @@ import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
 import { getProfiles } from "@/api/server-config.js";
 import { getConnectionSnapshot, getApi } from "@/api/connections.js";
 import { useIpcEvent } from "@/hooks/use-sse-events.js";
+import { ingestIpcActivityEvent, useOsNotificationStore } from "@/os/notifications.js";
 import { useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { SessionInfo } from "@/api/client.js";
@@ -37,7 +38,7 @@ interface ActivityEntry {
   time: Date;
 }
 
-const TYPE_ICON: Record<string, LucideIcon> = {
+export const TYPE_ICON: Record<string, LucideIcon> = {
   build: Hammer,
   run: Play,
   terminal: Terminal,
@@ -45,7 +46,7 @@ const TYPE_ICON: Record<string, LucideIcon> = {
   custom: Wrench,
 };
 
-function formatUptime(startedAt: number): string {
+export function formatUptime(startedAt: number): string {
   const secs = Math.floor((Date.now() - startedAt) / 1000);
   if (secs < 60) return `${secs}s`;
   const mins = Math.floor(secs / 60);
@@ -55,15 +56,17 @@ function formatUptime(startedAt: number): string {
   return rem > 0 ? `${hours}h ${rem}m` : `${hours}h`;
 }
 
-function SessionRow({
-  session,
-  onNavigate,
-  onKill,
-}: {
+export interface SessionRowProps {
   session: SessionInfo & { profileId?: string; profileName?: string };
   onNavigate: (id: string, profileId?: string) => void;
   onKill: (id: string, profileId?: string) => void;
-}) {
+}
+
+export function SessionRow({
+  session,
+  onNavigate,
+  onKill,
+}: SessionRowProps) {
   const Icon = TYPE_ICON[session.type] ?? Terminal;
   const status = getSessionStatus(session);
   const dotColor = getStatusDotColor(status);
@@ -91,9 +94,9 @@ function SessionRow({
       role="button"
       tabIndex={0}
       className="flex items-center gap-3 px-3 py-2 rounded cursor-pointer hover:bg-[var(--color-surface-2)] transition-colors group"
-      onClick={() => onNavigate(session.id)}
+      onClick={() => onNavigate(session.id, session.profileId)}
       onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") onNavigate(session.id);
+        if (e.key === "Enter" || e.key === " ") onNavigate(session.id, session.profileId);
       }}
     >
       <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]/60" />
@@ -129,6 +132,13 @@ function SessionRow({
         onClick={(e) => {
           e.stopPropagation();
           onKill(session.id, session.profileId);
+        }}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onKill(session.id, session.profileId);
+          }
         }}
         title="Kill session"
       >
@@ -169,6 +179,8 @@ export function DashboardPage() {
   );
 
   useIpcEvent("*", (e) => {
+    ingestIpcActivityEvent(e);
+
     const msg =
       typeof e.data === "object" && e.data !== null
         ? (((e.data as Record<string, unknown>).message as

@@ -1,6 +1,6 @@
 # System Architecture
 
-**Status:** Current architecture overview, updated 2026-11-02 (reflecting Phase 01 OS lifecycle prototype implementation checkpoint and Phase 02 native Tauri / desktop SSH-forwarding removal). Detailed subsystem contracts are linked below; source code is authoritative.
+**Status:** Current architecture overview, updated 2026-11-02 (reflecting Phase 01 OS lifecycle prototype, Phase 02 native Tauri / desktop SSH-forwarding removal, Phase 04 shell chrome, Phase 05 app migration, and Phase 06 System Monitor and tray). Detailed subsystem contracts are linked below; source code is authoritative.
 
 ## Runtime Overview
 
@@ -261,6 +261,32 @@ Phase 05 migrates existing workbench and management panels into the OS windowing
 - **DiffViewer Hardening (`packages/ui/src/components/organisms/DiffViewer.tsx`):** Resolves transport strictly via `getBoundTransport(targetRef)`, checks connection generation before read, after read, and after `fsWriteFile`. Tracks `documentIdentityRef`, `editRevisionRef`, and `activeSaveRef`: typing during an in-flight stat/save increments `editRevisionRef` and resets `saveState` from `"saving"` to `"idle"`. Authoritative modified pinning (`authoritativeModified`) protects post-save baseline while preserving newer local dirty edits over external refetches.
 - **Search & Replace Hardening (`SearchPanel.tsx`, `use-file-search.ts`, `use-search-panel-replace.ts`):** Captures profile connection with `isCurrentConnection` assertion upon result arrival; empty federated search returns empty results safely without ambient fallback. `SearchPanel` enforces `isSearchMatchingInput` query-result binding and 200-char input normalization, disabling replace when typing diverges. `useSearchPanelReplace` validates match generations across Replace Next and batch Replace All (`allMatchesValid`) while skipping dirty tabs.
 - **Session Changes App (`packages/ui/src/os/apps/SessionChangesApp.tsx`):** Requires complete 6-part owner tuple, stably captures generation via `useState` on mount, acquires `session-changes` resource claim, and closes the mounted window while purging query cache if Session Changes becomes disabled or disconnected (offscreen/hidden review retirement remains open under W2).
+
+## AI Dev OS System Monitor & Tray Infrastructure (Phase 06)
+
+**Status:** Administratively closed per user direction (2026-11-02 22:10:00 +07:00); technical acceptance incomplete. Carryover findings C2–C6 and W1–W4 from Cycle 3 review (score 6.5/10) remain active qualification gates carried forward to Phase 08/09.
+
+Phase 06 consolidates the standalone Dashboard overview and Host Resources popovers into a unified System Monitor application, introduces a TopBar system tray with live hardware meters, and routes activity telemetry into OS notifications:
+
+### 1. Unified System Monitor Application (`SystemMonitorApp.tsx`)
+- **Fleet-Wide Overview & Composition:** Registered in `APP_MANIFESTS` as `system-monitor` (`single-instance`, `minimumCtx: "none"`, `defaultPlacement: "tile"`). Merges fleet project counts (clean/dirty), aggregated terminal sessions, and host resource telemetry by composing `HostResourceFleetDeck`, `HostResourceGlance`, `HostResourceDiagnosis`, `HostIdleSuspendStatus`, and `ForceSleepDialog`.
+- **Profile-Filtered Inspection & Alert Drilldown:** Supports inspecting specific hosts via window `appState.inspectedProfileId`, falling back to full-fleet view when null. Selecting a profile clears incident highlights. Alert drilldowns (`selectedIncidentId`) navigate directly to incident evidence; acknowledgment (`markRead`) updates presentation state.
+- **Process Termination Safety:** Terminal session kill flows require explicit confirmation via a Radix Dialog modal, capturing target `{ profileId, generation, terminalId, incarnation }`. Client revalidation rejects locally observed profile generation or terminal incarnation mismatches (authoritative replacement safety remains open under C2 requiring an atomic expected-incarnation server mutation contract). Jump actions dispatch `terminal:focus` intents without creating replacement sessions.
+- **Cognito Privacy Masking:** Masks hostnames to `protected-host` and redacts kill confirmation command text when Cognito Privacy Mode is active (full detail masking across loaded child storage/incident drilldowns remains open under C3).
+
+### 2. TopBar Monitor Tray & Stream Coordination (`MonitorTray.tsx`)
+- **Shared Stream Coordinator:** Reuses `useMultiHostResources` and `useHostMetrics` backed by canonical `HostResourceStreamCoordinator`. App and tray are designed to share stream leases and REST fallback paths (runtime verification of zero duplicate leases and lease release lifecycle remains tracked under W1).
+- **Status Presentation & Tray Lifecycle:** Displays compact CPU/memory utilization meters with mapped connection indicators (`Live`, `Stale`, `Connecting`, `Offline`; canonical freshness mapping across all modes remains tracked under W1). TopBar tray is intended to unmount gracefully when hidden while maintaining background telemetry.
+- **Alert Indicators & Intent Dispatch:** Unread alert indicator dot reflects `useHostResourceAlertPresentationStore`. Clicking opens System Monitor and dispatches `monitor:alert` (for targeted incident inspection) or `system:monitor` (for profile fleet overview).
+
+### 3. Intent Routing & Activity Notification Ingestion
+- **Typed OS Intents (`intents.ts`, `OsShell.tsx`):** Adds `system:monitor` (`profileId`, `incidentId`, `tab`) and `monitor:alert` (`profileId`, `incidentId`). `OsShell` handles both intents by focusing existing instances or creating new windows with stamped `deliveryId`.
+- **Activity Telemetry Ingestion (`notifications.ts`):** `ingestIpcActivityEvent` filters typed activity events via `TYPED_ACTIVITY_EVENTS` (`git:*`, `terminal:*`, `agent:*`, `host:*`, `idle-suspend:*`), mapping them to structured `NotificationCenter` items with source, level, and title classification. Replaces legacy Dashboard activity cards while keeping raw tool outputs out of notification history (strict producer-bound schema validation and payload containment remain open under C6).
+
+### 4. Open Carryovers & Qualification Boundaries
+- **C2 Replacement-Process Kill Safety:** Server-side atomic expected-incarnation kill contracts remain an open requirement; client-side revalidation protects against known cached mismatches.
+- **C3/C4 Detail Masking & Event Containment:** Thorough Cognito masking across deep diagnostic drilldowns and capture-phase modal shortcut containment remain active carryovers.
+- **C5/C6 Multi-Host Attention & Activity Schemas:** Cross-host read-state isolation and strict producer-bound typed notification contracts are tracked as release gates carried to Phase 09.
 ## Multi-Profile Ownership Model
 
 A browser-side `profileId` selects one saved server endpoint/identity. A monotonically replaced connection `generation` identifies the current runtime for that profile. UI work captures both before issuing requests.

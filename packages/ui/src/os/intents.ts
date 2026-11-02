@@ -38,6 +38,7 @@ export type IntentAction =
   | "settings:open"
   | "settings:devices"
   | "system:monitor"
+  | "monitor:alert"
   | "recipes:launch";
 
 export interface IntentPayloadMap {
@@ -209,7 +210,13 @@ export interface IntentPayloadMap {
     profileId?: string;
   };
   "system:monitor": {
+    profileId?: string;
+    incidentId?: string;
+    tab?: "fleet" | "sessions" | "idle";
+  };
+  "monitor:alert": {
     profileId: string;
+    incidentId: string;
   };
   "recipes:launch": {
     profileId: string;

@@ -25,6 +25,7 @@ const APP_ICONS: Record<OsAppId, string> = {
   "project-info": "ℹ",
   "agent-store": "🛒",
   settings: "⚙",
+  "system-monitor": "📊",
 };
 
 export function Dock({ onLaunchApp, className = "" }: DockProps) {

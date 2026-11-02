@@ -95,6 +95,16 @@ function sanitizeAppState(
       projected.activeTab = rawState.activeTab;
     return Object.keys(projected).length > 0 ? projected : undefined;
   }
+  if (appId === "system-monitor") {
+    const projected: Record<string, unknown> = {};
+    if (typeof rawState.inspectedProfileId === "string")
+      projected.inspectedProfileId = rawState.inspectedProfileId;
+    if (typeof rawState.selectedIncidentId === "string")
+      projected.selectedIncidentId = rawState.selectedIncidentId;
+    if (typeof rawState.activeTab === "string")
+      projected.activeTab = rawState.activeTab;
+    return Object.keys(projected).length > 0 ? projected : undefined;
+  }
   return undefined;
 }
 

@@ -127,6 +127,15 @@ export const APP_MANIFESTS: Record<OsAppId, AppManifest> = {
     minSize: { width: 480, height: 360 },
     intents: ["settings:open", "settings:devices"],
   },
+  "system-monitor": {
+    appId: "system-monitor",
+    displayName: "System Monitor",
+    instancing: "single-instance",
+    minimumCtx: "none",
+    defaultPlacement: "tile",
+    minSize: { width: 480, height: 360 },
+    intents: ["system:monitor", "monitor:alert"],
+  },
 };
 
 export function getAppManifest(appId: OsAppId): AppManifest | undefined {

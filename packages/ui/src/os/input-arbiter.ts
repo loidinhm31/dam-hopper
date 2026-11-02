@@ -10,6 +10,7 @@ export interface InputArbiterContext {
   isCognitoActive: boolean;
   isComposing: boolean;
   isFrameFocused: boolean;
+  isModalActive?: boolean;
   cycleFocusShortcut?: string;
   paletteShortcut?: string;
 }
@@ -91,6 +92,11 @@ export function arbitrateKeyboardEvent(
   // 2. IME Composition / Dead keys / AltGr: Passthrough immediately without chord interception
   if (ctx.isComposing || isImeOrCompositionEvent(event)) {
     return "ime-passthrough";
+  }
+
+  // 3. Modal active: do not fire OS frame shortcuts or palette behind active modal
+  if (ctx.isModalActive) {
+    return "app-passthrough";
   }
 
   const normalizedEvent: ShortcutKeyEvent = {
