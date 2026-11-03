@@ -1,11 +1,11 @@
 {
-  "run_id": "local-run-1793667350959",
+  "run_id": "local-run-1793670875580",
   "command": "eval-browser-local-capture",
-  "started_at": "2026-11-03T00:55:50.959Z",
-  "completed_at": "2026-11-03T00:55:50.959Z",
+  "started_at": "2026-11-03T01:54:35.580Z",
+  "completed_at": "2026-11-03T01:54:35.580Z",
   "case_name": "os-cutover",
   "route": "/os",
-  "git_head": "c83f55043e5b2ea2aa23e67d0953195df7597e3d",
+  "git_head": "3f4a7506d03847dc86bc9a41dfb42fa8cd6bf0f3",
   "browser": "chromium",
   "browser_version": "1.61.1",
   "os": "linux",
@@ -13,15 +13,33 @@
     "width": 1440,
     "height": 900
   },
-  "device_pixel_ratio": 1,
+  "device_pixel_ratio": 1.25,
   "checkpoints": [
     {
       "checkpoint": "screenshot",
       "file_name": "screenshot.png",
-      "sha256": "95e17a5d6e9f00988ffc8b460324bc48255605333f4c72ee2f5c6aae4de8d04b",
+      "sha256": "2f897e3acf1ec900ec2f635ebe0617675649493b620877affb5a1f5c11b68d8f",
       "dimensions": {
         "width": 1440,
         "height": 900
+      }
+    },
+    {
+      "checkpoint": "fhd",
+      "file_name": "fhd.png",
+      "sha256": "df5fc6ad7e766941966af4e1795ad45cc7547ba6108e649fd941d488846a4580",
+      "dimensions": {
+        "width": 1920,
+        "height": 1080
+      }
+    },
+    {
+      "checkpoint": "compact",
+      "file_name": "compact.png",
+      "sha256": "2d0371d80bb5bb2201b0add26ff56bcb3c78a174b1b0a8b0183bc36c8cbca1b9",
+      "dimensions": {
+        "width": 1024,
+        "height": 640
       }
     }
   ],
