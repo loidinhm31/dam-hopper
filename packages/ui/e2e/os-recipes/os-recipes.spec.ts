@@ -24,7 +24,7 @@ test.describe("DamHopper OS Recipes & Save Subset Application Journey", () => {
     await expect(osShell).toBeVisible({ timeout: 20_000 });
 
     // 2. Open Recipes from Dock
-    const dockRecipesBtn = page.getByRole("button", { name: "Recipes", exact: false }).first();
+    const dockRecipesBtn = page.locator("aside[aria-label='Application Dock'] button[title='Recipes']").first();
     await expect(dockRecipesBtn).toBeVisible({ timeout: 10_000 });
     await dockRecipesBtn.click();
 
