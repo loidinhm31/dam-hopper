@@ -93,7 +93,7 @@ automatic_policy = "agent-free"
     let (event_sink, _rx) = BroadcastEventSink::new(512);
     let pty_manager = PtySessionManager::new(Arc::new(event_sink.clone()));
 
-    let mut config = DamHopperConfig {
+    let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "smoke-fixture-ws".into(),
             root: workspace_dir.display().to_string(),
@@ -113,7 +113,6 @@ automatic_policy = "agent-free"
         features: FeaturesConfig::default(),
         config_path: config_path.clone(),
     };
-    config.server.telemetry.db_path = tmp.path().join("telemetry.db").display().to_string();
 
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(vec![]);

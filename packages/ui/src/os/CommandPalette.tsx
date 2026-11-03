@@ -229,9 +229,11 @@ export function CommandPalette({
     return items;
   }, [
     activeDesktop,
-    session.windows,
-    session.activeDesktopId,
+    session,
+    setSession,
     openWindow,
+    focusWindow,
+    restoreWindow,
     addDesktop,
     toggleMaximizeWindow,
     setWindowMode,

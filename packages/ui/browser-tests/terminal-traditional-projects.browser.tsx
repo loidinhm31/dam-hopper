@@ -256,8 +256,20 @@ const projectStatusTransport = {
   terminalResize: () => {},
 } as unknown as Transport;
 
-vi.mock("@/hooks/use-compact-workspace.js", () => ({
-  useCompactWorkspace: () => compactState.value,
+vi.mock("@/os/use-os-viewport.js", () => ({
+  useOsViewport: () => ({
+    width: compactState.value ? 375 : 1440,
+    height: 700,
+    isStandard: !compactState.value,
+    isCompact: compactState.value,
+    isNarrowHeight: false,
+    isUnsupported: false,
+  }),
+  useContainerQuery: () => ({
+    width: compactState.value ? 375 : 1440,
+    height: 700,
+    isCompact: compactState.value,
+  }),
 }));
 
 vi.mock("@/hooks/use-coarse-pointer.js", () => ({

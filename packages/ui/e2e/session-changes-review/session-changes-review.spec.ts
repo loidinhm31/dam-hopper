@@ -21,7 +21,7 @@ test.describe("OMP Session Changes Panel User Journey (AC1-AC8)", () => {
     // 2. Navigate to workspace
     await page.goto(`${appServices.appOrigin}/workspace`);
 
-    const primaryNav = page.locator("nav[aria-label='Primary']").first();
+    const primaryNav = page.locator("[data-os-shell='true'], nav[aria-label='Primary'], header[role='banner']").first();
     await expect(primaryNav).toBeVisible({ timeout: 20_000 });
 
     // Look for session changes button in tab bar or header

@@ -1,19 +1,34 @@
-import { act, useMemo, useRef, useState } from "react";
+import { act, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AppZoomProvider, useAppZoom } from "@/contexts/AppZoomContext.js";
 import { BrowserDebugKeepAliveHost } from "@/components/organisms/BrowserDebugKeepAliveHost.js";
-import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import type { BrowserDebugController } from "@/hooks/use-browser-debug.js";
 import { APP_ZOOM_STORAGE_KEY } from "@/lib/app-zoom.js";
 import { getBrowserDebugViewportGeometry } from "@/lib/browser-debug-keep-alive.js";
 import {
   getCompactWorkspaceEffectiveWidth,
   readCompactWorkspaceMatch,
+  subscribeToCompactWorkspace,
 } from "@/hooks/compact-workspace-media-query.js";
 import { TopNavAppZoomControls } from "@/components/atoms/TopNavAppZoomControls.js";
 import "@/index.css";
+
+function useCompactWorkspace() {
+  const { level } = useAppZoom();
+  const [matches, setMatches] = useState(() =>
+    readCompactWorkspaceMatch(typeof window !== "undefined" ? window : undefined, level),
+  );
+  useEffect(() => {
+    return subscribeToCompactWorkspace(
+      setMatches,
+      typeof window !== "undefined" ? window : undefined,
+      level,
+    );
+  }, [level]);
+  return matches;
+}
 
 function PortalFixture() {
   const [clicks, setClicks] = useState(0);

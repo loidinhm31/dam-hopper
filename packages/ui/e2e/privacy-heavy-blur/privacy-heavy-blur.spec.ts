@@ -18,7 +18,7 @@ test.describe("Privacy Heavy Blur Real Application Journey (A04)", () => {
     await page.goto(`${appServices.appOrigin}/workspace`);
 
     // Wait for the workspace shell and top navigation to be visible
-    const topNav = page.locator("nav[aria-label='Primary']").first();
+    const topNav = page.locator("[data-os-shell='true'], nav[aria-label='Primary'], header[role='banner']").first();
     await expect(topNav).toBeVisible({ timeout: 15_000 });
 
     const contentRoot = page.locator("[data-cognito-mode-content]");

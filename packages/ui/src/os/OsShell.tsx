@@ -739,40 +739,7 @@ export function OsShell() {
           focusWindow(existing.id);
           return { status: "handled", targetWindowId: existing.id };
         }
-        const anyTerminalWindow = windowList.find(
-          (w) =>
-            w.appId === "terminals" &&
-            w.ctx.profileId === intent.payload.profileId,
-        );
-        if (anyTerminalWindow) {
-          if (anyTerminalWindow.minimized) restoreWindow(anyTerminalWindow.id);
-          focusWindow(anyTerminalWindow.id);
-          useWindowStore.getState().updateAppState(anyTerminalWindow.id, {
-            sessionId: intent.payload.terminalId,
-            terminalId: intent.payload.terminalId,
-          });
-          return { status: "handled", targetWindowId: anyTerminalWindow.id };
-        }
-        const manifest = getAppManifest("terminals");
-        const id = `terminals-${generateUUID().slice(0, 8)}`;
-        const activeDesktopId =
-          useWindowStore.getState().session.activeDesktopId;
-        openWindow(
-          {
-            id,
-            appId: "terminals",
-            title: manifest?.displayName ?? "Terminal",
-            ctx: { profileId: intent.payload.profileId },
-            mode: manifest?.defaultPlacement ?? "tile",
-            appState: {
-              sessionId: intent.payload.terminalId,
-              terminalId: intent.payload.terminalId,
-            },
-          },
-          activeDesktopId,
-        );
-        focusWindow(id);
-        return { status: "handled", targetWindowId: id };
+        return { status: "unhandled", reason: "terminal-not-found" };
       }),
       registerIntentHandler("search:query", (intent) => {
         const targetCtx: WindowContext = {
@@ -1139,6 +1106,7 @@ export function OsShell() {
       activeProject,
       activeDesktop?.defaultCtx,
       session.activeDesktopId,
+      switchDesktop,
     ],
   );
 

@@ -5,7 +5,6 @@ import { page, userEvent } from "vitest/browser";
 import type { GitLogEntry } from "@/api/client.js";
 import { GitLogTree } from "@/components/organisms/GitLogTree.js";
 import { GitEditCommitMessageDialog } from "@/components/organisms/GitHistoryActions.js";
-import { TerminalFloatingToolPanel } from "@/components/organisms/TerminalFloatingToolPanel.js";
 import "@/index.css";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -34,12 +33,13 @@ function HistoryDialogHarness() {
       <output aria-label="IDE activations">{clicks}</output>
       <input aria-label="Terminal input" />
       <div className="relative h-[650px]">
-        <TerminalFloatingToolPanel
-          open={panelOpen}
-          title="Git"
-          onClose={() => setPanelOpen(false)}
-          content={
-            <>
+        {panelOpen && (
+          <div className="h-full flex flex-col border border-border bg-background" data-testid="git-tool-panel">
+            <div className="flex items-center justify-between p-2 border-b border-border">
+              <span>Git</span>
+              <button type="button" onClick={() => setPanelOpen(false)}>Close</button>
+            </div>
+            <div className="flex-1 overflow-auto p-2">
               <GitLogTree logs={[head]} onEditCommitMessage={setEditing} />
               <GitEditCommitMessageDialog
                 commit={editing}
@@ -48,14 +48,13 @@ function HistoryDialogHarness() {
                 saving={false}
                 onClose={() => setEditing(null)}
                 onConfirm={(message) => {
-                  // Model the successful refresh replacing the keyed history row.
                   setHead({ ...head, hash: "2".repeat(40), message });
                   setEditing(null);
                 }}
               />
-            </>
-          }
-        />
+            </div>
+          </div>
+        )}
       </div>
     </>
   );

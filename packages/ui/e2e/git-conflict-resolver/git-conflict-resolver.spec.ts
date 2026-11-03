@@ -22,7 +22,7 @@ test.describe("Git Conflict Resolver Real Application Journey (AC1-AC12)", () =>
     await page.goto(`${appServices.appOrigin}/workspace`);
 
     // Wait for primary navigation shell
-    const primaryNav = page.locator("nav[aria-label='Primary']").first();
+    const primaryNav = page.locator("[data-os-shell='true'], nav[aria-label='Primary'], header[role='banner']").first();
     await expect(primaryNav).toBeVisible({ timeout: 20_000 });
 
     // Look for the floating conflict pill on the screen and open resolver

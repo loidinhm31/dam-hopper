@@ -22,7 +22,7 @@ test.describe("Editor Git Blame & Commit Reveal Real Application Journey (A01-A1
     await page.goto(`${appServices.appOrigin}/workspace`);
 
     // Wait for primary navigation shell and top workspace layout
-    const primaryNav = page.locator("nav[aria-label='Primary']").first();
+    const primaryNav = page.locator("[data-os-shell='true'], nav[aria-label='Primary'], header[role='banner']").first();
     await expect(primaryNav).toBeVisible({ timeout: 20_000 });
 
     // Open code.ts from explorer file tree

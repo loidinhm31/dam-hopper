@@ -24,7 +24,7 @@ test.describe("Project Plans Dashboard Real Application Journey (Phase 05 Qualif
     expect(initialPlanBytes.length).toBeGreaterThan(0);
     await page.goto(`${appServices.appOrigin}/workspace`);
 
-    const topNav = page.locator("nav[aria-label='Primary']").first();
+    const topNav = page.locator("[data-os-shell='true'], nav[aria-label='Primary'], header[role='banner']").first();
     await expect(topNav).toBeVisible({ timeout: 15_000 });
 
     // 3. Open Workflow Context Deck

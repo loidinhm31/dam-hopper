@@ -258,6 +258,8 @@ Phase 05 migrates existing workbench and management panels into the OS windowing
 - **Search & Replace Hardening (`SearchPanel.tsx`, `use-file-search.ts`, `use-search-panel-replace.ts`):** Captures profile connection with `isCurrentConnection` assertion upon result arrival; empty federated search returns empty results safely without ambient fallback. `SearchPanel` enforces `isSearchMatchingInput` query-result binding and 200-char input normalization, disabling replace when typing diverges. `useSearchPanelReplace` validates match generations across Replace Next and batch Replace All (`allMatchesValid`) while skipping dirty tabs.
 - **Session Changes App (`packages/ui/src/os/apps/SessionChangesApp.tsx`):** Requires complete 6-part owner tuple, stably captures generation via `useState` on mount, acquires `session-changes` resource claim, and closes the mounted window while purging query cache if Session Changes becomes disabled or disconnected (offscreen/hidden review retirement remains open under W2).
 
+<a id="ai-dev-os-system-monitor--tray-infrastructure-phase-06"></a>
+<a id="ai-dev-os-system-monitor-tray-infrastructure-phase-06"></a>
 ## AI Dev OS System Monitor & Tray Infrastructure (Phase 06)
 
 **Status:** Administratively closed per user direction (2026-11-02 22:10:00 +07:00); technical acceptance incomplete. Carryover findings C2–C6 and W1–W4 from Cycle 3 review (score 6.5/10) remain active qualification gates carried forward to Phase 08/09.
@@ -283,6 +285,8 @@ Phase 06 consolidates the standalone Dashboard overview and Host Resources popov
 - **C2 Replacement-Process Kill Safety:** Server-side atomic expected-incarnation kill contracts remain an open requirement; client-side revalidation protects against known cached mismatches.
 - **C3/C4 Detail Masking & Event Containment:** Thorough Cognito masking across deep diagnostic drilldowns and capture-phase modal shortcut containment remain active carryovers.
 - **C5/C6 Multi-Host Attention & Activity Schemas:** Cross-host read-state isolation and strict producer-bound typed notification contracts are tracked as release gates carried to Phase 09.
+<a id="ai-dev-os-agent-hub--launch-recipes-phase-07"></a>
+<a id="ai-dev-os-agent-hub-launch-recipes-phase-07"></a>
 ## AI Dev OS Agent Hub & Launch Recipes (Phase 07)
 
 **Status:** User approved with noted carryovers to Phase 08 & 09 (Task 1 `implement-agent-hub` and Task 2 `implement-launch-recipes` completed in source; 126 unit tests across 6 files and 6 browser component tests across 3 files reported passing in `plans/reports/tester-261102-2354-phase-07-agent-hub-and-recipes-cycle-3.md`; this documentation update did not rerun runtime qualification). Technical acceptance is incomplete; Cycle 3 code review (`plans/reports/code-review-261102-2353-phase-07-agent-hub-and-recipes-cycle-3.md`, score 5/10) carries critical findings C1–C3 and warnings W1–W9 forward as open qualification gates.
@@ -305,7 +309,7 @@ Phase 07 introduces a multi-profile fleet AI agent home and client-only declarat
 - **`outcomeUnknown` Handling:** Interrupted dispatch, response loss, or startup recovery transition in-flight steps to `outcomeUnknown`. Dismissal marks steps dismissed without relaunching. Action-time epoch rechecking at the network effect boundary and generation fencing during list reconciliation remain active carryovers (C2).
 ## AI Dev OS Root Cutover & Legacy Shell Deletion (Phase 08)
 
-**Status:** Administratively marked DONE per user direction (2026-11-03); technical acceptance incomplete. Cycle 3 review scored 6/10 (0 Critical, 2 High findings); C2 router location reactivity, C3 dynamic session window matching in OsShell `file:open`, and migration of 16 browser test files importing deleted shells are tracked as active carryovers into Phase 09 qualification.
+**Status:** Administratively marked DONE per user direction (2026-11-03); technical acceptance incomplete. Cycle 3 review scored 6/10 (0 Critical, 2 High findings); C2 router location reactivity, C3 dynamic session window matching in OsShell `file:open`, and W4 migration of 16 browser test files were tracked as carryovers into Phase 09 qualification, where they were subsequently resolved in source.
 
 Phase 08 cuts over the root web route `/` to `OsShell`, translates legacy paths into qualified deep links, eliminates over 45 legacy web shells and mobile-specific components, and standardizes terminal input suppression:
 
@@ -318,6 +322,28 @@ Phase 08 cuts over the root web route `/` to `OsShell`, translates legacy paths 
 - **Deleted Shell Templates:** Permanently deleted `WorkspacePage`, `DashboardPage`, `IdeShell`, `TerminalWorkspaceShell`, `MobileWorkspaceShell`, `AppLayout`, `TopNav` (and fragments), `HostResourcePopover`, and floating panel wrappers (`TerminalFloatingFilePanel`, `TerminalFloatingToolPanel`, `TerminalFloatingControlShell`).
 - **Generic Terminal Input Policy (`terminal-input-policy.ts`):** All web mobile virtual keyboard modules (`MobileTerminalAccessoryBar`, `MobileTerminalCustomKeyboard`, `android-chrome-input-policy`, `use-compact-workspace`, `use-coarse-pointer`) are eliminated. Replaced by `syncTerminalInputSuppression`, synchronizing xterm's hidden textarea (`inputMode = "none"`, `tabIndex = -1`, `blur()`) and `disableStdin = true` across Cognito privacy mode, disconnected server profiles, and modal focus trapping.
 - **OS Frame Authority & TopBar Management:** Floating conflict resolution z-index is governed directly by OS frame authority (`OS_RESOLVER_PANEL_TOPMOST_Z_INDEX = 30`). Multi-server profile management dialogs (`ServerProfilesDialog`, `ServerSettingsDialog`) are embedded directly into the OS `TopBar` context menu ("Manage Profiles…").
+
+<a id="ai-dev-os-application-qualification--visual-review-phase-09"></a>
+<a id="ai-dev-os-application-qualification-visual-review-phase-09"></a>
+## AI Dev OS Application Qualification & Visual Review (Phase 09)
+
+**Status:** Automated qualification checkpoint recorded (2026-11-03 07:16:06 +07:00); technical acceptance incomplete. Per dated integration report (`plans/261101-1738-ai-dev-os-redesign/reports/integration.md`), 4,735 automated unit, browser, and cargo tests passed (0 failures, 4 skipped, 1 ignored out of 4,740 test cases; typecheck, lint, and build gates clean). This documentation update recorded findings and did not re-execute runtime qualification. Carried live lifecycle/container oracles and visual review ledgers remain open release gates for production staging/deployment.
+
+Phase 09 qualifies the full DamHopper OS web platform, including application journeys, browser component regressions, server integration, and release alignment:
+
+### 1. Architectural Ingress & Defect Resolutions
+- **Router Location Reactivity (Phase 08 C2):** `AppContentRouter` in `packages/ui/src/embed/dam-hopper-app.tsx` subscribes directly to React Router's `useLocation()` above `DamHopperAppInner`, rendering `RemovedRouteScreen` immediately with zero network requests or mutations when navigating to `/usage` or `/ssh-forwarding` across browser history (Back/Forward).
+- **Dynamic Window Session Matching & Rejection (Phase 08 C3):** In `packages/ui/src/os/OsShell.tsx`, intent consumers query live window session state dynamically (`useWindowStore.getState().session.windows`). The `terminal:focus` handler inspects running terminal windows; if not found, it returns `{ status: "unhandled", reason: "terminal-not-found" }` without spawning duplicate windows or mutating active layouts.
+- **Browser Component Migration & Pruning (Phase 08 W4):** Migrated 10 browser component suites to OS components and `useWindowStore`, permanently pruned deleted legacy floating panels suite (`terminal-floating-panels.browser.tsx`), and added `host-resource-popover-fixture.tsx`. All 59 active browser test suites pass in headless Chromium (324 passed, 4 skipped across 61 files).
+- **Zero Telemetry Runtime Verification (Phase 03 P0):** Cleaned server test fixture (`server/examples/agent_free_consent_fixture.rs`); verified zero telemetry runtime, collector, or OTLP dependencies in repository; aligned release versions across 9 manifest targets at `v0.15.6`.
+
+### 2. Root Cutover Journey & Governance
+- **Root Cutover E2E Journey:** Authored `packages/ui/e2e/os-cutover/os-cutover.spec.ts` exercising root `/` cutover, legacy path translation (`translateLegacyRoute`), retired feature notice boundaries, and xterm placement continuity.
+- **Carried Release Qualification Gates:**
+  - H1 & H2 (Live Lifecycle & Privacy Oracles): PTY stream continuity under live container daemon, zero outbound attach/replay counters across placement, and behavioral Cognito isolation (zero received PTY bytes) are structured in `os-lifecycle.spec.ts` and `os-cutover.spec.ts`, but require containerized Playwright daemon runs for final verification.
+  - C1 & C2: Editor save generation fencing and ambient transport retirement remain open qualification gates carried forward.
+  - Phase 07 C1–C3 & AC8: Run concurrency fences, Web Locks storage synchronization, and transaction defects identified in Phase 07 review remain open release qualification gates for live multi-tab and containerized environments.
+- **Visual Review Governance:** Ledgers across `packages/ui/e2e/os-cutover/review.md`, `os-recipes/review.md`, `os-lifecycle/review.md`, and `host-auto-sleep/review.md` remain in authentic `PENDING_REVIEW` state, preserving repository governance that automated tests certify behavioral assertions only and never synthesize human visual acceptance.
 
 ## Multi-Profile Ownership Model
 
@@ -630,106 +656,14 @@ Linux terminal idle suspend is coordinated by the server and an enrolled Unix-so
 Feature branch `feat/host-resources-auto-sleep`; implementation plan: `plans/261010-1746-host-resources-auto-sleep/plan.md`.
 Phase 01 through Phase 06 are fully implemented and certified, including end-to-end verification, security boundaries, and safe operational rollout runbooks.
 
-- **Policy & Fixed Timing**:
-  - Opt-in startup policy `agent-free` (`IdleSuspendAutomaticPolicy::AgentFree`); retains existing `empty-fleet` and `agent-activity` policies without regression.
-  - Fixed 10,800s (3 hours) quiet period enforced fail-closed at startup validation and timing PATCH admission; dynamic adjustment rejected.
-  - Startup policy is immutable: full configuration updates, workspace reload, and settings import preserve the running startup policy even if the on-disk file changes.
-  - Wire protocol `IdleSuspendStatusV1` enforces strict mutual exclusivity between `activity` (`agent-activity` only) and `agentFree`/`clientPresence`/`consent` (`agent-free` only).
-- **Managed Agent Inventory & Descendant Closures**:
-  - `ProcessDiscovery` in `server/src/idle_suspend/activity/process.rs` bounds candidate matching strictly to managed PTY session roots and retained lineage (`MAX_MANAGED_ROOTS_LIMIT = 64`, `MAX_RELEVANT_PROCESSES_LIMIT = 1024`, `MAX_SCANNED_PROCESSES_LIMIT = 8192`).
-  - Traces complete `descendant_processes` closures per recognized agent (Codex, Claude, OMP) using process-tree traversal; child workers or subagents cannot hide running activity under an idle parent.
-  - Privacy-preserving `ProcessImageKey` captures device ID (`exe_dev`), inode (`exe_ino`), and sanitized entrypoint token without exposing raw arguments or environment variables.
-  - Produces deduplicated, sorted `matched_agents: Vec<MatchedManagedAgent>` with exact process identities (`pid`, `start_ticks`) and terminal bindings.
-  - Independent external agents (tmux, SSH, shell outside managed PTYs) are deliberately excluded by product design and do not block sleep.
-- **Verified OMP TCP Peer Binding**:
-  - `verify_tcp_peer_process` in `server/src/agent_status/collector.rs` binds loopback WebSocket connections to verified OS process identities on Linux:
-    1. Pre-check: reads `/proc/<claimed_pid>/stat` to record `start_ticks` and reject zombie/dead states (`Z`, `X`).
-    2. Socket lookup: locates client socket inode from `/proc/net/tcp` and `/proc/net/tcp6` matching `peer_addr.port()`.
-    3. Descriptor check: scans `/proc/<claimed_pid>/fd/` for symlinks targeting `socket:[<inode>]`, bounded by `MAX_PEER_FDS_SCAN = 256` to prevent DoS.
-    4. Ancestry check: traces `/proc/<pid>/stat` parent PIDs (up to 32 hops) ensuring lineage connects to the registered terminal root; asserts `stat_before.start_ticks == root.start_ticks` on direct root match to defeat recycled PID spoofing.
-    5. Post-check: re-reads `/proc/<claimed_pid>/stat` ensuring `start_ticks` remained identical and the process remained alive.
-  - Unverified connections fail closed in semantic evaluation as `UnverifiedProcessBinding` without leaking socket inodes or PIDs to clients.
-- **Hard Fail-Closed Native Freshness Gate**:
-  - Codex and Claude CLI hooks lack keepalive heartbeats; leases expire after 15s (`DEFAULT_LEASE_MS = 15_000`).
-  - Enforces hard fail-closed gate: zero synthetic lease stretching, zero simulated Idle states from stop events, zero screen/transcript scraping, and zero cloud API substitution.
-  - Unrefreshed native providers transition to `AgentSemanticBlockReason::UnrefreshedNativeProvider` (`AgentSemanticEvaluation::Unknown`), blocking automatic sleep until refreshed or proven exited.
-- **Monotonic Non-Free Generation Tracking & Semantic Evaluation**:
-  - `AgentStatusRegistry` maintains monotonic `non_free_generation: u64` (initialized at 1) incremented on every non-free mutation: working reporter admission, hook state transition, lease expiration sweep, terminal removal, or reconnect.
-  - Brief `Working -> Idle` gaps between coordinator polling sweeps increment `non_free_generation`, invalidating previous Free claim tickets.
-  - `evaluate_managed_agents` executes under registry read lock:
-    - Empty matched agents -> `Free` (0 idle, 0 blocked).
-    - Any agent `Working` -> `Working` (capturing implicated PIDs).
-    - Expired lease, unrefreshed native provider, unverified binding, ambiguous owner, or uncovered subagent -> `Unknown`.
-    - All matched agents `Idle` or `Blocked` with active leases -> `Free` with `min_lease_remaining_ms`, current `non_free_generation`, and `semantic_revision`.
-- **AgentFreeClaimTicket & PTY Manager Handoff Fences**:
-  - `AgentFreeClaimTicket` in `server/src/idle_suspend/activity/sampler.rs` captures atomic evaluation snapshot with sanitized `Debug` formatting.
-  - `PtySessionManager::try_claim_agent_free_handoff` in `server/src/pty/manager.rs` enforces 8-point admission fence under `inner` lock:
-    1. Policy is `AgentFree` and enabled.
-    2. Request ID, semantic revision, non-free generation, and timing revision match ticket.
-    3. Monotonic eligibility deadline is expired.
-    4. Observation age <= 5 seconds (`MAX_ACCEPTED_OBSERVATION_AGE`).
-    5. Input revision matches ticket.
-    6. Fleet generation matches ticket.
-    7. Live sessions count and root process identities match ticket roots exactly.
-    8. Atomic fleet handoff claim acquires handoff flag, verifying no session is creating, closing, disposing, or restarting.
-- **Public WebSocket Client Presence Registry & RAII Guards**:
-  - `ClientPresenceRegistry` (`server/src/idle_suspend/client_presence.rs`) provides a bounded in-memory registry (`DEFAULT_MAX_PUBLIC_CLIENTS = 1024`) embedded in `AppState.client_presence`.
-  - Exclusions: Strictly tracks authenticated public UI `/ws` WebSocket connections. Private loopback OMP reporter sockets (`/ws/agent-status`) and HTTP Server-Sent Events streams (host-resource SSE) are deliberately excluded.
-  - Two-Phase Connection Admission:
-    1. `PendingUpgradeGuard`: Reserved post-authentication (`reserve_pending_upgrade`) before Axum WebSocket upgrade. Capacity saturation immediately rejects admission with `PresenceAdmissionError::CapacityExceeded` (HTTP 503 `PRESENCE_UNAVAILABLE`). Expired pending reservations (`PENDING_UPGRADE_TIMEOUT = 30s`) are pruned on every mutation. Dropped guards cleanly release reservation slots without leaking active state.
-    2. `ClientPresenceGuard`: Promoted upon upgrade completion (`promote_pending_to_live`), capturing connection ID (UUIDv4) and actor session invariants (`subject`, `session_id`, `auth_version`, `credential_version`, `effective_deadline`). Guard drop automatically decrements connection count and increments monotonic membership revision.
-  - Zero-Client Admission Fence: `try_claim_no_client_fence(expected_revision)` atomically asserts zero live connections and zero pending upgrades while verifying monotonic revision match; latches `host_suspending = true` to immediately reject new upgrades with `HostSuspending` (HTTP 503).
-  - Monotonic `membership_revision: u64`: Increments on every reservation, promotion, liveness prune, retirement, or fence transition. Broadcasts `IdleSuspendClientPresenceStatusV1` snapshots via a Tokio watch channel without lock contention.
-- **Cryptographic Capability Verification & Session Invariants**:
-  - Immediate Receipt Delivery: Immediately after upgrade promotion, the server sends a private `host:uiConnection` frame (`UiConnectionFrame`: `{ kind: "host:uiConnection", version: 1, connectionId, decisionCapability }`) directly to the socket's private channel ahead of broadcast events.
-  - 122-bit high-entropy secret (`Uuid::new_v4()`) generated per socket. Server stores only a 32-byte SHA-256 digest (`hash_capability`); plaintext capability secrets are never logged, never emitted to `event_sink`, and never exposed in GET/status endpoints.
-  - `verify_decision_capability`: Validates candidate capability secrets using constant-time comparison (`subtle::ConstantTimeEq`) to defeat timing attacks. Enforces actor session invariants (`subject`, `session_id`, `auth_version`, `credential_version`, and non-expired `effective_deadline`).
-  - Active/Closing Invariant: Rejects connections with `closing: true`; explicit `mark_closing()` immediately revokes decision capability prior to task teardown.
-- **Decoupled Frame Reader & Heartbeat Supervision**:
-  - Dedicated `frame_reader` loop in `server/src/api/ws.rs` decouples WebSocket control frames (Ping, Pong, Close) from the bounded application queue (`APP_MSG_CAP = 64`), ensuring long PTY or filesystem commands cannot starve transport liveness.
-  - Control frames and application data immediately refresh `last_liveness` via `record_pong()`.
-  - Dedicated heartbeat supervisor task sends periodic pings (`HEARTBEAT_INTERVAL = 30s`) and evaluates elapsed silence against `HEARTBEAT_DEADLINE = 90s`. Silent connections exceeding 90 seconds are marked closing, logged, and gracefully terminated via unified cancellation channels.
-- **UI Exact-Owner Receipt Binding & Lifecycle**:
-  - `WsTransport` (`packages/ui/src/api/ws-transport.ts`): Caches `host:uiConnection` receipt in memory upon arrival (`getUiConnectionReceipt()`); immediately delivers cached snapshot to late subscribers (`subscribeUiConnection`). Socket disconnect, close, error, reconnect, or transport disposal resets receipt to `null` and notifies subscribers.
-  - `connections.ts` (`packages/ui/src/api/connections.ts`): Provides `getUiConnectionReceipt(owner)` and `subscribeUiConnectionReceipt(owner, listener)` gated strictly by `isCurrentConnection(owner)` with generation matching. Stale owners, disconnected profiles, or non-WebSocket transports return `null` with no ambient or fallback profile resolution.
-- **Three-Hour Coordinator Engine & Monotonic Epochs**:
-  - Tracks continuous quiescence epoch (>10,800s, 3 hours) using monotonic `Instant` timestamps (`free_anchor`, `elapsed > Duration::from_secs(quiet_period_seconds)`). Strict inequality required; exact boundary (`== 10,800s`) rejected.
-  - Clean zero-agent boot support: fleets starting with zero agents initialize directly in valid tracking epoch without false blockers.
-  - Intervening non-free agent activity (`Working`, hook transitions, lease expiration) or safety invalidations immediately reset continuity and clear `free_anchor`.
-- **Public Client Presence Arbitration & Branching**:
-  - Zero connected public clients (`connection_count == 0 && pending_upgrade_count == 0`): coordinator enters `FinalCheck` automatically, bypassing consent prompt.
-  - Positive connected public clients (`connection_count > 0`): coordinator issues single active consent request (`ActiveConsentRequest`) with unique UUID (`consent-<uuid>`), monotonic revision, and 60-second expiration (`expires_at = now + 60s`), transitioning to `AgentFreePhase::AwaitingConsent`.
-  - Pending-only connection upgrades (`pending_upgrade_count > 0`): coordinator pauses and waits across cadence ticks until pending upgrades complete promotion or timeout, eliminating handshake race conditions.
-- **First-Valid Consent Latching & Immediate Final Check Dispatch**:
-  - `POST /api/system/idle-suspend/v1/consent/decision` endpoint passes decisions to coordinator actor loop.
-  - First valid server-accepted decision latches atomically into `active_consent.decision` and records `last_settled_consent`.
-  - Subsequent contrary decisions return HTTP 409 `decisionAlreadySettled`.
-  - Duplicate identical decisions return idempotent HTTP 200 OK (`Success { idempotent: true }`).
-  - Approval (`Approve`): sets `AgentFreePhase::Approved`, captures approving actor and connection ID, responds HTTP 200 OK, and immediately dispatches `attempt_agent_free_final_check(true, ...)` without waiting for the 60s timeout.
-  - Refusal (`Deny`): sets `AgentFreePhase::Deferred` with reason `ClientRefusal`, responds HTTP 200 OK, and defers coordinator for full `> 10,800s` (3 hours) cooldown.
-- **Timeouts, Disconnects, and Pre-Dispatch Invalidation**:
-  - 60s Unanswered Timeout: if `now >= expires_at` with no decision, consent request transitions to `ConsentState::Expired`, sets reason `UnansweredTimeout`, and defers coordinator for `> 10,800s`.
-  - Last-Client Disconnect: if client count drops to 0 while in `AwaitingConsent` or `Approved`, in-flight consent transitions to `ConsentState::Cancelled`, sets reason `LastClientDisconnected`, and defers for `> 10,800s`.
-  - Pre-Dispatch Actor Revalidation: `revalidate_approving_actor` re-checks the approving actor before final execution against database: user enabled, auth version matched, session unrevoked, session non-expired (`now < expires_at`), MFA deadline valid (`now < mfa_due_at`), and credential version matched. Revalidation failure cancels consent with `SafetyInvalidation` and defers for `> 10,800s`.
-- **Fresh Final Check Pipeline & Atomic Handoff**:
-  - Captures fresh PTY snapshot and runs `process_discovery.prepare_sample` / `commit_sample` and `agent_status.evaluate_managed_agents`.
-  - Any working agent, ambiguous owner, unrefreshed native provider, or expired lease cancels consent, sets `Blocked`, and resets quiet anchor.
-  - All-free evaluation acquires PTY handoff claim via `try_claim_agent_free_handoff(admission)` under middle lock.
-  - Zero-client flow: atomically claims `try_claim_no_client_fence(pres_rev)`. If clients arrived during final check, releases PTY claim and issues consent request instead.
-  - Approved client flow: sets `client_presence.set_host_suspending(true)`.
-  - Emits `FinalCheckCompleted`, `HandoffClaimAccepted`, `HelperRequestDispatched` server events and dispatches single `SuspendWithRtcWakeRequest` to executor.
-- **Audit Logging & Privacy-Preserving Redaction**:
-  - `IdleSuspendServerAudit` appends `ConsentAuditRecord` (version, timestamp, actor, request_id, request_revision, connection_id, decision, status_revision, result) via verified file descriptors (`O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK`, mode 0600, UID/GID checks, `sync_data`).
-  - `project_server_audit` redacts actor subject to boolean `actor_present: bool`, omits `connection_id`, projects canonical UUID `correlation_id`, and redacts details to `requestRevision,statusRevision` for diagnostic bundles.
-- **Canonical Admission Lock Order**:
-  1. Outer / Coarse: `ClientPresenceRegistry` lock (synchronous in-memory lock for live/pending sockets and reservation guards).
-  2. Middle: `PtySessionManager::inner` lock (synchronous lock for fleet generation and managed terminal sessions).
-  3. Inner / Fine: `AgentStatusRuntime::registry` lock (synchronous read/write lock for semantic agent states).
-     Invariants:
-  - Never hold any lock across `.await`, Tokio channel dispatch, filesystem I/O, or procfs/network inspection.
-  - Never acquire in reverse order (`AgentStatusRuntime` -> `PtySessionManager` -> `ClientPresence`).
-  - Asynchronous authentication, database verification, and fresh process sampling complete before acquiring the final admission fence; only monotonic session/revocation epochs and fleet/semantic revisions are checked under the fence.
+The semantic agent-free automatic sleep subsystem coordinates quiescence across managed terminal sessions and public clients:
+- **Policy & Quiescence Epoch:** Opt-in immutable `agent-free` policy with fixed 10,800s (3 hours) quiet period enforced fail-closed at startup.
+- **Managed Process Lineage:** Traces complete `descendant_processes` closures per recognized agent (Codex, Claude, OMP) using process-tree traversal; unrefreshed native CLI hooks fail closed after 15s.
+- **Public Client Presence Registry:** Bounded in-memory registry (`ClientPresenceRegistry`) tracking authenticated public UI `/ws` connections with two-phase reservation guards and cryptographic capability verification.
+- **Actor Revalidation & Handoff:** Pre-dispatch database revalidation verifies approving actor before execution; atomic 8-point admission fence under middle lock claims PTY handoff and dispatches `SuspendWithRtcWakeRequest`.
+- **Lock Order Invariant:** `ClientPresenceRegistry` (outer) -> `PtySessionManager::inner` (middle) -> `AgentStatusRuntime::registry` (inner). Never hold locks across `.await` or I/O.
 
+Full architectural contracts, state machine transitions, lock specifications, and audit logging invariants are detailed in [Idle Suspend Architecture](./architecture/idle-suspend.md).
 `deploy/release/` provides release packaging, installers, and service templates. Host-resource SSE streams deep Linux metrics under capped subscriber leases (max 32 global, 4 per subject). See [Host-Resource SSE Architecture](./architecture/host-resource-sse.md).
 
 ## Android Native Client Architecture

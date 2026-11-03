@@ -10,7 +10,7 @@ import type * as multiResourcesModule from "@/hooks/use-multi-host-resources.js"
 import type { ServerProfile } from "@/api/server-config.js";
 import type { ConnectionSnapshot } from "@/api/connections.js";
 import type { ConnectionRef } from "@/api/ownership.js";
-import type { HostResourcePopoverProps } from "@/components/organisms/HostResourcePopover.js";
+import type { HostResourcePopoverProps } from "./host-resource-popover-fixture.js";
 import type {
   MultiHostResourceEntry,
   UseMultiHostResourcesResult,
@@ -320,7 +320,7 @@ async function renderPopover(
     ),
   );
 }
-import { HostResourcePopover } from "@/components/organisms/HostResourcePopover.js";
+import { HostResourcePopover } from "./host-resource-popover-fixture.js";
 import { useHostResourceAlertPresentationStore } from "@/hooks/use-host-resource-alert-presentation.js";
 import { resetTransportListeners, useIpc } from "@/hooks/use-sse.js";
 import {

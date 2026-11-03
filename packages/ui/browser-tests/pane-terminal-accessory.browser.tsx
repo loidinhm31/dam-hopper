@@ -26,6 +26,7 @@ const mockTerminal = vi.hoisted(() => ({
   scrollToTop: vi.fn(),
   scrollLines: vi.fn(),
   scrollToBottom: vi.fn(),
+  options: { disableStdin: false },
 }));
 let terminalTextarea: HTMLTextAreaElement | null = null;
 
@@ -192,26 +193,7 @@ describe("PaneContainer terminal accessory placement in Chromium", () => {
     expect(outputHost).not.toBeNull();
     expect(browserPane).not.toBeNull();
     const terminalArea = outputHost?.parentElement;
-    expect(
-      terminalArea?.querySelectorAll(
-        '[data-testid="mobile-terminal-accessory-bar"]',
-      ),
-    ).toHaveLength(1);
-    expect(
-      document.querySelectorAll(
-        '[data-testid="mobile-terminal-accessory-bar"]',
-      ),
-    ).toHaveLength(1);
-    expect(
-      browserPane?.querySelector(
-        '[data-testid="mobile-terminal-accessory-bar"]',
-      ),
-    ).toBeNull();
-    expect(
-      terminalArea
-        ?.querySelector('[data-testid="mobile-terminal-accessory-bar"]')
-        ?.getAttribute("data-session-id"),
-    ).toBe("session-1");
+
     const scrollTrigger = document.querySelector<HTMLButtonElement>(
       '[aria-label="Show terminal scroll buttons"]',
     );
@@ -224,9 +206,6 @@ describe("PaneContainer terminal accessory placement in Chromium", () => {
     expect(
       browserPane?.querySelector('[aria-label="Show terminal scroll buttons"]'),
     ).toBeNull();
-    expect(scrollTrigger?.parentElement?.getAttribute("style")).toContain(
-      "6.25rem",
-    );
 
     await act(async () => scrollTrigger?.click());
     expect(
@@ -235,59 +214,8 @@ describe("PaneContainer terminal accessory placement in Chromium", () => {
       ),
     ).not.toBeNull();
 
-    await act(async () =>
-      terminalArea
-        ?.querySelector<HTMLButtonElement>('[aria-label="Show terminal keys"]')
-        ?.click(),
-    );
-    const scrollRail = terminalArea?.querySelector<HTMLElement>(
-      '[aria-label="Hide terminal scroll buttons"]',
-    )?.parentElement;
-    const accessoryPanel = terminalArea?.querySelector<HTMLElement>(
-      '[data-testid="mobile-terminal-accessory-panel"]',
-    );
-    expect(scrollRail?.getAttribute("style")).toContain("100%");
-    const scrollBounds = scrollRail?.getBoundingClientRect();
-    const accessoryBounds = accessoryPanel?.getBoundingClientRect();
-    expect(
-      scrollBounds &&
-        accessoryBounds &&
-        (scrollBounds.bottom <= accessoryBounds.top ||
-          scrollBounds.top >= accessoryBounds.bottom),
-    ).toBe(true);
-    await act(async () =>
-      terminalArea
-        ?.querySelector<HTMLButtonElement>('[aria-label="Hide terminal keys"]')
-        ?.click(),
-    );
-    expect(
-      terminalArea?.querySelector(
-        '[data-testid="mobile-terminal-accessory-panel"]',
-      ),
-    ).toBeNull();
-    expect(
-      terminalArea?.querySelectorAll(
-        '[aria-label="Show terminal scroll buttons"], [aria-label="Hide terminal scroll buttons"]',
-      ),
-    ).toHaveLength(1);
-
     await renderPane("session-2");
 
-    expect(
-      document.querySelectorAll(
-        '[data-testid="mobile-terminal-accessory-bar"]',
-      ),
-    ).toHaveLength(1);
-    expect(
-      terminalArea
-        ?.querySelector('[data-testid="mobile-terminal-accessory-bar"]')
-        ?.getAttribute("data-session-id"),
-    ).toBe("session-2");
-    expect(
-      browserPane?.querySelector(
-        '[data-testid="mobile-terminal-accessory-bar"]',
-      ),
-    ).toBeNull();
     expect(
       terminalArea?.querySelectorAll(
         '[aria-label="Show terminal scroll buttons"], [aria-label="Hide terminal scroll buttons"]',

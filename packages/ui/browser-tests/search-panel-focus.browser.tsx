@@ -5,10 +5,9 @@ import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppZoomProvider } from "@/contexts/AppZoomContext.js";
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
-import { AndroidChromeInputPolicyProvider } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { useSearchUiStore } from "@/stores/search-ui.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
-import WorkspacePage from "@/components/pages/WorkspacePage.js";
+import { SearchPanel } from "@/components/organisms/SearchPanel.js";
 
 // Mock transport
 vi.mock(import("@/api/transport.js"), async (importOriginal) => {
@@ -82,9 +81,12 @@ describe("SearchPanel focus retention in Chromium", () => {
           <QueryClientProvider client={queryClient}>
             <AppZoomProvider>
               <EncryptProvider>
-                <AndroidChromeInputPolicyProvider>
-                  <WorkspacePage />
-                </AndroidChromeInputPolicyProvider>
+                <div className="dialog-viewport-fit h-full">
+                  <SearchPanel
+                    project="demo-project"
+                    onResultClick={() => {}}
+                  />
+                </div>
               </EncryptProvider>
             </AppZoomProvider>
           </QueryClientProvider>

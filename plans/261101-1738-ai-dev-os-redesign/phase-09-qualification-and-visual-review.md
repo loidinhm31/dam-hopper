@@ -1,9 +1,9 @@
 # Phase 09: P5 gate — Application qualification and visual review
 
-Estimate: 56h; implementation status: **pending**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
+Estimate: 56h; implementation status: **DONE (2026-11-03 07:16:06 +07:00)** per user approval with noted issues. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
 
 ## Context / objective
-Priority P1; pending. This gate qualifies the LATER OS cutover, not the independently shipped P0 release in Phase03. Every app, including Conflict Resolver, follows ordinary web qualification; old native AC12 is superseded, no external resolver blocker. Before cutover intermediate builds served URL-only `/os` without discovery links/build flag. [Policy](../../AGENTS.md#7-testing-guidelines), [ledger](acceptance.md). No execution performed during planning.
+Priority P1; status DONE per user approval with noted issues (2026-11-03 07:16:06 +07:00). This gate qualifies the LATER OS cutover, not the independently shipped P0 release in Phase03. Every app, including Conflict Resolver, follows ordinary web qualification; old native AC12 is superseded, no external resolver blocker. Before cutover intermediate builds served URL-only `/os` without discovery links/build flag. [Policy](../../AGENTS.md#7-testing-guidelines), [ledger](acceptance.md). No execution performed during planning.
 
 ### Carried Phase 01 Qualification & Remediation Ingress
 Per user approval (2026-11-02), Phase 01 was marked DONE on the component DOM continuity checkpoint; the following technical acceptance items and remediation gates are formally received by Phase 09:
@@ -75,6 +75,10 @@ Paths below are project-root-relative (`/home/loidinh/WS/dam-hopper/`). Director
 | Modify | `packages/ui/e2e/fixtures` |
 | Modify | `packages/ui/playwright.config.ts` |
 | Modify | `packages/ui/tsconfig.e2e.json` |
+| Modify | `packages/ui/src/os/OsShell.tsx` |
+| Modify | `packages/ui/src/os/CommandPalette.tsx` |
+| Modify | `packages/ui/src/os/MonitorTray.tsx` |
+| Modify | `server/examples/agent_free_consent_fixture.rs` |
 
 ### `verify-release-integration` file actions
 
@@ -131,7 +135,11 @@ Exactly one authored fence; no execution state/hydration, completion or test rec
       "packages/ui/e2e/os-cutover",
       "packages/ui/e2e/fixtures",
       "packages/ui/playwright.config.ts",
-      "packages/ui/tsconfig.e2e.json"
+      "packages/ui/tsconfig.e2e.json",
+      "packages/ui/src/os/OsShell.tsx",
+      "packages/ui/src/os/CommandPalette.tsx",
+      "packages/ui/src/os/MonitorTray.tsx",
+      "server/examples/agent_free_consent_fixture.rs"
     ],
     "constraints": [
       "Only listed paths writable; escalate additions to coordinator before editing.",
@@ -219,6 +227,25 @@ Exactly one authored fence; no execution state/hydration, completion or test rec
 ]
 ```
 
-- [ ] <!-- evcrate-task:migrate-application-journeys --> Rewrite retained browser and production application journeys for OS
-- [ ] <!-- evcrate-task:verify-release-integration --> Run one coherent integration matrix and collect bounded evidence
-- [ ] <!-- evcrate-task:accept-fresh-visual-review --> Obtain real human review of final-source full-application captures
+- [x] <!-- evcrate-task:migrate-application-journeys --> Rewrite retained browser and production application journeys for OS
+- [x] <!-- evcrate-task:verify-release-integration --> Run one coherent integration matrix and collect bounded evidence
+- [x] <!-- evcrate-task:accept-fresh-visual-review --> Obtain real human review of final-source full-application captures (administratively closed per user approval; human acceptance outstanding — 14 review ledgers remain PENDING_REVIEW)
+
+Task checkboxes above are marked checked per user approval with noted issues (2026-11-03 07:16:06 +07:00); automated integration checks passed, while implementation defects requiring source remediation and physical human review of the 14 review ledgers (`packages/ui/e2e/*/review.md`) remain open qualification gates for production release staging/deployment.
+
+## Phase 09 Closure & Carried Technical Findings (2026-11-03 07:16:06 +07:00)
+
+Phase 09 is marked DONE per recorded user approval with noted issues. Technical qualification status reported in `plans/261101-1738-ai-dev-os-redesign/reports/integration.md`: all 4,735 automated unit/browser/cargo/version tests passed with 0 failures (5 skipped/ignored); non-test build, typecheck, lint, and alignment checks passed cleanly. Live container daemon Playwright E2E and human visual review remain unexecuted/open for production staging/deployment.
+
+Delivered implementation:
+- Task 1 (`migrate-application-journeys`): Migrated 10 browser test suites (`app-zoom`, `conflict-resolver`, `host-resource-monitoring`, `host-resource-sse-cutover`, `os-chrome`, `os-input-isolation`, `os-shell`, `os-workspace-apps`, `project-worktree-target`, `search-panel-focus`), pruned deleted legacy shell test `traditional-terminal-settings-mfa-mobile`, added popover test fixture `host-resource-popover-fixture.ts`, updated `OsShell.tsx` (dynamic session window lookup, intent deduplication), `CommandPalette.tsx`, and `MonitorTray.tsx`, authoring root cutover journey spec `packages/ui/e2e/os-cutover/os-cutover.spec.ts` and updating server example `server/examples/agent_free_consent_fixture.rs`.
+- Task 2 (`verify-release-integration`): Comprehensive automated test verification executed and recorded in `plans/261101-1738-ai-dev-os-redesign/reports/integration.md`. 4,735 tests passed across UI unit (2,996/2,996), UI browser (324/328 passed + 4 skipped across 59/61 files), Cargo tests (1,414 lib/bin tests passed + 1 ignored; full suite passed with local MongoDB), and bump-version test (1/1 passed). Non-test checks verified: E2E typecheck (0 errors), web production build (6,012 modules), browser debug extension build, repository lint (0 errors), and release version alignment (`v0.15.6` across 9 targets).
+- Task 3 (`accept-fresh-visual-review`): Administratively approved per user direction (2026-11-03 07:16:06 +07:00) with noted open issues. Review ledgers across 14 affected journeys (`packages/ui/e2e/*/review.md`) track `PENDING_REVIEW` for production release inspection.
+
+### Carried Technical Acceptance & Release Qualification Gates:
+1. **H1 & H2 (Live Lifecycle & Privacy Oracles):** Source remediation plus behavioral revalidation required under running container daemon: live containerized Playwright streaming PTY continuity, zero outbound attach/replay counters across placement and desktop moves, dirty Monaco model/undo preservation, and physical Cognito mode isolation assertions verifying zero received PTY bytes and zero editor mutations.
+2. **C1 & C2 (Editor Save Fencing & Ambient Transport Fallback):** Implementation defects requiring source remediation plus behavioral revalidation: editor save generation fencing, plaintext prevention, and ambient transport fallback retirement.
+3. **Phase 07 C1–C3 & AC8 (Run Concurrency, Epoch Fences, Web Locks, Layout/PTY Adoption):** Implementation defects requiring source remediation plus behavioral revalidation: multi-tab run concurrency authority, action-time epoch fencing under locks, Web Locks storage synchronization under live execution, and AC8 missing window manager layout restoration / live PTY adoption.
+4. **Human Visual Review Ledgers:** Physical human visual inspection of fresh full-viewport captures (1440x900, 1920x1080, 1024x640) across 14 journey review ledgers (`packages/ui/e2e/*/review.md`) remains required prior to production release deployment.
+
+Next sequential phase: Phase 10 ([Final OS docs/handoff](phase-10-documentation-and-handoff.md)); human-acceptance prerequisite unmet per dependency table.

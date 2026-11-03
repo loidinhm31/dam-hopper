@@ -38,7 +38,7 @@ test.describe("Host Resources Agent-Aware Auto-Sleep & Consent UI Real Applicati
 
     // 2. Navigate to workspace
     await page.goto(`${appServices.appOrigin}/workspace`);
-    const topNav = page.locator("nav[aria-label='Primary']").first();
+    const topNav = page.locator("[data-os-shell='true'], nav[aria-label='Primary'], header[role='banner']").first();
     await expect(topNav).toBeVisible({ timeout: 15_000 });
 
     // 3. Verify dialog is NOT displayed when no consent request is active

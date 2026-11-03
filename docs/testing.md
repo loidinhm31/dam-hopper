@@ -109,6 +109,16 @@ pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts b
 pnpm --filter @dam-hopper/ui test:e2e:typecheck
 # 5. Application E2E journey (unexecuted live qualification gate, review.md PENDING_REVIEW):
 E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e os-lifecycle/os-lifecycle.spec.ts
+
+# Feature: AI Dev OS Root Cutover & Qualification (Phases 08–09)
+# 1. E2E Typecheck
+pnpm --filter @dam-hopper/ui test:e2e:typecheck
+# 2. UI Unit Tests (324 files, 2,996 tests)
+pnpm --filter @dam-hopper/ui test
+# 3. Browser Component Regressions (59 active suites in Chromium)
+pnpm --filter @dam-hopper/ui test:browser --run
+# 4. Root Cutover Application E2E Journey
+E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e os-cutover/os-cutover.spec.ts
 ```
 
 ---
@@ -177,6 +187,13 @@ Application E2E journeys validate end-to-end user workflows across containerized
    - Selects terminal window on Desktop 2, activates Cognito Privacy Mode (`Control+Alt+KeyB`), asserts overlay visibility and `inert` attribute, clicks overlay, attempts typed input while masked, and dismisses Cognito mode (with behavioral outcome verification, such as zero written PTY bytes, recorded as an open blocker under H2).
    - Captures checkpoint evidence via `captureApplicationCheckpoint`. Colocated governance file `packages/ui/e2e/os-lifecycle/review.md` records `PENDING_REVIEW` pending operator visual inspection.
    - *Technical Lifecycle Qualification Boundary:* Live PTY streaming continuity across reparenting, zero attach/replay counters, Monaco model/undo stack preservation under a live daemon, and behavioral outcome assertions (zero written PTY bytes under Cognito) remain open qualification blockers (H1/H2) carried forward to Phase 09.
+5. **OS Root Cutover (`packages/ui/e2e/os-cutover/os-cutover.spec.ts`):**
+   - Serial Playwright journey targeting `/` at 1440x900 viewport against containerized application services.
+   - Verifies root `/` cutover to `OsShell` header, Dock, and Desktop 1 canvas.
+   - Validates legacy route translation (`/workspace`, `/terminals`, `/ide`, `/git`, `/settings`, `/devices`, `/agent-store`) to qualified OS deep links (`open=terminals|git|settings|agent-store|editor`).
+   - Validates zero-network retirement boundary for `/usage` and `/ssh-forwarding` rendering `RemovedRouteScreen` with zero child service/network requests.
+   - Asserts xterm window placement continuity across placement mode transitions (tile, float, max, tray restore).
+   - Colocated governance record `packages/ui/e2e/os-cutover/review.md` records `PENDING_REVIEW` pending operator visual inspection.
 ---
 
 ## 6. Visual Evidence Authenticity & Governance
@@ -260,11 +277,14 @@ The table below records the baseline suite classification from the initial 4-tie
 
 | Category | Suite Count | Declared Tests | Test Type | Status |
 |---|---|---|---|---|
-| UI Unit Tests | ~302 files | 2,305 tests | Vitest jsdom | Active / Required |
-| Browser Component Regressions | 52 suites | 254 tests | Vitest Browser Mode (Chromium, 15173) | Active / Required |
+| UI Unit Tests | 324 files | 2,996 tests | Vitest jsdom | Active / Passed (0 failures) |
+| Browser Component Regressions | 59 active suites (61 files) | 324 tests passed (4 skipped) | Vitest Browser Mode (Chromium, 15173) | Active / Passed (0 failures) |
 | Specialized Backend Component | 1 suite | 5 tests | Vitest Browser Mode (Chromium, 15174) | Active / Required |
-| Application E2E Journeys | 3 baseline suites (+ feature specs) | 3+ tests | Playwright Test (Isolated App + MongoDB or SQLite) | Active / Required |
+| Application E2E Journeys | 6 authored journey suites | 6+ tests | Playwright Test (Isolated App + MongoDB or SQLite) | Active / Types passing; runtime oracles open |
 | E2E Fixture Lifecycle Probes | 1 suite | 7 tests | Playwright Test (Container Lifecycle) | Active / Required |
+| Rust Server Tests | Library + Bins | 1,414 tests passed (1 ignored) | Native `cargo test` | Active / Passed (0 failures) |
+
+*Total Automated Suite (from dated integration report `plans/261101-1738-ai-dev-os-redesign/reports/integration.md`):* 4,735 passed, 4 skipped, 1 ignored, 0 failures across 4,740 test cases (with separate E2E typecheck, lint, and build gates clean). This documentation pass did not rerun runtime qualification. Carried live lifecycle/container oracles (H1/H2) and visual review ledgers remain open release qualification gates.
 
 ### Ranked Integrated Workflow Gaps
 

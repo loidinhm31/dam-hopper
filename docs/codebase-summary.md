@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Source summary:** Repomix 1.18.0 compaction generated 2026-11-03 (`repomix-output.xml`; 3,973 files included, 10 scanner-excluded, 9,734,866 tokens, 42,298,757 chars). The repository inventory reflects Phase 02 (P0a: Tauri desktop host and SSH-forwarding UI removal), Phase 03 (P0b: Usage and server telemetry retirement, neutral DB path helpers, and early release preparation), Phase 01 OS lifecycle prototype, Phase 04 OS shell chrome and services, Phase 05 application catalog and deep links, Phase 06 System Monitor and tray baseline, Phase 07 Agent Hub and Launch Recipes baseline, and Phase 08 Root cutover and legacy shell deletion of the AI Dev OS redesign.
+**Source summary:** Repomix 1.18.0 compaction generated 2026-11-03 (`repomix-output.xml`; 3,981 files included, 10 scanner-excluded, 9,747,177 tokens, 42,351,704 chars). The repository inventory reflects Phase 02 (P0a: Tauri desktop host and SSH-forwarding UI removal), Phase 03 (P0b: Usage and server telemetry retirement, neutral DB path helpers, and early release preparation), Phase 01 OS lifecycle prototype, Phase 04 OS shell chrome and services, Phase 05 application catalog and deep links, Phase 06 System Monitor and tray baseline, Phase 07 Agent Hub and Launch Recipes baseline, Phase 08 Root cutover and legacy shell deletion, and Phase 09 Application qualification and visual review of the AI Dev OS redesign.
 ## Historical Repository Inventory (2026-10-05)
 
 The previous inventory counted **2,046 eligible text files and 411,852 physical lines of code/text** at the date of that scan:
@@ -279,6 +279,40 @@ Phase 08 implementation under [AI Dev OS Redesign Plan](../plans/261101-1738-ai-
 | **OS Intent Delivery & Stale Closure Fix** | `packages/ui/src/os/OsShell.tsx` | Intent handlers query `useWindowStore.getState().session.windows` dynamically to prevent stale closures. Deep link processing synchronizes via `handlersReady` and deduplicates through `lastProcessedSearchRef`. Added `settings:devices` intent handler. |
 | **Conflict Resolver OS Frame Authority** | `packages/ui/src/components/organisms/ConflictResolverPanel.tsx` | Replaced imported legacy terminal-workspace-panel constants with `OS_RESOLVER_PANEL_TOPMOST_Z_INDEX = 30`, governing floating z-index directly through OS frame authority. |
 
+## AI Dev OS Application Qualification & Visual Review Phase 09 Implementation Checkpoint (2026-11-03)
+
+Phase 09 qualifies the full DamHopper OS web platform, including application journeys, browser component regressions, server integration, and release alignment under [AI Dev OS Redesign Plan](../plans/261101-1738-ai-dev-os-redesign/plan.md). Automated qualification checkpoint recorded (2026-11-03 07:16:06 +07:00); technical acceptance incomplete. Per dated integration report (`plans/261101-1738-ai-dev-os-redesign/reports/integration.md`), 4,735 automated unit, browser, and cargo tests passed (0 failures, 4 skipped, 1 ignored out of 4,740 test cases; typecheck, lint, and build gates clean). This documentation update recorded findings and did not re-execute runtime qualification. Carried live lifecycle/container oracles and visual review ledgers remain open for production staging/deployment.
+
+| Validation Gate | Command / Surface | Result | Metrics |
+|---|---|---|---|
+| **E2E Typecheck** | `pnpm --filter @dam-hopper/ui test:e2e:typecheck` | **PASS** | 0 TypeScript errors |
+| **UI Unit Tests** | `pnpm --filter @dam-hopper/ui test` | **PASS** | 324/324 files, 2,996/2,996 tests passed |
+| **UI Browser Tests** | `pnpm --filter @dam-hopper/ui test:browser --run` | **PASS** | 59/61 files passed (2 skipped), 324/328 tests passed (4 skipped) |
+| **Web Build** | `pnpm --filter @dam-hopper/web build` | **PASS** | 6,012 modules transformed, production assets generated |
+| **Browser Extension** | `node scripts/stage-browser-debug-extension.mjs` | **PASS** | Content script bundled, extension archive staged |
+| **Repository Lint** | `pnpm lint` | **PASS** | 0 errors (274 non-blocking warnings) |
+| **Server Unit & Bins** | `cargo test --lib --bins` | **PASS** | 1,414 passed, 1 ignored, 0 failed |
+| **Server Full Suite** | `cargo test` (with local MongoDB) | **PASS** | All unit and integration suites passed |
+| **Version Alignment** | `node deploy/release/check-version-alignment.mjs` | **PASS** | Aligned at `v0.15.6` across 9 targets |
+| **Version Bump Test** | `node --test tests/deploy/bump-version.test.mjs` | **PASS** | 1/1 passed |
+
+### Architectural Ingress & Defect Resolutions
+- **Phase 08 C2 (Router Location Reactivity):** `AppContentRouter` in `dam-hopper-app.tsx` subscribes directly to `useLocation()` above `DamHopperAppInner`, rendering `RemovedRouteScreen` immediately with zero network requests or mutations when navigating to `/usage` or `/ssh-forwarding` across browser history (Back/Forward).
+- **Phase 08 C3 (Dynamic Window Session Matching & Rejection):** `OsShell.tsx` dynamically queries `useWindowStore.getState().session.windows` for editor and terminal windows; `terminal:focus` rejects unknown session targets with `unhandled` (`reason: "terminal-not-found"`) without disturbing live windows (verified in `os-workspace-apps.browser.tsx`).
+- **Phase 08 W4 (Browser Test Migration & Pruning):** Migrated 10 browser component suites to OS components and `useWindowStore`, permanently pruned deleted legacy floating panels suite (`terminal-floating-panels.browser.tsx`), and added `host-resource-popover-fixture.tsx`. 59 active test suites pass cleanly in Chromium (324 passed, 4 skipped).
+- **Phase 03 P0 Verification:** Zero telemetry runtime/collector or OTLP dependencies; `agent_free_consent_fixture.rs` cleaned; version aligned at `v0.15.6` across 9 targets.
+- **Root Cutover E2E Journey:** Authored `packages/ui/e2e/os-cutover/os-cutover.spec.ts` exercising root `/` cutover, legacy route translation, retired feature notice boundaries, and xterm placement continuity.
+
+### Carried Technical Qualification & Release Gates
+- **H1 & H2 (Live Lifecycle & Privacy Oracles):** Real PTY stream continuity under live container daemon, zero outbound attach/replay counters across placement, and behavioral Cognito isolation (zero received PTY bytes) are structured in `os-lifecycle.spec.ts` and `os-cutover.spec.ts`, but require containerized Playwright daemon runs for final verification.
+- **C1 & C2:** Editor save generation fencing and ambient transport retirement remain open qualification gates carried forward.
+- **Phase 07 C1–C3 & AC8:** Run concurrency fences, Web Locks storage synchronization, and transaction defects identified in Phase 07 review remain open release qualification gates for live multi-tab and containerized environments.
+
+### Visual Review Ledger Status
+In accordance with repository guidelines (`AGENTS.md` §7), automated test passes certify behavioral assertions only. Automated agents never synthesize human acceptance. The visual review ledgers across all affected user journeys remain in their authentic state:
+- New OS Journeys (`os-cutover/review.md`, `os-recipes/review.md`, `os-lifecycle/review.md`, `host-auto-sleep/review.md`): Prepared with `PENDING_REVIEW` awaiting fresh full-viewport captures and human inspection.
+- Retained Journeys: Historical acceptance records preserved; final-source human inspection remains required prior to production cutover.
+
 ## Shared UI Map
 
 `packages/ui/` exports the shared application via `packages/ui/src/embed/dam-hopper-app.tsx` (`packages/ui/src/index.ts` does not exist).
@@ -289,7 +323,7 @@ Phase 08 implementation under [AI Dev OS Redesign Plan](../plans/261101-1738-ai-
 - **Core Library (`packages/ui/src/lib/`):** 115 files, ~15.5k LOC implementing generic tile tree algorithms, terminal wire codecs, generic terminal input suppression policy (`terminal-input-policy.ts`), OPAQUE PAKE, AES-256-GCM crypto, terminal registries, and diagnostics.
 - **State Stores (`packages/ui/src/stores/`):** 11 files, ~4k LOC managing editor tabs, explorer expansion, Git history selection, and privacy mode.
 - **Types (`packages/ui/src/types/`):** Generic `TileTree<T>` data model (`tile-tree.ts`) and terminal layout definitions.
-- **Browser Component Regressions (`packages/ui/browser-tests/`):** Headless Chromium suites, including `os-lifecycle.browser.tsx` (9 tests), `os-shell.browser.tsx` (4 tests), `os-input-isolation.browser.tsx` (3 tests), `os-workspace-apps.browser.tsx` (7 tests), `os-review-apps.browser.tsx` (6 tests), `os-management-apps.browser.tsx` (3 tests), `os-system-monitor.browser.tsx` (4 tests), `os-agent-hub.browser.tsx`, `os-recipes.browser.tsx`, and `cognito-mode.browser.tsx` (retired web mobile browser suites deleted in Phase 08).
+- **Browser Component Regressions (`packages/ui/browser-tests/`):** 59 active headless Chromium suites (324 passed, 4 skipped across 61 files), including `os-lifecycle.browser.tsx` (9 tests), `os-shell.browser.tsx` (4 tests), `os-input-isolation.browser.tsx` (3 tests), `os-workspace-apps.browser.tsx` (7 tests), `os-review-apps.browser.tsx` (6 tests), `os-management-apps.browser.tsx` (3 tests), `os-system-monitor.browser.tsx` (4 tests), `os-agent-hub.browser.tsx`, `os-recipes.browser.tsx`, and `cognito-mode.browser.tsx` (migrated 10 browser suites to OS components, pruned deleted legacy floating panels suite, and added `host-resource-popover-fixture.tsx`).
 - **Design Guidelines:** Defined in `packages/ui/src/index.css` and `docs/frontend-components/platform-integrations.md` (JetBrains Mono, dark slate palette, Radix UI primitives with `@radix-ui/react-compose-refs` React 19 patch).
 
 ## Workflow Tracking
@@ -327,6 +361,6 @@ DamHopper enforces a **4-tier testing architecture** (see [Testing Guide](./test
 
 Deployment artifacts are located in `deploy/release/` and documented in the [Installation and Deployment Guide](./deployment-guide.md).
 ## Codebase Compaction Snapshot
-Repomix compaction artifact generated at `./repomix-output.xml` (3,973 files, 9,734,866 tokens packed, 42,298,757 chars, excluding dot-folders, build artifacts, lockfiles, and 10 security-flagged test/config assets as of 2026-11-03). Reflects Phase 02 (P0a) removal of `apps/native/` and desktop SSH forwarding, Phase 03 (P0b) Usage and telemetry retirement, alongside the Phase 01 OS lifecycle architecture, Phase 04 shell chrome and services, Phase 05 application catalog and deep links, Phase 06 System Monitor and tray baseline, Phase 07 Agent Hub and Launch Recipes baseline, and Phase 08 Root cutover and legacy shell deletion.
+Repomix compaction artifact generated at `./repomix-output.xml` (3,981 files, 9,747,177 tokens packed, 42,351,704 chars, excluding dot-folders, build artifacts, lockfiles, and 10 security-flagged test/config assets as of 2026-11-03). Reflects Phase 02 (P0a) removal of `apps/native/` and desktop SSH forwarding, Phase 03 (P0b) Usage and telemetry retirement, alongside the Phase 01 OS lifecycle architecture, Phase 04 shell chrome and services, Phase 05 application catalog and deep links, Phase 06 System Monitor and tray baseline, Phase 07 Agent Hub and Launch Recipes baseline, Phase 08 Root cutover and legacy shell deletion, and Phase 09 Application qualification and visual review.
 
 *Note on Compaction Timing:* The Repomix metrics above reflect the compaction snapshot generated during this documentation update pass on 2026-11-03.

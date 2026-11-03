@@ -36,21 +36,21 @@ function MonitorTrayInner({ onOpenMonitor, className = "" }: MonitorTrayProps) {
       if (match) return match;
     }
     return multiResources.entries[0] ?? null;
-  }, [activeProfile?.id, multiResources.entries]);
+  }, [activeProfile, multiResources.entries]);
 
   // First unread alert target if any
-  const alertTarget = useMemo(() => {
-    if (unreadIds.length === 0) return null;
+  let alertTarget: { profileId: string; incidentId: string } | null = null;
+  if (unreadIds.length > 0) {
     for (const [profId, data] of Object.entries(byProfile)) {
       if (data.unreadIds.length > 0) {
-        return { profileId: profId, incidentId: data.unreadIds[0] };
+        alertTarget = { profileId: profId, incidentId: data.unreadIds[0] };
+        break;
       }
     }
-    if (activeEntry?.profile.id) {
-      return { profileId: activeEntry.profile.id, incidentId: unreadIds[0] };
+    if (!alertTarget && activeEntry?.profile.id) {
+      alertTarget = { profileId: activeEntry.profile.id, incidentId: unreadIds[0] };
     }
-    return null;
-  }, [unreadIds, byProfile, activeEntry?.profile.id]);
+  }
 
   const handleOpen = useCallback(
     (profileId?: string, incidentId?: string) => {
