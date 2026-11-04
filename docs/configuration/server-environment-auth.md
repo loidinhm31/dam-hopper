@@ -29,8 +29,8 @@ path = "/tmp/test-workspace"
 
 | Var                                        | Type    | Purpose                                                                                                                                                                                                                                                                                             |
 | ------------------------------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DAM_HOPPER_CONFIG`                        | path    | Load an exact `dam-hopper.toml` registry file                                                                                                                                                                                                                                                       |
-| `DAM_HOPPER_WORKSPACE`                     | path    | Legacy workspace path/discovery fallback                                                                                                                                                                                                                                                            |
+| `DAM_HOPPER_CONFIG`                        | path    | Load an exact `config.toml` configuration file                                                                                                                                                                                                                                                      |
+| `DAM_HOPPER_WORKSPACE`                     | path    | Legacy environment override (superseded by `[workspace].root` in `config.toml`)                                                                                                                                                                                                                    |
 | `DAM_HOPPER_PORT`                          | number  | API listen port (direct/Docker default 4800; systemd sets 4801)                                                                                                                                                                                                                                     |
 | `DAM_HOPPER_HOST`                          | string  | API bind address (default `0.0.0.0`)                                                                                                                                                                                                                                                                |
 | `DAM_HOPPER_CORS_ORIGINS`                  | string  | Comma-separated exact HTTP(S) origins for credentialed API/WS CORS                                                                                                                                                                                                                                  |
@@ -279,7 +279,7 @@ used only as the server's JWT signing secret. On Unix it is created with mode
 sessions:
 
 ```bash
-cd server && cargo run -- --config /path/to/dam-hopper.toml --new-token
+cd server && cargo run -- --config /path/to/config.toml --new-token
 ```
 
 Normal login returns an MFA challenge, not a bearer token. Use the `token`

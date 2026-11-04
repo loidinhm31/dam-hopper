@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useWindowStore } from "./window-store.js";
 import type { OsWindow } from "./types.js";
 import { useEditorStore } from "@/stores/editor.js";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 
 export interface WindowListProps {
   className?: string;
@@ -9,6 +10,7 @@ export interface WindowListProps {
 
 export function WindowList({ className = "" }: WindowListProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<{ id: string; filePath?: string } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const session = useWindowStore((state) => state.session);
@@ -70,7 +72,8 @@ export function WindowList({ className = "" }: WindowListProps) {
         }
         if (
           targetWorktree &&
-          t.target?.worktreePath &&
+          t.target?.kind === "project" &&
+          t.target.worktreePath &&
           t.target.worktreePath !== targetWorktree
         ) {
           return false;
@@ -79,11 +82,8 @@ export function WindowList({ className = "" }: WindowListProps) {
       });
 
       if (isDirty) {
-        if (typeof globalThis.confirm !== "function") return;
-        const confirmed = globalThis.confirm(
-          `You have unsaved changes in ${filePath ?? "editor"}. Close anyway?`,
-        );
-        if (confirmed !== true) return;
+        setConfirmTarget({ id: win.id, filePath });
+        return;
       }
     }
     closeWindow(win.id);
@@ -168,6 +168,23 @@ export function WindowList({ className = "" }: WindowListProps) {
             </div>
           )}
         </div>
+      )}
+      {confirmTarget && (
+        <ConfirmDialog
+          open={Boolean(confirmTarget)}
+          onClose={() => setConfirmTarget(null)}
+          onConfirm={() => {
+            if (confirmTarget && session.windows[confirmTarget.id]) {
+              closeWindow(confirmTarget.id);
+            }
+            setConfirmTarget(null);
+          }}
+          title="Discard Unsaved Changes?"
+          description={`You have unsaved changes in ${confirmTarget.filePath ?? "editor"}. Close anyway?`}
+          confirmText="Discard and Close"
+          cancelText="Cancel"
+          variant="danger"
+        />
       )}
     </div>
   );

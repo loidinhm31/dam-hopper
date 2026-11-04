@@ -118,6 +118,8 @@ wake_after_seconds = {}
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path,
     };
 

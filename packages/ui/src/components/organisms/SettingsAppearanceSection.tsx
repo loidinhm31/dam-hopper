@@ -30,6 +30,7 @@ export function SettingsAppearanceSection() {
     terminalScrollStep,
     explorerShowHidden,
     cognitoModeStyle,
+    defaultWindowPlacement,
     saveDebounced,
   } = useSettingsStore();
 
@@ -85,6 +86,27 @@ export function SettingsAppearanceSection() {
 
       <div className="border-t border-[var(--color-border)]" />
 
+      <SettingRow
+        title="Default window placement"
+        description="Choose whether new windows open as floating panels or tiled grid panes"
+      >
+        <Select
+          value={defaultWindowPlacement ?? "float"}
+          onValueChange={(val: "float" | "tile") =>
+            saveDebounced({ defaultWindowPlacement: val })
+          }
+        >
+          <SelectTrigger className="w-32" data-testid="default-window-placement-select">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="float">Float</SelectItem>
+            <SelectItem value="tile">Tile</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
       <SettingRow
         title="Show hidden files"
         description="Show dotfiles and hidden entries in the project explorer"

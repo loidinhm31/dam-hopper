@@ -18,7 +18,7 @@ use crate::{
         MediaTicketKind, VideoTicketIssue, VideoTicketPurpose, VideoTicketRecord,
     },
     state::AppState,
-    workspace_target::ProjectTargetRef,
+    workspace_target::{FilesystemTargetRef, ProjectTargetRef},
 };
 
 use super::{error::ApiError, fs::resolve, media_stream_response};
@@ -26,7 +26,12 @@ use super::{error::ApiError, fs::resolve, media_stream_response};
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssueVideoTicketRequest {
-    pub project: String,
+    #[serde(default)]
+    pub target: Option<FilesystemTargetRef>,
+    #[serde(default)]
+    pub target_type: Option<String>,
+    #[serde(default)]
+    pub project: Option<String>,
     #[serde(default)]
     pub worktree_path: Option<String>,
     pub path: String,
@@ -59,9 +64,21 @@ pub async fn issue_ticket(
 ) -> Result<Response, ApiError> {
     let _workspace_context = state.workspace_context_guard.read().await;
     let expected_generation = state.video_stream_tickets.generation();
-    let target_ref = ProjectTargetRef {
-        project: request.project,
-        worktree_path: request.worktree_path,
+    let target_ref = if let Some(target) = request.target {
+        if request.project.is_some() || request.worktree_path.is_some() || request.target_type.is_some() {
+            return Err(ApiError::custom(
+                StatusCode::BAD_REQUEST,
+                "INVALID_FS_TARGET",
+                "cannot provide both target and targetType/project fields",
+            ));
+        }
+        target
+    } else {
+        super::fs::parse_rest_target(
+            request.target_type.as_deref(),
+            request.project,
+            request.worktree_path,
+        )?
     };
     let resolved = resolve(&state, &target_ref, &request.path)
         .await

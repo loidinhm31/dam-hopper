@@ -13,8 +13,8 @@ use crate::error::AppError;
 use crate::pty::manager::PtyCreateOpts;
 use crate::state::AppState;
 use crate::workspace_target::{
-    target_path_is_within, target_path_relative, ProjectTargetRef, ResolvedProjectTarget,
-    WorkspaceTargetError,
+    target_path_is_within, target_path_relative, FilesystemTargetRef, ProjectTargetRef,
+    ResolvedProjectTarget, WorkspaceTargetError,
 };
 
 use super::error::ApiError;
@@ -35,6 +35,8 @@ pub struct CreateSessionBody {
     pub cols: u16,
     #[serde(default = "default_rows")]
     pub rows: u16,
+    #[serde(default)]
+    pub target: Option<FilesystemTargetRef>,
     pub project: Option<String>,
     /// Optional registered worktree target. The server resolves and records
     /// the canonical target before spawning the PTY.
@@ -89,22 +91,85 @@ pub async fn create_session(
         env,
         cols,
         rows,
-        project,
-        worktree_path,
+        target: requested_target,
+        project: requested_project,
+        worktree_path: requested_worktree,
         name,
     } = body;
-    let target = resolve_terminal_target(&state, project.as_deref(), worktree_path).await?;
-    let cwd = resolve_terminal_cwd(&state, target.as_ref(), requested_cwd).await?;
+
+    let (target, cwd, project, canonical_worktree_path) = match requested_target {
+        Some(FilesystemTargetRef::Workspace(_)) => {
+            if requested_project.is_some() || requested_worktree.is_some() {
+                return Err(ApiError::custom(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_FS_TARGET",
+                    "workspace folder terminal cannot have project or worktreePath",
+                ));
+            }
+            let cwd_param = requested_cwd.ok_or_else(|| {
+                ApiError::custom(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_FS_TARGET",
+                    "workspace folder terminal requires cwd",
+                )
+            })?;
+            let sandbox = state.workspace_sandbox().map_err(|_| {
+                ApiError::custom(
+                    StatusCode::FORBIDDEN,
+                    "UNCONFIGURED_WORKSPACE_ROOT",
+                    "workspace root is not configured or unavailable",
+                )
+            })?;
+            sandbox.check_identity().map_err(AppError::Fs)?;
+            let p = if std::path::Path::new(&cwd_param).is_absolute() {
+                PathBuf::from(&cwd_param)
+            } else {
+                sandbox.root().join(&cwd_param)
+            };
+            let canonical_cwd = dunce::canonicalize(&p).map_err(|_| {
+                ApiError::custom(StatusCode::BAD_REQUEST, "INVALID_CWD", "cwd does not exist")
+            })?;
+            if !canonical_cwd.is_dir() {
+                return Err(ApiError::custom(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_CWD",
+                    "cwd is not a directory",
+                ));
+            }
+            if !crate::workspace_target::target_path_is_within(&canonical_cwd, sandbox.root()) {
+                return Err(ApiError::custom(
+                    StatusCode::BAD_REQUEST,
+                    "PATH_ESCAPE",
+                    "cwd escapes workspace root",
+                ));
+            }
+            sandbox.check_identity().map_err(AppError::Fs)?;
+            (None, canonical_cwd.to_string_lossy().into_owned(), None, None)
+        }
+        Some(FilesystemTargetRef::Project(p)) => {
+            let target = resolve_terminal_target(&state, Some(&p.project), p.worktree_path).await?;
+            let cwd = resolve_terminal_cwd(&state, target.as_ref(), requested_cwd).await?;
+            let canonical_worktree_path = target.as_ref().and_then(|resolved| {
+                (!resolved.is_root()).then(|| resolved.target_path().to_string_lossy().into_owned())
+            });
+            let project_name = target.as_ref().map(|t| t.project().to_string());
+            (target, cwd, project_name, canonical_worktree_path)
+        }
+        None => {
+            let target = resolve_terminal_target(&state, requested_project.as_deref(), requested_worktree).await?;
+            let cwd = resolve_terminal_cwd(&state, target.as_ref(), requested_cwd).await?;
+            let canonical_worktree_path = target.as_ref().and_then(|resolved| {
+                (!resolved.is_root()).then(|| resolved.target_path().to_string_lossy().into_owned())
+            });
+            (target, cwd, requested_project, canonical_worktree_path)
+        }
+    };
 
     let (restart_policy, restart_max_retries, env) =
         resolve_terminal_env(&state, project.as_deref(), target.as_ref(), env).await?;
-    let canonical_worktree_path = target.as_ref().and_then(|resolved| {
-        (!resolved.is_root()).then(|| resolved.target_path().to_string_lossy().into_owned())
-    });
-    let session_id = id.clone();
 
     let meta = match state.pty_manager.create(PtyCreateOpts {
-        id,
+        id: id.clone(),
         command,
         cwd,
         env,
@@ -133,7 +198,7 @@ pub async fn create_session(
                     ))
                 ) {
                     if state.pty_manager.mark_target_unavailable(
-                        &session_id,
+                        &id,
                         &target_ref.project,
                         target_ref.worktree_path.as_deref().unwrap_or_default(),
                     ) {

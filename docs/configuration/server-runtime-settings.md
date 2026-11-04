@@ -41,7 +41,7 @@ When the database opens successfully:
 
 ### Session Changes Configuration
 
-Lightweight Session Changes tracking is opt-in and disabled by default. The master switch is configured under `[server]` in `dam-hopper.toml`.
+Lightweight Session Changes tracking is opt-in and disabled by default. The master switch is configured under `[server]` in `config.toml`.
 
 ```toml
 [server]
@@ -92,7 +92,7 @@ enables them.
 
 ### Diagnostics Storage
 
-Diagnostics export does not currently add user-configurable knobs to `dam-hopper.toml`.
+Diagnostics export does not currently add user-configurable knobs to `config.toml`.
 
 The export API is local-only, uses camelCase on the wire, and accepts `frontend` plus the legacy `frontendSnapshot` alias.
 
@@ -119,7 +119,7 @@ Bundle-v1 bounds are fixed in the implementation:
   and nested DTO depth 8
 - 5-second command/API deadlines
 
-These are not `dam-hopper.toml` keys and have no public tuning knobs. The
+These are not `config.toml` keys and have no public tuning knobs. The
 default idle-suspend policy (`empty-fleet`) and timeout configuration remain
 unchanged.
 

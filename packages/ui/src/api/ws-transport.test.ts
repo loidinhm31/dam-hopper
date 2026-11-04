@@ -256,9 +256,8 @@ describe("WsTransport explorer language scan endpoint", () => {
 
     await transport.invoke("fs:languageFiles", { project: "demo project" });
 
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      "http://localhost:4800/api/fs/language-files?project=demo+project",
-    );
+    expect(fetchMock.mock.calls[0][0]).toContain("project=demo+project");
+    expect(fetchMock.mock.calls[0][0]).toContain("targetType=project");
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "GET" });
     transport.destroy();
   });
@@ -281,9 +280,9 @@ describe("WsTransport explorer language scan endpoint", () => {
       worktreePath: "/tmp/demo-worktree",
     });
 
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      "http://localhost:4800/api/fs/language-files?project=demo&worktreePath=%2Ftmp%2Fdemo-worktree",
-    );
+    expect(fetchMock.mock.calls[0][0]).toContain("project=demo");
+    expect(fetchMock.mock.calls[0][0]).toContain("worktreePath=%2Ftmp%2Fdemo-worktree");
+    expect(fetchMock.mock.calls[0][0]).toContain("targetType=project");
     transport.destroy();
   });
 });
@@ -301,8 +300,11 @@ describe("WsTransport filesystem targets", () => {
     const targetedMessage = JSON.parse(socket.sent[0]);
     expect(targetedMessage).toMatchObject({
       kind: "fs:subscribe_tree",
-      project: "demo",
-      worktree_path: "/tmp/demo-worktree",
+      target: {
+        type: "project",
+        project: "demo",
+        worktreePath: "/tmp/demo-worktree",
+      },
       path: "src",
     });
     socket.onmessage?.({
@@ -647,7 +649,40 @@ describe("WsTransport typed API errors", () => {
     } satisfies Partial<ApiRequestError>);
     transport.destroy();
   });
+});
 
+describe("WsTransport fsOp with workspace mutation authority", () => {
+  it("attaches cached workspaceEpoch to wire target and message payload", async () => {
+    installMockWebSocket();
+    const transport = new WsTransport("http://localhost:4800");
+    transport.cachedWorkspaceEpoch = 42;
+
+    const socket = sockets[0];
+    socket.readyState = 1;
+
+    const opPromise = transport.fsOp("delete", {
+      target: { kind: "workspace", profileId: "default" },
+      path: "test-file.txt",
+    });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    const sentStr = socket.sent.find((s) => s.includes('"kind":"fs:op"'));
+    expect(sentStr).toBeDefined();
+    const sent = JSON.parse(sentStr!);
+    expect(sent.target).toEqual({ type: "workspace", workspaceEpoch: 42 });
+    expect(sent.workspaceEpoch).toBe(42);
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "fs:op_result",
+        req_id: sent.req_id,
+        ok: true,
+      }),
+    } as MessageEvent);
+
+    const result = await opPromise;
+    expect(result.ok).toBe(true);
+    transport.destroy();
+  });
 });
 
 describe("WsTransport profile credentials", () => {
@@ -1520,7 +1555,7 @@ describe("WsTransport settings export/import", () => {
         status: 200,
         headers: {
           "content-type": "application/toml; charset=utf-8",
-          "content-disposition": 'attachment; filename="dam-hopper.toml"',
+          "content-disposition": 'attachment; filename="config.toml"',
         },
       }),
     );
@@ -1543,8 +1578,8 @@ describe("WsTransport settings export/import", () => {
       new Response(
         JSON.stringify({
           imported: true,
-          fileName: "dam-hopper.toml",
-          backupFileName: "dam-hopper.toml.bak.123",
+          fileName: "config.toml",
+          backupFileName: "config.toml.bak.123",
           workspaceName: "ws",
         }),
         {
@@ -1561,8 +1596,8 @@ describe("WsTransport settings export/import", () => {
     );
     expect(result).toEqual({
       imported: true,
-      fileName: "dam-hopper.toml",
-      backupFileName: "dam-hopper.toml.bak.123",
+      fileName: "config.toml",
+      backupFileName: "config.toml.bak.123",
       workspaceName: "ws",
     });
     expect(fetchMock).toHaveBeenCalledWith(

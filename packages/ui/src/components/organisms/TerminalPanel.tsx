@@ -852,6 +852,10 @@ export function TerminalPanel({
           return false;
         }
 
+        if (e.key === "F12" || e.code === "F12" || e.keyCode === 123) {
+          return false;
+        }
+
         if (
           e.type === "keydown" &&
           e.key === "Backspace" &&

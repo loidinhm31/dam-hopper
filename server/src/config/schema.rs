@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::system::config::HostResourceMonitorConfig;
 
@@ -215,15 +215,34 @@ pub struct ProjectConfig {
 // Workspace config
 // ──────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct WorkspaceInfo {
+    #[serde(default)]
     pub name: String,
-    #[serde(default = "default_root")]
+    #[serde(default)]
     pub root: String,
 }
 
-fn default_root() -> String {
-    ".".to_string()
+/// Errors encountered when authoritatively resolving and validating a workspace root directory.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum WorkspaceRootError {
+    #[error("UNCONFIGURED_WORKSPACE_ROOT: workspace.root is not configured in config file. Configure a dedicated directory to enable workspace browsing.")]
+    Unconfigured,
+    #[error("UNCONFIGURED_WORKSPACE_ROOT: workspace root does not exist: {0}")]
+    NotFound(PathBuf),
+    #[error("UNCONFIGURED_WORKSPACE_ROOT: workspace root is not a directory: {0}")]
+    NotADirectory(PathBuf),
+    #[error("UNCONFIGURED_WORKSPACE_ROOT: workspace root cannot be canonicalized: {0}")]
+    CanonicalizationFailed(String),
+    #[error("UNCONFIGURED_WORKSPACE_ROOT: workspace root resolves to or contains sensitive directory {0}. Configure a dedicated workspace directory.")]
+    SensitiveDirectory(PathBuf),
+}
+
+impl WorkspaceInfo {
+    /// Authoritatively resolve and validate this workspace root relative to `config_dir`.
+    pub fn resolve_root(&self, config_dir: &Path) -> Result<PathBuf, WorkspaceRootError> {
+        crate::config::parser::resolve_workspace_root(config_dir, &self.root)
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -628,6 +647,7 @@ impl Default for ServerConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DamHopperConfigRaw {
+    #[serde(default)]
     pub workspace: WorkspaceInfo,
     pub agent_store: Option<AgentStoreConfig>,
     #[serde(default)]
@@ -636,6 +656,10 @@ pub struct DamHopperConfigRaw {
     pub projects: Vec<ProjectConfigRaw>,
     #[serde(default)]
     pub features: FeaturesConfig,
+    #[serde(default)]
+    pub ui: Option<UiConfig>,
+    pub semantic: Option<toml::Value>,
+    pub workspaces: Option<Vec<KnownWorkspace>>,
 }
 
 // ──────────────────────────────────────────────
@@ -650,20 +674,27 @@ pub struct DamHopperConfig {
     pub server: ServerConfig,
     pub projects: Vec<ProjectConfig>,
     pub features: FeaturesConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui: Option<UiConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspaces: Option<Vec<KnownWorkspace>>,
     /// Absolute path of the config file that was loaded (internal use only).
     #[serde(skip)]
     pub config_path: PathBuf,
+}
+
+impl DamHopperConfig {
+    /// Authoritatively resolve and validate the workspace root relative to the config file directory.
+    pub fn resolve_workspace_root(&self) -> Result<PathBuf, WorkspaceRootError> {
+        let config_dir = self.config_path.parent().unwrap_or_else(|| Path::new("."));
+        self.workspace.resolve_root(config_dir)
+    }
 }
 
 // ──────────────────────────────────────────────
 // Global config
 // ──────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct GlobalDefaults {
-    pub workspace: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -959,6 +990,13 @@ pub enum CognitoModeStyle {
     HeavyBlur,
     BlackScreen,
 }
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DefaultWindowPlacement {
+    #[default]
+    Float,
+    Tile,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1109,6 +1147,12 @@ pub struct UiConfig {
     pub cognito_mode_shortcut: String,
     #[serde(default, alias = "cognito_mode_style")]
     pub cognito_mode_style: CognitoModeStyle,
+    #[serde(
+        default,
+        alias = "default_window_placement",
+        alias = "defaultWindowPlacement"
+    )]
+    pub default_window_placement: DefaultWindowPlacement,
 }
 
 pub const MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES: usize = 4096;
@@ -1160,6 +1204,7 @@ impl Default for UiConfig {
             terminal_scroll_step: default_terminal_scroll_step(),
             cognito_mode_shortcut: default_cognito_mode_shortcut(),
             cognito_mode_style: CognitoModeStyle::default(),
+            default_window_placement: DefaultWindowPlacement::default(),
         }
     }
 }
@@ -1243,12 +1288,17 @@ impl UiConfig {
         }
         Ok(())
     }
+
+    pub fn validate_window_placement(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalConfig {
-    pub defaults: Option<GlobalDefaults>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceInfo>,
     pub workspaces: Option<Vec<KnownWorkspace>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui: Option<UiConfig>,

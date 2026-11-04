@@ -90,6 +90,8 @@ sealed class ClientMsg {
         val expectedMtime: Long,
         val size: ULong,
         val encoding: String? = null,
+        @SerialName("workspaceEpoch")
+        val workspaceEpoch: Long? = null,
     ) : ClientMsg()
 
     @Serializable
@@ -132,6 +134,8 @@ sealed class ClientMsg {
         val newPath: String? = null,
         @SerialName("force_git")
         val forceGit: Boolean = false,
+        @SerialName("workspaceEpoch")
+        val workspaceEpoch: Long? = null,
     ) : ClientMsg()
 
     // FS — upload
@@ -148,6 +152,8 @@ sealed class ClientMsg {
         val dir: String,
         val filename: String,
         val len: ULong,
+        @SerialName("workspaceEpoch")
+        val workspaceEpoch: Long? = null,
     ) : ClientMsg()
 
     @Serializable

@@ -8,6 +8,7 @@ import { ConflictResolverToolbar } from "@/components/organisms/ConflictResolver
 import { MergeConflictEditor } from "@/components/organisms/MergeConflictEditor.js";
 import { normalizeProjectTarget } from "@/api/client.js";
 import { AlertTriangle, Loader2, CheckCircle2 } from "lucide-react";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 
 export interface ConflictResolverAppProps {
   window: OsWindow;
@@ -22,6 +23,7 @@ export function ConflictResolverApp({ window }: ConflictResolverAppProps) {
   const initialFilePath = window.appState?.filePath as string | undefined;
 
   const closeWindow = useWindowStore((state) => state.closeWindow);
+  const [confirmAbortOp, setConfirmAbortOp] = useState<string | null>(null);
 
   const target = useMemo(
     () =>
@@ -101,7 +103,7 @@ export function ConflictResolverApp({ window }: ConflictResolverAppProps) {
     }
   }, [resolver, requestedOperation]);
 
-  const handleAbort = useCallback(async () => {
+  const handleAbort = useCallback(() => {
     const liveOp = resolver.operation?.operation;
     if (
       requestedOperation !== undefined &&
@@ -110,11 +112,16 @@ export function ConflictResolverApp({ window }: ConflictResolverAppProps) {
       return;
     }
     const op = liveOp ?? "operation";
-    if (
-      !globalThis.confirm(
-        `Abort ${op.toUpperCase()}? This will discard uncommitted merge resolutions and clean the worktree.`,
-      )
-    ) {
+    setConfirmAbortOp(op);
+  }, [resolver.operation?.operation, requestedOperation]);
+
+  const executeAbort = useCallback(async () => {
+    const expectedOp = confirmAbortOp;
+    setConfirmAbortOp(null);
+    if (!expectedOp) return;
+    const currentOp = resolver.operation?.operation;
+    if (currentOp !== expectedOp) {
+      setOperationError("Conflict operation changed while confirmation was pending; abort cancelled.");
       return;
     }
     setIsAborting(true);
@@ -131,7 +138,7 @@ export function ConflictResolverApp({ window }: ConflictResolverAppProps) {
     } finally {
       setIsAborting(false);
     }
-  }, [resolver, requestedOperation, closeWindow, window.id]);
+  }, [confirmAbortOp, resolver, closeWindow, window.id]);
 
   if (!claimStatus.success) {
     return (
@@ -271,6 +278,16 @@ export function ConflictResolverApp({ window }: ConflictResolverAppProps) {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={Boolean(confirmAbortOp)}
+        onClose={() => setConfirmAbortOp(null)}
+        onConfirm={executeAbort}
+        title="Abort Conflict Resolution?"
+        description={`Abort ${(confirmAbortOp ?? "operation").toUpperCase()}? This will discard uncommitted merge resolutions and clean the worktree.`}
+        confirmText="Abort and Discard"
+        cancelText="Keep Resolving"
+        variant="danger"
+      />
     </div>
   );
 }

@@ -14,6 +14,13 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/Select.js";
 import type { OsWindow } from "../types.js";
 import { useWindowStore } from "../window-store.js";
 import { dispatchIntent, createIntent } from "../intents.js";
@@ -628,19 +635,25 @@ export function SystemMonitorApp({ window }: SystemMonitorAppProps) {
               {/* Filters */}
               <div className="flex items-center gap-1.5">
                 {multiResources.configuredProfileCount > 1 && (
-                  <select
+                  <Select
                     value={sessionProfileFilter}
-                    onChange={(e) => setSessionProfileFilter(e.target.value)}
-                    aria-label="Filter sessions by profile"
-                    className="px-2 py-0.5 rounded text-[10px] bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] focus:outline-none"
+                    onValueChange={(val) => setSessionProfileFilter(val)}
                   >
-                    <option value="all">All Profiles</option>
-                    {multiResources.entries.map((e, idx) => (
-                      <option key={e.profile.id} value={e.profile.id}>
-                        {cognitoActive ? `Profile ${idx + 1}` : e.profile.name ?? e.profile.id}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger
+                      aria-label="Filter sessions by profile"
+                      className="h-6 w-auto min-w-[100px] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] text-[var(--color-text)]"
+                    >
+                      <SelectValue placeholder="All Profiles" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all" className="text-xs">All Profiles</SelectItem>
+                      {multiResources.entries.map((e, idx) => (
+                        <SelectItem key={e.profile.id} value={e.profile.id} className="text-xs">
+                          {cognitoActive ? `Profile ${idx + 1}` : e.profile.name ?? e.profile.id}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 )}
 
                 {(["all", "terminal", "build", "run"] as const).map((type) => (

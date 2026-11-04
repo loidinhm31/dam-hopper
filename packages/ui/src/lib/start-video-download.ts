@@ -1,12 +1,12 @@
 import { issueVideoTicket } from "@/api/video-tickets.js";
 import type { ConnectionRef, ProjectTargetInput } from "@/api/client.js";
-
+import type { FsTargetRef } from "@/api/ownership.js";
 /**
  * Starts browser-managed video download without reading media bytes in JavaScript.
  * The download ticket is deliberately not revoked after the click.
  */
 export async function startVideoDownload(
-  target: ProjectTargetInput,
+  target: FsTargetRef | ProjectTargetInput,
   path: string,
   owner?: ConnectionRef,
 ): Promise<void> {

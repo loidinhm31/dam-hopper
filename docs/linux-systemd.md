@@ -50,8 +50,8 @@ coordinated by a root-only recovery unit:
 > default release-manager render run `dam-hopper-api.service` as the
 > unprivileged `dam-hopper:dam-hopper` account. Custom identities must remain
 > non-root; verify `User=`/`Group=` on each host.
-> Template source is `ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config @API_HOME@/dam-hopper.toml --host 0.0.0.0 --port 4801`; default rendering is:
-> `ExecStart=/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801`.
+> Template source is `ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config @API_HOME@/config.toml --host 0.0.0.0 --port 4801`; default rendering is:
+> `ExecStart=/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/config.toml --host 0.0.0.0 --port 4801`.
 > The checked-in unit is this concrete production-default rendering and must
 > stay synchronized. It has exactly one privileged
 > `ExecStartPre=+/opt/dam-hopper/current/bin/dam-hopper-manager provision-api-runtime`
@@ -115,7 +115,7 @@ DamHopper enforces strict separation between immutable release assets, durable m
 └── backups/<tx_id>/               # 0700 root:root (Concrete unit & config rollback backups)
 
 /var/lib/dam-hopper/              # 0700 final API UID:GID (API runtime state)
-├── dam-hopper.toml                # 0600 final API UID:GID (Canonical API registry)
+├── config.toml                # 0600 final API UID:GID (Canonical API configuration)
 ├── idle-suspend-audit.jsonl       # 0600 final API UID:GID (Server timing/manual audit)
 └── .config/dam-hopper/            # 0700 final API UID:GID (Diagnostics and token parent)
 
@@ -124,7 +124,7 @@ DamHopper enforces strict separation between immutable release assets, durable m
 ├── host-config.json         # 0644 root:root (Committed public runtime config)
 ├── server.env               # 0600 root:root (Optional production env: MONGODB_URI/DATABASE or DAM_HOPPER_LITE_MODE, DAM_HOPPER_MFA_KEY_FILE)
 ├── mfa-encryption.key       # 0600 API UID:GID (Dedicated 32-byte AES-256-GCM TOTP encryption key)
-└── dam-hopper.toml          # 0644 root:root (Optional read-only legacy migration source)
+└── dam-hopper.toml.bak        # Optional preserved legacy migration backup (clean cutover)
 /etc/systemd/system/
 ├── dam-hopper-recovery.service
 ├── dam-hopper-idle-suspend-helper.service # Present only if role is 'server' or 'both'

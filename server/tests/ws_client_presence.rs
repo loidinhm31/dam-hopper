@@ -62,6 +62,8 @@ fn make_test_state(tmp: &TempDir, presence_registry: Option<Arc<ClientPresenceRe
         server: dam_hopper_server::config::ServerConfig::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_dir.join("dam-hopper.toml"),
     };
 

@@ -74,6 +74,7 @@ struct SubInfo {
     watcher_lease: WatcherLease,
     /// Absolute path prefix used to filter broadcast events.
     filter_prefix: PathBuf,
+    is_workspace: bool,
 }
 
 /// Project-scoped filesystem subsystem.
@@ -88,7 +89,11 @@ pub struct FsSubsystem {
 
 struct Inner {
     sandbox: Option<ProjectSandbox>,
-    watcher_mgr: FsWatcherManager,
+    workspace_sandbox: Option<WorkspaceSandbox>,
+    workspace_generation: u64,
+    workspace_epoch: u64,
+    project_watcher_mgr: FsWatcherManager,
+    workspace_watcher_mgr: FsWatcherManager,
     subs: HashMap<u64, SubInfo>,
     next_sub_id: u64,
 }
@@ -98,6 +103,14 @@ impl FsSubsystem {
     /// (e.g. path doesn't exist), the sandbox is stored as `None` and IDE
     /// FS operations will return `FsError::Unavailable` at request time.
     pub fn new(projects: Vec<(String, PathBuf)>) -> Self {
+        Self::new_with_workspace(projects, None)
+    }
+
+    /// Construct with optional workspace root.
+    pub fn new_with_workspace(
+        projects: Vec<(String, PathBuf)>,
+        workspace_root: Option<PathBuf>,
+    ) -> Self {
         let sandbox = match ProjectSandbox::new(projects) {
             Ok(s) => Some(s),
             Err(e) => {
@@ -105,10 +118,24 @@ impl FsSubsystem {
                 None
             }
         };
+        let workspace_sandbox = match workspace_root {
+            Some(root) => match WorkspaceSandbox::new(root) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    tracing::warn!(error = %e, "WorkspaceSandbox init failed — workspace FS ops unavailable");
+                    None
+                }
+            },
+            None => None,
+        };
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 sandbox,
-                watcher_mgr: FsWatcherManager::new(),
+                workspace_sandbox,
+                workspace_generation: 1,
+                workspace_epoch: initial_workspace_epoch(),
+                project_watcher_mgr: FsWatcherManager::new(),
+                workspace_watcher_mgr: FsWatcherManager::new(),
                 subs: HashMap::new(),
                 next_sub_id: 1,
             })),
@@ -130,13 +157,16 @@ impl FsSubsystem {
         };
         let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         inner.sandbox = sandbox;
-        let watcher_leases: Vec<WatcherLease> = inner
+        let project_sub_ids: Vec<u64> = inner
             .subs
-            .drain()
-            .map(|(_, info)| info.watcher_lease)
+            .iter()
+            .filter(|(_, info)| !info.is_workspace)
+            .map(|(id, _)| *id)
             .collect();
-        for watcher_lease in watcher_leases {
-            inner.watcher_mgr.release(&watcher_lease);
+        for sub_id in project_sub_ids {
+            if let Some(info) = inner.subs.remove(&sub_id) {
+                inner.project_watcher_mgr.release(&info.watcher_lease);
+            }
         }
     }
 
@@ -151,6 +181,106 @@ impl FsSubsystem {
             .sandbox
             .clone()
             .ok_or(FsError::Unavailable)
+    }
+
+    /// Returns a cloned workspace sandbox handle, or `Err(Unavailable)` if not configured.
+    pub fn workspace_sandbox(&self) -> Result<WorkspaceSandbox, FsError> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .workspace_sandbox
+            .clone()
+            .ok_or(FsError::Unavailable)
+    }
+
+    /// Reinitialize workspace sandbox after a config reload or workspace root update.
+    pub fn reinit_workspace_sandbox(&self, root: Option<PathBuf>) {
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        inner.workspace_generation += 1;
+        let generation = inner.workspace_generation;
+        let old_root = inner.workspace_sandbox.as_ref().map(|s| s.root().to_path_buf());
+        let old_identity = inner.workspace_sandbox.as_ref().map(|s| s.identity());
+        let workspace_sandbox = match root {
+            Some(r) => match WorkspaceSandbox::new_with_generation(r, generation) {
+                Ok(s) => {
+                    if old_root.as_ref() != Some(&s.root().to_path_buf())
+                        || old_identity != Some(s.identity())
+                    {
+                        inner.workspace_epoch += 1;
+                    }
+                    Some(s)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "WorkspaceSandbox reinit failed — workspace FS ops unavailable");
+                    None
+                }
+            },
+            None => None,
+        };
+        inner.workspace_sandbox = workspace_sandbox;
+        let to_remove: Vec<u64> = inner
+            .subs
+            .iter()
+            .filter(|(_, info)| info.is_workspace)
+            .map(|(id, _)| *id)
+            .collect();
+        for sub_id in to_remove {
+            if let Some(info) = inner.subs.remove(&sub_id) {
+                inner.workspace_watcher_mgr.release(&info.watcher_lease);
+            }
+        }
+    }
+
+    pub fn workspace_epoch(&self) -> u64 {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .workspace_epoch
+    }
+
+    pub fn bump_workspace_epoch(&self) {
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        inner.workspace_epoch += 1;
+    }
+
+
+    /// Subscribe strictly to events within an actual directory under the workspace root.
+    pub fn subscribe_workspace_directory(
+        &self,
+        directory_abs_path: PathBuf,
+    ) -> Result<(u64, broadcast::Receiver<FsEvent>), FsError> {
+        let mut inner = self.inner.lock().expect("FsSubsystem: Mutex poisoned");
+        let sandbox = inner.workspace_sandbox.as_ref().ok_or(FsError::Unavailable)?;
+        sandbox.check_identity()?;
+        let watcher_root = sandbox.root().to_path_buf();
+        if !directory_abs_path.starts_with(&watcher_root) {
+            return Err(FsError::PathEscape);
+        }
+        let watcher_key = WatcherKey {
+            project: "workspace".to_owned(),
+            target_key: "workspace".to_owned(),
+            root: directory_abs_path.clone(),
+        };
+        let (watcher_lease, rx) = inner.workspace_watcher_mgr.subscribe(&watcher_key)?;
+        let sub_id = inner.next_sub_id;
+        inner.next_sub_id += 1;
+        inner.subs.insert(
+            sub_id,
+            SubInfo {
+                watcher_lease,
+                filter_prefix: directory_abs_path,
+                is_workspace: true,
+            },
+        );
+        Ok((sub_id, rx))
+    }
+
+    /// Subscribe to tree events for `filter_abs_path` across the whole workspace root.
+    pub fn subscribe_workspace_tree(
+        &self,
+        filter_abs_path: PathBuf,
+    ) -> Result<(u64, broadcast::Receiver<FsEvent>), FsError> {
+        self.subscribe_workspace_directory(filter_abs_path)
     }
 
     /// Subscribe to tree events for `filter_abs_path` within `project`.
@@ -236,7 +366,16 @@ impl FsSubsystem {
         watcher_key: WatcherKey,
         filter_abs_path: PathBuf,
     ) -> Result<(u64, broadcast::Receiver<FsEvent>), FsError> {
-        let (watcher_lease, rx) = inner.watcher_mgr.subscribe(&watcher_key)?;
+        Self::subscribe_with_key_internal(inner, watcher_key, filter_abs_path, false)
+    }
+
+    fn subscribe_with_key_internal(
+        inner: &mut Inner,
+        watcher_key: WatcherKey,
+        filter_abs_path: PathBuf,
+        is_workspace: bool,
+    ) -> Result<(u64, broadcast::Receiver<FsEvent>), FsError> {
+        let (watcher_lease, rx) = inner.project_watcher_mgr.subscribe(&watcher_key)?;
         let sub_id = inner.next_sub_id;
         inner.next_sub_id += 1;
         inner.subs.insert(
@@ -244,6 +383,7 @@ impl FsSubsystem {
             SubInfo {
                 watcher_lease,
                 filter_prefix: filter_abs_path,
+                is_workspace,
             },
         );
         Ok((sub_id, rx))
@@ -253,7 +393,11 @@ impl FsSubsystem {
     pub fn unsubscribe_tree(&self, sub_id: u64) {
         let mut inner = self.inner.lock().expect("FsSubsystem: Mutex poisoned");
         if let Some(info) = inner.subs.remove(&sub_id) {
-            inner.watcher_mgr.release(&info.watcher_lease);
+            if info.is_workspace {
+                inner.workspace_watcher_mgr.release(&info.watcher_lease);
+            } else {
+                inner.project_watcher_mgr.release(&info.watcher_lease);
+            }
         }
     }
 
@@ -271,13 +415,20 @@ impl FsSubsystem {
     /// For tests: refcount of watcher at `root`.
     #[cfg(test)]
     pub fn watcher_refcount(&self, root: &Path) -> usize {
-        self.inner
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .watcher_mgr
-            .refcount(root)
+        let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let proj = inner.project_watcher_mgr.refcount(root);
+        let ws = inner.workspace_watcher_mgr.refcount(root);
+        proj + ws
     }
 }
+fn initial_workspace_epoch() -> u64 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    (secs << 16) | 1
+}
+
 
 /// Generate a depth-1 tree snapshot for `abs_path`.
 ///

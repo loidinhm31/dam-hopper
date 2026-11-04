@@ -32,6 +32,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 import { useGitConflictFile, useGitFileDiff } from "@/api/queries.js";
 import {
   useConflictResolver,
@@ -126,6 +127,11 @@ export function MergeConflictEditor({
   const [isResolving, setIsResolving] = useState(false);
   const [selectedConflict, setSelectedConflict] = useState(0);
   const [draftKey, setDraftKey] = useState<string | null>(null);
+  const [confirmState, setConfirmState] = useState<{
+    title: string;
+    description: string;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
   const draftKeyRef = useRef<string | null>(null);
   const [resultContent, setResultContent] = useState<string>("");
   const resultContentRef = useRef<string>("");
@@ -901,12 +907,17 @@ export function MergeConflictEditor({
   }
 
   function handleDiscardRecovery(recoveryKey: string) {
-    if (!window.confirm("Discard this saved conflict recovery text?")) return;
-    if (!resolver.discardDraft(recoveryKey, true)) {
-      setResolveError("Recovery text could not be discarded");
-      return;
-    }
-    if (recoveryKey === draftKey) onClose();
+    setConfirmState({
+      title: "Discard Recovery Text?",
+      description: "Discard this saved conflict recovery text?",
+      onConfirm: () => {
+        if (!resolver.discardDraft(recoveryKey, true)) {
+          setResolveError("Recovery text could not be discarded");
+          return;
+        }
+        if (recoveryKey === draftKey) onClose();
+      },
+    });
   }
 
   async function handleMarkResolved() {
@@ -990,38 +1001,37 @@ export function MergeConflictEditor({
       snapshot?.unsupportedReason,
   );
 
-  const handleBinaryChoice = async (side: "ours" | "theirs") => {
+  const handleBinaryChoice = (side: "ours" | "theirs") => {
     if (!draftKey || isResolving || !targetAvailable) return;
     const sideLabel = side === "ours" ? "Ours (Stage 2)" : "Theirs (Stage 3)";
-    if (
-      !window.confirm(
-        `Resolve binary conflict for ${filePath} by keeping ${sideLabel} and staging the file?`,
-      )
-    ) {
-      return;
-    }
-    setIsResolving(true);
-    setResolveError(null);
-    try {
-      const outcome = await resolver.applyIndexSide(draftKey, side);
-      if (outcome.outcome === "applied") {
-        onResolved();
-      } else {
-        const errorMsg =
-          "error" in outcome
-            ? outcome.error
-            : "reason" in outcome
-              ? outcome.reason
-              : "Binary resolution failed";
-        setResolveError(errorMsg);
-      }
-    } catch (err) {
-      setResolveError(
-        err instanceof Error ? err.message : "Binary resolution failed",
-      );
-    } finally {
-      setIsResolving(false);
-    }
+    setConfirmState({
+      title: "Resolve Binary Conflict?",
+      description: `Resolve binary conflict for ${filePath} by keeping ${sideLabel} and staging the file?`,
+      onConfirm: async () => {
+        setIsResolving(true);
+        setResolveError(null);
+        try {
+          const outcome = await resolver.applyIndexSide(draftKey, side);
+          if (outcome.outcome === "applied") {
+            onResolved();
+          } else {
+            const errorMsg =
+              "error" in outcome
+                ? outcome.error
+                : "reason" in outcome
+                  ? outcome.reason
+                  : "Binary resolution failed";
+            setResolveError(errorMsg);
+          }
+        } catch (err) {
+          setResolveError(
+            err instanceof Error ? err.message : "Binary resolution failed",
+          );
+        } finally {
+          setIsResolving(false);
+        }
+      },
+    });
   };
   const oursPresent = Boolean(
     snapshot?.stages?.ours && snapshot.stages.ours.kind !== "missing",
@@ -1060,35 +1070,34 @@ export function MergeConflictEditor({
     }
   };
 
-  const handleDeleteFile = async () => {
+  const handleDeleteFile = () => {
     if (!draftKey || isResolving || !targetAvailable) return;
-    if (
-      !window.confirm(
-        `Delete ${filePath} from the working tree and index to resolve this conflict?`,
-      )
-    ) {
-      return;
-    }
-    setIsResolving(true);
-    setResolveError(null);
-    try {
-      const outcome = await resolver.applyDelete(draftKey);
-      if (outcome.outcome === "applied") {
-        onResolved();
-      } else {
-        const errorMsg =
-          "error" in outcome
-            ? outcome.error
-            : "reason" in outcome
-              ? outcome.reason
-              : "Delete failed";
-        setResolveError(errorMsg);
-      }
-    } catch (err) {
-      setResolveError(err instanceof Error ? err.message : "Delete failed");
-    } finally {
-      setIsResolving(false);
-    }
+    setConfirmState({
+      title: "Delete Conflicted File?",
+      description: `Delete ${filePath} from the working tree and index to resolve this conflict?`,
+      onConfirm: async () => {
+        setIsResolving(true);
+        setResolveError(null);
+        try {
+          const outcome = await resolver.applyDelete(draftKey);
+          if (outcome.outcome === "applied") {
+            onResolved();
+          } else {
+            const errorMsg =
+              "error" in outcome
+                ? outcome.error
+                : "reason" in outcome
+                  ? outcome.reason
+                  : "Delete failed";
+            setResolveError(errorMsg);
+          }
+        } catch (err) {
+          setResolveError(err instanceof Error ? err.message : "Delete failed");
+        } finally {
+          setIsResolving(false);
+        }
+      },
+    });
   };
 
   const isLoading =
@@ -1798,6 +1807,22 @@ export function MergeConflictEditor({
         </div>
       )}
         </>
+      )}
+      {confirmState && (
+        <ConfirmDialog
+          open={Boolean(confirmState)}
+          onClose={() => setConfirmState(null)}
+          onConfirm={() => {
+            const fn = confirmState.onConfirm;
+            setConfirmState(null);
+            void fn();
+          }}
+          title={confirmState.title}
+          description={confirmState.description}
+          confirmText="Confirm"
+          cancelText="Cancel"
+          variant="danger"
+        />
       )}
     </div>
   );

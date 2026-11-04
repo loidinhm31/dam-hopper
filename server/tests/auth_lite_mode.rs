@@ -71,6 +71,8 @@ fn new_state(tmp: &TempDir, store: Option<AuthStore>, no_auth: bool) -> anyhow::
         agent_store: None,
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: root.join("dam-hopper.toml"),
     };
     let tunnel_manager = common::make_tunnel_manager(&event_sink);

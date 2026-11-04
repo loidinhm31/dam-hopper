@@ -148,6 +148,8 @@ wake_after_seconds = {}
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
 
@@ -266,6 +268,8 @@ agent_executables = [{}]
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
 
@@ -370,6 +374,8 @@ automatic_policy = "agent-free"
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
 

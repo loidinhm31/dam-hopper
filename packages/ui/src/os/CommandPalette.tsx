@@ -8,12 +8,14 @@ import {
 } from "react";
 import { useWindowStore } from "./window-store.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
+import { useSettingsStore } from "@/stores/settings.js";
 import { APP_MANIFESTS, findExistingWindowForApp } from "./app-registry.js";
 import { createProjectDesktopTemplate } from "./desktop-templates.js";
 import type { OsAppId } from "./types.js";
 import { generateUUID } from "@/lib/utils.js";
 import { loadAllRecipes } from "./recipes/persistence.js";
 import { dispatchIntent, createIntent } from "./intents.js";
+import { getConnectionSnapshot, getApi } from "@/api/connections.js";
 export type PaletteMode =
   | "commands"
   | "agents"
@@ -112,7 +114,7 @@ export function CommandPalette({
         title: `Open ${manifest.displayName}`,
         description: `Open ${manifest.displayName} window (${manifest.defaultPlacement})`,
         shortcut: manifest.appId === "terminals" ? "Ctrl+`" : undefined,
-        onSelect: () => {
+        onSelect: async () => {
           const desktopCtx =
             activeDesktop?.defaultCtx ?? { profileId: "default" };
           const existing = findExistingWindowForApp(
@@ -126,15 +128,44 @@ export function CommandPalette({
             onClose();
             return;
           }
+          let appState: Record<string, unknown> | undefined;
+          if (manifest.appId === "terminals") {
+            const terminalId = `term-${generateUUID()}`;
+            let createError: string | undefined;
+            let incarnation: number | undefined;
+            const snap = getConnectionSnapshot(desktopCtx.profileId);
+            if (snap && snap.status === "connected") {
+              try {
+                const client = getApi(snap.owner);
+                const sessionRes = await client.terminal.create({
+                  id: terminalId,
+                  command: "",
+                  project: desktopCtx.projectId,
+                  cols: 80,
+                  rows: 24,
+                });
+                incarnation = sessionRes.incarnation;
+              } catch (err) {
+                createError = err instanceof Error ? err.message : String(err);
+              }
+            }
+            appState = {
+              sessionId: terminalId,
+              terminalId,
+              ...(incarnation !== undefined ? { incarnation } : {}),
+              ...(createError ? { createError } : {}),
+            };
+          }
           openWindow(
             {
               id: `${manifest.appId}-${generateUUID().slice(0, 8)}`,
               appId: manifest.appId,
               title: manifest.displayName,
-              ctx: activeDesktop?.defaultCtx ?? { profileId: "default" },
+              ctx: desktopCtx,
               mode: manifest.defaultPlacement,
+              appState,
             },
-            session.activeDesktopId,
+            useWindowStore.getState().session.activeDesktopId,
           );
           onClose();
         },
@@ -301,7 +332,7 @@ export function CommandPalette({
               appId: "editor",
               title: "Editor",
               ctx: activeDesktop?.defaultCtx ?? { profileId: "default" },
-              mode: "tile",
+              mode: useSettingsStore.getState().defaultWindowPlacement ?? "float",
             },
             session.activeDesktopId,
           );

@@ -501,8 +501,45 @@ See [Workflow API Specification](./workflow-api.md).
 
 See [Agent Status Architecture](./architecture/agent-status.md).
 
-## Git Safety Model
+## Workspace-First Filesystem & Marked Projects
 
+DamHopper decouples whole-workspace filesystem access from project registration. Users can navigate, view, edit, search, and launch folder terminals across the authorized server workspace root without configuring projects. Projects represent explicitly marked folders associating directories with build metadata, command palettes, agent configurations, and Git capabilities.
+
+### Core Architecture & Invariants
+
+1. **Authoritative Browse Root:**
+   - Security authority is derived explicitly from `[workspace] root` in `config.toml`, resolved relative to the configuration file path.
+   - It is never derived from ambient `workspace_dir` or config parent paths.
+   - Roots resolving to, within, or containing sensitive daemon configuration directories (`~/.config/dam-hopper`, `/etc/dam-hopper`, `/var/lib/dam-hopper`) are strictly rejected and fail closed with `UNCONFIGURED_WORKSPACE_ROOT` (HTTP 403 / WS error) without disrupting existing project access.
+2. **Target Discrimination:**
+   - All filesystem operations (REST `/api/fs/*` and WebSocket `fs:*` commands) use explicit target discrimination:
+     - `Workspace`: `{ "type": "workspace" }` (or `targetType=workspace` in REST queries).
+     - `Project`: `{ "type": "project", "project": "name", "worktreePath": "..." }`.
+   - Missing project fields never silently expand access to the workspace.
+
+3. **Workspace Sandbox & Authority Fencing:**
+   - `WorkspaceSandbox` in `FsSubsystem` tracks the root `DirectoryIdentity` and generation token.
+   - Pre-mutation checks refuse deleting, renaming, or modifying the workspace root, marked project roots, registered worktree roots, or their containing ancestors.
+   - Plain and encrypted writes, chunked uploads, and media ticket consumption verify directory identity and target authority at commit time, rejecting root replacements and symlink swaps.
+   - **Stale-Root Save Fence**: When the active workspace root switches, dirty editor buffers or pending client writes referencing old relative paths fail closed and are strictly prevented from saving into the new root.
+4. **Canonical Editor Document Identity:**
+   - Document identity is decoupled from access routes:
+     `documentKey = JSON.stringify(["file", profileId, workspaceId, workspaceEpoch, canonicalPath])`.
+   - Opening a file (e.g. `src/main.rs`) via Workspace mode or Projects mode (`project: "backend"`) shares one Monaco editor model, undo stack, and dirty buffer.
+   - Saves route through the authorizing target. Unmarking a project revokes project route access while preserving dirty buffers in memory.
+
+5. **Project-Gated Git Operations:**
+   - Git operations, Git blame, and conflict resolution strictly require a configured project target and a registered worktree.
+   - Direct server requests carrying workspace targets or unconfigured projects fail closed with `UNKNOWN_PROJECT` (HTTP 404).
+   - Client UI displays an actionable CTA: *"Mark as project to use Git"*. No automatic `git init` or command execution occurs.
+
+6. **Project Metadata Lifecycle (Mark / Unmark):**
+   - `POST /api/config/projects`: Adds a project entry to `[[projects]]` in `config.toml` with folder path (target-relative or existing path). Rejects duplicate names and duplicate canonical roots (nested roots permitted). Mutates TOML atomically and publishes config changes.
+   - `DELETE /api/config/projects/:name`: Removes project configuration from `config.toml` without deleting disk files or killing running PTYs.
+7. **Folder Terminals:**
+   - Untargeted folder terminal creation validates that requested `cwd` is canonically contained within the authorized workspace root. Traversal escapes or paths outside the workspace fail closed without fallback to `$HOME`.
+
+## Git Safety Model
 Git operations use porcelain semantics for worktree/index state. Normal push remains fast-forward-only. A commit-message edit or squash operates on raw object plumbing without modifying working tree files or index entries:
 
 - **Compare-and-swap ref updates**: First captures branch and HEAD, checks candidate rewrites against that snapshot, and updates refs via compare-and-swap. Squash requires a unique contiguous oldest-first parent chain reaching the captured tip and preserving the final tree. Signature loss requires explicit consent when applicable.

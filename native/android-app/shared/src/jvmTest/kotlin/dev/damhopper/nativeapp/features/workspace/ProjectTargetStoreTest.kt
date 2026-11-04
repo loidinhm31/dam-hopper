@@ -15,14 +15,17 @@ class ProjectTargetStoreTest {
         val store = ProjectTargetStore()
         assertEquals(0L, store.getWorkspaceRevision("prof-1"))
 
-        store.invalidateWorkspace("prof-1", "/home/user/workspace-a/dam-hopper.toml")
+        store.invalidateWorkspace("prof-1", "/home/user/workspace-a", epoch = 1L, configPath = "/home/user/.config/dam-hopper/config.toml")
         assertEquals(1L, store.getWorkspaceRevision("prof-1"))
-        assertEquals("/home/user/workspace-a/dam-hopper.toml", store.getActiveWorkspaceConfigPath("prof-1"))
+        assertEquals("/home/user/workspace-a", store.getActiveWorkspaceRoot("prof-1"))
+        assertEquals("/home/user/.config/dam-hopper/config.toml", store.getActiveWorkspaceConfigPath("prof-1"))
+        assertEquals(1L, store.getActiveWorkspaceEpoch("prof-1"))
 
-        store.invalidateWorkspace("prof-1", "/home/user/workspace-b/dam-hopper.toml")
+        store.invalidateWorkspace("prof-1", "/home/user/workspace-b", epoch = 2L, configPath = "/home/user/.config/dam-hopper/config.toml")
         assertEquals(2L, store.getWorkspaceRevision("prof-1"))
-        assertEquals("/home/user/workspace-b/dam-hopper.toml", store.getActiveWorkspaceConfigPath("prof-1"))
-
+        assertEquals("/home/user/workspace-b", store.getActiveWorkspaceRoot("prof-1"))
+        assertEquals("/home/user/.config/dam-hopper/config.toml", store.getActiveWorkspaceConfigPath("prof-1"))
+        assertEquals(2L, store.getActiveWorkspaceEpoch("prof-1"))
         // Other profiles remain isolated
         assertEquals(0L, store.getWorkspaceRevision("prof-2"))
     }
@@ -32,8 +35,8 @@ class ProjectTargetStoreTest {
         val store = ProjectTargetStore()
         val profA = "profile-alpha"
         val profB = "profile-beta"
-        val ws1 = "/path/to/ws1/dam-hopper.toml"
-        val ws2 = "/path/to/ws2/dam-hopper.toml"
+        val ws1 = "/path/to/ws1"
+        val ws2 = "/path/to/ws2"
         val projectName = "dam-hopper"
 
         store.selectTarget(profA, ws1, projectName, "worktree-1")

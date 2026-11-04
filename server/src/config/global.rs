@@ -20,11 +20,6 @@ pub fn dam_hopper_config_dir() -> PathBuf {
 pub fn global_config_path() -> PathBuf {
     dam_hopper_config_dir().join("config.toml")
 }
-
-pub fn global_registry_path() -> PathBuf {
-    dam_hopper_config_dir().join("dam-hopper.toml")
-}
-
 pub fn global_env_path() -> PathBuf {
     dam_hopper_config_dir().join(".env")
 }
@@ -41,8 +36,11 @@ pub fn read_global_config_at(path: &Path) -> Result<Option<GlobalConfig>, AppErr
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "Cannot read global config — ignoring");
-            return Ok(None);
+            return Err(AppError::Config(format!(
+                "Cannot read global config {}: {}",
+                path.display(),
+                e
+            )));
         }
     };
 
@@ -76,11 +74,11 @@ pub fn read_global_config_at(path: &Path) -> Result<Option<GlobalConfig>, AppErr
     });
     match parsed {
         Ok(cfg) => Ok(Some(cfg)),
-        Err(e) => {
-            // Matches Node.js behavior: corrupted global config is warned and ignored.
-            tracing::warn!(path = %path.display(), error = %e, "Failed to parse global config — ignoring");
-            Ok(None)
-        }
+        Err(e) => Err(AppError::Config(format!(
+            "Failed to parse global config {}: {}",
+            path.display(),
+            e
+        ))),
     }
 }
 
@@ -95,70 +93,82 @@ pub fn write_global_config_at(path: &Path, config: &GlobalConfig) -> Result<(), 
         ));
     }
     let toml_value = serialize_global_config_for_toml(config)?;
-    let content = toml::to_string_pretty(&toml_value)
+    let mut root_table = if path.exists() {
+        let existing = std::fs::read_to_string(path)
+            .map_err(|e| AppError::Config(format!("Cannot read config {}: {}", path.display(), e)))?;
+        toml::from_str::<toml::Value>(&existing)
+            .map_err(|e| AppError::Config(format!("Invalid TOML in {}: {}", path.display(), e)))?
+            .as_table()
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        toml::map::Map::new()
+    };
+
+    if let toml::Value::Table(new_table) = toml_value {
+        for (k, v) in new_table {
+            if k == "server" {
+                if let (Some(existing_sub), Some(new_sub)) = (
+                    root_table.get_mut(&k).and_then(|t| t.as_table_mut()),
+                    v.as_table(),
+                ) {
+                    existing_sub.remove("idleSuspend");
+                    existing_sub.remove("hostResources");
+                    existing_sub.remove("sessionChangesEnabled");
+                    existing_sub.remove("workflowDeletedNoteRetentionDays");
+                    existing_sub.remove("workflowEventRetentionDays");
+                    existing_sub.remove("workflowStaleAfterHours");
+                    for (sub_k, sub_v) in new_sub {
+                        existing_sub.insert(sub_k.clone(), sub_v.clone());
+                    }
+                    continue;
+                }
+            }
+            root_table.insert(k, v);
+        }
+    }
+
+    let content = toml::to_string_pretty(&toml::Value::Table(root_table))
         .map_err(|e| AppError::Config(format!("Cannot serialize global config: {}", e)))?;
-    // atomic_write uses 0o600 on Unix (protects workspace paths + future auth tokens)
     atomic_write(path, &content)
 }
 
 fn serialize_global_config_for_toml(config: &GlobalConfig) -> Result<toml::Value, AppError> {
-    let mut json = serde_json::to_value(config)
-        .map_err(|e| AppError::Config(format!("Cannot serialize global config: {}", e)))?;
-    normalize_global_config_json_for_toml(&mut json);
-    json_to_toml(&json)
-        .ok_or_else(|| AppError::Config("Cannot convert global config to TOML".to_string()))
-}
+    let mut table = toml::map::Map::new();
 
-fn normalize_global_config_json_for_toml(value: &mut Value) {
-    let Some(root) = value.as_object_mut() else {
-        return;
-    };
-
-    if let Some(ui) = root.get_mut("ui") {
-        normalize_ui_json_for_toml(ui);
+    if let Some(ws) = &config.workspace {
+        let mut ws_table = toml::map::Map::new();
+        ws_table.insert("name".to_string(), toml::Value::String(ws.name.clone()));
+        ws_table.insert("root".to_string(), toml::Value::String(ws.root.clone()));
+        table.insert("workspace".to_string(), toml::Value::Table(ws_table));
     }
-    if let Some(server) = root.get_mut("server") {
-        normalize_server_json_for_toml(server);
-    }
-}
 
-fn normalize_server_json_for_toml(value: &mut Value) {
-    let Some(server) = value.as_object_mut() else {
-        return;
-    };
-
-    let entries = std::mem::take(server);
-    for (key, value) in entries {
-        let toml_key = match key.as_str() {
-            "sessionDbPath" => "session_db_path",
-            "sessionBufferTtlHours" => "session_buffer_ttl_hours",
-            other => other,
-        };
-        let mut value = value;
-        if toml_key == "telemetry" {
-            normalize_telemetry_json_for_toml(&mut value);
+    if let Some(workspaces) = &config.workspaces {
+        let ws_json = serde_json::to_value(workspaces)
+            .map_err(|e| AppError::Config(format!("Failed to serialize workspaces: {e}")))?;
+        if let Some(ws_toml) = json_to_toml(&ws_json) {
+            table.insert("workspaces".to_string(), ws_toml);
         }
-        server.insert(toml_key.to_string(), value);
     }
+
+    if let Some(ui) = &config.ui {
+        let mut ui_json = serde_json::to_value(ui)
+            .map_err(|e| AppError::Config(format!("Failed to serialize ui config: {e}")))?;
+        normalize_ui_json_for_toml(&mut ui_json);
+        if let Some(ui_toml) = json_to_toml(&ui_json) {
+            table.insert("ui".to_string(), ui_toml);
+        }
+    }
+
+    if config.server != Default::default() {
+        let server_toml = crate::config::parser::server_to_toml(&config.server);
+        table.insert("server".to_string(), server_toml);
+    }
+
+    Ok(toml::Value::Table(table))
 }
 
-fn normalize_telemetry_json_for_toml(value: &mut Value) {
-    let Some(telemetry) = value.as_object_mut() else {
-        return;
-    };
-    let entries = std::mem::take(telemetry);
-    for (key, value) in entries {
-        let toml_key = match key.as_str() {
-            "dbPath" => "db_path",
-            "detailRetentionDays" => "detail_retention_days",
-            "aggregateRetentionDays" => "aggregate_retention_days",
-            other => other,
-        };
-        telemetry.insert(toml_key.to_string(), value);
-    }
-}
-
-fn normalize_ui_json_for_toml(value: &mut Value) {
+pub(crate) fn normalize_ui_json_for_toml(value: &mut Value) {
     let Some(ui) = value.as_object_mut() else {
         return;
     };
@@ -218,13 +228,14 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
             "terminalScrollStep" => "terminal_scroll_step",
             "cognitoModeShortcut" | "cognito_mode_shortcut" => "cognito_mode_shortcut",
             "cognitoModeStyle" | "cognito_mode_style" => "cognito_mode_style",
+            "defaultWindowPlacement" | "default_window_placement" => "default_window_placement",
             other => other,
         };
         ui.insert(toml_key.to_string(), value);
     }
 }
 
-fn json_to_toml(v: &Value) -> Option<toml::Value> {
+pub(crate) fn json_to_toml(v: &Value) -> Option<toml::Value> {
     match v {
         Value::Null => None,
         Value::Bool(b) => Some(toml::Value::Boolean(*b)),

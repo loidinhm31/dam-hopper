@@ -145,6 +145,16 @@ sealed class ServerMsg {
     ) : ServerMsg()
 
     @Serializable
+    data class FileIdentity(
+        @SerialName("workspaceId")
+        val workspaceId: String? = null,
+        @SerialName("workspaceEpoch")
+        val workspaceEpoch: Long? = null,
+        @SerialName("canonicalPath")
+        val canonicalPath: String? = null,
+    )
+
+    @Serializable
     @SerialName("fs:read_result")
     data class FsReadResult(
         @SerialName("req_id")
@@ -156,6 +166,12 @@ sealed class ServerMsg {
         val size: ULong? = null,
         val data: String? = null,
         val code: String? = null,
+        @SerialName("workspaceEpoch")
+        val workspaceEpoch: Long? = null,
+        @SerialName("file_identity")
+        val fileIdentity: FileIdentity? = null,
+        @SerialName("fileIdentity")
+        val fileIdentityCamel: FileIdentity? = null,
     ) : ServerMsg()
 
     @Serializable

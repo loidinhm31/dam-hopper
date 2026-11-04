@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import type { MarkProjectRequest } from "./fs-types.js";
 import type { QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import {
@@ -10,6 +11,7 @@ import {
   type ProjectTargetInput,
 } from "./client.js";
 import { getTransport } from "./transport.js";
+import { normalizeFsTarget, type FsTargetRef } from "./ownership.js";
 import { useEditorStore } from "@/stores/editor.js";
 import type {
   ExplorerLanguageScanCache,
@@ -155,21 +157,6 @@ function projectsQueryKey(owner?: ConnectionRef) {
   return owner ? profileQueryKey(owner, "projects") : ["projects"];
 }
 
-function fsTreeQueryKey(normalized: {
-  project: string;
-  profileId?: string;
-  worktreePath?: string;
-}) {
-  const owner = resolveTargetOwner(normalized.profileId);
-  return owner
-    ? profileQueryKey(
-        owner,
-        "fs",
-        normalized.project,
-        projectTargetCacheKey(normalized),
-      )
-    : ["fs-tree", normalized.project, projectTargetCacheKey(normalized)];
-}
 
 export function gitQueryKey(
   prefix: string,
@@ -196,6 +183,24 @@ export function gitQueryKey(
   ];
 }
 
+export function fsTreeQueryKey(
+  target: FsTargetRef | ProjectTargetInput,
+  path: string = "",
+): unknown[] {
+  const targetRef = normalizeFsTarget(target);
+  const targetKey =
+    targetRef.kind === "workspace"
+      ? "workspace"
+      : targetRef.worktreePath == null
+        ? "root"
+        : targetRef.worktreePath;
+  if (targetRef.kind === "workspace") {
+    return ["fs-tree", targetRef.profileId || "workspace", "root", path];
+  }
+  return targetRef.profileId
+    ? ["fs-tree", targetRef.profileId, targetRef.project, targetKey, path]
+    : ["fs-tree", targetRef.project, targetKey, path];
+}
 async function reconcileAffectedEditorTabs(
   target: ProjectTargetInput,
   paths: string[],
@@ -212,6 +217,7 @@ async function reconcileAllOpenEditorTargets() {
   const state = useEditorStore.getState();
   const targets = new Map<string, ProjectTargetInput>();
   for (const tab of state.tabs ?? []) {
+    if (tab.target.kind === "workspace") continue;
     const normalized = normalizeProjectTarget(tab.target);
     targets.set(
       `${normalized.project}::${projectTargetCacheKey(normalized)}`,
@@ -302,6 +308,7 @@ function markFailedGitResults(
 
     const openTargets = new Map<string, ProjectTargetInput>();
     for (const tab of useEditorStore.getState().tabs ?? []) {
+      if (tab.target.kind === "workspace") continue;
       const normalized = normalizeProjectTarget(tab.target);
       if (normalized.project !== result.projectName) continue;
       openTargets.set(
@@ -319,6 +326,7 @@ function markOpenEditorTargetsUnavailableIfNeeded(error: unknown) {
   const state = useEditorStore.getState();
   const targets = new Map<string, ProjectTargetInput>();
   for (const tab of state.tabs ?? []) {
+    if (tab.target.kind === "workspace") continue;
     const normalized = normalizeProjectTarget(tab.target);
     targets.set(
       `${normalized.project}::${projectTargetCacheKey(normalized)}`,
@@ -1254,6 +1262,47 @@ export function useUpdateProject(options?: OwnerInput) {
       });
       void qc.invalidateQueries({
         queryKey: owner ? profileQueryKey(owner, "projects") : ["projects"],
+      });
+    },
+  });
+}
+export function useMarkProject(options?: OwnerInput) {
+  const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
+  const profileId = typeof options === "string" ? options : (options && "profileId" in options ? options.profileId : undefined);
+  return useMutation({
+    mutationFn: (req: MarkProjectRequest) =>
+      getBoundApiClient(owner).config.markProject(profileId ?? "", req),
+    onSuccess: () => {
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "projects") : ["projects"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "config") : ["config"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "workspace") : ["workspace"],
+      });
+    },
+  });
+}
+
+export function useUnmarkProject(options?: OwnerInput) {
+  const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
+  const profileId = typeof options === "string" ? options : (options && "profileId" in options ? options.profileId : undefined);
+  return useMutation({
+    mutationFn: (name: string) =>
+      getBoundApiClient(owner).config.unmarkProject(profileId ?? "", name),
+    onSuccess: () => {
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "projects") : ["projects"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "config") : ["config"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "workspace") : ["workspace"],
       });
     },
   });

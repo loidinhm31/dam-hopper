@@ -880,8 +880,8 @@ export async function runSmokeCurrentServer(options) {
   const bearerToken = seedOutput.token;
   console.log(`[PASS] Auth database seeded. User: ${seedOutput.username}, Token: Bearer [REDACTED]`);
 
-  // 3. Write Isolated dam-hopper.toml Registry Configuration
-  const configPath = path.join(runDir, 'dam-hopper.toml');
+  // 3. Write Isolated config.toml Configuration
+  const configPath = path.join(runDir, 'config.toml');
   const tomlContent = [
     '[workspace]',
     'name = "fixture-workspace"',

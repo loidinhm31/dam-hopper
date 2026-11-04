@@ -12,12 +12,12 @@ Terminal Idle Suspend introduces server-authoritative, opt-in Linux suspend with
 4. **No-Auth Mode Rejection**: The timing mutation and manual force-suspend endpoints explicitly reject `--no-auth` / development mode (`403 idleSuspendTimingDisabledNoAuth`, `403 idleSuspendDisabledNoAuth`) to prevent unauthenticated host suspension or timing tampering on untrusted local networks.
 5. **Fail-Closed by Default**: Unsupported platforms, unconfigured helper enrollment, sleep inhibitors, missing RTC alarms, or audit/persistence failures prevent suspend entirely without automatic retries.
 6. **Descriptor-Relative Runtime State**: The API provisioner derives
-   `/var/lib/dam-hopper/dam-hopper.toml` and
+   `/var/lib/dam-hopper/config.toml` and
    `/var/lib/dam-hopper/idle-suspend-audit.jsonl` from trusted descriptors,
    validates exact metadata, and refuses unsafe objects or publication races.
-   `/etc/dam-hopper/dam-hopper.toml` is a bounded, read-only, copy-once source
-   only when canonical config is absent; no legacy file or old `/etc` audit is
-   repaired, truncated, or deleted.
+   A legacy `/etc/dam-hopper/dam-hopper.toml`, when present, is an optional
+   read-only migration source only while canonical config is absent; no legacy
+   file or old `/etc` audit is repaired, truncated, or deleted.
 
 ## Threat Analysis and Mitigations
 

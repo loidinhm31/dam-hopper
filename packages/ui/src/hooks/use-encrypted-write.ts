@@ -33,6 +33,10 @@ import { generateUUID } from "@/lib/utils.js";
 import { encryptFile, encryptText } from "@/lib/crypto.js";
 import { toEncryptKey, useEncryptMode } from "@/contexts/EncryptContext.js";
 import {
+  normalizeFsTarget,
+  type FsTargetRef,
+} from "@/api/ownership.js";
+import {
   isProjectTargetError,
   normalizeProjectTarget,
   type ConnectionRef,
@@ -58,7 +62,7 @@ export interface EncryptedUploadResult {
 export interface UseEncryptedWriteReturn {
   /** Upload an encrypted File to the given directory. */
   uploadFile: (
-    target: ProjectTargetInput,
+    target: FsTargetRef | ProjectTargetInput,
     dir: string,
     file: File,
     passphrase: string,
@@ -68,7 +72,7 @@ export interface UseEncryptedWriteReturn {
 
   /** Save encrypted text content to the given path. */
   saveText: (
-    target: ProjectTargetInput,
+    target: FsTargetRef | ProjectTargetInput,
     path: string,
     text: string,
     passphrase: string,
@@ -119,7 +123,7 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
   );
 
   function resolveOwnerAndTransport(
-    targetRef: ProjectTargetRef,
+    targetRef: FsTargetRef | ProjectTargetRef,
     explicitOwner?: ConnectionRef,
   ): { owner?: ConnectionRef; transport: WsTransport } {
     let owner: ConnectionRef | undefined = explicitOwner;
@@ -141,15 +145,15 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
     async (
       transport: WsTransport,
       owner: ConnectionRef | undefined,
-      targetRef: ProjectTargetRef,
+      targetRef: FsTargetRef | ProjectTargetRef,
       passphrase: string,
       expectedRevision: number,
     ): Promise<OpaqueSessionResult> => {
-      const project = targetRef.project;
+      const project = "project" in targetRef ? targetRef.project : "workspace";
       const cached = getSession(project, owner);
       if (cached) return cached;
 
-      const key = toEncryptKey(targetRef, owner);
+      const key = toEncryptKey("project" in targetRef ? targetRef : { project: "workspace" }, owner);
       const inflight = sessionInflightRef.current.get(key);
       if (inflight) return inflight;
 
@@ -191,15 +195,16 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
 
   const uploadFile = useCallback(
     async (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ProjectTargetInput,
       dir: string,
       file: File,
       passphrase: string,
       onProgress?: (pct: number) => void,
       explicitOwner?: ConnectionRef,
     ): Promise<EncryptedUploadResult> => {
-      const targetRef = normalizeProjectTarget(target);
-      const project = targetRef.project;
+      const targetRef = normalizeFsTarget(target);
+      const project =
+        targetRef.kind === "project" ? targetRef.project : "workspace";
       setError(null);
       const { owner, transport } = resolveOwnerAndTransport(
         targetRef,
@@ -257,10 +262,11 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
         if (!result.ok) {
           const msg = result.error ?? "Encrypted upload failed";
           if (isTargetUnavailableError(result) || isProjectTargetError(msg)) {
-            markProjectTargetUnavailable(targetRef);
-            useEditorStore.getState().markTargetUnavailable(targetRef);
+            if (targetRef.kind === "project") {
+              markProjectTargetUnavailable(targetRef as unknown as ProjectTargetRef);
+              useEditorStore.getState().markTargetUnavailable(targetRef);
+            }
           }
-          setError(msg);
           return { ok: false, error: msg };
         }
 
@@ -268,10 +274,11 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Encrypted upload failed";
         if (isTargetUnavailableError(e) || isProjectTargetError(msg)) {
-          markProjectTargetUnavailable(targetRef);
-          useEditorStore.getState().markTargetUnavailable(targetRef);
+          if (targetRef.kind === "project") {
+            markProjectTargetUnavailable(targetRef as unknown as ProjectTargetRef);
+            useEditorStore.getState().markTargetUnavailable(targetRef);
+          }
         }
-        setStatus("error");
         setError(msg);
         clearSession(project, owner);
         return { ok: false, error: msg };
@@ -282,14 +289,15 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
 
   const saveText = useCallback(
     async (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ProjectTargetInput,
       path: string,
       text: string,
       passphrase: string,
       explicitOwner?: ConnectionRef,
     ): Promise<EncryptedUploadResult> => {
-      const targetRef = normalizeProjectTarget(target);
-      const project = targetRef.project;
+      const targetRef = normalizeFsTarget(target);
+      const project =
+        targetRef.kind === "project" ? targetRef.project : "workspace";
       setError(null);
       const { owner, transport } = resolveOwnerAndTransport(
         targetRef,
@@ -341,10 +349,11 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
         if (!result.ok) {
           const msg = result.error ?? "Encrypted save failed";
           if (isTargetUnavailableError(result) || isProjectTargetError(msg)) {
-            markProjectTargetUnavailable(targetRef);
-            useEditorStore.getState().markTargetUnavailable(targetRef);
+            if (targetRef.kind === "project") {
+              markProjectTargetUnavailable(targetRef as unknown as ProjectTargetRef);
+              useEditorStore.getState().markTargetUnavailable(targetRef);
+            }
           }
-          setError(msg);
           return { ok: false, error: msg };
         }
 
@@ -352,10 +361,11 @@ export function useEncryptedWrite(): UseEncryptedWriteReturn {
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Encrypted save failed";
         if (isTargetUnavailableError(e) || isProjectTargetError(msg)) {
-          markProjectTargetUnavailable(targetRef);
-          useEditorStore.getState().markTargetUnavailable(targetRef);
+          if (targetRef.kind === "project") {
+            markProjectTargetUnavailable(targetRef as unknown as ProjectTargetRef);
+            useEditorStore.getState().markTargetUnavailable(targetRef);
+          }
         }
-        setStatus("error");
         setError(msg);
         clearSession(project, owner);
         return { ok: false, error: msg };

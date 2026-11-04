@@ -8,6 +8,7 @@ import { WindowList } from "./WindowList.js";
 import { readServerProfiles, type ServerProfile } from "@/api/server-config.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
+import { useProjects } from "@/api/queries.js";
 import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
 import { MonitorTray } from "./MonitorTray.js";
 export interface TopBarProps {
@@ -49,16 +50,41 @@ export function TopBar({
     projectId: activeProject ?? undefined,
   };
 
+  const { data: defaultProjects = [] } = useProjects({
+    profileId: currentDefaultCtx.profileId,
+  });
+  const setSelectedProject = useWorkspaceStore(
+    (state) => state.setSelectedProject,
+  );
+
   const handleSelectProfile = useCallback(
     (profileId: string) => {
       if (!activeDesktop) return;
       setDefaultCtx(activeDesktop.id, {
-        ...currentDefaultCtx,
         profileId,
+        projectId: undefined,
+        worktreeId: undefined,
+      });
+      setSelectedProject(null);
+    },
+    [activeDesktop, setDefaultCtx, setSelectedProject],
+  );
+
+  const handleSelectProject = useCallback(
+    (projectName: string) => {
+      if (!activeDesktop) return;
+      setDefaultCtx(activeDesktop.id, {
+        ...currentDefaultCtx,
+        projectId: projectName,
+        worktreeId: undefined,
+      });
+      setSelectedProject({
+        profileId: currentDefaultCtx.profileId,
+        project: projectName,
       });
       setIsCtxMenuOpen(false);
     },
-    [activeDesktop, currentDefaultCtx, setDefaultCtx],
+    [activeDesktop, currentDefaultCtx, setDefaultCtx, setSelectedProject],
   );
 
   const minimizedWindows = Object.values(session.windows).filter(
@@ -122,7 +148,7 @@ export function TopBar({
               <div className="px-2 py-1 text-[10px] text-[var(--color-text-muted)] uppercase tracking-wider font-semibold border-b border-[var(--color-border)] mb-1">
                 Default for New Windows
               </div>
-              <div className="max-h-48 overflow-y-auto">
+              <div className="max-h-36 overflow-y-auto">
                 {availableProfiles.map((p) => {
                   const isSelected = p.id === currentDefaultCtx.profileId;
                   return (
@@ -143,6 +169,35 @@ export function TopBar({
                   );
                 })}
               </div>
+              {defaultProjects.length > 0 && (
+                <>
+                  <div className="px-2 py-1 text-[10px] text-[var(--color-text-muted)] uppercase tracking-wider font-semibold border-b border-t border-[var(--color-border)] my-1">
+                    Active Project
+                  </div>
+                  <div className="max-h-36 overflow-y-auto">
+                    {defaultProjects.map((proj) => {
+                      const isProjSelected =
+                        proj.name === currentDefaultCtx.projectId;
+                      return (
+                        <button
+                          key={proj.name}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => handleSelectProject(proj.name)}
+                          className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-left truncate transition-colors ${
+                            isProjSelected
+                              ? "bg-[var(--color-surface-hover)] font-medium text-[var(--color-primary)]"
+                              : "text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]"
+                          }`}
+                        >
+                          <span className="truncate">{proj.name}</span>
+                          {isProjSelected && <span>✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
               <div className="border-t border-[var(--color-border)] mt-1 pt-1">
                 <button
                   type="button"

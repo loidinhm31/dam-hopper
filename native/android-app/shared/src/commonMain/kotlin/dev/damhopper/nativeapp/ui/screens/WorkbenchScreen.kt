@@ -676,7 +676,7 @@ fun WorkbenchScreen(
 
     val snapshot = targetStore.getSnapshot(
         profileId = activeProfileId,
-        workspaceConfigPath = workspaceStatus?.configPath,
+        workspaceConfigPath = workspaceStatus?.path ?: workspaceStatus?.configPath,
         project = navState.activeProject
     )
     val currentScope: () -> GitOperationScope? = {
@@ -1002,7 +1002,7 @@ fun WorkbenchScreen(
                             if (proj == navState.activeProject) {
                                 targetStore.selectTarget(
                                     profileId = activeProfileId,
-                                    workspaceConfigPath = workspaceStatus?.configPath,
+                                    workspaceConfigPath = workspaceStatus?.path ?: workspaceStatus?.configPath,
                                     project = proj,
                                     worktreePath = wtPath
                                 )
@@ -1387,16 +1387,23 @@ fun WorkbenchScreen(
                 isSwitchingWorkspace = true
                 coroutineScope.launch {
                     try {
-                        // Immediately bump workspace revision and invalidate cache to fence against in-flight requests
-                        targetStore.invalidateWorkspace(activeProfileId, targetPath)
-                        // Clear stale worktree and project state immediately
-                        currentWorktrees = emptyList()
-                        projects = emptyList()
                         val repo = workspaceRepo
                         if (repo != null) {
                             val ok = repo.switchWorkspace(targetPath)
                             if (ok) {
-                                workspaceStatus = repo.getWorkspaceStatus()
+                                // Switch confirmed by server: close tabs and invalidate state
+                                editorTabsState?.closeAll()
+                                currentWorktrees = emptyList()
+                                projects = emptyList()
+                                val newStatus = repo.getWorkspaceStatus()
+                                workspaceStatus = newStatus
+                                targetStore.invalidateWorkspace(
+                                    profileId = activeProfileId,
+                                    newWorkspaceRoot = newStatus.path,
+                                    epoch = newStatus.workspaceEpoch,
+                                    configPath = newStatus.configPath,
+                                )
+                                fileRepo?.currentWorkspaceEpoch = newStatus.workspaceEpoch
                                 val projs = repo.listProjects()
                                 projects = projs
                                 if (projs.isNotEmpty()) {

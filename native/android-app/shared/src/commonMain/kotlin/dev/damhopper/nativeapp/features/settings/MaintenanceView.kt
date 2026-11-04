@@ -123,7 +123,7 @@ class SettingsDocumentWorkflow(
             when (val outcome = repository.exportWorkspaceToml(operation)) {
                 is SettingsOutcome.Confirmed ->
                     launchPicker(operation, SettingsDocumentKind.CREATE_TOML, "Saving the workspace TOML") {
-                        port.createDocument(operation, "dam-hopper.toml", "application/toml", outcome.value)
+                        port.createDocument(operation, "config.toml", "application/toml", outcome.value)
                     }
                 else -> note(outcome.describe("Exporting the workspace TOML"), error = true, owner = operation.owner)
             }

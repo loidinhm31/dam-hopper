@@ -73,9 +73,9 @@ impl Layout {
         self.trusted_root().join("etc/dam-hopper")
     }
 
-    /// Canonical API daemon configuration file (`/var/lib/dam-hopper/dam-hopper.toml`).
+    /// Canonical API daemon configuration file (`/var/lib/dam-hopper/config.toml`).
     pub fn api_daemon_config_path(&self) -> PathBuf {
-        self.api_state_dir().join("dam-hopper.toml")
+        self.api_state_dir().join("config.toml")
     }
 
     /// Legacy migration-only API daemon configuration file (`/etc/dam-hopper/dam-hopper.toml`).
@@ -342,7 +342,7 @@ mod tests {
         let layout = Layout::new();
         assert_eq!(
             layout.api_daemon_config_path(),
-            PathBuf::from("/var/lib/dam-hopper/dam-hopper.toml")
+            PathBuf::from("/var/lib/dam-hopper/config.toml")
         );
         assert_eq!(
             layout.legacy_api_daemon_config_path(),
@@ -359,7 +359,7 @@ mod tests {
         let layout = Layout::with_root("/custom/root");
         assert_eq!(
             layout.api_daemon_config_path(),
-            PathBuf::from("/custom/root/var/lib/dam-hopper/dam-hopper.toml")
+            PathBuf::from("/custom/root/var/lib/dam-hopper/config.toml")
         );
         assert_eq!(
             layout.legacy_api_daemon_config_path(),

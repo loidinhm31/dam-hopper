@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { Terminal, Loader2 } from "lucide-react";
+import { getConnectionSnapshot, getApi } from "@/api/connections.js";
 import type { OsWindow, ResourceClaimKey } from "../types.js";
 import { useWindowOwner } from "../window-context.js";
 import { useResourceClaim } from "../resource-registry.js";
@@ -15,10 +17,11 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
   const slotRef = useRef<HTMLDivElement>(null);
   const owner = useWindowOwner();
   const focusWindow = useWindowStore((state) => state.focusWindow);
+  const updateAppState = useWindowStore((state) => state.updateAppState);
   const sessionId =
     (window.appState?.sessionId as string | undefined) ??
     (window.appState?.terminalId as string | undefined) ??
-    `${window.ctx.profileId}:default`;
+    `${window.ctx.profileId}:${window.id}`;
 
   const incarnation = latestTerminalSessionIncarnation({
     profileId: owner.profileId,
@@ -37,6 +40,41 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
   );
 
   const claimStatus = useResourceClaim(claimKey, window.id);
+  const [hasAttachedTerminal, setHasAttachedTerminal] = useState(() =>
+    Boolean(getTerminal({ profileId: owner.profileId, id: sessionId })),
+  );
+  const [isLaunching, setIsLaunching] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(
+    (window.appState?.createError as string | undefined) ?? null,
+  );
+
+  const handleLaunchSession = useCallback(async () => {
+    setIsLaunching(true);
+    setLaunchError(null);
+    try {
+      const snap = getConnectionSnapshot(owner.profileId);
+      if (!snap || snap.status !== "connected") {
+        throw new Error(`Profile ${owner.profileId} is not connected`);
+      }
+      const client = getApi(snap.owner);
+      const sessionRes = await client.terminal.create({
+        id: sessionId,
+        command: (window.appState?.command as string | undefined) ?? "",
+        project: window.ctx.projectId,
+        cwd: (window.appState?.cwd as string | undefined) ?? undefined,
+        cols: 80,
+        rows: 24,
+      });
+      updateAppState(window.id, {
+        createError: undefined,
+        incarnation: sessionRes.incarnation,
+      });
+    } catch (err) {
+      setLaunchError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsLaunching(false);
+    }
+  }, [owner.profileId, sessionId, updateAppState, window.appState, window.ctx.projectId, window.id]);
 
   // Attach terminal DOM element only if claim succeeded
   useEffect(() => {
@@ -45,6 +83,8 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
     if (!el) return;
 
     const attach = () => {
+      const entry = getTerminal({ profileId: owner.profileId, id: sessionId });
+      setHasAttachedTerminal(Boolean(entry));
       attachTerminalsToHost({
         host: el,
         sessionIds: [sessionId],
@@ -53,7 +93,6 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
           getTerminal({ profileId: owner.profileId, id }),
       });
     };
-
     attach();
     const unsubscribe = subscribeToRegistryChanges(attach);
     return () => {
@@ -98,9 +137,31 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
           Disconnected from profile server ({owner.status})
         </div>
       )}
-      <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--color-text-muted)] pointer-events-none">
-        Terminal surface: {sessionId}
-      </div>
+      {!hasAttachedTerminal && owner.isConnected && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-[var(--color-surface)] text-xs text-[var(--color-text-muted)] gap-3 pointer-events-auto">
+          <Terminal className="h-8 w-8 text-[var(--color-primary)] opacity-80" />
+          <div className="flex flex-col gap-1">
+            <span className="font-medium text-[var(--color-text)]">
+              Terminal Session Inactive
+            </span>
+            <span className="text-[11px] font-mono text-[var(--color-text-muted)]">
+              {sessionId}
+            </span>
+          </div>
+          {launchError && (
+            <span className="text-red-400 text-2xs max-w-xs">{launchError}</span>
+          )}
+          <button
+            type="button"
+            onClick={() => void handleLaunchSession()}
+            disabled={isLaunching}
+            className="px-3 py-1.5 rounded bg-[var(--color-primary)] text-white text-xs font-medium hover:opacity-90 transition-opacity flex items-center gap-1.5 disabled:opacity-50 pointer-events-auto"
+          >
+            {isLaunching && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {isLaunching ? "Launching Session…" : "Launch Terminal Session"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

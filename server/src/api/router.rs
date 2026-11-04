@@ -134,8 +134,8 @@ pub fn build_router_with_web_dir_and_origins(
         // Global config
         .route("/api/global-config", get(config::get_global_config))
         .route(
-            "/api/global-config/defaults",
-            post(config::update_global_defaults),
+            "/api/global-config/workspace",
+            post(config::update_global_workspace),
         )
         .route("/api/global-config/ui", post(config::update_global_ui))
         // Projects
@@ -148,7 +148,11 @@ pub fn build_router_with_web_dir_and_origins(
         // Config
         .route("/api/config", get(config::get_config))
         .route("/api/config", put(config::update_config))
-        .route("/api/config/projects/{name}", patch(config::update_project))
+        .route("/api/config/projects", post(config::mark_project))
+        .route(
+            "/api/config/projects/{name}",
+            patch(config::update_project).delete(config::unmark_project),
+        )
         // Git
         .route("/api/git/fetch", post(git::fetch_projects))
         .route("/api/git/pull", post(git::pull_projects))

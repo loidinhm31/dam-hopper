@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::workspace_target::ResolvedProjectTarget;
+use crate::workspace_target::{ResolvedFilesystemTarget, ResolvedProjectTarget};
 
 use super::{
     media_session::{MediaClientId, MediaSessionToken},
@@ -39,7 +39,7 @@ pub type VideoFileVersion = MediaFileVersion;
 #[derive(Clone)]
 pub struct VideoTicketRecord {
     pub purpose: VideoTicketPurpose,
-    pub target: ResolvedProjectTarget,
+    pub target: ResolvedFilesystemTarget,
     pub project_relative_path: PathBuf,
     pub file: VideoFileVersion,
     pub mime: String,
@@ -188,7 +188,7 @@ mod tests {
     fn video_adapter_keeps_purpose_values_stable() {
         let record = VideoTicketRecord {
             purpose: VideoTicketPurpose::Download,
-            target: ResolvedProjectTarget::from_parts(
+            target: ResolvedFilesystemTarget::Project(ResolvedProjectTarget::from_parts(
                 "project".into(),
                 PathBuf::from("/private"),
                 PathBuf::from("/private"),
@@ -196,7 +196,7 @@ mod tests {
                 true,
                 true,
                 None,
-            ),
+            )),
             project_relative_path: PathBuf::from("clip.webm"),
             file: MediaFileVersion {
                 canonical_path: PathBuf::from("/private/clip.webm"),

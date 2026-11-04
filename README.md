@@ -65,7 +65,7 @@ pnpm --filter @dam-hopper/web stage:browser-extension
 pnpm --filter @dam-hopper/web exec vite --host 127.0.0.1
 ```
 
-Vite proxies `/api` and `/ws` to `http://127.0.0.1:4803`. Add `--config /path/to/dam-hopper.toml` to the server command when you need a specific project registry.
+Vite proxies `/api` and `/ws` to `http://127.0.0.1:4803`. Add `--config /path/to/config.toml` to the server command when you need a specific configuration file (defaults to `~/.config/dam-hopper/config.toml`).
 
 > **Security:** `--no-auth` bypasses authentication and is strictly for isolated local development. Never expose it to a LAN, the public Internet, or an untrusted network. The server binary defaults to `--host 0.0.0.0`; always pass `--host 127.0.0.1` for local development. The convenience scripts `pnpm dev:server` and `pnpm dev:server:no-auth` bind `0.0.0.0:4803` with `--no-auth`; do not execute them on public or untrusted networks.
 

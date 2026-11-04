@@ -17,7 +17,7 @@ use crate::{
         VideoTicketPurpose,
     },
     state::AppState,
-    workspace_target::ProjectTargetRef,
+    workspace_target::{FilesystemTargetRef, ProjectTargetRef, ResolvedFilesystemTarget},
 };
 
 use super::{
@@ -171,10 +171,12 @@ fn requested_range(headers: &HeaderMap, size: u64) -> Result<Option<ByteRange>, 
 }
 
 async fn open_revalidated(state: &AppState, record: &MediaTicketRecord) -> Option<tokio::fs::File> {
-    let target_ref = ProjectTargetRef {
-        project: record.target.project().to_owned(),
-        worktree_path: (!record.target.is_root())
-            .then(|| record.target.target_path().to_string_lossy().into_owned()),
+    let target_ref = match &record.target {
+        ResolvedFilesystemTarget::Workspace { .. } => FilesystemTargetRef::workspace(),
+        ResolvedFilesystemTarget::Project(p) => FilesystemTargetRef::Project(ProjectTargetRef {
+            project: p.project().to_string(),
+            worktree_path: (!p.is_root()).then(|| p.target_path().to_string_lossy().into_owned()),
+        }),
     };
     let resolved = resolve(
         state,
@@ -184,8 +186,7 @@ async fn open_revalidated(state: &AppState, record: &MediaTicketRecord) -> Optio
     .await
     .ok()?;
     if resolved.target.target_key() != record.target.target_key()
-        || resolved.target.target_path() != record.target.target_path()
-        || resolved.target.configured_root() != record.target.configured_root()
+        || resolved.target.root_path() != record.target.root_path()
     {
         return None;
     }

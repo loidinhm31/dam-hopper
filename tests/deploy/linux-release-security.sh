@@ -39,11 +39,11 @@ if ! grep -q "User=@API_USER@" "$API_UNIT"; then
 fi
 
 # Verify API unit template exact canonical ExecStart and sandboxing directives
-if ! grep -q "ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config @API_HOME@/dam-hopper.toml --host 0.0.0.0 --port 4801" "$API_UNIT"; then
+if ! grep -q "ExecStart=@RELEASE_ROOT@/bin/dam-hopper-server --config @API_HOME@/config.toml --host 0.0.0.0 --port 4801" "$API_UNIT"; then
     fail "API unit template missing exact canonical ExecStart"
 fi
-if grep -q "/etc/dam-hopper/dam-hopper.toml" "$API_UNIT"; then
-    fail "API unit template must not reference legacy /etc/dam-hopper/dam-hopper.toml"
+if grep -E "(/etc/dam-hopper/config\.toml|dam-hopper\.toml)" "$API_UNIT"; then
+    fail "API unit template must not reference legacy paths or dam-hopper.toml"
 fi
 
 

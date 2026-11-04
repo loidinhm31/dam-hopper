@@ -118,13 +118,13 @@ fun GlobalSettingsView(
 
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Default workspace", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                Text("Workspace root", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
                 Text(
                     text = when {
                         editor == null -> "Unavailable: no connected Settings server."
                         defaults?.loaded != true -> "Loading…"
-                        defaults?.workspace == null -> "No default workspace is set."
-                        else -> "Current default: ${defaults?.workspace}"
+                        defaults?.workspace == null -> "No workspace root is set."
+                        else -> "Current workspace root: ${defaults?.workspace}"
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -133,7 +133,7 @@ fun GlobalSettingsView(
                 OutlinedTextField(
                     value = defaultDraft,
                     onValueChange = { defaultDraft = it },
-                    label = { Text("Server path of the default workspace") },
+                    label = { Text("Server path of the workspace root") },
                     singleLine = true,
                     enabled = editor != null,
                     modifier = Modifier.fillMaxWidth(),
@@ -143,19 +143,13 @@ fun GlobalSettingsView(
                         enabled = editor != null && defaultDraft.isNotBlank() && defaults?.busy != true,
                         onClick = {
                             scope.launch {
-                                message = editor!!.setGlobalDefaultWorkspace(defaultDraft).describe("Setting the default workspace")
+                                message = editor!!.setGlobalDefaultWorkspace(defaultDraft).describe("Setting the workspace root")
                             }
                         },
-                    ) { Text("Set default") }
-                    OutlinedButton(
-                        enabled = editor != null && defaults?.workspace != null && defaults?.busy != true,
-                        onClick = {
-                            scope.launch { message = editor!!.clearGlobalDefaultWorkspace().describe("Clearing the default workspace") }
-                        },
-                    ) { Text("Clear default") }
+                    ) { Text("Set root") }
                 }
                 Text(
-                    "Clearing the default does not change the known-workspace list below.",
+                    "Changing the workspace root updates [workspace].root in config.toml.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

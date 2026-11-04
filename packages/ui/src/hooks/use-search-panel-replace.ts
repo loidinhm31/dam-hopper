@@ -18,6 +18,7 @@ import {
   resolveSearchMatchTarget,
   runReplaceNext,
 } from "@/lib/search-replace-next.js";
+import type { FsTargetRef } from "@/api/ownership.js";
 import {
   normalizeProjectTarget,
   projectTargetCacheKey,
@@ -48,8 +49,12 @@ export interface UseSearchPanelReplaceResult {
   replaceAll: () => Promise<void>;
 }
 
-function targetScopeKey(target: ProjectTargetInput): string {
-  const normalized = normalizeProjectTarget(target);
+function targetScopeKey(target: ProjectTargetInput | FsTargetRef | string | undefined): string {
+  if (!target) return "";
+  if (typeof target === "object" && "kind" in target && target.kind === "workspace") {
+    return `workspace::${target.profileId}`;
+  }
+  const normalized = normalizeProjectTarget(target as ProjectTargetInput);
   const prefix = normalized.profileId
     ? `${normalized.profileId}::${normalized.project}`
     : normalized.project;

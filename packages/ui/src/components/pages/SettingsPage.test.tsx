@@ -149,14 +149,14 @@ describe("SettingsPage Import / Export integration", () => {
 
     expect(mockExportMutate).toHaveBeenCalledTimes(1);
     expect(createObjectURLMock).toHaveBeenCalledTimes(1);
-    expect(container.textContent).toContain("Downloaded dam-hopper.toml");
+    expect(container.textContent).toContain("Downloaded config.toml");
   });
 
   it("handles import confirmation and successful upload", async () => {
     mockImportMutate.mockResolvedValue({
       imported: true,
-      fileName: "dam-hopper.toml",
-      backupFileName: "dam-hopper.toml.bak.123",
+      fileName: "config.toml",
+      backupFileName: "config.toml.bak.123",
       workspaceName: "test-workspace",
     });
 
@@ -170,7 +170,7 @@ describe("SettingsPage Import / Export integration", () => {
 
     const testFile = new File(
       ["[workspace]\nname = 'imported'\n"],
-      "dam-hopper.toml",
+      "config.toml",
       {
         type: "application/toml",
       },
@@ -195,7 +195,7 @@ describe("SettingsPage Import / Export integration", () => {
       "[workspace]\nname = 'imported'\n",
     );
     expect(container.textContent).toContain(
-      "Settings imported. Backup saved to dam-hopper.toml.bak.123",
+      "Settings imported. Backup saved to config.toml.bak.123",
     );
   });
 
@@ -208,7 +208,7 @@ describe("SettingsPage Import / Export integration", () => {
       container.querySelector<HTMLInputElement>("input[type='file']");
     const testFile = new File(
       ["[workspace]\nname = 'imported'\n"],
-      "dam-hopper.toml",
+      "config.toml",
       {
         type: "application/toml",
       },
@@ -305,7 +305,7 @@ describe("SettingsPage Import / Export integration", () => {
 
     expect(mockExportMutate).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain(
-      "Downloaded dam-hopper-production-server.toml",
+      "Downloaded dam-hopper-production-server-config.toml",
     );
   });
 
@@ -320,7 +320,7 @@ describe("SettingsPage Import / Export integration", () => {
       container.querySelector<HTMLInputElement>("input[type='file']");
     const testFile = new File(
       ["[workspace]\nname = 'imported'\n"],
-      "dam-hopper.toml",
+      "config.toml",
       { type: "application/toml" },
     );
     testFile.text = async () => "[workspace]\nname = 'imported'\n";

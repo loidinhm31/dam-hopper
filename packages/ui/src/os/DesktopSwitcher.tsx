@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, type KeyboardEvent } from "react";
 import { useWindowStore } from "./window-store.js";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 
 export interface DesktopSwitcherProps {
   className?: string;
@@ -12,6 +13,13 @@ export function DesktopSwitcher({ className = "" }: DesktopSwitcherProps) {
   const renameDesktop = useWindowStore((state) => state.renameDesktop);
   const removeDesktop = useWindowStore((state) => state.removeDesktop);
 
+  const [confirmDelete, setConfirmDelete] = useState<{
+    desktopId: string;
+    desktopName: string;
+    survivingId: string;
+    survivingName: string;
+    windowCount: number;
+  } | null>(null);
   const [editingDesktopId, setEditingDesktopId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -119,11 +127,15 @@ export function DesktopSwitcher({ className = "" }: DesktopSwitcherProps) {
                   );
                   const surviving = otherDesktops[0];
                   if (!surviving) return;
-                  if (hasWindows && typeof globalThis.confirm === "function") {
-                    const confirmed = globalThis.confirm(
-                      `Desktop "${d.name}" contains ${desktopWindows.length} window(s). Move them to "${surviving.name}" and close desktop?`,
-                    );
-                    if (confirmed !== true) return;
+                  if (hasWindows) {
+                    setConfirmDelete({
+                      desktopId: d.id,
+                      desktopName: d.name,
+                      survivingId: surviving.id,
+                      survivingName: surviving.name,
+                      windowCount: desktopWindows.length,
+                    });
+                    return;
                   }
                   removeDesktop(d.id, surviving.id);
                 }}
@@ -150,6 +162,27 @@ export function DesktopSwitcher({ className = "" }: DesktopSwitcherProps) {
       >
         +
       </button>
+      {confirmDelete && (
+        <ConfirmDialog
+          open={Boolean(confirmDelete)}
+          onClose={() => setConfirmDelete(null)}
+          onConfirm={() => {
+            if (
+              confirmDelete &&
+              session.desktops.some((d) => d.id === confirmDelete.desktopId) &&
+              session.desktops.some((d) => d.id === confirmDelete.survivingId)
+            ) {
+              removeDesktop(confirmDelete.desktopId, confirmDelete.survivingId);
+            }
+            setConfirmDelete(null);
+          }}
+          title="Close Virtual Desktop?"
+          description={`Desktop "${confirmDelete.desktopName}" contains ${confirmDelete.windowCount} window(s). Move them to "${confirmDelete.survivingName}" and close desktop?`}
+          confirmText="Move Windows & Close"
+          cancelText="Cancel"
+          variant="danger"
+        />
+      )}
     </nav>
   );
 }

@@ -128,7 +128,7 @@ const ContextMenuContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
 >(function ContextMenuContent(
-  { className, avoidCollisions = true, collisionPadding = 8, ...props },
+  { className, avoidCollisions = true, collisionPadding = 8, onPointerDown, onMouseDown, ...props },
   ref,
 ) {
   const inPortal = React.useContext(PortalScope);
@@ -143,6 +143,14 @@ const ContextMenuContent = React.forwardRef<
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
         className,
       )}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        onPointerDown?.(e);
+      }}
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        onMouseDown?.(e);
+      }}
       {...props}
     />
   );
@@ -156,6 +164,8 @@ ContextMenuContent.displayName = ContextMenuPrimitive.Content.displayName;
 
 function ContextMenuItem({
   className,
+  onPointerDown,
+  onMouseDown,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Item>) {
   return (
@@ -167,6 +177,14 @@ function ContextMenuItem({
         "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className,
       )}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        onPointerDown?.(e);
+      }}
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        onMouseDown?.(e);
+      }}
     />
   );
 }

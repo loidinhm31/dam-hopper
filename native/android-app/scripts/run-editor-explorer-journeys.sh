@@ -96,7 +96,7 @@ printf "common alpha content\n" > "$PROJ_A/common.ts"
 printf "common beta content\n" > "$PROJ_B/common.ts"
 
 # Write valid DamHopperConfigRaw TOML schema with [workspace] and [[projects]] array
-SERVER_CONFIG="$FIXTURE_DIR/dam-hopper.toml"
+SERVER_CONFIG="$FIXTURE_DIR/config.toml"
 cat <<EOF > "$SERVER_CONFIG"
 [workspace]
 name = "fixture-workspace"
@@ -176,7 +176,7 @@ $ADB -s "$TARGET_DEVICE" reverse tcp:$SERVER_PORT tcp:$SERVER_PORT
 # 4. Launch isolated server using valid environment
 echo "[INFO] Starting isolated DamHopper server on loopback 127.0.0.1:$SERVER_PORT..."
 if [ "$RUN_CARGO" = "cmd.exe /c cargo" ]; then
-    cmd.exe /c "set APPDATA=$WIN_FIXTURE_DIR\appdata && set DAM_HOPPER_LITE_MODE=true && set DAM_HOPPER_AUTH_SQLITE_PATH=$WIN_SQLITE_AUTH_DB && cargo run --manifest-path server/Cargo.toml --bin dam-hopper-server -- --config $WIN_FIXTURE_DIR/dam-hopper.toml --host 127.0.0.1 --port $SERVER_PORT" > "$FIXTURE_DIR/server.log" 2>&1 &
+    cmd.exe /c "set APPDATA=$WIN_FIXTURE_DIR\appdata && set DAM_HOPPER_LITE_MODE=true && set DAM_HOPPER_AUTH_SQLITE_PATH=$WIN_SQLITE_AUTH_DB && cargo run --manifest-path server/Cargo.toml --bin dam-hopper-server -- --config $WIN_FIXTURE_DIR/config.toml --host 127.0.0.1 --port $SERVER_PORT" > "$FIXTURE_DIR/server.log" 2>&1 &
     SERVER_PID=$!
 else
     APPDATA="$FIXTURE_DIR/appdata" \

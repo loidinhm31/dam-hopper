@@ -2,7 +2,14 @@
  * FS types — mirrors server JSON shapes.
  * Duplication is intentional; web package must not import server crates.
  */
-import type { ProjectTargetRef } from "./ownership.js";
+import type { FsTargetRef, ProjectTargetRef, ServerFsTarget } from "./ownership.js";
+
+/** Canonical file identity from server authorized stat/read. */
+export interface FileIdentity {
+  workspaceId: string;
+  workspaceEpoch: number;
+  canonicalPath: string;
+}
 /** Single node in the file tree. id = path relative to subscribed root. */
 export interface FsArborNode {
   id: string;
@@ -44,6 +51,7 @@ export interface DirEntry {
   size: number;
   mtime: number;
   isSymlink: boolean;
+  fileIdentity?: FileIdentity;
 }
 
 export interface FsListResponse {
@@ -56,6 +64,7 @@ export interface FsFileStat {
   mtime: number;
   mime?: string;
   isBinary: boolean;
+  fileIdentity?: FileIdentity;
 }
 
 /** Raw TreeNode shape sent by the server in fs:tree_snapshot.nodes (camelCase from Rust serde). */
@@ -88,7 +97,7 @@ export interface SearchMatch {
   project?: string;
   profileId?: string;
   profileName?: string;
-  targetRef?: ProjectTargetRef;
+  targetRef?: FsTargetRef | ProjectTargetRef;
   generation?: number;
 }
 
@@ -104,7 +113,7 @@ export interface PathSearchMatch {
   project?: string;
   profileId?: string;
   profileName?: string;
-  targetRef?: ProjectTargetRef;
+  targetRef?: FsTargetRef | ProjectTargetRef;
   generation?: number;
 }
 export interface PathSearchResponse {
@@ -142,4 +151,29 @@ export interface LanguageFilesResponse {
   files: LanguageFile[];
   truncated: boolean;
   limit: number;
+}
+
+export interface MarkProjectRequest {
+  name: string;
+  target: ServerFsTarget;
+  path: string;
+  projectType?: string;
+  tags?: string[];
+}
+
+export interface MarkProjectResponse {
+  name: string;
+  root: string;
+  projectType?: string;
+  tags?: string[];
+}
+
+export interface UnmarkProjectResponse {
+  unmarked: true;
+  name: string;
+}
+
+export interface WorkspaceFolderTerminalRequest {
+  target: ServerFsTarget;
+  cwd?: string;
 }

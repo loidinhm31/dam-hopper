@@ -60,7 +60,7 @@ Every non-browser feature in the existing DamHopper web application (`packages/u
 | **A02** | Authentication & TOTP MFA | `components/organisms/AuthDialog.tsx`, `server/src/api/auth.rs`, `server/src/api/auth_mfa.rs` | 04 | Authenticate against SQLite/Mongo auth backend. Complete password login, TOTP setup/verify challenge, receive 401 on expired tokens, rotate tokens. |
 | **C01** | TERMINAL Traditional shell | `components/organisms/IdeShell.tsx`, `components/organisms/TerminalPanel.tsx` | 06 | App launches into Traditional terminal shell. Project switching rebinds PTYs; zero IDE shell layout or switcher visible. |
 | **NAV01**| Single-row panel navigation | `components/organisms/TopNavigation.tsx`, validation answers | 06, 17 | Horizontally scroll the top row to reach all 12 panels. Selecting a panel replaces the terminal; terminal session continues in background. Row remains visible above IME. |
-| **C02** | Config & preferences target | `components/organisms/SettingsModal.tsx`, `server/src/api/config.rs` | 06, 17 | Inspect and edit project-specific `dam-hopper.toml` vs global config vs client-local preferences. Changes save to appropriate target. |
+| **C02** | Config & preferences target | `components/organisms/SettingsModal.tsx`, `server/src/api/config.rs` | 06, 17 | Inspect and edit project configurations in `config.toml` vs client-local preferences. Changes save to appropriate target. |
 | **T01** | Remote PTY lifecycle | `stores/terminal-store.ts`, `server/src/api/terminal.rs`, `server/src/pty/` | 07 | Create, list, switch, rename, kill, and restart remote PTY sessions. Sessions survive client disconnect and reconnect with identical incarnation. |
 | **T02** | Terminal stream & input | `lib/terminal-buffer.ts`, `server/src/api/ws_protocol.rs` | 05, 07 | Stream live terminal output with UTF-8 byte continuity. Support IME input, screen resize, selection, copy/paste, and scrollback search. |
 | **T03** | Agent status & correlation | `components/molecules/AgentStatusBadge.tsx`, `server/src/agent_status/` | 07 | Observe OMP/Codex/Claude agent hook status and PTY correlation. Server epochs and leases control status; client does not inject synthetic status. |
@@ -232,7 +232,7 @@ The web client Monaco implementation (`packages/ui/src/components/organisms/Mona
 3. Multiple tabs with dirty buffer tracking, mtime timestamp checks on save, and reload/overwrite prompts.
 4. Inline and side-by-side diff viewers (`DiffViewer.tsx`) with hunk revert.
 5. Three-way merge conflict editor (`MergeConflictEditor.tsx`) resolving base, ours, and theirs blocks.
-6. JSON Worker: Schema validation, error squigglies, auto-completion for `package.json`, `tsconfig.json`, `dam-hopper.toml`.
+6. JSON Worker: Schema validation, error squigglies, auto-completion for `package.json`, `tsconfig.json`.
 7. TypeScript Worker: In-editor syntax and semantic diagnostics for TypeScript/JavaScript.
 
 ### 6.2 Native Implementation Strategy & Hard Gates

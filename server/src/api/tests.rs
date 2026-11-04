@@ -110,24 +110,26 @@ fn normalize_terminal_output(output: &str) -> String {
     output.replace("\r\n", "\n")
 }
 
-fn make_state(tmp: &TempDir) -> AppState {
+pub(crate) fn make_state(tmp: &TempDir) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
 
     // Create a minimal config file so config_path.exists() returns true (required by
     // /api/workspace/status `ready` field).
-    let config_file = workspace_dir.join("dam-hopper.toml");
-    std::fs::write(&config_file, "[workspace]\nname = \"test-workspace\"\n").ok();
+    let config_file = workspace_dir.join("config.toml");
+    std::fs::write(&config_file, format!("[workspace]\nname = \"test-workspace\"\nroot = \"{}\"\n", workspace_dir.display())).ok();
 
     let mut config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
-            root: ".".into(),
+            root: workspace_dir.to_string_lossy().into_owned(),
         },
         agent_store: None,
         server: crate::config::ServerConfig::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dam-hopper.toml"),
+        ui: None,
+        workspaces: None,
+        config_path: config_file.clone(),
     };
     // Runtime-enable tests must not race through the user's default telemetry
     // database when lib tests run concurrently.
@@ -162,19 +164,21 @@ fn make_state_with_idle_suspend_config(
     idle_suspend: crate::config::IdleSuspendConfig,
 ) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
-    let config_file = workspace_dir.join("dam-hopper.toml");
-    std::fs::write(&config_file, "[workspace]\nname = \"test-workspace\"\n").ok();
+    let config_file = workspace_dir.join("config.toml");
+    std::fs::write(&config_file, format!("[workspace]\nname = \"test-workspace\"\nroot = \"{}\"\n", workspace_dir.display())).ok();
 
     let mut config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
-            root: ".".into(),
+            root: workspace_dir.to_string_lossy().into_owned(),
         },
         agent_store: None,
         server: crate::config::ServerConfig::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dam-hopper.toml"),
+        ui: None,
+        workspaces: None,
+        config_path: config_file.clone(),
     };
     config.server.idle_suspend = idle_suspend;
 
@@ -1346,7 +1350,7 @@ async fn workspace_status_returns_loaded_true() {
     assert_eq!(
         json["configPath"],
         tmp.path()
-            .join("dam-hopper.toml")
+            .join("config.toml")
             .to_string_lossy()
             .to_string()
     );
@@ -1367,33 +1371,25 @@ async fn workspace_get_includes_config_path_and_legacy_root() {
     assert_eq!(
         json["configPath"],
         tmp.path()
-            .join("dam-hopper.toml")
+            .join("config.toml")
             .to_string_lossy()
             .to_string()
     );
+    assert!(json["workspaceEpoch"].is_number());
 }
 
 #[tokio::test]
-async fn workspace_switch_accepts_direct_config_file_path() {
+async fn workspace_switch_updates_root_in_single_config() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
 
     let switched = tempfile::tempdir().unwrap();
-    let switched_cfg = switched.path().join("dam-hopper.toml");
-    std::fs::write(
-        &switched_cfg,
-        r#"
-[workspace]
-name = "switched"
-root = "."
-"#,
-    )
-    .unwrap();
+    let canonical_switched = dunce::canonicalize(switched.path()).unwrap();
 
     let resp = post_json(
         state.clone(),
         "/api/workspace/switch",
-        serde_json::json!({ "path": switched_cfg.to_string_lossy().to_string() }),
+        serde_json::json!({ "path": canonical_switched.to_string_lossy().to_string(), "name": "switched" }),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -1405,20 +1401,38 @@ root = "."
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["name"], "switched");
-    assert_eq!(
-        crate::workspace_target::target_path_identity(Path::new(
-            json["configPath"].as_str().unwrap()
-        )),
-        crate::workspace_target::target_path_identity(&switched_cfg)
-    );
+    assert_eq!(json["path"], canonical_switched.to_string_lossy().to_string());
+    assert!(json["workspaceEpoch"].is_number());
 
-    let resp = get(state, "/api/workspace").await;
+    let resp = get(state.clone(), "/api/workspace").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["root"], switched.path().to_string_lossy().to_string());
+    assert_eq!(json["root"], canonical_switched.to_string_lossy().to_string());
+
+    let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+    assert!(on_disk.contains("switched"));
+}
+
+#[tokio::test]
+async fn workspace_switch_invalid_root_fails_closed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let initial_epoch = state.workspace_epoch();
+
+    let resp = post_json(
+        state.clone(),
+        "/api/workspace/switch",
+        serde_json::json!({ "path": "/nonexistent/directory/that/cannot/exist/12345" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    assert_eq!(state.workspace_epoch(), initial_epoch);
+    let current_cfg = state.config.read().await;
+    assert_eq!(current_cfg.workspace.name, "test-workspace");
 }
 
 #[tokio::test]
@@ -1479,7 +1493,7 @@ async fn config_update_persists_camel_case_project_fields_as_toml_schema() {
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let written = std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
+    let written = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
     assert!(written.contains("env_file = \".env\""));
     assert!(written.contains("build_command = \"cargo build\""));
     assert!(written.contains("run_command = \"cargo run\""));
@@ -1589,7 +1603,7 @@ async fn config_update_formats_mixed_absolute_project_paths_for_toml() {
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let written = std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
+    let written = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
     let parsed: toml::Value = toml::from_str(&written).unwrap();
     let projects = parsed["projects"].as_array().unwrap();
     let inside_path = projects[0]["path"].as_str().unwrap();
@@ -1621,7 +1635,7 @@ async fn config_patch_project_persists_camel_case_project_fields_as_toml_schema(
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     std::fs::write(
-        tmp.path().join("dam-hopper.toml"),
+        tmp.path().join("config.toml"),
         r#"
 [workspace]
 name = "test-workspace"
@@ -1651,7 +1665,7 @@ restartPolicy = "never"
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let written = std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
+    let written = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
     assert!(written.contains("env_file = \".env\""));
     assert!(written.contains("run_command = \"cargo run\""));
     assert!(written.contains("restart = \"always\""));
@@ -1797,7 +1811,7 @@ async fn settings_export_returns_raw_toml() {
     );
     assert_eq!(
         resp.headers().get("content-disposition").unwrap(),
-        "attachment; filename=\"dam-hopper.toml\""
+        "attachment; filename=\"config.toml\""
     );
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
@@ -1814,17 +1828,28 @@ async fn settings_export_returns_raw_toml() {
 /// need project resolution (ship/unship, git API endpoints, etc.).
 fn make_state_with_project(tmp: &TempDir) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
+    let config_file = workspace_dir.join("config.toml");
+    std::fs::write(
+        &config_file,
+        format!(
+            "[workspace]\nname = \"test-workspace\"\nroot = \"{}\"\n\n[[projects]]\nname = \"test-project\"\npath = \".\"\ntype = \"cargo\"\n",
+            workspace_dir.display()
+        ),
+    )
+    .ok();
 
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
-            root: ".".into(),
+            root: workspace_dir.display().to_string(),
         },
         agent_store: None,
         server: crate::config::ServerConfig::default(),
         projects: vec![test_project_config(&workspace_dir)],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dam-hopper.toml"),
+        ui: None,
+        workspaces: None,
+        config_path: config_file,
     };
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
@@ -1883,17 +1908,31 @@ fn make_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) -> Ap
             )
         })
         .collect();
+    let config_file = workspace_dir.join("config.toml");
+    let mut toml_str = format!(
+        "[workspace]\nname = \"test-workspace\"\nroot = \"{}\"\n\n",
+        workspace_dir.display()
+    );
+    for p in &projects {
+        toml_str.push_str(&format!(
+            "[[projects]]\nname = \"{}\"\npath = \"{}\"\ntype = \"cargo\"\n\n",
+            p.name, p.path
+        ));
+    }
+    std::fs::write(&config_file, &toml_str).ok();
 
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
-            root: ".".into(),
+            root: workspace_dir.display().to_string(),
         },
         agent_store: None,
         server: crate::config::ServerConfig::default(),
         projects,
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dam-hopper.toml"),
+        ui: None,
+        workspaces: None,
+        config_path: config_file,
     };
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
@@ -2020,17 +2059,28 @@ fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> Ap
     let workspace_dir = tmp.path().to_path_buf();
     let mut project = test_project_config(&workspace_dir);
     project.env_file = env_file.map(str::to_string);
+    let config_file = workspace_dir.join("config.toml");
+    std::fs::write(
+        &config_file,
+        format!(
+            "[workspace]\nname = \"test-workspace\"\nroot = \"{}\"\n\n[[projects]]\nname = \"test-project\"\npath = \".\"\ntype = \"cargo\"\n",
+            workspace_dir.display()
+        ),
+    )
+    .ok();
 
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
-            root: ".".into(),
+            root: workspace_dir.display().to_string(),
         },
         agent_store: None,
         server: crate::config::ServerConfig::default(),
         projects: vec![project],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dam-hopper.toml"),
+        ui: None,
+        workspaces: None,
+        config_path: config_file,
     };
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
@@ -2069,16 +2119,28 @@ fn make_state_with_project_root_env_file(
     let workspace_dir = workspace.path().to_path_buf();
     let mut project = test_project_config(project_root);
     project.env_file = env_file.map(str::to_string);
+    let config_file = workspace_dir.join("config.toml");
+    std::fs::write(
+        &config_file,
+        format!(
+            "[workspace]\nname = \"test-workspace\"\nroot = \"{}\"\n\n[[projects]]\nname = \"test-project\"\npath = \"{}\"\ntype = \"cargo\"\n",
+            workspace_dir.display(),
+            project_root.display()
+        ),
+    )
+    .ok();
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
-            root: ".".into(),
+            root: workspace_dir.display().to_string(),
         },
         agent_store: None,
         server: crate::config::ServerConfig::default(),
         projects: vec![project],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dam-hopper.toml"),
+        ui: None,
+        workspaces: None,
+        config_path: config_file,
     };
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
@@ -4651,7 +4713,7 @@ async fn video_ticket_issuance_is_not_limited_by_live_ticket_count() {
     for _ in 0..=FORMER_GLOBAL_TICKET_LIMIT {
         let record = crate::fs::VideoTicketRecord {
             purpose: crate::fs::VideoTicketPurpose::Playback,
-            target: target.clone(),
+            target: crate::workspace_target::ResolvedFilesystemTarget::Project(target.clone()),
             project_relative_path: "clip.webm".into(),
             file: crate::fs::VideoFileVersion::from_metadata(canonical.clone(), &metadata).unwrap(),
             mime: "video/webm".into(),
@@ -5251,7 +5313,7 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
         assert!(!text.contains(path));
     }
     let traversal = post_json(
-        state,
+        state.clone(),
         "/api/fs/image/tickets",
         serde_json::json!({
             "project": "test-project",
@@ -5267,6 +5329,19 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
             .unwrap()
     )
     .contains("outside.png"));
+
+    let ambiguous = post_json(
+        state,
+        "/api/fs/image/tickets",
+        serde_json::json!({
+            "target": { "type": "workspace" },
+            "targetType": "project",
+            "path": "real.png",
+            "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+        }),
+    )
+    .await;
+    assert_eq!(ambiguous.status(), StatusCode::BAD_REQUEST);
 }
 
 #[cfg(unix)]
@@ -6045,26 +6120,12 @@ async fn workspace_switch_preserves_startup_idle_suspend_policy() {
     let state = make_state_with_project(&tmp);
 
     let switched_dir = tempfile::tempdir().unwrap();
-    let switched_cfg = switched_dir.path().join("dam-hopper.toml");
-    std::fs::write(
-        &switched_cfg,
-        r#"
-[workspace]
-name = "switched-ws"
-
-[server.idle_suspend]
-enabled = true
-quiet_period_seconds = 3600
-wake_after_seconds = 1800
-enrollment_reference = "systemd:fake"
-"#,
-    )
-    .unwrap();
+    let canonical_switched = dunce::canonicalize(switched_dir.path()).unwrap();
 
     let resp = post_json(
         state.clone(),
         "/api/workspace/switch",
-        serde_json::json!({ "path": switched_cfg.to_string_lossy().to_string() }),
+        serde_json::json!({ "path": canonical_switched.to_string_lossy().to_string(), "name": "switched-ws" }),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);

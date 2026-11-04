@@ -77,12 +77,13 @@ initRepo(repoA, "SERVER_A\n", "SERVER_A");
 initRepo(repoB, "SERVER_B\n", "SERVER_B");
 
 // Write configs
-const configA = join(dirA, "dam-hopper.toml");
-const configB = join(dirB, "dam-hopper.toml");
+const configA = join(dirA, "config.toml");
+const configB = join(dirB, "config.toml");
 
 function makeConfig(name, repoPath, sessionDb) {
   return `[workspace]
 name = "${name}"
+root = "${repoPath}"
 
 [[projects]]
 name = "web"

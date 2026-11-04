@@ -245,8 +245,8 @@ export function SettingsPage({
       const a = document.createElement("a");
       a.href = url;
       const downloadFilename = targetProfile
-        ? `dam-hopper-${targetProfile.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.toml`
-        : "dam-hopper.toml";
+        ? `dam-hopper-${targetProfile.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-config.toml`
+        : "config.toml";
       a.download = downloadFilename;
       document.body.appendChild(a);
       a.click();

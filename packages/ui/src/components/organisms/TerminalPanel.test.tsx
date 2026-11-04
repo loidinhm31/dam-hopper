@@ -883,4 +883,25 @@ describe("TerminalPanel owned connections", () => {
     });
     expect(term.customKeyEventHandler!(normalKey)).toBe(true);
   });
+
+  it("passes F12 through to browser by returning false from customKeyEventHandler without terminal consumption", async () => {
+    await connect("f12-test", 1);
+    await act(async () => {
+      root.render(
+        createElement(TerminalPanel, {
+          profileId: "f12-test",
+          sessionId: "f12-term",
+          project: "test",
+          command: "bash",
+        }),
+      );
+    });
+
+    const term = state.terminals[state.terminals.length - 1]!;
+    expect(term.customKeyEventHandler).toBeDefined();
+
+    const f12Key = new KeyboardEvent("keydown", { code: "F12", key: "F12" });
+    // Returning false instructs xterm to bypass handling so browser default (DevTools) fires
+    expect(term.customKeyEventHandler!(f12Key)).toBe(false);
+  });
 });

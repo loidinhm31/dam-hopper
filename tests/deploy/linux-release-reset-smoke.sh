@@ -15,8 +15,8 @@ assert_file_exists "$RESET_SCRIPT" "Reset script must exist"
 # 1. Verify --help documents canonical default path
 log "Testing reset script help output"
 HELP_OUT="$("$RESET_SCRIPT" --help 2>&1 || true)"
-if ! echo "$HELP_OUT" | grep -q -- "--config <path>.*default: /var/lib/dam-hopper/dam-hopper.toml"; then
-    fail "Reset script --help must document canonical default /var/lib/dam-hopper/dam-hopper.toml"
+if ! echo "$HELP_OUT" | grep -q -- "--config <path>.*default: /var/lib/dam-hopper/config.toml"; then
+    fail "Reset script --help must document canonical default /var/lib/dam-hopper/config.toml"
 fi
 
 # 2. Setup mock environment for identity and config testing

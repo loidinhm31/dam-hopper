@@ -5,13 +5,16 @@ import { GlobalConfigEditor } from "./GlobalConfigEditor.js";
 
 vi.mock("@/api/queries.js", () => ({
   useGlobalConfig: () => ({
-    data: { defaults: { workspace: "/workspaces/demo" } },
+    data: { workspace: { name: "demo", root: "/workspaces/demo" } },
     isLoading: false,
   }),
-  useUpdateGlobalDefaults: () => ({
+  useSwitchWorkspace: () => ({
     isPending: false,
     error: null,
     mutateAsync: vi.fn(),
+  }),
+  useWorkspaceStatus: () => ({
+    data: { ready: true, path: "/workspaces/demo", configPath: "/home/user/.config/dam-hopper/config.toml" },
   }),
   useKnownWorkspaces: () => ({
     data: { workspaces: [] },
@@ -31,9 +34,11 @@ vi.mock("@/api/queries.js", () => ({
 }));
 
 describe("GlobalConfigEditor", () => {
-  it("renders default and known-workspace inputs enabled", () => {
+  it("renders workspace configuration and known-workspace inputs enabled", () => {
     const markup = renderToStaticMarkup(<GlobalConfigEditor />);
 
+    expect(markup).toContain("Workspace Configuration");
+    expect(markup).toContain("Canonical Workspace Root");
     expect(markup).toContain('placeholder="/path/to/workspace"');
     expect(markup).not.toContain('placeholder="/path/to/workspace" disabled=""');
   });

@@ -95,7 +95,7 @@ function createDummyZip(entries, epoch = 1700000000) {
 function standardEntries() {
   return [
     { name: "dam-hopper-server.exe", data: Buffer.from("MZ-DUMMY-SERVER-EXE-CONTENT") },
-    { name: "dam-hopper.example.toml", data: Buffer.from("[workspace]\nname = 'test'\n") },
+    { name: "config.example.toml", data: Buffer.from("[workspace]\nname = 'test'\n") },
     { name: "LICENSE", data: Buffer.from("MIT License\n") },
     { name: "README.md", data: Buffer.from("# DamHopper Windows\n") },
   ];
@@ -185,7 +185,7 @@ try {
     const zipName = `dam-hopper-${tag}-windows-x86_64.zip`;
     const entries = [
       { name: "../dam-hopper-server.exe", data: Buffer.from("MZ") },
-      { name: "dam-hopper.example.toml", data: Buffer.from("test") },
+      { name: "config.example.toml", data: Buffer.from("test") },
       { name: "LICENSE", data: Buffer.from("MIT") },
       { name: "README.md", data: Buffer.from("test") },
     ];
@@ -210,7 +210,7 @@ try {
     const zipName = `dam-hopper-${tag}-windows-x86_64.zip`;
     const entries = [
       { name: "bin/dam-hopper-server.exe", data: Buffer.from("MZ") },
-      { name: "dam-hopper.example.toml", data: Buffer.from("test") },
+      { name: "config.example.toml", data: Buffer.from("test") },
       { name: "LICENSE", data: Buffer.from("MIT") },
       { name: "README.md", data: Buffer.from("test") },
     ];

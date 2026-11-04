@@ -36,6 +36,8 @@ fn create_test_state(workspace_root: PathBuf, repo_root: PathBuf) -> AppState {
         server: dam_hopper_server::config::ServerConfig::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_root.join("dam-hopper.toml"),
     };
 

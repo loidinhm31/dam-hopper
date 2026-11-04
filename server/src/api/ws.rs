@@ -35,7 +35,10 @@ use crate::fs::{
     mutate, ops, secure_path, tree_snapshot_sync, EncUploadState, UploadState, MAX_UPLOAD_BYTES,
 };
 use crate::state::AppState;
-use crate::workspace_target::{ProjectTargetRef, ResolvedProjectTarget};
+use crate::workspace_target::{
+    FileIdentity, FilesystemTargetRef, ProjectTargetRef, ResolvedFilesystemTarget,
+    ResolvedProjectTarget,
+};
 
 /// Bounded per-connection outbound channels (split for PTY + FS).
 /// PTY (control + terminal output) uses backpressure via .await.
@@ -126,8 +129,9 @@ impl Drop for FsSubscriptionGuard {
 
 #[derive(Clone)]
 struct TargetBinding {
-    resolved: ResolvedProjectTarget,
+    resolved: ResolvedFilesystemTarget,
     root_identity: secure_path::DirectoryIdentity,
+    workspace_generation: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -880,15 +884,22 @@ async fn handle_socket(
             // -----------------------------------------------------------
             ClientMsg::FsSubTree {
                 req_id,
+                target,
                 project,
                 worktree_path,
                 path,
                 watch_only,
             } => {
+                let target_ref = match extract_ws_target(target, project, worktree_path) {
+                    Ok(t) => t,
+                    Err((code, msg)) => {
+                        send_fs_error(&pty_tx, req_id, code, msg).await;
+                        continue;
+                    }
+                };
                 let result = do_fs_subscribe(
                     req_id,
-                    &project,
-                    worktree_path.as_deref(),
+                    &target_ref,
                     &path,
                     watch_only,
                     &state,
@@ -916,6 +927,7 @@ async fn handle_socket(
             // -----------------------------------------------------------
             ClientMsg::FsRead {
                 req_id,
+                target,
                 project,
                 worktree_path,
                 path,
@@ -923,10 +935,16 @@ async fn handle_socket(
                 len,
                 read_mode,
             } => {
+                let target_ref = match extract_ws_target(target, project, worktree_path) {
+                    Ok(t) => t,
+                    Err((code, msg)) => {
+                        send_fs_error(&pty_tx, req_id, code, msg).await;
+                        continue;
+                    }
+                };
                 let result = do_fs_read(
                     req_id,
-                    &project,
-                    worktree_path.as_deref(),
+                    &target_ref,
                     &path,
                     offset,
                     len,
@@ -949,12 +967,14 @@ async fn handle_socket(
             // -----------------------------------------------------------
             ClientMsg::FsWriteBegin {
                 req_id,
+                target,
                 project,
                 worktree_path,
                 path,
                 expected_mtime,
                 size,
                 encoding: _,
+                workspace_epoch,
             } => {
                 if size > FS_WRITE_MAX {
                     send_fs_error(
@@ -967,12 +987,24 @@ async fn handle_socket(
                     continue;
                 }
 
+                let target_ref = match extract_ws_target(target, project, worktree_path) {
+                    Ok(t) => t,
+                    Err((code, msg)) => {
+                        send_fs_error(&pty_tx, req_id, code, msg).await;
+                        continue;
+                    }
+                };
+                if let Err((code, msg)) = validate_workspace_mutation_authority(&state, &target_ref, workspace_epoch) {
+                    send_fs_error(&pty_tx, req_id, code, msg).await;
+                    continue;
+                }
+
                 let target_result =
-                    resolve_target_path(&project, worktree_path.as_deref(), &path, &state).await;
+                    resolve_target_path(&state, &target_ref, &path).await;
                 match target_result {
                     Err((code, msg)) => send_fs_error(&pty_tx, req_id, code, msg).await,
-                    Ok((target, abs_path)) => {
-                        let relative_path = match abs_path.strip_prefix(target.target_path()) {
+                    Ok((target, abs_path, _)) => {
+                        let relative_path = match abs_path.strip_prefix(target.root_path()) {
                             Ok(relative) => relative.to_path_buf(),
                             Err(_) => {
                                 send_fs_error(
@@ -985,7 +1017,7 @@ async fn handle_socket(
                                 continue;
                             }
                         };
-                        let target = match bind_resolved_target(target).await {
+                        let target = match bind_resolved_target(&state, target).await {
                             Ok(target) => target,
                             Err(error) => {
                                 send_fs_error(
@@ -1028,7 +1060,7 @@ async fn handle_socket(
                         if let Ok(json) = serde_json::to_string(&ack) {
                             let _ = pty_tx.send(WireMsg::Text(json)).await;
                         }
-                        debug!(req_id, write_id, path, project, "fs:write_begin");
+                        debug!(req_id, write_id, path, "fs:write_begin");
                     }
                 }
             }
@@ -1172,6 +1204,7 @@ async fn handle_socket(
                     continue;
                 }
 
+                let _auth_guard = state.workspace_context_guard.read().await;
                 let revalidated = revalidate_bound_path(
                     &state,
                     &entry.target,
@@ -1181,16 +1214,29 @@ async fn handle_socket(
                 )
                 .await;
                 let write_result = match revalidated {
-                    Ok(_) => {
-                        secure_path::persist_temp(
-                            entry.target.resolved.target_path().to_path_buf(),
-                            entry.relative_path.clone(),
-                            entry.temp,
-                            Some(entry.expected_mtime),
-                            Some(entry.target.root_identity),
+                    Ok(validated_path) => {
+                        let ws_root = state.workspace_sandbox().ok().map(|s| s.root().to_path_buf());
+                        let cfg = state.config.read().await;
+                        let proj_roots: Vec<std::path::PathBuf> = cfg.projects.iter().map(|p| std::path::PathBuf::from(&p.path)).collect();
+                        drop(cfg);
+                        if let Err(e) = crate::fs::mutate::assert_safe_mutation_against_roots(
+                            &validated_path,
+                            ws_root.as_deref(),
+                            &proj_roots,
                             false,
-                        )
-                        .await
+                        ) {
+                            Err(e)
+                        } else {
+                            secure_path::persist_temp(
+                                entry.target.resolved.root_path().to_path_buf(),
+                                entry.relative_path.clone(),
+                                entry.temp,
+                                Some(entry.expected_mtime),
+                                Some(entry.target.root_identity),
+                                false,
+                            )
+                            .await
+                        }
                     }
                     Err(error) => Err(error),
                 };
@@ -1239,17 +1285,43 @@ async fn handle_socket(
             ClientMsg::FsOp {
                 req_id,
                 op,
+                target,
                 project,
                 worktree_path,
                 path,
                 new_path,
                 force_git,
+                workspace_epoch,
             } => {
+                let target_ref = match extract_ws_target(target, project, worktree_path) {
+                    Ok(t) => t,
+                    Err((_code, msg)) => {
+                        let msg = ServerMsg::FsOpResult {
+                            req_id,
+                            ok: false,
+                            error: Some(msg),
+                        };
+                        if let Ok(json) = serde_json::to_string(&msg) {
+                            let _ = pty_tx.send(WireMsg::Text(json)).await;
+                        }
+                        continue;
+                    }
+                };
+                if let Err((_code, err_msg)) = validate_workspace_mutation_authority(&state, &target_ref, workspace_epoch) {
+                    let msg = ServerMsg::FsOpResult {
+                        req_id,
+                        ok: false,
+                        error: Some(err_msg),
+                    };
+                    if let Ok(json) = serde_json::to_string(&msg) {
+                        let _ = pty_tx.send(WireMsg::Text(json)).await;
+                    }
+                    continue;
+                }
                 let result = do_fs_op(
                     req_id,
                     &op,
-                    &project,
-                    worktree_path.as_deref(),
+                    &target_ref,
                     &path,
                     new_path.as_deref(),
                     force_git,
@@ -1282,17 +1354,29 @@ async fn handle_socket(
             ClientMsg::FsUploadBegin {
                 req_id,
                 upload_id,
+                target,
                 project,
                 worktree_path,
                 dir,
                 filename,
                 len,
+                workspace_epoch,
             } => {
+                let target_ref = match extract_ws_target(target, project, worktree_path) {
+                    Ok(t) => t,
+                    Err((code, msg)) => {
+                        send_fs_error(&pty_tx, req_id, code, msg).await;
+                        continue;
+                    }
+                };
+                if let Err((code, msg)) = validate_workspace_mutation_authority(&state, &target_ref, workspace_epoch) {
+                    send_fs_error(&pty_tx, req_id, code, msg).await;
+                    continue;
+                }
                 let result = do_upload_begin(
                     req_id,
                     &upload_id,
-                    &project,
-                    worktree_path.as_deref(),
+                    &target_ref,
                     &dir,
                     &filename,
                     len,
@@ -1360,6 +1444,7 @@ async fn handle_socket(
                     }
                     Some(upload_state) => {
                         let up_id = upload_state.inner.target_abs.to_string_lossy().to_string();
+                        let _auth_guard = state.workspace_context_guard.read().await;
                         let revalidated = revalidate_bound_path(
                             &state,
                             &upload_state.target,
@@ -1376,20 +1461,38 @@ async fn handle_socket(
                                 new_mtime: None,
                                 error: Some(error.to_string()),
                             },
-                            Ok(_) => {
-                                let target_root =
-                                    upload_state.target.resolved.target_path().to_path_buf();
-                                let relative_path = upload_state.relative_path.clone();
-                                let commit = tokio::task::spawn_blocking(move || {
-                                    upload_state.inner.commit_at_target(
-                                        &target_root,
-                                        &relative_path,
-                                        None,
-                                        Some(upload_state.target.root_identity),
-                                        false,
-                                    )
-                                })
-                                .await;
+                            Ok(validated_path) => {
+                                let ws_root = state.workspace_sandbox().ok().map(|s| s.root().to_path_buf());
+                                let cfg = state.config.read().await;
+                                let proj_roots: Vec<std::path::PathBuf> = cfg.projects.iter().map(|p| std::path::PathBuf::from(&p.path)).collect();
+                                drop(cfg);
+                                if let Err(e) = crate::fs::mutate::assert_safe_mutation_against_roots(
+                                    &validated_path,
+                                    ws_root.as_deref(),
+                                    &proj_roots,
+                                    false,
+                                ) {
+                                    ServerMsg::FsUploadResult {
+                                        req_id,
+                                        upload_id,
+                                        ok: false,
+                                        new_mtime: None,
+                                        error: Some(e.to_string()),
+                                    }
+                                } else {
+                                    let target_root =
+                                        upload_state.target.resolved.root_path().to_path_buf();
+                                    let relative_path = upload_state.relative_path.clone();
+                                    let commit = tokio::task::spawn_blocking(move || {
+                                        upload_state.inner.commit_at_target(
+                                            &target_root,
+                                            &relative_path,
+                                            None,
+                                            Some(upload_state.target.root_identity),
+                                            false,
+                                        )
+                                    })
+                                    .await;
                                 match commit {
                                     Ok(Ok(new_mtime)) => {
                                         debug!(req_id, new_mtime, "fs:upload_commit success");
@@ -1430,7 +1533,8 @@ async fn handle_socket(
                             }
                         }
                     }
-                };
+                }
+            };
                 if let Ok(json) = serde_json::to_string(&msg) {
                     let _ = pty_tx.send(WireMsg::Text(json)).await;
                 }
@@ -1806,12 +1910,14 @@ async fn handle_socket(
                 req_id,
                 upload_id,
                 session_id,
+                target,
                 project,
                 worktree_path,
                 dir,
                 filename,
                 len,
                 expected_mtime,
+                workspace_epoch,
             } => {
                 if !aes_keys.contains_key(&session_id) {
                     send_fs_error(
@@ -1823,12 +1929,22 @@ async fn handle_socket(
                     )
                     .await;
                 } else {
+                    let target_ref = match extract_ws_target(target, project, worktree_path) {
+                        Ok(t) => t,
+                        Err((code, msg)) => {
+                            send_fs_error(&pty_tx, req_id, code, msg).await;
+                            continue;
+                        }
+                    };
+                    if let Err((code, msg)) = validate_workspace_mutation_authority(&state, &target_ref, workspace_epoch) {
+                        send_fs_error(&pty_tx, req_id, code, msg).await;
+                        continue;
+                    }
                     match do_enc_put_begin(
                         req_id,
                         &upload_id,
                         &session_id,
-                        &project,
-                        worktree_path.as_deref(),
+                        &target_ref,
                         &dir,
                         &filename,
                         len,
@@ -1839,7 +1955,7 @@ async fn handle_socket(
                     .await
                     {
                         Ok(()) => {
-                            debug!(req_id, upload_id, len, project, "fs:put_begin accepted");
+                            debug!(req_id, upload_id, len, "fs:put_begin accepted");
                             let msg = ServerMsg::FsPutBeginOk { req_id, upload_id };
                             send_json(&pty_tx, &msg).await;
                         }
@@ -1890,7 +2006,7 @@ async fn handle_socket(
 
                 let target_abs = enc_state.inner.inner.target_abs.clone();
                 let expected_mtime = enc_state.inner.expected_mtime;
-                let target_root = enc_state.target.resolved.target_path().to_path_buf();
+                let target_root = enc_state.target.resolved.root_path().to_path_buf();
                 let target_root_identity = enc_state.target.root_identity;
                 let relative_path = enc_state.relative_path.clone();
                 let uid = upload_id.clone();
@@ -1913,15 +2029,16 @@ async fn handle_socket(
                     continue;
                 }
 
-                if let Err(error) = revalidate_bound_path(
+                let _auth_guard = state.workspace_context_guard.read().await;
+                let revalidated = revalidate_bound_path(
                     &state,
                     &enc_state.target,
                     &enc_state.relative_path,
                     &target_abs,
                     true,
                 )
-                .await
-                {
+                .await;
+                if let Err(error) = revalidated {
                     let msg = ServerMsg::FsPutResult {
                         req_id,
                         upload_id: uid,
@@ -1933,8 +2050,28 @@ async fn handle_socket(
                     send_json(&pty_tx, &msg).await;
                     continue;
                 }
-
-                // H2: move NamedTempFile into closure so it stays alive until the read completes
+                let validated_path = revalidated.unwrap();
+                let ws_root = state.workspace_sandbox().ok().map(|s| s.root().to_path_buf());
+                let cfg = state.config.read().await;
+                let proj_roots: Vec<std::path::PathBuf> = cfg.projects.iter().map(|p| std::path::PathBuf::from(&p.path)).collect();
+                drop(cfg);
+                if let Err(e) = crate::fs::mutate::assert_safe_mutation_against_roots(
+                    &validated_path,
+                    ws_root.as_deref(),
+                    &proj_roots,
+                    false,
+                ) {
+                    let msg = ServerMsg::FsPutResult {
+                        req_id,
+                        upload_id: uid,
+                        ok: false,
+                        conflict: false,
+                        new_mtime: None,
+                        error: Some(e.to_string()),
+                    };
+                    send_json(&pty_tx, &msg).await;
+                    continue;
+                }
                 let temp_file = enc_state.inner.inner.temp;
                 // H1: return (error_msg, is_conflict) from spawn_blocking for accurate client signaling
                 let result = tokio::task::spawn_blocking(move || -> Result<i64, (String, bool)> {
@@ -2011,9 +2148,11 @@ async fn handle_socket(
             ClientMsg::FsPutSave {
                 req_id,
                 session_id,
+                target,
                 project,
                 worktree_path,
                 path,
+                workspace_epoch,
             } => {
                 // Validate session and resolve path first; binary frame will do the decrypt+write
                 if !aes_keys.contains_key(&session_id) {
@@ -2025,11 +2164,20 @@ async fn handle_socket(
                     )
                     .await;
                 } else {
-                    match resolve_target_path(&project, worktree_path.as_deref(), &path, &state)
-                        .await
-                    {
-                        Ok((target, path_abs)) => {
-                            let relative_path = match path_abs.strip_prefix(target.target_path()) {
+                    let target_ref = match extract_ws_target(target, project, worktree_path) {
+                        Ok(t) => t,
+                        Err((code, msg)) => {
+                            send_fs_error(&pty_tx, req_id, code, msg).await;
+                            continue;
+                        }
+                    };
+                    if let Err((code, msg)) = validate_workspace_mutation_authority(&state, &target_ref, workspace_epoch) {
+                        send_fs_error(&pty_tx, req_id, code, msg).await;
+                        continue;
+                    }
+                    match resolve_target_path(&state, &target_ref, &path).await {
+                        Ok((target, path_abs, _)) => {
+                            let relative_path = match path_abs.strip_prefix(target.root_path()) {
                                 Ok(relative) => relative.to_path_buf(),
                                 Err(_) => {
                                     send_fs_error(
@@ -2042,7 +2190,7 @@ async fn handle_socket(
                                     continue;
                                 }
                             };
-                            let target = match bind_resolved_target(target).await {
+                            let target = match bind_resolved_target(&state, target).await {
                                 Ok(target) => target,
                                 Err(error) => {
                                     send_fs_error(
@@ -2064,7 +2212,6 @@ async fn handle_socket(
                             });
                         }
                         Err((code, message)) => {
-                            warn!(req_id, code, message, "fs:put_save path rejected");
                             send_fs_error(&pty_tx, req_id, code, message).await;
                         }
                     }
@@ -2122,89 +2269,188 @@ async fn send_json(tx: &mpsc::Sender<WireMsg>, msg: &ServerMsg) {
     }
 }
 
+fn extract_ws_target(
+    target: Option<FilesystemTargetRef>,
+    project: Option<String>,
+    worktree_path: Option<String>,
+) -> Result<FilesystemTargetRef, (String, String)> {
+    match (target, project) {
+        (Some(FilesystemTargetRef::Workspace(_)), Some(_)) => {
+            Err(("INVALID_FS_TARGET".to_string(), "conflicting target: workspace target cannot have project".to_string()))
+        }
+        (Some(FilesystemTargetRef::Workspace(payload)), None) => {
+            if worktree_path.is_some() {
+                return Err(("INVALID_FS_TARGET".to_string(), "conflicting target: workspace target cannot have worktreePath".to_string()));
+            }
+            Ok(FilesystemTargetRef::Workspace(payload))
+        }
+        (Some(FilesystemTargetRef::Project(p)), Some(proj)) => {
+            if p.project != proj || p.worktree_path != worktree_path {
+                return Err(("INVALID_FS_TARGET".to_string(), "conflicting target and project fields".to_string()));
+            }
+            Ok(FilesystemTargetRef::Project(p))
+        }
+        (Some(FilesystemTargetRef::Project(p)), None) => {
+            Ok(FilesystemTargetRef::Project(p))
+        }
+        (None, Some(proj)) => {
+            Ok(FilesystemTargetRef::project(proj, worktree_path))
+        }
+        (None, None) => {
+            Err(("INVALID_FS_TARGET".to_string(), "missing filesystem target".to_string()))
+        }
+    }
+}
+
 /// Resolve project + relative path → validated absolute path.
 async fn resolve_abs_path(
-    project: &str,
-    worktree_path: Option<&str>,
-    path: &str,
     state: &AppState,
+    target_ref: &FilesystemTargetRef,
+    path: &str,
 ) -> Result<std::path::PathBuf, (String, String)> {
-    resolve_target_path(project, worktree_path, path, state)
+    resolve_target_path(state, target_ref, path)
         .await
-        .map(|(_, canonical)| canonical)
+        .map(|(_, canonical, _)| canonical)
+}
+
+fn validate_workspace_mutation_authority(
+    state: &AppState,
+    target_ref: &FilesystemTargetRef,
+    msg_epoch: Option<u64>,
+) -> Result<(), (String, String)> {
+    if !target_ref.is_workspace() {
+        return Ok(());
+    }
+    let target_epoch = match target_ref {
+        FilesystemTargetRef::Workspace(payload) => payload.workspace_epoch,
+        _ => None,
+    };
+    if let (Some(m), Some(t)) = (msg_epoch, target_epoch) {
+        if m != t {
+            return Err((
+                "MISMATCHED_WORKSPACE_AUTHORITY".into(),
+                format!("Conflicting workspaceEpoch values: message has {m}, target has {t}"),
+            ));
+        }
+    }
+    let epoch = msg_epoch.or(target_epoch);
+    let Some(epoch) = epoch else {
+        return Err((
+            "STALE_WORKSPACE_AUTHORITY".into(),
+            "workspaceEpoch is required for workspace operations".into(),
+        ));
+    };
+    let current_epoch = state.workspace_epoch();
+    if epoch != current_epoch {
+        return Err((
+            "STALE_WORKSPACE_AUTHORITY".into(),
+            format!("Stale workspace authority: client provided epoch {epoch}, current is {current_epoch}"),
+        ));
+    }
+    Ok(())
 }
 
 async fn resolve_target_path(
-    project: &str,
-    worktree_path: Option<&str>,
-    path: &str,
     state: &AppState,
-) -> Result<(ResolvedProjectTarget, std::path::PathBuf), (String, String)> {
+    target_ref: &FilesystemTargetRef,
+    path: &str,
+) -> Result<(ResolvedFilesystemTarget, std::path::PathBuf, FileIdentity), (String, String)> {
     let rel = if path.is_empty() || path == "/" {
         "."
     } else {
         path.trim_start_matches('/')
     };
-    let target_ref = ProjectTargetRef {
-        project: project.to_owned(),
-        worktree_path: worktree_path.map(str::to_owned),
-    };
-    super::fs::resolve(state, &target_ref, rel)
+    super::fs::resolve(state, target_ref, rel)
         .await
-        .map(|resolved| (resolved.target, resolved.canonical))
+        .map(|resolved| (resolved.target, resolved.canonical, resolved.file_identity))
         .map_err(map_fs_resolution_error)
 }
 
 async fn bind_resolved_target(
-    target: ResolvedProjectTarget,
+    state: &AppState,
+    target: ResolvedFilesystemTarget,
 ) -> Result<TargetBinding, crate::fs::FsError> {
-    let target_path = target.target_path().to_path_buf();
+    let target_path = target.root_path().to_path_buf();
     let root_identity =
         tokio::task::spawn_blocking(move || secure_path::directory_identity(&target_path))
             .await
             .map_err(|error| crate::fs::FsError::Io(std::io::Error::other(error.to_string())))??;
+    let workspace_generation = state
+        .workspace_sandbox()
+        .map(|s| s.generation())
+        .unwrap_or(1);
     Ok(TargetBinding {
         resolved: target,
         root_identity,
+        workspace_generation,
     })
 }
 
 async fn revalidate_target_binding(
     state: &AppState,
     binding: &TargetBinding,
-) -> Result<ResolvedProjectTarget, crate::fs::FsError> {
-    let expected = &binding.resolved;
-    let target_ref = ProjectTargetRef {
-        project: expected.project().to_owned(),
-        worktree_path: (!expected.is_root())
-            .then(|| expected.target_path().to_string_lossy().into_owned()),
-    };
-    let current = state
-        .resolve_project_target(&target_ref)
-        .await
-        .map_err(|error| crate::fs::FsError::MutationRefused(error.to_string()))?;
-    if current.project() != expected.project()
-        || current.configured_root() != expected.configured_root()
-        || current.target_path() != expected.target_path()
-        || current.target_key() != expected.target_key()
-        || current.is_root() != expected.is_root()
-    {
-        return Err(crate::fs::FsError::MutationRefused(
-            "filesystem target changed while operation was in flight".into(),
-        ));
-    }
+) -> Result<ResolvedFilesystemTarget, crate::fs::FsError> {
+    match &binding.resolved {
+        ResolvedFilesystemTarget::Workspace { root: expected_root } => {
+            let sandbox = state.workspace_sandbox()?;
+            if sandbox.generation() != binding.workspace_generation {
+                return Err(crate::fs::FsError::MutationRefused(
+                    "workspace authority changed while operation was in flight".into(),
+                ));
+            }
+            if sandbox.root() != expected_root {
+                return Err(crate::fs::FsError::MutationRefused(
+                    "workspace root changed while operation was in flight".into(),
+                ));
+            }
+            let root_path = sandbox.root().to_path_buf();
+            let root_identity =
+                tokio::task::spawn_blocking(move || secure_path::directory_identity(&root_path))
+                    .await
+                    .map_err(|error| crate::fs::FsError::Io(std::io::Error::other(error.to_string())))??;
+            if root_identity != binding.root_identity {
+                return Err(crate::fs::FsError::MutationRefused(
+                    "workspace root was replaced while operation was in flight".into(),
+                ));
+            }
+            Ok(ResolvedFilesystemTarget::Workspace {
+                root: sandbox.root().to_path_buf(),
+            })
+        }
+        ResolvedFilesystemTarget::Project(expected) => {
+            let target_ref = ProjectTargetRef {
+                project: expected.project().to_owned(),
+                worktree_path: (!expected.is_root())
+                    .then(|| expected.target_path().to_string_lossy().into_owned()),
+            };
+            let current = state
+                .resolve_project_target(&target_ref)
+                .await
+                .map_err(|error| crate::fs::FsError::MutationRefused(error.to_string()))?;
+            if current.project() != expected.project()
+                || current.configured_root() != expected.configured_root()
+                || current.target_path() != expected.target_path()
+                || current.target_key() != expected.target_key()
+                || current.is_root() != expected.is_root()
+            {
+                return Err(crate::fs::FsError::MutationRefused(
+                    "filesystem target changed while operation was in flight".into(),
+                ));
+            }
 
-    let target_path = current.target_path().to_path_buf();
-    let root_identity =
-        tokio::task::spawn_blocking(move || secure_path::directory_identity(&target_path))
-            .await
-            .map_err(|error| crate::fs::FsError::Io(std::io::Error::other(error.to_string())))??;
-    if root_identity != binding.root_identity {
-        return Err(crate::fs::FsError::MutationRefused(
-            "filesystem target was replaced while operation was in flight".into(),
-        ));
+            let target_path = current.target_path().to_path_buf();
+            let root_identity =
+                tokio::task::spawn_blocking(move || secure_path::directory_identity(&target_path))
+                    .await
+                    .map_err(|error| crate::fs::FsError::Io(std::io::Error::other(error.to_string())))??;
+            if root_identity != binding.root_identity {
+                return Err(crate::fs::FsError::MutationRefused(
+                    "filesystem target was replaced while operation was in flight".into(),
+                ));
+            }
+            Ok(ResolvedFilesystemTarget::Project(current))
+        }
     }
-    Ok(current)
 }
 
 async fn revalidate_bound_path(
@@ -2215,23 +2461,45 @@ async fn revalidate_bound_path(
     allow_missing_final: bool,
 ) -> Result<std::path::PathBuf, crate::fs::FsError> {
     let current = revalidate_target_binding(state, binding).await?;
-    let sandbox = state.fs.sandbox()?;
-    let proposed = current.target_path().join(relative_path);
-    let validated = if allow_missing_final {
-        let parent = proposed.parent().ok_or_else(|| {
-            crate::fs::FsError::MutationRefused("target path has no parent".into())
-        })?;
-        let name = proposed
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| {
-                crate::fs::FsError::MutationRefused("target filename is invalid".into())
-            })?;
-        sandbox
-            .validate_new_target_path(&current, parent.to_path_buf(), name)
-            .await?
-    } else {
-        sandbox.validate_target(&current, proposed).await?
+    let validated = match current {
+        ResolvedFilesystemTarget::Workspace { root } => {
+            let sandbox = state.workspace_sandbox()?;
+            let proposed = root.join(relative_path);
+            if allow_missing_final {
+                let parent = proposed.parent().ok_or_else(|| {
+                    crate::fs::FsError::MutationRefused("target path has no parent".into())
+                })?;
+                let name = proposed
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| {
+                        crate::fs::FsError::MutationRefused("target filename is invalid".into())
+                    })?;
+                sandbox.validate_workspace_new_path(parent.to_path_buf(), name).await?
+            } else {
+                sandbox.validate_workspace(proposed).await?
+            }
+        }
+        ResolvedFilesystemTarget::Project(proj_target) => {
+            let sandbox = state.fs.sandbox()?;
+            let proposed = proj_target.target_path().join(relative_path);
+            if allow_missing_final {
+                let parent = proposed.parent().ok_or_else(|| {
+                    crate::fs::FsError::MutationRefused("target path has no parent".into())
+                })?;
+                let name = proposed
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| {
+                        crate::fs::FsError::MutationRefused("target filename is invalid".into())
+                    })?;
+                sandbox
+                    .validate_new_target_path(&proj_target, parent.to_path_buf(), name)
+                    .await?
+            } else {
+                sandbox.validate_target(&proj_target, proposed).await?
+            }
+        }
     };
     if validated != expected_abs {
         return Err(crate::fs::FsError::MutationRefused(
@@ -2256,8 +2524,7 @@ fn map_fs_resolution_error(error: crate::error::AppError) -> (String, String) {
 /// Handle `fs:read` — stat + binary detect + ranged/full read → base64 response.
 async fn do_fs_read(
     req_id: u64,
-    project: &str,
-    worktree_path: Option<&str>,
+    target_ref: &FilesystemTargetRef,
     path: &str,
     offset: Option<u64>,
     len: Option<u64>,
@@ -2275,6 +2542,7 @@ async fn do_fs_read(
                 size: None,
                 data: None,
                 code: Some("UNSUPPORTED_READ_MODE".into()),
+                file_identity: None,
             };
         }
         if offset.is_some() || len.is_some() {
@@ -2287,6 +2555,7 @@ async fn do_fs_read(
                 size: None,
                 data: None,
                 code: Some("RANGE_NOT_ALLOWED".into()),
+                file_identity: None,
             };
         }
         let is_md = std::path::Path::new(path)
@@ -2304,14 +2573,11 @@ async fn do_fs_read(
                 size: None,
                 data: None,
                 code: Some("INVALID_EXTENSION".into()),
+                file_identity: None,
             };
         }
 
-        let target_ref = ProjectTargetRef {
-            project: project.to_owned(),
-            worktree_path: worktree_path.map(str::to_owned),
-        };
-        let target = match state.resolve_project_target(&target_ref).await {
+        let resolved_target = match state.resolve_filesystem_target(target_ref).await {
             Ok(t) => t,
             Err(e) => {
                 let (code, _) = map_fs_resolution_error(e);
@@ -2324,10 +2590,11 @@ async fn do_fs_read(
                     size: None,
                     data: None,
                     code: Some(code),
+                    file_identity: None,
                 };
             }
         };
-        if !target.available() {
+        if !resolved_target.available() {
             return ServerMsg::FsReadResult {
                 req_id,
                 ok: false,
@@ -2337,9 +2604,10 @@ async fn do_fs_read(
                 size: None,
                 data: None,
                 code: Some("TARGET_UNAVAILABLE".into()),
+                file_identity: None,
             };
         }
-        let root_path = target.target_path().to_path_buf();
+        let root_path = resolved_target.root_path().to_path_buf();
         let initial_root_id = match secure_path::directory_identity(&root_path) {
             Ok(id) => id,
             Err(_) => {
@@ -2352,6 +2620,7 @@ async fn do_fs_read(
                     size: None,
                     data: None,
                     code: Some("FS_UNAVAILABLE".into()),
+                    file_identity: None,
                 };
             }
         };
@@ -2371,6 +2640,7 @@ async fn do_fs_read(
                 size: None,
                 data: None,
                 code: Some("PATH_REJECTED".into()),
+                file_identity: None,
             };
         }
 
@@ -2386,6 +2656,7 @@ async fn do_fs_read(
                     size: None,
                     data: None,
                     code: Some("TOO_LARGE".into()),
+                    file_identity: None,
                 };
             }
             Err(crate::fs::FsError::Conflict) => {
@@ -2398,6 +2669,7 @@ async fn do_fs_read(
                     size: None,
                     data: None,
                     code: Some("CONFLICT".into()),
+                    file_identity: None,
                 };
             }
             Err(crate::fs::FsError::NotFound) => {
@@ -2410,6 +2682,7 @@ async fn do_fs_read(
                     size: None,
                     data: None,
                     code: Some("NOT_FOUND".into()),
+                    file_identity: None,
                 };
             }
             Err(_) => {
@@ -2422,6 +2695,7 @@ async fn do_fs_read(
                     size: None,
                     data: None,
                     code: Some("READ_FAILED".into()),
+                    file_identity: None,
                 };
             }
         };
@@ -2436,10 +2710,11 @@ async fn do_fs_read(
                 size: None,
                 data: None,
                 code: Some("INVALID_DOCUMENT".into()),
+                file_identity: None,
             };
         }
 
-        let current_root_id = match secure_path::directory_identity(target.target_path()) {
+        let current_root_id = match secure_path::directory_identity(resolved_target.root_path()) {
             Ok(id) => id,
             Err(_) => {
                 return ServerMsg::FsReadResult {
@@ -2451,6 +2726,7 @@ async fn do_fs_read(
                     size: None,
                     data: None,
                     code: Some("TARGET_CHANGED".into()),
+                    file_identity: None,
                 };
             }
         };
@@ -2464,10 +2740,16 @@ async fn do_fs_read(
                 size: None,
                 data: None,
                 code: Some("TARGET_CHANGED".into()),
+                file_identity: None,
             };
         }
 
         let encoded = BASE64.encode(&snap.bytes);
+        let file_identity = FileIdentity::new(
+            state.workspace_id().await,
+            state.workspace_epoch(),
+            root_path.join(p).to_string_lossy().to_string(),
+        );
         return ServerMsg::FsReadResult {
             req_id,
             ok: true,
@@ -2477,9 +2759,10 @@ async fn do_fs_read(
             size: Some(snap.size_bytes),
             data: Some(encoded),
             code: None,
+            file_identity: Some(file_identity),
         };
     }
-    let abs = match resolve_abs_path(project, worktree_path, path, state).await {
+    let (_, abs, file_identity) = match resolve_target_path(state, target_ref, path).await {
         Ok(p) => p,
         Err((code, _message)) => {
             return ServerMsg::FsReadResult {
@@ -2491,6 +2774,7 @@ async fn do_fs_read(
                 size: None,
                 data: None,
                 code: Some(code),
+                file_identity: None,
             };
         }
     };
@@ -2508,6 +2792,7 @@ async fn do_fs_read(
                 size: None,
                 data: None,
                 code: Some(format!("IO_ERROR: {e}")),
+                file_identity: None,
             };
         }
     };
@@ -2525,6 +2810,7 @@ async fn do_fs_read(
                 size: None,
                 data: None,
                 code: Some(format!("IO_ERROR: {e}")),
+                file_identity: None,
             };
         }
     };
@@ -2543,7 +2829,6 @@ async fn do_fs_read(
         _ => None,
     };
 
-    // Without a range, enforce 5MB cap (range reads are uncapped — LargeFileViewer owns that)
     let max = if range.is_some() {
         u64::MAX
     } else {
@@ -2562,6 +2847,7 @@ async fn do_fs_read(
                 size: Some(file_size),
                 data: None,
                 code: Some("TOO_LARGE".into()),
+                file_identity: None,
             };
         }
         Err(e) => {
@@ -2574,6 +2860,7 @@ async fn do_fs_read(
                 size: None,
                 data: None,
                 code: Some(e.to_string()),
+                file_identity: None,
             };
         }
     };
@@ -2589,6 +2876,7 @@ async fn do_fs_read(
         size: Some(file_size),
         data: Some(encoded),
         code: None,
+        file_identity: Some(file_identity),
     }
 }
 
@@ -2599,38 +2887,49 @@ async fn do_fs_read(
 async fn do_fs_op(
     _req_id: u64,
     op: &str,
-    project: &str,
-    worktree_path: Option<&str>,
+    target_ref: &FilesystemTargetRef,
     path: &str,
     new_path: Option<&str>,
     force_git: bool,
     state: &AppState,
 ) -> Result<(), crate::fs::FsError> {
+    let _auth_guard = state.workspace_context_guard.read().await;
     let target = state
-        .resolve_project_target(&ProjectTargetRef {
-            project: project.to_owned(),
-            worktree_path: worktree_path.map(str::to_owned),
-        })
+        .resolve_filesystem_target(target_ref)
         .await
         .map_err(|e| crate::fs::FsError::MutationRefused(e.to_string()))?;
 
-    let sandbox = state.fs.sandbox()?;
-    let target_root = target.target_path().to_path_buf();
+    let target_root = target.root_path().to_path_buf();
+    let ws_root = state.workspace_sandbox().ok().map(|s| s.root().to_path_buf());
+    let cfg = state.config.read().await;
+    let proj_roots: Vec<std::path::PathBuf> = cfg.projects.iter().map(|p| std::path::PathBuf::from(&p.path)).collect();
+    drop(cfg);
 
     match op {
         "create_file" | "create_dir" => {
-            // Target doesn't exist yet — validate via parent + filename split.
             let rel = trim_leading_slash(path);
             let proposed = target_root.join(rel);
             let parent = proposed
                 .parent()
                 .map(|p| p.to_path_buf())
-                .unwrap_or(target_root.clone());
+                .unwrap_or_else(|| target_root.clone());
             let name = proposed.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            // Validate parent exists and is within sandbox, then construct new abs path.
-            let new_abs = sandbox
-                .validate_new_target_path(&target, parent, name)
-                .await?;
+            let new_abs = match &target {
+                ResolvedFilesystemTarget::Workspace { .. } => {
+                    let sandbox = state.workspace_sandbox()?;
+                    sandbox.validate_workspace_new_path(parent, name).await?
+                }
+                ResolvedFilesystemTarget::Project(proj) => {
+                    let sandbox = state.fs.sandbox()?;
+                    sandbox.validate_new_target_path(proj, parent, name).await?
+                }
+            };
+            crate::fs::mutate::assert_safe_mutation_against_roots(
+                &new_abs,
+                ws_root.as_deref(),
+                &proj_roots,
+                false,
+            )?;
             if op == "create_file" {
                 mutate::create_file(&new_abs, &target_root).await
             } else {
@@ -2639,22 +2938,46 @@ async fn do_fs_op(
         }
         "delete" => {
             let rel = trim_leading_slash(path);
-            // Empty/root path: validate will succeed on project root.
-            // assert_safe_mutation will then reject it.
             let abs = if rel == "." {
                 target_root.clone()
             } else {
-                sandbox
-                    .validate_target(&target, target_root.join(rel))
-                    .await?
+                match &target {
+                    ResolvedFilesystemTarget::Workspace { .. } => {
+                        let sandbox = state.workspace_sandbox()?;
+                        sandbox.validate_workspace(target_root.join(rel)).await?
+                    }
+                    ResolvedFilesystemTarget::Project(proj) => {
+                        let sandbox = state.fs.sandbox()?;
+                        sandbox.validate_target(proj, target_root.join(rel)).await?
+                    }
+                }
             };
+            crate::fs::mutate::assert_safe_mutation_against_roots(
+                &abs,
+                ws_root.as_deref(),
+                &proj_roots,
+                force_git,
+            )?;
             mutate::delete(&abs, &target_root, force_git).await
         }
         "rename" | "move" => {
             let rel = trim_leading_slash(path);
-            let abs = sandbox
-                .validate_target(&target, target_root.join(rel))
-                .await?;
+            let abs = match &target {
+                ResolvedFilesystemTarget::Workspace { .. } => {
+                    let sandbox = state.workspace_sandbox()?;
+                    sandbox.validate_workspace(target_root.join(rel)).await?
+                }
+                ResolvedFilesystemTarget::Project(proj) => {
+                    let sandbox = state.fs.sandbox()?;
+                    sandbox.validate_target(proj, target_root.join(rel)).await?
+                }
+            };
+            crate::fs::mutate::assert_safe_mutation_against_roots(
+                &abs,
+                ws_root.as_deref(),
+                &proj_roots,
+                false,
+            )?;
 
             let dst_rel = new_path.ok_or_else(|| {
                 crate::fs::FsError::MutationRefused("rename/move requires new_path".into())
@@ -2664,14 +2987,27 @@ async fn do_fs_op(
             let dst_parent = dst_proposed
                 .parent()
                 .map(|p| p.to_path_buf())
-                .unwrap_or(target_root.clone());
+                .unwrap_or_else(|| target_root.clone());
             let dst_name = dst_proposed
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("");
-            let dst_abs = sandbox
-                .validate_new_target_path(&target, dst_parent, dst_name)
-                .await?;
+            let dst_abs = match &target {
+                ResolvedFilesystemTarget::Workspace { .. } => {
+                    let sandbox = state.workspace_sandbox()?;
+                    sandbox.validate_workspace_new_path(dst_parent, dst_name).await?
+                }
+                ResolvedFilesystemTarget::Project(proj) => {
+                    let sandbox = state.fs.sandbox()?;
+                    sandbox.validate_new_target_path(proj, dst_parent, dst_name).await?
+                }
+            };
+            crate::fs::mutate::assert_safe_mutation_against_roots(
+                &dst_abs,
+                ws_root.as_deref(),
+                &proj_roots,
+                false,
+            )?;
 
             if op == "rename" {
                 mutate::rename(&abs, &dst_abs, &target_root).await
@@ -2700,8 +3036,7 @@ fn trim_leading_slash(s: &str) -> &str {
 async fn do_upload_begin(
     _req_id: u64,
     upload_id: &str,
-    project: &str,
-    worktree_path: Option<&str>,
+    target_ref: &FilesystemTargetRef,
     dir: &str,
     filename: &str,
     len: u64,
@@ -2713,38 +3048,41 @@ async fn do_upload_begin(
     }
 
     let target = state
-        .resolve_project_target(&ProjectTargetRef {
-            project: project.to_owned(),
-            worktree_path: worktree_path.map(str::to_owned),
-        })
+        .resolve_filesystem_target(target_ref)
         .await
         .map_err(|e| crate::fs::FsError::MutationRefused(e.to_string()))?;
 
-    let sandbox = state.fs.sandbox()?;
-
+    let target_root = target.root_path().to_path_buf();
     let dir_rel = trim_leading_slash(dir);
-    let dir_abs = sandbox
-        .validate_target(&target, target.target_path().join(dir_rel))
-        .await?;
 
-    // validate_new_path checks filename for path separators / ".." / empty
-    let target_abs = sandbox
-        .validate_new_target_path(&target, dir_abs, filename)
-        .await?;
+    let (dir_abs, target_abs) = match &target {
+        ResolvedFilesystemTarget::Workspace { root } => {
+            let sandbox = state.workspace_sandbox()?;
+            let dir_abs = sandbox.validate_workspace(root.join(dir_rel)).await?;
+            let target_abs = sandbox.validate_workspace_new_path(dir_abs.clone(), filename).await?;
+            (dir_abs, target_abs)
+        }
+        ResolvedFilesystemTarget::Project(proj) => {
+            let sandbox = state.fs.sandbox()?;
+            let dir_abs = sandbox.validate_target(proj, proj.target_path().join(dir_rel)).await?;
+            let target_abs = sandbox.validate_new_target_path(proj, dir_abs.clone(), filename).await?;
+            (dir_abs, target_abs)
+        }
+    };
 
     let relative_path = target_abs
-        .strip_prefix(target.target_path())
+        .strip_prefix(&target_root)
         .map_err(|_| crate::fs::FsError::PathEscape)?
         .to_path_buf();
-    let target = bind_resolved_target(target).await?;
+    let bound_target = bind_resolved_target(state, target).await?;
     let upload_state = UploadInFlight {
-        target,
+        target: bound_target,
         relative_path,
         inner: UploadState::new(target_abs, len)?,
     };
     uploads.insert(upload_id.to_string(), upload_state);
 
-    debug!(upload_id, len, project, "fs:upload_begin accepted");
+    debug!(upload_id, len, "fs:upload_begin accepted");
     Ok(())
 }
 
@@ -2918,6 +3256,7 @@ async fn handle_enc_put_save_binary(
                 ok: false,
                 new_mtime: None,
                 error: Some("OPAQUE session not found — login may have expired".into()),
+                file_identity: None,
             };
             if let Ok(json) = serde_json::to_string(&msg) {
                 let _ = pty_tx.send(WireMsg::Text(json)).await;
@@ -2926,6 +3265,7 @@ async fn handle_enc_put_save_binary(
         }
     };
 
+    let _auth_guard = state.workspace_context_guard.read().await;
     match revalidate_bound_path(state, target, relative_path, path_abs, false).await {
         Ok(_) => {}
         Err(error) => {
@@ -2935,6 +3275,7 @@ async fn handle_enc_put_save_binary(
                 ok: false,
                 new_mtime: None,
                 error: Some(error.to_string()),
+                file_identity: None,
             };
             if let Ok(json) = serde_json::to_string(&msg) {
                 let _ = pty_tx.send(WireMsg::Text(json)).await;
@@ -2943,8 +3284,31 @@ async fn handle_enc_put_save_binary(
         }
     }
 
+    let ws_root = state.workspace_sandbox().ok().map(|s| s.root().to_path_buf());
+    let cfg = state.config.read().await;
+    let proj_roots: Vec<std::path::PathBuf> = cfg.projects.iter().map(|p| std::path::PathBuf::from(&p.path)).collect();
+    drop(cfg);
+    if let Err(e) = crate::fs::mutate::assert_safe_mutation_against_roots(
+        path_abs,
+        ws_root.as_deref(),
+        &proj_roots,
+        false,
+    ) {
+        let msg = ServerMsg::FsPutSaveResult {
+            req_id,
+            ok: false,
+            new_mtime: None,
+            error: Some(e.to_string()),
+            file_identity: None,
+        };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let _ = pty_tx.send(WireMsg::Text(json)).await;
+        }
+        return;
+    }
+
     let encrypted_bytes = data.to_vec();
-    let target_root = target.resolved.target_path().to_path_buf();
+    let target_root = target.resolved.root_path().to_path_buf();
     let target_root_identity = target.root_identity;
     let relative_path = relative_path.to_path_buf();
 
@@ -2963,6 +3327,12 @@ async fn handle_enc_put_save_binary(
     })
     .await;
 
+    let file_identity = FileIdentity::new(
+        state.workspace_id().await,
+        state.workspace_epoch(),
+        path_abs.to_string_lossy().to_string(),
+    );
+
     let msg = match result {
         Ok(Ok(new_mtime)) => {
             debug!(req_id, new_mtime, "fs:put_save decrypt ok");
@@ -2971,6 +3341,7 @@ async fn handle_enc_put_save_binary(
                 ok: true,
                 new_mtime: Some(new_mtime),
                 error: None,
+                file_identity: Some(file_identity),
             }
         }
         Ok(Err(e)) => {
@@ -2980,6 +3351,7 @@ async fn handle_enc_put_save_binary(
                 ok: false,
                 new_mtime: None,
                 error: Some(format!("decrypt failed: {e}")),
+                file_identity: None,
             }
         }
         Err(e) => {
@@ -2989,6 +3361,7 @@ async fn handle_enc_put_save_binary(
                 ok: false,
                 new_mtime: None,
                 error: Some(format!("internal error: {e}")),
+                file_identity: None,
             }
         }
     };
@@ -3005,8 +3378,7 @@ async fn do_enc_put_begin(
     _req_id: u64,
     upload_id: &str,
     session_id: &str,
-    project: &str,
-    worktree_path: Option<&str>,
+    target_ref: &FilesystemTargetRef,
     dir: &str,
     filename: &str,
     len: u64,
@@ -3014,7 +3386,6 @@ async fn do_enc_put_begin(
     state: &AppState,
     enc_uploads: &mut HashMap<String, EncUploadInFlight>,
 ) -> Result<(), (String, String)> {
-    // FIX-04: cap concurrent encrypted uploads per connection
     if enc_uploads.len() >= 8 {
         return Err((
             "LIMIT_EXCEEDED".into(),
@@ -3040,81 +3411,55 @@ async fn do_enc_put_begin(
     }
 
     let target = state
-        .resolve_project_target(&ProjectTargetRef {
-            project: project.to_owned(),
-            worktree_path: worktree_path.map(str::to_owned),
-        })
+        .resolve_filesystem_target(target_ref)
         .await
         .map_err(map_fs_resolution_error)?;
-    let sandbox = state
-        .fs
-        .sandbox()
-        .map_err(|e| ("FS_UNAVAILABLE".into(), e.to_string()))?;
-    let target_root = target.target_path().to_path_buf();
 
-    let dir_abs = target_root.join(dir.trim_start_matches('/'));
+    let target_root = target.root_path().to_path_buf();
+    let dir_rel = trim_leading_slash(dir);
+    let dir_proposed = target_root.join(dir_rel);
 
-    // FIX-01: fast-path lexical traversal check before any filesystem I/O
-    if dir_abs
+    if dir_proposed
         .components()
         .any(|c| c == std::path::Component::ParentDir)
     {
         return Err(("FORBIDDEN".into(), "path traversal in dir field".into()));
     }
 
-    // FIX-01 + FIX-M2: validate nearest existing ancestor BEFORE creating dirs.
-    // This prevents create_dir_all from following a pre-existing symlink that escapes the sandbox.
-    {
-        let mut check = dir_abs.clone();
-        loop {
-            match sandbox.validate_target(&target, check.clone()).await {
-                Ok(_) => break, // found an existing ancestor within sandbox
-                Err(crate::fs::FsError::NotFound) => {
-                    check = check.parent().map(|p| p.to_path_buf()).ok_or_else(|| {
-                        (
-                            "INVALID_PATH".into(),
-                            "dir has no valid parent within workspace".into(),
-                        )
-                    })?;
-                }
-                Err(e) => {
-                    return Err(match e {
-                        crate::fs::FsError::PathEscape | crate::fs::FsError::PermissionDenied => {
-                            ("FORBIDDEN".into(), "dir resolves outside workspace".into())
-                        }
-                        _ => ("INVALID_PATH".into(), e.to_string()),
-                    });
-                }
-            }
+    let (dir_abs, target_abs) = match &target {
+        ResolvedFilesystemTarget::Workspace { .. } => {
+            let sandbox = state
+                .workspace_sandbox()
+                .map_err(|e| ("FS_UNAVAILABLE".into(), e.to_string()))?;
+            let dir_abs = sandbox
+                .validate_workspace(dir_proposed)
+                .await
+                .map_err(|e| ("PATH_REJECTED".into(), e.to_string()))?;
+            let target_abs = sandbox
+                .validate_workspace_new_path(dir_abs.clone(), filename)
+                .await
+                .map_err(|e| ("PATH_REJECTED".into(), e.to_string()))?;
+            (dir_abs, target_abs)
         }
-    }
-
-    // FIX-08: auto-create target directory (ancestor validated safe above)
-    tokio::fs::create_dir_all(&dir_abs).await.map_err(|e| {
-        (
-            "UPLOAD_INIT_FAILED".into(),
-            format!("failed to create target directory: {e}"),
-        )
-    })?;
-
-    // FIX-01: final canonicalize + sandbox check on now-existing dir
-    let dir_validated = sandbox
-        .validate_target(&target, dir_abs)
-        .await
-        .map_err(|e| match e {
-            crate::fs::FsError::PathEscape | crate::fs::FsError::PermissionDenied => {
-                ("FORBIDDEN".into(), "dir resolves outside workspace".into())
-            }
-            _ => ("INVALID_PATH".into(), e.to_string()),
-        })?;
-
-    let target_abs = sandbox
-        .validate_new_target_path(&target, dir_validated, filename)
-        .await
-        .map_err(|e| ("INVALID_PATH".into(), e.to_string()))?;
+        ResolvedFilesystemTarget::Project(proj) => {
+            let sandbox = state
+                .fs
+                .sandbox()
+                .map_err(|e| ("FS_UNAVAILABLE".into(), e.to_string()))?;
+            let dir_abs = sandbox
+                .validate_target(proj, dir_proposed)
+                .await
+                .map_err(|e| ("PATH_REJECTED".into(), e.to_string()))?;
+            let target_abs = sandbox
+                .validate_new_target_path(proj, dir_abs.clone(), filename)
+                .await
+                .map_err(|e| ("PATH_REJECTED".into(), e.to_string()))?;
+            (dir_abs, target_abs)
+        }
+    };
 
     let relative_path = target_abs
-        .strip_prefix(target.target_path())
+        .strip_prefix(&target_root)
         .map_err(|_| {
             (
                 "FORBIDDEN".into(),
@@ -3122,11 +3467,11 @@ async fn do_enc_put_begin(
             )
         })?
         .to_path_buf();
-    let target = bind_resolved_target(target)
+    let bound_target = bind_resolved_target(state, target)
         .await
         .map_err(|error| ("UPLOAD_INIT_FAILED".into(), error.to_string()))?;
     let enc_state = EncUploadInFlight {
-        target,
+        target: bound_target,
         relative_path,
         inner: EncUploadState::new(target_abs, len, session_id.to_string(), expected_mtime)
             .map_err(|e| ("UPLOAD_INIT_FAILED".into(), e.to_string()))?,
@@ -3277,8 +3622,7 @@ async fn pump_agent_status(
 
 async fn do_fs_subscribe(
     req_id: u64,
-    project: &str,
-    worktree_path: Option<&str>,
+    target_ref: &FilesystemTargetRef,
     path: &str,
     watch_only: Option<bool>,
     state: &AppState,
@@ -3286,45 +3630,71 @@ async fn do_fs_subscribe(
     fs_tx: mpsc::Sender<WireMsg>,
     fs_pumps: &mut HashMap<u64, tokio::task::JoinHandle<()>>,
 ) -> Result<(), (String, String)> {
-    let (target, abs_path) = resolve_target_path(project, worktree_path, path, state).await?;
+    let (target, abs_path, _) = resolve_target_path(state, target_ref, path).await?;
 
     let is_watch_only = watch_only.unwrap_or(false);
-    let (sub_id, fs_rx) = if is_watch_only {
-        let meta = tokio::fs::metadata(&abs_path)
-            .await
-            .map_err(|e| ("PATH_REJECTED".to_string(), e.to_string()))?;
-        if !meta.is_dir() {
-            return Err((
-                "PATH_REJECTED".to_string(),
-                "path is not a directory".to_string(),
-            ));
+    let (sub_id, fs_rx) = match &target {
+        ResolvedFilesystemTarget::Workspace { .. } => {
+            if is_watch_only {
+                let meta = tokio::fs::metadata(&abs_path)
+                    .await
+                    .map_err(|e| ("PATH_REJECTED".to_string(), e.to_string()))?;
+                if !meta.is_dir() {
+                    return Err((
+                        "PATH_REJECTED".to_string(),
+                        "path is not a directory".to_string(),
+                    ));
+                }
+                state
+                    .fs
+                    .subscribe_workspace_directory(abs_path.clone())
+                    .map_err(|e| ("WATCHER_ERROR".to_string(), e.to_string()))?
+            } else {
+                state
+                    .fs
+                    .subscribe_workspace_tree(abs_path.clone())
+                    .map_err(|e| ("WATCHER_ERROR".to_string(), e.to_string()))?
+            }
         }
-        state
-            .fs
-            .subscribe_target_directory(&target, abs_path.clone())
-            .map_err(|e| match e {
-                crate::fs::FsError::NotFound => (
-                    "PROJECT_NOT_FOUND".to_string(),
-                    format!("Project not found: {project}"),
-                ),
-                crate::fs::FsError::PathEscape => ("PATH_REJECTED".to_string(), e.to_string()),
-                _ => ("WATCHER_ERROR".to_string(), e.to_string()),
-            })?
-    } else {
-        state
-            .fs
-            .subscribe_target_tree(&target, abs_path.clone())
-            .map_err(|e| match e {
-                crate::fs::FsError::NotFound => (
-                    "PROJECT_NOT_FOUND".to_string(),
-                    format!("Project not found: {project}"),
-                ),
-                crate::fs::FsError::PathEscape => ("PATH_REJECTED".to_string(), e.to_string()),
-                _ => ("WATCHER_ERROR".to_string(), e.to_string()),
-            })?
+        ResolvedFilesystemTarget::Project(proj_target) => {
+            if is_watch_only {
+                let meta = tokio::fs::metadata(&abs_path)
+                    .await
+                    .map_err(|e| ("PATH_REJECTED".to_string(), e.to_string()))?;
+                if !meta.is_dir() {
+                    return Err((
+                        "PATH_REJECTED".to_string(),
+                        "path is not a directory".to_string(),
+                    ));
+                }
+                state
+                    .fs
+                    .subscribe_target_directory(proj_target, abs_path.clone())
+                    .map_err(|e| match e {
+                        crate::fs::FsError::NotFound => (
+                            "PROJECT_NOT_FOUND".to_string(),
+                            format!("Project not found: {}", proj_target.project()),
+                        ),
+                        crate::fs::FsError::PathEscape => ("PATH_REJECTED".to_string(), e.to_string()),
+                        _ => ("WATCHER_ERROR".to_string(), e.to_string()),
+                    })?
+            } else {
+                state
+                    .fs
+                    .subscribe_target_tree(proj_target, abs_path.clone())
+                    .map_err(|e| match e {
+                        crate::fs::FsError::NotFound => (
+                            "PROJECT_NOT_FOUND".to_string(),
+                            format!("Project not found: {}", proj_target.project()),
+                        ),
+                        crate::fs::FsError::PathEscape => ("PATH_REJECTED".to_string(), e.to_string()),
+                        _ => ("WATCHER_ERROR".to_string(), e.to_string()),
+                    })?
+            }
+        }
     };
 
-    debug!(sub_id, project, target_key = %target.target_key(), path, is_watch_only, "fs:subscribe_tree");
+    debug!(sub_id, target_key = %target.target_key(), path, is_watch_only, "fs:subscribe_tree");
 
     let mut registration = FsSubscriptionGuard::new(state.fs.clone(), sub_id);
     let nodes = if is_watch_only {
@@ -3349,7 +3719,7 @@ async fn do_fs_subscribe(
         .map_err(|_| ("CONN_CLOSED".to_string(), "connection closed".to_string()))?;
 
     let filter_prefix = abs_path.clone();
-    let event_target_root = is_watch_only.then(|| target.target_path().to_path_buf());
+    let event_target_root = is_watch_only.then(|| target.root_path().to_path_buf());
     let fs = state.fs.clone();
     registration.disarm();
     let handle = tokio::spawn(async move {
@@ -3740,5 +4110,59 @@ mod tests {
         let replacement = super::secure_path::directory_identity(&target).unwrap();
 
         assert_ne!(initial, replacement);
+    }
+
+    #[test]
+    fn extract_ws_target_preserves_workspace_payload_epoch() {
+        use crate::workspace_target::{FilesystemTargetRef, WorkspaceTargetPayload};
+        let target = FilesystemTargetRef::Workspace(WorkspaceTargetPayload {
+            workspace_epoch: Some(999),
+        });
+        let extracted = super::extract_ws_target(Some(target), None, None).unwrap();
+        match extracted {
+            FilesystemTargetRef::Workspace(payload) => {
+                assert_eq!(payload.workspace_epoch, Some(999));
+            }
+            _ => panic!("Expected Workspace target"),
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_workspace_mutation_authority_enforces_epoch() {
+        use crate::workspace_target::{FilesystemTargetRef, WorkspaceTargetPayload};
+        let tmp = tempfile::tempdir().unwrap();
+        let state = crate::api::tests::make_state(&tmp);
+        let epoch = state.workspace_epoch();
+
+        // Target with valid epoch
+        let valid_target = FilesystemTargetRef::Workspace(WorkspaceTargetPayload {
+            workspace_epoch: Some(epoch),
+        });
+        assert!(super::validate_workspace_mutation_authority(&state, &valid_target, None).is_ok());
+        assert!(super::validate_workspace_mutation_authority(&state, &valid_target, Some(epoch)).is_ok());
+
+        // Target with missing epoch and missing msg epoch
+        let missing_target = FilesystemTargetRef::Workspace(WorkspaceTargetPayload {
+            workspace_epoch: None,
+        });
+        let err_missing = super::validate_workspace_mutation_authority(&state, &missing_target, None);
+        assert!(err_missing.is_err());
+        assert_eq!(err_missing.unwrap_err().0, "STALE_WORKSPACE_AUTHORITY");
+
+        // Missing target epoch but valid message epoch
+        assert!(super::validate_workspace_mutation_authority(&state, &missing_target, Some(epoch)).is_ok());
+
+        // Stale epoch
+        let stale_target = FilesystemTargetRef::Workspace(WorkspaceTargetPayload {
+            workspace_epoch: Some(epoch + 10),
+        });
+        let err_stale = super::validate_workspace_mutation_authority(&state, &stale_target, None);
+        assert!(err_stale.is_err());
+        assert_eq!(err_stale.unwrap_err().0, "STALE_WORKSPACE_AUTHORITY");
+
+        // Conflicting epochs
+        let err_conflict = super::validate_workspace_mutation_authority(&state, &valid_target, Some(epoch + 1));
+        assert!(err_conflict.is_err());
+        assert_eq!(err_conflict.unwrap_err().0, "MISMATCHED_WORKSPACE_AUTHORITY");
     }
 }

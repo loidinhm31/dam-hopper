@@ -29,7 +29,7 @@ Commands:
   logs        View logs (pass 'api' or 'web'; defaults to both)
 
 Options:
-  --config <file>     Path to dam-hopper.toml (default: /tmp/dam-hopper-uat/dam-hopper.toml)
+  --config <file>     Path to config.toml (default: /tmp/dam-hopper-uat/config.toml)
   --env-file <file>   Path to env file with MONGODB_URI etc. (default: /tmp/dam-hopper-uat/uat.env)
   --api-port <port>   API server port (default: 4803)
   --web-port <port>   Web host port (default: 4804)
@@ -95,7 +95,7 @@ PID_WEB="$UAT_DIR/web.pid"
 LOG_SERVER="$UAT_DIR/server.log"
 LOG_WEB="$UAT_DIR/web.log"
 RUNTIME_CONFIG="$UAT_DIR/runtime-config.json"
-UAT_CONFIG="${CUSTOM_CONFIG:-$UAT_DIR/dam-hopper.toml}"
+UAT_CONFIG="${CUSTOM_CONFIG:-$UAT_DIR/config.toml}"
 check_prerequisites() {
     if [[ ! -x "$API_BIN" ]]; then
         echo "Error: API binary not found at $API_BIN. Run 'cargo build --release --bins' first." >&2
@@ -169,11 +169,18 @@ setup_uat_environment() {
 }
 EOF
 
-    # Write minimal UAT dam-hopper.toml if not present
+    # Write minimal UAT config.toml if not present (migrating legacy dam-hopper.toml if exists)
     if [[ ! -f "$UAT_CONFIG" ]]; then
-        cat > "$UAT_CONFIG" <<EOF
+        local legacy_uat_config="$UAT_DIR/dam-hopper.toml"
+        if [[ -f "$legacy_uat_config" && "$UAT_CONFIG" == "$UAT_DIR/config.toml" ]]; then
+            cp "$legacy_uat_config" "$legacy_uat_config.bak"
+            mv "$legacy_uat_config" "$UAT_CONFIG"
+            echo "Migrated existing UAT config from $legacy_uat_config to $UAT_CONFIG"
+        else
+            cat > "$UAT_CONFIG" <<EOF
 [workspace]
 name = "uat-workspace"
+root = "${UAT_DIR}"
 
 [server.idle_suspend]
 enabled = false
@@ -181,6 +188,7 @@ automatic_policy = "empty-fleet"
 quiet_period_seconds = 900
 wake_after_seconds = 600
 EOF
+        fi
     fi
 }
 

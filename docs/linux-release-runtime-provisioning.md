@@ -27,7 +27,7 @@ root is opened.
 | `/var/lib/dam-hopper` | API UID:GID, directory `0700` | Durable API state root. Reconciles pre-existing `0755` (created by systemd `StateDirectory=` in v0.2.0) by safely tightening to `0700` via descriptor `fchmod`. |
 | `/var/lib/dam-hopper/.config` | API UID:GID, directory `0700` | API configuration root. Reconciles pre-existing `0755` by safely tightening to `0700` via descriptor `fchmod`. |
 | `/var/lib/dam-hopper/.config/dam-hopper` | API UID:GID, directory `0700` | API diagnostics and token parent. Reconciles pre-existing `0755` by safely tightening to `0700` via descriptor `fchmod`. |
-| `/var/lib/dam-hopper/dam-hopper.toml` | API UID:GID, regular file `0600` | Canonical API registry consumed at startup. |
+| `/var/lib/dam-hopper/config.toml` | API UID:GID, regular file `0600` | Canonical API configuration consumed at startup. |
 | `/var/lib/dam-hopper/idle-suspend-audit.jsonl` | API UID:GID, regular file `0600` | Server timing/manual audit. |
 | `/etc/dam-hopper/dam-hopper.toml` | `root:root`, regular file `0644` | Optional, read-only migration source used only while canonical config is absent. |
 | `/var/lib/dam-hopper/.config/dam-hopper/diagnostics/idle-suspend-events-v1.jsonl` | API-owned diagnostic stream | Validated/used by the semantic event writer; not created by this runtime provisioning gate. |
@@ -58,7 +58,7 @@ component. These checks are bounded and occur before publication.
 Migration is copy-once, not synchronization. After a successful copy, the
 canonical file is the startup authority; later changes to the legacy file are
 ignored. A rerun validates the canonical file and does not rewrite it. Operators
-should edit `/var/lib/dam-hopper/dam-hopper.toml` for production policy changes,
+should edit `/var/lib/dam-hopper/config.toml` for production policy changes,
 then restart `dam-hopper-api.service` so startup captures the immutable idle
 suspend policy. The legacy file may be retained for rollback evidence, but the
 API runtime gate never mutates it.
@@ -77,7 +77,7 @@ sequence is:
    and content checks. If absent, inspect the optional legacy tree read-only or
    select the seed.
 5. Stage the selected bytes in the fixed sibling
-   `.dam-hopper.toml.provisioning` using exclusive creation, `O_NOFOLLOW`, and
+   `.config.toml.provisioning` using exclusive creation, `O_NOFOLLOW`, and
    mode `0600`.
 6. Write all bytes, synchronize the temporary file, set its final API UID/GID
    and mode, then re-stat type, identity, and exact size.
@@ -104,7 +104,7 @@ object in place.
   mode is refused. Existing canonical bytes are not normalized or truncated.
 - A present legacy `/etc` anchor or legacy config with unsafe metadata is
   refused; the gate does not create `/etc`, `/etc/dam-hopper`, or legacy files.
-- An unexpected pre-existing `.dam-hopper.toml.provisioning` is never reused or
+- An unexpected pre-existing `.config.toml.provisioning` is never reused or
   deleted. The fixed temporary name is exclusive and no-follow.
 - If another actor publishes the canonical file first, `RENAME_NOREPLACE`
   refuses the replacement. The winner is preserved and the call removes only
@@ -148,7 +148,7 @@ canonical file.
 
 ### Production policy changes
 
-Edit `/var/lib/dam-hopper/dam-hopper.toml`, preserving API ownership and mode,
+Edit `/var/lib/dam-hopper/config.toml`, preserving API ownership and mode,
 then restart `dam-hopper-api.service`. Startup policy fields are captured at
 boot; timing changes still use the authenticated timing API described in the
 [configuration guide](./configuration-guide.md). Editing the legacy `/etc`

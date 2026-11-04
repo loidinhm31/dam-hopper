@@ -111,6 +111,8 @@ automatic_policy = "agent-free"
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
 

@@ -329,6 +329,8 @@ session_changes_enabled = false
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
 
@@ -382,6 +384,8 @@ async fn test_modified_extension_conflict_preserves_file_and_stays_off() {
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
 
@@ -442,6 +446,8 @@ async fn test_workspace_switch_reconciles_session_changes() {
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: ws_a.join("dam-hopper.toml"),
     };
 
@@ -458,6 +464,8 @@ async fn test_workspace_switch_reconciles_session_changes() {
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: ws_b.join("dam-hopper.toml"),
     };
 

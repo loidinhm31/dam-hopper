@@ -2,7 +2,6 @@
 mod tests;
 
 pub mod discovery;
-pub mod finder;
 pub mod global;
 pub mod parser;
 pub mod presets;
@@ -10,10 +9,9 @@ pub mod replacement;
 pub mod resolve;
 pub mod schema;
 
-pub use finder::{find_config_file, load_workspace_config, CONFIG_FILENAME};
 pub use global::{
     add_known_workspace, add_known_workspace_at, dam_hopper_config_dir, global_config_path,
-    global_env_path, global_registry_path, list_known_workspaces, list_known_workspaces_at,
+    global_env_path, list_known_workspaces, list_known_workspaces_at,
     read_global_config, read_global_config_at, remove_known_workspace, remove_known_workspace_at,
     write_global_config, write_global_config_at,
 };
@@ -24,7 +22,7 @@ pub use resolve::{resolve_startup_config, ConfigResolution, ConfigResolutionInpu
 pub use schema::{
     default_idle_suspend_agent_executables, default_idle_suspend_automatic_policy,
     is_generic_interpreter, validate_agent_executable_entry, validate_agent_executables,
-    AgentAssignment, AgentStoreConfig, CognitoModeStyle, CommandKind, DamHopperConfig, FeaturesConfig, GlobalConfig,
+    AgentAssignment, AgentStoreConfig, CognitoModeStyle, CommandKind, DamHopperConfig, DefaultWindowPlacement, FeaturesConfig, GlobalConfig,
     IdleSuspendAutomaticPolicy, IdleSuspendCapabilitySelection, IdleSuspendConfig, KnownWorkspace,
     ProjectAgents, ProjectConfig, ProjectType, RestartPolicy, ServerConfig, ServiceConfig,
     TerminalProfile, UiConfig, WorkspaceInfo,

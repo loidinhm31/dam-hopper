@@ -1,3 +1,4 @@
+import type { FsTargetRef } from "@/api/ownership.js";
 /**
  * Typed OS Intent routing for DamHopper OS.
  *
@@ -49,7 +50,9 @@ export interface IntentPayloadMap {
     profileId: string;
     projectId?: string;
     worktreeId?: string;
+    target?: FsTargetRef;
     cwd?: string;
+    terminalId?: string;
   };
   "terminal:focus": {
     profileId: string;
@@ -57,23 +60,26 @@ export interface IntentPayloadMap {
   };
   "file:open": {
     profileId: string;
-    projectId: string;
+    projectId?: string;
     worktreeId?: string;
+    target?: FsTargetRef;
     filePath: string;
     line?: number;
     generation?: number;
   };
   "file:edit": {
     profileId: string;
-    projectId: string;
+    projectId?: string;
     worktreeId?: string;
+    target?: FsTargetRef;
     filePath: string;
     line?: number;
   };
   "file:reveal": {
     profileId: string;
-    projectId: string;
+    projectId?: string;
     worktreeId?: string;
+    target?: FsTargetRef;
     filePath: string;
   };
   "browser:preview": {

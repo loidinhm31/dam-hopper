@@ -1,6 +1,7 @@
 package dev.damhopper.nativeapp.features.files
 
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -46,6 +47,17 @@ data class LanguageFilesResponse(
     val limit: Long = 0L,
 )
 
+/** Canonical server identity returned by filesystem reads and stat. */
+@Serializable
+data class FileIdentityDto(
+    @SerialName("workspaceId")
+    val workspaceId: String? = null,
+    @SerialName("workspaceEpoch")
+    val workspaceEpoch: Long? = null,
+    @SerialName("canonicalPath")
+    val canonicalPath: String? = null,
+)
+
 /**
  * REST Stat response DTO for GET /api/fs/stat.
  */
@@ -56,7 +68,16 @@ data class FileStatDto(
     val mtime: Long = 0L,
     val mime: String? = null,
     val isBinary: Boolean = false,
-)
+    @SerialName("fileIdentity")
+    val fileIdentity: FileIdentityDto? = null,
+    @SerialName("file_identity")
+    val fileIdentitySnake: FileIdentityDto? = null,
+    @SerialName("workspaceEpoch")
+    val workspaceEpoch: Long? = null,
+) {
+    val effectiveEpoch: Long?
+        get() = workspaceEpoch ?: fileIdentity?.workspaceEpoch ?: fileIdentitySnake?.workspaceEpoch
+}
 
 /**
  * Result of reading a file via REST or WebSocket.
@@ -70,6 +91,8 @@ data class FsFileReadResult(
     val textContent: String? = null,
     val binaryData: ByteArray? = null,
     val errorCode: String? = null,
+    val workspaceEpoch: Long? = null,
+    val fileIdentity: FileIdentityDto? = null,
 )
 
 /**

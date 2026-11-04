@@ -31,10 +31,10 @@ fi
 
 # 2. Verify installer source has zero daemon-TOML provisioning or repair
 log "Verifying installer does not provision or repair daemon-TOML in /etc or /var/lib"
-if grep -E "dam-hopper\.toml" "$INSTALLER"; then
-    fail "Installer must not reference or provision dam-hopper.toml"
+if grep -E "config\.toml|dam-hopper\.toml" "$INSTALLER"; then
+    fail "Installer must not reference or provision config.toml or dam-hopper.toml"
 fi
-if grep -E "(mkdir|tee|cat|install|chmod|chown).*dam-hopper\.toml" "$INSTALLER"; then
+if grep -E "(mkdir|tee|cat|install|chmod|chown).*(config|dam-hopper)\.toml" "$INSTALLER"; then
     fail "Installer must not contain TOML creation, modification, or repair commands"
 fi
 

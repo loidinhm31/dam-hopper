@@ -18,6 +18,8 @@ vi.mock("@/api/transport.js", () => ({ getTransport: getTransportMock }));
 vi.mock("@/api/queries.js", () => ({
   invalidateGitFileOperation: vi.fn(),
   markTargetUnavailableIfNeeded: markTargetUnavailableMock,
+  useWorkspaceStatus: vi.fn(() => ({ data: { workspaceEpoch: 1 } })),
+  fsTreeQueryKey: vi.fn(() => ["fs-tree"]),
 }));
 vi.mock("@/api/server-config.js", () => ({
   getActiveProfile: () => null,

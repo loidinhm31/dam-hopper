@@ -388,6 +388,8 @@ mod tests {
                 health_check_url: None,
             }],
             features: Default::default(),
+            ui: None,
+            workspaces: None,
             config_path: PathBuf::from("/test/dam-hopper.toml"),
         }
     }

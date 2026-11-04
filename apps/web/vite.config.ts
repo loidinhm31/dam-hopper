@@ -25,7 +25,25 @@ export default defineConfig(({ command, mode }) => {
         process.env.npm_package_version || "0.2.0",
       ),
     },
-    plugins: [react(), tailwindcss(), fixBrokenXtermRequestMode()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      fixBrokenXtermRequestMode(),
+      {
+        name: "runtime-config-dev-fallback",
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            if (req.url === "/__dam-hopper/runtime-config.json") {
+              res.setHeader("Content-Type", "application/json");
+              res.statusCode = 200;
+              res.end(JSON.stringify({}));
+              return;
+            }
+            next();
+          });
+        },
+      },
+    ],
     resolve: {
       alias: {
         "@": uiSrc,

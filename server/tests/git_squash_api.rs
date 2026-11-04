@@ -125,6 +125,8 @@ fn setup(no_auth: bool) -> TestApp {
         agent_store: None,
         projects: vec![project("test-repo", &path), project("other-repo", &other)],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: root.join("dam-hopper.toml"),
     };
     let state = AppState::new(

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getTransport } from "@/api/transport.js";
 import {
@@ -6,14 +6,22 @@ import {
   getTransport as getConnectionsTransport,
   isCurrentConnection,
 } from "@/api/connections.js";
-import type { ConnectionRef } from "@/api/ownership.js";
+import {
+  normalizeFsTarget,
+  toServerFsTarget,
+  fsTargetKey,
+  type ConnectionRef,
+  type FsTargetRef,
+} from "@/api/ownership.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import {
   normalizeProjectTarget,
   projectTargetCacheKey,
   type ProjectTargetInput,
+  type ProjectTargetRef,
 } from "@/api/client.js";
 import {
+  fsTreeQueryKey,
   invalidateGitFileOperation,
   markTargetUnavailableIfNeeded,
 } from "@/api/queries.js";
@@ -32,17 +40,24 @@ export interface UploadProgress {
  * Progress is derived from per-seq acks.
  */
 export function useFsUpload(
-  target: ProjectTargetInput,
+  target: FsTargetRef | ProjectTargetInput,
   subscribedPath: string,
 ) {
   const qc = useQueryClient();
-  const targetRef = normalizeProjectTarget(target);
-  const project = targetRef.project;
-  const worktreePath = targetRef.worktreePath;
-  const targetKey = projectTargetCacheKey(targetRef);
+  const isTargetValid = !(target && typeof target === "object" && "kind" in target && target.kind === "project" && !target.project?.trim());
+  const targetRef = isTargetValid ? normalizeFsTarget(target) : { kind: "project" as const, project: "", profileId: (target as FsTargetRef).profileId ?? "" };
+  const targetKey = isTargetValid ? fsTargetKey(targetRef) : "invalid";
   const profileId = targetRef.profileId;
+  const uploadTarget = useMemo(
+    () =>
+      targetRef.kind === "project" && !targetRef.profileId
+        ? targetRef.worktreePath
+          ? { project: targetRef.project, worktreePath: targetRef.worktreePath }
+          : { project: targetRef.project }
+        : targetRef,
+    [targetRef],
+  );
   const [progress, setProgress] = useState<UploadProgress | null>(null);
-
   const upload = useCallback(
     async (dir: string, file: File): Promise<void> => {
       if (typeof file.stream !== "function") {
@@ -56,8 +71,6 @@ export function useFsUpload(
       }
 
       setProgress({ filename: file.name, pct: 0, done: false });
-      const requestTarget =
-        worktreePath == null ? project : { project, worktreePath };
       let connectionRef: ConnectionRef | undefined;
       let t: WsTransport;
 
@@ -82,7 +95,7 @@ export function useFsUpload(
       }
 
       try {
-        const result = await t.fsUploadFile(requestTarget, dir, file, (pct) => {
+        const result = await t.fsUploadFile(uploadTarget, dir, file, (pct) => {
           setProgress({ filename: file.name, pct, done: false });
         });
 
@@ -98,24 +111,20 @@ export function useFsUpload(
 
         if (result.ok) {
           setProgress({ filename: file.name, pct: 100, done: true });
-          if (profileId) {
-            void qc.invalidateQueries({
-              queryKey: [
-                "fs-tree",
-                profileId,
-                project,
-                targetKey,
-                subscribedPath,
-              ],
-            });
+          const queryKey = fsTreeQueryKey(targetRef, subscribedPath);
+          void qc.invalidateQueries({ queryKey });
+          if (targetRef.kind === "project") {
+            const path = dir ? `${dir}/${file.name}` : file.name;
+            void invalidateGitFileOperation(
+              qc,
+              targetRef as unknown as ProjectTargetRef,
+              path,
+            );
           }
-          void qc.invalidateQueries({
-            queryKey: ["fs-tree", project, targetKey, subscribedPath],
-          });
-          const path = dir ? `${dir}/${file.name}` : file.name;
-          void invalidateGitFileOperation(qc, targetRef, path);
         } else {
-          markTargetUnavailableIfNeeded(targetRef, result.error);
+          if (targetRef.kind === "project") {
+            markTargetUnavailableIfNeeded(uploadTarget as ProjectTargetRef, result.error);
+          }
           setProgress({
             filename: file.name,
             pct: 0,
@@ -134,11 +143,13 @@ export function useFsUpload(
           return;
         }
         const msg = e instanceof Error ? e.message : String(e);
-        markTargetUnavailableIfNeeded(targetRef, e);
+        if (targetRef.kind === "project") {
+          markTargetUnavailableIfNeeded(uploadTarget as ProjectTargetRef, e);
+        }
         setProgress({ filename: file.name, pct: 0, done: true, error: msg });
       }
     },
-    [project, subscribedPath, targetKey, worktreePath, qc, profileId, targetRef],
+    [subscribedPath, targetKey, qc, profileId, targetRef, uploadTarget],
   );
 
   function clearProgress() {

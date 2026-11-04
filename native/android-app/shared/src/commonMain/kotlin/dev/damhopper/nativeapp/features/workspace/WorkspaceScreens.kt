@@ -365,8 +365,7 @@ fun WorkspaceSwitcherModal(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 items(knownWorkspaces) { kw ->
-                    val isCurrent = status?.path == kw.path || status?.configPath == kw.path ||
-                        (status?.configPath != null && status.configPath.startsWith("${kw.path.trimEnd('/')}/"))
+                    val isCurrent = status?.path != null && (status.path.trimEnd('/') == kw.path.trimEnd('/'))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -417,7 +416,7 @@ fun WorkspaceSwitcherModal(
             OutlinedTextField(
                 value = newPath,
                 onValueChange = { newPath = it },
-                label = { Text("Workspace Directory or dam-hopper.toml Path") },
+                label = { Text("Workspace Directory") },
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(6.dp))

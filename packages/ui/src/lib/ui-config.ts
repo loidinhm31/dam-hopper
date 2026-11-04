@@ -175,6 +175,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
     DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
   cognitoModeShortcut: DEFAULT_COGNITO_MODE_SHORTCUT,
   cognitoModeStyle: "heavy-blur",
+  defaultWindowPlacement: "float",
 };
 
 export function isExplorerLanguageFilter(
@@ -209,6 +210,8 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
   return {
     ...DEFAULT_UI_CONFIG,
     ...canonicalUi,
+    defaultWindowPlacement:
+      ui?.defaultWindowPlacement === "tile" ? "tile" : "float",
     hostResourcePinnedMount: ui?.hostResourcePinnedMount ?? null,
     explorerLanguageFilter: normalizeExplorerLanguageFilter(
       (ui as { explorerLanguageFilter?: unknown } | null | undefined)

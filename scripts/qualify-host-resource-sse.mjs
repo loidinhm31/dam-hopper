@@ -94,7 +94,7 @@ Options:
   --light-sample-seconds N  Light cadence in seconds (default: 5)
   --retain-fixture-for-release  Keep Mongo database and credentials for release run
   --server-bin PATH         Release server binary path (default: server/target/release/dam-hopper-server)
-  --server-config PATH      Path to dam-hopper.toml for release server
+  --server-config PATH      Path to config.toml for release server
   --harness-ready PATH      Path to ready.json from preceding harness run
   --release-port PORT       Port for release server (default: 4803)
 `);
@@ -479,7 +479,7 @@ async function runReleaseMode(opts) {
     opts.serverBin,
     [
       "--config",
-      opts.serverConfig || join(ready.xdgConfigHome, "../workspace/dam-hopper.toml"),
+      opts.serverConfig || join(ready.xdgConfigHome, "../workspace/config.toml"),
       "--host",
       "127.0.0.1",
       "--port",

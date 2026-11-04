@@ -79,6 +79,38 @@ describe("persistence", () => {
     ).toBeUndefined();
   });
 
+  it("sanitizes files appState to allowlisted mode and projectFilter fields", () => {
+    let session = createDefaultOsSession("d1", "Main");
+    session = openWindow(session, {
+      id: "w-files",
+      appId: "files",
+      title: "Files",
+      ctx: { profileId: "p1" },
+      mode: "tile",
+      appState: {
+        mode: "workspace",
+        projectFilter: "my-service",
+        selectedPath: "src/main.rs",
+        expandedPaths: ["src", "src/models"],
+        scrollTop: 120,
+        secretAuth: "token-123",
+        unsupportedField: { nested: true },
+      },
+    });
+
+    const sanitized = sanitizeSessionForPersistence(session);
+    expect(sanitized.windows["w-files"].appState).toEqual({
+      mode: "workspace",
+      projectFilter: "my-service",
+      selectedPath: "src/main.rs",
+      expandedPaths: ["src", "src/models"],
+      scrollTop: 120,
+    });
+    const state = sanitized.windows["w-files"].appState as Record<string, unknown>;
+    expect(state.secretAuth).toBeUndefined();
+    expect(state.unsupportedField).toBeUndefined();
+  });
+
   it("suspends autosave and preserves corrupt bytes when JSON is malformed", () => {
     const noticeHandler = vi.fn();
     localStorage.setItem(OS_SESSION_STORAGE_KEY, "not-valid-json{[[");
@@ -254,8 +286,7 @@ describe("persistence", () => {
 
   it("loads and saves dock pins under os:v1:dock key", () => {
     const defaultPins = loadDockPins();
-    expect(defaultPins).toEqual(["terminals", "editor", "browser"]);
-
+    expect(defaultPins).toEqual(["files", "terminals", "editor", "browser"]);
     saveDockPins(["terminals", "editor"]);
     expect(JSON.parse(localStorage.getItem(OS_DOCK_STORAGE_KEY)!)).toEqual([
       "terminals",

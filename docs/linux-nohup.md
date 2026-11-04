@@ -48,10 +48,9 @@ deploy/run-linux-nohup.sh restart --bin server/target/release/dam-hopper-server
 Edit `~/.config/dam-hopper/server.conf`:
 
 ```ini
-# Optional. Omit to use ~/.config/dam-hopper/dam-hopper.toml.
-DAM_HOPPER_CONFIG="/home/user/.config/dam-hopper/dam-hopper.toml"
-# Legacy directory-discovery override:
-# DAM_HOPPER_WORKSPACE="/path/to/workspace"
+# Optional. Omit to use ~/.config/dam-hopper/config.toml.
+DAM_HOPPER_CONFIG="/home/user/.config/dam-hopper/config.toml"
+# Note: Directory discovery is removed; workspace root authority is configured via [workspace].root in config.toml.
 DAM_HOPPER_HOST="0.0.0.0"
 DAM_HOPPER_PORT="4800"
 # Exact frontend origins; comma-separated if more than one.

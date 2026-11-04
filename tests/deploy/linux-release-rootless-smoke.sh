@@ -72,7 +72,7 @@ printf '<!doctype html><html><body>rootless-smoke</body></html>\n' > "$WEB_ROOT/
 cat > "$TEST_ROOT/runtime-config.json" <<EOF
 {"schemaVersion":1,"role":"web","releaseVersion":"${RELEASE_VERSION}","profileId":"c7325e68-07e1-4e44-8d96-b333a4658cf9"}
 EOF
-cat > "$TEST_ROOT/dam-hopper.toml" <<EOF
+cat > "$TEST_ROOT/config.toml" <<EOF
 [workspace]
 name = "rootless-smoke"
 root = "${WORKSPACE_ROOT}"
@@ -188,8 +188,7 @@ printf 'Starting rootless API server (%s)\n' "$API_BIN"
 env -u MONGODB_URI -u MONGODB_DATABASE \
     HOME="$HOME_ROOT" XDG_CONFIG_HOME="$HOME_ROOT/.config" RUST_ENV=development ENVIRONMENT=development RUST_LOG=error \
     "$API_BIN" \
-    --config "$TEST_ROOT/dam-hopper.toml" \
-    --workspace "$WORKSPACE_ROOT" \
+    --config "$TEST_ROOT/config.toml" \
     --host 127.0.0.1 \
     --port "$API_PORT" \
     --no-auth \

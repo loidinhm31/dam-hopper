@@ -1,6 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { OsShell } from "@/os/OsShell.js";
 import { useWindowStore } from "@/os/window-store.js";
 import { createDefaultOsSession } from "@/os/window-ops.js";
@@ -17,6 +18,7 @@ import type { TerminalFindController } from "@/lib/terminal-find-controller.js";
 describe("OS Lifecycle Component Browser Tests", () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
+  let queryClient: QueryClient;
 
   beforeEach(() => {
     localStorage.clear();
@@ -31,14 +33,19 @@ describe("OS Lifecycle Component Browser Tests", () => {
     container.style.position = "relative";
     document.body.appendChild(container);
     root = createRoot(container);
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
   });
 
   const renderOsShell = async () => {
     await act(async () => {
       root?.render(
-        <EncryptProvider>
-          <OsShell />
-        </EncryptProvider>,
+        <QueryClientProvider client={queryClient}>
+          <EncryptProvider>
+            <OsShell />
+          </EncryptProvider>
+        </QueryClientProvider>,
       );
     });
   };

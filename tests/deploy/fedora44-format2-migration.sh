@@ -55,7 +55,7 @@ Environment=RUST_LOG=info
 Environment=RUST_ENV=production
 EnvironmentFile=/home/loidinh/.config/dam-hopper/server.env
 EnvironmentFile=/home/loidinh/.config/dam-hopper/server-safety.env
-ExecStart=/opt/dam-hopper/bin/dam-hopper-server --config /home/loidinh/.config/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801
+ExecStart=/opt/dam-hopper/bin/dam-hopper-server --config /home/loidinh/.config/dam-hopper/config.toml --host 0.0.0.0 --port 4801
 Restart=on-failure
 RestartSec=5s
 KillSignal=SIGTERM

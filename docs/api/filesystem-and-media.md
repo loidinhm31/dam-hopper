@@ -3,8 +3,10 @@
 File explorer and session-bound media capability contracts moved from the [API reference index](../api-reference.md).
 ### IDE File Explorer
 
-**GET /api/fs/list?project=NAME&path=REL[&worktreePath=PATH]**
+**GET /api/fs/list?[targetType=workspace|project&][project=NAME&]path=REL[&worktreePath=PATH]**
 List directory contents.
+- `targetType=workspace`: browses the authorized workspace root without requiring a project.
+- `targetType=project` (or omitted with `project=NAME`): browses the configured project or worktree root.
 
 Response:
 
@@ -22,15 +24,16 @@ Response:
 }
 ```
 
-**GET /api/fs/read?project=NAME&path=REL[&worktreePath=PATH][&offset=N&len=M]**
+**GET /api/fs/read?[targetType=workspace|project&][project=NAME&]path=REL[&worktreePath=PATH][&offset=N&len=M]**
 Read file content (text or binary detection).
 
+- Returns `x-file-identity` response header containing JSON `{ workspaceId, workspaceEpoch, canonicalPath }`.
 - Text: returns body with Content-Type: text/\*
 - Binary: returns `{ binary: true, mime: "..." }`
-- Reads enforce the server's configured bounds; use `offset` and `len` range requests for large files rather than relying on an old global size figure.
+- Reads enforce the server's configured bounds; use `offset` and `len` range requests for large files.
 
-**GET /api/fs/stat?project=NAME&path=REL[&worktreePath=PATH]**
-File metadata.
+**GET /api/fs/stat?[targetType=workspace|project&][project=NAME&]path=REL[&worktreePath=PATH]**
+File metadata and canonical identity.
 
 Response:
 
@@ -40,7 +43,12 @@ Response:
   "size": 1024,
   "mtime": 1712577600,
   "mime": "text/typescript",
-  "isBinary": false
+  "isBinary": false,
+  "fileIdentity": {
+    "workspaceId": "ws-1",
+    "workspaceEpoch": 1,
+    "canonicalPath": "/path/to/workspace/file.ts"
+  }
 }
 ```
 

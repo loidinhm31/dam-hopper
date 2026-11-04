@@ -203,7 +203,7 @@ See the [Agent Status contract](./architecture/agent-status.md).
 - Place tests next to small domain units; use `server/tests/` for cross-module server behavior, `packages/ui/src/**/*.test.ts(x)` for headless unit tests, `packages/ui/browser-tests/` for real-browser component integration, and `packages/ui/e2e/` for application journeys.
 - Test success and denial paths, stale generations, cancellation, unavailable owners, limits, and failure cleanup where those contracts apply.
 - Distinguish mocked component tests from real HTTP/browser/deployment qualification. Record platform/version limitations; do not turn prior test counts into a claim of current release qualification.
-- Run repository-supported commands from `package.json` and package manifests. `pnpm test` runs server tests, `pnpm test:all` runs the repository test script, `pnpm lint` covers `apps/` and `packages/`, and `pnpm check` is the broad root gate.
+- Run repository-supported commands from `package.json` and package manifests. `pnpm test` runs server tests, `pnpm test:all` runs the repository test script, `pnpm lint` covers `apps/` and `packages/`, and `pnpm check` is the broad root gate (note that Vite builds bundle and strip types without full type-checking, whereas static type correctness relies on `tsc`).
 - **4-Tier Runner Boundaries (see [Testing guide](./testing.md)):**
   - **Tier 1 — Rust Backend Tests (`cargo test`):** Unit and integration suites against real filesystems and repositories; avoid mocks for Git CAS, PTY, and SQLite persistence.
   - **Tier 2 — Frontend Unit Tests (Vitest jsdom):** Headless execution of stores, reducers, hooks, and data utilities under `packages/ui/src/**/*.test.{ts,tsx}`.

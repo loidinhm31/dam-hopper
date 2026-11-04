@@ -20,11 +20,11 @@ Keys are stored in-memory per session (not persisted to disk).
 
 ## Manual Smoke Checklist
 
-1. Create `~/.config/dam-hopper/dam-hopper.toml` with at least two projects whose `projects[].path` values point at separate roots. On Windows, use different drives if available.
+1. Create `~/.config/dam-hopper/config.toml` with at least two projects whose `projects[].path` values point at separate roots. On Windows, use different drives if available.
    Expected: `GET /api/workspace/status` reports the registry `configPath` and the expected `projectCount`.
 
-2. Start the same-origin server with `cargo run --manifest-path server/Cargo.toml -- --config ~/.config/dam-hopper/dam-hopper.toml --port 4800 --host 127.0.0.1`.
-   Expected: startup succeeds without requiring a repo-local `dam-hopper.toml`.
+2. Start the same-origin server with `cargo run --manifest-path server/Cargo.toml -- --config ~/.config/dam-hopper/config.toml --port 4800 --host 127.0.0.1`.
+   Expected: startup succeeds using the authoritative config file without requiring a repo-local file.
 
 3. Browse and read files in each project, then create or edit a file inside each root.
    Expected: list/read/write operations work inside the selected project and do not bleed across roots.
@@ -50,8 +50,8 @@ The PowerShell bootstrap (`dam-hopper-install.ps1`) installs the Windows `x86_64
 %LOCALAPPDATA%\Programs\dam-hopper\
 ├── bin\
 │   └── dam-hopper-server.exe     # Server executable
-├── dam-hopper.example.toml       # Sample configuration template
-├── dam-hopper.toml               # Active user configuration (preserved on upgrade)
+├── config.example.toml       # Sample configuration template
+├── config.toml               # Active user configuration (preserved on upgrade)
 ├── LICENSE                       # License file
 └── README.md                     # Release documentation
 ```
@@ -63,17 +63,17 @@ $installDir = Join-Path $env:LOCALAPPDATA "Programs\dam-hopper"
 powershell -NoProfile -ExecutionPolicy Bypass -File .\dam-hopper-install.ps1 `
   -Latest -InstallDir $installDir -AddToPath
 
-# On first install, copy sample configuration if dam-hopper.toml does not exist:
-if (-not (Test-Path "$installDir\dam-hopper.toml")) {
-  Copy-Item "$installDir\dam-hopper.example.toml" "$installDir\dam-hopper.toml"
+# On first install, copy sample configuration if config.toml does not exist:
+if (-not (Test-Path "$installDir\config.toml")) {
+  Copy-Item "$installDir\config.example.toml" "$installDir\config.toml"
 }
 
 # Launch the server (open a fresh shell if using PATH, or invoke directly):
-& "$installDir\bin\dam-hopper-server.exe" --config "$installDir\dam-hopper.toml"
+& "$installDir\bin\dam-hopper-server.exe" --config "$installDir\config.toml"
 ```
 
 #### Upgrades, configuration preservation, and attestation
-- **Configuration preservation:** Re-running the installer with `-Latest` or `-Version` safely stages and replaces `bin\dam-hopper-server.exe` while preserving your existing `dam-hopper.toml`.
+- **Configuration preservation:** Re-running the installer with `-Latest` or `-Version` safely stages and replaces `bin\dam-hopper-server.exe` while preserving your existing `config.toml`.
 - **User PATH:** `-AddToPath` appends `%LOCALAPPDATA%\Programs\dam-hopper\bin` to the current user's User PATH environment variable. Open a **fresh terminal** for PATH changes to take effect in your shell session.
 - **Attestation verification:** Pass `-VerifyAttestation` during installation to verify the published Windows ZIP and installer assets with `gh`. For manual verification, attest the release subjects before extraction (the extracted `dam-hopper-server.exe` is not itself a published attestation subject):
   ```powershell
@@ -82,7 +82,7 @@ if (-not (Test-Path "$installDir\dam-hopper.toml")) {
   gh attestation verify "$assetDir\dam-hopper-install.ps1" --repo "loidinhm31/dam-hopper"
   ```
 - **Dry-run mode:** Pass `-DryRun` to verify release metadata and archive integrity without modifying filesystem or environment state.
-- **Environment and `.env` loading:** The server automatically loads `.env` files from: (1) the directory containing the active `dam-hopper.toml` configuration file (e.g. `%LOCALAPPDATA%\Programs\dam-hopper\.env`), (2) the canonical user configuration directory (`%USERPROFILE%\.config\dam-hopper\.env`), and (3) the current working directory. Variables set in the system/shell environment take precedence; this allows placing `MONGODB_URI` and `MONGODB_DATABASE` right next to `dam-hopper.toml`.
+- **Environment and `.env` loading:** The server automatically loads `.env` files from: (1) the directory containing the active `config.toml` configuration file (e.g. `%LOCALAPPDATA%\Programs\dam-hopper\.env`), (2) the canonical user configuration directory (`%USERPROFILE%\.config\dam-hopper\.env`), and (3) the current working directory. Variables set in the system/shell environment take precedence; this allows placing `MONGODB_URI` and `MONGODB_DATABASE` right next to `config.toml`.
 - **Platform boundaries:** Windows direct-server operation does not provide Linux systemd service management, manager migration, or terminal idle-suspend helper semantics. The server runs as a direct foreground process managed by the user or an external supervisor.
 ### Windows Server Loopback Smoke Checklist
 
@@ -157,7 +157,7 @@ Error: `Workspace directory does not exist` or missing project path errors
 
 Check:
 
-1. Registry path exists: `ls ~/.config/dam-hopper/dam-hopper.toml`
+1. Registry path exists: `ls ~/.config/dam-hopper/config.toml`
 2. Each `projects[].path` exists
 3. Relative project paths are resolved from the registry file directory
 4. User has read permissions
@@ -166,7 +166,7 @@ Check:
 
 Error: `Project not found: {name}`
 
-Verify in dam-hopper.toml:
+Verify in config.toml:
 
 1. Project name is correct
 2. Project path exists relative to the registry file directory or is an absolute path
@@ -223,7 +223,7 @@ path = ".dam-hopper/agent-store"
 Start server:
 
 ```bash
-dam-hopper-server --config ~/.config/dam-hopper/dam-hopper.toml --port 4800
+dam-hopper-server --config ~/.config/dam-hopper/config.toml --port 4800
 ```
 
 All four projects now accessible via `/api/projects` and `/api/fs/list?project=frontend&path=src`, etc.

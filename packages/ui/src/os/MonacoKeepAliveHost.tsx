@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type * as monacoNs from "monaco-editor";
 import { MonacoHost } from "@/components/organisms/MonacoHost.js";
 import { editorFileTabKey, useEditorStore, type Tab } from "@/stores/editor.js";
@@ -7,9 +8,15 @@ import {
   projectTargetCacheKey,
   type ProjectTargetInput,
 } from "@/api/client.js";
+import {
+  normalizeFsTarget,
+  fsTargetKey,
+  type FsTargetRef,
+} from "@/api/ownership.js";
 import { getConnectionSnapshot } from "@/api/connections.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useEncryptedWrite } from "@/hooks/use-encrypted-write.js";
+import { isNonMonacoFormat } from "@/lib/editor-format.js";
 import { useWindowStore } from "./window-store.js";
 
 export interface ParkedMonacoEntry {
@@ -26,36 +33,46 @@ export function getMonacoParkingHost(): HTMLElement | null {
 }
 
 export function getParkedMonacoEntry(
-  tabKey: string,
+  key: string,
+  fallbackKey?: string,
 ): ParkedMonacoEntry | undefined {
-  return parkedMonacoRegistry.get(tabKey);
+  return parkedMonacoRegistry.get(key) ?? (fallbackKey ? parkedMonacoRegistry.get(fallbackKey) : undefined);
 }
 
 export function registerParkedMonaco(
-  tabKey: string,
+  key: string,
   element: HTMLElement,
   editor: monacoNs.editor.IStandaloneCodeEditor | null,
+  aliasKey?: string,
 ): () => void {
-  parkedMonacoRegistry.set(tabKey, { tabKey, element, editor });
+  const entry = { tabKey: key, element, editor };
+  parkedMonacoRegistry.set(key, entry);
+  if (aliasKey && aliasKey !== key) {
+    parkedMonacoRegistry.set(aliasKey, entry);
+  }
   listeners.forEach((l) => l());
   return () => {
-    parkedMonacoRegistry.delete(tabKey);
+    parkedMonacoRegistry.delete(key);
+    if (aliasKey && aliasKey !== key) {
+      parkedMonacoRegistry.delete(aliasKey);
+    }
     listeners.forEach((l) => l());
   };
 }
 
 export function subscribeToMonacoParking(
-  tabKey: string,
+  key: string,
   callback: (entry: ParkedMonacoEntry) => void,
+  fallbackKey?: string,
 ): () => void {
   const listener = () => {
-    const entry = parkedMonacoRegistry.get(tabKey);
+    const entry = getParkedMonacoEntry(key, fallbackKey);
     if (entry) {
       callback(entry);
     }
   };
   listeners.add(listener);
-  const existing = parkedMonacoRegistry.get(tabKey);
+  const existing = getParkedMonacoEntry(key, fallbackKey);
   if (existing) {
     callback(existing);
   }
@@ -64,8 +81,12 @@ export function subscribeToMonacoParking(
   };
 }
 
-export function attachMonacoToSlot(slot: HTMLElement, tabKey: string): boolean {
-  const entry = parkedMonacoRegistry.get(tabKey);
+export function attachMonacoToSlot(
+  slot: HTMLElement,
+  key: string,
+  fallbackKey?: string,
+): boolean {
+  const entry = getParkedMonacoEntry(key, fallbackKey);
   if (!entry || !entry.element) return false;
   slot.scrollLeft = 0;
   slot.scrollTop = 0;
@@ -83,29 +104,32 @@ export function attachMonacoToSlot(slot: HTMLElement, tabKey: string): boolean {
 
 export function parkMonacoElement(
   parkingHost: HTMLElement,
-  tabKey: string,
+  key: string,
+  fallbackKey?: string,
 ): void {
-  const entry = parkedMonacoRegistry.get(tabKey);
+  const entry = getParkedMonacoEntry(key, fallbackKey);
   if (!entry || !entry.element) return;
   if (entry.element.parentElement !== parkingHost) {
     parkingHost.appendChild(entry.element);
   }
 }
-
 export interface MonacoKeepAliveHostProps {
   children?: React.ReactNode;
 }
 
 function ParkedMonacoItem({
+  parkingKey,
   tabKey,
   filePath,
   target,
 }: {
+  parkingKey: string;
   tabKey: string;
   filePath: string;
-  target: ProjectTargetInput;
+  target: FsTargetRef;
 }) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const parkingSlotRef = useRef<HTMLDivElement>(null);
+  const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null);
   const editorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null);
   const { isEncryptEnabled, getPassphrase } = useEncryptMode();
   const encryptedWrite = useEncryptedWrite();
@@ -113,26 +137,28 @@ function ParkedMonacoItem({
   // Ensure real tab buffer exists in useEditorStore
   useEffect(() => {
     const state = useEditorStore.getState();
-    const existing = state.tabs.find((t) => t.key === tabKey);
+    const existing = state.tabs.find(
+      (t) => (t.documentKey && t.documentKey === parkingKey) || t.key === tabKey,
+    );
     if (!existing) {
-      const targetRef = normalizeProjectTarget(target);
+      const targetRef = normalizeFsTarget(target);
       const profileId = targetRef.profileId;
       const snap = profileId ? getConnectionSnapshot(profileId) : null;
       const newTab: Tab = {
         key: tabKey,
-        project: targetRef.project,
+        project: targetRef.kind === "project" ? targetRef.project : "",
         target: targetRef,
-        targetKey: projectTargetCacheKey(targetRef),
+        targetKey: fsTargetKey(targetRef),
         targetAvailable: true,
         path: filePath,
         name: filePath.split("/").pop() ?? filePath,
-        mtime: Date.now(),
+        mtime: 0,
         size: 0,
         tier: "normal",
         content: "",
         savedContent: "",
         dirty: false,
-        loading: false,
+        loading: true,
         saving: false,
         conflicted: false,
         resourceBinding: snap ? { serverUrl: snap.serverUrl } : undefined,
@@ -144,21 +170,41 @@ function ParkedMonacoItem({
   }, [tabKey, filePath, target]);
 
   const tab = useEditorStore(
-    useCallback((s) => s.tabs.find((t) => t.key === tabKey) ?? null, [tabKey]),
+    useCallback(
+      (s) =>
+        s.tabs.find(
+          (t) => (t.documentKey && t.documentKey === parkingKey) || t.key === tabKey,
+        ) ?? null,
+      [parkingKey, tabKey],
+    ),
   );
 
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const unregister = registerParkedMonaco(tabKey, el, editorRef.current);
+  useLayoutEffect(() => {
+    const parkingSlot = parkingSlotRef.current;
+    if (!parkingSlot) return;
+
+    const el = document.createElement("div");
+    el.setAttribute("data-monaco-tab", parkingKey);
+    el.setAttribute("data-testid", `monaco-tab-${parkingKey}`);
+    el.style.width = "100%";
+    el.style.height = "100%";
+    el.style.position = "absolute";
+    el.style.inset = "0";
+    el.style.overflow = "hidden";
+    parkingSlot.appendChild(el);
+    setHostEl(el);
+
+    const unregister = registerParkedMonaco(parkingKey, el, editorRef.current, tabKey);
     return () => {
       unregister();
       if (editorRef.current) {
         editorRef.current.dispose();
         editorRef.current = null;
       }
+      el.remove();
+      setHostEl(null);
     };
-  }, [tabKey]);
+  }, [parkingKey, tabKey]);
 
   const handleSave = useCallback(async () => {
     const currentTab = useEditorStore
@@ -189,34 +235,35 @@ function ParkedMonacoItem({
 
   return (
     <div
-      ref={containerRef}
-      data-monaco-tab={tabKey}
-      data-testid={`monaco-tab-${tabKey}`}
+      ref={parkingSlotRef}
+      data-monaco-parking-slot={parkingKey}
+      data-testid={`monaco-parking-slot-${parkingKey}`}
       style={{
         width: "100%",
         height: "100%",
         position: "relative",
-        overflow: "hidden",
       }}
     >
-      <MonacoHost
-        tabKey={tabKey}
-        path={filePath}
-        content={tab?.content ?? ""}
-        tab={tab}
-        tier="normal"
-        onChange={(val) => useEditorStore.getState().setContent(tabKey, val)}
-        onSave={() => void handleSave()}
-        onViewStateChange={(vs) =>
-          useEditorStore.getState().saveViewState(tabKey, vs)
-        }
-        onEditorReady={(editor) => {
-          editorRef.current = editor;
-          if (containerRef.current) {
-            registerParkedMonaco(tabKey, containerRef.current, editor);
-          }
-        }}
-      />
+      {hostEl &&
+        createPortal(
+          <MonacoHost
+            tabKey={tabKey}
+            path={filePath}
+            content={tab?.content ?? ""}
+            tab={tab}
+            tier="normal"
+            onChange={(val) => useEditorStore.getState().setContent(tabKey, val)}
+            onSave={() => void handleSave()}
+            onViewStateChange={(vs) =>
+              useEditorStore.getState().saveViewState(tabKey, vs)
+            }
+            onEditorReady={(editor) => {
+              editorRef.current = editor;
+              registerParkedMonaco(tabKey, hostEl, editor);
+            }}
+          />,
+          hostEl,
+        )}
     </div>
   );
 }
@@ -224,31 +271,47 @@ function ParkedMonacoItem({
 export function MonacoKeepAliveHost({ children }: MonacoKeepAliveHostProps) {
   const parkingRef = useRef<HTMLDivElement>(null);
   const sessionWindows = useWindowStore((state) => state.session.windows);
+  const tabs = useEditorStore((state) => state.tabs);
 
   const editorEntries = useMemo(() => {
     const seen = new Set<string>();
     const entries: Array<{
+      parkingKey: string;
       tabKey: string;
       filePath: string;
-      target: ProjectTargetInput;
+      target: FsTargetRef;
     }> = [];
+    const tabs = useEditorStore.getState().tabs;
     for (const w of Object.values(sessionWindows)) {
       if (w.appId !== "editor") continue;
       const filePath =
         (w.appState?.filePath as string | undefined) ?? "untitled.ts";
-      const target: ProjectTargetInput = {
-        profileId: w.ctx.profileId,
-        project: w.ctx.projectId ?? "global",
-        worktreePath: w.ctx.worktreeId,
-      };
+      let target: FsTargetRef;
+      if (w.ctx.target) {
+        target = normalizeFsTarget(w.ctx.target, w.ctx.profileId);
+      } else if (w.ctx.projectId) {
+        target = normalizeFsTarget({
+          profileId: w.ctx.profileId,
+          project: w.ctx.projectId,
+          worktreePath: w.ctx.worktreeId,
+        });
+      } else {
+        target = { kind: "workspace", profileId: w.ctx.profileId ?? "" };
+      }
       const tabKey = editorFileTabKey(target, filePath);
-      if (!seen.has(tabKey)) {
-        seen.add(tabKey);
-        entries.push({ tabKey, filePath, target });
+      const tab = tabs.find((t) => t.key === tabKey);
+      if (isNonMonacoFormat(filePath, tab?.size, tab?.tier)) continue;
+      const docKey =
+        (typeof w.appState?.documentKey === "string" && w.appState.documentKey) ||
+        tab?.documentKey ||
+        tabKey;
+      if (!seen.has(docKey)) {
+        seen.add(docKey);
+        entries.push({ parkingKey: docKey, tabKey, filePath, target });
       }
     }
     return entries;
-  }, [sessionWindows]);
+  }, [sessionWindows, tabs]);
   useEffect(() => {
     globalMonacoParkingHost = parkingRef.current;
     return () => {
@@ -276,7 +339,8 @@ export function MonacoKeepAliveHost({ children }: MonacoKeepAliveHostProps) {
       >
         {editorEntries.map((entry) => (
           <ParkedMonacoItem
-            key={entry.tabKey}
+            key={entry.parkingKey}
+            parkingKey={entry.parkingKey}
             tabKey={entry.tabKey}
             filePath={entry.filePath}
             target={entry.target}

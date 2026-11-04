@@ -36,6 +36,8 @@ pub struct FileStat {
     pub mtime: i64,
     pub mime: Option<String>,
     pub is_binary: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_identity: Option<crate::workspace_target::FileIdentity>,
 }
 
 pub async fn list_dir(abs: &Path) -> Result<Vec<DirEntry>, FsError> {
@@ -168,6 +170,7 @@ pub async fn stat(abs: &Path) -> Result<FileStat, FsError> {
         mtime,
         mime,
         is_binary,
+        file_identity: None,
     })
 }
 

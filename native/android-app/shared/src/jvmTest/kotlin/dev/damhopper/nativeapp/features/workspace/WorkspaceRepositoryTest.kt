@@ -55,7 +55,7 @@ class WorkspaceRepositoryTest {
     @Test
     fun testGetWorkspaceStatusWithNullableFields() = runTest {
         server!!.createContext("/api/workspace/status") { exchange ->
-            val json = """{"ready":true,"path":"/home/user/workspace","configPath":"/home/user/workspace/dam-hopper.toml","name":"demo-workspace","projectCount":3}"""
+            val json = """{"ready":true,"path":"/home/user/workspace","configPath":"/home/user/.config/dam-hopper/config.toml","name":"demo-workspace","projectCount":3,"workspaceEpoch":1}"""
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
@@ -63,7 +63,9 @@ class WorkspaceRepositoryTest {
         val repo = createRepository()
         val status = repo.getWorkspaceStatus()
         assertTrue(status.ready)
-        assertEquals("/home/user/workspace/dam-hopper.toml", status.configPath)
+        assertEquals("/home/user/workspace", status.path)
+        assertEquals("/home/user/.config/dam-hopper/config.toml", status.configPath)
+        assertEquals(1L, status.workspaceEpoch)
         assertEquals("demo-workspace", status.name)
         assertEquals(3, status.projectCount)
     }
@@ -113,7 +115,7 @@ class WorkspaceRepositoryTest {
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/workspace/status") { exchange ->
-            val json = """{"ready":true,"path":"/ws","configPath":"/ws/dam-hopper.toml","name":"ws","projectCount":1}"""
+            val json = """{"ready":true,"path":"/ws","configPath":"/etc/dam-hopper/config.toml","name":"ws","projectCount":1,"workspaceEpoch":1}"""
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
@@ -137,7 +139,7 @@ class WorkspaceRepositoryTest {
         var observedBody: String? = null
         server!!.createContext("/api/workspace/switch") { exchange ->
             observedBody = exchange.requestBody.bufferedReader().readText()
-            val json = """{"ok":true}"""
+            val json = """{"ok":true,"workspaceEpoch":2}"""
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
@@ -146,15 +148,16 @@ class WorkspaceRepositoryTest {
         assertEquals(0L, store.getWorkspaceRevision("test-profile"))
 
         val repo = createRepository(store)
-        val switchSuccess = repo.switchWorkspace("/path/to/new-workspace/dam-hopper.toml")
+        val switchSuccess = repo.switchWorkspace("/path/to/new-workspace")
 
         assertTrue(switchSuccess)
         assertNotNull(observedBody)
-        assertTrue(observedBody!!.contains("/path/to/new-workspace/dam-hopper.toml"))
+        assertTrue(observedBody!!.contains("/path/to/new-workspace"))
 
         // Fencing check: TargetStore workspace revision must increment on switch
         assertEquals(1L, store.getWorkspaceRevision("test-profile"))
-        assertEquals("/path/to/new-workspace/dam-hopper.toml", store.getActiveWorkspaceConfigPath("test-profile"))
+        assertEquals("/path/to/new-workspace", store.getActiveWorkspaceRoot("test-profile"))
+        assertEquals(2L, store.getActiveWorkspaceEpoch("test-profile"))
     }
 
     @Test

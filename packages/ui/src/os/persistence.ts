@@ -62,6 +62,22 @@ function sanitizeAppState(
     const projected: Record<string, unknown> = {};
     if (typeof rawState.selectedPath === "string")
       projected.selectedPath = rawState.selectedPath;
+    if (rawState.mode === "workspace" || rawState.mode === "projects")
+      projected.mode = rawState.mode;
+    if (typeof rawState.projectFilter === "string")
+      projected.projectFilter = rawState.projectFilter;
+    if (
+      Array.isArray(rawState.expandedPaths) &&
+      rawState.expandedPaths.every((p: unknown) => typeof p === "string")
+    ) {
+      projected.expandedPaths = rawState.expandedPaths.slice(0, 100);
+    }
+    if (
+      typeof rawState.scrollTop === "number" &&
+      Number.isFinite(rawState.scrollTop)
+    ) {
+      projected.scrollTop = rawState.scrollTop;
+    }
     return Object.keys(projected).length > 0 ? projected : undefined;
   }
   if (appId === "search") {
@@ -658,6 +674,7 @@ export const OS_NOTIFICATION_PREFS_STORAGE_KEY =
   "dam-hopper:os:v1:notifications_prefs";
 
 export const DEFAULT_DOCK_PINS: OsAppId[] = [
+  "files",
   "terminals",
   "editor",
   "browser",

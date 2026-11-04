@@ -1,3 +1,4 @@
+import type { FsTargetRef } from "@/api/ownership.js";
 import type { TileNode } from "@/types/tile-tree.js";
 
 export type OsAppId =
@@ -26,6 +27,7 @@ export interface WindowContext {
   worktreeId?: string;
   gitRootId?: string;
   operation?: string;
+  target?: FsTargetRef;
 }
 
 export type WindowMode = "tile" | "float";

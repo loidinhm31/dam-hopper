@@ -267,18 +267,35 @@ export function focusWindow(
   const window = session.windows[windowId];
   if (!window) return session;
 
+  const currentDesktop = session.desktops.find((d) => d.id === window.desktopId);
+  if (!currentDesktop) return session;
+
+  const isAlreadyFocused = currentDesktop.focusedWindowId === windowId;
+  const isFloating = currentDesktop.floatingWindowIds.includes(windowId);
+  const isFloatingAtFront =
+    !isFloating ||
+    currentDesktop.floatingWindowIds[currentDesktop.floatingWindowIds.length - 1] === windowId;
+
+  const pane = currentDesktop.tree
+    ? findTilePaneContaining(currentDesktop.tree, (id) => id === windowId)
+    : null;
+  const isPaneActive = !pane || pane.active === windowId;
+
+  if (isAlreadyFocused && isFloatingAtFront && isPaneActive) {
+    return session;
+  }
+
   return updateDesktop(session, window.desktopId, (d) => {
     let tree = d.tree;
     if (tree) {
-      const pane = findTilePaneContaining(tree, (id) => id === windowId);
-      if (pane && pane.active !== windowId) {
-        tree = updateTilePane(tree, pane.id, (p) => ({
-          ...p,
+      const p = findTilePaneContaining(tree, (id) => id === windowId);
+      if (p && p.active !== windowId) {
+        tree = updateTilePane(tree, p.id, (paneState) => ({
+          ...paneState,
           active: windowId,
         }));
       }
     }
-    const isFloating = d.floatingWindowIds.includes(windowId);
     const floatingWindowIds = isFloating
       ? [...d.floatingWindowIds.filter((id) => id !== windowId), windowId]
       : d.floatingWindowIds;

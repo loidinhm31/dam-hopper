@@ -514,7 +514,7 @@ export function MonacoHost({
       )}
       <div className="monaco-host-editor-container flex-1 min-w-0 h-full overflow-hidden">
         <Editor
-          path={`inmemory://dam-hopper/${encodeURIComponent(tabKey)}`}
+          path={`inmemory://dam-hopper/${encodeURIComponent(effectiveTab?.documentKey ?? tabKey)}`}
           value={content}
           language={language}
           theme="vs-dark"

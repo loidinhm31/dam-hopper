@@ -100,6 +100,8 @@ async fn setup_fixture() -> Option<TestFixture> {
         agent_store: None,
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_root.join("dam-hopper.toml"),
     };
 

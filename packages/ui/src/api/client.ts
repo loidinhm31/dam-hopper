@@ -40,12 +40,19 @@ import {
   terminalKey,
   terminalInstanceKey,
   connectionKey,
+  normalizeFsTarget,
+  toServerFsTarget,
+  fsTargetKey,
+  parseFsTargetKey,
+  isSameFsTarget,
   type ConnectionRef,
   type ProfileId,
   type ProjectRef,
   type ProjectTargetRef,
   type ResourceBinding,
   type ServerProjectTarget,
+  type FsTargetRef,
+  type ServerFsTarget,
   type TerminalInstanceRef,
   type TerminalRef,
   type Owned,
@@ -60,6 +67,11 @@ export {
   terminalKey,
   terminalInstanceKey,
   connectionKey,
+  normalizeFsTarget,
+  toServerFsTarget,
+  fsTargetKey,
+  parseFsTargetKey,
+  isSameFsTarget,
 };
 export type {
   ConnectionRef,
@@ -68,9 +80,25 @@ export type {
   ProjectTargetRef,
   ResourceBinding,
   ServerProjectTarget,
+  FsTargetRef,
+  ServerFsTarget,
   TerminalInstanceRef,
   TerminalRef,
   Owned,
+};
+import type {
+  FileIdentity,
+  MarkProjectRequest,
+  MarkProjectResponse,
+  UnmarkProjectResponse,
+  WorkspaceFolderTerminalRequest,
+} from "./fs-types.js";
+export type {
+  FileIdentity,
+  MarkProjectRequest,
+  MarkProjectResponse,
+  UnmarkProjectResponse,
+  WorkspaceFolderTerminalRequest,
 };
 import type {
   AbandonSessionRequest,
@@ -1929,6 +1957,7 @@ export interface WorkspaceInfo {
   root: string;
   configPath: string;
   projectCount: number;
+  workspaceEpoch?: number;
 }
 
 export interface KnownWorkspace {
@@ -1947,6 +1976,7 @@ export interface WorkspaceStatus {
   configPath?: string;
   name?: string;
   projectCount?: number;
+  workspaceEpoch?: number;
 }
 
 export interface DiscoveredProject {
@@ -2044,12 +2074,15 @@ export interface UiConfig {
   agentSettingsPaths?: AgentSettingsPaths;
   cognitoModeShortcut?: string;
   cognitoModeStyle?: CognitoModeStyle;
+  defaultWindowPlacement?: "float" | "tile";
 }
-
 export interface GlobalConfig {
+  workspace?: { name: string; root: string };
   defaults?: { workspace?: string };
   workspaces?: KnownWorkspace[];
   ui?: UiConfig;
+  server?: Record<string, unknown>;
+  configPath?: string;
 }
 
 export interface Worktree {
@@ -2663,6 +2696,19 @@ export function createApiClient(
     if (!targets) return undefined;
     return targets.map(toWireTarget);
   }
+  function toFsWireTarget(
+    target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
+  ): ServerFsTarget {
+    if (typeof target === "object" && target !== null && "type" in target) {
+      return target as ServerFsTarget;
+    }
+    const norm = normalizeFsTarget(target, owner.profileId);
+    if (norm.profileId && owner.profileId) {
+      assertOwnerMatch(owner, norm, "fs-target");
+    }
+    return toServerFsTarget(norm);
+  }
+
 
   return {
     owner,
@@ -2687,6 +2733,11 @@ export function createApiClient(
     },
     globalConfig: {
       get: () => transport.invoke<GlobalConfig>("globalConfig:get"),
+      updateWorkspace: (workspace: { root: string; name?: string }) =>
+        transport.invoke<{ updated: true }>(
+          "globalConfig:updateWorkspace",
+          workspace,
+        ),
       updateDefaults: (defaults: { workspace?: string }) =>
         transport.invoke<{ updated: true }>(
           "globalConfig:updateDefaults",
@@ -3092,6 +3143,39 @@ export function createApiClient(
           name,
           patch: data,
         }),
+      markProject: (
+        profileIdOrReq: ProfileId | MarkProjectRequest,
+        maybeReq?: MarkProjectRequest,
+      ) => {
+        const req =
+          typeof profileIdOrReq === "string" ? maybeReq! : profileIdOrReq;
+        const profileId =
+          typeof profileIdOrReq === "string"
+            ? profileIdOrReq
+            : owner.profileId;
+        if (profileId && owner.profileId) {
+          assertOwnerMatch(owner, profileId, "config:markProject");
+        }
+        return transport.invoke<MarkProjectResponse>("config:markProject", {
+          ...req,
+          target: toServerFsTarget(req.target),
+        });
+      },
+      unmarkProject: (
+        profileIdOrName: ProfileId | string,
+        maybeName?: string,
+      ) => {
+        const name = maybeName ?? (profileIdOrName as string);
+        const profileId = maybeName
+          ? (profileIdOrName as ProfileId)
+          : owner.profileId;
+        if (profileId && owner.profileId) {
+          assertOwnerMatch(owner, profileId, "config:unmarkProject");
+        }
+        return transport.invoke<UnmarkProjectResponse>("config:unmarkProject", {
+          name,
+        });
+      },
     },
     settings: {
       clearCache: () => transport.invoke<{ cleared: boolean }>("cache:clear"),
@@ -3252,6 +3336,7 @@ export function createApiClient(
     terminal: {
       create: (opts: {
         id: string;
+        target?: ServerFsTarget | FsTargetRef;
         project?: string;
         command: string;
         cwd?: string;
@@ -3259,7 +3344,11 @@ export function createApiClient(
         rows: number;
         worktreePath?: string;
         name?: string | null;
-      }) => transport.invoke<SessionInfo>("terminal:create", opts),
+      }) =>
+        transport.invoke<SessionInfo>("terminal:create", {
+          ...opts,
+          ...(opts.target ? { target: toFsWireTarget(opts.target) } : {}),
+        }),
       kill: (id: string) => transport.invoke<void>("terminal:kill", id),
       remove: (id: string) => transport.invoke<void>("terminal:remove", id),
       rename: (id: string, name: string | null) =>
@@ -3376,82 +3465,73 @@ export function createApiClient(
       },
     },
     fs: {
-      list: (target: ProjectTargetInput, path: string) =>
+      list: (
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
+        path: string,
+      ) =>
         transport.invoke<FsListResponse>("fs:list", {
-          ...toWireTarget(target),
+          target: toFsWireTarget(target),
           path,
         }),
-      languageFiles: (target: ProjectTargetInput) =>
-        transport.invoke<LanguageFilesResponse>(
-          "fs:languageFiles",
-          toWireTarget(target),
-        ),
+      languageFiles: (
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
+      ) =>
+        transport.invoke<LanguageFilesResponse>("fs:languageFiles", {
+          target: toFsWireTarget(target),
+        }),
       read: (
-        target: ProjectTargetInput,
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
         path: string,
         opts?: { offset?: number; len?: number; mode?: "plan-document" },
       ) => {
-        const wire = toWireTarget(target);
+        const wire = toFsWireTarget(target);
+        const norm = normalizeFsTarget(target, owner.profileId);
         const fsTrans = transport as unknown as FsTransportSeam;
         if (typeof fsTrans.fsRead === "function") {
-          return fsTrans.fsRead(
-            {
-              profileId: owner.profileId,
-              project: wire.project,
-              worktreePath: wire.worktreePath,
-            },
-            path,
-            opts,
-          ) as Promise<FsReadResponse>;
+          return fsTrans.fsRead(norm, path, opts) as Promise<FsReadResponse>;
         }
         return transport.invoke<FsReadResponse>("fs:read", {
-          ...wire,
+          target: wire,
           path,
           ...opts,
         });
       },
       writeFile: (
-        target: ProjectTargetInput,
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
         path: string,
         content: string,
         expectedMtime: number,
       ) => {
-        const wire = toWireTarget(target);
+        const wire = toFsWireTarget(target);
+        const norm = normalizeFsTarget(target, owner.profileId);
         const fsTrans = transport as unknown as FsTransportSeam;
         if (typeof fsTrans.fsWriteFile === "function") {
           return fsTrans.fsWriteFile(
-            {
-              profileId: owner.profileId,
-              project: wire.project,
-              worktreePath: wire.worktreePath,
-            },
+            norm,
             path,
             content,
             expectedMtime,
           ) as Promise<FsWriteResponse>;
         }
         return transport.invoke<FsWriteResponse>("fs:writeFile", {
-          ...wire,
+          target: wire,
           path,
           content,
           expectedMtime,
         });
       },
       subscribeTree: (
-        target: ProjectTargetInput,
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
         path: string,
         opts?: { watchOnly?: boolean },
       ) => {
-        const wire = toWireTarget(target);
+        const wire = toFsWireTarget(target);
+        const norm = normalizeFsTarget(target, owner.profileId);
         const fsTrans = transport as unknown as FsTransportSeam;
         if (typeof fsTrans.fsSubscribeTree === "function") {
           return (
             fsTrans.fsSubscribeTree(
-              {
-                profileId: owner.profileId,
-                project: wire.project,
-                worktreePath: wire.worktreePath,
-              },
+              norm,
               path,
               opts,
             ) as Promise<number | { sub_id: number }>
@@ -3460,7 +3540,7 @@ export function createApiClient(
         return transport
           .invoke<{
             sub_id: number;
-          }>("fs:subscribeTree", { ...wire, path, ...opts })
+          }>("fs:subscribeTree", { target: wire, path, ...opts })
           .then((r) => r.sub_id);
       },
       unsubscribeTree: (sub_id: number) => {
@@ -3494,20 +3574,16 @@ export function createApiClient(
         );
       },
       uploadFile: (
-        target: ProjectTargetInput,
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
         dir: string,
         file: File,
         onProgress?: (pct: number) => void,
       ) => {
-        const wire = toWireTarget(target);
+        const norm = normalizeFsTarget(target, owner.profileId);
         const fsTrans = transport as unknown as FsTransportSeam;
         if (typeof fsTrans.fsUploadFile === "function") {
           return fsTrans.fsUploadFile(
-            {
-              profileId: owner.profileId,
-              project: wire.project,
-              worktreePath: wire.worktreePath,
-            },
+            norm,
             dir,
             file,
             onProgress,
@@ -3518,22 +3594,18 @@ export function createApiClient(
         );
       },
       putFile: (
-        target: ProjectTargetInput,
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
         dir: string,
         file: File,
         uploadId: string,
         encKey: CryptoKey,
         onProgress?: (pct: number) => void,
       ) => {
-        const wire = toWireTarget(target);
+        const norm = normalizeFsTarget(target, owner.profileId);
         const fsTrans = transport as unknown as FsTransportSeam;
         if (typeof fsTrans.fsPutFile === "function") {
           return fsTrans.fsPutFile(
-            {
-              profileId: owner.profileId,
-              project: wire.project,
-              worktreePath: wire.worktreePath,
-            },
+            norm,
             dir,
             file,
             uploadId,
@@ -3546,21 +3618,17 @@ export function createApiClient(
         );
       },
       putSave: (
-        target: ProjectTargetInput,
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
         path: string,
         blob: Blob,
         saveId: string,
         encKey: CryptoKey,
       ) => {
-        const wire = toWireTarget(target);
+        const norm = normalizeFsTarget(target, owner.profileId);
         const fsTrans = transport as unknown as FsTransportSeam;
         if (typeof fsTrans.fsPutSave === "function") {
           return fsTrans.fsPutSave(
-            {
-              profileId: owner.profileId,
-              project: wire.project,
-              worktreePath: wire.worktreePath,
-            },
+            norm,
             path,
             blob,
             saveId,
@@ -3699,6 +3767,10 @@ export interface ApiClient {
   };
   globalConfig: {
     get: () => Promise<GlobalConfig>;
+    updateWorkspace: (workspace: {
+      root: string;
+      name?: string;
+    }) => Promise<{ updated: true }>;
     updateDefaults: (defaults: {
       workspace?: string;
     }) => Promise<{ updated: true }>;
@@ -3919,6 +3991,14 @@ export interface ApiClient {
       name: string,
       data: Partial<ProjectConfig>,
     ) => Promise<ProjectConfig>;
+    markProject: {
+      (req: MarkProjectRequest): Promise<MarkProjectResponse>;
+      (profileId: ProfileId, req: MarkProjectRequest): Promise<MarkProjectResponse>;
+    };
+    unmarkProject: {
+      (name: string): Promise<UnmarkProjectResponse>;
+      (profileId: ProfileId, name: string): Promise<UnmarkProjectResponse>;
+    };
   };
   settings: {
     clearCache: () => Promise<{ cleared: boolean }>;
@@ -4013,6 +4093,7 @@ export interface ApiClient {
   terminal: {
     create: (opts: {
       id: string;
+      target?: ServerFsTarget | FsTargetRef;
       project?: string;
       command: string;
       cwd?: string;
@@ -4072,23 +4153,26 @@ export interface ApiClient {
     ) => Promise<ConsentDecisionResponse>;
   };
   fs: {
-    list: (target: ProjectTargetInput, path: string) => Promise<FsListResponse>;
+    list: (
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
+      path: string,
+    ) => Promise<FsListResponse>;
     languageFiles: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
     ) => Promise<LanguageFilesResponse>;
     read: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
       path: string,
       opts?: { offset?: number; len?: number; mode?: "plan-document" },
     ) => Promise<FsReadResponse>;
     writeFile: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
       path: string,
       content: string,
       expectedMtime: number,
     ) => Promise<FsWriteResponse>;
     subscribeTree: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
       path: string,
       opts?: { watchOnly?: boolean },
     ) => Promise<number>;
@@ -4099,13 +4183,13 @@ export interface ApiClient {
       cb: (message: string) => void,
     ) => () => void;
     uploadFile: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
       dir: string,
       file: File,
       onProgress?: (pct: number) => void,
     ) => Promise<FsUploadResult>;
     putFile: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
       dir: string,
       file: File,
       uploadId: string,
@@ -4113,7 +4197,7 @@ export interface ApiClient {
       onProgress?: (pct: number) => void,
     ) => Promise<FsPutResult>;
     putSave: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
       path: string,
       blob: Blob,
       saveId: string,
@@ -4255,3 +4339,5 @@ export const api = createApiClient(
   { profileId: "", generation: 0 },
   defaultAmbientTransport,
 );
+
+export const client = api;

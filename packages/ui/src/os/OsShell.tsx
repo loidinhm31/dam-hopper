@@ -28,7 +28,7 @@ import {
 import { getTerminal } from "@/lib/terminal-registry.js";
 import { parseOsDeepLink } from "./deep-links.js";
 import { readServerProfiles } from "@/api/server-config.js";
-import { getConnectionSnapshot } from "@/api/connections.js";
+import { getConnectionSnapshot, getApi } from "@/api/connections.js";
 import { dispatchIntent, registerIntentHandler, createIntent } from "./intents.js";
 import { TopBar } from "./TopBar.js";
 import { Dock } from "./Dock.js";
@@ -50,7 +50,8 @@ import { generateUUID } from "@/lib/utils.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { useEditorStore } from "@/stores/editor.js";
+import { editorFileTabKey, useEditorStore } from "@/stores/editor.js";
+import { normalizeFsTarget, toServerFsTarget, type FsTargetRef } from "@/api/ownership.js";
 import { normalizeProjectTarget } from "@/api/client.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 export function OsShell() {
@@ -235,30 +236,63 @@ export function OsShell() {
 
   // Register default OS intent consumers
   useEffect(() => {
+    const getPlacement = () =>
+      useSettingsStore.getState().defaultWindowPlacement ?? "float";
+
     const unregisterList: Array<() => void> = [
-      registerIntentHandler("terminal:open", (intent) => {
+      registerIntentHandler("terminal:open", async (intent) => {
         const targetCtx: WindowContext = {
           profileId: intent.payload.profileId,
           projectId: intent.payload.projectId,
           worktreeId: intent.payload.worktreeId,
+          target: intent.payload.target,
         };
-        const id = `terminals-${generateUUID().slice(0, 8)}`;
+        const id = `terminals-${generateUUID()}`;
+        const terminalId =
+          intent.payload.terminalId ?? `term-${generateUUID()}`;
+
+        let createError: string | undefined;
+        let incarnation: number | undefined;
+        const snap = getConnectionSnapshot(targetCtx.profileId);
+        if (snap && snap.status === "connected") {
+          try {
+            const client = getApi(snap.owner);
+            const wireTarget = targetCtx.target ? toServerFsTarget(targetCtx.target) : undefined;
+            const session = await client.terminal.create({
+              id: terminalId,
+              command: "",
+              project: targetCtx.projectId,
+              cwd: intent.payload.cwd,
+              target: wireTarget,
+              cols: 80,
+              rows: 24,
+            });
+            incarnation = session.incarnation;
+          } catch (err) {
+            createError = err instanceof Error ? err.message : String(err);
+          }
+        }
+
         openWindow(
           {
             id,
             appId: "terminals",
             title: "Terminals",
             ctx: targetCtx,
-            mode: "tile",
-            appState: intent.payload.cwd
-              ? { cwd: intent.payload.cwd }
-              : undefined,
+            mode: getPlacement(),
+            appState: {
+              sessionId: terminalId,
+              terminalId,
+              ...(incarnation !== undefined ? { incarnation } : {}),
+              ...(createError ? { createError } : {}),
+              ...(intent.payload.cwd ? { cwd: intent.payload.cwd } : {}),
+            },
           },
           useWindowStore.getState().session.activeDesktopId,
         );
         return { status: "handled", targetWindowId: id };
       }),
-      registerIntentHandler("file:open", (intent) => {
+      registerIntentHandler("file:open", async (intent) => {
         if (
           intent.payload.profileId &&
           intent.payload.generation !== undefined
@@ -280,50 +314,84 @@ export function OsShell() {
           projectId: intent.payload.projectId,
           worktreeId: intent.payload.worktreeId,
           generation: intent.payload.generation,
+          target: intent.payload.target,
         };
-        const targetRef = normalizeProjectTarget({
-          profileId: targetCtx.profileId,
-          project: targetCtx.projectId ?? "",
-          worktreePath: targetCtx.worktreeId,
-        });
+        const targetRef = intent.payload.target
+          ? normalizeFsTarget(intent.payload.target, targetCtx.profileId)
+          : targetCtx.projectId
+            ? normalizeFsTarget({
+                profileId: targetCtx.profileId,
+                project: targetCtx.projectId,
+                worktreePath: targetCtx.worktreeId,
+              })
+            : { kind: "workspace" as const, profileId: targetCtx.profileId ?? "" };
         const fileNode: FsArborNode = {
           id: intent.payload.filePath,
           name: intent.payload.filePath.split("/").pop() || "",
           kind: "file",
           size: 0,
-          mtime: Date.now(),
+          mtime: 0,
           isSymlink: false,
           children: null,
         };
-        void useEditorStore.getState().open(targetRef, fileNode);
+
+        const currentTabs = useEditorStore.getState().tabs;
+        const currentTabKey = editorFileTabKey(targetRef, intent.payload.filePath);
+        const currentTab = currentTabs.find((t) => t.key === currentTabKey);
+        const canonicalDocKey = currentTab?.documentKey;
 
         const existing = Object.values(useWindowStore.getState().session.windows).find(
-          (w) =>
-            w.appId === "editor" &&
-            w.ctx.profileId === targetCtx.profileId &&
-            w.ctx.projectId === targetCtx.projectId &&
-            w.ctx.worktreeId === targetCtx.worktreeId,
+          (w) => {
+            if (w.appId !== "editor") return false;
+            if (canonicalDocKey && w.appState?.documentKey === canonicalDocKey) return true;
+            let wTarget: FsTargetRef;
+            if (w.ctx.target) {
+              wTarget = normalizeFsTarget(w.ctx.target, w.ctx.profileId);
+            } else if (w.ctx.projectId) {
+              wTarget = normalizeFsTarget({
+                profileId: w.ctx.profileId,
+                project: w.ctx.projectId,
+                worktreePath: w.ctx.worktreeId,
+              });
+            } else {
+              wTarget = { kind: "workspace", profileId: w.ctx.profileId ?? "" };
+            }
+            const wTabKey = editorFileTabKey(wTarget, (w.appState?.filePath as string) ?? "");
+            if (wTabKey === currentTabKey) return true;
+            return (
+              w.ctx.profileId === targetCtx.profileId &&
+              (w.ctx.projectId ?? "") === (targetCtx.projectId ?? "") &&
+              (w.ctx.worktreeId ?? "") === (targetCtx.worktreeId ?? "") &&
+              w.appState?.filePath === intent.payload.filePath
+            );
+          },
         );
         if (existing) {
           if (existing.minimized) restoreWindow(existing.id);
           focusWindow(existing.id);
-          useWindowStore.getState().updateAppState(existing.id, {
-            filePath: intent.payload.filePath,
-            line: intent.payload.line,
-          });
+          if (intent.payload.line !== undefined) {
+            useWindowStore.getState().updateAppState(existing.id, {
+              line: intent.payload.line,
+            });
+          }
+          void useEditorStore.getState().open(targetRef, fileNode);
           return { status: "handled", targetWindowId: existing.id };
         }
+
+        void useEditorStore.getState().open(targetRef, fileNode);
         const id = `editor-${generateUUID().slice(0, 8)}`;
+        const placement = useSettingsStore.getState().defaultWindowPlacement ?? "float";
         openWindow(
           {
             id,
             appId: "editor",
             title: intent.payload.filePath.split("/").pop() || "Editor",
             ctx: targetCtx,
-            mode: "tile",
+            mode: placement,
             appState: {
               filePath: intent.payload.filePath,
               line: intent.payload.line,
+              ...(canonicalDocKey ? { documentKey: canonicalDocKey } : {}),
             },
           },
           useWindowStore.getState().session.activeDesktopId,
@@ -338,7 +406,7 @@ export function OsShell() {
             appId: "browser",
             title: "Browser Preview",
             ctx: { profileId: intent.payload.profileId },
-            mode: "float",
+            mode: getPlacement(),
             appState: { url: intent.payload.url },
           },
           useWindowStore.getState().session.activeDesktopId,
@@ -376,7 +444,7 @@ export function OsShell() {
             appId: "conflict-resolver",
             title: "Conflict Resolver",
             ctx: targetCtx,
-            mode: "float",
+            mode: getPlacement(),
             appState: {
               root: intent.payload.root,
               filePath: intent.payload.filePath,
@@ -420,7 +488,7 @@ export function OsShell() {
             appId: "session-changes",
             title: "Session Changes",
             ctx: targetCtx,
-            mode: "float",
+            mode: getPlacement(),
             appState: {
               generation,
               terminalId: intent.payload.terminalId,
@@ -456,7 +524,7 @@ export function OsShell() {
             appId: "git",
             title: "Git",
             ctx: targetCtx,
-            mode: "tile",
+            mode: getPlacement(),
           },
           useWindowStore.getState().session.activeDesktopId,
         );
@@ -487,7 +555,7 @@ export function OsShell() {
             appId: "workflow-plans",
             title: "Workflow & Plans",
             ctx: targetCtx,
-            mode: "tile",
+            mode: getPlacement(),
             appState: { selectedItemId: intent.payload.itemId },
           },
           useWindowStore.getState().session.activeDesktopId,
@@ -515,7 +583,7 @@ export function OsShell() {
             appId: "ports-tunnels",
             title: "Ports & Tunnels",
             ctx: targetCtx,
-            mode: "float",
+            mode: getPlacement(),
           },
           useWindowStore.getState().session.activeDesktopId,
         );
@@ -553,7 +621,7 @@ export function OsShell() {
             appId: "settings",
             title: "Settings",
             ctx: { profileId: intent.payload.profileId ?? "default" },
-            mode: "tile",
+            mode: getPlacement(),
             appState: {
               activeTab: intent.payload.tab ?? "general",
               profileId: intent.payload.profileId,
@@ -594,7 +662,7 @@ export function OsShell() {
             appId: "project-info",
             title: "Project Info",
             ctx: targetCtx,
-            mode: "float",
+            mode: getPlacement(),
           },
           useWindowStore.getState().session.activeDesktopId,
         );
@@ -626,7 +694,7 @@ export function OsShell() {
             appId: "agent-store",
             title: "Agent Store",
             ctx: targetCtx,
-            mode: "tile",
+            mode: getPlacement(),
             appState: intent.payload.tab
               ? { tab: intent.payload.tab }
               : undefined,
@@ -669,7 +737,7 @@ export function OsShell() {
             appId: "system-monitor",
             title: "System Monitor",
             ctx: targetCtx,
-            mode: "tile",
+            mode: getPlacement(),
             appState: {
               inspectedProfileId: intent.payload.profileId ?? null,
               selectedIncidentId: intent.payload.incidentId ?? null,
@@ -711,7 +779,7 @@ export function OsShell() {
             appId: "system-monitor",
             title: "System Monitor",
             ctx: targetCtx,
-            mode: "tile",
+            mode: getPlacement(),
             appState: {
               inspectedProfileId: intent.payload.profileId,
               selectedIncidentId: intent.payload.incidentId,
@@ -773,7 +841,7 @@ export function OsShell() {
             appId: "search",
             title: manifest?.displayName ?? "Search",
             ctx: targetCtx,
-            mode: manifest?.defaultPlacement ?? "tile",
+            mode: getPlacement(),
             appState: {
               query: intent.payload.query,
               deliveryId: generateUUID(),
@@ -822,7 +890,7 @@ export function OsShell() {
             appId: "changes",
             title: manifest?.displayName ?? "Changes",
             ctx: targetCtx,
-            mode: manifest?.defaultPlacement ?? "tile",
+            mode: getPlacement(),
             appState: {
               filePath: intent.payload.filePath,
               status: intent.payload.status,
@@ -863,7 +931,7 @@ export function OsShell() {
             appId: "git",
             title: "Source Control",
             ctx: targetCtx,
-            mode: "tile",
+            mode: getPlacement(),
           },
           useWindowStore.getState().session.activeDesktopId,
         );
@@ -895,7 +963,7 @@ export function OsShell() {
             appId: "agent-hub",
             title: "Agent Hub",
             ctx: targetCtx,
-            mode: "tile",
+            mode: getPlacement(),
           },
           activeDesktopId,
         );
@@ -958,7 +1026,7 @@ export function OsShell() {
             appId: "terminals",
             title: `Terminal (${intent.payload.terminalId})`,
             ctx: { profileId: intent.payload.profileId },
-            mode: "tile",
+            mode: getPlacement(),
             appState: {
               sessionId: intent.payload.terminalId,
               terminalId: intent.payload.terminalId,
@@ -1064,7 +1132,7 @@ export function OsShell() {
     session.desktops[0];
 
   const handleLaunchApp = useCallback(
-    (appId: OsAppId) => {
+    async (appId: OsAppId) => {
       const manifest = APP_MANIFESTS[appId];
       if (!manifest) return;
       const targetCtx: WindowContext = activeDesktop?.defaultCtx ?? {
@@ -1086,6 +1154,34 @@ export function OsShell() {
         return;
       }
       const id = generateUUID();
+      let appState: Record<string, unknown> | undefined;
+      if (appId === "terminals") {
+        const terminalId = `term-${generateUUID()}`;
+        let createError: string | undefined;
+        let incarnation: number | undefined;
+        const snap = getConnectionSnapshot(targetCtx.profileId);
+        if (snap && snap.status === "connected") {
+          try {
+            const client = getApi(snap.owner);
+            const createdSession = await client.terminal.create({
+              id: terminalId,
+              command: "",
+              project: targetCtx.projectId,
+              cols: 80,
+              rows: 24,
+            });
+            incarnation = createdSession.incarnation;
+          } catch (err) {
+            createError = err instanceof Error ? err.message : String(err);
+          }
+        }
+        appState = {
+          sessionId: terminalId,
+          terminalId,
+          ...(incarnation !== undefined ? { incarnation } : {}),
+          ...(createError ? { createError } : {}),
+        };
+      }
       openWindow(
         {
           id,
@@ -1093,8 +1189,9 @@ export function OsShell() {
           title: manifest.displayName,
           ctx: targetCtx,
           mode: manifest.defaultPlacement,
+          appState,
         },
-        session.activeDesktopId,
+        useWindowStore.getState().session.activeDesktopId,
       );
     },
     [

@@ -538,6 +538,17 @@ async fn resolve_target_path(
     project_name: &str,
     worktree_path: Option<String>,
 ) -> Result<std::path::PathBuf, ApiError> {
+    let configured = {
+        let cfg = state.config.read().await;
+        cfg.projects.iter().any(|p| p.name == project_name)
+    };
+    if !configured {
+        return Err(ApiError::custom(
+            axum::http::StatusCode::NOT_FOUND,
+            "UNKNOWN_PROJECT",
+            format!("Project not found: {project_name}"),
+        ));
+    }
     state
         .resolve_project_target(&ProjectTargetRef {
             project: project_name.to_string(),

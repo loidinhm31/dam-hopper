@@ -3,7 +3,7 @@
  * Deterministic Windows x86_64 release archive packager for DamHopper.
  * Produces a byte-reproducible ZIP file containing:
  *   - dam-hopper-server.exe
- *   - dam-hopper.example.toml
+ *   - config.example.toml
  *   - LICENSE
  *   - README.md
  *
@@ -29,7 +29,7 @@ const DEFAULT_SOURCE_DATE_EPOCH = 1700000000;
 
 const WINDOWS_ZIP_REQUIRED_MEMBERS = Object.freeze([
   "dam-hopper-server.exe",
-  "dam-hopper.example.toml",
+  "config.example.toml",
   "LICENSE",
   "README.md",
 ]);
@@ -137,8 +137,7 @@ function parseArgs() {
 
   configExamplePath = configExamplePath
     ? resolve(rootDir, configExamplePath)
-    : resolve(rootDir, "__fixtures__/workspace/dam-hopper.toml");
-
+    : resolve(rootDir, "__fixtures__/workspace/config.toml");
   licensePath = licensePath
     ? resolve(rootDir, licensePath)
     : resolve(rootDir, "LICENSE");
@@ -169,7 +168,7 @@ function printUsageAndExit(code) {
 Options:
   --tag, -t <tag>            Release tag (vX.Y.Z, required)
   --binary, -b <path>        Path to dam-hopper-server.exe (default: server/target/.../dam-hopper-server.exe)
-  --config-example <path>    Path to example TOML config (default: __fixtures__/workspace/dam-hopper.toml)
+  --config-example <path>    Path to example TOML config (default: __fixtures__/workspace/config.toml)
   --license <path>           Path to LICENSE file (default: LICENSE)
   --readme <path>            Path to README.md file (default: README.md)
   --output-dir, -o <dir>     Output directory for ZIP archive (default: artifacts/release)
@@ -366,13 +365,13 @@ function main() {
   } = parseArgs();
 
   const binaryBytes = readInputFile(binaryPath, "dam-hopper-server.exe binary");
-  const configBytes = readInputFile(configExamplePath, "dam-hopper.example.toml config");
+  const configBytes = readInputFile(configExamplePath, "config.example.toml config");
   const licenseBytes = readInputFile(licensePath, "LICENSE file");
   const readmeBytes = readInputFile(readmePath, "README.md file");
 
   const entries = [
     { name: "dam-hopper-server.exe", data: binaryBytes },
-    { name: "dam-hopper.example.toml", data: configBytes },
+    { name: "config.example.toml", data: configBytes },
     { name: "LICENSE", data: licenseBytes },
     { name: "README.md", data: readmeBytes },
   ];

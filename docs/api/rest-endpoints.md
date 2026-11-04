@@ -57,22 +57,48 @@ underlying content.
 ### Projects
 
 **GET /api/projects**
-List all projects in workspace.
+List all projects configured on the server.
+Response: `[ { name, path, type, ... } ]`
 
-Response: `{ projects: [ { name, path, type } ] }`
+**POST /api/config/projects**
+Mark a folder as a project. Re-resolves target folder, enforces name and canonical root uniqueness (nested roots allowed), atomically updates `config.toml`, and publishes config changes.
+Body:
+```json
+{
+  "name": "services-api",
+  "target": { "type": "workspace" },
+  "path": "services/api",
+  "projectType": "custom",
+  "tags": ["backend"]
+}
+```
+Response:
+```json
+{
+  "ok": true,
+  "name": "services-api",
+  "path": "services/api"
+}
+```
 
+**DELETE /api/config/projects/{name}**
+Unmark a project. Removes project configuration from `config.toml` without deleting disk files or terminating running terminals.
+Response:
+```json
+{
+  "ok": true,
+  "name": "services-api"
+}
+```
 ### Terminals
 
 **POST /api/terminal** (transport channel: `terminal:create`)
 Create a new PTY session (idempotent).
 
-Body: `{ id, project?, cwd?, worktreePath?, command, cols, rows, env? }`
+Body: `{ id, target?, project?, cwd?, worktreePath?, command, cols, rows, env? }`
 
-When `worktreePath` is present, the server resolves it as a registered,
-available worktree for `project`, resolves relative `cwd` values beneath that
-target, rejects cwd values outside it, and persists the canonical target in
-session metadata. `worktreePath` requires `project`; omitting it preserves
-configured-root or legacy project behavior.
+- When `target: { "type": "workspace" }` is present, `cwd` is required and must be canonically contained within the authorized workspace root. Traversal escapes or directories outside the workspace are rejected with 400 `INVALID_FS_TARGET` without `$HOME` fallback.
+- When `worktreePath` is present, the server resolves it as a registered, available worktree for `project`, resolves relative `cwd` values beneath that target, rejects cwd values outside it, and persists the canonical target in session metadata. `worktreePath` requires `project`; omitting it preserves configured-root or legacy project behavior.
 
 Platform behavior for free terminals differs only where the request omits `cwd`: Windows uses an existing user home directory, then the server's existing current directory; Unix retains the `HOME`-then-`/tmp` fallback. On Windows, an empty command or the exact `bash` selector starts the native interactive `cmd.exe` with no arguments. Other command strings run as `cmd.exe /C <command>`.
 
@@ -724,14 +750,12 @@ Notes:
 - UI usage: Consumed by `WorkspaceGitPanel` and `GitPage` squash workflows when `isViewingLocalBranch` is true. Verified pre-flight messages validate identical `headOid` and `branch`. On success, generates a receipt (`receipt.branch`, `receipt.sourceOid`) driving the leased push confirmation flow.
 - Response follows `GitActionResult`.
 
-
 ### Agent Status API
 
 **GET /api/agent-status/v1/snapshot**
 Returns the current active agent status snapshot across all live managed terminals.
 
 Response:
-
 ```json
 {
   "version": 1,

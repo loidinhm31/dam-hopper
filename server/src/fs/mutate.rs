@@ -37,6 +37,52 @@ pub fn assert_safe_mutation(
     Ok(())
 }
 
+/// Reject mutations on the workspace root, marked project roots, registered worktree roots,
+/// or their containing ancestors, as well as .git/ paths (unless force_git).
+pub fn assert_safe_mutation_against_roots(
+    abs: &Path,
+    workspace_root: Option<&Path>,
+    protected_roots: &[std::path::PathBuf],
+    force_git: bool,
+) -> Result<(), FsError> {
+    if let Some(ws_root) = workspace_root {
+        if abs == ws_root {
+            return Err(FsError::MutationRefused(
+                "cannot mutate workspace root".into(),
+            ));
+        }
+        if ws_root.starts_with(abs) {
+            return Err(FsError::MutationRefused(
+                "cannot mutate containing ancestor of workspace root".into(),
+            ));
+        }
+    }
+    for p_root in protected_roots {
+        if abs == p_root {
+            return Err(FsError::MutationRefused(
+                "cannot mutate protected project root".into(),
+            ));
+        }
+        if p_root.starts_with(abs) {
+            return Err(FsError::MutationRefused(
+                "cannot mutate containing ancestor of a protected project root".into(),
+            ));
+        }
+    }
+
+    if !force_git {
+        let in_git = abs
+            .components()
+            .any(|c| matches!(c, Component::Normal(n) if n == ".git"));
+        if in_git {
+            return Err(FsError::MutationRefused(
+                "refusing .git write without force_git=true".into(),
+            ));
+        }
+    }
+
+    Ok(())
+}
 // ---------------------------------------------------------------------------
 // Mutation operations
 // ---------------------------------------------------------------------------

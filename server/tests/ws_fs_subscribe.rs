@@ -95,6 +95,8 @@ fn make_test_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) 
         server: dam_hopper_server::config::ServerConfig::default(),
         projects,
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_dir.join("dam-hopper.toml"),
     };
 

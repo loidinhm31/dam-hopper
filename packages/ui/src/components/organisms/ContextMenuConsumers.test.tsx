@@ -126,6 +126,7 @@ vi.mock("@/hooks/use-fs-upload.js", () => ({
 vi.mock("@/api/queries.js", () => ({
   useGitDiff: () => ({ data: undefined }),
   useProject: () => ({ data: { path: "/workspace/demo" } }),
+  useProjects: () => ({ data: [{ name: "demo", path: "/workspace/demo" }], isLoading: false }),
   useExplorerLanguageScan: () => ({
     cache: null,
     scan: {

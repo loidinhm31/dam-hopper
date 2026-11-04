@@ -1,6 +1,6 @@
 # DamHopper Codebase Summary
 
-**Source summary:** Repomix 1.18.0 compaction generated 2026-11-03 (`repomix-output.xml`; 3,981 files included, 10 scanner-excluded, 9,747,177 tokens, 42,351,704 chars). The repository inventory reflects Phase 02 (P0a: Tauri desktop host and SSH-forwarding UI removal), Phase 03 (P0b: Usage and server telemetry retirement, neutral DB path helpers, and early release preparation), Phase 01 OS lifecycle prototype, Phase 04 OS shell chrome and services, Phase 05 application catalog and deep links, Phase 06 System Monitor and tray baseline, Phase 07 Agent Hub and Launch Recipes baseline, Phase 08 Root cutover and legacy shell deletion, and Phase 09 Application qualification and visual review of the AI Dev OS redesign.
+**Source summary:** Repomix 1.18.0 compaction generated 2026-11-03 (`repomix-output.xml`; 3,970 files included, 10 scanner-excluded, 9,799,475 tokens, 42,617,445 chars). The repository reflects clean cutover to a single server-global `config.toml` authoritative configuration (`[workspace].root` canonical browse root authority, validated atomic workspace root switching with fail-closed stale-root save fence, marked projects, and legacy directory-discovery removal), alongside Phase 01–09 AI Dev OS architecture.
 ## Historical Repository Inventory (2026-10-05)
 
 The previous inventory counted **2,046 eligible text files and 411,852 physical lines of code/text** at the date of that scan:

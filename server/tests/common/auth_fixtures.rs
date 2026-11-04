@@ -77,6 +77,8 @@ impl AuthTestFixture {
             agent_store: None,
             projects: vec![],
             features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
             config_path: workspace_root.join("dam-hopper.toml"),
         };
 
@@ -153,6 +155,8 @@ impl AuthTestFixture {
             agent_store: None,
             projects: vec![],
             features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
             config_path: workspace_root.join("dam-hopper.toml"),
         };
 

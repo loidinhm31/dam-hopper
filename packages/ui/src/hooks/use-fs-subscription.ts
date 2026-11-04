@@ -5,8 +5,14 @@ import {
   captureConnection,
   getTransport as getConnectionsTransport,
 } from "@/api/connections.js";
-import { toServerProjectTarget } from "@/api/ownership.js";
-import type { WsTransport } from "@/api/ws-transport.js";
+import {
+  toServerProjectTarget,
+  normalizeFsTarget,
+  toServerFsTarget,
+  fsTargetKey,
+  type FsTargetRef,
+  type ServerFsTarget,
+} from "@/api/ownership.js";
 import type {
   FsArborNode,
   FsListResponse,
@@ -20,6 +26,7 @@ import {
   type ProjectTargetInput,
   type ProjectTargetRef,
 } from "@/api/client.js";
+import { fsTreeQueryKey } from "@/api/queries.js";
 import { scheduleGitFsInvalidation } from "@/lib/git-fs-invalidation.js";
 import { useTransportGeneration } from "@/hooks/use-transport-generation.js";
 import {
@@ -80,15 +87,15 @@ export function applyFsDelta(
 
 interface FsSubscriptionTransportSeam {
   fsSubscribeTree?: (
-    project: string | { project: string; worktreePath?: string },
+    target: ServerFsTarget | FsTargetRef | ProjectTargetInput,
     path: string,
   ) => Promise<{ sub_id: number; nodes: ServerTreeNode[] }>;
   fsUnsubscribeTree?: (sub_id: number) => void;
   onFsEvent?: (sub_id: number, cb: (ev: FsEventDto) => void) => () => void;
 }
 
-function resolveSubscriptionTransport(
-  targetRef: ProjectTargetRef,
+export function resolveSubscriptionTransport(
+  targetRef: FsTargetRef,
   originating?: Transport | null,
 ): Transport {
   if (originating) return originating;
@@ -100,29 +107,38 @@ function resolveSubscriptionTransport(
 }
 
 /**
- * Subscribe to a project's file tree via WS.
+ * Subscribe to a filesystem tree via WS.
  *
- * Returns the TanStack Query result for `['fs-tree', project, path]`.
+ * Returns the TanStack Query result for the target-scoped tree cache key.
  * Also exposes `loadChildren` for lazy dir expansion.
  */
-export function useFsSubscription(target: ProjectTargetInput, path: string) {
+export function useFsSubscription(
+  target: FsTargetRef | ProjectTargetInput | null | undefined,
+  path: string,
+  options?: { enabled?: boolean },
+) {
   const qc = useQueryClient();
-  const targetRef = normalizeProjectTarget(target);
-  const project = targetRef.project;
-  const worktreePath = targetRef.worktreePath;
+  const isTargetValid = !(target && typeof target === "object" && "kind" in target && target.kind === "project" && !target.project?.trim());
+  const isEnabled = (options?.enabled ?? true) && isTargetValid;
+  const targetRef = target && isTargetValid
+    ? normalizeFsTarget(target)
+    : { kind: "workspace" as const, profileId: "" };
   const profileId = targetRef.profileId;
-  const targetKey = projectTargetCacheKey(targetRef);
-  const requestTarget =
-    worktreePath == null ? project : { project, worktreePath };
+  const targetKey =
+    targetRef.kind === "workspace"
+      ? "workspace"
+      : targetRef.worktreePath == null
+        ? "root"
+        : targetRef.worktreePath;
+  const requestTarget = toServerFsTarget(targetRef);
   const transportGeneration = useTransportGeneration(profileId);
   const boundTransportGenerationRef = useRef(transportGeneration);
   const originatingTransportRef = useRef<Transport | null>(null);
 
-  const treeQueryKey = profileId
-    ? ["fs-tree", profileId, project, targetKey, path]
-    : ["fs-tree", project, targetKey, path];
+  const treeQueryKey = fsTreeQueryKey(targetRef, path);
   const query = useQuery<FsTreeData>({
     queryKey: treeQueryKey,
+    enabled: isEnabled,
     queryFn: async ({ signal }) => {
       const t = resolveSubscriptionTransport(targetRef);
       const fsSeam = t as unknown as FsSubscriptionTransportSeam;
@@ -160,7 +176,7 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
   // Cleanup runs on sub_id change (re-subscription) or unmount.
   const subId = query.data?.sub_id;
   useEffect(() => {
-    if (subId == null) return;
+    if (!isEnabled || subId == null) return;
     if (boundTransportGenerationRef.current !== transportGeneration) {
       boundTransportGenerationRef.current = transportGeneration;
       void qc.resetQueries({
@@ -180,14 +196,23 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
     }
 
     const fsSeam = t as unknown as FsSubscriptionTransportSeam;
-    const workspaceEpoch = explorerLanguageScanWorkspaceEpoch(qc, targetRef);
+    const projectRef =
+      targetRef.kind === "project"
+        ? (targetRef as unknown as ProjectTargetRef)
+        : null;
+    const workspaceEpoch = projectRef
+      ? explorerLanguageScanWorkspaceEpoch(qc, projectRef)
+      : 0;
     const handleEvent = (ev: FsEventDto) => {
       if (
-        explorerLanguageScanWorkspaceEpoch(qc, targetRef) !== workspaceEpoch
+        projectRef &&
+        explorerLanguageScanWorkspaceEpoch(qc, projectRef) !== workspaceEpoch
       ) {
         return;
       }
-      markExplorerLanguageScanStale(qc, targetRef, workspaceEpoch, targetKey);
+      if (projectRef) {
+        markExplorerLanguageScanStale(qc, projectRef, workspaceEpoch, targetKey);
+      }
       qc.setQueryData<FsTreeData>(treeQueryKey, (prev) => {
         if (!prev) return prev;
         const next = applyFsDelta(prev, ev);
@@ -199,9 +224,10 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
         }
         return next;
       });
-      scheduleGitFsInvalidation(qc, targetRef);
+      if (projectRef) {
+        scheduleGitFsInvalidation(qc, projectRef);
+      }
     };
-
     let off: () => void;
     if (typeof fsSeam.onFsEvent === "function") {
       off = fsSeam.onFsEvent(subId, handleEvent);
@@ -228,8 +254,6 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
     };
   }, [
     subId,
-    project,
-    worktreePath,
     targetKey,
     path,
     qc,
@@ -242,9 +266,9 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
       targetRef,
       originatingTransportRef.current,
     );
-    const wire = toServerProjectTarget(targetRef);
+    const wire = toServerFsTarget(targetRef);
     const resp = await t.invoke<FsListResponse>("fs:list", {
-      ...wire,
+      target: wire,
       path: nodeId,
     });
     const children = resp.entries.map(
@@ -265,9 +289,9 @@ export function useFsSubscription(target: ProjectTargetInput, path: string) {
       return { ...prev, nodes: spliceChildren(prev.nodes, nodeId, children) };
     });
 
-    if (targetRef.profileId) {
+    if (targetRef.kind === "project" && targetRef.profileId) {
       qc.setQueryData<FsTreeData>(
-        ["fs-tree", project, targetKey, path],
+        ["fs-tree", targetRef.project, targetKey, path],
         (prev) => {
           if (!prev) return prev;
           return {
@@ -300,7 +324,7 @@ function serverNodeToArbor(n: ServerTreeNode): FsArborNode {
   };
 }
 
-function spliceChildren(
+export function spliceChildren(
   nodes: FsArborNode[],
   targetId: string,
   children: FsArborNode[],

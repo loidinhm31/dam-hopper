@@ -35,7 +35,7 @@ same-epoch byte reproducibility and changed-epoch digest variation.
 accepts exactly one of `-Version vX.Y.Z` or `-Latest`, plus `-InstallDir`,
 `-AddToPath`, `-VerifyAttestation`, and `-DryRun`. It verifies release metadata,
 asset size, and SHA-256 before bounded four-member extraction; preserves an
-existing `dam-hopper.toml`; optionally updates only User PATH; and never starts
+existing `config.toml`; optionally updates only User PATH; and never starts
 the server. The focused `tests/deploy/windows-release-install.ps1` harness uses
 `windows-release-install-fixture.mjs` and reports 14/14 integration scenarios,
 including upgrade/config preservation, dry-run, digest/size and archive safety
@@ -66,12 +66,12 @@ reproducibility and live-installation boundaries.
 The merge reconciliation kept refusal-based descriptor provisioning and
 excluded recursive string-path `chown`, while incorporating the workflow and
 Explorer HTML preview surfaces. The API unit renders
-`--config /var/lib/dam-hopper/dam-hopper.toml`; the merge boundary is complete.
+`--config /var/lib/dam-hopper/config.toml`; the merge boundary is complete.
 
 ### API runtime-state boundary (2026-09-14)
 
 `server/src/linux_release/api_runtime.rs` now provisions the descriptor-relative
-API state root, canonical `/var/lib/dam-hopper/dam-hopper.toml`, and server
+API state root, canonical `/var/lib/dam-hopper/config.toml`, and server
 `/var/lib/dam-hopper/idle-suspend-audit.jsonl`. A validated legacy
 `/etc/dam-hopper/dam-hopper.toml` is an optional exact-byte, copy-once source
 only when canonical state is absent. Staging uses an exclusive no-follow
@@ -82,8 +82,8 @@ boundaries. See [Linux API Runtime State Provisioning](./linux-release-runtime-p
 ### Systemd unit and policy boundary (2026-09-14)
 
 `deploy/systemd/dam-hopper-api.service.in` renders
-`--config @API_HOME@/dam-hopper.toml`; the checked-in unit resolves that
-operand to `/var/lib/dam-hopper/dam-hopper.toml` and must stay synchronized
+`--config @API_HOME@/config.toml`; the checked-in unit resolves that
+operand to `/var/lib/dam-hopper/config.toml` and must stay synchronized
 with the production-default rendering. `validate_api_unit_policy` requires
 exactly one canonical `ExecStart` and one zero-operand privileged
 `provision-api-runtime` prestart. Staging renders, parses, and policy-checks
@@ -93,7 +93,7 @@ arguments fail closed. Focused unit-policy/staging evidence records 29/29.
 ### Preflight, installer, and reset boundary (2026-09-14)
 
 `activate_preflight.rs` gates SQLite holder checks only for `server`/`both`
-roles. It inspects canonical `/var/lib/dam-hopper/dam-hopper.toml` first and
+roles. It inspects canonical `/var/lib/dam-hopper/config.toml` first and
 the extant `/etc/dam-hopper/dam-hopper.toml` migration source second, using
 no-follow regular-file descriptors, a 64 KiB bound, UTF-8/TOML parsing, and
 fixed API `HOME`/working-directory path semantics. Unsafe presence fails closed;

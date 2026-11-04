@@ -44,11 +44,16 @@ vi.mock("@/hooks/use-fs-subscription.js", () => ({
     refetch: vi.fn(),
     isFetching: false,
   }),
+  resolveSubscriptionTransport: () => ({
+    invoke: vi.fn().mockResolvedValue({ entries: [] }),
+  }),
+  spliceChildren: (nodes: unknown[], _id: string, children: unknown[]) => children,
 }));
 vi.mock("@/api/queries.js", () => ({
   invalidateGitFileOperation: vi.fn(),
   useGitDiff: () => ({ data: undefined }),
   useProject: () => ({ data: { path: "/workspace/demo" } }),
+  useWorkspaceStatus: () => ({ data: { workspaceEpoch: 1 } }),
   useExplorerLanguageScan: () => ({
     cache: harness.cache,
     scan: {
@@ -59,6 +64,9 @@ vi.mock("@/api/queries.js", () => ({
       mutateAsync: harness.scanMutate,
     },
   }),
+  useProjects: () => ({ data: [] }),
+  useMarkProject: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useUnmarkProject: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock("@/hooks/use-fs-ops.js", () => ({
   useFsOps: () => ({

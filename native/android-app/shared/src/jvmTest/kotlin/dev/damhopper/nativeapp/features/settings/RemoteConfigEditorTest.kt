@@ -66,7 +66,8 @@ class RemoteConfigEditorTest {
             if (req.method == "PUT") 200 to """{"ok":true}""" else 200 to serverConfig
         }
         server.route("/api/config/projects/api") { _ -> 200 to """{"ok":true}""" }
-        server.route("/api/global-config") { _ -> 200 to """{"defaults":{"workspace":"/srv/default"},"ui":{}}""" }
+        server.route("/api/global-config") { _ -> 200 to """{"workspace":{"name":"ws","root":"/srv/default"},"ui":{}}""" }
+        server.route("/api/global-config/workspace") { _ -> 200 to """{"updated":true}""" }
         server.route("/api/global-config/defaults") { _ -> 200 to """{"updated":true}""" }
     }
 
@@ -295,21 +296,19 @@ class RemoteConfigEditorTest {
     }
 
     @Test
-    fun globalDefaultsSetAndClearSendExactPayloads() = runBlocking {
+    fun globalWorkspaceRootSetSendsExactPayloadAndUpdatesState() = runBlocking {
         val editor = editor()
         assertTrue(editor.loadGlobalDefaults())
         assertEquals("/srv/default", editor.defaults.value.workspace)
 
         assertTrue(editor.setGlobalDefaultWorkspace("/srv/other") is SettingsOutcome.Confirmed)
-        assertEquals("""{"defaults":{"workspace":"/srv/other"}}""", server.posts("/api/global-config/defaults")[0].body)
+        assertEquals("""{"root":"/srv/other"}""", server.posts("/api/global-config/workspace")[0].body)
         assertEquals("/srv/other", editor.defaults.value.workspace)
 
-        assertTrue(editor.clearGlobalDefaultWorkspace() is SettingsOutcome.Confirmed)
-        assertEquals("""{"defaults":{}}""", server.posts("/api/global-config/defaults")[1].body)
-        assertNull(editor.defaults.value.workspace)
         assertTrue(editor.setGlobalDefaultWorkspace("  ") is SettingsOutcome.NotSubmitted)
-        assertEquals(2, server.posts("/api/global-config/defaults").size)
+        assertEquals(1, server.posts("/api/global-config/workspace").size)
         assertEquals(0, server.count(path = "/api/workspace/known"), "the known registry is untouched")
+        assertEquals(0, server.count(path = "/api/global-config/defaults"), "defaults.workspace duplicate removed")
     }
 
     @Test

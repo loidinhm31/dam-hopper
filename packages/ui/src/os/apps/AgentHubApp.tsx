@@ -3,6 +3,13 @@ import {
   useMemo,
   type ReactElement,
 } from "react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/Select.js";
 import type { OsWindow, WindowContext } from "../types.js";
 import { useWindowStore } from "../window-store.js";
 import { dispatchIntent, createIntent } from "../intents.js";
@@ -356,36 +363,48 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
           />
 
           {/* Profile Filter Dropdown */}
-          <select
-            data-testid="agent-hub-profile-filter"
-            aria-label="Filter by host profile"
+          <Select
             value={profileFilter}
-            onChange={(e) => setProfileFilter(e.target.value)}
-            className="px-2 py-1 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
+            onValueChange={(val) => setProfileFilter(val)}
           >
-            <option value="all">All Hosts ({profileLabels.size})</option>
-            {Array.from(profileLabels.entries()).map(([pId, label]) => (
-              <option key={pId} value={pId}>
-                {label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger
+              data-testid="agent-hub-profile-filter"
+              aria-label="Filter by host profile"
+              className="h-7 w-auto min-w-[130px] rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs text-[var(--color-text)]"
+            >
+              <SelectValue placeholder="All Hosts" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Hosts ({profileLabels.size})</SelectItem>
+              {Array.from(profileLabels.entries()).map(([pId, label]) => (
+                <SelectItem key={pId} value={pId}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
           {/* Harness Filter Dropdown */}
-          <select
-            data-testid="agent-hub-harness-filter"
-            aria-label="Filter by agent harness"
+          <Select
             value={harnessFilter}
-            onChange={(e) =>
-              setHarnessFilter(e.target.value as "OMP" | "Codex" | "Claude" | "all")
+            onValueChange={(val) =>
+              setHarnessFilter(val as "OMP" | "Codex" | "Claude" | "all")
             }
-            className="px-2 py-1 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
           >
-            <option value="all">All Harnesses</option>
-            <option value="OMP">OMP</option>
-            <option value="Codex">Codex</option>
-            <option value="Claude">Claude</option>
-          </select>
+            <SelectTrigger
+              data-testid="agent-hub-harness-filter"
+              aria-label="Filter by agent harness"
+              className="h-7 w-auto min-w-[120px] rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs text-[var(--color-text)]"
+            >
+              <SelectValue placeholder="All Harnesses" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Harnesses</SelectItem>
+              <SelectItem value="OMP">OMP</SelectItem>
+              <SelectItem value="Codex">Codex</SelectItem>
+              <SelectItem value="Claude">Claude</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {/* Blocked Jump / Warning Notice */}

@@ -8,7 +8,7 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::{rngs::OsRng, RngCore};
 
-use crate::workspace_target::ResolvedProjectTarget;
+use crate::workspace_target::{ResolvedFilesystemTarget, ResolvedProjectTarget};
 
 use axum::http::HeaderMap;
 
@@ -79,7 +79,7 @@ impl MediaFileVersion {
 pub(crate) struct MediaTicketRecord {
     pub kind: MediaTicketKind,
     pub purpose: MediaTicketPurpose,
-    pub target: ResolvedProjectTarget,
+    pub target: ResolvedFilesystemTarget,
     pub project_relative_path: PathBuf,
     pub file: MediaFileVersion,
     pub mime: String,
@@ -1120,7 +1120,7 @@ mod tests {
         MediaTicketRecord {
             kind,
             purpose: MediaTicketPurpose::Playback,
-            target: ResolvedProjectTarget::from_parts(
+            target: ResolvedFilesystemTarget::Project(ResolvedProjectTarget::from_parts(
                 "project".into(),
                 PathBuf::from("/private"),
                 PathBuf::from("/private"),
@@ -1128,7 +1128,7 @@ mod tests {
                 true,
                 true,
                 None,
-            ),
+            )),
             project_relative_path: PathBuf::from("media.bin"),
             file: MediaFileVersion::from_metadata(PathBuf::from("/private/media.bin"), &metadata)
                 .unwrap(),

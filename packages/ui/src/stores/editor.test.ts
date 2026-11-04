@@ -9,15 +9,19 @@ vi.mock("@/api/transport.js", () => ({
 
 import {
   countDirtyTabsForTarget,
+  editorActiveKeyForTarget,
   editorFileTabKey,
   editorTargetScopeKey,
+  editorDocumentKey,
+  parseEditorDocumentKey,
   migrateEditorState,
   useEditorStore,
   type Tab,
 } from "./editor.js";
+import { normalizeFsTarget, type FsTargetRef } from "@/api/ownership.js";
 
 function makeTab(project: string, path: string): Tab {
-  const target = { project } as const;
+  const target = normalizeFsTarget(project);
   return {
     key: editorFileTabKey(target, path),
     project,
@@ -60,6 +64,7 @@ function resetEditorStore() {
     tabs: [],
     activeKeys: {},
     requestGenerations: {},
+    documents: {},
   });
 }
 
@@ -278,7 +283,7 @@ describe("editor store project target isolation", () => {
     expect(tabs).toHaveLength(2);
     expect(new Set(tabs.map((tab) => tab.key)).size).toBe(2);
     expect(tabs.map((tab) => tab.target.worktreePath)).toEqual([
-      undefined,
+      null,
       "/tmp/alpha-wt",
     ]);
     expect(
@@ -296,13 +301,15 @@ describe("editor store project target isolation", () => {
     ).toBe(tabs[1]?.key);
     expect(fsRead).toHaveBeenNthCalledWith(
       1,
-      { project: "alpha" },
+      expect.objectContaining({ project: "alpha" }),
       "src/one.ts",
+      undefined,
     );
     expect(fsRead).toHaveBeenNthCalledWith(
       2,
-      { project: "alpha", worktreePath: "/tmp/alpha-wt" },
+      expect.objectContaining({ project: "alpha", worktreePath: "/tmp/alpha-wt" }),
       "src/one.ts",
+      undefined,
     );
   });
 
@@ -323,7 +330,7 @@ describe("editor store project target isolation", () => {
       activeKeys: { alpha: legacyKey },
     });
 
-    expect(migrated.tabs[0]?.target).toEqual({ project: "alpha" });
+    expect(migrated.tabs[0]?.target).toEqual(expect.objectContaining({ project: "alpha" }));
     expect(migrated.tabs[0]?.key).not.toBe(legacyKey);
     expect(
       migrated.activeKeys[editorTargetScopeKey({ project: "alpha" })],
@@ -788,7 +795,7 @@ describe("editor store reopen freshness check", () => {
     await Promise.resolve();
 
     const updated = useEditorStore.getState().tabs[0];
-    expect(fsRead).toHaveBeenCalledWith({ project: "alpha" }, "src/file.ts");
+    expect(fsRead).toHaveBeenCalledWith(expect.objectContaining({ project: "alpha" }), "src/file.ts");
     expect(updated?.content).toBe("new content from disk");
     expect(updated?.mtime).toBe(200);
     expect(updated?.size).toBe(22);
@@ -1008,13 +1015,13 @@ describe("editor store reconcileTabFreshness", () => {
 
     expect(fsRead).toHaveBeenNthCalledWith(
       1,
-      { project: "alpha" },
+      expect.objectContaining({ project: "alpha" }),
       "src/file.ts",
       { offset: 0, len: 0 },
     );
     expect(fsRead).toHaveBeenNthCalledWith(
       2,
-      { project: "alpha" },
+      expect.objectContaining({ project: "alpha" }),
       "src/file.ts",
     );
 
@@ -1055,7 +1062,7 @@ describe("editor store reconcileTabFreshness", () => {
     // Only stat check should be performed, no content reload
     expect(fsRead).toHaveBeenCalledTimes(1);
     expect(fsRead).toHaveBeenCalledWith(
-      { project: "alpha" },
+      expect.objectContaining({ project: "alpha" }),
       "src/dirty.ts",
       { offset: 0, len: 0 },
     );
@@ -1202,5 +1209,319 @@ describe("blameEnabled session toggle and persistence exclusion", () => {
 
     const migrated = migrateEditorState(rawPersisted);
     expect(migrated.tabs[0]?.blameEnabled).toBe(false);
+  });
+});
+
+describe("Phase 03: Canonical Editor Document Identity and Routes", () => {
+  beforeEach(() => {
+    resetEditorStore();
+    fsRead.mockReset();
+    fsWriteFile.mockReset();
+  });
+
+  it("generates and parses server-normalized documentKey", () => {
+    const docKey = editorDocumentKey("profile-1", {
+      workspaceId: "ws-abc",
+      workspaceEpoch: 42,
+      canonicalPath: "/home/user/repo/src/main.rs",
+    });
+    expect(docKey).toBe(
+      JSON.stringify([
+        "file",
+        "profile-1",
+        "ws-abc",
+        42,
+        "/home/user/repo/src/main.rs",
+      ]),
+    );
+
+    const parsed = parseEditorDocumentKey(docKey);
+    expect(parsed).toEqual({
+      profileId: "profile-1",
+      workspaceId: "ws-abc",
+      workspaceEpoch: 42,
+      canonicalPath: "/home/user/repo/src/main.rs",
+    });
+  });
+
+  it("coalesces Workspace and Project route opens to one dirty document buffer", async () => {
+    const wsTarget: FsTargetRef = { kind: "workspace", profileId: "profile-1" };
+    const projTarget: FsTargetRef = {
+      kind: "project",
+      profileId: "profile-1",
+      project: "my-app",
+    };
+
+    const sharedIdentity = {
+      workspaceId: "ws-1",
+      workspaceEpoch: 1,
+      canonicalPath: "/workspace/my-app/src/index.ts",
+    };
+
+    // 1. Open via Workspace route
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      content: btoa("initial content"),
+      binary: false,
+      mtime: 100,
+      size: 15,
+      fileIdentity: sharedIdentity,
+    });
+
+    await useEditorStore.getState().open(wsTarget, {
+      id: "my-app/src/index.ts",
+      name: "index.ts",
+      kind: "file",
+      size: 15,
+      mtime: 100,
+      isSymlink: false,
+    });
+
+    const wsTabKey = editorFileTabKey(wsTarget, "my-app/src/index.ts");
+    expect(useEditorStore.getState().tabs).toHaveLength(1);
+    expect(useEditorStore.getState().tabs[0].content).toBe("initial content");
+
+    // User makes unsaved edits in the Workspace tab
+    useEditorStore.getState().setContent(wsTabKey, "modified content");
+    expect(useEditorStore.getState().tabs[0].dirty).toBe(true);
+    expect(useEditorStore.getState().tabs[0].content).toBe("modified content");
+
+    // 2. Open via Project route to the same canonical file
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      content: btoa("initial content on disk"),
+      binary: false,
+      mtime: 100,
+      size: 15,
+      fileIdentity: sharedIdentity,
+    });
+
+    await useEditorStore.getState().open(projTarget, {
+      id: "src/index.ts",
+      name: "index.ts",
+      kind: "file",
+      size: 15,
+      mtime: 100,
+      isSymlink: false,
+    });
+
+    const projTabKey = editorFileTabKey(projTarget, "src/index.ts");
+    expect(useEditorStore.getState().tabs).toHaveLength(2);
+
+    // The project tab coalesced with the shared document: it has the dirty edits, NOT the disk content!
+    const projTab = useEditorStore.getState().tabs.find((t) => t.key === projTabKey);
+    expect(projTab).toBeDefined();
+    expect(projTab?.content).toBe("modified content");
+    expect(projTab?.dirty).toBe(true);
+    expect(projTab?.documentKey).toBe(
+      editorDocumentKey("profile-1", sharedIdentity),
+    );
+
+    // Editing in the Project tab updates the Workspace tab synchronously
+    useEditorStore.getState().setContent(projTabKey, "further edits from project");
+    const wsTab = useEditorStore.getState().tabs.find((t) => t.key === wsTabKey);
+    expect(wsTab?.content).toBe("further edits from project");
+    expect(wsTab?.dirty).toBe(true);
+  });
+
+  it("save routes through the authorizing access target and relative path", async () => {
+    const projTarget: FsTargetRef = {
+      kind: "project",
+      profileId: "profile-1",
+      project: "my-app",
+    };
+    const wsTarget: FsTargetRef = { kind: "workspace", profileId: "profile-1" };
+
+    const sharedIdentity = {
+      workspaceId: "ws-1",
+      workspaceEpoch: 1,
+      canonicalPath: "/workspace/my-app/src/index.ts",
+    };
+
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      content: btoa("code"),
+      binary: false,
+      mtime: 100,
+      size: 4,
+      fileIdentity: sharedIdentity,
+    });
+
+    await useEditorStore.getState().open(projTarget, {
+      id: "src/index.ts",
+      name: "index.ts",
+      kind: "file",
+      size: 4,
+      mtime: 100,
+      isSymlink: false,
+    });
+
+    const projTabKey = editorFileTabKey(projTarget, "src/index.ts");
+    useEditorStore.getState().setContent(projTabKey, "new code");
+
+    fsWriteFile.mockResolvedValueOnce({
+      ok: true,
+      newMtime: 200,
+      fileIdentity: sharedIdentity,
+    });
+
+    const saved = await useEditorStore.getState().save(projTabKey);
+    expect(saved).toBe(true);
+
+    // Save was sent with the authorizing target and relative path
+    expect(fsWriteFile).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "project", profileId: "profile-1", project: "my-app" }),
+      "src/index.ts",
+      "new code",
+      100,
+    );
+
+    const tab = useEditorStore.getState().tabs[0];
+    expect(tab.dirty).toBe(false);
+    expect(tab.mtime).toBe(200);
+    expect(tab.savedContent).toBe("new code");
+  });
+
+  it("unmarking retains dirty buffers but denies saves; Workspace route can save", async () => {
+    const projTarget: FsTargetRef = {
+      kind: "project",
+      profileId: "profile-1",
+      project: "my-app",
+    };
+    const wsTarget: FsTargetRef = { kind: "workspace", profileId: "profile-1" };
+
+    const sharedIdentity = {
+      workspaceId: "ws-1",
+      workspaceEpoch: 1,
+      canonicalPath: "/workspace/my-app/src/index.ts",
+    };
+
+    fsRead.mockResolvedValue({
+      ok: true,
+      content: btoa("initial"),
+      binary: false,
+      mtime: 100,
+      size: 7,
+      fileIdentity: sharedIdentity,
+    });
+
+    await useEditorStore.getState().open(projTarget, {
+      id: "src/index.ts",
+      name: "index.ts",
+      kind: "file",
+      size: 7,
+      mtime: 100,
+      isSymlink: false,
+    });
+    await useEditorStore.getState().open(wsTarget, {
+      id: "my-app/src/index.ts",
+      name: "index.ts",
+      kind: "file",
+      size: 7,
+      mtime: 100,
+      isSymlink: false,
+    });
+
+    const projTabKey = editorFileTabKey(projTarget, "src/index.ts");
+    const wsTabKey = editorFileTabKey(wsTarget, "my-app/src/index.ts");
+
+    useEditorStore.getState().setContent(projTabKey, "unsaved changes");
+
+    // Project is unmarked!
+    useEditorStore.getState().markTargetUnavailable(projTarget);
+
+    const projTab = useEditorStore.getState().tabs.find((t) => t.key === projTabKey);
+    expect(projTab?.targetAvailable).toBe(false);
+    expect(projTab?.dirty).toBe(true);
+    expect(projTab?.content).toBe("unsaved changes");
+
+    // Attempting to save via revoked project route is refused
+    const projectSaveAttempt = await useEditorStore.getState().save(projTabKey);
+    expect(projectSaveAttempt).toBe(false);
+    expect(fsWriteFile).not.toHaveBeenCalled();
+
+    // But saving via the still-authorized Workspace route succeeds
+    fsWriteFile.mockResolvedValueOnce({
+      ok: true,
+      newMtime: 250,
+      fileIdentity: sharedIdentity,
+    });
+
+    const wsSaveAttempt = await useEditorStore.getState().save(wsTabKey);
+    expect(wsSaveAttempt).toBe(true);
+    expect(fsWriteFile).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "workspace", profileId: "profile-1" }),
+      "my-app/src/index.ts",
+      "unsaved changes",
+      100,
+    );
+
+    // Both tabs are marked clean after the shared document is saved
+    const updatedProjTab = useEditorStore.getState().tabs.find((t) => t.key === projTabKey);
+    const updatedWsTab = useEditorStore.getState().tabs.find((t) => t.key === wsTabKey);
+    expect(updatedProjTab?.dirty).toBe(false);
+    expect(updatedWsTab?.dirty).toBe(false);
+    expect(updatedProjTab?.mtime).toBe(250);
+  });
+
+  it("migrates persisted state preserving dirty content without guessing missing identity", () => {
+    const rawState = {
+      tabs: [
+        {
+          key: '["file","profile-1","repo",null,"src/dirty.ts"]',
+          project: "repo",
+          path: "src/dirty.ts",
+          content: "unsaved local edit",
+          savedContent: "disk original",
+          dirty: true,
+          tier: "normal",
+          target: { kind: "project", profileId: "profile-1", project: "repo" },
+          // No fileIdentity provided (legacy unverified route)
+        },
+      ],
+      activeKeys: {},
+    };
+
+    const migrated = migrateEditorState(rawState);
+    expect(migrated.tabs).toHaveLength(1);
+    const tab = migrated.tabs[0];
+    expect(tab.dirty).toBe(true);
+    expect(tab.content).toBe("unsaved local edit");
+    expect(tab.savedContent).toBe("disk original");
+    // Does not guess identity:
+    expect(tab.fileIdentity).toBeUndefined();
+    expect(tab.documentKey).toBeUndefined();
+  });
+
+  it("editorActiveKeyForTarget strictly preserves target and profile boundaries", () => {
+    const activeKeys: Record<string, string | null> = {
+      "alpha::root": "key-alpha-root",
+      "alpha": "key-alpha-legacy",
+      "explicit-null::root": null,
+    };
+
+    // Default profile root matches legacy/root fallback
+    expect(editorActiveKeyForTarget(activeKeys, { project: "alpha" })).toBe("key-alpha-root");
+
+    // Worktree target MUST NOT inherit root selection
+    expect(
+      editorActiveKeyForTarget(activeKeys, {
+        kind: "project",
+        project: "alpha",
+        worktreePath: "/tmp/worktree",
+      }),
+    ).toBeNull();
+
+    // Target on distinct profile MUST NOT inherit default profile root selection
+    expect(
+      editorActiveKeyForTarget(activeKeys, {
+        kind: "project",
+        profileId: "profile-2",
+        project: "alpha",
+      }),
+    ).toBeNull();
+
+    // Explicit null active key is respected
+    expect(editorActiveKeyForTarget(activeKeys, { project: "explicit-null" })).toBeNull();
   });
 });

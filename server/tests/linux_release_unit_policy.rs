@@ -71,7 +71,7 @@ fn test_render_api_unit_success() {
     assert!(rendered.contains("Environment=XDG_CONFIG_HOME=/var/lib/dam-hopper/.config"));
     let parsed = ParsedUnit::parse(&rendered).expect("parse rendered API unit");
     let expected_exec = format!(
-        "{}/bin/dam-hopper-server --config {}/dam-hopper.toml --host 0.0.0.0 --port 4801",
+        "{}/bin/dam-hopper-server --config {}/config.toml --host 0.0.0.0 --port 4801",
         ctx.release_root.display(),
         ctx.api_home
     );
@@ -79,7 +79,7 @@ fn test_render_api_unit_success() {
         parsed.get_all_values("Service", "ExecStart"),
         vec![expected_exec.as_str()]
     );
-    assert!(rendered.contains("/var/lib/dam-hopper/dam-hopper.toml"));
+    assert!(rendered.contains("/var/lib/dam-hopper/config.toml"));
     assert!(!rendered.contains("/etc/dam-hopper/dam-hopper.toml"));
     assert!(rendered.contains("Environment=DAM_HOPPER_CORS_ORIGINS=http://localhost:4802"));
     assert!(rendered.contains("SyslogIdentifier=dam-hopper-api"));
@@ -149,7 +149,7 @@ fn test_api_unit_policy_rejects_duplicate_execstart() {
     let ctx = create_valid_context();
     let duplicate_execstart_template = API_TEMPLATE.replace(
         "\nExecStart=",
-        "\nExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801\nExecStart=",
+        "\nExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-server --config /var/lib/dam-hopper/config.toml --host 0.0.0.0 --port 4801\nExecStart=",
     );
     assert!(matches!(
         render_api_unit(&duplicate_execstart_template, &ctx),
@@ -162,7 +162,7 @@ fn test_api_unit_policy_rejects_duplicate_execstart() {
 fn test_api_unit_policy_rejects_legacy_etc_config_path() {
     let ctx = create_valid_context();
     let legacy_etc_template = API_TEMPLATE.replace(
-        "--config @API_HOME@/dam-hopper.toml",
+        "--config @API_HOME@/config.toml",
         "--config /etc/dam-hopper/dam-hopper.toml",
     );
     assert!(matches!(
@@ -178,7 +178,7 @@ fn test_checked_in_api_unit_passes_policy_and_omits_legacy_path() {
 
     assert_eq!(
         parsed.get_all_values("Service", "ExecStart"),
-        vec!["/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801"]
+        vec!["/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/config.toml --host 0.0.0.0 --port 4801"]
     );
     assert_eq!(parsed.get_value("Service", "User"), Some("dam-hopper"));
     assert_eq!(parsed.get_value("Service", "Group"), Some("dam-hopper"));
@@ -214,8 +214,8 @@ fn test_checked_in_api_unit_passes_policy_and_omits_legacy_path() {
 
     assert!(!CHECKED_IN_API_UNIT.contains("/etc/dam-hopper/dam-hopper.toml"));
     assert!(!API_TEMPLATE.contains("/etc/dam-hopper/dam-hopper.toml"));
-    assert!(CHECKED_IN_API_UNIT.contains("/var/lib/dam-hopper/dam-hopper.toml"));
-    assert!(API_TEMPLATE.contains("@API_HOME@/dam-hopper.toml"));
+    assert!(CHECKED_IN_API_UNIT.contains("/var/lib/dam-hopper/config.toml"));
+    assert!(API_TEMPLATE.contains("@API_HOME@/config.toml"));
 }
 
 #[test]
@@ -298,7 +298,7 @@ fn test_render_api_unit_explicit_valid_identity() {
     assert!(rendered.contains("WorkingDirectory=/var/lib/dam-hopper"));
     assert!(rendered.contains("Environment=HOME=/var/lib/dam-hopper"));
     assert!(rendered.contains("Environment=XDG_CONFIG_HOME=/var/lib/dam-hopper/.config"));
-    assert!(rendered.contains("ExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801"));
+    assert!(rendered.contains("ExecStart=/opt/dam-hopper/releases/v0.2.0/both/bin/dam-hopper-server --config /var/lib/dam-hopper/config.toml --host 0.0.0.0 --port 4801"));
 }
 
 #[test]

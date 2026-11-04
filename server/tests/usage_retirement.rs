@@ -37,6 +37,8 @@ fn make_test_state(tmp: &TempDir) -> AppState {
         server: dam_hopper_server::config::ServerConfig::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_file,
     };
 

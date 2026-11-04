@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::fs::{FsEvent, TreeNode};
-
+use crate::workspace_target::{FileIdentity, FilesystemTargetRef};
 // ---------------------------------------------------------------------------
 // Inbound
 // ---------------------------------------------------------------------------
@@ -32,7 +32,10 @@ pub enum ClientMsg {
     #[serde(rename = "fs:subscribe_tree")]
     FsSubTree {
         req_id: u64,
-        project: String,
+        #[serde(default)]
+        target: Option<FilesystemTargetRef>,
+        #[serde(default)]
+        project: Option<String>,
         #[serde(default)]
         worktree_path: Option<String>,
         path: String,
@@ -46,7 +49,10 @@ pub enum ClientMsg {
     #[serde(rename = "fs:read")]
     FsRead {
         req_id: u64,
-        project: String,
+        #[serde(default)]
+        target: Option<FilesystemTargetRef>,
+        #[serde(default)]
+        project: Option<String>,
         #[serde(default)]
         worktree_path: Option<String>,
         path: String,
@@ -60,7 +66,10 @@ pub enum ClientMsg {
     #[serde(rename = "fs:write_begin")]
     FsWriteBegin {
         req_id: u64,
-        project: String,
+        #[serde(default)]
+        target: Option<FilesystemTargetRef>,
+        #[serde(default)]
+        project: Option<String>,
         #[serde(default)]
         worktree_path: Option<String>,
         path: String,
@@ -71,6 +80,8 @@ pub enum ClientMsg {
         /// Optional encoding: "base64" (default) or "binary".
         #[serde(default)]
         encoding: Option<String>,
+        #[serde(default, alias = "workspaceEpoch")]
+        workspace_epoch: Option<u64>,
     },
     #[serde(rename = "fs:write_chunk")]
     FsWriteChunk {
@@ -92,7 +103,10 @@ pub enum ClientMsg {
         req_id: u64,
         /// "create_file" | "create_dir" | "rename" | "delete" | "move"
         op: String,
-        project: String,
+        #[serde(default)]
+        target: Option<FilesystemTargetRef>,
+        #[serde(default)]
+        project: Option<String>,
         #[serde(default)]
         worktree_path: Option<String>,
         /// Source path (relative to project root).
@@ -102,6 +116,8 @@ pub enum ClientMsg {
         /// Allow .git/ writes for delete op.
         #[serde(default)]
         force_git: bool,
+        #[serde(default, alias = "workspaceEpoch")]
+        workspace_epoch: Option<u64>,
     },
 
     // FS — upload protocol (begin → chunk(binary)* → commit)
@@ -110,7 +126,10 @@ pub enum ClientMsg {
         req_id: u64,
         /// Client-chosen identifier for this upload session.
         upload_id: String,
-        project: String,
+        #[serde(default)]
+        target: Option<FilesystemTargetRef>,
+        #[serde(default)]
+        project: Option<String>,
         #[serde(default)]
         worktree_path: Option<String>,
         /// Target directory (relative to project root).
@@ -119,6 +138,8 @@ pub enum ClientMsg {
         filename: String,
         /// Declared total file size in bytes.
         len: u64,
+        #[serde(default, alias = "workspaceEpoch")]
+        workspace_epoch: Option<u64>,
     },
     /// JSON header for an upload chunk; raw bytes arrive in the NEXT binary WS frame.
     #[serde(rename = "fs:upload_chunk")]
@@ -169,7 +190,10 @@ pub enum ClientMsg {
         upload_id: String,
         /// OPAQUE session_id — server looks up the derived AES key.
         session_id: String,
-        project: String,
+        #[serde(default)]
+        target: Option<FilesystemTargetRef>,
+        #[serde(default)]
+        project: Option<String>,
         #[serde(default)]
         worktree_path: Option<String>,
         dir: String,
@@ -180,6 +204,8 @@ pub enum ClientMsg {
         /// Server rejects commit with CONFLICT if file was modified since then.
         #[serde(default)]
         expected_mtime: Option<i64>,
+        #[serde(default, alias = "workspaceEpoch")]
+        workspace_epoch: Option<u64>,
     },
     /// JSON header for an encrypted chunk; raw bytes arrive in the NEXT binary WS frame.
     #[serde(rename = "fs:put_chunk")]
@@ -193,11 +219,16 @@ pub enum ClientMsg {
         req_id: u64,
         /// OPAQUE session_id — server looks up the derived AES key.
         session_id: String,
-        project: String,
+        #[serde(default)]
+        target: Option<FilesystemTargetRef>,
+        #[serde(default)]
+        project: Option<String>,
         #[serde(default)]
         worktree_path: Option<String>,
         /// File path relative to project root.
         path: String,
+        #[serde(default, alias = "workspaceEpoch")]
+        workspace_epoch: Option<u64>,
     },
 
     // Auth — explicit key eviction (defense-in-depth; 16-entry cap is the primary guard)
@@ -379,6 +410,8 @@ pub enum ServerMsg {
         /// Error code when ok=false (e.g. "TOO_LARGE", "NOT_FOUND").
         #[serde(skip_serializing_if = "Option::is_none")]
         code: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_identity: Option<FileIdentity>,
     },
 
     // FS — write
@@ -518,6 +551,8 @@ pub enum ServerMsg {
         new_mtime: Option<i64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_identity: Option<FileIdentity>,
     },
 
     // Port forward — push events (server → client)

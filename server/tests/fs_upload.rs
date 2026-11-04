@@ -65,6 +65,8 @@ fn make_state(tmp: &TempDir) -> AppState {
             health_check_url: None,
         }],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_dir.join("dam-hopper.toml"),
     };
     let (event_sink, _) = BroadcastEventSink::new(64);

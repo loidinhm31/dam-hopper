@@ -12,8 +12,9 @@ use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::router::{build_router_with_web_dir_and_origins, parse_cors_origins},
     config::{
-        global_config_path, global_env_path, global_registry_path, read_global_config_at,
+        global_env_path,
         resolve_startup_config, ConfigResolutionInput, ConfigSource, DamHopperConfig,
+        GlobalConfig,
     },
     crypto::load_or_create_server_setup,
     diagnostics::{DiagnosticStore, DiagnosticTracingLayer},
@@ -31,11 +32,11 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Path to a specific dam-hopper.toml registry file
+    /// Path to authoritative config.toml file
     #[arg(long, env = "DAM_HOPPER_CONFIG")]
     config: Option<PathBuf>,
 
-    /// Path to workspace directory containing dam-hopper.toml
+    /// Optional workspace directory override
     #[arg(long, env = "DAM_HOPPER_WORKSPACE")]
     workspace: Option<PathBuf>,
 
@@ -885,26 +886,16 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let gc_path = global_config_path();
-    let global_config = read_global_config_at(&gc_path)?.unwrap_or_default();
-
-    // ── Workspace ─────────────────────────────────────────────────────────────
-
-    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let resolution = resolve_startup_config(ConfigResolutionInput {
-        explicit_config: cli.config.clone(),
-        workspace_dir: cli.workspace.clone(),
-        global_default_workspace: global_config
-            .defaults
-            .as_ref()
-            .and_then(|d| d.workspace.as_ref())
-            .map(PathBuf::from),
-        current_dir,
-        registry_path: global_registry_path(),
-    })?;
+    let resolution = resolve_startup_config(ConfigResolutionInput::from_explicit(cli.config.clone()))?;
 
     let workspace_dir = resolution.workspace_dir;
     let config = resolution.config;
+    let global_config = GlobalConfig {
+        workspace: Some(config.workspace.clone()),
+        workspaces: config.workspaces.clone(),
+        ui: config.ui.clone(),
+        server: config.server.clone(),
+    };
 
     if cli.config.is_none() {
         if let Some(parent) = config.config_path.parent() {
@@ -1056,7 +1047,8 @@ async fn main() -> anyhow::Result<()> {
     // ── Build state + router ──────────────────────────────────────────────────
 
     let allowed_origins = parse_cors_origins(cli.cors_origins.as_deref())?;
-    let fs = FsSubsystem::new(project_roots(&config));
+    let ws_root = config.resolve_workspace_root().ok();
+    let fs = FsSubsystem::new_with_workspace(project_roots(&config), ws_root);
 
     let auth_store = if cli.no_auth {
         None

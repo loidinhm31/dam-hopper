@@ -17,15 +17,18 @@ import type { WsTransport } from "@/api/ws-transport.js";
 import {
   isProjectTargetError,
   normalizeProjectTarget,
-  projectTargetCacheKey,
   type ProjectTargetInput,
 } from "@/api/client.js";
-
+import {
+  normalizeFsTarget,
+  fsTargetKey,
+  type FsTargetRef,
+} from "@/api/ownership.js";
 const CHUNK_BYTES = 64 * 1024; // 64 KB
 
 interface LargeFileViewerProps {
-  project: string;
-  target?: ProjectTargetInput;
+  project?: string;
+  target?: FsTargetRef | ProjectTargetInput;
   path: string;
   fileName: string;
   size: number;
@@ -47,12 +50,19 @@ export function LargeFileViewer({
   size,
   onTargetUnavailable,
 }: LargeFileViewerProps) {
-  const targetRef = useMemo(
-    () => normalizeProjectTarget(target ?? project),
-    [project, target],
-  );
-  const targetKey = projectTargetCacheKey(targetRef);
-  const targetIdentity = `${targetRef.project}::${targetKey}`;
+  const targetRef = useMemo<FsTargetRef>(() => {
+    if (target && typeof target === "object" && "kind" in target) {
+      return normalizeFsTarget(target as FsTargetRef, (target as FsTargetRef).profileId);
+    }
+    if (target) {
+      return normalizeFsTarget(target as ProjectTargetInput);
+    }
+    return project
+      ? { kind: "project", project, profileId: "" }
+      : { kind: "workspace", profileId: "" };
+  }, [project, target]);
+  const targetKey = fsTargetKey(targetRef);
+  const targetIdentity = `${targetRef.kind}::${targetKey}`;
   const [lines, setLines] = useState<string[]>([]);
   const [loadedBytes, setLoadedBytes] = useState(0);
   const [loading, setLoading] = useState(false);

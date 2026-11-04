@@ -19,11 +19,12 @@ import { SearchPanelResults } from "@/components/organisms/SearchPanelResults.js
 import { useSearchPanelReplace } from "@/hooks/use-search-panel-replace.js";
 import type { PathSearchMatch, SearchMatch } from "@/api/fs-types.js";
 import { cn } from "@/lib/utils.js";
-import type { ProjectTargetRef } from "@/api/client.js";
+import type { ProjectTargetInput, ProjectTargetRef } from "@/api/client.js";
+import type { FsTargetRef } from "@/api/ownership.js";
 
 interface SearchPanelProps {
   project: string;
-  target?: ProjectTargetRef;
+  target?: ProjectTargetRef | FsTargetRef;
   onResultClick: (
     match: SearchResultItem,
     options?: { closeSearch?: boolean },
@@ -53,16 +54,22 @@ export function SearchPanel({
   onQueryChange: controlledOnQueryChange,
   isolatedState = false,
 }: SearchPanelProps) {
-  const worktreePath = target?.worktreePath;
-  const targetProject = target?.project ?? project;
+  const worktreePath = target && "worktreePath" in target ? target.worktreePath : undefined;
+  const targetProject = target && "project" in target ? target.project : project;
   const targetProfileId = target?.profileId;
   const requestTarget = useMemo(() => {
+    if (target && "kind" in target) {
+      return target;
+    }
+    const worktreePath = target?.worktreePath;
+    const targetProject = target?.project ?? project;
+    const targetProfileId = target?.profileId;
     const base =
       worktreePath == null
         ? { project: targetProject }
         : { project: targetProject, worktreePath };
     return targetProfileId ? { ...base, profileId: targetProfileId } : base;
-  }, [targetProject, worktreePath, targetProfileId]);
+  }, [target, project]);
   const localInputRef = useRef<HTMLInputElement>(null);
   const resolvedRef = inputRef ?? localInputRef;
   const globalStore = useSearchUiStore();
@@ -168,6 +175,20 @@ export function SearchPanel({
     data.query === query.slice(0, 200) &&
     !isLoading;
 
+  const searchReplaceTarget: ProjectTargetInput = useMemo(() => {
+    if (requestTarget && "kind" in requestTarget) {
+      if (requestTarget.kind === "workspace") {
+        return { project: "", profileId: requestTarget.profileId };
+      }
+      return {
+        project: requestTarget.project,
+        worktreePath: requestTarget.worktreePath,
+        profileId: requestTarget.profileId,
+      };
+    }
+    return requestTarget as ProjectTargetInput;
+  }, [requestTarget]);
+
   const {
     selectedMatchKey,
     isReplacing,
@@ -178,7 +199,7 @@ export function SearchPanel({
     replaceNext,
     replaceAll,
   } = useSearchPanelReplace({
-    target: requestTarget,
+    target: searchReplaceTarget,
     scope,
     matches: isSearchMatchingInput ? contentMatches : [],
     searchQuery: data?.query ?? "",

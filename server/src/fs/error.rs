@@ -39,12 +39,28 @@ impl FsError {
     pub fn status_code(&self) -> u16 {
         match self {
             FsError::NotFound => 404,
-            FsError::PathEscape | FsError::PermissionDenied | FsError::MutationRefused(_) => 403,
+            FsError::PathEscape => 403,
+            FsError::PermissionDenied => 403,
+            FsError::MutationRefused(_) => 409,
             FsError::TooLarge(_) => 413,
             FsError::Unavailable => 503,
             FsError::Conflict => 409,
             FsError::InvalidName(_) => 400,
             FsError::Io(_) => 500,
+        }
+    }
+
+    pub fn api_code(&self) -> Option<&'static str> {
+        match self {
+            FsError::NotFound => Some("NOT_FOUND"),
+            FsError::PathEscape => Some("PATH_ESCAPE"),
+            FsError::PermissionDenied => Some("PERMISSION_DENIED"),
+            FsError::MutationRefused(_) => Some("MUTATION_REFUSED"),
+            FsError::TooLarge(_) => Some("TOO_LARGE"),
+            FsError::Unavailable => Some("FS_UNAVAILABLE"),
+            FsError::Conflict => Some("CONFLICT"),
+            FsError::InvalidName(_) => Some("INVALID_NAME"),
+            FsError::Io(_) => None,
         }
     }
 }

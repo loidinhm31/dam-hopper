@@ -34,6 +34,8 @@ import {
   updateDesktopTreeSizes,
   updateFloatBounds,
 } from "./window-ops.js";
+import { useSettingsStore } from "@/stores/settings.js";
+
 export interface WindowStoreState {
   session: OsSessionV1;
   viewport: { width: number; height: number };
@@ -82,6 +84,7 @@ export interface WindowStoreState {
     toIndex: number,
   ) => void;
   updateAppState: (windowId: string, patch: Record<string, unknown>) => void;
+  updateWindowContext: (windowId: string, patch: Partial<WindowContext>) => void;
   splitWindow: (
     sourceWindowId: string,
     targetWindowId: string,
@@ -98,8 +101,10 @@ export const useWindowStore = create<WindowStoreState>((set, get) => ({
   setSession: (session) => set({ session }),
 
   openWindow: (window, desktopId) => {
+    const defaultMode = useSettingsStore.getState().defaultWindowPlacement ?? "float";
+    const mode = window.mode ?? defaultMode;
     set((state) => ({
-      session: openWindow(state.session, window, desktopId),
+      session: openWindow(state.session, { ...window, mode }, desktopId),
     }));
   },
 
@@ -270,6 +275,25 @@ export const useWindowStore = create<WindowStoreState>((set, get) => ({
             [windowId]: {
               ...win,
               appState: { ...win.appState, ...patch },
+            },
+          },
+        },
+      };
+    });
+  },
+
+  updateWindowContext: (windowId, patch) => {
+    set((state) => {
+      const win = state.session.windows[windowId];
+      if (!win) return state;
+      return {
+        session: {
+          ...state.session,
+          windows: {
+            ...state.session.windows,
+            [windowId]: {
+              ...win,
+              ctx: { ...win.ctx, ...patch },
             },
           },
         },

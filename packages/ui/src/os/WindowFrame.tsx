@@ -17,7 +17,14 @@ import {
 } from "./window-ops.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { useEditorStore } from "@/stores/editor.js";
-
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/Select.js";
 export interface WindowFrameProps {
   window: OsWindow;
   children: ReactNode;
@@ -44,6 +51,8 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
 
   const [isDragging, setIsDragging] = useState(false);
   const dragCleanupRef = useRef<(() => void) | null>(null);
+  const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
+  const filePath = window.appState?.filePath as string | undefined;
 
   // Cancel active drag/resize gestures immediately if Cognito activates or unmounts
   useEffect(() => {
@@ -65,8 +74,10 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
   }, []);
 
   const handlePointerDown = useCallback(() => {
-    focusWindow(window.id);
-  }, [focusWindow, window.id]);
+    if (!isFocused) {
+      focusWindow(window.id);
+    }
+  }, [focusWindow, isFocused, window.id]);
 
   const handleStartDrag = useCallback(
     (e: ReactMouseEvent) => {
@@ -176,7 +187,8 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
         }
         if (
           targetWorktree &&
-          t.target?.worktreePath &&
+          t.target?.kind === "project" &&
+          t.target.worktreePath &&
           t.target.worktreePath !== targetWorktree
         ) {
           return false;
@@ -185,14 +197,8 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
       });
 
       if (isDirty) {
-        if (typeof globalThis.confirm !== "function") {
-          // Fail-closed: do not close without explicit user confirmation
-          return;
-        }
-        const confirmed = globalThis.confirm(
-          `You have unsaved changes in ${filePath ?? "editor"}. Close anyway?`,
-        );
-        if (confirmed !== true) return;
+        setConfirmCloseOpen(true);
+        return;
       }
     }
     closeWindow(window.id);
@@ -297,8 +303,9 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
   ];
 
   return (
-    <div
-      role="region"
+    <>
+      <div
+        role="region"
       aria-label={window.title}
       aria-labelledby={`window-title-${window.id}`}
       data-os-window-frame={window.id}
@@ -356,25 +363,28 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
 
           {/* Move to other desktop */}
           {otherDesktops.length > 0 && (
-            <select
-              aria-label="Move to desktop"
+            <Select
               value=""
-              onChange={(e) => {
-                if (e.target.value) {
-                  moveWindowToDesktop(window.id, e.target.value);
+              onValueChange={(val) => {
+                if (val) {
+                  moveWindowToDesktop(window.id, val);
                 }
               }}
-              className="text-[10px] bg-transparent border border-[var(--color-border)] rounded px-1 py-0.5 text-[var(--color-text-muted)]"
             >
-              <option value="" disabled>
-                Move…
-              </option>
-              {otherDesktops.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger
+                aria-label="Move to desktop"
+                className="h-5 w-auto gap-1 border border-[var(--color-border)] rounded bg-transparent px-1.5 py-0 text-[10px] text-[var(--color-text-muted)]"
+              >
+                <SelectValue placeholder="Move…" />
+              </SelectTrigger>
+              <SelectContent>
+                {otherDesktops.map((d) => (
+                  <SelectItem key={d.id} value={d.id} className="text-xs">
+                    {d.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
 
           {/* Minimize */}
@@ -446,6 +456,22 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
           ))}
         </>
       )}
-    </div>
+      </div>
+      <ConfirmDialog
+        open={confirmCloseOpen}
+        onClose={() => setConfirmCloseOpen(false)}
+        onConfirm={() => {
+          setConfirmCloseOpen(false);
+          if (session.windows[window.id]) {
+            closeWindow(window.id);
+          }
+        }}
+        title="Discard Unsaved Changes?"
+        description={`You have unsaved changes in ${filePath ?? "editor"}. Close anyway?`}
+        confirmText="Discard and Close"
+        cancelText="Cancel"
+        variant="danger"
+      />
+    </>
   );
 }

@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 /**
@@ -100,10 +101,11 @@ class WorkspaceRepository(
 
     /**
      * Changes active workspace on the remote server.
-     * WARNING: Reinitializes server workspace and disposes ALL remote PTY sessions.
+     * The authoritative config path stays unchanged; the server advances the workspace epoch.
      * On success, invalidates local targetStore cache and bumps workspace revision.
      */
     suspend fun switchWorkspace(path: String): Boolean {
+        require(!path.endsWith(".toml")) { "Workspace switching accepts directory only, not config file '$path'" }
         val body = buildJsonObject {
             put("path", path)
         }.toString()
@@ -111,7 +113,12 @@ class WorkspaceRepository(
         val obj = ProtocolJson.decodeFromString(JsonObject.serializer(), text)
         val ok = obj["ok"]?.jsonPrimitive?.booleanOrNull == true
         if (ok) {
-            targetStore?.invalidateWorkspace(apiClient.connection.profileId, path)
+            val epoch = (obj["workspaceEpoch"] ?: obj["workspace_epoch"])?.jsonPrimitive?.longOrNull
+            targetStore?.invalidateWorkspace(
+                profileId = apiClient.connection.profileId,
+                newWorkspaceRoot = path,
+                epoch = epoch,
+            )
         }
         return ok
     }

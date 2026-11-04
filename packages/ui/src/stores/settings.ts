@@ -111,8 +111,8 @@ interface PersistedSettingsState {
   cognitoModeStyle: CognitoModeStyle;
   osPaletteShortcut: string;
   osCycleFocusShortcut: string;
+  defaultWindowPlacement: "float" | "tile";
 }
-
 interface SettingsState extends PersistedSettingsState {
   hydrated: boolean;
   sourceUnset: boolean;
@@ -211,6 +211,11 @@ function applySnapshotToStore(
     clamped.osPaletteShortcut = snapshot.osPaletteShortcut;
   if (typeof snapshot.osCycleFocusShortcut === "string")
     clamped.osCycleFocusShortcut = snapshot.osCycleFocusShortcut;
+  const placement =
+    snapshot.defaultWindowPlacement ??
+    (snapshot as Record<string, unknown>).default_window_placement;
+  if (placement === "float" || placement === "tile")
+    clamped.defaultWindowPlacement = placement;
   if (typeof snapshot.terminalSuggestionsEnabled === "boolean")
     clamped.terminalSuggestionsEnabled = snapshot.terminalSuggestionsEnabled;
   if (typeof snapshot.terminalAutoSwitchProjectEnabled === "boolean")
@@ -307,6 +312,7 @@ function pickPersistedSettings(
     osPaletteShortcut: state.osPaletteShortcut ?? DEFAULT_OS_PALETTE_SHORTCUT,
     osCycleFocusShortcut:
       state.osCycleFocusShortcut ?? DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
+    defaultWindowPlacement: state.defaultWindowPlacement ?? "float",
   };
 }
 
@@ -360,8 +366,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   cognitoModeStyle: "heavy-blur",
   osPaletteShortcut: DEFAULT_OS_PALETTE_SHORTCUT,
   osCycleFocusShortcut: DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
+  defaultWindowPlacement: "float",
   hydrated: false,
-  sourceUnset: true,
+  sourceUnset: false,
 
   hydrate: async (options?: {
     owner?: ConnectionRef;
@@ -454,6 +461,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         agentSettingsPaths: ui.agentSettingsPaths,
         cognitoModeShortcut: ui.cognitoModeShortcut,
         cognitoModeStyle: ui.cognitoModeStyle,
+        defaultWindowPlacement: ui.defaultWindowPlacement ?? "float",
         hydrated: true,
         sourceUnset: false,
       });
@@ -566,6 +574,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.cognitoModeStyle = normalizeCognitoModeStyle(
         partial.cognitoModeStyle,
       );
+    if (
+      partial.defaultWindowPlacement === "float" ||
+      partial.defaultWindowPlacement === "tile"
+    ) {
+      clamped.defaultWindowPlacement = partial.defaultWindowPlacement;
+    }
+    if (partial.osPaletteShortcut !== undefined)
+      clamped.osPaletteShortcut = partial.osPaletteShortcut;
+    if (partial.osCycleFocusShortcut !== undefined)
+      clamped.osCycleFocusShortcut = partial.osCycleFocusShortcut;
     set(clamped);
   },
 

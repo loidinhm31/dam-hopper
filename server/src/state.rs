@@ -23,8 +23,8 @@ use crate::system::HostResourceMonitor;
 use crate::tunnel::TunnelSessionManager;
 use crate::workflow::{WorkflowService, WorkflowStore};
 use crate::workspace_target::{
-    ProjectTargetRef, ProjectWorktree, ResolvedProjectTarget, WorkspaceTargetError,
-    WorkspaceTargetResolver,
+    FilesystemTargetRef, ProjectTargetRef, ProjectWorktree, ResolvedFilesystemTarget,
+    ResolvedProjectTarget, WorkspaceTargetError, WorkspaceTargetResolver,
 };
 
 /// Shared application state across all Axum handlers.
@@ -138,6 +138,12 @@ impl AppState {
             .map(std::path::Path::to_path_buf)
             .unwrap_or_else(|| StdPathBuf::from("/"))
     }
+    /// Return authoritative config file path.
+    pub async fn config_path(&self) -> StdPathBuf {
+        let cfg = self.config.read().await;
+        cfg.config_path.clone()
+    }
+
 
     /// Resolve a project name to its absolute filesystem path.
     /// Returns `Err(NotFound)` if the project doesn't exist in the current config.
@@ -255,7 +261,12 @@ impl AppState {
         diagnostics: DiagnosticStore,
     ) -> anyhow::Result<Self> {
         pty_manager.set_diagnostics(diagnostics.clone());
-        let workspace_dir = Arc::new(RwLock::new(workspace_dir));
+        let ws_root = config.resolve_workspace_root().ok();
+        if let Some(root) = &ws_root {
+            fs.reinit_workspace_sandbox(Some(root.clone()));
+        }
+        let initial_workspace_dir = ws_root.unwrap_or(workspace_dir);
+        let workspace_dir = Arc::new(RwLock::new(initial_workspace_dir));
         let host_resource_monitor = HostResourceMonitor::system(
             Arc::clone(&workspace_dir),
             event_sink.clone(),
@@ -374,6 +385,7 @@ impl AppState {
             crate::session_changes::store::SessionChangesService::new()
                 .map_err(|e| anyhow::anyhow!("Session changes service unavailable: {e}"))?,
         );
+        fs.reinit_workspace_sandbox(config.resolve_workspace_root().ok());
 
         Ok(Self {
             workspace_dir,
@@ -418,6 +430,59 @@ impl AppState {
             session_changes,
         })
     }
+    /// Returns the active workspace sandbox, or `Err(FsError::Unavailable)` if unconfigured.
+    pub fn workspace_sandbox(
+        &self,
+    ) -> Result<crate::fs::sandbox::WorkspaceSandbox, crate::fs::error::FsError> {
+        self.fs.workspace_sandbox()
+    }
+
+    /// Stable logical identifier for the current workspace.
+    pub async fn workspace_id(&self) -> String {
+        let cfg = self.config.read().await;
+        if !cfg.workspace.name.trim().is_empty() {
+            cfg.workspace.name.clone()
+        } else {
+            cfg.config_path.to_string_lossy().into_owned()
+        }
+    }
+
+    /// Current logical document epoch for the workspace.
+    pub fn workspace_epoch(&self) -> u64 {
+        self.fs.workspace_epoch()
+    }
+    /// Resolves either a whole-workspace filesystem target or a project-scoped target.
+    pub async fn resolve_filesystem_target(
+        &self,
+        target_ref: &FilesystemTargetRef,
+    ) -> Result<ResolvedFilesystemTarget, AppError> {
+        match target_ref {
+            FilesystemTargetRef::Workspace(_) => {
+                let sandbox = self.workspace_sandbox().map_err(AppError::Fs)?;
+                sandbox.check_identity().map_err(AppError::Fs)?;
+                Ok(ResolvedFilesystemTarget::Workspace {
+                    root: sandbox.root().to_path_buf(),
+                })
+            }
+            FilesystemTargetRef::Project(project_ref) => {
+                let configured_root = {
+                    let config = self.config.read().await;
+                    let project = config
+                        .projects
+                        .iter()
+                        .find(|p| p.name == project_ref.project)
+                        .ok_or(WorkspaceTargetError::UnknownProject)?;
+                    project.path.clone()
+                };
+                let resolved = self
+                    .workspace_target_resolver
+                    .resolve(project_ref, std::path::Path::new(&configured_root))
+                    .await?;
+                Ok(ResolvedFilesystemTarget::Project(resolved))
+            }
+        }
+    }
+
     /// Override the auth service handle (used for testing or custom clock injection).
     pub fn with_auth_service(mut self, auth_service: Arc<crate::auth::AuthService>) -> Self {
         self.auth_service = auth_service;

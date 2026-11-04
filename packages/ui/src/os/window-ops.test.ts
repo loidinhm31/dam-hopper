@@ -28,6 +28,7 @@ import {
   updateFloatBounds,
 } from "./window-ops.js";
 import { collectTilePanes, newTilePaneNode } from "@/lib/tile-tree.js";
+import { useWindowStore } from "./window-store.js";
 
 const testCtx: WindowContext = {
   profileId: "profile-1",
@@ -353,5 +354,31 @@ describe("window-ops pure functions", () => {
     expect(session.windows["w3"].mode).toBe("tile");
     const splitPanes = collectTilePanes(session.desktops[0].tree!);
     expect(splitPanes.length).toBe(2);
+  });
+
+  it("updates window context via updateWindowContext while preserving unrelated fields", () => {
+    const store = useWindowStore.getState();
+    store.openWindow({
+      id: "win-ctx-test",
+      appId: "files",
+      title: "Files",
+      ctx: { profileId: "prof-a", projectId: "proj-old", worktreeId: "wt-old" },
+      mode: "tile",
+    });
+    expect(useWindowStore.getState().session.windows["win-ctx-test"]?.ctx).toEqual({
+      profileId: "prof-a",
+      projectId: "proj-old",
+      worktreeId: "wt-old",
+    });
+
+    useWindowStore.getState().updateWindowContext("win-ctx-test", {
+      projectId: "proj-new",
+      worktreeId: undefined,
+    });
+    expect(useWindowStore.getState().session.windows["win-ctx-test"]?.ctx).toEqual({
+      profileId: "prof-a",
+      projectId: "proj-new",
+      worktreeId: undefined,
+    });
   });
 });

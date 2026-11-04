@@ -37,6 +37,8 @@ fn make_state(tmp: &tempfile::TempDir) -> AppState {
         server: Default::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: root.join("dam-hopper.toml"),
     };
     let (sink, _) = BroadcastEventSink::new(8);

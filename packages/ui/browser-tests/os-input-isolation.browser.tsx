@@ -1,6 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { OsShell } from "@/os/OsShell.js";
 import { useWindowStore } from "@/os/window-store.js";
 import { createDefaultOsSession } from "@/os/window-ops.js";
@@ -15,6 +16,7 @@ import { arbitrateKeyboardEvent } from "@/os/input-arbiter.js";
 describe("OS Input Isolation & Cognito Privacy Browser Tests", () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
+  let queryClient: QueryClient;
 
   beforeEach(() => {
     localStorage.clear();
@@ -29,6 +31,9 @@ describe("OS Input Isolation & Cognito Privacy Browser Tests", () => {
     container.style.position = "relative";
     document.body.appendChild(container);
     root = createRoot(container);
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
   });
 
   afterEach(() => {
@@ -47,9 +52,11 @@ describe("OS Input Isolation & Cognito Privacy Browser Tests", () => {
   const renderOsShell = async () => {
     await act(async () => {
       root?.render(
-        <EncryptProvider>
-          <OsShell />
-        </EncryptProvider>,
+        <QueryClientProvider client={queryClient}>
+          <EncryptProvider>
+            <OsShell />
+          </EncryptProvider>
+        </QueryClientProvider>,
       );
     });
   };

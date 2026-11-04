@@ -1,7 +1,7 @@
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { QueryClientContext } from "@tanstack/react-query";
 import type { Tab } from "@/stores/editor.js";
-import type { ConnectionRef } from "@/api/ownership.js";
+import type { ConnectionRef, FsTargetRef, ProjectTargetRef } from "@/api/ownership.js";
 import {
   isCurrentConnection,
   useConnectionSnapshot,
@@ -119,6 +119,7 @@ export interface RepositoryRefreshOptions {
  */
 export function isBlameEligibleTab(tab: Tab | null | undefined): boolean {
   if (!tab) return false;
+  if ("kind" in tab.target && tab.target.kind === "workspace") return false;
   if (!tab.targetAvailable) return false;
   if (tab.conflicted) return false;
   if (!tab.path || tab.path.trim().length === 0) return false;
@@ -134,6 +135,18 @@ export function isBlameEligibleTab(tab: Tab | null | undefined): boolean {
   return true;
 }
 
+function toProjectRef(target: FsTargetRef | ProjectTargetRef | undefined): ProjectTargetRef {
+  if (!target) return { project: "", profileId: "" };
+  if ("kind" in target) {
+    if (target.kind === "workspace") return { project: "", profileId: target.profileId };
+    return {
+      profileId: target.profileId,
+      project: target.project,
+      worktreePath: target.worktreePath,
+    };
+  }
+  return target;
+}
 export function useEditorGitBlame({
   tab,
   editor,
@@ -208,7 +221,7 @@ export function useEditorGitBlame({
       ? getCompletedBlameHit(
           queryClient,
           capturedOwner,
-          tab.target,
+          toProjectRef(tab.target),
           tab.path,
           currentContentHash,
           currentLineCount,
@@ -288,10 +301,10 @@ export function useEditorGitBlame({
     warmHit?.hit && warmHit.data ? warmHit.data.rootId : null,
   );
 
-  const currentIdentityKey = tab
-    ? `${tab.target.profileId}:${snapshot?.owner.generation ?? 0}:${tab.target.project}:${projectTargetCacheKey(tab.target)}:${tab.path}:${tab.key}`
+  const projectRef = tab && (!("kind" in tab.target) || tab.target.kind === "project") ? toProjectRef(tab.target) : null;
+  const currentIdentityKey = tab && projectRef
+    ? `${projectRef.profileId}:${snapshot?.owner.generation ?? 0}:${projectRef.project}:${projectTargetCacheKey(projectRef)}:${tab.path}:${tab.key}`
     : "";
-
   const [prevIdentity, setPrevIdentity] = useState<string>(currentIdentityKey);
   if (currentIdentityKey !== prevIdentity) {
     setPrevIdentity(currentIdentityKey);
@@ -393,7 +406,7 @@ export function useEditorGitBlame({
         const hit = getCompletedBlameHit(
           queryClient,
           owner,
-          currentTab.target,
+          toProjectRef(currentTab.target),
           currentTab.path,
           contentSha256,
           bufferLineCount,
@@ -431,7 +444,7 @@ export function useEditorGitBlame({
         ? beginRequestLease(
             queryClient,
             owner,
-            currentTab.target,
+            toProjectRef(currentTab.target),
             currentTab.path,
           )
         : null;
@@ -450,7 +463,7 @@ export function useEditorGitBlame({
       try {
         const client = getBoundApiClient(owner);
         const resp = await client.git.blame(
-          currentTab.target,
+          toProjectRef(currentTab.target),
           {
             path: currentTab.path,
             content,
@@ -519,7 +532,7 @@ export function useEditorGitBlame({
           setCompletedBlamePayload(
             queryClient,
             owner,
-            currentTab.target,
+            toProjectRef(currentTab.target),
             currentTab.path,
             contentSha256,
             validation.response,
@@ -659,14 +672,14 @@ export function useEditorGitBlame({
         const discoveryHandle = beginRootDiscovery(
           queryClient,
           owner,
-          currentTab.target,
+          toProjectRef(currentTab.target),
         );
 
         try {
           const roots = await queryClient.fetchQuery({
-            queryKey: gitQueryKey("git-roots", currentTab.target),
+            queryKey: gitQueryKey("git-roots", toProjectRef(currentTab.target)),
             queryFn: () =>
-              getBoundApiClient(owner).git.roots(currentTab.target),
+              getBoundApiClient(owner).git.roots(toProjectRef(currentTab.target)),
             staleTime: 0,
           });
 
@@ -733,7 +746,7 @@ export function useEditorGitBlame({
 
           if (shouldReblame) {
             if (headChanged || rootChanged) {
-              advanceTargetEpoch(queryClient, owner, currentTab.target);
+              advanceTargetEpoch(queryClient, owner, toProjectRef(currentTab.target));
               setData(null);
               dataRef.current = null;
               setStatus("waiting");
@@ -777,7 +790,7 @@ export function useEditorGitBlame({
       advanceTargetEpoch(
         queryClient,
         snapshotRef.current.owner,
-        tabRef.current.target,
+        toProjectRef(tabRef.current.target),
       );
     }
     triggerRepositoryRefresh({ force: true });
@@ -967,7 +980,7 @@ export function useEditorGitBlame({
       ) {
         if (e.generation !== snapshotRef.current.owner.generation) return;
       }
-      const currentProject = tabRef.current?.target.project;
+      const currentProject = tabRef.current?.target && "project" in tabRef.current.target ? tabRef.current.target.project : undefined;
       const projectName = extractProjectName(e.data);
       if (!projectName || projectName === currentProject) {
         triggerRepositoryRefresh({ reblameOnSameHead: true });
@@ -985,7 +998,7 @@ export function useEditorGitBlame({
         advanceTargetEpoch(
           queryClient,
           snapshotRef.current.owner,
-          tabRef.current.target,
+          toProjectRef(tabRef.current.target),
         );
       }
       setData(null);
@@ -1007,7 +1020,7 @@ export function useEditorGitBlame({
 
             const match = isMatchingGitQueryKey(
               key,
-              currentTab.target,
+              toProjectRef(currentTab.target),
               snapshotRef.current?.owner,
               lastOwningRootIdRef.current,
             );
@@ -1016,7 +1029,7 @@ export function useEditorGitBlame({
                 advanceTargetEpoch(
                   queryClient,
                   snapshotRef.current.owner,
-                  currentTab.target,
+                  toProjectRef(currentTab.target),
                 );
               }
               setData(null);

@@ -9,7 +9,14 @@ import {
   type ConnectionStatus,
 } from "@/api/connections.js";
 import { getProfiles } from "@/api/server-config.js";
-import { toServerProjectTarget, type ConnectionRef } from "@/api/ownership.js";
+import {
+  toServerProjectTarget,
+  normalizeFsTarget,
+  toServerFsTarget,
+  fsTargetKey,
+  type ConnectionRef,
+  type FsTargetRef,
+} from "@/api/ownership.js";
 import type {
   PathSearchResponse,
   SearchResponse,
@@ -55,14 +62,14 @@ export interface FileSearchResultData {
 }
 
 export function useFileSearch(
-  target: ProjectTargetInput | null,
+  target: FsTargetRef | ProjectTargetInput | null,
   scope: SearchScope = "project",
   mode: SearchMode = "content",
   query = "",
 ) {
-  const targetRef = target == null ? null : normalizeProjectTarget(target);
-  const project = targetRef?.project ?? null;
-  const targetKey = targetRef == null ? null : projectTargetCacheKey(targetRef);
+  const targetRef = target == null ? null : normalizeFsTarget(target);
+  const project = targetRef?.kind === "project" ? targetRef.project : null;
+  const targetKey = targetRef == null ? null : fsTargetKey(targetRef);
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState("");
 
@@ -126,11 +133,12 @@ export function useFileSearch(
           t = getTransport() as WsTransport;
         }
         const channel = mode === "filename" ? "fs:searchPaths" : "fs:search";
-        const wire = targetRef ? toServerProjectTarget(targetRef) : {};
+        const wire = targetRef ? toServerFsTarget(targetRef) : undefined;
         const resp = (await t.invoke(channel, {
-          ...wire,
+          ...(wire ? { target: wire } : {}),
           q: trimmedQuery,
           case: caseSensitive || undefined,
+          scope,
         })) as SearchResponse | PathSearchResponse;
 
         if (conn && !isCurrentConnection(conn)) {
