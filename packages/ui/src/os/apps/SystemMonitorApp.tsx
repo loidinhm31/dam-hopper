@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -37,7 +37,18 @@ import {
   useGlobalConfig,
   useUpdateUiConfig,
 } from "@/api/queries.js";
-import { getConnectionSnapshot, getApi } from "@/api/connections.js";
+import { getConnectionSnapshot, getApi, isCurrentConnection } from "@/api/connections.js";
+import {
+  terminalTargetKey,
+  type TerminalTarget,
+  type TerminationOrigin,
+  type TerminationState,
+} from "@/api/terminal-session-contract.js";
+import { requestGuardedTermination } from "@/lib/terminal-session-actions.js";
+import {
+  terminalActionCoordinator,
+  useAllTerminalActions,
+} from "@/lib/terminal-session-action-coordinator.js";
 import { profileQueryKey } from "@/api/query-client.js";
 import { logger } from "@dam-hopper/shared/logger";
 import { useHostResourceAlertPresentationStore } from "@/hooks/use-host-resource-alert-presentation.js";
@@ -76,12 +87,14 @@ export interface SessionRowProps {
   session: SessionInfo & { profileName?: string; profileId?: string };
   onNavigate: (id: string, profileId?: string) => void;
   onKill: (id: string, profileId?: string) => void;
+  isKillDisabled?: boolean;
 }
 
 export function SessionRow({
   session,
   onNavigate,
   onKill,
+  isKillDisabled = false,
 }: SessionRowProps) {
   const Icon = TYPE_ICON[session.type] ?? Terminal;
   const status = getSessionStatus(session);
@@ -143,7 +156,12 @@ export function SessionRow({
       />
       <button
         type="button"
-        className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-danger)]/60 hover:text-[var(--color-danger)]"
+        disabled={isKillDisabled}
+        className={`shrink-0 transition-opacity p-0.5 rounded ${
+          isKillDisabled
+            ? "opacity-40 cursor-not-allowed text-[var(--color-text-muted)]"
+            : "opacity-0 group-hover:opacity-100 hover:bg-[var(--color-danger)]/20 text-[var(--color-danger)]/60 hover:text-[var(--color-danger)]"
+        }`}
         onClick={(e) => {
           e.stopPropagation();
           onKill(session.id, session.profileId);
@@ -184,7 +202,9 @@ interface ConfirmKillTarget {
   profileId: string;
   profileName: string;
   generation?: number;
-  incarnation?: number;
+  incarnation?: number | string;
+  target?: TerminalTarget | null;
+  origin?: TerminationOrigin;
 }
 
 function isProjectClean(project: unknown): boolean {
@@ -212,7 +232,7 @@ export function SystemMonitorApp({ window }: SystemMonitorAppProps) {
   const cognitoActive = useCognitoModeStore((state) => state.active);
   const multiResources = useMultiHostResources({ enabled: true });
   const { allProjects } = useAggregatedProjects();
-  const { sessions: aggregatedSessions = [], isLoading: sessionsLoading } =
+  const { sessions: aggregatedSessions = [], observations = [], isLoading: sessionsLoading } =
     useAggregatedTerminalSessions();
 
   // Selected profile filter for drilldown: persisted in appState
@@ -257,6 +277,13 @@ export function SystemMonitorApp({ window }: SystemMonitorAppProps) {
   const [confirmKill, setConfirmKill] = useState<ConfirmKillTarget | null>(null);
   const [killError, setKillError] = useState<string | null>(null);
   const [killPending, setKillPending] = useState(false);
+  const retainedActions = useAllTerminalActions();
+  const promptTokenRef = useRef(0);
+
+  const targetKey = terminalTargetKey;
+  useEffect(() => {
+    terminalActionCoordinator.reconcileWithObservations(observations);
+  }, [observations]);
 
   // Force sleep dialog state with frozen owner target
   const [forceSleepOpen, setForceSleepOpen] = useState(false);
@@ -331,99 +358,186 @@ export function SystemMonitorApp({ window }: SystemMonitorAppProps) {
     [aliveSessions, cognitoActive],
   );
 
-  // Jump to terminal session
+  // Jump to terminal session via exact placement intent
   const handleNavigateToSession = useCallback(
     (sessionId: string, profileId?: string) => {
       const targetProfileId = profileId ?? inspectedProfileId ?? "default";
-      void dispatchIntent(
-        createIntent(
-          "terminal:focus",
-          {
-            profileId: targetProfileId,
-            terminalId: sessionId,
-          },
-          window.id,
-        ),
+      const session = aggregatedSessions.find(
+        (s) => s.id === sessionId && (!profileId || s.profileId === profileId),
       );
+
+      if (session && session.terminationTarget) {
+        void dispatchIntent(
+          createIntent(
+            "terminal:place-existing",
+            {
+              sourceHubWindowId: window.id,
+              target: session.terminationTarget,
+              action: "focus-existing",
+            },
+            window.id,
+          ),
+        );
+      } else {
+        void dispatchIntent(
+          createIntent(
+            "terminal:focus",
+            {
+              profileId: targetProfileId,
+              terminalId: sessionId,
+            },
+            window.id,
+          ),
+        );
+      }
     },
-    [inspectedProfileId, window.id],
+    [aggregatedSessions, inspectedProfileId, window.id],
   );
 
-  // Request kill with displayed session snapshot
+  // Request kill with displayed session snapshot and guarded termination target
   const handleRequestKill = useCallback(
     (sessionId: string, profileId?: string) => {
       const session = aggregatedSessions.find(
         (s) => s.id === sessionId && (!profileId || s.profileId === profileId),
       );
       if (!session) return;
-      if (session.incarnation === undefined) {
-        setKillError("Cannot terminate process: session incarnation is unavailable.");
-        return;
-      }
       const targetProfile = session.profileId;
       const snapshot = getConnectionSnapshot(targetProfile);
 
-      setKillError(null);
+      if (!session.terminationTarget) {
+        promptTokenRef.current++;
+        if (session.incarnation === undefined && !session.incarnationExact) {
+          setKillError("Cannot terminate process: session incarnation is unavailable.");
+        } else {
+          setKillError(
+            "Cannot terminate session: server does not support guarded termination protocol. Upgrade server to DamHopper Termination Protocol v1.",
+          );
+        }
+        setConfirmKill({
+          sessionId,
+          sessionName: session.name ?? session.command ?? sessionId,
+          command: session.command ?? "",
+          profileId: targetProfile,
+          profileName: session.profileId,
+          generation: snapshot?.owner.generation,
+          incarnation: session.incarnationExact ?? session.incarnation,
+          target: null,
+        });
+        return;
+      }
+
+      promptTokenRef.current++;
+      const existingAction = retainedActions.get(terminalTargetKey(session.terminationTarget));
+      if (existingAction?.status === "refused") {
+        setKillError(`Termination refused (${existingAction.error.code}): ${existingAction.error.error}`);
+      } else if (existingAction?.status === "failed") {
+        setKillError(`Termination failed (${existingAction.error.category}): ${existingAction.error.message}`);
+      } else if (existingAction?.status === "outcomeUnknown") {
+        setKillError(
+          `Termination outcome unknown (${existingAction.error?.category ?? "network"}). Retained pending observation.`,
+        );
+      } else {
+        setKillError(null);
+      }
+
+      const origin: TerminationOrigin =
+        session.terminationState === "restartPending" && !session.alive
+          ? "restartPending"
+          : "live";
+
       setConfirmKill({
         sessionId,
         sessionName: session.name ?? session.command ?? sessionId,
         command: session.command ?? "",
         profileId: targetProfile,
         profileName: session.profileId,
-        generation: snapshot?.owner.generation,
-        incarnation: session.incarnation,
+        generation: session.terminationTarget.generation,
+        incarnation: session.terminationTarget.incarnation,
+        target: session.terminationTarget,
+        origin,
       });
     },
     [aggregatedSessions],
   );
 
-  // Execute confirmed kill with revalidation against stale profile/generation/incarnation
+  // Execute confirmed kill using guarded termination protocol
   const handleConfirmKill = useCallback(async () => {
-    if (!confirmKill) return;
+    if (!confirmKill || !confirmKill.target) return;
+    const reservation = terminalActionCoordinator.reserveDispatch(
+      confirmKill.target,
+      confirmKill.origin ?? "live",
+    );
+    if (!reservation.allowed) {
+      return;
+    }
+    const attemptToken = reservation.attemptToken;
     setKillPending(true);
     setKillError(null);
 
     try {
       const currentSnap = getConnectionSnapshot(confirmKill.profileId);
       if (!currentSnap || currentSnap.status !== "connected") {
-        throw new Error(
-          `Target profile '${confirmKill.profileName}' is disconnected. Kill aborted to prevent orphan action.`,
-        );
+        const failedState: TerminationState = {
+          status: "failed",
+          target: confirmKill.target,
+          origin: confirmKill.origin ?? "live",
+          error: {
+            category: "abort" as const,
+            message: `Target profile '${confirmKill.profileName}' is disconnected. Kill aborted to prevent orphan action.`,
+          },
+        };
+        terminalActionCoordinator.recordOutcome(confirmKill.target, failedState, attemptToken);
+        setKillError(failedState.error.message);
+        return;
       }
 
-      if (
-        confirmKill.generation !== undefined &&
-        currentSnap.owner.generation !== confirmKill.generation
-      ) {
-        throw new Error(
-          `Connection generation changed for '${confirmKill.profileName}'. Session may have been replaced or reconnected. Kill aborted.`,
-        );
-      }
+      const checkCurrent = () =>
+        isCurrentConnection({
+          profileId: confirmKill.target!.profileId,
+          generation: confirmKill.target!.generation,
+        });
 
-      // Revalidate strictly in owner-qualified cache
-      const ownerKey = profileQueryKey(currentSnap.owner, "terminal-sessions");
-      const currentOwnerSessions =
-        qc.getQueryData<SessionInfo[]>(ownerKey) ??
-        aggregatedSessions.filter((s) => s.profileId === confirmKill.profileId);
-
-      const liveTarget = currentOwnerSessions.find((s) => s.id === confirmKill.sessionId);
-
-      if (!liveTarget || !liveTarget.alive) {
-        throw new Error("Process has already exited or is no longer running.");
-      }
-
-      if (
-        confirmKill.incarnation !== undefined &&
-        (liveTarget.incarnation === undefined || liveTarget.incarnation !== confirmKill.incarnation)
-      ) {
-        throw new Error(
-          "Process incarnation changed or unavailable (replacement process detected). Kill aborted.",
-        );
+      if (!checkCurrent()) {
+        const failedState: TerminationState = {
+          status: "failed",
+          target: confirmKill.target,
+          origin: confirmKill.origin ?? "live",
+          error: {
+            category: "abort" as const,
+            message: `Connection generation changed for '${confirmKill.profileName}'. Session may have been replaced or reconnected. Kill aborted.`,
+          },
+        };
+        terminalActionCoordinator.recordOutcome(confirmKill.target, failedState, attemptToken);
+        setKillError(failedState.error.message);
+        return;
       }
 
       const client = getApi(currentSnap.owner);
-      await client.terminal.kill(confirmKill.sessionId);
+      const result = await requestGuardedTermination(
+        confirmKill.target,
+        confirmKill.origin ?? "live",
+        client,
+        checkCurrent,
+      );
 
+      terminalActionCoordinator.recordOutcome(confirmKill.target, result, attemptToken);
+
+      if (result.status === "refused") {
+        setKillError(`Termination refused (${result.error.code}): ${result.error.error}`);
+        return;
+      }
+      if (result.status === "failed") {
+        setKillError(`Termination failed (${result.error.category}): ${result.error.message}`);
+        return;
+      }
+      if (result.status === "outcomeUnknown") {
+        setKillError(
+          `Termination outcome unknown (${result.error?.category ?? "network"}). Retained pending observation.`,
+        );
+        return;
+      }
+
+      const ownerKey = profileQueryKey(currentSnap.owner, "terminal-sessions");
       void qc.invalidateQueries({ queryKey: ownerKey });
       void qc.invalidateQueries({ queryKey: ["terminal-sessions"] });
       setConfirmKill(null);
@@ -434,7 +548,7 @@ export function SystemMonitorApp({ window }: SystemMonitorAppProps) {
     } finally {
       setKillPending(false);
     }
-  }, [confirmKill, aggregatedSessions, qc]);
+  }, [confirmKill, qc]);
 
   return (
     <div
@@ -706,10 +820,20 @@ export function SystemMonitorApp({ window }: SystemMonitorAppProps) {
                         profileName: "Protected",
                       }
                     : session;
+                  const actionState = session.terminationTarget
+                    ? retainedActions.get(targetKey(session.terminationTarget))
+                    : null;
+                  const isKillDisabled = Boolean(
+                    actionState &&
+                      (actionState.status === "dispatching" ||
+                        actionState.status === "terminationRequested" ||
+                        actionState.status === "outcomeUnknown"),
+                  );
                   return (
                     <SessionRow
                       key={`${session.profileId}:${session.id}`}
                       session={displaySession}
+                      isKillDisabled={isKillDisabled}
                       onNavigate={(id, profileId) => handleNavigateToSession(id, profileId)}
                       onKill={(id, profileId) => handleRequestKill(id, profileId)}
                     />
@@ -747,7 +871,7 @@ export function SystemMonitorApp({ window }: SystemMonitorAppProps) {
 
       {/* Confirmation Dialog for Process Kill using standard Dialog primitive */}
       {confirmKill && (
-        <Dialog open={true} onOpenChange={(open) => !open && setConfirmKill(null)}>
+        <Dialog open={true} onOpenChange={(open) => !open && !killPending && setConfirmKill(null)}>
           <DialogContent
             aria-labelledby="confirm-kill-title"
             data-os-modal="true"
@@ -807,15 +931,28 @@ export function SystemMonitorApp({ window }: SystemMonitorAppProps) {
               >
                 Cancel
               </button>
-              <button
-                type="button"
-                onClick={handleConfirmKill}
-                disabled={killPending}
-                className="px-3 py-1.5 rounded bg-[var(--color-danger)] hover:bg-[var(--color-danger)]/90 text-white font-medium transition-colors flex items-center gap-1.5 text-xs"
-              >
-                {killPending && <RefreshCw className="h-3 w-3 animate-spin" />}
-                <span>Kill Session</span>
-              </button>
+              {(() => {
+                const actionState = confirmKill.target
+                  ? retainedActions.get(targetKey(confirmKill.target))
+                  : null;
+                const isUnresolved = Boolean(
+                  actionState &&
+                    (actionState.status === "dispatching" ||
+                      actionState.status === "terminationRequested" ||
+                      actionState.status === "outcomeUnknown"),
+                );
+                return (
+                  <button
+                    type="button"
+                    onClick={handleConfirmKill}
+                    disabled={killPending || !confirmKill.target || isUnresolved}
+                    className="px-3 py-1.5 rounded bg-[var(--color-danger)] hover:bg-[var(--color-danger)]/90 text-white font-medium transition-colors flex items-center gap-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {killPending && <RefreshCw className="h-3 w-3 animate-spin" />}
+                    <span>Kill Session</span>
+                  </button>
+                );
+              })()}
             </DialogFooter>
           </DialogContent>
         </Dialog>

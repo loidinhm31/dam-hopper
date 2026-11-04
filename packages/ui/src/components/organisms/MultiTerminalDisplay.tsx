@@ -11,8 +11,10 @@ import { terminalRegistry } from "@/lib/terminal-registry.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import type { TerminalRef } from "@/api/ownership.js";
+import type { TerminalTarget } from "../../api/terminal-session-contract.js";
 
 export interface MountedSession {
+  mountKey?: string;
   sessionId: string;
   project: string;
   name?: string;
@@ -21,6 +23,8 @@ export interface MountedSession {
   worktreePath?: string;
   profileId?: string;
   terminalRef?: TerminalRef;
+  terminalTarget?: TerminalTarget;
+  attachPolicy?: "existing-only" | "create-explicit";
 }
 
 interface Props {

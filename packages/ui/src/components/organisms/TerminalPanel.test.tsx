@@ -33,9 +33,32 @@ function makeTransport() {
     data,
     buffers,
     events,
-    invoke: vi.fn(async (_channel: string) => [
-      { id: "shared", project: "shared", alive: true },
-    ]),
+    invoke: vi.fn(async (channel: string) => {
+      if (channel === "terminal:listDetailedObservation") {
+        return {
+          termination: {
+            version: 1,
+            serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+          },
+          sessions: [
+            {
+              id: "target-term",
+              alive: true,
+              incarnation: 555,
+              incarnationExact: "555",
+            },
+            {
+              id: "owned-term",
+              alive: true,
+              incarnation: 1,
+              incarnationExact: "1",
+            },
+            { id: "shared", project: "shared", alive: true },
+          ],
+        };
+      }
+      return [{ id: "shared", project: "shared", alive: true }];
+    }),
     terminalWrite: vi.fn(),
     terminalResize: vi.fn(),
     terminalAttach: vi.fn(() => true),
@@ -903,5 +926,312 @@ describe("TerminalPanel owned connections", () => {
     const f12Key = new KeyboardEvent("keydown", { code: "F12", key: "F12" });
     // Returning false instructs xterm to bypass handling so browser default (DevTools) fires
     expect(term.customKeyEventHandler!(f12Key)).toBe(false);
+  });
+
+  it("suppresses keyboard input and disables stdin when suppressInput prop is true", async () => {
+    await connect("suppress-test", 1);
+    await act(async () => {
+      root.render(
+        createElement(TerminalPanel, {
+          profileId: "suppress-test",
+          sessionId: "suppress-term",
+          project: "test",
+          command: "bash",
+          suppressInput: true,
+        }),
+      );
+    });
+
+    const term = state.terminals[state.terminals.length - 1]!;
+    expect(term.options.disableStdin).toBe(true);
+
+    const normalKey = new KeyboardEvent("keydown", { code: "KeyA", key: "a" });
+    expect(term.customKeyEventHandler!(normalKey)).toBe(false);
+  });
+
+  it("withholds output and disables input when replay incarnation disagrees with exact TerminalTarget", async () => {
+    const t = await connect("target-test", 1);
+    const target = {
+      profileId: "target-test",
+      generation: 1,
+      serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+      terminalId: "target-term",
+      incarnation: "555",
+    };
+
+    await act(async () => {
+      root.render(
+        createElement(TerminalPanel, {
+          profileId: "target-test",
+          sessionId: "target-term",
+          project: "test",
+          command: "bash",
+          terminalTarget: target,
+        }),
+      );
+    });
+
+    const term = state.terminals[state.terminals.length - 1]!;
+
+    // Send mismatched buffer replay
+    await act(async () => {
+      t.buffers.forEach((cb) =>
+        cb({
+          data: "stale data",
+          offset: 10,
+          reset: false,
+          truncated: false,
+          incarnation: 554, // Mismatch!
+        }),
+      );
+    });
+
+    // Mismatched buffer must NOT be written to terminal output
+    expect(term.output).not.toContain("stale data");
+    expect(term.options.disableStdin).toBe(true);
+
+    // Now send matching safe positive incarnation
+    await act(async () => {
+      t.buffers.forEach((cb) =>
+        cb({
+          data: "fresh data",
+          offset: 20,
+          reset: false,
+          truncated: false,
+          incarnation: 555, // Match!
+        }),
+      );
+    });
+
+    expect(term.output).toContain("fresh data");
+  });
+
+  it("refuses attach and disables stdin when serverEpoch differs even with same ID and same incarnation, preventing outgoing writes", async () => {
+    const t = await connect("epoch-test", 1);
+    // Mock inventory observation to return a NEW server epoch
+    t.invoke.mockImplementation(async (channel: string) => {
+      if (channel === "terminal:listDetailedObservation") {
+        return {
+          termination: {
+            version: 1,
+            serverEpoch: "new-epoch-uuid-9999",
+          },
+          sessions: [
+            {
+              id: "target-term",
+              alive: true,
+              incarnation: 555,
+              incarnationExact: "555",
+            },
+          ],
+        };
+      }
+      return [];
+    });
+
+    const target = {
+      profileId: "epoch-test",
+      generation: 1,
+      serverEpoch: "old-epoch-uuid-1111", // Mismatch with new-epoch-uuid-9999
+      terminalId: "target-term",
+      incarnation: "555",
+    };
+
+    await act(async () => {
+      root.render(
+        createElement(TerminalPanel, {
+          profileId: "epoch-test",
+          sessionId: "target-term",
+          project: "test",
+          command: "bash",
+          terminalTarget: target,
+        }),
+      );
+    });
+
+    const term = state.terminals[state.terminals.length - 1]!;
+    // Attach must NOT have been sent
+    expect(t.terminalAttach).not.toHaveBeenCalled();
+    // Stdin must remain disabled
+    expect(term.options.disableStdin).toBe(true);
+
+    // Simulate typing: no outgoing write must reach transport
+    term.input.forEach((listener) => listener("ls\n"));
+    expect(t.terminalWrite).not.toHaveBeenCalled();
+  });
+
+  it("refuses attach and disables stdin when connection owner generation is retired, preventing outgoing writes", async () => {
+    const t = await connect("gen-test", 2); // Active connection is generation 2
+    const target = {
+      profileId: "gen-test",
+      generation: 1, // Target is captured under retired generation 1!
+      serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+      terminalId: "target-term",
+      incarnation: "555",
+    };
+
+    await act(async () => {
+      root.render(
+        createElement(TerminalPanel, {
+          profileId: "gen-test",
+          sessionId: "target-term",
+          project: "test",
+          command: "bash",
+          terminalTarget: target,
+        }),
+      );
+    });
+
+    const term = state.terminals[state.terminals.length - 1]!;
+    // Attach must NOT have been sent because generation is retired
+    expect(t.terminalAttach).not.toHaveBeenCalled();
+    expect(term.options.disableStdin).toBe(true);
+
+    // Simulate typing: zero outbound writes
+    term.input.forEach((listener) => listener("echo hack\n"));
+    expect(t.terminalWrite).not.toHaveBeenCalled();
+  });
+
+  it("adopts terminalTarget dynamically without recreating xterm instance", async () => {
+    const t = await connect("adopt-test", 1);
+    const initialXtermCount = state.terminals.length;
+
+    // Mount without terminalTarget
+    await act(async () => {
+      root.render(
+        createElement(TerminalPanel, {
+          profileId: "adopt-test",
+          sessionId: "adopt-term",
+          project: "test",
+          command: "bash",
+        }),
+      );
+    });
+
+    expect(state.terminals.length).toBe(initialXtermCount + 1);
+    const termInstance = state.terminals[state.terminals.length - 1];
+
+    // Re-render with terminalTarget prop (simulating OS shell adoption)
+    const target = {
+      profileId: "adopt-test",
+      generation: 1,
+      serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+      terminalId: "adopt-term",
+      incarnation: "777",
+    };
+
+    await act(async () => {
+      root.render(
+        createElement(TerminalPanel, {
+          profileId: "adopt-test",
+          sessionId: "adopt-term",
+          project: "test",
+          command: "bash",
+          terminalTarget: target,
+        }),
+      );
+    });
+
+    // xterm instance MUST NOT have been recreated
+    expect(state.terminals.length).toBe(initialXtermCount + 1);
+    expect(state.terminals[state.terminals.length - 1]).toBe(termInstance);
+  });
+
+  it("gates resize events until terminal authority is verified", async () => {
+    const t = await connect("resize-test", 1);
+    const target = {
+      profileId: "resize-test",
+      generation: 1,
+      serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+      terminalId: "resize-term",
+      incarnation: "888",
+    };
+
+    await act(async () => {
+      root.render(
+        createElement(TerminalPanel, {
+          profileId: "resize-test",
+          sessionId: "resize-term",
+          project: "test",
+          command: "bash",
+          terminalTarget: target,
+        }),
+      );
+    });
+
+    const term = state.terminals[state.terminals.length - 1]!;
+
+    // Trigger resize while authority is unverified: terminalResize must NOT be called
+    await act(async () => {
+      term.resize.forEach((cb) => cb({ cols: 80, rows: 24 }));
+    });
+    expect(t.terminalResize).not.toHaveBeenCalled();
+  });
+
+  it("durably revokes authority on incarnation mismatch and prevents subsequent writes and resizes", async () => {
+    const t = await connect("revoke-test", 1);
+    const target = {
+      profileId: "revoke-test",
+      generation: 1,
+      serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+      terminalId: "revoke-term",
+      incarnation: "888",
+    };
+
+    t.invoke.mockImplementation(async (channel: string) => {
+      if (channel === "terminal:listDetailedObservation") {
+        return {
+          termination: {
+            version: 1,
+            serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+          },
+          sessions: [
+            {
+              id: "revoke-term",
+              alive: true,
+              incarnation: 888,
+              incarnationExact: "888",
+            },
+          ],
+        };
+      }
+      return [];
+    });
+
+    await act(async () => {
+      root.render(
+        createElement(TerminalPanel, {
+          profileId: "revoke-test",
+          sessionId: "revoke-term",
+          project: "test",
+          command: "bash",
+          terminalTarget: target,
+        }),
+      );
+    });
+
+    const term = state.terminals[state.terminals.length - 1]!;
+
+    // Simulate incoming data with mismatched incarnation: 999 !== 888
+    await act(async () => {
+      t.data.forEach((cb) => cb("mismatched output", 1, 999));
+    });
+
+    // Stdin must be disabled
+    expect(term.options.disableStdin).toBe(true);
+
+    // Typing must be dropped (terminalWrite must NOT be called)
+    t.terminalWrite.mockClear();
+    await act(async () => {
+      term.input.forEach((listener) => listener("malicious input\n"));
+    });
+    expect(t.terminalWrite).not.toHaveBeenCalled();
+
+    // Resize must be dropped (terminalResize must NOT be called)
+    t.terminalResize.mockClear();
+    await act(async () => {
+      term.resize.forEach((listener) => listener({ cols: 100, rows: 30 }));
+    });
+    expect(t.terminalResize).not.toHaveBeenCalled();
   });
 });

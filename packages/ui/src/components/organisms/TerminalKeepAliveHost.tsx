@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { terminalKey } from "@/api/ownership.js";
+import { terminalTargetKey } from "@/api/terminal-session-contract.js";
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
 import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import { subscribeToTerminalAppZoomChanges } from "@/lib/terminal-zoom-invalidation.js";
@@ -62,12 +63,18 @@ export function TerminalKeepAliveHost({
             ? tabIndex + 1
             : undefined
           : mountedIndex + 1;
-        const key = session.terminalRef
-          ? terminalKey(session.terminalRef)
-          : session.profileId
-            ? JSON.stringify([session.profileId, session.sessionId])
-            : session.sessionId;
-
+        const profileId =
+          session.terminalTarget?.profileId ??
+          session.terminalRef?.profileId ??
+          session.profileId ??
+          "default";
+        const sessionId =
+          session.terminalTarget?.terminalId ??
+          session.terminalRef?.id ??
+          session.sessionId;
+        const key =
+          session.mountKey ??
+          terminalKey({ profileId, id: sessionId });
         return (
           <TerminalPanel
             key={key}
@@ -78,6 +85,8 @@ export function TerminalKeepAliveHost({
             worktreePath={session.worktreePath}
             profileId={session.profileId}
             terminalRef={session.terminalRef}
+            terminalTarget={session.terminalTarget}
+            attachPolicy={session.attachPolicy}
             onExit={() => onSessionExit?.(session.sessionId)}
             onNewTerminal={onNewTerminal}
             onTerminalReady={() => onTerminalReady?.(session.sessionId)}

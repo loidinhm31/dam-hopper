@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils.js";
-import type { ButtonHTMLAttributes } from "react";
+import type { ComponentPropsWithRef } from "react";
 
 export const inputClass =
   "w-full rounded glass-input px-2.5 py-1.5 outline-none " +
@@ -24,7 +24,7 @@ const sizeClasses: Record<Size, string> = {
   md: "h-8 px-3 text-sm",
 };
 
-interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
+interface Props extends ComponentPropsWithRef<"button"> {
   variant?: Variant;
   size?: Size;
   loading?: boolean;

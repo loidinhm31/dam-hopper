@@ -69,4 +69,53 @@ describe("OS Typed Intents", () => {
       expect(result.error).toContain("Target connection refused");
     }
   });
+
+  it("dispatches terminal:place-existing with typed TerminalPlacementIntent", async () => {
+    const handler = vi.fn().mockResolvedValue({
+      status: "handled" as const,
+      targetWindowId: "win-term-1",
+    });
+
+    registerIntentHandler("terminal:place-existing", handler);
+
+    const intent = createIntent("terminal:place-existing", {
+      sourceHubWindowId: "win-hub-1",
+      action: "open-beside",
+      target: {
+        profileId: "p1",
+        generation: 1,
+        serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+        terminalId: "term-1",
+        incarnation: "1",
+      },
+    });
+
+    const result = await dispatchIntent(intent);
+    expect(result.status).toBe("handled");
+    expect(handler).toHaveBeenCalledWith(intent);
+  });
+
+  it("dispatches session-changes:open with full ReviewTarget tuple", async () => {
+    const handler = vi.fn().mockResolvedValue({
+      status: "handled" as const,
+      targetWindowId: "win-review-1",
+    });
+
+    registerIntentHandler("session-changes:open", handler);
+
+    const intent = createIntent("session-changes:open", {
+      profileId: "p1",
+      generation: 1,
+      terminalId: "term-1",
+      terminalIncarnation: "1",
+      ompSessionId: "omp-1",
+      serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+      rootId: "git-root",
+      baselineId: "base-1",
+    });
+
+    const result = await dispatchIntent(intent);
+    expect(result.status).toBe("handled");
+    expect(handler).toHaveBeenCalledWith(intent);
+  });
 });

@@ -7457,3 +7457,317 @@ async fn test_idle_suspend_consent_decision_endpoint_guards_and_capabilities() {
 
     client_guard.retire();
 }
+
+#[tokio::test]
+async fn test_terminal_inventory_headers_and_row_projection() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    // Call GET /api/terminal
+    let resp = get(state.clone(), "/api/terminal").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("X-DamHopper-Termination-Version").unwrap(),
+        "1"
+    );
+    let epoch_header = resp
+        .headers()
+        .get("X-DamHopper-PTY-Epoch")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert_eq!(epoch_header, state.pty_manager.termination_epoch().to_string());
+    assert_eq!(
+        resp.headers().get("Cache-Control").unwrap(),
+        "no-store"
+    );
+
+    // Create session
+    let create_body = serde_json::json!({
+        "id": "term-inv-test",
+        "command": "sh -c 'sleep 30'",
+        "cwd": tmp.path().to_str().unwrap(),
+    });
+    let c_resp = post_json(state.clone(), "/api/terminal", create_body).await;
+    assert_eq!(c_resp.status(), StatusCode::OK);
+
+    // Check list
+    let list_resp = get(state.clone(), "/api/terminal").await;
+    let body = axum::body::to_bytes(list_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json.as_array().unwrap();
+    let row = rows.iter().find(|r| r["id"] == "term-inv-test").unwrap();
+    assert_eq!(row["terminationState"], "live");
+    assert_eq!(row["incarnationExact"], row["incarnation"].as_u64().unwrap().to_string());
+    assert!(row.get("buffer_bytes").is_none());
+
+    // Check detailed
+    let det_resp = get(state.clone(), "/api/terminal/detailed").await;
+    let det_body = axum::body::to_bytes(det_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let det_json: serde_json::Value = serde_json::from_slice(&det_body).unwrap();
+    let det_rows = det_json.as_array().unwrap();
+    let det_row = det_rows.iter().find(|r| r["id"] == "term-inv-test").unwrap();
+    assert_eq!(det_row["terminationState"], "live");
+    assert_eq!(det_row["incarnationExact"], det_row["incarnation"].as_u64().unwrap().to_string());
+    assert!(det_row.get("buffer_bytes").is_some());
+
+    let _ = state.pty_manager.kill("term-inv-test");
+}
+
+#[tokio::test]
+async fn test_terminal_cors_exposes_termination_headers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let allowed_origin = "http://127.0.0.1:4801";
+    let router = crate::api::router::build_router_with_origins(
+        state,
+        vec![axum::http::HeaderValue::from_static(allowed_origin)],
+    );
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/terminal")
+        .header("Origin", allowed_origin)
+        .header("Cookie", auth_cookie())
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let exposed = resp
+        .headers()
+        .get("Access-Control-Expose-Headers")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(exposed.contains("x-damhopper-termination-version"));
+    assert!(exposed.contains("x-damhopper-pty-epoch"));
+}
+
+#[tokio::test]
+async fn test_terminal_terminate_body_limit_and_rejections() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let epoch = state.pty_manager.termination_epoch().to_string();
+
+    // Create session
+    let create_body = serde_json::json!({
+        "id": "term-rej-test",
+        "command": "sh -c 'sleep 30'",
+        "cwd": tmp.path().to_str().unwrap(),
+    });
+    let c_resp = post_json(state.clone(), "/api/terminal", create_body).await;
+    assert_eq!(c_resp.status(), StatusCode::OK);
+
+    // 1. Body > 512 bytes => 413 TERMINATION_BODY_TOO_LARGE
+    let big_padding = "x".repeat(600);
+    let big_body = format!("{{\"version\":1,\"expectedServerEpoch\":\"{epoch}\",\"expectedIncarnation\":\"1\",\"pad\":\"{big_padding}\"}}");
+    let router = build_router(state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/terminal/term-rej-test/terminate")
+        .header("Content-Type", "application/json")
+        .header("Cookie", auth_cookie())
+        .body(Body::from(big_body))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_BODY_TOO_LARGE");
+
+    // 2. Unknown fields => 400 TERMINATION_INVALID_REQUEST
+    let unknown_field_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": "1",
+        "profileId": "prof-1"
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-rej-test/terminate", unknown_field_body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_INVALID_REQUEST");
+
+    // 3. Unsupported version => 400 TERMINATION_UNSUPPORTED_VERSION
+    let unsupp_ver_body = serde_json::json!({
+        "version": 2,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": "1"
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-rej-test/terminate", unsupp_ver_body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_UNSUPPORTED_VERSION");
+
+    // 4. Numeric incarnation => 400 TERMINATION_INVALID_REQUEST
+    let numeric_inc_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": 1
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-rej-test/terminate", numeric_inc_body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_INVALID_REQUEST");
+
+    // 5. Noncanonical positive u64 (leading zero "01", negative "-1", float "1.0", zero "0") => 400 TERMINATION_INVALID_REQUEST
+    for bad_inc in ["0", "01", "-1", "+1", "1.0", "1e5", "18446744073709551616"] {
+        let bad_inc_body = serde_json::json!({
+            "version": 1,
+            "expectedServerEpoch": epoch,
+            "expectedIncarnation": bad_inc
+        });
+        let resp = post_json(state.clone(), "/api/terminal/term-rej-test/terminate", bad_inc_body).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "TERMINATION_INVALID_REQUEST");
+    }
+
+    // 6. Noncanonical UUID (uppercase, wrong format) => 400 TERMINATION_INVALID_REQUEST
+    let bad_uuid_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch.to_uppercase(),
+        "expectedIncarnation": "1"
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-rej-test/terminate", bad_uuid_body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_INVALID_REQUEST");
+
+    let _ = state.pty_manager.kill("term-rej-test");
+}
+
+#[tokio::test]
+async fn test_terminal_terminate_success_outcomes_and_domain_refusals() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let epoch = state.pty_manager.termination_epoch().to_string();
+
+    // 1. 404 NOT FOUND for absent session
+    let not_found_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": "100"
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-absent/terminate", not_found_body).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_NOT_FOUND");
+
+    // Create live session
+    let create_body = serde_json::json!({
+        "id": "term-live-route",
+        "command": "sh -c 'sleep 30'",
+        "cwd": tmp.path().to_str().unwrap(),
+    });
+    let c_resp = post_json(state.clone(), "/api/terminal", create_body).await;
+    assert_eq!(c_resp.status(), StatusCode::OK);
+    let c_raw = axum::body::to_bytes(c_resp.into_body(), usize::MAX).await.unwrap();
+    let c_json: serde_json::Value = serde_json::from_slice(&c_raw).unwrap();
+    let inc = c_json["incarnation"].as_u64().unwrap();
+    let inc_str = inc.to_string();
+
+    // 2. 409 EPOCH MISMATCH
+    let wrong_epoch = uuid::Uuid::new_v4().to_string();
+    let epoch_mismatch_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": wrong_epoch,
+        "expectedIncarnation": inc_str
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-live-route/terminate", epoch_mismatch_body).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_EPOCH_MISMATCH");
+
+    // 3. 409 INCARNATION MISMATCH
+    let inc_mismatch_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": (inc + 1).to_string()
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-live-route/terminate", inc_mismatch_body).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_INCARNATION_MISMATCH");
+
+    // 4. 202 TERMINATION REQUESTED
+    let term_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": inc_str
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-live-route/terminate", term_body.clone()).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["version"], 1);
+    assert_eq!(json["serverEpoch"], epoch);
+    assert_eq!(json["terminalId"], "term-live-route");
+    assert_eq!(json["incarnation"], inc_str);
+    assert_eq!(json["outcome"], "terminationRequested");
+
+    // 5. Duplicate request => 409 ALREADY REQUESTED
+    let dup_resp = post_json(state.clone(), "/api/terminal/term-live-route/terminate", term_body).await;
+    assert_eq!(dup_resp.status(), StatusCode::CONFLICT);
+    let dup_body = axum::body::to_bytes(dup_resp.into_body(), usize::MAX).await.unwrap();
+    let dup_json: serde_json::Value = serde_json::from_slice(&dup_body).unwrap();
+    assert_eq!(dup_json["code"], "TERMINATION_ALREADY_REQUESTED");
+
+    // 6. 200 RESTART CANCELLED for pending restart
+    state.pty_manager.test_respawn_hook().pause_next();
+    let r_meta = state
+        .pty_manager
+        .create(crate::pty::manager::PtyCreateOpts {
+            id: "term-restart-route".to_string(),
+            command: "sh -c 'exit 1'".to_string(),
+            cwd: tmp.path().to_str().unwrap().to_string(),
+            env: std::collections::HashMap::new(),
+            cols: 80,
+            rows: 24,
+            project: None,
+            worktree_path: None,
+            name: None,
+            restart_policy: crate::config::schema::RestartPolicy::Always,
+            restart_max_retries: 5,
+        })
+        .expect("create restart terminal");
+    let r_inc_str = r_meta.incarnation.to_string();
+    // Wait until enters restartPending
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let snap = state.pty_manager.termination_inventory_snapshot(false);
+        if let Some(r) = snap.rows.iter().find(|r| r.meta.id == "term-restart-route") {
+            if r.termination_state == crate::pty::manager::TerminalInventoryState::RestartPending {
+                break;
+            }
+        }
+    }
+
+    let cancel_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": r_inc_str
+    });
+    let cancel_resp = post_json(state.clone(), "/api/terminal/term-restart-route/terminate", cancel_body.clone()).await;
+    assert_eq!(cancel_resp.status(), StatusCode::OK);
+    let c_body = axum::body::to_bytes(cancel_resp.into_body(), usize::MAX).await.unwrap();
+    let c_res: serde_json::Value = serde_json::from_slice(&c_body).unwrap();
+    assert_eq!(c_res["version"], 1);
+    assert_eq!(c_res["serverEpoch"], epoch);
+    assert_eq!(c_res["terminalId"], "term-restart-route");
+    assert_eq!(c_res["incarnation"], r_inc_str);
+    assert_eq!(c_res["outcome"], "restartCancelled");
+
+    state.pty_manager.test_respawn_hook().release();
+}

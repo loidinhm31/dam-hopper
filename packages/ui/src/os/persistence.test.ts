@@ -315,4 +315,122 @@ describe("persistence", () => {
     expect(importOsEnvelope("invalid json").success).toBe(false);
     expect(importOsEnvelope(JSON.stringify({ version: 2 })).success).toBe(false);
   });
+
+  it("explicitly strips runtimeIdentity and protected Review tuple fields from persistence and imports", () => {
+    let session = createDefaultOsSession("d1", "Main");
+    session = openWindow(session, {
+      id: "w-term",
+      appId: "terminals",
+      title: "Terminal 1",
+      ctx: { profileId: "p1" },
+      mode: "tile",
+      appState: {
+        sessionId: "term-1",
+        cwd: "/home/user",
+        // Protected fields that must be stripped:
+        serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+        incarnation: 123,
+        terminationState: "live",
+      },
+      runtimeIdentity: {
+        kind: "terminal",
+        target: {
+          profileId: "p1",
+          generation: 1,
+          serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+          terminalId: "term-1",
+          incarnation: "123",
+        },
+      },
+    });
+
+    session = openWindow(session, {
+      id: "w-review",
+      appId: "session-changes",
+      title: "Session Changes",
+      ctx: { profileId: "p1" },
+      mode: "tile",
+      appState: {
+        target: {
+          profileId: "p1",
+          generation: 1,
+          terminalId: "term-1",
+          terminalIncarnation: "123",
+          ompSessionId: "omp-abc",
+          serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+          rootId: "git-root",
+          baselineId: "base-1",
+        },
+        terminalId: "term-1",
+        terminalIncarnation: "123",
+        serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+      },
+      runtimeIdentity: {
+        kind: "review",
+        target: {
+          profileId: "p1",
+          generation: 1,
+          terminalId: "term-1",
+          terminalIncarnation: "123",
+          ompSessionId: "omp-abc",
+          serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+          rootId: "git-root",
+          baselineId: "base-1",
+        },
+      },
+    });
+
+    const sanitized = sanitizeSessionForPersistence(session);
+    // runtimeIdentity stripped on all windows
+    expect(sanitized.windows["w-term"].runtimeIdentity).toBeUndefined();
+    expect(sanitized.windows["w-review"].runtimeIdentity).toBeUndefined();
+
+    // terminals appState contains only locators
+    expect(sanitized.windows["w-term"].appState).toEqual({
+      sessionId: "term-1",
+      cwd: "/home/user",
+    });
+
+    // session-changes appState stripped of all protected Review tuple fields
+    expect(sanitized.windows["w-review"].appState).toBeUndefined();
+
+    // Save and load roundtrip
+    saveOsSession(session);
+    const reloaded = loadOsSession();
+    expect(reloaded.windows["w-term"].runtimeIdentity).toBeUndefined();
+    expect(reloaded.windows["w-review"].runtimeIdentity).toBeUndefined();
+    expect(reloaded.windows["w-review"].appState).toBeUndefined();
+
+    // Export and import roundtrip
+    const exportedJson = exportOsSessionJson(session);
+    const imported = importOsSessionJson(exportedJson);
+    expect(imported.success).toBe(true);
+    expect(imported.session?.windows["w-term"].runtimeIdentity).toBeUndefined();
+    expect(imported.session?.windows["w-review"].runtimeIdentity).toBeUndefined();
+    expect(imported.session?.windows["w-review"].appState).toBeUndefined();
+
+    // Malicious import containing injected runtimeIdentity must be stripped
+    const maliciousJson = JSON.stringify({
+      ...sanitized,
+      windows: {
+        ...sanitized.windows,
+        "w-term": {
+          ...sanitized.windows["w-term"],
+          runtimeIdentity: {
+            kind: "terminal",
+            target: {
+              profileId: "p1",
+              generation: 1,
+              serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+              terminalId: "term-1",
+              incarnation: "9999",
+            },
+          },
+        },
+      },
+    });
+    const sanitizedImport = importOsSessionJson(maliciousJson);
+    expect(sanitizedImport.success).toBe(true);
+    expect(sanitizedImport.session?.windows["w-term"].runtimeIdentity).toBeUndefined();
+  });
 });

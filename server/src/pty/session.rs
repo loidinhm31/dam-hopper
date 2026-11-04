@@ -298,6 +298,44 @@ impl LiveSession {
         }
     }
 
+    /// Fallible synchronous guarded termination.
+    ///
+    /// Unlike legacy `terminate()`, this does NOT signal reader shutdown first.
+    /// On Unix it sends SIGKILL to the process group leader first;
+    /// if that fails or is unavailable, it falls back to killing the child process directly.
+    /// Returns Ok(()) if any kill signal succeeded, or typed sanitized failure if all attempts fail.
+    pub fn request_termination(&self) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            let pgid = self.master.lock().unwrap().process_group_leader();
+            if let Some(pgid) = pgid {
+                match killpg(Pid::from_raw(pgid), Signal::SIGKILL) {
+                    Ok(()) => return Ok(()),
+                    Err(error) => {
+                        warn!(
+                            session_id = %self.meta.id,
+                            pgid,
+                            %error,
+                            "Failed to kill PTY process group during guarded termination"
+                        );
+                    }
+                }
+            }
+        }
+
+        match self.child_killer.lock().unwrap().kill() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                warn!(
+                    session_id = %self.meta.id,
+                    %error,
+                    "Failed to kill PTY child process during guarded termination"
+                );
+                Err("OS process signal dispatch failed".to_string())
+            }
+        }
+    }
+
     /// Shared buffer reference — reader thread writes here.
     pub fn buffer_ref(&self) -> Arc<Mutex<ScrollbackBuffer>> {
         Arc::clone(&self.buffer)
@@ -342,6 +380,9 @@ pub struct DeadSession {
     pub will_restart: bool,
     /// Milliseconds until the next restart attempt; `None` if not restarting.
     pub restart_in_ms: Option<u64>,
+    /// True only if a dead session awaiting restart was explicitly cancelled
+    /// via guarded termination before supervisor reservation.
+    pub restart_cancelled: bool,
 }
 
 impl DeadSession {
@@ -365,6 +406,7 @@ impl DeadSession {
             shutdown,
             will_restart: false,
             restart_in_ms: None,
+            restart_cancelled: false,
         }
     }
 
@@ -387,6 +429,7 @@ impl DeadSession {
             shutdown,
             will_restart: false,
             restart_in_ms: None,
+            restart_cancelled: false,
         }
     }
 
@@ -403,6 +446,7 @@ impl DeadSession {
             shutdown: Arc::new(AtomicBool::new(true)),
             will_restart: false,
             restart_in_ms: None,
+            restart_cancelled: false,
         }
     }
 }

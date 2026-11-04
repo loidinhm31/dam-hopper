@@ -92,7 +92,6 @@ vi.mock("react-arborist", async () => {
           style: {},
           dragHandle: fileTreeHarness.dragHandle,
           tabIndex: 0,
-          "data-testid": "virtual-tree-row",
         }),
       );
     }),
@@ -127,6 +126,7 @@ vi.mock("@/api/queries.js", () => ({
   useGitDiff: () => ({ data: undefined }),
   useProject: () => ({ data: { path: "/workspace/demo" } }),
   useProjects: () => ({ data: [{ name: "demo", path: "/workspace/demo" }], isLoading: false }),
+  useWorkspaceStatus: vi.fn(() => ({ data: undefined, isLoading: false })),
   useExplorerLanguageScan: () => ({
     cache: null,
     scan: {
@@ -304,7 +304,7 @@ describe("migrated context-menu consumers", () => {
   it("keeps a virtual file row mounted while targeting its download action", async () => {
     await mount(<FileTree project="demo" />);
     const row = document.querySelector<HTMLElement>(
-      "[data-testid=virtual-tree-row]",
+      `[data-testid="file-tree-item-${fileTreeHarness.node.id}"]`,
     );
     expect(row).not.toBeNull();
 
@@ -326,7 +326,7 @@ describe("migrated context-menu consumers", () => {
   it("opens and dismisses a virtual row menu from the keyboard", async () => {
     await mount(<FileTree project="demo" />);
     const row = document.querySelector<HTMLElement>(
-      "[data-testid=virtual-tree-row]",
+      `[data-testid="file-tree-item-${fileTreeHarness.node.id}"]`,
     );
     expect(row).not.toBeNull();
 
@@ -358,7 +358,7 @@ describe("migrated context-menu consumers", () => {
     fileTreeHarness.nodes = [fileTreeHarness.node];
     await mount(<FileTree project="demo" />);
     const row = document.querySelector<HTMLElement>(
-      "[data-testid=virtual-tree-row]",
+      `[data-testid="file-tree-item-${fileTreeHarness.node.id}"]`,
     );
     expect(row).not.toBeNull();
 
@@ -413,7 +413,7 @@ describe("migrated context-menu consumers", () => {
   it("renames once through the focus-safe dialog", async () => {
     await mount(<FileTree project="demo" />);
     const row = document.querySelector<HTMLElement>(
-      "[data-testid=virtual-tree-row]",
+      `[data-testid="file-tree-item-${fileTreeHarness.node.id}"]`,
     );
     await openMenu(row!);
     await act(async () =>
@@ -449,7 +449,7 @@ describe("migrated context-menu consumers", () => {
     fileTreeHarness.ops.rename.mockRejectedValueOnce(new Error("offline"));
     await mount(<FileTree project="demo" />);
     const row = document.querySelector<HTMLElement>(
-      "[data-testid=virtual-tree-row]",
+      `[data-testid="file-tree-item-${fileTreeHarness.node.id}"]`,
     );
     await openMenu(row!);
     await act(async () =>
@@ -504,7 +504,7 @@ describe("migrated context-menu consumers", () => {
     ];
     await mount(<FileTree project="demo" />);
     const row = document.querySelector<HTMLElement>(
-      "[data-testid=virtual-tree-row]",
+      `[data-testid="file-tree-item-${fileTreeHarness.node.id}"]`,
     );
     await openMenu(row!);
     await act(async () =>
@@ -525,7 +525,7 @@ describe("migrated context-menu consumers", () => {
   it("does not delete when Enter is pressed on the cancel control", async () => {
     await mount(<FileTree project="demo" />);
     const row = document.querySelector<HTMLElement>(
-      "[data-testid=virtual-tree-row]",
+      `[data-testid="file-tree-item-${fileTreeHarness.node.id}"]`,
     );
     await openMenu(row!);
     await act(async () =>

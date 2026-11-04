@@ -24,6 +24,18 @@ describe("ResourceRegistry", () => {
       epoch: 42,
     };
     expect(formatClaimKey(key2)).toBe("terminal/p1/2/term-123/inc:5/ep:42");
+
+    const key3: ResourceClaimKey = {
+      resourceKind: "terminal",
+      profileId: "p1",
+      generation: 2,
+      resourceId: "term-123",
+      incarnation: "18446744073709551615",
+      authority: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+    };
+    expect(formatClaimKey(key3)).toBe(
+      "terminal/p1/2/term-123/inc:18446744073709551615/auth:c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+    );
   });
 
   it("claims a resource successfully and rejects conflicting duplicate claim", () => {

@@ -224,6 +224,8 @@ export function RecipesApp({ window }: RecipesAppProps): ReactElement {
         {activeTab === "save-subset" && (
           <RecipeEditor
             desktop={activeDesktop}
+            desktops={session.desktops}
+            sourceDesktopId={activeDesktop.id}
             windows={session.windows}
             initialMode="save-subset"
             onSaved={handleRecipeSaved}
@@ -235,6 +237,8 @@ export function RecipesApp({ window }: RecipesAppProps): ReactElement {
         {activeTab === "import" && (
           <RecipeEditor
             desktop={activeDesktop}
+            desktops={session.desktops}
+            sourceDesktopId={activeDesktop.id}
             windows={session.windows}
             initialMode="import"
             onSaved={handleRecipeSaved}
@@ -261,6 +265,8 @@ export function RecipesApp({ window }: RecipesAppProps): ReactElement {
         {exportingRecipe && (
           <RecipeEditor
             desktop={activeDesktop}
+            desktops={session.desktops}
+            sourceDesktopId={activeDesktop.id}
             windows={session.windows}
             initialRecipe={exportingRecipe}
             initialMode="export"

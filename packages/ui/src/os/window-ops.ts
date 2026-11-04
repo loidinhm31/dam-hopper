@@ -98,11 +98,73 @@ export function resizeFloatBounds(
   return clampFloatBounds({ x, y, width, height }, viewport);
 }
 
+export const CASCADE_STEP = 28;
+
+export function calculateNextFloatBounds(
+  session: OsSessionV1,
+  desktopId: string,
+  viewport: { width: number; height: number },
+): FloatBounds {
+  const safeViewport = {
+    width: Math.max(100, viewport?.width ?? 1280),
+    height: Math.max(80, viewport?.height ?? 800),
+  };
+
+  const fitWidth = Math.min(DEFAULT_FLOAT_BOUNDS.width, Math.max(50, safeViewport.width - 20));
+  const fitHeight = Math.min(DEFAULT_FLOAT_BOUNDS.height, Math.max(40, safeViewport.height - 20));
+  const baseX = Math.min(DEFAULT_FLOAT_BOUNDS.x, Math.max(0, safeViewport.width - fitWidth));
+  const baseY = Math.min(DEFAULT_FLOAT_BOUNDS.y, Math.max(0, safeViewport.height - fitHeight));
+
+  const desktop = session.desktops.find((d) => d.id === desktopId);
+  const eligibleWindows = desktop
+    ? desktop.floatingWindowIds
+        .map((id) => session.windows[id])
+        .filter((w): w is OsWindow => Boolean(w && !w.minimized && w.floatBounds))
+    : [];
+
+  const count = eligibleWindows.length;
+  if (count === 0) {
+    return { x: baseX, y: baseY, width: fitWidth, height: fitHeight };
+  }
+
+  // Reachable titlebar controls: at least 100px from right, 40px from bottom
+  const maxUsableX = Math.max(baseX, safeViewport.width - 100);
+  const maxUsableY = Math.max(baseY, safeViewport.height - 40);
+  const maxStepsX = Math.max(1, Math.floor((maxUsableX - baseX) / CASCADE_STEP));
+  const maxStepsY = Math.max(1, Math.floor((maxUsableY - baseY) / CASCADE_STEP));
+  const maxSteps = Math.min(maxStepsX, maxStepsY);
+
+  const stepIndex = count % maxSteps;
+  const x = Math.min(baseX + stepIndex * CASCADE_STEP, maxUsableX);
+  const y = Math.min(baseY + stepIndex * CASCADE_STEP, maxUsableY);
+
+  return { x, y, width: fitWidth, height: fitHeight };
+}
+
+export function projectFloatBounds(
+  saved: FloatBounds,
+  viewport: { width: number; height: number },
+): FloatBounds {
+  if (!viewport || viewport.width <= 0 || viewport.height <= 0) {
+    return { ...saved };
+  }
+  const minWidth = Math.min(MIN_FLOAT_WIDTH, viewport.width);
+  const minHeight = Math.min(MIN_FLOAT_HEIGHT, viewport.height);
+  const width = Math.min(Math.max(minWidth, saved.width), viewport.width);
+  const height = Math.min(Math.max(minHeight, saved.height), viewport.height);
+
+  const maxX = Math.max(0, viewport.width - 50);
+  const maxY = Math.max(0, viewport.height - 40);
+  const x = Math.max(0, Math.min(saved.x, maxX));
+  const y = Math.max(0, Math.min(saved.y, maxY));
+  return { x, y, width, height };
+}
+
 export function getVisibleFloatBounds(
   bounds: FloatBounds,
   viewport?: { width: number; height: number },
 ): FloatBounds {
-  return clampFloatBounds(bounds, viewport);
+  return projectFloatBounds(bounds, viewport ?? { width: 1280, height: 800 });
 }
 
 export function createDefaultOsSession(
@@ -184,22 +246,62 @@ function pickNextFocus(
   return null;
 }
 
+export function removeWindowFromAllDesktopPlacements(
+  session: OsSessionV1,
+  windowId: string,
+): OsSessionV1 {
+  let updatedSession = session;
+  for (const desk of updatedSession.desktops) {
+    const hasFloat = desk.floatingWindowIds.includes(windowId);
+    const hasTree =
+      desk.tree !== null &&
+      Boolean(findTilePaneContaining(desk.tree, (id) => id === windowId));
+    if (hasFloat || hasTree) {
+      updatedSession = updateDesktop(updatedSession, desk.id, (d) => {
+        const nextTree = removeWindowFromDesktopTree(d.tree, windowId);
+        const nextFloats = d.floatingWindowIds.filter((id) => id !== windowId);
+        const nextFocus =
+          d.focusedWindowId === windowId
+            ? pickNextFocus(d, windowId, session.windows)
+            : d.focusedWindowId;
+        return {
+          ...d,
+          floatingWindowIds: nextFloats,
+          tree: nextTree,
+          focusedWindowId: nextFocus,
+        };
+      });
+    }
+  }
+  return updatedSession;
+}
+
 export function openWindow(
   session: OsSessionV1,
   windowConfig: Omit<OsWindow, "desktopId" | "maximized" | "minimized">,
   targetDesktopId: string = session.activeDesktopId,
+  viewport?: { width: number; height: number },
 ): OsSessionV1 {
   const desktop = findDesktop(session, targetDesktopId) ?? session.desktops[0];
   if (!desktop) return session;
+
+  const floatBounds =
+    windowConfig.floatBounds ??
+    (windowConfig.mode === "float"
+      ? calculateNextFloatBounds(
+          session,
+          desktop.id,
+          viewport ?? { width: 1280, height: 800 },
+        )
+      : undefined);
 
   const window: OsWindow = {
     ...windowConfig,
     desktopId: desktop.id,
     maximized: false,
     minimized: false,
-    floatBounds: windowConfig.floatBounds ?? { ...DEFAULT_FLOAT_BOUNDS },
+    floatBounds,
   };
-
   const updatedWindows = { ...session.windows, [window.id]: window };
 
   return updateDesktop(
@@ -384,6 +486,7 @@ export function setWindowMode(
   session: OsSessionV1,
   windowId: string,
   mode: WindowMode,
+  viewport?: { width: number; height: number },
 ): OsSessionV1 {
   const window = session.windows[windowId];
   if (!window || window.mode === mode) return session;
@@ -391,7 +494,15 @@ export function setWindowMode(
   const updatedWindow: OsWindow = {
     ...window,
     mode,
-    floatBounds: window.floatBounds ?? { ...DEFAULT_FLOAT_BOUNDS },
+    floatBounds:
+      mode === "float"
+        ? window.floatBounds ??
+          calculateNextFloatBounds(
+            session,
+            window.desktopId,
+            viewport ?? { width: 1280, height: 800 },
+          )
+        : window.floatBounds,
   };
   const updatedWindows = { ...session.windows, [windowId]: updatedWindow };
 
@@ -400,6 +511,61 @@ export function setWindowMode(
     window.desktopId,
     (d) => {
       if (mode === "float") {
+        const tree = removeWindowFromDesktopTree(d.tree, windowId);
+        const floatingWindowIds = [
+          ...d.floatingWindowIds.filter((id) => id !== windowId),
+          windowId,
+        ];
+        return { ...d, tree, floatingWindowIds, focusedWindowId: windowId };
+      }
+      // Mode is "tile"
+      const floatingWindowIds = d.floatingWindowIds.filter(
+        (id) => id !== windowId,
+      );
+      let tree = d.tree;
+      if (!tree) {
+        tree = newTilePaneNode([windowId], windowId);
+      } else {
+        const targetPane = collectTilePanes(tree)[0];
+        tree = targetPane
+          ? insertItemIntoTilePane(tree, targetPane.id, windowId)
+          : newTilePaneNode([windowId], windowId);
+      }
+      return { ...d, tree, floatingWindowIds, focusedWindowId: windowId };
+    },
+  );
+}
+
+export function toggleWindowMode(
+  session: OsSessionV1,
+  windowId: string,
+  viewport?: { width: number; height: number },
+): OsSessionV1 {
+  const window = session.windows[windowId];
+  if (!window) return session;
+
+  const nextMode: WindowMode = window.mode === "tile" ? "float" : "tile";
+  const updatedWindow: OsWindow = {
+    ...window,
+    maximized: false,
+    mode: nextMode,
+    floatBounds:
+      nextMode === "float"
+        ? window.floatBounds ??
+          calculateNextFloatBounds(
+            session,
+            window.desktopId,
+            viewport ?? { width: 1280, height: 800 },
+          )
+        : window.floatBounds,
+  };
+  const updatedWindows = { ...session.windows, [windowId]: updatedWindow };
+
+  return updateDesktop(
+    { ...session, windows: updatedWindows },
+    window.desktopId,
+    (d) => {
+      if (nextMode === "float") {
         const tree = removeWindowFromDesktopTree(d.tree, windowId);
         const floatingWindowIds = [
           ...d.floatingWindowIds.filter((id) => id !== windowId),

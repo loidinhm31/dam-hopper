@@ -2312,3 +2312,168 @@ describe("Session changes REST channels", () => {
     transport.destroy();
   });
 });
+describe("Terminal observation and guarded termination channels", () => {
+  it("decodes headers and rows atomically for terminal:listObservation", async () => {
+    const transport = new WsTransport("http://localhost:4800");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: "term-1",
+            command: "bash",
+            cwd: "/home",
+            type: "terminal",
+            startedAt: 100,
+            alive: true,
+            incarnation: 42,
+            incarnationExact: "42",
+            terminationState: "live",
+          },
+        ]),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "X-DamHopper-Termination-Version": "1",
+            "X-DamHopper-PTY-Epoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+          },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const observation = await transport.invoke<{
+      sessions: readonly { id: string; incarnationExact?: string }[];
+      termination: { version: number | null; serverEpoch: string | null };
+    }>("terminal:listObservation");
+
+    expect(observation.termination).toEqual({
+      version: 1,
+      serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+    });
+    expect(observation.sessions).toHaveLength(1);
+    expect(observation.sessions[0].id).toBe("term-1");
+    expect(observation.sessions[0].incarnationExact).toBe("42");
+    transport.destroy();
+  });
+  it("decodes serverEpoch header from terminal:create response", async () => {
+    const transport = new WsTransport("http://localhost:4800");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "term-1",
+          incarnation: 1,
+          command: "bash",
+          cwd: "/home",
+          type: "terminal",
+          alive: true,
+          startedAt: 100,
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "X-DamHopper-Termination-Version": "1",
+            "X-DamHopper-PTY-Epoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+          },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await transport.invoke<{
+      id: string;
+      incarnation: number;
+      serverEpoch?: string;
+    }>("terminal:create", { id: "term-1", command: "", cols: 80, rows: 24 });
+
+    expect(res.id).toBe("term-1");
+    expect(res.incarnation).toBe(1);
+    expect(res.serverEpoch).toBe("e7b0c36b-67df-4f0e-b7d5-866468453483");
+    transport.destroy();
+  });
+
+  it("dispatches POST to /api/terminal/:id/terminate with exact wire body", async () => {
+    const transport = new WsTransport("http://localhost:4800");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          version: 1,
+          serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+          terminalId: "term-1",
+          incarnation: "42",
+          outcome: "terminationRequested",
+        }),
+        {
+          status: 202,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const target = {
+      profileId: "prof-1",
+      generation: 1,
+      serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+      terminalId: "term-1",
+      incarnation: "42",
+    };
+
+    const result = await transport.invoke<{ outcome: string }>(
+      "terminal:terminate",
+      { target, origin: "live" },
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:4800/api/terminal/term-1/terminate",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          version: 1,
+          expectedServerEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+          expectedIncarnation: "42",
+        }),
+      }),
+    );
+    expect(result.outcome).toBe("terminationRequested");
+    transport.destroy();
+  });
+
+  it("throws ApiRequestError when termination response mismatches status/outcome", async () => {
+    const transport = new WsTransport("http://localhost:4800");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          version: 1,
+          serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+          terminalId: "term-1",
+          incarnation: "42",
+          outcome: "restartCancelled", // Mismatch for live origin
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const target = {
+      profileId: "prof-1",
+      generation: 1,
+      serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+      terminalId: "term-1",
+      incarnation: "42",
+    };
+
+    await expect(
+      transport.invoke("terminal:terminate", { target, origin: "live" }),
+    ).rejects.toThrow(ApiRequestError);
+    transport.destroy();
+  });
+});

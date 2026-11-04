@@ -3,19 +3,22 @@ import {
   useMemo,
   useEffect,
   useRef,
+  useCallback,
   type KeyboardEvent,
   type ChangeEvent,
 } from "react";
+import { useShellInputContext } from "./shell-input-context.js";
 import { useWindowStore } from "./window-store.js";
-import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { useSettingsStore } from "@/stores/settings.js";
+import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { APP_MANIFESTS, findExistingWindowForApp } from "./app-registry.js";
 import { createProjectDesktopTemplate } from "./desktop-templates.js";
-import type { OsAppId } from "./types.js";
+
 import { generateUUID } from "@/lib/utils.js";
 import { loadAllRecipes } from "./recipes/persistence.js";
 import { dispatchIntent, createIntent } from "./intents.js";
 import { getConnectionSnapshot, getApi } from "@/api/connections.js";
+import { isCanonicalUuid } from "@/api/terminal-session-contract.js";
 export type PaletteMode =
   | "commands"
   | "agents"
@@ -61,25 +64,42 @@ export function CommandPalette({
   const [query, setQuery] = useState("");
   const [activeMode, setActiveMode] = useState<PaletteMode>("commands");
   const [selectedIndex, setSelectedIndex] = useState(0);
-
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const invokingElementRef = useRef<HTMLElement | null>(null);
+
+  const { registerModalMount } = useShellInputContext();
+
+  // Register modal mount lifecycle token
+  useEffect(() => {
+    if (isOpen) {
+      return registerModalMount("command-palette");
+    }
+  }, [isOpen, registerModalMount]);
+
+  const handleClose = useCallback(() => {
+    onClose();
+    if (invokingElementRef.current && invokingElementRef.current.isConnected) {
+      invokingElementRef.current.focus();
+    }
+  }, [onClose]);
 
   // Close immediately if Cognito Privacy Mode activates
   useEffect(() => {
     if (isCognitoActive && isOpen) {
-      onClose();
+      handleClose();
     }
-  }, [isCognitoActive, isOpen, onClose]);
+  }, [isCognitoActive, isOpen, handleClose]);
 
-  // Focus input on open
+  // Synchronous auto-focus on open and capture invoking element
   useEffect(() => {
     if (isOpen) {
+      invokingElementRef.current = document.activeElement as HTMLElement | null;
       setQuery("");
       setSelectedIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 50);
+      inputRef.current?.focus();
     }
   }, [isOpen]);
-
   const activeDesktop =
     session.desktops.find((d) => d.id === session.activeDesktopId) ??
     session.desktops[0];
@@ -133,8 +153,11 @@ export function CommandPalette({
             const terminalId = `term-${generateUUID()}`;
             let createError: string | undefined;
             let incarnation: number | undefined;
+            let serverEpoch: string | undefined;
             const snap = getConnectionSnapshot(desktopCtx.profileId);
             if (snap && snap.status === "connected") {
+              const originatingGeneration = snap.owner.generation;
+              const originatingProfileId = snap.owner.profileId;
               try {
                 const client = getApi(snap.owner);
                 const sessionRes = await client.terminal.create({
@@ -144,7 +167,20 @@ export function CommandPalette({
                   cols: 80,
                   rows: 24,
                 });
-                incarnation = sessionRes.incarnation;
+                const snapAfter = getConnectionSnapshot(desktopCtx.profileId);
+                if (
+                  snapAfter &&
+                  snapAfter.status === "connected" &&
+                  snapAfter.owner.profileId === originatingProfileId &&
+                  snapAfter.owner.generation === originatingGeneration
+                ) {
+                  incarnation = sessionRes.incarnation;
+                  if (sessionRes.serverEpoch && isCanonicalUuid(sessionRes.serverEpoch)) {
+                    serverEpoch = sessionRes.serverEpoch;
+                  }
+                } else {
+                  createError = "Connection owner changed during creation";
+                }
               } catch (err) {
                 createError = err instanceof Error ? err.message : String(err);
               }
@@ -152,7 +188,15 @@ export function CommandPalette({
             appState = {
               sessionId: terminalId,
               terminalId,
-              ...(incarnation !== undefined ? { incarnation } : {}),
+              ...(incarnation !== undefined && serverEpoch !== undefined
+                ? {
+                    incarnation,
+                    incarnationExact: String(incarnation),
+                    generation: snap?.owner.generation,
+                    profileId: snap?.owner.profileId,
+                    serverEpoch,
+                  }
+                : {}),
               ...(createError ? { createError } : {}),
             };
           }
@@ -406,7 +450,25 @@ export function CommandPalette({
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
-      onClose();
+      e.stopPropagation();
+      handleClose();
+    } else if (e.key === "Tab") {
+      // Focus trap within palette
+      if (!dialogRef.current) return;
+      const focusables = dialogRef.current.querySelectorAll<HTMLElement>(
+        'input, button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first?.focus();
+      }
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
       setSelectedIndex((prev) =>
@@ -423,6 +485,7 @@ export function CommandPalette({
       e.preventDefault();
       const selected = filteredItems[selectedIndex];
       if (selected && !selected.disabled) {
+        handleClose();
         selected.onSelect();
       }
     }
@@ -436,10 +499,19 @@ export function CommandPalette({
       aria-modal="true"
       aria-label="Command Palette"
       onKeyDown={handleKeyDown}
+      onPointerDown={(e) => {
+        if (e.target === e.currentTarget) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleClose();
+        }
+      }}
       className={`fixed inset-0 z-50 flex items-start justify-center pt-20 bg-black/60 backdrop-blur-sm select-none ${className}`}
     >
       <div
+        ref={dialogRef}
         className="w-full max-w-xl rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl overflow-hidden flex flex-col"
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Search Input Header */}
@@ -505,7 +577,10 @@ export function CommandPalette({
                   role="option"
                   aria-selected={isSelected}
                   onClick={() => {
-                    if (!item.disabled) item.onSelect();
+                    if (!item.disabled) {
+                      handleClose();
+                      item.onSelect();
+                    }
                   }}
                   onMouseEnter={() => setSelectedIndex(idx)}
                   className={`flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-colors text-xs ${

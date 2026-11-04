@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef, useEffect } from "react";
 import {
   useOsNotificationStore,
   redactNotification,
@@ -45,6 +45,37 @@ export function NotificationCenter({
   const focusWindow = useWindowStore((state) => state.focusWindow);
   const switchDesktop = useWindowStore((state) => state.switchDesktop);
   const restoreWindow = useWindowStore((state) => state.restoreWindow);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(target) &&
+        !target?.closest?.('[data-os-nonmodal-trigger="notification-center"]')
+      ) {
+        onClose();
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, onClose]);
 
   const displayEntries = useMemo(() => {
     const osList = entries.map((entry) =>
@@ -114,9 +145,10 @@ export function NotificationCenter({
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
+      ref={containerRef}
+      role="region"
       aria-label="Notification Center"
+      data-os-nonmodal-surface="notification-center"
       className={`fixed right-3 top-[calc(var(--os-topbar-height)+6px)] w-80 max-h-[480px] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl z-50 flex flex-col text-xs select-none ${className}`}
     >
       {/* Header */}

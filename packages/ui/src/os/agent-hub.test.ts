@@ -12,8 +12,10 @@ import {
   filterAgentHubItems,
   getUrgencyRank,
   validateAgentHubJump,
+  findMatchingTerminalWindow,
   type AgentHubItem,
 } from "./agent-hub.js";
+import { MAX_U64_STRING } from "@/api/terminal-session-contract.js";
 import type { OsWindow } from "./types.js";
 
 type ProfileView = AgentStatusProfilesView extends ReadonlyMap<string, infer Profile>
@@ -384,6 +386,167 @@ describe("agent-hub", () => {
       const result = validateAgentHubJump(mockItem, connections, {}, aliveMap);
       expect(result.valid).toBe(false);
       expect(result.reason).toContain("no longer alive on host");
+    });
+  });
+
+  describe("Architecture Contract C2 & C3: Inventory-first, Proof, and Background", () => {
+    it("includes unobserved sessions from aggregate inventory even without agent evidence", () => {
+      const owner: ConnectionRef = { profileId: "server-a", generation: 1 };
+      const conn: ConnectionSnapshot = {
+        owner,
+        status: "connected",
+        intent: true,
+        serverUrl: "http://localhost:4801",
+        error: null,
+      };
+
+      const items = buildAgentHubItems({
+        sessions: [
+          {
+            id: "term-raw-1",
+            name: "Raw Terminal",
+            command: "htop",
+            cwd: "/home/user",
+            type: "shell",
+            startedAt: 1000,
+            alive: true,
+            incarnation: 1,
+            incarnationExact: "1",
+            profileId: "server-a",
+            generation: 1,
+            terminationState: "live",
+            terminationTarget: {
+              profileId: "server-a",
+              generation: 1,
+              serverEpoch: "00000000-0000-0000-0000-000000000001",
+              terminalId: "term-raw-1",
+              incarnation: "1",
+            },
+          },
+        ],
+        connections: new Map([["server-a", conn]]),
+        profiles: new Map(), // No agent status!
+        windows: {},
+      });
+
+      expect(items).toHaveLength(1);
+      expect(items[0].isAgent).toBe(false);
+      expect(items[0].isBackground).toBe(true);
+      expect(items[0].urgency).toBe("unobserved");
+      expect(items[0].terminationTarget).not.toBeNull();
+      expect(items[0].terminationTarget?.terminalId).toBe("term-raw-1");
+    });
+
+    it("rejects unsafe numeric agent proof (> MAX_SAFE_INTEGER) while preserving valid exact End target", () => {
+      const owner: ConnectionRef = { profileId: "server-a", generation: 1 };
+      const conn: ConnectionSnapshot = {
+        owner,
+        status: "connected",
+        intent: true,
+        serverUrl: "http://localhost:4801",
+        error: null,
+      };
+
+      // Agent status with unsafe number (or safe number that cannot equal max-u64)
+      const agentStatus: TerminalAgentStatusRow = makeStatus({
+        id: "term-max-u64",
+        incarnation: 9007199254740992, // Unsafe number!
+      });
+
+      const profileView: ProfileView = {
+        owner,
+        epoch: 1,
+        revision: 1,
+        availability: "ready",
+        rows: new Map([["term-max-u64", agentStatus]]),
+        cursors: new Map(),
+      };
+
+      const items = buildAgentHubItems({
+        sessions: [
+          {
+            id: "term-max-u64",
+            name: "Max U64 Session",
+            command: "worker",
+            cwd: "/data",
+            type: "shell",
+            startedAt: 1000,
+            alive: true,
+            incarnationExact: MAX_U64_STRING,
+            profileId: "server-a",
+            generation: 1,
+            terminationState: "live",
+            terminationTarget: {
+              profileId: "server-a",
+              generation: 1,
+              serverEpoch: "00000000-0000-0000-0000-000000000001",
+              terminalId: "term-max-u64",
+              incarnation: MAX_U64_STRING,
+            },
+          },
+        ],
+        connections: new Map([["server-a", conn]]),
+        profiles: new Map([["server-a", profileView]]),
+        windows: {},
+      });
+
+      expect(items).toHaveLength(1);
+      // Agent join proof must fail due to unsafe number
+      expect(items[0].isAgent).toBe(false);
+      expect(items[0].urgency).toBe("unobserved");
+      // Target remains eligible with max-u64 exact string!
+      expect(items[0].terminationTarget?.incarnation).toBe(MAX_U64_STRING);
+    });
+
+    it("matches terminal windows strictly by exact runtime target tuple across desktops", () => {
+      const target = {
+        profileId: "server-a",
+        generation: 1,
+        serverEpoch: "00000000-0000-0000-0000-000000000001",
+        terminalId: "term-1",
+        incarnation: "5",
+      };
+
+      const windows: Record<string, OsWindow> = {
+        "win-matched": {
+          id: "win-matched",
+          appId: "terminals",
+          title: "Terminal 1",
+          ctx: { profileId: "server-a" },
+          mode: "tile",
+          desktopId: "desktop-2", // Other desktop!
+          maximized: false,
+          minimized: true,
+          runtimeIdentity: {
+            kind: "terminal",
+            target,
+          },
+        },
+        "win-unverified": {
+          id: "win-unverified",
+          appId: "terminals",
+          title: "Stale Terminal",
+          ctx: { profileId: "server-a" },
+          mode: "tile",
+          desktopId: "desktop-1",
+          maximized: false,
+          minimized: false,
+          appState: { sessionId: "term-1" }, // Raw ID only, no verified runtime target!
+        },
+      };
+
+      const match = findMatchingTerminalWindow(target, windows);
+      expect(match).not.toBeNull();
+      expect(match?.windowId).toBe("win-matched");
+      expect(match?.desktopId).toBe("desktop-2");
+      expect(match?.minimized).toBe(true);
+
+      // Stale target without runtimeIdentity does NOT match
+      const staleTarget = {
+        ...target,
+        incarnation: "6", // different incarnation
+      };
+      expect(findMatchingTerminalWindow(staleTarget, windows)).toBeNull();
     });
   });
 });

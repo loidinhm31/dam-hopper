@@ -225,4 +225,89 @@ describe("TerminalKeepAliveHost", () => {
       streamReady: false,
     });
   });
+
+  it("propagates exact TerminalTarget and attachPolicy to TerminalPanel", () => {
+    renderedPanelProps.length = 0;
+    const target = {
+      profileId: "prof-1",
+      generation: 2,
+      serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+      terminalId: "term-exact-1",
+      incarnation: "18446744073709551615",
+    };
+
+    renderToStaticMarkup(
+      <TerminalKeepAliveHost
+        mountedSessions={[
+          {
+            sessionId: "term-exact-1",
+            project: "web",
+            command: "bash",
+            profileId: "prof-1",
+            terminalTarget: target,
+            attachPolicy: "existing-only",
+          },
+        ]}
+      />,
+    );
+
+    expect(renderedPanelProps).toContainEqual(
+      expect.objectContaining({
+        sessionId: "term-exact-1",
+        terminalTarget: target,
+        attachPolicy: "existing-only",
+      }),
+    );
+  });
+
+  it("maintains stable panel instance across target adoption (ZERO remount/dispose)", () => {
+    renderedPanelProps.length = 0;
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    const initialSession = {
+      sessionId: "term-1",
+      project: "web",
+      command: "bash",
+      profileId: "prof-1",
+      terminalRef: { profileId: "prof-1", id: "term-1" },
+    };
+
+    act(() => {
+      root?.render(
+        <TerminalKeepAliveHost mountedSessions={[initialSession]} />,
+      );
+    });
+
+    const initialRegistration = activityRegistrations.get("term-1");
+    expect(initialRegistration).toBeDefined();
+
+    const target = {
+      profileId: "prof-1",
+      generation: 2,
+      serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+      terminalId: "term-1",
+      incarnation: "42",
+    };
+
+    // Re-render with target adopted (such as after Move beside)
+    act(() => {
+      root?.render(
+        <TerminalKeepAliveHost
+          mountedSessions={[
+            {
+              ...initialSession,
+              terminalTarget: target,
+              attachPolicy: "existing-only",
+            },
+          ]}
+        />,
+      );
+    });
+
+    // Activity registration must NOT have been disposed / recreated!
+    expect(activityRegistrations.get("term-1")).toBe(initialRegistration);
+    container.remove();
+  });
 });

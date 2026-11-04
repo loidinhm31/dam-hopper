@@ -310,35 +310,39 @@ export function parseOsDeepLink(
       });
       break;
 
-    case "session-changes":
-      if (!terminal || !incarnation || !ompSession) {
+    case "session-changes": {
+      const serverEpoch = params.get("serverEpoch") || params.get("epoch");
+      const baseline = params.get("baselineId") || params.get("baseline");
+      const genRaw = params.get("generation");
+
+      if (!terminal || !incarnation || !ompSession || !serverEpoch || !root || !baseline || genRaw === null) {
         return {
           status: "invalid",
           reason:
-            "Session Changes deep link requires terminal, incarnation, and ompSession parameters",
+            "Session Changes deep link requires full ReviewTarget tuple: profileId, generation, terminal, incarnation, ompSession, serverEpoch, root, and baselineId. Incomplete links are not supported; please open from Agent Hub.",
         };
       }
-      const genRaw = params.get("generation");
-      let generation: number | undefined;
-      if (genRaw !== null) {
-        const parsed = Number.parseInt(genRaw, 10);
-        if (!Number.isInteger(parsed) || parsed < 0 || String(parsed) !== genRaw.trim()) {
-          return {
-            status: "invalid",
-            reason: `Malformed generation parameter "${genRaw}"`,
-          };
-        }
-        generation = parsed;
+
+      const parsedGen = Number.parseInt(genRaw, 10);
+      if (!Number.isInteger(parsedGen) || parsedGen < 0 || String(parsedGen) !== genRaw.trim()) {
+        return {
+          status: "invalid",
+          reason: `Malformed generation parameter "${genRaw}"`,
+        };
       }
+
       intent = createIntent("session-changes:open", {
         profileId,
-        generation,
+        generation: parsedGen,
         terminalId: terminal,
         terminalIncarnation: incarnation,
         ompSessionId: ompSession,
-        rootId: root ?? ".",
+        serverEpoch,
+        rootId: root,
+        baselineId: baseline,
       });
       break;
+    }
 
     case "workflow-plans":
       if (params.get("itemId")) {

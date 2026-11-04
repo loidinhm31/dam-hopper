@@ -68,6 +68,9 @@ async function bootstrap() {
       },
     },
   });
+  if (typeof window !== "undefined") {
+    (window as unknown as { __DAM_HOPPER_QUERY_CLIENT__?: QueryClient }).__DAM_HOPPER_QUERY_CLIENT__ = queryClient;
+  }
 
   createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>

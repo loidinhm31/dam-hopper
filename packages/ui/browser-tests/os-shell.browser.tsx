@@ -152,4 +152,78 @@ describe("OS Shell Chrome Browser Tests", () => {
     expect(nHandle).not.toBeNull();
     expect(sHandle).not.toBeNull();
   });
+
+  it("coordinates nonmodal layers: opening one closes prior, outside click dismisses", async () => {
+    await renderOsShell();
+
+    const targetTrigger = container?.querySelector<HTMLButtonElement>(
+      '[data-os-nonmodal-trigger="target-selector"]',
+    );
+    const windowListTrigger = container?.querySelector<HTMLButtonElement>(
+      '[data-os-nonmodal-trigger="window-list"]',
+    );
+
+    expect(targetTrigger).not.toBeNull();
+    expect(windowListTrigger).not.toBeNull();
+
+    // Open target selector
+    act(() => {
+      targetTrigger?.click();
+    });
+    expect(
+      container?.querySelector('[data-os-nonmodal-surface="target-selector"]'),
+    ).not.toBeNull();
+
+    // Open window list -> target selector closes
+    act(() => {
+      windowListTrigger?.click();
+    });
+    expect(
+      container?.querySelector('[data-os-nonmodal-surface="target-selector"]'),
+    ).toBeNull();
+    expect(
+      container?.querySelector('[data-os-nonmodal-surface="window-list"]'),
+    ).not.toBeNull();
+
+    // Escape dismisses window list
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(
+      container?.querySelector('[data-os-nonmodal-surface="window-list"]'),
+    ).toBeNull();
+  });
+
+  it("synchronously focuses command palette and consumes backdrop clicks", async () => {
+    await renderOsShell();
+
+    const paletteTrigger = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Open command palette"]',
+    );
+    expect(paletteTrigger).not.toBeNull();
+
+    act(() => {
+      paletteTrigger?.focus();
+      paletteTrigger?.click();
+    });
+
+    const palette = container?.querySelector('[role="dialog"][aria-label="Command Palette"]');
+    expect(palette).not.toBeNull();
+
+    const input = palette?.querySelector<HTMLInputElement>("input");
+    expect(input).not.toBeNull();
+    expect(document.activeElement).toBe(input);
+
+    // Dismiss via backdrop pointerdown
+    act(() => {
+      palette?.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    // Palette closes
+    expect(
+      container?.querySelector('[role="dialog"][aria-label="Command Palette"]'),
+    ).toBeNull();
+  });
 });

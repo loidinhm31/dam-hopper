@@ -29,12 +29,17 @@ import {
 } from "@/api/session-changes-queries";
 import { SessionChangedFilesList } from "./SessionChangedFilesList";
 import { ReadonlyMonacoDiffViewer } from "./ReadonlyMonacoDiffViewer";
+import type { ReviewTarget } from "@/api/terminal-session-contract";
+
 export interface SessionChangesPanelProps {
   owner: ConnectionRef;
   terminalId: string;
   terminalIncarnation: string;
   ompSessionId: string;
   rootId?: string;
+  serverEpoch?: string;
+  baselineId?: string;
+  target?: ReviewTarget;
   isMaximized?: boolean;
   onToggleMaximize?: () => void;
   onClose: () => void;
@@ -364,7 +369,10 @@ export function SessionChangesPanel({
   terminalId,
   terminalIncarnation,
   ompSessionId,
-  rootId = ".",
+  rootId: propRootId,
+  serverEpoch: propServerEpoch,
+  baselineId: propBaselineId,
+  target,
   isMaximized,
   onToggleMaximize,
   onClose,
@@ -372,27 +380,38 @@ export function SessionChangesPanel({
 }: SessionChangesPanelProps) {
   const [renderSideBySide, setRenderSideBySide] = useState(true);
 
+  const rootId = target?.rootId ?? propRootId ?? ".";
+  const expectedServerEpoch = target?.serverEpoch ?? propServerEpoch;
+
   const refreshMutation = useSessionChangesRefreshMutation(owner);
 
-  // Status query
+  // Status query with exact metadata validation
   const statusQuery = useSessionChangesStatus(
     owner,
     terminalId,
     terminalIncarnation,
     ompSessionId,
     rootId,
+    { expectedServerEpoch },
   );
 
   const status = statusQuery.data;
   const isReadyOrIncomplete =
     status?.state === "ready" || status?.state === "incomplete";
-  const baselineId = status?.baselineId;
-  const serverEpoch = status?.serverEpoch;
+
+  // Metadata disagreement validation
+  const isIncarnationMismatch =
+    Boolean(status?.terminalIncarnation && status.terminalIncarnation !== terminalIncarnation);
+  const isEpochMismatch =
+    Boolean(expectedServerEpoch && status?.serverEpoch && status.serverEpoch !== expectedServerEpoch);
+  const isMetadataDisagreement = isIncarnationMismatch || isEpochMismatch;
+
+  const baselineId = target?.baselineId ?? propBaselineId ?? status?.baselineId;
+  const serverEpoch = target?.serverEpoch ?? propServerEpoch ?? status?.serverEpoch;
 
   const isRefreshMatchingCurrentIdentity =
     refreshMutation.variables?.serverEpoch === serverEpoch &&
     refreshMutation.variables?.baselineId === baselineId;
-
   const currentRefreshData = isRefreshMatchingCurrentIdentity
     ? refreshMutation.data
     : null;
@@ -530,6 +549,21 @@ export function SessionChangesPanel({
       {statusQuery.isLoading ? (
         <div className="flex-1 flex items-center justify-center">
           <Loader2 className="w-8 h-8 animate-spin text-[var(--color-text-muted)]" />
+        </div>
+      ) : isMetadataDisagreement ? (
+        <div
+          className="flex-1 flex flex-col items-center justify-center p-8 text-center text-rose-400 gap-2"
+          data-testid="session-status-error-view"
+        >
+          <AlertTriangle className="w-12 h-12 text-rose-400 mb-2 opacity-80" />
+          <h4 className="text-base font-semibold mb-1">
+            Status Metadata Disagreement
+          </h4>
+          <p className="text-xs text-[var(--color-text-muted)] max-w-sm mb-4">
+            {isIncarnationMismatch
+              ? `Returned incarnation (${status?.terminalIncarnation}) does not match expected terminal incarnation (${terminalIncarnation}).`
+              : `Returned server epoch does not match expected epoch (${expectedServerEpoch}).`}
+          </p>
         </div>
       ) : statusQuery.isError ? (
         <div

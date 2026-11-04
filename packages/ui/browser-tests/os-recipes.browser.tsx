@@ -360,4 +360,312 @@ describe("os-recipes.browser", () => {
       expect(statusBadge?.textContent?.toLowerCase()).toContain("confirmed");
     });
   });
+
+  it("invalidates value-bound confirmation on command edit and requires explicit re-review", async () => {
+    function setInputValue(input: HTMLInputElement, value: string) {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      if (nativeSetter) {
+        nativeSetter.call(input, value);
+      } else {
+        input.value = value;
+      }
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    const winTerm: OsWindow = {
+      id: "win-term-val",
+      appId: "terminals",
+      title: "Worker Terminal",
+      ctx: { profileId: "profile-a", projectId: "dam-hopper" },
+      mode: "tile",
+      desktopId: "d-1",
+      maximized: false,
+      minimized: false,
+    };
+
+    const desktop: OsDesktop = {
+      id: "d-1",
+      name: "Desktop 1",
+      defaultCtx: { profileId: "profile-a", projectId: "dam-hopper" },
+      tree: {
+        type: "pane",
+        id: "p-1",
+        items: ["win-term-val"],
+        active: "win-term-val",
+      },
+      floatingWindowIds: [],
+    };
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <EncryptProvider>
+            <MemoryRouter>
+              <RecipeEditor
+                desktop={desktop}
+                desktops={[desktop]}
+                sourceDesktopId="d-1"
+                windows={{ "win-term-val": winTerm }}
+                onSaved={vi.fn()}
+                onCancel={vi.fn()}
+              />
+            </MemoryRouter>
+          </EncryptProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    const cmdInput = container.querySelector(
+      'input[data-testid^="recipe-step-command-"]',
+    ) as HTMLInputElement;
+    const confirmCheckbox = container.querySelector(
+      'input[type="checkbox"][data-testid^="recipe-step-confirm-"]',
+    ) as HTMLInputElement;
+    const saveBtn = container.querySelector(
+      '[data-testid="recipe-save-submit-btn"]',
+    ) as HTMLButtonElement;
+
+    expect(cmdInput).not.toBeNull();
+    expect(confirmCheckbox).not.toBeNull();
+    expect(saveBtn.disabled).toBe(true);
+
+    // 1. Confirm the initial command ("bash")
+    await act(async () => {
+      confirmCheckbox.click();
+    });
+    expect(confirmCheckbox.checked).toBe(true);
+    expect(saveBtn.disabled).toBe(false);
+
+    // 2. Edit command text -> confirmation must be invalidated immediately!
+    await act(async () => {
+      setInputValue(cmdInput, "npm run build");
+    });
+    expect(confirmCheckbox.checked).toBe(false);
+    expect(saveBtn.disabled).toBe(true);
+
+    // 3. Typing back the previously confirmed text ("bash") does NOT re-confirm without explicit user action
+    await act(async () => {
+      setInputValue(cmdInput, "bash");
+    });
+    expect(confirmCheckbox.checked).toBe(false);
+    expect(saveBtn.disabled).toBe(true);
+
+    // 4. Explicit review: re-clicking checkbox re-confirms with current value
+    await act(async () => {
+      confirmCheckbox.click();
+    });
+    expect(confirmCheckbox.checked).toBe(true);
+    expect(saveBtn.disabled).toBe(false);
+  });
+
+  it("displays same-project worktree badges and includes worktree in recipe", async () => {
+    const winWorktree: OsWindow = {
+      id: "win-wt-1",
+      appId: "editor",
+      title: "Worktree Editor",
+      ctx: {
+        profileId: "profile-a",
+        projectId: "dam-hopper",
+        worktreeId: "feature-recipes",
+      },
+      mode: "tile",
+      desktopId: "d-1",
+      maximized: false,
+      minimized: false,
+    };
+
+    const desktop: OsDesktop = {
+      id: "d-1",
+      name: "Desktop 1",
+      defaultCtx: { profileId: "profile-a", projectId: "dam-hopper" },
+      tree: {
+        type: "pane",
+        id: "p-1",
+        items: ["win-wt-1"],
+        active: "win-wt-1",
+      },
+      floatingWindowIds: [],
+    };
+
+    const onSaved = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <EncryptProvider>
+            <MemoryRouter>
+              <RecipeEditor
+                desktop={desktop}
+                desktops={[desktop]}
+                sourceDesktopId="d-1"
+                windows={{ "win-wt-1": winWorktree }}
+                onSaved={onSaved}
+                onCancel={vi.fn()}
+              />
+            </MemoryRouter>
+          </EncryptProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    const badge = container.querySelector(
+      '[data-testid="recipe-worktree-badge-win-wt-1"]',
+    );
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toContain("Worktree: feature-recipes");
+
+    // Non-terminal app step requires no confirmation checkbox; save should be immediately eligible
+    const saveBtn = container.querySelector(
+      '[data-testid="recipe-save-submit-btn"]',
+    ) as HTMLButtonElement;
+    expect(saveBtn.disabled).toBe(false);
+
+    await act(async () => {
+      saveBtn.click();
+    });
+
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    const saved: RecipeV1 = onSaved.mock.calls[0][0];
+    expect(saved.appSteps).toHaveLength(1);
+    expect(saved.appSteps[0].worktreePath).toBe("feature-recipes");
+  });
+
+  it("shows actionable source-unavailable state when selected desktop is deleted", async () => {
+    const desktopValid: OsDesktop = {
+      id: "d-valid",
+      name: "Valid Desktop",
+      tree: null,
+      floatingWindowIds: [],
+    };
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <EncryptProvider>
+            <MemoryRouter>
+              <RecipeEditor
+                desktops={[desktopValid]}
+                sourceDesktopId="d-deleted"
+                windows={{}}
+                onSaved={vi.fn()}
+                onCancel={vi.fn()}
+              />
+            </MemoryRouter>
+          </EncryptProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    const unavailableNotice = container.querySelector(
+      '[data-testid="recipe-source-unavailable"]',
+    );
+    expect(unavailableNotice).not.toBeNull();
+    expect(unavailableNotice?.textContent).toContain("Source Desktop Unavailable");
+    expect(
+      container.querySelector('[data-testid="recipe-recovery-desktop-select"]'),
+    ).not.toBeNull();
+  });
+
+  it("distinguishes empty states: fleet-only vs windows on other desktop", async () => {
+    const desktopFleetOnly: OsDesktop = {
+      id: "d-fleet",
+      name: "Fleet Desktop",
+      tree: {
+        type: "pane",
+        id: "p-fleet",
+        items: ["win-sys-only"],
+        active: "win-sys-only",
+      },
+      floatingWindowIds: [],
+    };
+
+    const winFleetOnly: OsWindow = {
+      id: "win-sys-only",
+      appId: "system-monitor",
+      title: "System Monitor",
+      ctx: { profileId: "profile-a" },
+      mode: "tile",
+      desktopId: "d-fleet",
+      maximized: false,
+      minimized: false,
+    };
+
+    // Case 1: Fleet-only on sole desktop
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <EncryptProvider>
+            <MemoryRouter>
+              <RecipeEditor
+                desktops={[desktopFleetOnly]}
+                sourceDesktopId="d-fleet"
+                windows={{ "win-sys-only": winFleetOnly }}
+                onSaved={vi.fn()}
+                onCancel={vi.fn()}
+              />
+            </MemoryRouter>
+          </EncryptProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(
+      container.querySelector('[data-testid="recipe-empty-fleet-only"]'),
+    ).not.toBeNull();
+
+    // Case 2: Source desktop is empty/fleet-only, but other desktop has project windows
+    const desktopWithProject: OsDesktop = {
+      id: "d-proj",
+      name: "Project Desktop",
+      tree: {
+        type: "pane",
+        id: "p-proj",
+        items: ["win-term-other"],
+        active: "win-term-other",
+      },
+      floatingWindowIds: [],
+    };
+
+    const winTermOther: OsWindow = {
+      id: "win-term-other",
+      appId: "terminals",
+      title: "Other Desk Term",
+      ctx: { profileId: "profile-a", projectId: "dam-hopper" },
+      mode: "tile",
+      desktopId: "d-proj",
+      maximized: false,
+      minimized: false,
+    };
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <EncryptProvider>
+            <MemoryRouter>
+              <RecipeEditor
+                desktops={[desktopFleetOnly, desktopWithProject]}
+                sourceDesktopId="d-fleet"
+                windows={{
+                  "win-sys-only": winFleetOnly,
+                  "win-term-other": winTermOther,
+                }}
+                onSaved={vi.fn()}
+                onCancel={vi.fn()}
+              />
+            </MemoryRouter>
+          </EncryptProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    const otherDeskNotice = container.querySelector(
+      '[data-testid="recipe-empty-other-desktops"]',
+    );
+    expect(otherDeskNotice).not.toBeNull();
+    expect(otherDeskNotice?.textContent).toContain("Switch to Project Desktop");
+  });
 });

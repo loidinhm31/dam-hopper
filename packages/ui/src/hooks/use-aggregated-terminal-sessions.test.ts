@@ -34,8 +34,14 @@ vi.mock("@/api/connections.js", () => ({
 }));
 
 const session = (marker: string) => ({
-  id: "shared-session", project: "shared-project", command: marker,
-  alive: true, startedAt: 100, incarnation: 1,
+  id: "shared-session",
+  project: "shared-project",
+  command: marker,
+  alive: true,
+  startedAt: 100,
+  incarnation: 1,
+  incarnationExact: "1",
+  terminationState: "live" as const,
 });
 
 describe("useAggregatedTerminalSessions", () => {
@@ -67,7 +73,13 @@ describe("useAggregatedTerminalSessions", () => {
     vi.useFakeTimers();
     state.snapshots.clear();
     state.listeners.clear();
-    state.invoke.mockReset().mockImplementation(async (owner: ConnectionRef) => [session(`${owner.profileId}-${owner.generation}`)]);
+    state.invoke.mockReset().mockImplementation(async (owner: ConnectionRef) => ({
+      sessions: [session(`${owner.profileId}-${owner.generation}`)],
+      termination: {
+        version: 1,
+        serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+      },
+    }));
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     container = document.createElement("div");
     root = createRoot(container);
@@ -90,7 +102,13 @@ describe("useAggregatedTerminalSessions", () => {
       { id: "shared-session", profileId: "a", command: "a-1" },
       { id: "shared-session", profileId: "b", command: "b-1" },
     ]);
-    state.invoke.mockImplementation(async (owner: ConnectionRef) => [session(`${owner.profileId}-updated`)]);
+    state.invoke.mockImplementation(async (owner: ConnectionRef) => ({
+      sessions: [session(`${owner.profileId}-updated`)],
+      termination: {
+        version: 1,
+        serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+      },
+    }));
     await act(async () => {
       await client.invalidateQueries({ queryKey: profileQueryKey({ profileId: "a", generation: 1 }, "terminal-sessions") });
     });
@@ -113,16 +131,44 @@ describe("useAggregatedTerminalSessions", () => {
   });
 
   it("rejects a delayed old-generation response without poisoning the replacement", async () => {
-    let resolveOld!: (value: ReturnType<typeof session>[]) => void;
-    state.invoke.mockImplementation((owner: ConnectionRef) => owner.profileId === "a" && owner.generation === 1
-      ? new Promise((resolve) => { resolveOld = resolve; })
-      : Promise.resolve([session(`${owner.profileId}-${owner.generation}`)]));
+    const oldDeferred = Promise.withResolvers<unknown>();
+    state.invoke.mockImplementation((owner: ConnectionRef) =>
+      owner.profileId === "a" && owner.generation === 1
+        ? oldDeferred.promise
+        : Promise.resolve({
+            sessions: [session(`${owner.profileId}-${owner.generation}`)],
+            termination: {
+              version: 1,
+              serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+            },
+          }),
+    );
     await connect("a", 1);
     await connect("b", 1);
     await connect("a", 2);
-    await act(async () => resolveOld([session("stale")]));
+    await act(async () =>
+      oldDeferred.resolve({
+        sessions: [session("stale")],
+        termination: {
+          version: 1,
+          serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        },
+      }),
+    );
     await flush();
     expect(captured.sessions.map((item) => item.command)).toEqual(["a-2", "b-1"]);
     expect(client.getQueryData(profileQueryKey({ profileId: "a", generation: 1 }, "terminal-sessions"))).toBeUndefined();
+  });
+  it("projects observations and attaches valid terminationTarget on aggregated rows", async () => {
+    await connect("a", 1);
+    expect(captured.observations).toHaveLength(1);
+    expect(captured.observations[0].owner?.profileId).toBe("a");
+    expect(captured.sessions[0].terminationTarget).toEqual({
+      profileId: "a",
+      generation: 1,
+      serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+      terminalId: "shared-session",
+      incarnation: "1",
+    });
   });
 });

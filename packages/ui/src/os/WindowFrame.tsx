@@ -13,6 +13,7 @@ import { arbitrateKeyboardEvent } from "./input-arbiter.js";
 import {
   DEFAULT_FLOAT_BOUNDS,
   getVisibleFloatBounds,
+  projectFloatBounds,
   type ResizeDirection,
 } from "./window-ops.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
@@ -25,12 +26,32 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/Select.js";
+import {
+  useTerminalClose,
+  type TerminalCloseContextValue,
+} from "./terminal-close-context.js";
+import {
+  resolveWindowTerminalObservation,
+  type ReviewTarget,
+} from "@/api/terminal-session-contract.js";
+import { useAggregatedTerminalSessions } from "@/hooks/use-aggregated-terminal-sessions.js";
+import { useQueryClient } from "@tanstack/react-query";
+import { closeReviewTargetSafely } from "@/api/session-changes-queries.js";
+function isInteractiveElement(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      'button, a, input, select, textarea, [role="button"], [role="combobox"], [role="menuitem"], [role="listbox"], [role="option"], [contenteditable="true"], [data-os-resize-handle]',
+    ),
+  );
+}
 export interface WindowFrameProps {
   window: OsWindow;
   children: ReactNode;
 }
 
 export function WindowFrame({ window, children }: WindowFrameProps) {
+  const qc = useQueryClient();
   const { isFocused, owner } = useWindowContext();
   const isCognitoActive = useCognitoModeStore((state) => state.active);
   const session = useWindowStore((state) => state.session);
@@ -41,6 +62,7 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
   );
   const minimizeWindow = useWindowStore((state) => state.minimizeWindow);
   const setWindowMode = useWindowStore((state) => state.setWindowMode);
+  const toggleWindowMode = useWindowStore((state) => state.toggleWindowMode);
   const moveWindowToDesktop = useWindowStore(
     (state) => state.moveWindowToDesktop,
   );
@@ -51,9 +73,18 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
 
   const [isDragging, setIsDragging] = useState(false);
   const dragCleanupRef = useRef<(() => void) | null>(null);
+  const dragSuppressedRef = useRef(false);
   const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
   const filePath = window.appState?.filePath as string | undefined;
 
+  const { observations } = useAggregatedTerminalSessions();
+  let terminalClose: TerminalCloseContextValue | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    terminalClose = useTerminalClose();
+  } catch {
+    // optional fallback
+  }
   // Cancel active drag/resize gestures immediately if Cognito activates or unmounts
   useEffect(() => {
     if (isCognitoActive && dragCleanupRef.current) {
@@ -61,6 +92,7 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
       dragCleanupRef.current = null;
       setIsDragging(false);
       setIsResizing(false);
+      dragSuppressedRef.current = false;
     }
   }, [isCognitoActive]);
 
@@ -81,27 +113,48 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
 
   const handleStartDrag = useCallback(
     (e: ReactMouseEvent) => {
-      if (window.mode !== "float" || window.maximized) return;
+      if (e.button !== 0 || isCognitoActive) return;
+      if (isInteractiveElement(e.target)) return;
       focusWindow(window.id);
-      setIsDragging(true);
 
       const dragStart = {
         startX: e.clientX,
         startY: e.clientY,
-        initialX: window.floatBounds?.x ?? 60,
-        initialY: window.floatBounds?.y ?? 60,
+        initialX: window.floatBounds?.x ?? DEFAULT_FLOAT_BOUNDS.x,
+        initialY: window.floatBounds?.y ?? DEFAULT_FLOAT_BOUNDS.y,
       };
 
+      let dragStarted = false;
+      dragSuppressedRef.current = false;
+
       const handleMouseMove = (moveEvent: MouseEvent) => {
+        if (useCognitoModeStore.getState().active) {
+          handleMouseUp();
+          return;
+        }
         const deltaX = moveEvent.clientX - dragStart.startX;
         const deltaY = moveEvent.clientY - dragStart.startY;
+        const distance = Math.hypot(deltaX, deltaY);
+
+        if (!dragStarted) {
+          if (distance >= 4) {
+            dragStarted = true;
+            dragSuppressedRef.current = true;
+            setIsDragging(true);
+          } else {
+            return;
+          }
+        }
+
+        if (window.mode !== "float" || window.maximized) return;
+
         const nextX = dragStart.initialX + deltaX;
         const nextY = dragStart.initialY + deltaY;
         updateFloatBounds(window.id, {
           x: nextX,
           y: nextY,
-          width: window.floatBounds?.width ?? 720,
-          height: window.floatBounds?.height ?? 520,
+          width: window.floatBounds?.width ?? DEFAULT_FLOAT_BOUNDS.width,
+          height: window.floatBounds?.height ?? DEFAULT_FLOAT_BOUNDS.height,
         });
       };
 
@@ -117,6 +170,7 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
       dragCleanupRef.current = handleMouseUp;
     },
     [
+      isCognitoActive,
       window.mode,
       window.maximized,
       window.id,
@@ -124,6 +178,21 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
       focusWindow,
       updateFloatBounds,
     ],
+  );
+
+  const handleHeaderDoubleClick = useCallback(
+    (e: ReactMouseEvent) => {
+      if (e.button !== 0 || isCognitoActive) return;
+      if (isInteractiveElement(e.target)) return;
+      if (dragSuppressedRef.current) {
+        dragSuppressedRef.current = false;
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      toggleWindowMode(window.id);
+    },
+    [isCognitoActive, toggleWindowMode, window.id],
   );
 
   const handleStartResize = useCallback(
@@ -201,15 +270,52 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
         return;
       }
     }
+    if (window.appId === "session-changes") {
+      const target = window.runtimeIdentity?.kind === "review"
+        ? (window.runtimeIdentity.target as ReviewTarget)
+        : (window.appState?.target as ReviewTarget | undefined);
+      if (target) {
+        closeReviewTargetSafely(
+          qc,
+          target,
+          window.id,
+          useWindowStore.getState().session.windows,
+        );
+      }
+      closeWindow(window.id);
+      return;
+    }
+    if (window.appId === "terminals" && terminalClose) {
+      const { target, availability } = resolveWindowTerminalObservation(
+        window,
+        observations,
+      );
+
+      terminalClose.requestTerminalClose(
+        {
+          windowId: window.id,
+          entry: "frame",
+          target,
+          availability,
+        },
+        (wId) => {
+          closeWindow(wId);
+        },
+      );
+      return;
+    }
     closeWindow(window.id);
   }, [
     closeWindow,
+    terminalClose,
     window.appId,
     window.id,
-    window.appState?.filePath,
+    window.runtimeIdentity,
+    window.appState,
     window.ctx.projectId,
     window.ctx.profileId,
     window.ctx.worktreeId,
+    observations,
   ]);
 
   const handleKeyDown = useCallback(
@@ -229,6 +335,16 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
         isFrameFocused,
         isModalActive,
       });
+      if (
+        isFrameFocused &&
+        (e.nativeEvent.metaKey || e.nativeEvent.ctrlKey) &&
+        (e.nativeEvent.key === "w" || e.nativeEvent.key === "W")
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleClose();
+        return;
+      }
       if (disposition === "cognito-blocked") {
         e.preventDefault();
         e.stopPropagation();
@@ -272,8 +388,8 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
     : window.mode === "float"
       ? (() => {
           const bounds = window.floatBounds
-            ? getVisibleFloatBounds(window.floatBounds, viewport)
-            : DEFAULT_FLOAT_BOUNDS;
+            ? projectFloatBounds(window.floatBounds, viewport)
+            : projectFloatBounds(DEFAULT_FLOAT_BOUNDS, viewport);
           return {
             position: "absolute" as const,
             left: bounds.x,
@@ -323,6 +439,7 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
       <div
         data-os-frame-header="true"
         onMouseDown={handleStartDrag}
+        onDoubleClick={handleHeaderDoubleClick}
         className={`flex items-center justify-between px-3 py-1.5 border-b border-[var(--color-border)] select-none text-xs ${
           isFocused
             ? "bg-[var(--color-surface-hover)]"

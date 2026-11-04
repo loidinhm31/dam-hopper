@@ -2,6 +2,7 @@
 import type { Terminal } from "@xterm/xterm";
 import { describe, expect, it, vi } from "vitest";
 import {
+  calculateTerminalInputSuppression,
   syncTerminalInputSuppression,
 } from "./terminal-input-policy.js";
 
@@ -51,4 +52,22 @@ describe("terminal-input-policy", () => {
     expect(termWithoutTextarea.options.disableStdin).toBe(true);
   });
 
+  it("calculates input suppression across modal, cognito, stream, and owner states", () => {
+    // Idle normal state -> not suppressed
+    expect(calculateTerminalInputSuppression({})).toBe(false);
+
+    // Cognito active -> suppressed
+    expect(calculateTerminalInputSuppression({ cognitoActive: true })).toBe(true);
+
+    // Modal open (depth > 0) -> suppressed
+    expect(calculateTerminalInputSuppression({ modalDepth: 1 })).toBe(true);
+    expect(calculateTerminalInputSuppression({ modalDepth: 0 })).toBe(false);
+
+    // Palette active -> suppressed
+    expect(calculateTerminalInputSuppression({ activePalette: true })).toBe(true);
+
+    // Stream not ready / disconnected owner -> suppressed
+    expect(calculateTerminalInputSuppression({ isStreamNotReady: true })).toBe(true);
+    expect(calculateTerminalInputSuppression({ isOwnerDisconnected: true })).toBe(true);
+  });
 });

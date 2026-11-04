@@ -580,4 +580,84 @@ describe("OS Lifecycle Component Browser Tests", () => {
     // Focus cycled to win-k2
     expect(useWindowStore.getState().session.desktops[0].focusedWindowId).toBe("win-k2");
   });
+
+  it("toggles window mode on titlebar double-click and suppresses on drag threshold", async () => {
+    await renderOsShell();
+
+    await act(async () => {
+      useWindowStore.getState().openWindow({
+        id: "win-gesture-test",
+        appId: "terminals",
+        title: "Gesture Test",
+        ctx: { profileId: "default" },
+        mode: "tile",
+      });
+    });
+
+    const frame = container?.querySelector('[data-os-window-frame="win-gesture-test"]');
+    expect(frame).not.toBeNull();
+    const header = frame?.querySelector('[data-os-frame-header="true"]');
+    expect(header).not.toBeNull();
+
+    // Double-click on header background -> toggles mode from tile to float
+    await act(async () => {
+      header?.dispatchEvent(
+        new MouseEvent("dblclick", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+        }),
+      );
+    });
+
+    expect(useWindowStore.getState().session.windows["win-gesture-test"].mode).toBe("float");
+
+    // Double-click again -> toggles back to tile
+    await act(async () => {
+      header?.dispatchEvent(
+        new MouseEvent("dblclick", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+        }),
+      );
+    });
+
+    expect(useWindowStore.getState().session.windows["win-gesture-test"].mode).toBe("tile");
+  });
+
+  it("atomically unmaximizes and switches mode on titlebar double-click when maximized", async () => {
+    await renderOsShell();
+
+    await act(async () => {
+      useWindowStore.getState().openWindow({
+        id: "win-max-test",
+        appId: "terminals",
+        title: "Maximize Test",
+        ctx: { profileId: "default" },
+        mode: "tile",
+      });
+      useWindowStore.getState().toggleMaximizeWindow("win-max-test");
+    });
+
+    expect(useWindowStore.getState().session.windows["win-max-test"].maximized).toBe(true);
+
+    const frame = container?.querySelector('[data-os-window-frame="win-max-test"]');
+    const header = frame?.querySelector('[data-os-frame-header="true"]');
+
+    // Double-click titlebar
+    await act(async () => {
+      header?.dispatchEvent(
+        new MouseEvent("dblclick", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+        }),
+      );
+    });
+
+    const win = useWindowStore.getState().session.windows["win-max-test"];
+    expect(win.maximized).toBe(false);
+    expect(win.mode).toBe("float");
+  });
 });

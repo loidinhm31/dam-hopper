@@ -41,3 +41,28 @@ export function syncTerminalInputSuppression(
   }
 }
 
+export interface TerminalInputSuppressionState {
+  cognitoActive?: boolean;
+  modalDepth?: number;
+  activePalette?: boolean;
+  activeNonmodal?: boolean;
+  suppressNativeKeyboard?: boolean;
+  suppressAutoFocus?: boolean;
+  isStreamNotReady?: boolean;
+  isOwnerDisconnected?: boolean;
+}
+
+export function calculateTerminalInputSuppression(
+  state: TerminalInputSuppressionState,
+): boolean {
+  return Boolean(
+    state.cognitoActive ||
+      (state.modalDepth !== undefined && state.modalDepth > 0) ||
+      state.activePalette ||
+      state.activeNonmodal ||
+      state.suppressNativeKeyboard ||
+      state.suppressAutoFocus ||
+      state.isStreamNotReady ||
+      state.isOwnerDisconnected,
+  );
+}

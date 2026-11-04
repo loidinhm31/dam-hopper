@@ -198,7 +198,7 @@ describe("OS Review Apps Browser Tests", () => {
     expect(incompleteEl).not.toBeNull();
     expect(incompleteEl?.textContent).toContain("Incomplete Session Identity");
 
-    // 2. Open with complete tuple
+    // 2. Open with complete 8-tuple
     await act(async () => {
       useWindowStore.getState().openWindow({
         id: "win-session-complete",
@@ -207,10 +207,14 @@ describe("OS Review Apps Browser Tests", () => {
         ctx: { profileId: testProfile.id },
         mode: "float",
         appState: {
+          profileId: testProfile.id,
+          generation: 1,
           terminalId: "term-1",
           terminalIncarnation: "inc-1",
           ompSessionId: "omp-session-123",
-          rootId: ".",
+          serverEpoch: "epoch-123",
+          rootId: "root-123",
+          baselineId: "base-123",
         },
       });
     });
@@ -238,7 +242,7 @@ describe("OS Review Apps Browser Tests", () => {
     window.removeEventListener("keydown", leakDetector);
   });
 
-  it("purges cache and closes window when session changes is disabled", async () => {
+  it("purges cache and unmounts live viewer when session changes is disabled", async () => {
     await renderOs();
 
     const owner = { profileId: testProfile.id, generation: 1 };
@@ -254,10 +258,14 @@ describe("OS Review Apps Browser Tests", () => {
         ctx: { profileId: testProfile.id },
         mode: "float",
         appState: {
+          profileId: testProfile.id,
+          generation: 1,
           terminalId: "term-1",
           terminalIncarnation: "inc-1",
           ompSessionId: "omp-session-123",
-          rootId: ".",
+          serverEpoch: "epoch-123",
+          rootId: "root-123",
+          baselineId: "base-123",
         },
       });
     });
@@ -274,13 +282,100 @@ describe("OS Review Apps Browser Tests", () => {
       });
     });
 
-    // Verify window closed and query cache removed
-    expect(
-      useWindowStore.getState().session.windows["win-session-to-close"],
-    ).toBeUndefined();
+    // Verify query cache purged and content-free explanation rendered (window stays for explicit close)
     expect(
       queryClient.getQueryData(profileQueryKey(owner, "session-changes")),
     ).toBeUndefined();
+    const appEl = container?.querySelector(
+      '[data-os-session-changes-app="win-session-to-close"]',
+    );
+    expect(appEl?.textContent).toContain("Session Review Unavailable");
+  });
+
+  it("preserves sibling review cache when closing a single review window under same owner", async () => {
+    await renderOs();
+
+    const owner = { profileId: testProfile.id, generation: 1 };
+    const siblingKey = [
+      "profile",
+      testProfile.id,
+      1,
+      "session-changes",
+      "status",
+      "term-sibling",
+      "inc-sibling",
+      "omp-sibling",
+      "root-sibling",
+    ];
+    queryClient.setQueryData(siblingKey, {
+      state: "ready",
+      data: "sibling-data",
+    });
+
+    const targetKey = [
+      "profile",
+      testProfile.id,
+      1,
+      "session-changes",
+      "status",
+      "term-target",
+      "inc-target",
+      "omp-target",
+      "root-target",
+    ];
+    queryClient.setQueryData(targetKey, {
+      state: "ready",
+      data: "target-data",
+    });
+
+    // Open target window
+    await act(async () => {
+      useWindowStore.getState().openWindow({
+        id: "win-session-single-close",
+        appId: "session-changes",
+        title: "Single Close",
+        ctx: { profileId: testProfile.id },
+        mode: "float",
+        appState: {
+          profileId: testProfile.id,
+          generation: 1,
+          terminalId: "term-target",
+          terminalIncarnation: "inc-target",
+          ompSessionId: "omp-target",
+          serverEpoch: "epoch-target",
+          rootId: "root-target",
+          baselineId: "base-target",
+        },
+      });
+    });
+
+    const appEl = container?.querySelector(
+      '[data-os-session-changes-app="win-session-single-close"]',
+    );
+    expect(appEl).not.toBeNull();
+
+    // Close single window via Escape key
+    const keyEvent = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      appEl?.dispatchEvent(keyEvent);
+    });
+
+    // Window closed
+    expect(
+      useWindowStore.getState().session.windows["win-session-single-close"],
+    ).toBeUndefined();
+    // Target query cache MUST be removed for the closed review identity
+    expect(queryClient.getQueryData(targetKey)).toBeUndefined();
+
+    // Sibling cache MUST be preserved under the same owner!
+    expect(queryClient.getQueryData(siblingKey)).toEqual({
+      state: "ready",
+      data: "sibling-data",
+    });
   });
 
   it("proves multi-profile project collision isolation: identical project names across two profiles maintain separate resource claims", async () => {

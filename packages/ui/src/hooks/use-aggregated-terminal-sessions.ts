@@ -2,6 +2,12 @@ import { useQueries } from "@tanstack/react-query";
 import { useSyncExternalStore, useMemo } from "react";
 import type { SessionInfo } from "@/api/client.js";
 import {
+  createTerminalTargetFromObservation,
+  type TerminalTarget,
+  type TerminalInventoryTerminationState,
+  type TerminalInventoryDetailedObservation,
+} from "@/api/terminal-session-contract.js";
+import {
   getProfiles,
   subscribeToProfileChanges,
   getProfileChangeVersion,
@@ -9,18 +15,24 @@ import {
 import {
   getConnectionSnapshot,
   subscribeConnections,
-  getTransport as getConnectionTransport,
   isCurrentConnection,
 } from "@/api/connections.js";
 import { profileQueryKey } from "@/api/query-client.js";
-import { ConnectionOwnerError } from "@/api/ownership.js";
-import { rememberTerminalSessionIncarnations } from "@/lib/terminal-incarnation-state.js";
-import { useTerminalSessions } from "@/api/queries.js";
+import {
+  terminalInventoryQueryOptions,
+  useTerminalInventory,
+} from "@/api/queries.js";
 
-export type AggregatedSessionInfo = SessionInfo & { profileId: string };
+export type AggregatedSessionInfo = SessionInfo & {
+  profileId: string;
+  generation?: number;
+  terminationState?: TerminalInventoryTerminationState;
+  terminationTarget: TerminalTarget | null;
+};
 
 export function useAggregatedTerminalSessions(): {
   sessions: AggregatedSessionInfo[];
+  observations: TerminalInventoryDetailedObservation[];
   isSuccess: boolean;
   isLoading: boolean;
 } {
@@ -32,12 +44,10 @@ export function useAggregatedTerminalSessions(): {
 
   const profiles = useMemo(() => getProfiles(), [profileVersion]);
   const {
-    data: ambientSessions = [],
+    data: ambientObservation,
     isSuccess: ambientSuccess,
     isLoading: ambientLoading,
-  } = useTerminalSessions(
-    profiles.length === 0 ? undefined : { profileId: "__disabled__" },
-  );
+  } = useTerminalInventory(profiles.length === 0 ? null : undefined);
 
   const connectionVersion = useSyncExternalStore(
     subscribeConnections,
@@ -56,63 +66,76 @@ export function useAggregatedTerminalSessions(): {
       const snapshot = getConnectionSnapshot(profile.id);
       const isConnected = snapshot?.status === "connected";
       const owner = snapshot?.owner ?? { profileId: profile.id, generation: 0 };
+      const baseOptions = terminalInventoryQueryOptions(isConnected ? owner : null);
       return {
+        ...baseOptions,
         queryKey: isConnected
           ? profileQueryKey(owner, "terminal-sessions")
           : ["profile", profile.id, "disconnected", "terminal-sessions"],
-        queryFn: async (): Promise<AggregatedSessionInfo[]> => {
-          if (!isConnected) return [];
-          const transport = getConnectionTransport(owner);
-          const sessions = await transport.invoke<SessionInfo[]>(
-            "terminal:listDetailed",
-          );
-          if (!isCurrentConnection(owner)) {
-            throw new ConnectionOwnerError(
-              "Terminal session owner is stale",
-              "stale",
-            );
-          }
-          rememberTerminalSessionIncarnations(sessions, owner.profileId);
-          return sessions.map((s) => ({
-            ...s,
-            profileId: profile.id,
-          }));
-        },
         enabled: isConnected,
-        staleTime: Infinity,
       };
     });
   }, [profiles, connectionVersion]);
 
   const queryResults = useQueries({ queries: querySpecs });
 
-  const { sessions, isSuccess, isLoading } = useMemo(() => {
+  const { sessions, observations, isSuccess, isLoading } = useMemo(() => {
     if (profiles.length === 0) {
+      const list: AggregatedSessionInfo[] = [];
+      if (ambientObservation) {
+        for (const row of ambientObservation.sessions) {
+          const terminationTarget = createTerminalTargetFromObservation(
+            ambientObservation,
+            row,
+          );
+          list.push({
+            ...row,
+            profileId: "default",
+            generation: undefined,
+            terminationState: row.terminationState,
+            terminationTarget,
+          });
+        }
+      }
       return {
-        sessions: ambientSessions.map((s) => ({
-          ...s,
-          profileId: "default",
-        })),
+        sessions: list,
+        observations: ambientObservation ? [ambientObservation] : [],
         isSuccess: ambientSuccess,
         isLoading: ambientLoading,
       };
     }
-    const list: AggregatedSessionInfo[] = [];
+    const sessionsList: AggregatedSessionInfo[] = [];
+    const observationsList: TerminalInventoryDetailedObservation[] = [];
     let anyLoading = false;
 
     for (const result of queryResults) {
       if (result.isLoading) anyLoading = true;
-      if (Array.isArray(result.data)) {
-        list.push(...result.data);
+      const obs = result.data as TerminalInventoryDetailedObservation | undefined;
+      if (obs && (!obs.owner || isCurrentConnection(obs.owner))) {
+        observationsList.push(obs);
+        for (const row of obs.sessions) {
+          const terminationTarget = createTerminalTargetFromObservation(
+            obs,
+            row,
+          );
+          sessionsList.push({
+            ...row,
+            profileId: obs.owner ? obs.owner.profileId : "default",
+            generation: obs.owner?.generation,
+            terminationState: row.terminationState,
+            terminationTarget,
+          });
+        }
       }
     }
 
     return {
-      sessions: list,
+      sessions: sessionsList,
+      observations: observationsList,
       isSuccess:
         queryResults.length > 0 && queryResults.some((r) => r.isSuccess),
       isLoading: anyLoading,
     };
-  }, [profiles, ambientSessions, queryResults, ambientSuccess, ambientLoading]);
-  return { sessions, isSuccess, isLoading };
+  }, [profiles, ambientObservation, queryResults, ambientSuccess, ambientLoading]);
+  return { sessions, observations, isSuccess, isLoading };
 }

@@ -359,18 +359,26 @@ export function parseTerminalInstanceKey(
 }
 
 export function toTerminalKey(
-  target: TerminalRef | string,
+  target: TerminalRef | string | { terminalId: string; serverEpoch: string; profileId: string; generation: number; incarnation: string },
   defaultProfileId?: ProfileId,
 ): string {
   if (typeof target === "string") {
     if (target.startsWith("[")) {
-      const parsed = parseTerminalKey(target);
-      if (parsed) return target;
+      return target;
     }
     if (defaultProfileId) {
       return terminalKey({ profileId: defaultProfileId, id: target });
     }
     return target;
+  }
+  if (typeof target === "object" && target !== null && "serverEpoch" in target && "terminalId" in target) {
+    return JSON.stringify([
+      target.profileId,
+      target.generation,
+      target.serverEpoch,
+      target.terminalId,
+      target.incarnation,
+    ]);
   }
   return terminalKey(target);
 }

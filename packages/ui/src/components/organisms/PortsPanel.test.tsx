@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
 import { PortsPanel } from "./PortsPanel.js";
 import type { PortEntry } from "@/hooks/use-ports.js";
 
@@ -15,7 +17,7 @@ vi.mock("@/hooks/use-ports.js", () => ({
     isError: false,
     createTunnel: vi.fn(),
     stopTunnel: vi.fn(),
-    killPortSession: vi.fn(),
+    endPortSession: vi.fn(),
     installCloudflared: vi.fn(),
     installState: { status: "idle", downloaded: 0, total: 0 },
   }),
@@ -27,9 +29,20 @@ vi.mock("@/hooks/use-clipboard.js", () => ({
 
 vi.mock("@/api/server-config.js", () => ({
   isLocalServer: () => true,
+  subscribeToProfileChanges: () => () => {},
+  getProfileChangeVersion: () => 0,
+  getProfiles: () => [],
 }));
 
 describe("PortsPanel", () => {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const renderPanel = (ui: ReactElement) =>
+    renderToStaticMarkup(
+      <QueryClientProvider client={qc}>{ui}</QueryClientProvider>,
+    );
+
   beforeEach(() => {
     localStorage.clear();
     mockPorts = [
@@ -54,7 +67,7 @@ describe("PortsPanel", () => {
   });
 
   it("renders a ready tunnel action for the embedded Browser without removing the external link", () => {
-    const markup = renderToStaticMarkup(
+    const markup = renderPanel(
       <PortsPanel onOpenTunnelInBrowser={() => {}} />,
     );
 
@@ -66,7 +79,7 @@ describe("PortsPanel", () => {
   });
 
   it("does not render an embedded Browser action without a callback", () => {
-    const markup = renderToStaticMarkup(<PortsPanel />);
+    const markup = renderPanel(<PortsPanel />);
 
     expect(markup).not.toContain("in embedded Browser");
     expect(markup).toContain('href="https://demo.trycloudflare.com"');
@@ -93,11 +106,38 @@ describe("PortsPanel", () => {
       },
     ];
 
-    const markup = renderToStaticMarkup(<PortsPanel />);
+    const markup = renderPanel(<PortsPanel />);
     expect(markup).toContain('href="https://api.trycloudflare.com"');
     expect(markup).toContain('aria-label="Stop tunnel"');
     expect(markup).not.toContain(
+      'aria-label="End terminal session for :8080"',
+    );
+    expect(markup).not.toContain(
       'aria-label="Kill terminal session for :8080"',
     );
+  });
+
+  it("renders End terminal session action when port entry has valid terminationTarget and origin", () => {
+    mockPorts = [
+      {
+        port: 3000,
+        profileId: "default",
+        project: "web",
+        state: "listening",
+        sessionId: "session-1",
+        tunnel: null,
+        terminationTarget: {
+          profileId: "default",
+          generation: 1,
+          serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+          terminalId: "session-1",
+          incarnation: "42",
+        },
+        origin: "live",
+      },
+    ];
+
+    const markup = renderPanel(<PortsPanel />);
+    expect(markup).toContain('aria-label="End terminal session for :3000"');
   });
 });

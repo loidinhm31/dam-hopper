@@ -18,6 +18,14 @@ import type {
   FsWriteResponse,
   FsPutResult,
 } from "./ws-transport.js";
+import type {
+  TerminalInventoryDetailedPayload,
+  TerminalInventoryPayload,
+  TerminalInventoryTerminationState,
+  TerminalTarget,
+  TerminationOrigin,
+  TerminationResult,
+} from "./terminal-session-contract.js";
 import type { CommandHistoryEntry } from "@/lib/command-history.js";
 import {
   decodeAgentStatusSnapshot,
@@ -197,6 +205,12 @@ export interface SessionInfo {
   id: string;
   /** Opaque concrete PTY identity used to reject stale push events. */
   incarnation?: number;
+  /** Canonical u64 incarnation string from backend termination inventory observation */
+  incarnationExact?: string;
+  /** Originating PTY manager lifetime epoch, when proven by creation response or observation */
+  serverEpoch?: string;
+  /** Flat termination state from backend termination inventory observation */
+  terminationState?: TerminalInventoryTerminationState;
   project?: string;
   command: string;
   cwd: string;
@@ -3349,13 +3363,33 @@ export function createApiClient(
           ...opts,
           ...(opts.target ? { target: toFsWireTarget(opts.target) } : {}),
         }),
-      kill: (id: string) => transport.invoke<void>("terminal:kill", id),
-      remove: (id: string) => transport.invoke<void>("terminal:remove", id),
       rename: (id: string, name: string | null) =>
         transport.invoke<SessionInfo>("terminal:rename", { id, name }),
       list: () => transport.invoke<SessionInfo[]>("terminal:list"),
       listDetailed: () =>
         transport.invoke<SessionInfo[]>("terminal:listDetailed"),
+      listObservation: (options?: TransportInvokeOptions) =>
+        transport.invoke<TerminalInventoryPayload>(
+          "terminal:listObservation",
+          undefined,
+          options,
+        ),
+      listDetailedObservation: (options?: TransportInvokeOptions) =>
+        transport.invoke<TerminalInventoryDetailedPayload>(
+          "terminal:listDetailedObservation",
+          undefined,
+          options,
+        ),
+      terminateSessionGuarded: (
+        target: TerminalTarget,
+        origin: TerminationOrigin,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<TerminationResult>(
+          "terminal:terminate",
+          { target, origin },
+          options,
+        ),
       getBuffer: (id: string) =>
         transport.invoke<string>("terminal:buffer", id),
       agentStatusSnapshot: async () =>
@@ -4102,11 +4136,20 @@ export interface ApiClient {
       worktreePath?: string;
       name?: string | null;
     }) => Promise<SessionInfo>;
-    kill: (id: string) => Promise<void>;
-    remove: (id: string) => Promise<void>;
     rename: (id: string, name: string | null) => Promise<SessionInfo>;
     list: () => Promise<SessionInfo[]>;
     listDetailed: () => Promise<SessionInfo[]>;
+    listObservation: (
+      options?: TransportInvokeOptions,
+    ) => Promise<TerminalInventoryPayload>;
+    listDetailedObservation: (
+      options?: TransportInvokeOptions,
+    ) => Promise<TerminalInventoryDetailedPayload>;
+    terminateSessionGuarded: (
+      target: TerminalTarget,
+      origin: TerminationOrigin,
+      options?: TransportInvokeOptions,
+    ) => Promise<TerminationResult>;
     getBuffer: (id: string) => Promise<string>;
     agentStatusSnapshot: () => Promise<AgentStatusSnapshotV1>;
     getOmpExtensionStatus: (

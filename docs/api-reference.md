@@ -22,6 +22,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 | [Workspace and settings](./api/workspace-settings.md) | Agent Store, workspace, settings, health |
 | [WebSocket](./api/websocket.md) | WebSocket endpoint and event/message contract |
 | [Session changes review](#session-changes-review-api) | Read-only session changes status, files, file diff, and private tool-event capture endpoints |
+| [Terminal inventory and termination](#terminal-inventory-and-guarded-termination-api) | Additive inventory headers/fields and guarded termination protocol |
 
 ## Authentication
 
@@ -119,6 +120,107 @@ Typed error codes returned in `ErrorBody`:
 - **429 Too Many Requests:** `capacity`.
 - **503 Service Unavailable:** `trackingDisabled`, `targetUnavailable`, `registrationFailed`.
 - **504 Gateway Timeout:** `deadline`.
+## Terminal Inventory and Guarded Termination API
+
+### Terminal Creation Endpoint
+
+- `POST /api/terminal`
+
+Authenticated endpoint to launch a new terminal process. In addition to returning the created session's `SessionMeta`, responses carry originating lifetime authority headers:
+- `X-DamHopper-Termination-Version: 1`
+- `X-DamHopper-PTY-Epoch: <uuid>` — Manager-lifetime UUID epoch allocated when the PTY manager is constructed, shared by clones, and never persisted.
+- `Cache-Control: no-store`
+
+Clients decode these response headers to capture the originating manager epoch (`serverEpoch`), establishing immutable provenance alongside the originating connection generation and terminal incarnation.
+
+### Terminal Inventory Endpoints
+
+- `GET /api/terminal`
+- `GET /api/terminal/detailed`
+
+Authenticated endpoints returning the active terminal session inventory. Both endpoints return the following response headers:
+- `X-DamHopper-Termination-Version: 1`
+- `X-DamHopper-PTY-Epoch: <uuid>` — Manager-lifetime UUID epoch allocated when the PTY manager is constructed, shared by clones, and never persisted.
+- `Cache-Control: no-store`
+
+Response body is a JSON array of session rows with legacy `SessionMeta` properties alongside additive fields:
+- `incarnationExact` (`string`): Canonical decimal representation of the positive unsigned 64-bit incarnation integer (up to `"18446744073709551615"`). Canonical eligibility rejects conflicting safe-integer evidence: when a legacy numeric incarnation is safe, it must agree losslessly with `incarnationExact`.
+- `terminationState` (`string`): Six-state enum:
+  - `"live"`: Active process running; eligible for guarded termination signal.
+  - `"terminationRequested"`: Process termination signal has been dispatched.
+  - `"restartPending"`: Process is dead but scheduled for restart; eligible for restart cancellation.
+  - `"restartCancelled"`: Restart was cancelled; retained on in-memory tombstone until eviction.
+  - `"exited"`: Process has completed ordinary exit.
+  - `"unavailable"`: Session is in closing, handoff, or unverified state; non-actionable.
+- `buffer_bytes` (`number`, detailed endpoint only): Total buffered output bytes. Omitted on `GET /api/terminal`.
+
+### Guarded Termination Endpoint
+
+- `POST /api/terminal/{id}/terminate`
+
+Authenticated endpoint that atomically validates target authority and requests termination for a live terminal session, or cancels a scheduled restart. HTTP 202 signals request dispatch only and does not prove completed process exit. Payload is strictly bounded to a maximum of 512 bytes (`TERMINATION_MAX_BODY_BYTES`).
+
+**Request Body:**
+```json
+{
+  "version": 1,
+  "expectedServerEpoch": "<uuid>",
+  "expectedIncarnation": "<canonical-positive-u64>"
+}
+```
+
+**Success Outcomes:**
+- **HTTP 202 Accepted** (`outcome: "terminationRequested"`): Live running session received termination signal dispatched to the operating system process.
+  ```json
+  {
+    "version": 1,
+    "serverEpoch": "<uuid>",
+    "terminalId": "<id>",
+    "incarnation": "<canonical-positive-u64>",
+    "outcome": "terminationRequested"
+  }
+  ```
+- **HTTP 200 OK** (`outcome: "restartCancelled"`): Dead session scheduled for restart had its delay cleared, restart flag disabled, and fleet pending cancelled atomically. Retains exact cancellation marker on in-memory tombstone.
+  ```json
+  {
+    "version": 1,
+    "serverEpoch": "<uuid>",
+    "terminalId": "<id>",
+    "incarnation": "<canonical-positive-u64>",
+    "outcome": "restartCancelled"
+  }
+  ```
+
+**Error Codes and HTTP Status Mapping:**
+- **400 Bad Request:**
+  - `TERMINATION_INVALID_REQUEST`: Malformed JSON, non-canonical UUID epoch, non-canonical incarnation, or missing required fields.
+  - `TERMINATION_UNSUPPORTED_VERSION`: Version is not `1`.
+- **404 Not Found:**
+  - `TERMINATION_NOT_FOUND`: Session ID does not exist in active sessions or retained tombstones.
+- **409 Conflict:**
+  - `TERMINATION_EPOCH_MISMATCH`: `expectedServerEpoch` does not match the PTY manager's current lifetime epoch.
+  - `TERMINATION_INCARNATION_MISMATCH`: `expectedIncarnation` does not match the session's current incarnation.
+  - `TERMINATION_REPLACEMENT_PENDING`: A replacement session has already been admitted for this terminal ID.
+  - `TERMINATION_ALREADY_REQUESTED`: Termination has already been requested or restart already cancelled.
+  - `TERMINATION_NOT_LIVE`: Session is not currently live or restart-pending.
+  - `TERMINATION_MANAGER_CLOSING`: PTY manager is shutting down.
+- **413 Payload Too Large:**
+  - `TERMINATION_BODY_TOO_LARGE`: Request payload exceeds 512 bytes limit.
+- **500 Internal Server Error:**
+  - `TERMINATION_SIGNAL_FAILED`: Failed to dispatch process kill signal to OS.
+
+Legacy `DELETE /api/terminal/{id}` endpoints remain for backwards compatibility with unrelated existing clients; safe web clients never fall back to DELETE.
+
+### Originating Lifetime Provenance Requirements
+
+Ordinary launched terminal views in the UI do not initially possess captured destructive target tuples. In addition to matching the exact terminal session ID (`row.id === effectiveSessionId`) and passing numeric/exact row eligibility (`isTerminalInventoryRowEligible`), clients enforce complete 4-part originating lifetime provenance before resolving an ordinary view to a destructive termination target (`resolveWindowTerminalObservation`):
+1. **Originating Connection Generation:** Safe non-negative integer strictly matching observation generation (`obs.owner.generation === winGeneration`).
+2. **Originating Profile ID:** Non-empty string strictly matching observation profile (`obs.owner.profileId === winProfileId`).
+3. **Originating PTY ServerEpoch:** Canonical UUID strictly matching observation epoch (`obs.termination.serverEpoch === winServerEpoch` and `obs.termination.version === 1`).
+4. **Originating Incarnation:** Canonical positive u64 string and/or safe positive integer with mutual consistency, strictly matching `row.incarnationExact`.
+
+If any of these 4 criteria is missing or mismatched, destructive actions ("End Session", "Cancel Restart") remain disabled with an explanatory reason ("End session is unavailable: connection disconnected, legacy headerless server, or unverified session identity"), failing closed without ambient epoch promotion, while preserving safe presentation "Close View".
+
 ## Retired plugin API anchors
 
 ### Trusted Plugin API

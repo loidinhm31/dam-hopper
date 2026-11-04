@@ -137,6 +137,12 @@ function sanitizeAppState(
       projected.activeTab = rawState.activeTab;
     return Object.keys(projected).length > 0 ? projected : undefined;
   }
+  if (appId === "session-changes") {
+    // CRITICAL: Protected ReviewTarget tuple fields (generation, terminalId,
+    // terminalIncarnation, ompSessionId, serverEpoch, rootId, baselineId, target)
+    // MUST NEVER be persisted or restored as trusted authority.
+    return undefined;
+  }
   return undefined;
 }
 
@@ -611,7 +617,7 @@ export function loadOsSession(
       });
       return createDefaultOsSession();
     }
-    return validation.session;
+    return sanitizeSessionForPersistence(validation.session);
   } catch (err) {
     autosaveSuspended = true;
     preservedCorruptBytes = raw;
@@ -662,7 +668,7 @@ export function importOsSessionJson(raw: string): {
     if (!validation.valid || !validation.session) {
       return { success: false, error: validation.error };
     }
-    return { success: true, session: validation.session };
+    return { success: true, session: sanitizeSessionForPersistence(validation.session) };
   } catch (err) {
     return { success: false, error: `Invalid JSON syntax: ${String(err)}` };
   }

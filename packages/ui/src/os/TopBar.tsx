@@ -1,4 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, useRef, useEffect } from "react";
+import {
+  useShellInputContext,
+  type ShellInputContextValue,
+} from "./shell-input-context.js";
 import { Server } from "lucide-react";
 import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
@@ -39,11 +43,63 @@ export function TopBar({
   const availableProfiles: ServerProfile[] =
     knownProfiles.status === "available" ? knownProfiles.profiles : [];
   const activeProject = useWorkspaceStore((state) => state.activeProject);
+  let shellInput: ShellInputContextValue | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    shellInput = useShellInputContext();
+  } catch {
+    // Standalone fallback
+  }
 
-  const [isCtxMenuOpen, setIsCtxMenuOpen] = useState(false);
+  const targetMenuRef = useRef<HTMLDivElement>(null);
+  const [localCtxMenuOpen, setLocalCtxMenuOpen] = useState(false);
+  const isCtxMenuOpen = shellInput
+    ? shellInput.activeNonmodal === "target-selector"
+    : localCtxMenuOpen;
+
+  const setIsCtxMenuOpen = useCallback(
+    (open: boolean) => {
+      if (shellInput) {
+        shellInput.setSurfaceOpen("target-selector", open);
+      } else {
+        setLocalCtxMenuOpen(open);
+      }
+    },
+    [shellInput],
+  );
+
+  useEffect(() => {
+    if (!isCtxMenuOpen) return;
+
+    function handlePointerDown(e: PointerEvent) {
+      const target = e.target as HTMLElement | null;
+      if (
+        targetMenuRef.current &&
+        !targetMenuRef.current.contains(target) &&
+        !target?.closest?.('[data-os-nonmodal-trigger="target-selector"]')
+      ) {
+        setIsCtxMenuOpen(false);
+      }
+    }
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsCtxMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isCtxMenuOpen, setIsCtxMenuOpen]);
+
   const [isProfilesDialogOpen, setIsProfilesDialogOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ServerProfile | null | undefined>(undefined);
-
   // Default context for new windows on active desktop
   const currentDefaultCtx = activeDesktop?.defaultCtx ?? {
     profileId: activeProfile?.id ?? "default",
@@ -118,7 +174,8 @@ export function TopBar({
             type="button"
             aria-label="Default context for new windows"
             aria-expanded={isCtxMenuOpen}
-            onClick={() => setIsCtxMenuOpen((prev) => !prev)}
+            data-os-nonmodal-trigger="target-selector"
+            onClick={() => setIsCtxMenuOpen(!isCtxMenuOpen)}
             className="flex items-center gap-1.5 px-2 py-0.5 rounded border border-[var(--color-border)] hover:bg-[var(--color-surface-hover)] transition-colors text-[11px]"
           >
             <span className="text-[10px] text-[var(--color-text-muted)]">
@@ -142,7 +199,9 @@ export function TopBar({
 
           {isCtxMenuOpen && (
             <div
+              ref={targetMenuRef}
               role="menu"
+              data-os-nonmodal-surface="target-selector"
               className="absolute left-0 mt-1 w-56 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl p-1 z-50 text-xs"
             >
               <div className="px-2 py-1 text-[10px] text-[var(--color-text-muted)] uppercase tracking-wider font-semibold border-b border-[var(--color-border)] mb-1">
@@ -256,8 +315,16 @@ export function TopBar({
         <button
           type="button"
           aria-label={`Notifications (${unreadNotificationsCount} unread)`}
-          onClick={onOpenNotifications}
-          className="relative p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] transition-colors"
+          data-os-nonmodal-trigger="notification-center"
+          onClick={() => {
+            if (shellInput) {
+              shellInput.setSurfaceOpen(
+                "notification-center",
+                shellInput.activeNonmodal !== "notification-center",
+              );
+            }
+            onOpenNotifications?.();
+          }}
         >
           <span className="text-sm">🔔</span>
           {unreadNotificationsCount > 0 && (

@@ -12,6 +12,92 @@
  */
 
 import type { Transport, TransportInvokeOptions } from "./transport.js";
+import type { SessionInfo } from "./client.js";
+import {
+  X_DAM_HOPPER_TERMINATION_VERSION,
+  X_DAM_HOPPER_PTY_EPOCH,
+  isCanonicalUuid,
+  isCanonicalPositiveU64,
+  isTerminalInventoryTerminationState,
+  isTerminationResultValid,
+  type TerminationMetadata,
+  type TerminalInventoryPayload,
+  type TerminalInventoryDetailedPayload,
+  type TerminalInventoryRow,
+  type TerminalInventoryDetailedRow,
+  type TerminalTarget,
+  type TerminationOrigin,
+  type TerminationResult,
+} from "./terminal-session-contract.js";
+
+export interface WsTransportInvokeOptions extends TransportInvokeOptions {
+  responseDecoder?: (
+    response: Response,
+    json: unknown,
+  ) => Promise<unknown> | unknown;
+}
+
+export function decodeTerminationHeaders(
+  headers: Headers | Record<string, string | null | undefined>,
+): TerminationMetadata {
+  const getHeader = (name: string): string | null => {
+    if (typeof (headers as Headers).get === "function") {
+      return (headers as Headers).get(name);
+    }
+    const record = headers as Record<string, string | null | undefined>;
+    const target = name.toLowerCase();
+    for (const key of Object.keys(record)) {
+      if (key.toLowerCase() === target) {
+        return record[key] ?? null;
+      }
+    }
+    return null;
+  };
+
+  const versionHeader = getHeader(X_DAM_HOPPER_TERMINATION_VERSION);
+  const epochHeader = getHeader(X_DAM_HOPPER_PTY_EPOCH);
+
+  if (versionHeader !== "1") {
+    return Object.freeze({
+      version: null,
+      serverEpoch: null,
+      reason: "unsupported",
+    });
+  }
+
+  if (!epochHeader || !isCanonicalUuid(epochHeader)) {
+    return Object.freeze({
+      version: null,
+      serverEpoch: null,
+      reason: "invalidMetadata",
+    });
+  }
+
+  return Object.freeze({
+    version: 1,
+    serverEpoch: epochHeader,
+  });
+}
+
+export function decodeTerminalInventoryRows<T extends SessionInfo>(
+  rows: unknown,
+): readonly T[] {
+  if (!Array.isArray(rows)) return Object.freeze([]);
+  return Object.freeze(
+    rows.map((row) => {
+      const r: Record<string, unknown> = {
+        ...(row as Record<string, unknown>),
+      };
+      if (!isCanonicalPositiveU64(r.incarnationExact)) {
+        delete r.incarnationExact;
+      }
+      if (!isTerminalInventoryTerminationState(r.terminationState)) {
+        delete r.terminationState;
+      }
+      return Object.freeze(r as unknown as T);
+    }),
+  );
+}
 
 export interface WsTransportCloseInfo {
   code?: number;
@@ -677,6 +763,22 @@ function channelToEndpoint(
       return { method: "GET", url: "/api/terminal" };
     case "terminal:listDetailed":
       return { method: "GET", url: "/api/terminal/detailed" };
+    case "terminal:listObservation":
+      return { method: "GET", url: "/api/terminal" };
+    case "terminal:listDetailedObservation":
+      return { method: "GET", url: "/api/terminal/detailed" };
+    case "terminal:terminate": {
+      const d = data as { target: TerminalTarget; origin: TerminationOrigin };
+      return {
+        method: "POST",
+        url: `/api/terminal/${encodeURIComponent(d.target.terminalId)}/terminate`,
+        body: {
+          version: 1,
+          expectedServerEpoch: d.target.serverEpoch,
+          expectedIncarnation: d.target.incarnation,
+        },
+      };
+    }
     case "terminal:agentStatusSnapshot":
       return { method: "GET", url: "/api/agent-status/v1/snapshot" };
     case "agentStatus:getOmpExtensionStatus": {
@@ -744,16 +846,6 @@ function channelToEndpoint(
       return {
         method: "GET",
         url: `/api/terminal/${encodeURIComponent(data as string)}/buffer`,
-      };
-    case "terminal:kill":
-      return {
-        method: "DELETE",
-        url: `/api/terminal/${encodeURIComponent(data as string)}`,
-      };
-    case "terminal:remove":
-      return {
-        method: "DELETE",
-        url: `/api/terminal/${encodeURIComponent(data as string)}/remove`,
       };
     case "terminal:rename": {
       const d = data as { id: string; name: string | null };
@@ -3081,8 +3173,12 @@ export class WsTransport implements Transport {
   async invoke<T>(
     channel: string,
     data?: unknown,
-    options?: TransportInvokeOptions | number,
+    options?: TransportInvokeOptions | WsTransportInvokeOptions | number,
   ): Promise<T> {
+    const invokeOptions =
+      typeof options === "object" && options !== null
+        ? (options as WsTransportInvokeOptions)
+        : undefined;
     const timeoutMs =
       typeof options === "number" ? options : (options?.timeoutMs ?? 30000);
     const externalSignal =
@@ -3191,13 +3287,66 @@ export class WsTransport implements Transport {
       }
       const ct = response.headers.get("content-type") ?? "";
       if (ct.includes("application/json")) {
-        const json = await response.json();
+        const json: unknown = await response.json();
         if (
           json &&
           typeof json === "object" &&
-          typeof (json as Record<string, unknown>).workspaceEpoch === "number"
+          "workspaceEpoch" in json &&
+          typeof json.workspaceEpoch === "number"
         ) {
-          this.cachedWorkspaceEpoch = (json as Record<string, unknown>).workspaceEpoch as number;
+          this.cachedWorkspaceEpoch = json.workspaceEpoch;
+        }
+        if (invokeOptions?.responseDecoder) {
+          return (await invokeOptions.responseDecoder(response, json)) as T;
+        }
+        if (channel === "terminal:create") {
+          const termination = decodeTerminationHeaders(response.headers);
+          if (termination.version === 1 && termination.serverEpoch) {
+            return Object.freeze({
+              ...(typeof json === "object" && json !== null ? json : {}),
+              serverEpoch: termination.serverEpoch,
+            }) as T;
+          }
+        }
+        if (channel === "terminal:listObservation") {
+          const termination = decodeTerminationHeaders(response.headers);
+          const sessions =
+            decodeTerminalInventoryRows<TerminalInventoryRow>(json);
+          return Object.freeze({
+            sessions,
+            termination,
+          }) as T;
+        }
+        if (channel === "terminal:listDetailedObservation") {
+          const termination = decodeTerminationHeaders(response.headers);
+          const sessions =
+            decodeTerminalInventoryRows<TerminalInventoryDetailedRow>(json);
+          return Object.freeze({
+            sessions,
+            termination,
+          }) as T;
+        }
+        if (channel === "terminal:terminate") {
+          const d = data as {
+            target: TerminalTarget;
+            origin: TerminationOrigin;
+          };
+          if (
+            !isTerminationResultValid(
+              response.status,
+              json,
+              d.target,
+              d.origin,
+            )
+          ) {
+            throw new ApiRequestError(
+              `Termination response invalid or status/outcome/origin mismatch (status ${response.status})`,
+              response.status,
+              "status_outcome_mismatch",
+              json,
+            );
+          }
+          return json as T;
         }
         return json as T;
       }

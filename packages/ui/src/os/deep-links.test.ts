@@ -104,19 +104,24 @@ describe("deep-links parser", () => {
       TEST_PROFILES,
     );
     expect(incomplete.status).toBe("invalid");
-    expect(incomplete.reason).toContain("requires terminal, incarnation, and ompSession");
+    expect(incomplete.reason).toContain("requires full ReviewTarget tuple");
 
     const complete = parseOsDeepLink(
-      "?open=session-changes&profile=prof-1&terminal=t1&incarnation=inc1&ompSession=omp1&root=.",
+      "?open=session-changes&profile=prof-1&generation=1&terminal=t1&incarnation=1&ompSession=omp1&serverEpoch=c18f1f50-3bf0-4566-b333-e18e8df52ea2&root=git-root&baseline=base-1",
       TEST_PROFILES,
     );
     expect(complete.status).toBe("valid");
     expect(complete.appId).toBe("session-changes");
     expect(complete.intent?.action).toBe("session-changes:open");
     expect(complete.intent?.payload).toMatchObject({
+      profileId: "prof-1",
+      generation: 1,
       terminalId: "t1",
-      terminalIncarnation: "inc1",
+      terminalIncarnation: "1",
       ompSessionId: "omp1",
+      serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+      rootId: "git-root",
+      baselineId: "base-1",
     });
   });
   it("rejects malformed line numbers in file/editor deep links", () => {
@@ -146,14 +151,14 @@ describe("deep-links parser", () => {
 
   it("validates session-changes generation parameter", () => {
     const invalidGen = parseOsDeepLink(
-      "?open=session-changes&profile=prof-1&terminal=t1&incarnation=inc1&ompSession=omp1&generation=bad",
+      "?open=session-changes&profile=prof-1&terminal=t1&incarnation=1&ompSession=omp1&generation=bad&serverEpoch=c18f1f50-3bf0-4566-b333-e18e8df52ea2&root=git-root&baseline=base-1",
       TEST_PROFILES,
     );
     expect(invalidGen.status).toBe("invalid");
     expect(invalidGen.reason).toContain('Malformed generation parameter "bad"');
 
     const validGen = parseOsDeepLink(
-      "?open=session-changes&profile=prof-1&terminal=t1&incarnation=inc1&ompSession=omp1&generation=3",
+      "?open=session-changes&profile=prof-1&terminal=t1&incarnation=1&ompSession=omp1&generation=3&serverEpoch=c18f1f50-3bf0-4566-b333-e18e8df52ea2&root=git-root&baseline=base-1",
       TEST_PROFILES,
     );
     expect(validGen.status).toBe("valid");

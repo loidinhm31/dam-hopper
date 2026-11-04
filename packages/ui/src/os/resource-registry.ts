@@ -16,6 +16,7 @@ export function formatClaimKey(key: ResourceClaimKey): string {
   ];
   if (key.incarnation !== undefined) parts.push(`inc:${key.incarnation}`);
   if (key.epoch !== undefined) parts.push(`ep:${key.epoch}`);
+  if (key.authority !== undefined) parts.push(`auth:${key.authority}`);
   return parts.join("/");
 }
 

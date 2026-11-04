@@ -90,4 +90,48 @@ describe("input-arbiter", () => {
     });
     expect(disposition).toBe("app-passthrough");
   });
+
+  it("suppresses OS palette and global shortcuts when modal is active", () => {
+    const paletteChord = new KeyboardEvent("keydown", {
+      key: "k",
+      code: "KeyK",
+      ctrlKey: true,
+      altKey: true,
+    });
+    const osChord = new KeyboardEvent("keydown", {
+      key: "Escape",
+      ctrlKey: true,
+      altKey: true,
+    });
+
+    expect(
+      arbitrateKeyboardEvent(paletteChord, {
+        isCognitoActive: false,
+        isComposing: false,
+        isFrameFocused: false,
+        isModalActive: true,
+      }),
+    ).toBe("app-passthrough");
+
+    expect(
+      arbitrateKeyboardEvent(osChord, {
+        isCognitoActive: false,
+        isComposing: false,
+        isFrameFocused: false,
+        isModalActive: true,
+      }),
+    ).toBe("app-passthrough");
+  });
+
+  it("prioritizes Cognito blocking over modal-active and IME", () => {
+    const event = new KeyboardEvent("keydown", { key: "Escape", ctrlKey: true, altKey: true });
+    expect(
+      arbitrateKeyboardEvent(event, {
+        isCognitoActive: true,
+        isComposing: true,
+        isFrameFocused: true,
+        isModalActive: true,
+      }),
+    ).toBe("cognito-blocked");
+  });
 });

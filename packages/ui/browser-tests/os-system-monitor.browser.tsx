@@ -50,12 +50,33 @@ function createMockTransport(
   killFn?: (id: string) => Promise<void>,
 ): WsTransport {
   return {
-    invoke: vi.fn().mockImplementation((action: string, payload: unknown) => {
-      if (action === "terminal:kill") {
-        return killFn ? killFn(payload as string) : Promise.resolve();
+    invoke: vi.fn().mockImplementation(async (action: string, payload: unknown) => {
+      if (action === "terminal:terminate" || action === "terminal:kill") {
+        const target = (payload as { target?: { terminalId?: string; incarnation?: string } })?.target;
+        const termId = target?.terminalId ?? (payload as string);
+        if (killFn) {
+          await killFn(termId);
+        }
+        return Promise.resolve({
+          version: 1,
+          serverEpoch: "00000000-0000-0000-0000-000000000001",
+          terminalId: termId,
+          incarnation: target?.incarnation ?? "10",
+          outcome: "terminationRequested",
+        });
       }
-      if (action === "terminal:listDetailed") {
-        return Promise.resolve(sessionsList);
+      if (action === "terminal:listDetailed" || action === "terminal:listDetailedObservation") {
+        return Promise.resolve({
+          sessions: sessionsList.map((s) => ({
+            ...s,
+            incarnationExact: String(s.incarnation ?? 1),
+            terminationState: s.alive ? "live" : "exited",
+          })),
+          termination: {
+            version: 1,
+            serverEpoch: "00000000-0000-0000-0000-000000000001",
+          },
+        });
       }
       return Promise.resolve([]);
     }),
@@ -135,6 +156,16 @@ describe("OS System Monitor & Tray Browser Tests", () => {
         kill: vi.fn().mockImplementation(async (id: string) => {
           killCallsA.push(id);
         }),
+        terminateSessionGuarded: vi.fn().mockImplementation(async (target) => {
+          killCallsA.push(target.terminalId);
+          return {
+            version: 1,
+            serverEpoch: target.serverEpoch,
+            terminalId: target.terminalId,
+            incarnation: target.incarnation,
+            outcome: "terminationRequested",
+          };
+        }),
       },
     } as unknown as ApiClient;
 
@@ -142,6 +173,16 @@ describe("OS System Monitor & Tray Browser Tests", () => {
       terminal: {
         kill: vi.fn().mockImplementation(async (id: string) => {
           killCallsB.push(id);
+        }),
+        terminateSessionGuarded: vi.fn().mockImplementation(async (target) => {
+          killCallsB.push(target.terminalId);
+          return {
+            version: 1,
+            serverEpoch: target.serverEpoch,
+            terminalId: target.terminalId,
+            incarnation: target.incarnation,
+            outcome: "terminationRequested",
+          };
         }),
       },
     } as unknown as ApiClient;
@@ -170,11 +211,35 @@ describe("OS System Monitor & Tray Browser Tests", () => {
 
     queryClient.setQueryData(
       ["profile", "profile-a", 1, "terminal-sessions"],
-      sessionsA.map((s) => ({ ...s, profileId: "profile-a" })),
+      {
+        sessions: sessionsA.map((s) => ({
+          ...s,
+          profileId: "profile-a",
+          incarnationExact: String(s.incarnation),
+          terminationState: "live",
+        })),
+        termination: {
+          version: 1,
+          serverEpoch: "00000000-0000-0000-0000-000000000001",
+        },
+        owner: { profileId: "profile-a", generation: 1 },
+      },
     );
     queryClient.setQueryData(
       ["profile", "profile-b", 1, "terminal-sessions"],
-      sessionsB.map((s) => ({ ...s, profileId: "profile-b" })),
+      {
+        sessions: sessionsB.map((s) => ({
+          ...s,
+          profileId: "profile-b",
+          incarnationExact: String(s.incarnation),
+          terminationState: "live",
+        })),
+        termination: {
+          version: 1,
+          serverEpoch: "00000000-0000-0000-0000-000000000002",
+        },
+        owner: { profileId: "profile-b", generation: 1 },
+      },
     );
 
     container = document.createElement("div");
@@ -637,5 +702,100 @@ describe("OS System Monitor & Tray Browser Tests", () => {
     // Verify focused window did not change
     const activeWindowAfter = useWindowStore.getState().session.desktops[0].focusedWindowId;
     expect(activeWindowAfter).toBe(activeWindowBefore);
+  });
+
+  it("dispatches terminal:place-existing placement intent carrying source window ID", async () => {
+    let placementIntent: unknown = null;
+    const unsubPlacement = registerIntentHandler("terminal:place-existing", (intent) => {
+      placementIntent = intent.payload;
+      return { status: "handled" };
+    });
+
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <EncryptProvider>
+            <MemoryRouter>
+              <OsShell />
+            </MemoryRouter>
+          </EncryptProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    // Open System Monitor
+    await act(async () => {
+      await dispatchIntent(createIntent("system:monitor", { profileId: "profile-a" }));
+    });
+
+    // Click session row
+    const row = container?.querySelector("li[role='button']");
+    await act(async () => {
+      (row as HTMLElement)?.click();
+    });
+
+    expect(placementIntent).not.toBeNull();
+    const payload = placementIntent as {
+      sourceHubWindowId: string;
+      target: { terminalId: string; profileId: string };
+      action: string;
+    };
+    expect(payload.sourceHubWindowId).toBeDefined();
+    expect(payload.target.terminalId).toBe(identicalId);
+    expect(payload.target.profileId).toBe("profile-a");
+    expect(payload.action).toBe("focus-existing");
+
+    unsubPlacement();
+  });
+
+  it("renders server upgrade guidance when guarded termination metadata is unsupported", async () => {
+    // Set unsupported termination metadata for profile-a
+    queryClient.setQueryData(
+      ["profile", "profile-a", 1, "terminal-sessions"],
+      {
+        sessions: sessionsA.map((s) => ({
+          ...s,
+          profileId: "profile-a",
+          incarnationExact: String(s.incarnation),
+          terminationState: "live",
+        })),
+        termination: {
+          version: null,
+          serverEpoch: null,
+          reason: "unsupported",
+        },
+        owner: { profileId: "profile-a", generation: 1 },
+      },
+    );
+
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <EncryptProvider>
+            <MemoryRouter>
+              <OsShell />
+            </MemoryRouter>
+          </EncryptProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    await act(async () => {
+      await dispatchIntent(createIntent("system:monitor", { profileId: "profile-a" }));
+    });
+
+    const row = container?.querySelector("li[role='button']");
+    const killBtn = row?.querySelector("button[title='Kill session']");
+    await act(async () => {
+      (killBtn as HTMLButtonElement)?.click();
+    });
+
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain("server does not support guarded termination protocol");
+    expect(dialog?.textContent).toContain("Upgrade server to DamHopper Termination Protocol v1");
+
+    // Kill Session button should be disabled
+    const confirmBtn = dialog?.querySelector('button.bg-\\[var\\(--color-danger\\)\\]');
+    expect(confirmBtn?.hasAttribute("disabled")).toBe(true);
   });
 });

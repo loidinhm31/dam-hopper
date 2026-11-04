@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useState, useRef } from "react";
-import type { OsWindow, OsAppId, WindowContext } from "./types.js";
+import type { OsWindow, OsAppId, WindowContext, ShellNonmodalSurface } from "./types.js";
 import { useWindowStore } from "./window-store.js";
 import { DesktopCanvas } from "./DesktopCanvas.js";
 import { OsResourceHost } from "./OsResourceHost.js";
@@ -28,13 +28,25 @@ import {
 import { getTerminal } from "@/lib/terminal-registry.js";
 import { parseOsDeepLink } from "./deep-links.js";
 import { readServerProfiles } from "@/api/server-config.js";
-import { getConnectionSnapshot, getApi } from "@/api/connections.js";
+import { getConnectionSnapshot, isCurrentConnection, getApi } from "@/api/connections.js";
 import { dispatchIntent, registerIntentHandler, createIntent } from "./intents.js";
+import { TerminalCloseProvider } from "./terminal-close-context.js";
+import { ReviewRetirementHost } from "./review-retirement.js";
+import { useAggregatedTerminalSessions } from "@/hooks/use-aggregated-terminal-sessions.js";
+import {
+  type ReviewTarget,
+  type TerminalTarget,
+  isCanonicalUuid,
+  resolveWindowTerminalObservation,
+} from "@/api/terminal-session-contract.js";
+import { findMatchingTerminalWindow } from "./agent-hub.js";
 import { TopBar } from "./TopBar.js";
 import { Dock } from "./Dock.js";
 import { CommandPalette } from "./CommandPalette.js";
 import { NotificationCenter } from "./NotificationCenter.js";
 import { useOsNotificationStore, ingestIpcActivityEvent } from "./notifications.js";
+import { ShellInputProvider } from "./shell-input-context.js";
+import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { useIpcEvent } from "@/hooks/use-sse-events.js";
 import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.js";
 import { useAgentStatusStore } from "@/stores/agent-status.js";
@@ -63,12 +75,69 @@ export function OsShell() {
   const profile = useServerProfile();
   const profileId = profile?.id ?? "default";
   const activeProject = useWorkspaceStore((state) => state.activeProject);
+  const { observations } = useAggregatedTerminalSessions();
+  const latestObservationsRef = useRef(observations);
+  useEffect(() => {
+    latestObservationsRef.current = observations;
+  }, [observations]);
+  // Synchronize inventory-observed terminal target and terminationState into windows
+  useEffect(() => {
+    const sessionWindows = useWindowStore.getState().session.windows;
+    let changed = false;
+    const nextWindows = { ...sessionWindows };
+    for (const [winId, win] of Object.entries(sessionWindows)) {
+      if (win.appId !== "terminals") continue;
+      const resolved = resolveWindowTerminalObservation(win, observations);
+      const currentTarget =
+        win.runtimeIdentity?.kind === "terminal"
+          ? win.runtimeIdentity.target
+          : (win.appState?.target as TerminalTarget | undefined);
+      const currentTerminationState = win.appState?.terminationState;
+
+      // Only adopt if we gained a verified target whose owner is currently active, or if terminationState changed
+      const isTargetCurrent = resolved.target
+        ? isCurrentConnection({
+            profileId: resolved.target.profileId,
+            generation: resolved.target.generation,
+          })
+        : false;
+      const shouldAdoptTarget = !currentTarget && resolved.target !== null && isTargetCurrent;
+      const shouldUpdateState = currentTerminationState !== resolved.availability;
+      if (shouldAdoptTarget || shouldUpdateState) {
+        changed = true;
+        nextWindows[winId] = {
+          ...win,
+          ...(shouldAdoptTarget && resolved.target
+            ? {
+                runtimeIdentity: {
+                  kind: "terminal",
+                  target: resolved.target,
+                },
+              }
+            : {}),
+          appState: {
+            ...win.appState,
+            target: currentTarget ?? resolved.target ?? win.appState?.target,
+            terminationState: resolved.availability,
+          },
+        };
+      }
+    }
+    if (changed) {
+      useWindowStore.getState().setSession({
+        ...useWindowStore.getState().session,
+        windows: nextWindows,
+      });
+    }
+  }, [observations]);
   const [notice, setNotice] = useState<PersistenceNotice | null>(null);
   const [deepLinkNotice, setDeepLinkNotice] = useState<string | null>(null);
   const [handlersReady, setHandlersReady] = useState(false);
   const lastProcessedSearchRef = useRef<string | null>(null);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
-  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [activeNonmodal, setActiveNonmodal] = useState<ShellNonmodalSurface | null>(null);
+  const [modalDepth, setModalDepth] = useState(0);
+  const isNotificationsOpen = activeNonmodal === "notification-center";
   const unreadTerminalNotifs = useTerminalNotificationsStore(
     (state) => state.notifications.filter((n) => !n.read).length,
   );
@@ -188,10 +257,12 @@ export function OsShell() {
       const targetEl = e.target as HTMLElement | null;
       if (targetEl?.closest?.('[data-shortcut-capture="true"]')) return;
 
+      const isCognitoActive = useCognitoModeStore.getState().active;
       const disposition = arbitrateKeyboardEvent(e, {
-        isCognitoActive: false,
+        isCognitoActive,
         isComposing: Boolean(e.isComposing),
         isFrameFocused: false,
+        isModalActive: isPaletteOpen || modalDepth > 0,
         paletteShortcut: osPaletteShortcut,
         cycleFocusShortcut: osCycleFocusShortcut,
       });
@@ -199,7 +270,16 @@ export function OsShell() {
       if (disposition === "os-palette-handled") {
         e.preventDefault();
         e.stopPropagation();
+        setActiveNonmodal(null);
         setIsPaletteOpen((prev) => !prev);
+        return;
+      }
+
+      if (e.key === "Escape" && activeNonmodal !== null && !isPaletteOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setActiveNonmodal(null);
+        return;
       } else if (disposition === "os-shortcut-handled") {
         e.preventDefault();
         e.stopPropagation();
@@ -253,8 +333,11 @@ export function OsShell() {
 
         let createError: string | undefined;
         let incarnation: number | undefined;
+        let serverEpoch: string | undefined;
         const snap = getConnectionSnapshot(targetCtx.profileId);
         if (snap && snap.status === "connected") {
+          const originatingGeneration = snap.owner.generation;
+          const originatingProfileId = snap.owner.profileId;
           try {
             const client = getApi(snap.owner);
             const wireTarget = targetCtx.target ? toServerFsTarget(targetCtx.target) : undefined;
@@ -267,7 +350,20 @@ export function OsShell() {
               cols: 80,
               rows: 24,
             });
-            incarnation = session.incarnation;
+            const snapAfter = getConnectionSnapshot(targetCtx.profileId);
+            if (
+              snapAfter &&
+              snapAfter.status === "connected" &&
+              snapAfter.owner.profileId === originatingProfileId &&
+              snapAfter.owner.generation === originatingGeneration
+            ) {
+              incarnation = session.incarnation;
+              if (session.serverEpoch && isCanonicalUuid(session.serverEpoch)) {
+                serverEpoch = session.serverEpoch;
+              }
+            } else {
+              createError = "Connection owner changed during creation";
+            }
           } catch (err) {
             createError = err instanceof Error ? err.message : String(err);
           }
@@ -283,7 +379,15 @@ export function OsShell() {
             appState: {
               sessionId: terminalId,
               terminalId,
-              ...(incarnation !== undefined ? { incarnation } : {}),
+              ...(incarnation !== undefined && serverEpoch !== undefined
+                ? {
+                    incarnation,
+                    incarnationExact: String(incarnation),
+                    generation: snap?.owner.generation,
+                    profileId: snap?.owner.profileId,
+                    serverEpoch,
+                  }
+                : {}),
               ...(createError ? { createError } : {}),
               ...(intent.payload.cwd ? { cwd: intent.payload.cwd } : {}),
             },
@@ -456,31 +560,82 @@ export function OsShell() {
         return { status: "handled", targetWindowId: id };
       }),
       registerIntentHandler("session-changes:open", (intent) => {
-        const generation =
-          intent.payload.generation ??
-          getConnectionSnapshot(intent.payload.profileId)?.owner.generation;
+        const payload = intent.payload;
+        if (
+          !payload ||
+          !payload.profileId ||
+          typeof payload.generation !== "number" ||
+          !payload.terminalId ||
+          !payload.terminalIncarnation ||
+          !payload.ompSessionId ||
+          !payload.serverEpoch ||
+          !payload.rootId ||
+          !payload.baselineId
+        ) {
+          return {
+            status: "invalid",
+            error:
+              "Session Changes requires complete ReviewTarget tuple (profileId, generation, terminalId, terminalIncarnation, ompSessionId, serverEpoch, rootId, baselineId). Please upgrade or open from Agent Hub.",
+          };
+        }
+
+        if (
+          !isCurrentConnection({
+            profileId: payload.profileId,
+            generation: payload.generation,
+          })
+        ) {
+          return {
+            status: "invalid",
+            error:
+              "Session Changes target owner is disconnected or connection generation has changed.",
+          };
+        }
+
+        const reviewTarget: ReviewTarget = Object.freeze({ ...payload });
         const targetCtx: WindowContext = {
-          profileId: intent.payload.profileId,
-          generation,
+          profileId: reviewTarget.profileId,
+          generation: reviewTarget.generation,
         };
-        const existing = findExistingWindowForApp(
+
+        const existing = Object.values(
           useWindowStore.getState().session.windows,
-          "session-changes",
-          targetCtx,
-          intent.payload,
-        );
+        ).find((w) => {
+          if (w.appId !== "session-changes") return false;
+          const target =
+            w.runtimeIdentity?.kind === "review"
+              ? w.runtimeIdentity.target
+              : (w.appState?.target as ReviewTarget | undefined);
+          if (target) {
+            return (
+              target.profileId === reviewTarget.profileId &&
+              target.generation === reviewTarget.generation &&
+              target.terminalId === reviewTarget.terminalId &&
+              target.terminalIncarnation === reviewTarget.terminalIncarnation &&
+              target.ompSessionId === reviewTarget.ompSessionId &&
+              target.serverEpoch === reviewTarget.serverEpoch &&
+              target.rootId === reviewTarget.rootId &&
+              target.baselineId === reviewTarget.baselineId
+            );
+          }
+          return false;
+        });
+
         if (existing) {
+          if (
+            existing.desktopId !==
+            useWindowStore.getState().session.activeDesktopId
+          ) {
+            switchDesktop(existing.desktopId);
+          }
           if (existing.minimized) restoreWindow(existing.id);
           focusWindow(existing.id);
           useWindowStore.getState().updateAppState(existing.id, {
-            generation,
-            terminalId: intent.payload.terminalId,
-            terminalIncarnation: intent.payload.terminalIncarnation,
-            ompSessionId: intent.payload.ompSessionId,
-            rootId: intent.payload.rootId,
+            target: reviewTarget,
           });
           return { status: "handled", targetWindowId: existing.id };
         }
+
         const id = `session-changes-${generateUUID().slice(0, 8)}`;
         openWindow(
           {
@@ -489,16 +644,17 @@ export function OsShell() {
             title: "Session Changes",
             ctx: targetCtx,
             mode: getPlacement(),
+            runtimeIdentity: {
+              kind: "review",
+              target: reviewTarget,
+            },
             appState: {
-              generation,
-              terminalId: intent.payload.terminalId,
-              terminalIncarnation: intent.payload.terminalIncarnation,
-              ompSessionId: intent.payload.ompSessionId,
-              rootId: intent.payload.rootId,
+              target: reviewTarget,
             },
           },
           useWindowStore.getState().session.activeDesktopId,
         );
+        focusWindow(id);
         return { status: "handled", targetWindowId: id };
       }),
       registerIntentHandler("git:status", (intent) => {
@@ -803,11 +959,176 @@ export function OsShell() {
                 intent.payload.terminalId),
         );
         if (existing) {
+          if (
+            existing.desktopId !==
+            useWindowStore.getState().session.activeDesktopId
+          ) {
+            switchDesktop(existing.desktopId);
+          }
           if (existing.minimized) restoreWindow(existing.id);
           focusWindow(existing.id);
           return { status: "handled", targetWindowId: existing.id };
         }
         return { status: "unhandled", reason: "terminal-not-found" };
+      }),
+      registerIntentHandler("terminal:place-existing", (intent) => {
+        const { sourceHubWindowId, target, action } = intent.payload;
+        if (!sourceHubWindowId || !target || !action) {
+          return {
+            status: "invalid",
+            error: "Missing required placement fields",
+          };
+        }
+
+        const currentWindows = useWindowStore.getState().session.windows;
+        const sourceHubWin = currentWindows[sourceHubWindowId];
+        if (!sourceHubWin) {
+          return {
+            status: "invalid",
+            error: `Source Hub window '${sourceHubWindowId}' not found`,
+          };
+        }
+
+        if (
+          !isCurrentConnection({
+            profileId: target.profileId,
+            generation: target.generation,
+          })
+        ) {
+          return {
+            status: "invalid",
+            error: `Owner connection '${target.profileId}' generation changed or disconnected`,
+          };
+        }
+
+        const obs = latestObservationsRef.current.find(
+          (o) =>
+            o.owner?.profileId === target.profileId &&
+            o.owner?.generation === target.generation,
+        );
+        if (
+          !obs ||
+          obs.termination.version !== 1 ||
+          obs.termination.serverEpoch !== target.serverEpoch
+        ) {
+          return {
+            status: "invalid",
+            error:
+              "Target PTY serverEpoch mismatch or unsupported inventory authority",
+          };
+        }
+
+        const inventorySession = obs.sessions.find(
+          (s) =>
+            s.id === target.terminalId &&
+            s.incarnationExact === target.incarnation,
+        );
+        if (!inventorySession) {
+          return {
+            status: "invalid",
+            error: "Target terminal session is missing, replaced, or retired",
+          };
+        }
+
+        const matching = findMatchingTerminalWindow(target, currentWindows);
+        const existingWindow = matching ? matching.window : null;
+
+        const activeDesktopId =
+          useWindowStore.getState().session.activeDesktopId;
+        const sourceDesktopId = sourceHubWin.desktopId;
+
+        if (action === "focus-existing") {
+          if (existingWindow) {
+            if (existingWindow.desktopId !== activeDesktopId) {
+              switchDesktop(existingWindow.desktopId);
+            }
+            if (existingWindow.minimized) {
+              restoreWindow(existingWindow.id);
+            }
+            focusWindow(existingWindow.id);
+            return { status: "handled", targetWindowId: existingWindow.id };
+          }
+          return {
+            status: "unhandled",
+            reason: "No active window found for terminal target",
+          };
+        }
+
+        if (action === "open-beside") {
+          if (existingWindow && existingWindow.desktopId === sourceDesktopId) {
+            if (existingWindow.minimized) {
+              restoreWindow(existingWindow.id);
+            }
+            focusWindow(existingWindow.id);
+            return { status: "handled", targetWindowId: existingWindow.id };
+          }
+
+          const terminalWinId = existingWindow
+            ? existingWindow.id
+            : `terminals-${generateUUID().slice(0, 8)}`;
+          const winToPlace: OsWindow = existingWindow ?? {
+            id: terminalWinId,
+            appId: "terminals",
+            title: `Terminal (${target.terminalId})`,
+            ctx: {
+              profileId: target.profileId,
+              generation: target.generation,
+            },
+            mode: sourceHubWin.mode === "tile" ? "tile" : "float",
+            desktopId: sourceDesktopId,
+            maximized: false,
+            minimized: false,
+            runtimeIdentity: {
+              kind: "terminal",
+              target,
+            },
+            appState: {
+              target,
+              sessionId: target.terminalId,
+              attachPolicy: "existing-only",
+            },
+          };
+
+          const placedId = useWindowStore.getState().placeExistingTerminal({
+            sourceHubWindowId,
+            terminalWindow: winToPlace,
+            action: "open-beside",
+          });
+          return { status: "handled", targetWindowId: placedId };
+        }
+
+        if (action === "move-beside") {
+          if (!existingWindow) {
+            return {
+              status: "invalid",
+              error:
+                "Cannot move-beside: no existing window found for target",
+            };
+          }
+
+          const placedId = useWindowStore.getState().placeExistingTerminal({
+            sourceHubWindowId,
+            terminalWindow: {
+              ...existingWindow,
+              runtimeIdentity: {
+                kind: "terminal",
+                target,
+              },
+              appState: {
+                ...existingWindow.appState,
+                target,
+                attachPolicy: "existing-only",
+              },
+            },
+            action: "move-beside",
+          });
+          return { status: "handled", targetWindowId: placedId };
+        }
+
+        return {
+          status: "invalid",
+          error: `Unknown placement action '${action}'`,
+        };
       }),
       registerIntentHandler("search:query", (intent) => {
         const targetCtx: WindowContext = {
@@ -1159,8 +1480,11 @@ export function OsShell() {
         const terminalId = `term-${generateUUID()}`;
         let createError: string | undefined;
         let incarnation: number | undefined;
+        let serverEpoch: string | undefined;
         const snap = getConnectionSnapshot(targetCtx.profileId);
         if (snap && snap.status === "connected") {
+          const originatingGeneration = snap.owner.generation;
+          const originatingProfileId = snap.owner.profileId;
           try {
             const client = getApi(snap.owner);
             const createdSession = await client.terminal.create({
@@ -1170,7 +1494,20 @@ export function OsShell() {
               cols: 80,
               rows: 24,
             });
-            incarnation = createdSession.incarnation;
+            const snapAfter = getConnectionSnapshot(targetCtx.profileId);
+            if (
+              snapAfter &&
+              snapAfter.status === "connected" &&
+              snapAfter.owner.profileId === originatingProfileId &&
+              snapAfter.owner.generation === originatingGeneration
+            ) {
+              incarnation = createdSession.incarnation;
+              if (createdSession.serverEpoch && isCanonicalUuid(createdSession.serverEpoch)) {
+                serverEpoch = createdSession.serverEpoch;
+              }
+            } else {
+              createError = "Connection owner changed during creation";
+            }
           } catch (err) {
             createError = err instanceof Error ? err.message : String(err);
           }
@@ -1178,7 +1515,15 @@ export function OsShell() {
         appState = {
           sessionId: terminalId,
           terminalId,
-          ...(incarnation !== undefined ? { incarnation } : {}),
+          ...(incarnation !== undefined && serverEpoch !== undefined
+            ? {
+                incarnation,
+                incarnationExact: String(incarnation),
+                generation: snap?.owner.generation,
+                profileId: snap?.owner.profileId,
+                serverEpoch,
+              }
+            : {}),
           ...(createError ? { createError } : {}),
         };
       }
@@ -1250,78 +1595,96 @@ export function OsShell() {
   };
 
   return (
-    <OsResourceHost>
-      <div
-        data-os-shell="true"
-        data-testid="os-shell-root"
-        className="flex flex-col w-screen h-screen overflow-hidden bg-[var(--color-bg)] select-none"
-      >
-        {/* Top OS Bar */}
-        <TopBar
-          onOpenPalette={() => setIsPaletteOpen(true)}
-          onOpenNotifications={() => setIsNotificationsOpen((prev) => !prev)}
-          unreadNotificationsCount={unreadNotifs}
-        />
-        {deepLinkNotice && (
+    <ShellInputProvider
+      activePalette={isPaletteOpen}
+      onPaletteChange={setIsPaletteOpen}
+      activeNonmodal={activeNonmodal}
+      onNonmodalChange={setActiveNonmodal}
+      onModalDepthChange={setModalDepth}
+    >
+      <TerminalCloseProvider>
+        <ReviewRetirementHost />
+        <OsResourceHost>
           <div
-            data-testid="os-deep-link-notice"
-            role="alert"
-            className="flex items-center justify-between px-4 py-2 bg-[var(--color-danger)]/15 border-b border-[var(--color-danger)]/30 text-xs text-[var(--color-danger)] shrink-0 z-50 select-none"
+            data-os-shell="true"
+            data-testid="os-shell-root"
+            className="flex flex-col w-screen h-screen overflow-hidden bg-[var(--color-bg)] select-none"
           >
-            <span>{deepLinkNotice}</span>
-            <button
-              type="button"
-              onClick={() => setDeepLinkNotice(null)}
-              className="px-2 py-0.5 rounded text-xs hover:bg-[var(--color-danger)]/20"
-            >
-              Dismiss
-            </button>
-          </div>
-        )}
-        {notice && (
-          <div
-            data-os-notice="true"
-            className="flex items-center justify-between px-3 py-1 bg-[var(--color-warning)] text-black text-xs z-50"
-          >
-            <span>{notice.message}</span>
-            <button
-              type="button"
-              aria-label="Dismiss notice"
-              onClick={() => setNotice(null)}
-              className="text-xs font-bold px-1"
-            >
-              ✕
-            </button>
-          </div>
-        )}
-
-        {/* Desktop Canvas */}
-        {/* Main Workspace: Left Dock + Desktop Canvas */}
-        <div className="flex flex-1 min-h-0 w-full overflow-hidden">
-          <Dock onLaunchApp={handleLaunchApp} />
-
-          <main className="flex-1 min-h-0 relative overflow-hidden" role="main">
-            {activeDesktop && (
-              <DesktopCanvas
-                desktop={activeDesktop}
-                renderApp={renderApp}
-              />
+            {/* Top OS Bar */}
+            <TopBar
+              onOpenPalette={() => {
+                setActiveNonmodal(null);
+                setIsPaletteOpen(true);
+              }}
+              onOpenNotifications={() =>
+                setActiveNonmodal((prev) =>
+                  prev === "notification-center" ? null : "notification-center",
+                )
+              }
+              unreadNotificationsCount={unreadNotifs}
+            />
+            {deepLinkNotice && (
+              <div
+                data-testid="os-deep-link-notice"
+                role="alert"
+                className="flex items-center justify-between px-4 py-2 bg-[var(--color-danger)]/15 border-b border-[var(--color-danger)]/30 text-xs text-[var(--color-danger)] shrink-0 z-50 select-none"
+              >
+                <span>{deepLinkNotice}</span>
+                <button
+                  type="button"
+                  onClick={() => setDeepLinkNotice(null)}
+                  className="px-2 py-0.5 rounded text-xs hover:bg-[var(--color-danger)]/20"
+                >
+                  Dismiss
+                </button>
+              </div>
             )}
-          </main>
-        </div>
+            {notice && (
+              <div
+                data-os-notice="true"
+                className="flex items-center justify-between px-3 py-1 bg-[var(--color-warning)] text-black text-xs z-50"
+              >
+                <span>{notice.message}</span>
+                <button
+                  type="button"
+                  aria-label="Dismiss notice"
+                  onClick={() => setNotice(null)}
+                  className="text-xs font-bold px-1"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
 
-        {/* Command Palette Modal */}
-        <CommandPalette
-          isOpen={isPaletteOpen}
-          onClose={() => setIsPaletteOpen(false)}
-        />
+            {/* Desktop Canvas */}
+            {/* Main Workspace: Left Dock + Desktop Canvas */}
+            <div className="flex flex-1 min-h-0 w-full overflow-hidden">
+              <Dock onLaunchApp={handleLaunchApp} />
 
-        {/* Notification Center Popover */}
-        <NotificationCenter
-          isOpen={isNotificationsOpen}
-          onClose={() => setIsNotificationsOpen(false)}
-        />
-      </div>
-      </OsResourceHost>
+              <main className="flex-1 min-h-0 relative overflow-hidden" role="main">
+                {activeDesktop && (
+                  <DesktopCanvas
+                    desktop={activeDesktop}
+                    renderApp={renderApp}
+                  />
+                )}
+              </main>
+            </div>
+
+            {/* Command Palette Modal */}
+            <CommandPalette
+              isOpen={isPaletteOpen}
+              onClose={() => setIsPaletteOpen(false)}
+            />
+
+            {/* Notification Center Popover */}
+            <NotificationCenter
+              isOpen={isNotificationsOpen}
+              onClose={() => setActiveNonmodal(null)}
+            />
+          </div>
+        </OsResourceHost>
+      </TerminalCloseProvider>
+    </ShellInputProvider>
   );
 }

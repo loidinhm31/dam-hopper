@@ -27,6 +27,11 @@ import {
 } from "@/lib/explorer-language-scan.js";
 import { invalidateBlameForTarget } from "@/lib/editor-git-blame-cache.js";
 import type {
+  TerminalInventoryDetailedPayload,
+  TerminalInventoryDetailedObservation,
+  TerminalInventoryDetailedRow,
+} from "./terminal-session-contract.js";
+import type {
   DamHopperConfig,
   ProjectConfig,
   ProjectWithStatus,
@@ -1096,26 +1101,62 @@ export function useGlobalConfig(options?: OwnerInput) {
   });
 }
 
+export function terminalInventoryQueryOptions(owner?: ConnectionRef | null) {
+  const queryKey = owner
+    ? profileQueryKey(owner, "terminal-sessions")
+    : (["terminal-sessions"] as const);
+
+  return {
+    queryKey,
+    queryFn: async (): Promise<TerminalInventoryDetailedObservation> => {
+      const transport = owner ? getBoundTransport(owner) : getTransport();
+      const raw = await transport.invoke<
+        TerminalInventoryDetailedPayload | TerminalInventoryDetailedRow[]
+      >("terminal:listDetailedObservation");
+      const payload: TerminalInventoryDetailedPayload = Array.isArray(raw)
+        ? {
+            sessions: raw,
+            termination: {
+              version: null,
+              serverEpoch: null,
+              reason: "unsupported",
+            },
+          }
+        : raw;
+      if (owner && !isCurrentConnection(owner)) {
+        throw new ConnectionOwnerError(
+          "Terminal session owner is stale",
+          "stale",
+        );
+      }
+      rememberTerminalSessionIncarnations(payload.sessions, owner?.profileId);
+      return Object.freeze({
+        ...payload,
+        owner: owner ?? null,
+      });
+    },
+    staleTime: Infinity, // driven by terminal:changed push event invalidation
+  };
+}
+
+export function useTerminalInventory(owner?: ConnectionRef | null) {
+  const resolvedOwner =
+    owner !== undefined ? owner : resolveWorkflowOwner(undefined);
+  return useQuery<TerminalInventoryDetailedObservation>({
+    ...terminalInventoryQueryOptions(resolvedOwner),
+  });
+}
+
 export function useTerminalSessions(options?: {
   owner?: ConnectionRef;
   profileId?: ProfileId;
 }) {
   const owner = resolveWorkflowOwner(options);
-  const queryKey = owner
-    ? profileQueryKey(owner, "terminal-sessions")
-    : (["terminal-sessions"] as const);
+  const baseOptions = terminalInventoryQueryOptions(owner);
 
-  return useQuery<SessionInfo[]>({
-    queryKey,
-    queryFn: async () => {
-      const transport = owner ? getBoundTransport(owner) : getTransport();
-      const sessions = await transport.invoke<SessionInfo[]>(
-        "terminal:listDetailed",
-      );
-      rememberTerminalSessionIncarnations(sessions, owner?.profileId);
-      return sessions;
-    },
-    staleTime: Infinity, // driven by terminal:changed push event invalidation
+  return useQuery<TerminalInventoryDetailedObservation, Error, SessionInfo[]>({
+    ...baseOptions,
+    select: (obs) => obs.sessions as unknown as SessionInfo[],
   });
 }
 

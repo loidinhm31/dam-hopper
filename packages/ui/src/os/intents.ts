@@ -1,4 +1,5 @@
 import type { FsTargetRef } from "@/api/ownership.js";
+import type { TerminalPlacementIntent, ReviewTarget } from "../api/terminal-session-contract.js";
 /**
  * Typed OS Intent routing for DamHopper OS.
  *
@@ -10,6 +11,7 @@ import type { FsTargetRef } from "@/api/ownership.js";
 export type IntentAction =
   | "terminal:open"
   | "terminal:focus"
+  | "terminal:place-existing"
   | "file:open"
   | "file:edit"
   | "file:reveal"
@@ -58,6 +60,7 @@ export interface IntentPayloadMap {
     profileId: string;
     terminalId: string;
   };
+  "terminal:place-existing": TerminalPlacementIntent;
   "file:open": {
     profileId: string;
     projectId?: string;
@@ -174,14 +177,7 @@ export interface IntentPayloadMap {
     worktreeId?: string;
     filePath: string;
   };
-  "session-changes:open": {
-    profileId: string;
-    generation?: number;
-    terminalId: string;
-    terminalIncarnation: string;
-    ompSessionId: string;
-    rootId?: string;
-  };
+  "session-changes:open": ReviewTarget;
   "workflow:open-item": {
     profileId: string;
     projectId?: string;

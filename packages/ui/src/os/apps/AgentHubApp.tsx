@@ -1,6 +1,7 @@
 import {
   useState,
   useMemo,
+  useCallback,
   type ReactElement,
 } from "react";
 import {
@@ -10,18 +11,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/Select.js";
-import type { OsWindow, WindowContext } from "../types.js";
+import type { OsWindow } from "../types.js";
 import { useWindowStore } from "../window-store.js";
 import { dispatchIntent, createIntent } from "../intents.js";
-import {
-  useAggregatedTerminalSessions,
-  type AggregatedSessionInfo,
-} from "@/hooks/use-aggregated-terminal-sessions.js";
+import { useAggregatedTerminalSessions } from "@/hooks/use-aggregated-terminal-sessions.js";
 import { useAggregatedProjects } from "@/hooks/use-aggregated-projects.js";
 import { useAgentStatusStore } from "@/stores/agent-status.js";
 import {
   getAllConnectionSnapshots,
   getConnectionSnapshot,
+  getApi,
   type ConnectionSnapshot,
 } from "@/api/connections.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
@@ -29,17 +28,20 @@ import {
   buildAgentHubItems,
   computeAgentHubSummary,
   filterAgentHubItems,
-  validateAgentHubJump,
+  findMatchingTerminalWindow,
+  createTerminalPlacementIntent,
   type AgentHubItem,
   type AgentHubUrgency,
+  type AgentHubFilterScope,
   AGENT_HUB_URGENCY_ORDER,
   AGENT_HUB_URGENCY_LABELS,
 } from "../agent-hub.js";
-import { terminalKey, parseTerminalKey, type TerminalRef } from "@/api/ownership.js";
+import { terminalKey, type TerminalRef } from "@/api/ownership.js";
 import { buildTraditionalTerminalProjectGroups } from "@/lib/traditional-terminal-projects.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
-import { generateUUID } from "@/lib/utils.js";
+import { SessionChangesClient } from "@/api/session-changes-client.js";
+import type { ReviewTarget } from "@/api/terminal-session-contract.js";
 
 export interface AgentHubAppProps {
   window: OsWindow;
@@ -48,22 +50,21 @@ export interface AgentHubAppProps {
 export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
   const isCognitoActive = useCognitoModeStore((state) => state.active);
   const session = useWindowStore((state) => state.session);
-  const openWindow = useWindowStore((state) => state.openWindow);
   const focusWindow = useWindowStore((state) => state.focusWindow);
   const restoreWindow = useWindowStore((state) => state.restoreWindow);
   const switchDesktop = useWindowStore((state) => state.switchDesktop);
 
+  const [scopeFilter, setScopeFilter] = useState<AgentHubFilterScope>("all");
   const [urgencyFilter, setUrgencyFilter] = useState<AgentHubUrgency | "all">("all");
   const [profileFilter, setProfileFilter] = useState<string | "all">("all");
   const [harnessFilter, setHarnessFilter] = useState<"OMP" | "Codex" | "Claude" | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null);
 
-  const { sessions: rawSessions = [], isLoading: sessionsLoading } =
-    useAggregatedTerminalSessions();
-  const { allProjects = [], isLoading: projectsLoading } =
-    useAggregatedProjects();
+  const { sessions: rawSessions = [] } = useAggregatedTerminalSessions();
+  const { allProjects = [] } = useAggregatedProjects();
   const statusProfiles = useAgentStatusStore((state) => state.profiles);
+
   // Map all connections
   const connectionsMap = useMemo(() => {
     const map = new Map<string, ConnectionSnapshot>();
@@ -121,9 +122,7 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
           command: s.command,
           cwd: s.cwd,
           type: s.type,
-          startedAt: s.startedAt,
-          project: s.project,
-          worktreePath: s.worktreePath,
+          startedAt: s.startedAt ?? 0,
         },
       });
     }
@@ -131,15 +130,17 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
     return buildTraditionalTerminalProjectGroups(mounted, tabs);
   }, [rawSessions]);
 
-  // Build aggregated Agent Hub items
+  // Build inventory-first Agent Hub items
   const items = useMemo(() => {
     return buildAgentHubItems({
       groups,
       profiles: statusProfiles,
       connections: connectionsMap,
       profileLabels,
+      sessions: rawSessions,
+      windows: session.windows,
     });
-  }, [groups, statusProfiles, connectionsMap, profileLabels]);
+  }, [groups, statusProfiles, connectionsMap, profileLabels, rawSessions, session.windows]);
 
   // Summary counts
   const summary = useMemo(() => {
@@ -149,12 +150,13 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
   // Filtered items
   const filteredItems = useMemo(() => {
     return filterAgentHubItems(items, {
+      scope: scopeFilter,
       urgency: urgencyFilter,
       profileId: profileFilter,
       harness: harnessFilter,
       searchQuery,
     });
-  }, [items, urgencyFilter, profileFilter, harnessFilter, searchQuery]);
+  }, [items, scopeFilter, urgencyFilter, profileFilter, harnessFilter, searchQuery]);
 
   // Group filtered items by urgency
   const groupedItems = useMemo(() => {
@@ -163,6 +165,7 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
       working: [],
       idle: [],
       unavailable: [],
+      unobserved: [],
     };
     for (const item of filteredItems) {
       groupsMap[item.urgency].push(item);
@@ -170,86 +173,214 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
     return groupsMap;
   }, [filteredItems]);
 
-  // Alive terminal IDs by profile map for jump validation
-  const aliveTerminalIdsByProfile = useMemo(() => {
-    const map = new Map<string, Set<string>>();
-    for (const s of rawSessions) {
-      if (s.alive) {
-        let set = map.get(s.profileId);
-        if (!set) {
-          set = new Set<string>();
-          map.set(s.profileId, set);
-        }
-        set.add(s.id);
-      }
-    }
-    return map;
-  }, [rawSessions]);
+  // Handle jump / placement intent
+  const handleJump = useCallback(
+    (item: AgentHubItem) => {
+      setFeedbackNotice(null);
 
-  // Handle jump
-  const handleJump = (item: AgentHubItem) => {
-    setFeedbackNotice(null);
-    const validation = validateAgentHubJump(
-      item,
-      connectionsMap,
-      session.windows,
-      aliveTerminalIdsByProfile,
-    );
-
-    if (!validation.valid) {
-      setFeedbackNotice(`Jump blocked: ${validation.reason ?? "Invalid target"}`);
-      return;
-    }
-
-    // Existing window found
-    if (validation.existingWindowId) {
-      const win = session.windows[validation.existingWindowId];
-      if (win) {
-        if (win.desktopId !== session.activeDesktopId) {
-          switchDesktop(win.desktopId);
-        }
-        if (win.minimized) {
-          restoreWindow(win.id);
-        }
-        focusWindow(win.id);
+      // Check if target is valid
+      if (!item.terminationTarget) {
+        setFeedbackNotice("Jump blocked: Terminal target is unavailable or invalid.");
         return;
       }
-    }
 
-    // No window displaying it yet, but session is live on host. Open in terminals app on active desktop.
-    const newWinId = `terminals-${generateUUID().slice(0, 8)}`;
-    openWindow(
-      {
-        id: newWinId,
-        appId: "terminals",
-        title: item.terminalTitle,
-        ctx: validation.targetContext ?? { profileId: item.profileId },
-        mode: "tile",
-        appState: {
-          sessionId: item.terminalRef.id,
-          terminalId: item.terminalRef.id,
-        },
-      },
+      const conn = connectionsMap.get(item.profileId);
+      if (!conn || conn.status !== "connected") {
+        setFeedbackNotice(
+          `Jump blocked: Target profile "${item.profileLabel}" is disconnected or unavailable.`,
+        );
+        return;
+      }
+
+      if (conn.owner.generation !== item.terminationTarget.generation) {
+        setFeedbackNotice(
+          `Jump blocked: Target profile "${item.profileLabel}" generation changed.`,
+        );
+        return;
+      }
+
+      const matchingWin =
+        item.matchingWindow ??
+        findMatchingTerminalWindow(item.terminationTarget, session.windows);
+
+      if (matchingWin) {
+        // Window already exists
+        if (matchingWin.desktopId === session.activeDesktopId) {
+          // Same desktop: restore if minimized, then focus
+          if (matchingWin.minimized) {
+            restoreWindow(matchingWin.windowId);
+          }
+          focusWindow(matchingWin.windowId);
+          dispatchIntent(
+            createIntent(
+              "terminal:place-existing",
+              createTerminalPlacementIntent(
+                window.id,
+                item.terminationTarget,
+                "focus-existing",
+              ),
+              window.id,
+            ),
+          );
+        } else {
+          // Other desktop: switch desktop and focus, or emit move-beside
+          switchDesktop(matchingWin.desktopId);
+          if (matchingWin.minimized) {
+            restoreWindow(matchingWin.windowId);
+          }
+          focusWindow(matchingWin.windowId);
+          dispatchIntent(
+            createIntent(
+              "terminal:place-existing",
+              createTerminalPlacementIntent(
+                window.id,
+                item.terminationTarget,
+                "focus-existing",
+              ),
+              window.id,
+            ),
+          );
+        }
+      } else {
+        // Background session: no open window anywhere on any desktop
+        // Emit frozen placement intent with action "open-beside"
+        dispatchIntent(
+          createIntent(
+            "terminal:place-existing",
+            createTerminalPlacementIntent(
+              window.id,
+              item.terminationTarget,
+              "open-beside",
+            ),
+            window.id,
+          ),
+        );
+      }
+    },
+    [
+      connectionsMap,
+      focusWindow,
+      restoreWindow,
       session.activeDesktopId,
-    );
-    focusWindow(newWinId);
-  };
+      session.windows,
+      switchDesktop,
+      window.id,
+    ],
+  );
 
-  // Handle Review affordance
-  const handleReview = (item: AgentHubItem) => {
-    dispatchIntent(
-      createIntent("session-changes:open", {
-        profileId: item.profileId,
-        terminalId: item.terminalRef.id,
-        terminalIncarnation: String(item.incarnation),
-        ompSessionId: item.status.agentSessionId ?? "",
-      }),
-    );
-  };
+  // Handle Review affordance (Architecture Contract C3 & Task 2)
+  const handleReview = useCallback(
+    async (item: AgentHubItem) => {
+      setFeedbackNotice(null);
+
+      // Verify exact agent evidence join
+      if (!item.isAgent || !item.status || !item.terminationTarget) {
+        setFeedbackNotice(
+          "Review unavailable: Agent evidence proof missing or unsafe numeric incarnation.",
+        );
+        return;
+      }
+
+      const snap = getConnectionSnapshot(item.profileId);
+      if (!snap || snap.status !== "connected") {
+        setFeedbackNotice(
+          `Review unavailable: Target profile "${item.profileLabel}" is disconnected.`,
+        );
+        return;
+      }
+
+      if (snap.owner.generation !== item.terminationTarget.generation) {
+        setFeedbackNotice(
+          `Review unavailable: Target profile generation changed (expected ${item.terminationTarget.generation}, live ${snap.owner.generation}).`,
+        );
+        return;
+      }
+
+      const client = getApi(snap.owner);
+
+      try {
+        const config = await client.config.get();
+        if (!config?.server?.sessionChangesEnabled) {
+          setFeedbackNotice(
+            "Review unavailable: Session changes tracking is disabled on server. Enable it in Server Settings.",
+          );
+          return;
+        }
+
+        const scClient = new SessionChangesClient({ apiClient: client });
+        const status = await scClient.getStatus({
+          terminalId: item.terminationTarget.terminalId,
+          terminalIncarnation: item.terminationTarget.incarnation,
+          ompSessionId: item.status.agentSessionId ?? "",
+        });
+
+        // Recheck currency post-await
+        const postSnap = getConnectionSnapshot(item.profileId);
+        if (
+          !postSnap ||
+          postSnap.status !== "connected" ||
+          postSnap.owner.generation !== item.terminationTarget.generation
+        ) {
+          setFeedbackNotice(
+            "Review unavailable: Connection retired or changed during status resolution.",
+          );
+          return;
+        }
+
+        // Exact terminal incarnation comparison
+        if (status.terminalIncarnation !== item.terminationTarget.incarnation) {
+          setFeedbackNotice(
+            `Review unavailable: Incarnation mismatch (status ${status.terminalIncarnation}, target ${item.terminationTarget.incarnation}).`,
+          );
+          return;
+        }
+
+        if (status.state === "initializing") {
+          setFeedbackNotice(
+            "Review unavailable: Session changes is currently initializing for this session.",
+          );
+          return;
+        }
+
+        if (!status.rootId || !status.baselineId) {
+          setFeedbackNotice(
+            "Review unavailable: No session changes baseline has been established yet.",
+          );
+          return;
+        }
+
+        if (!status.serverEpoch) {
+          setFeedbackNotice(
+            "Review unavailable: Missing server epoch in session changes status.",
+          );
+          return;
+        }
+
+        const reviewTarget: ReviewTarget = Object.freeze({
+          profileId: item.terminationTarget.profileId,
+          generation: item.terminationTarget.generation,
+          terminalId: item.terminationTarget.terminalId,
+          terminalIncarnation: item.terminationTarget.incarnation,
+          ompSessionId: item.status.agentSessionId ?? "",
+          serverEpoch: status.serverEpoch,
+          rootId: status.rootId,
+          baselineId: status.baselineId,
+        });
+
+        dispatchIntent(
+          createIntent("session-changes:open", reviewTarget, window.id),
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setFeedbackNotice(`Review unavailable: ${msg}`);
+      }
+    },
+    [window.id],
+  );
 
   // Handle Open Recipes affordance
   const handleOpenRecipes = () => {
-    dispatchIntent(createIntent("recipes:open", {}));
+    dispatchIntent(createIntent("recipes:open", {}, window.id));
   };
 
   return (
@@ -258,7 +389,7 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
       data-testid={`agent-hub-app-${window.id}`}
       className="w-full h-full overflow-hidden flex flex-col bg-[var(--color-surface)] text-[var(--color-text)] select-none text-xs"
     >
-      {/* App Header & Urgency KPI Badges */}
+      {/* App Header & KPI Badges */}
       <div className="flex flex-col gap-2 p-3 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -266,7 +397,9 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
               🤖 Agent Hub
             </span>
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)]">
-              {summary.total} agents ({summary.connectedProfiles}/{summary.totalProfiles} connected hosts)
+              {summary.total} sessions ({summary.agentsCount} agents,{" "}
+              {summary.backgroundCount} background, {summary.connectedProfiles}/
+              {summary.totalProfiles} connected hosts)
             </span>
           </div>
 
@@ -282,14 +415,18 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
           </div>
         </div>
 
-        {/* Urgency Pill Summary Bar */}
+        {/* Scope and Urgency Pill Filter Bar */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+          {/* Primary Scope Filters (All / Agents / Background) */}
           <button
             type="button"
             data-testid="agent-hub-filter-all"
-            onClick={() => setUrgencyFilter("all")}
+            onClick={() => {
+              setScopeFilter("all");
+              setUrgencyFilter("all");
+            }}
             className={`px-2 py-0.5 rounded-full text-xs transition-colors flex items-center gap-1 border ${
-              urgencyFilter === "all"
+              scopeFilter === "all" && urgencyFilter === "all"
                 ? "bg-[var(--color-primary)] text-white border-[var(--color-primary)]"
                 : "bg-[var(--color-surface)] text-[var(--color-text)] border-[var(--color-border)] hover:bg-[var(--color-surface-hover)]"
             }`}
@@ -297,6 +434,36 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
             All <span className="opacity-80">({summary.total})</span>
           </button>
 
+          <button
+            type="button"
+            data-testid="agent-hub-filter-agents"
+            onClick={() => setScopeFilter("agents")}
+            className={`px-2 py-0.5 rounded-full text-xs transition-colors flex items-center gap-1 border ${
+              scopeFilter === "agents"
+                ? "bg-[var(--color-primary)] text-white border-[var(--color-primary)]"
+                : "bg-[var(--color-surface)] text-[var(--color-text)] border-[var(--color-border)] hover:bg-[var(--color-surface-hover)]"
+            }`}
+          >
+            Agents <span className="opacity-80">({summary.agentsCount})</span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="agent-hub-filter-background"
+            onClick={() => setScopeFilter("background")}
+            className={`px-2 py-0.5 rounded-full text-xs transition-colors flex items-center gap-1 border ${
+              scopeFilter === "background"
+                ? "bg-[var(--color-primary)] text-white border-[var(--color-primary)]"
+                : "bg-[var(--color-surface)] text-[var(--color-text)] border-[var(--color-border)] hover:bg-[var(--color-surface-hover)]"
+            }`}
+          >
+            Background{" "}
+            <span className="opacity-80">({summary.backgroundCount})</span>
+          </button>
+
+          <span className="h-4 w-px bg-[var(--color-border)] mx-1" />
+
+          {/* Urgency Filters */}
           <button
             type="button"
             data-testid="agent-hub-filter-needs-attention"
@@ -351,12 +518,12 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
           </button>
         </div>
 
-        {/* Filter & Search Bar */}
+        {/* Search and Filters Bar */}
         <div className="flex items-center gap-2 pt-1 text-xs">
           <input
             type="text"
             data-testid="agent-hub-search-input"
-            placeholder="Search agents by title, project, host, reason..."
+            placeholder="Search sessions by title, project, host, reason..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="flex-1 px-2.5 py-1 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
@@ -407,7 +574,7 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
           </Select>
         </div>
 
-        {/* Blocked Jump / Warning Notice */}
+        {/* Feedback / Blocked Notice */}
         {feedbackNotice && (
           <div
             data-testid="agent-hub-feedback-notice"
@@ -425,7 +592,7 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
         )}
       </div>
 
-      {/* Agents Roster Body */}
+      {/* Sessions Roster Body */}
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-4">
         {filteredItems.length === 0 ? (
           <div
@@ -433,11 +600,14 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
             className="flex-1 flex flex-col items-center justify-center p-8 text-center text-[var(--color-text-muted)] gap-2"
           >
             <span className="text-2xl">🤖</span>
-            <span className="font-medium text-sm">No agent sessions found</span>
+            <span className="font-medium text-sm">No sessions found</span>
             <span className="text-xs max-w-sm">
-              {searchQuery || urgencyFilter !== "all" || profileFilter !== "all"
-                ? "Try adjusting your search filters or urgency selection."
-                : "Launch an agent in a terminal or run a recipe to see active agents."}
+              {searchQuery ||
+              urgencyFilter !== "all" ||
+              profileFilter !== "all" ||
+              scopeFilter !== "all"
+                ? "Try adjusting your search filters or scope selection."
+                : "No terminal sessions found in aggregate inventory."}
             </span>
           </div>
         ) : (
@@ -476,7 +646,7 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
                             : "border-[var(--color-border)] hover:border-[var(--color-border-hover)]"
                         }`}
                       >
-                        {/* Card Top: Harness & Status Badges */}
+                        {/* Card Top: Badges & Tags */}
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="px-1.5 py-0.5 rounded font-mono font-bold text-[10px] bg-[var(--color-surface-hover)] border border-[var(--color-border)] text-[var(--color-primary)]">
@@ -490,13 +660,25 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
                                     ? "bg-blue-500/20 text-blue-400 border-blue-500/40"
                                     : item.urgency === "idle"
                                       ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/40"
-                                      : "bg-gray-500/20 text-gray-400 border-gray-500/40"
+                                      : item.urgency === "unobserved"
+                                        ? "bg-purple-500/10 text-purple-400 border-purple-500/30"
+                                        : "bg-gray-500/20 text-gray-400 border-gray-500/40"
                               }`}
                             >
                               {item.presentation.label}
                               {item.presentation.reasonLabel &&
                                 ` (${item.presentation.reasonLabel})`}
                             </span>
+
+                            {item.isBackground && (
+                              <span
+                                data-testid="agent-hub-background-badge"
+                                className="px-1.5 py-0.5 rounded text-[10px] bg-sky-500/10 text-sky-400 border border-sky-500/30"
+                              >
+                                Background
+                              </span>
+                            )}
+
                             {item.presentation.outcomeHint && (
                               <span className="text-[10px] text-emerald-400/80">
                                 {item.presentation.outcomeHint}
@@ -517,7 +699,7 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
                             }`}
                             title={isCognitoActive ? undefined : item.terminalTitle}
                           >
-                            {isCognitoActive ? "[Protected Agent]" : item.terminalTitle}
+                            {isCognitoActive ? "[Protected Session]" : item.terminalTitle}
                           </span>
                           <span
                             className={`text-[11px] text-[var(--color-text-muted)] truncate ${
@@ -530,22 +712,24 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
 
                         {/* Card Footer: Action Buttons */}
                         <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-[var(--color-border)]/50">
+                          {/* Review Button */}
                           <button
                             type="button"
                             data-testid={`agent-hub-review-${item.key}`}
-                            onClick={() => handleReview(item)}
+                            onClick={() => void handleReview(item)}
                             className="px-2 py-1 rounded bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] text-[var(--color-text)] border border-[var(--color-border)] text-[11px] transition-colors"
                           >
                             Review
                           </button>
 
+                          {/* Jump / Placement Button */}
                           <button
                             type="button"
                             data-testid={`agent-hub-jump-${item.key}`}
                             onClick={() => handleJump(item)}
                             className="px-2.5 py-1 rounded bg-[var(--color-primary)] text-white hover:opacity-90 font-medium text-[11px] transition-opacity flex items-center gap-1"
                           >
-                            Jump ➔
+                            {item.isBackground ? "Open Beside ➔" : "Jump ➔"}
                           </button>
                         </div>
                       </div>

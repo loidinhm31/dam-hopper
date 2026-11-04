@@ -162,6 +162,78 @@ describe("recipe-engine", () => {
       expect(sysMon).toBeDefined();
       expect(sysMon?.reason).toContain("Contextless / fleet application");
     });
+    it("excludes recipes app as contextless fleet utility alongside system-monitor, settings, agent-hub", () => {
+      const winRecipes: OsWindow = {
+        id: "win-recipes",
+        appId: "recipes",
+        title: "Launch Recipes",
+        ctx: { profileId: "server-a", projectId: "proj-1" },
+        mode: "tile",
+        desktopId: "d-1",
+        maximized: false,
+        minimized: false,
+      };
+
+      const desktop: OsDesktop = {
+        id: "d-1",
+        name: "Test Desk",
+        tree: {
+          type: "pane",
+          id: "pane-1",
+          items: ["win-recipes"],
+          active: "win-recipes",
+        },
+        floatingWindowIds: [],
+      };
+
+      const preview = calculateSaveSubset({
+        desktop,
+        windows: { "win-recipes": winRecipes },
+        chosenProfileId: "server-a",
+        chosenProjectId: "proj-1",
+      });
+
+      expect(preview.canSave).toBe(false);
+      expect(preview.matchingWindows).toHaveLength(0);
+      expect(preview.excludedWindows).toHaveLength(1);
+      expect(preview.excludedWindows[0].reason).toContain("Contextless / fleet application");
+    });
+
+    it("excludes windows with missing profile or project context", () => {
+      const winMissing: OsWindow = {
+        id: "win-missing",
+        appId: "editor",
+        title: "Contextless Editor",
+        ctx: { profileId: "server-a" }, // projectId is missing
+        mode: "tile",
+        desktopId: "d-1",
+        maximized: false,
+        minimized: false,
+      };
+
+      const desktop: OsDesktop = {
+        id: "d-1",
+        name: "Test Desk",
+        tree: {
+          type: "pane",
+          id: "pane-1",
+          items: ["win-missing"],
+          active: "win-missing",
+        },
+        floatingWindowIds: [],
+      };
+
+      const preview = calculateSaveSubset({
+        desktop,
+        windows: { "win-missing": winMissing },
+        chosenProfileId: "server-a",
+        chosenProjectId: "proj-1",
+      });
+
+      expect(preview.canSave).toBe(false);
+      expect(preview.excludedWindows).toHaveLength(1);
+      expect(preview.excludedWindows[0].reason).toContain("Missing context / unsupported capture");
+    });
   });
 
   describe("Topology Pruning for Subset", () => {
@@ -290,6 +362,50 @@ describe("recipe-engine", () => {
       expect(recipe.terminalSteps[0].command).toBe("npm start");
       expect(recipe.appSteps).toHaveLength(1);
       expect(recipe.appSteps[0].appId).toBe("files");
+    });
+    it("includes same-project worktrees and propagates worktreePath to terminal and app steps", () => {
+      const winTermWt: OsWindow = {
+        id: "win-term-wt",
+        appId: "terminals",
+        title: "Worktree Terminal",
+        ctx: {
+          profileId: "server-a",
+          projectId: "proj-1",
+          worktreeId: "feat-branch",
+        },
+        mode: "tile",
+        desktopId: "d-1",
+        maximized: false,
+        minimized: false,
+      };
+
+      const desktop: OsDesktop = {
+        id: "d-1",
+        name: "Worktree Desktop",
+        tree: {
+          type: "pane",
+          id: "p-1",
+          items: ["win-term-wt"],
+          active: "win-term-wt",
+        },
+        floatingWindowIds: [],
+      };
+
+      const { recipe } = buildRecipeFromDesktopSubset({
+        recipeId: "recipe-wt",
+        name: "Worktree Recipe",
+        desktop,
+        windows: { "win-term-wt": winTermWt },
+        chosenProfileId: "server-a",
+        chosenProjectId: "proj-1",
+        authoredCommandsByStepKey: {
+          "step-win-term-wt": "cargo build",
+        },
+      });
+
+      expect(recipe.terminalSteps).toHaveLength(1);
+      expect(recipe.terminalSteps[0].worktreePath).toBe("feat-branch");
+      expect(recipe.terminalSteps[0].command).toBe("cargo build");
     });
   });
 

@@ -1,17 +1,81 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useWindowStore } from "./window-store.js";
 import type { OsWindow } from "./types.js";
 import { useEditorStore } from "@/stores/editor.js";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
+import {
+  useShellInputContext,
+  type ShellInputContextValue,
+} from "./shell-input-context.js";
+import {
+  useTerminalClose,
+  type TerminalCloseContextValue,
+} from "./terminal-close-context.js";
+import {
+  resolveWindowTerminalObservation,
+  type ReviewTarget,
+} from "@/api/terminal-session-contract.js";
+import { useAggregatedTerminalSessions } from "@/hooks/use-aggregated-terminal-sessions.js";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { closeReviewTargetSafely } from "@/api/session-changes-queries.js";
 
 export interface WindowListProps {
   className?: string;
 }
 
 export function WindowList({ className = "" }: WindowListProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [confirmTarget, setConfirmTarget] = useState<{ id: string; filePath?: string } | null>(null);
+  let shellInput: ShellInputContextValue | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    shellInput = useShellInputContext();
+  } catch {
+    // Optional context for standalone testing
+  }
+
+  let terminalClose: TerminalCloseContextValue | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    terminalClose = useTerminalClose();
+  } catch {
+    // Optional context for standalone testing
+  }
+
+  let qc: QueryClient | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    qc = useQueryClient();
+  } catch {
+    // Optional context for standalone testing
+  }
+  const { observations } = useAggregatedTerminalSessions();
+  const [localIsOpen, setLocalIsOpen] = useState(false);
+  const isOpen = shellInput
+    ? shellInput.activeNonmodal === "window-list"
+    : localIsOpen;
+
+  const setIsOpen = useCallback(
+    (open: boolean) => {
+      if (shellInput) {
+        shellInput.setSurfaceOpen("window-list", open);
+      } else {
+        setLocalIsOpen(open);
+      }
+    },
+    [shellInput],
+  );
+
+  const [confirmTarget, setConfirmTarget] = useState<{
+    id: string;
+    filePath?: string;
+  } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Register modal mount for confirmDialog
+  useEffect(() => {
+    if (confirmTarget !== null && shellInput) {
+      return shellInput.registerModalMount("confirm-dialog");
+    }
+  }, [confirmTarget, shellInput]);
 
   const session = useWindowStore((state) => state.session);
   const focusWindow = useWindowStore((state) => state.focusWindow);
@@ -26,19 +90,36 @@ export function WindowList({ className = "" }: WindowListProps) {
   const totalWindows = Object.keys(session.windows).length;
 
   useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
+    if (!isOpen) return;
+
+    function handlePointerDown(event: PointerEvent) {
+      if (confirmTarget !== null) return;
+      const target = event.target as HTMLElement | null;
       if (
         containerRef.current &&
-        !containerRef.current.contains(event.target as Node)
+        !containerRef.current.contains(target) &&
+        !target?.closest?.('[data-os-nonmodal-trigger="window-list"]')
       ) {
         setIsOpen(false);
       }
     }
-    if (isOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (confirmTarget !== null) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsOpen(false);
+      }
     }
-  }, [isOpen]);
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, confirmTarget, setIsOpen]);
 
   const handleSelectWindow = (win: OsWindow) => {
     if (win.desktopId !== activeDesktopId) {
@@ -86,6 +167,40 @@ export function WindowList({ className = "" }: WindowListProps) {
         return;
       }
     }
+    if (win.appId === "session-changes") {
+      const target = win.runtimeIdentity?.kind === "review"
+        ? (win.runtimeIdentity.target as ReviewTarget)
+        : (win.appState?.target as ReviewTarget | undefined);
+      if (target && qc) {
+        closeReviewTargetSafely(
+          qc,
+          target,
+          win.id,
+          useWindowStore.getState().session.windows,
+        );
+      }
+      closeWindow(win.id);
+      return;
+    }
+    if (win.appId === "terminals" && terminalClose) {
+      const { target, availability } = resolveWindowTerminalObservation(
+        win,
+        observations,
+      );
+
+      terminalClose.requestTerminalClose(
+        {
+          windowId: win.id,
+          entry: "window-list",
+          target,
+          availability,
+        },
+        (wId) => {
+          closeWindow(wId);
+        },
+      );
+      return;
+    }
     closeWindow(win.id);
   };
 
@@ -95,7 +210,8 @@ export function WindowList({ className = "" }: WindowListProps) {
         type="button"
         aria-label="Window list"
         aria-expanded={isOpen}
-        onClick={() => setIsOpen((prev) => !prev)}
+        data-os-nonmodal-trigger="window-list"
+        onClick={() => setIsOpen(!isOpen)}
         className="flex items-center gap-1.5 px-2 py-1 rounded text-xs border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] transition-colors"
       >
         <span>Windows</span>
@@ -108,6 +224,7 @@ export function WindowList({ className = "" }: WindowListProps) {
         <div
           role="menu"
           aria-label="Windows on current desktop"
+          data-os-nonmodal-surface="window-list"
           className="absolute right-0 mt-1 w-64 max-h-80 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl p-1 z-50 text-xs"
         >
           <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold border-b border-[var(--color-border)] mb-1">

@@ -19,10 +19,17 @@ import {
   subscribeConnections,
   getTransport as getConnectionTransport,
 } from "@/api/connections.js";
-import { cn } from "@/lib/utils.js";
+import { cn, generateUUID } from "@/lib/utils.js";
 import { getTransport, type Transport } from "@/api/transport.js";
 import { useTransportGeneration } from "@/hooks/use-transport-generation.js";
 import type { SessionInfo } from "@/api/client.js";
+import {
+  isTerminalInventoryRowEligible,
+  proveNumericEvidenceJoin,
+  terminalTargetKey,
+  type TerminalTarget,
+  type TerminalInventoryDetailedPayload,
+} from "@/api/terminal-session-contract.js";
 import {
   getTerminal,
   registerTerminal,
@@ -87,6 +94,17 @@ import {
   rememberTerminalSessionIncarnation,
 } from "@/lib/terminal-incarnation-state.js";
 
+function isReplacementIncarnation(received: number | string | undefined, expected: string): boolean {
+  if (received === undefined || received === null) return false;
+  try {
+    const r = BigInt(String(received));
+    const e = BigInt(expected);
+    return r > e;
+  } catch {
+    return false;
+  }
+}
+
 interface TerminalPanelProps {
   /** Unique session ID (e.g. "build:api-server", "run:api-server") */
   sessionId: string;
@@ -100,7 +118,8 @@ interface TerminalPanelProps {
   worktreePath?: string;
   profileId?: string;
   terminalRef?: TerminalRef;
-  /** Called when the PTY process exits */
+  terminalTarget?: TerminalTarget;
+  attachPolicy?: "existing-only" | "create-explicit";
   onExit?: (exitCode: number | null) => void;
   /** Called when Shift+Enter is pressed — used to open a new terminal */
   onNewTerminal?: () => void;
@@ -110,6 +129,7 @@ interface TerminalPanelProps {
   suppressAutoFocus?: boolean;
   /** Disables xterm text input for mobile custom-keyboard mode */
   suppressNativeKeyboard?: boolean;
+  suppressInput?: boolean;
   /** Current 1-based position in the open terminal list. */
   terminalOrder?: number;
   /** Enables WebGL only while this kept-alive terminal is visible. */
@@ -156,11 +176,14 @@ export function TerminalPanel({
   project,
   profileId,
   terminalRef,
+  terminalTarget,
+  attachPolicy,
   onExit,
   onNewTerminal,
   onTerminalReady,
   suppressAutoFocus = false,
   suppressNativeKeyboard = suppressAutoFocus,
+  suppressInput = false,
   terminalOrder,
   webglEnabled = false,
   className,
@@ -170,8 +193,25 @@ export function TerminalPanel({
   const boundTransportRef = useRef<{
     transport: Transport;
     isCurrent: () => boolean;
+    isReadyForMutation: (options?: { forInput?: boolean }) => boolean;
   } | null>(null);
+  const isAuthorityRevokedRef = useRef(false);
   const syncConnectionRef = useRef<() => void>(() => {});
+  const terminalTargetRef = useRef(terminalTarget);
+  const bindingTokenRef = useRef(0);
+  useEffect(() => {
+    const prev = terminalTargetRef.current;
+    terminalTargetRef.current = terminalTarget;
+    if (
+      prev?.profileId !== terminalTarget?.profileId ||
+      prev?.generation !== terminalTarget?.generation ||
+      prev?.serverEpoch !== terminalTarget?.serverEpoch ||
+      prev?.incarnation !== terminalTarget?.incarnation ||
+      prev?.terminalId !== terminalTarget?.terminalId
+    ) {
+      syncConnectionRef.current();
+    }
+  }, [terminalTarget]);
   useEffect(() => {
     syncConnectionRef.current();
   }, [transportGeneration]);
@@ -179,6 +219,8 @@ export function TerminalPanel({
   const shouldSuppressNativeKeyboard = Boolean(suppressNativeKeyboard);
   const shouldSuppressTerminalFocus =
     shouldSuppressNativeKeyboard || Boolean(suppressAutoFocus);
+  const suppressInputRef = useRef(suppressInput);
+  suppressInputRef.current = suppressInput;
   const terminalFontSize = useSettingsStore((state) => state.terminalFontSize);
   const appZoomFactor = appZoomLevel / 100;
   const terminalDisplayFontSize = terminalFontSize * appZoomFactor;
@@ -211,14 +253,19 @@ export function TerminalPanel({
         : undefined),
     [ownerProfileId, safeSessionId, terminalRef],
   );
-  const terminalRegistrationKey = effectiveTerminalRef
-    ? terminalKey(effectiveTerminalRef)
-    : safeSessionId;
+  const terminalRegistrationKey = useMemo(() => {
+    if (terminalTarget) {
+      return terminalTargetKey(terminalTarget);
+    }
+    return effectiveTerminalRef
+      ? terminalKey(effectiveTerminalRef)
+      : safeSessionId;
+  }, [effectiveTerminalRef, safeSessionId, terminalTarget]);
 
   const writePanelInput = useCallback(
     (data: string) => {
       const binding = boundTransportRef.current;
-      if (binding?.isCurrent()) {
+      if (binding?.isReadyForMutation({ forInput: true })) {
         binding.transport.terminalWrite(safeSessionId, data);
       }
     },
@@ -238,15 +285,25 @@ export function TerminalPanel({
   const syncEffectiveStdinSuppression = useCallback(
     (targetTerm: Terminal | null) => {
       if (!targetTerm) return;
+      if (isAuthorityRevokedRef.current) {
+        syncTerminalInputSuppression(targetTerm, true);
+        return;
+      }
       const gate = streamReplayGateRef.current;
       const isReplayOrAttachActive =
         !gate?.isLiveStreamReady || (gate?.activeReplayWrites ?? 0) > 0;
-      const effectiveSuppression =
-        shouldSuppressNativeKeyboardRef.current || isReplayOrAttachActive;
+      const isSuppressed =
+        Boolean(suppressInputRef.current) ||
+        shouldSuppressNativeKeyboardRef.current;
+      const effectiveSuppression = isSuppressed || isReplayOrAttachActive;
       syncTerminalInputSuppression(targetTerm, effectiveSuppression);
     },
     [],
   );
+  useEffect(() => {
+    syncEffectiveStdinSuppression(termRef.current);
+  }, [suppressInput, syncEffectiveStdinSuppression]);
+
   // Term element state — triggers re-render to mount portal after open()
   const [termElement, setTermElement] = useState<HTMLElement | null>(null);
   const findControllerRef = useRef<TerminalFindController | null>(null);
@@ -299,6 +356,13 @@ export function TerminalPanel({
     if (openedRef.current) return;
     openedRef.current = true;
 
+    const instanceToken = generateUUID();
+    recordClientDiagnostic("transport", "terminal-panel", "xterm_created", {
+      instanceToken,
+      sessionId: safeSessionId,
+      profileId: ownerProfileId,
+    });
+
     const term = new Terminal({
       theme: DARK_THEME,
       fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
@@ -328,6 +392,14 @@ export function TerminalPanel({
     terminalHost.style.height = "100%";
     terminalBoundary.appendChild(terminalHost);
     container.appendChild(terminalBoundary);
+    terminalBoundary.setAttribute("data-terminal-session-id", safeSessionId);
+    terminalBoundary.setAttribute("data-xterm-instance-token", instanceToken);
+    if (terminalTargetRef.current) {
+      terminalBoundary.setAttribute(
+        "data-xterm-server-epoch",
+        terminalTargetRef.current.serverEpoch,
+      );
+    }
 
     const handleContextMenu = (e: MouseEvent) => {
       if (term.hasSelection()) {
@@ -394,12 +466,37 @@ export function TerminalPanel({
     const streamReplayGate = createTerminalStreamReplayGate();
     streamReplayGateRef.current = streamReplayGate;
     const bindConnection = (): (() => void) => {
+      const currentTarget = terminalTargetRef.current;
+      const bindingToken = ++bindingTokenRef.current;
+      if (currentTarget) {
+        terminalBoundary.setAttribute(
+          "data-xterm-server-epoch",
+          currentTarget.serverEpoch,
+        );
+      }
       if (
         terminalRef &&
         (terminalRef.id !== sessionId ||
           (profileId !== undefined && terminalRef.profileId !== profileId))
       ) {
         return () => {};
+      }
+      if (currentTarget) {
+        if (!ownerProfileId || ownerProfileId !== currentTarget.profileId) {
+          term.options.disableStdin = true;
+          setAttachState("idle");
+          return () => {};
+        }
+        const snapshot = getConnectionSnapshot(ownerProfileId);
+        if (
+          !snapshot ||
+          snapshot.status !== "connected" ||
+          snapshot.owner.generation !== currentTarget.generation
+        ) {
+          term.options.disableStdin = true;
+          setAttachState("idle");
+          return () => {};
+        }
       }
       let transport: Transport;
       let isCurrent: () => boolean;
@@ -419,16 +516,72 @@ export function TerminalPanel({
         boundServerUrl = snapshot.serverUrl;
         const owner = snapshot.owner;
         transport = getConnectionTransport(owner);
-        isCurrent = () => !disposed && isCurrentConnection(owner);
+        isCurrent = () =>
+          !disposed &&
+          bindingTokenRef.current === bindingToken &&
+          isCurrentConnection(owner);
       } else {
         try {
           transport = getTransport();
-          isCurrent = () => !disposed;
+          isCurrent = () =>
+            !disposed && bindingTokenRef.current === bindingToken;
         } catch {
           return () => {};
         }
       }
-      const binding = { transport, isCurrent };
+      let isAuthorityRevoked = false;
+      let isAuthorityVerified = false;
+
+      const revokeAuthority = (reason: string) => {
+        isAuthorityRevoked = true;
+        isAuthorityRevokedRef.current = true;
+        isAuthorityVerified = false;
+        pendingReplayBuffer = null;
+        confirmedRestartPending = false;
+        restartRecoveryPending = false;
+        term.options.disableStdin = true;
+        cancelScheduledTerminalFit(terminalEntry);
+        resetTerminalStreamReplayGateForAttach(streamReplayGate);
+        outputActivity.setStreamReady(false);
+        syncEffectiveStdinSuppression(term);
+        recordClientDiagnostic(
+          "transport",
+          "terminal-panel",
+          "authority_revoked",
+          {
+            sessionId: safeSessionId,
+            reason,
+            instanceToken,
+          },
+        );
+      };
+
+      const isReadyForMutation = (options?: { forInput?: boolean }): boolean => {
+        if (disposed || isAuthorityRevoked || isAuthorityRevokedRef.current || !isCurrent()) {
+          return false;
+        }
+        if (currentTarget && !isAuthorityVerified) {
+          return false;
+        }
+        if (ownerProfileId) {
+          const snap = getConnectionSnapshot(ownerProfileId);
+          if (
+            !snap ||
+            snap.status !== "connected" ||
+            (currentTarget && snap.owner.generation !== currentTarget.generation)
+          ) {
+            return false;
+          }
+        }
+        if (options?.forInput) {
+          if (Boolean(suppressInputRef.current)) return false;
+          if (term.options.disableStdin) return false;
+          if (!shouldForwardTerminalData(streamReplayGate)) return false;
+        }
+        return true;
+      };
+
+      const binding = { transport, isCurrent, isReadyForMutation };
       boundTransportRef.current = binding;
       term.options.disableStdin = false;
       resetTerminalStreamReplayGateForAttach(streamReplayGate);
@@ -444,7 +597,6 @@ export function TerminalPanel({
       let pendingReplayBuffer: TerminalBufferReplay | null = null;
       let attachSentGeneration = 0;
       let acceptedStreamIncarnation: number | null = null;
-
       const resetActivityForUnavailableStream = () => {
         resetTerminalStreamReplayGateForAttach(streamReplayGate);
         outputActivity.setStreamReady(false);
@@ -484,16 +636,44 @@ export function TerminalPanel({
         if (!isCurrent() || !restartRecoveryPending) return;
         const probeGeneration = ++restartProbeGeneration;
         void transport
-          .invoke<SessionInfo[]>("terminal:listDetailed")
-          .then((sessions) => {
+          .invoke<TerminalInventoryDetailedPayload>("terminal:listDetailedObservation")
+          .then((payload) => {
             if (
               !isCurrent() ||
               !restartRecoveryPending ||
               probeGeneration !== restartProbeGeneration
-            )
+            ) {
               return;
-            if (
-              sessions.some(
+            }
+            const sessions =
+              "sessions" in payload
+                ? payload.sessions
+                : (payload as SessionInfo[]);
+            if (currentTarget) {
+              const termMeta =
+                "termination" in payload ? payload.termination : null;
+              if (
+                !termMeta ||
+                termMeta.version !== 1 ||
+                termMeta.serverEpoch !== currentTarget.serverEpoch
+              ) {
+                term.options.disableStdin = true;
+                syncEffectiveStdinSuppression(term);
+                return;
+              }
+              const matching = sessions?.find(
+                (s) =>
+                  s.id === safeSessionId &&
+                  s.alive &&
+                  isTerminalInventoryRowEligible(s) &&
+                  s.incarnationExact === currentTarget.incarnation,
+              );
+              if (matching) {
+                isAuthorityVerified = true;
+                reopenLiveStreamAfterRestart();
+              }
+            } else if (
+              sessions?.some(
                 (session) => session.id === safeSessionId && session.alive,
               )
             ) {
@@ -502,7 +682,6 @@ export function TerminalPanel({
           })
           .catch(() => {});
       };
-
       const writeLiveData = (data: string) => {
         term.write(data);
         if (data.length > 0) outputActivity.markOutput();
@@ -543,6 +722,17 @@ export function TerminalPanel({
         safeSessionId,
         (data, offset, incarnation) => {
           if (!isCurrent()) return;
+          if (currentTarget) {
+            if (isAuthorityRevoked) return;
+            if (String(incarnation) !== currentTarget.incarnation) {
+              term.options.disableStdin = true;
+              syncEffectiveStdinSuppression(term);
+              if (isAuthorityVerified && isReplacementIncarnation(incarnation, currentTarget.incarnation)) {
+                revokeAuthority(`data_incarnation_replacement:${incarnation}>${currentTarget.incarnation}`);
+              }
+              return;
+            }
+          }
           const globalIncarnation = latestTerminalSessionIncarnation(
             terminalRegistrationKey,
           );
@@ -638,11 +828,13 @@ export function TerminalPanel({
               {
                 sessionId: safeSessionId,
                 queuedChunkCount: queuedLiveDataSnapshot.length,
+                instanceToken,
               },
             );
-            recoveryController?.onReplayComplete();
           },
           streamReplayGate,
+          instanceToken,
+          currentTarget,
         );
         recordClientDiagnostic("transport", "terminal-panel", "buffer_replay", {
           sessionId: safeSessionId,
@@ -658,6 +850,28 @@ export function TerminalPanel({
       if (transport.onTerminalBuffer) {
         unsubBuffer = transport.onTerminalBuffer(safeSessionId, (replay) => {
           if (!isCurrent()) return;
+          if (currentTarget) {
+            if (isAuthorityRevoked) return;
+            if (String(replay.incarnation) !== currentTarget.incarnation) {
+              term.options.disableStdin = true;
+              syncEffectiveStdinSuppression(term);
+              recordClientDiagnostic(
+                "transport",
+                "terminal-panel",
+                "buffer_replay_refused_mismatch",
+                {
+                  sessionId: safeSessionId,
+                  expectedIncarnation: currentTarget.incarnation,
+                  receivedIncarnation: replay.incarnation,
+                  instanceToken,
+                },
+              );
+              if (isAuthorityVerified && isReplacementIncarnation(replay.incarnation, currentTarget.incarnation)) {
+                revokeAuthority(`buffer_incarnation_replacement:${replay.incarnation}>${currentTarget.incarnation}`);
+              }
+              return;
+            }
+          }
           const globalIncarnation = latestTerminalSessionIncarnation(
             terminalRegistrationKey,
           );
@@ -743,14 +957,17 @@ export function TerminalPanel({
           ) {
             return;
           }
-
+          if (currentTarget && exitEvent.incarnation !== undefined) {
+            if (String(exitEvent.incarnation) !== currentTarget.incarnation) {
+              return;
+            }
+          }
           if (exitEvent.incarnation !== undefined) {
             rememberTerminalSessionIncarnation(
               terminalRegistrationKey,
               exitEvent.incarnation,
             );
           }
-
           const { exitCode, willRestart, restartIn } = exitEvent;
           restartRecoveryPending = willRestart;
           restartProbeGeneration += 1;
@@ -778,7 +995,11 @@ export function TerminalPanel({
       // live gate without counting the synthetic restart banner as output.
       unsubRestart =
         transport.onProcessRestarted?.(safeSessionId, (restartEvent) => {
-          if (!isCurrent() || !restartRecoveryPending) return;
+          if (!isCurrent() || !restartRecoveryPending || isAuthorityRevoked) return;
+          if (currentTarget) {
+            revokeAuthority("process_restarted_target_invalidated");
+            return;
+          }
           reopenLiveStreamAfterRestart();
           suggestionsRef.current.handleReplay();
           const { restartCount } = restartEvent;
@@ -811,8 +1032,7 @@ export function TerminalPanel({
 
       // 5. Forward user input → PTY stdin, with suggestion interception
       inputDisposable = term.onData((data) => {
-        if (!isCurrent()) return;
-        if (!shouldForwardTerminalData(streamReplayGate)) return;
+        if (!isReadyForMutation({ forInput: true })) return;
         const result = suggestionsRef.current.handleInput(data);
         if (result.forward) {
           transport.terminalWrite(safeSessionId, result.data);
@@ -821,16 +1041,23 @@ export function TerminalPanel({
       const textarea = term.textarea;
       const suppressComposition = () =>
         suggestionsRef.current.handleComposition();
+      const handlePaste = (e: ClipboardEvent) => {
+        if (!isReadyForMutation({ forInput: true })) {
+          e.preventDefault();
+          return;
+        }
+        suggestionsRef.current.handleComposition();
+      };
       textarea?.addEventListener("compositionstart", suppressComposition);
-      textarea?.addEventListener("paste", suppressComposition);
+      textarea?.addEventListener("paste", handlePaste);
       releaseCompositionGuards = () => {
         textarea?.removeEventListener("compositionstart", suppressComposition);
-        textarea?.removeEventListener("paste", suppressComposition);
+        textarea?.removeEventListener("paste", handlePaste);
       };
 
       // 6. PTY resize: fired by fitAddon.fit()
       const resizeDisposable = term.onResize(({ cols: c, rows: r }) => {
-        if (!isCurrent()) return;
+        if (!isReadyForMutation()) return;
         if (!isTerminalFitEligible(terminalEntry)) return;
         transport.terminalResize(safeSessionId, c, r);
       });
@@ -838,10 +1065,12 @@ export function TerminalPanel({
       // 7. One composed keyboard handler: an acceptance only wins after the
       // controller invalidates its current ghost and yields a suffix.
       const baseKeyEventHandler = (e: KeyboardEvent) => {
+        if (!isCurrent() || Boolean(suppressInputRef.current)) {
+          return false;
+        }
+        const settings = useSettingsStore.getState();
+        const cognitoShortcut = settings.cognitoModeShortcut;
         const cognitoActive = useCognitoModeStore.getState().active;
-        const cognitoShortcut =
-          useCognitoModeStore.getState().activationShortcut ??
-          useSettingsStore.getState().cognitoModeShortcut;
         if (
           shouldConsumeCognitoModeTerminalKey(
             e,
@@ -869,12 +1098,13 @@ export function TerminalPanel({
         if (
           !handleTerminalSuggestionKeyEvent(e, {
             accept: (kind) => {
+              if (!isReadyForMutation({ forInput: true })) return "";
               const suffix = suggestionsRef.current.accept(kind);
-              if (suffix && isCurrent())
+              if (suffix)
                 transport.terminalWrite(safeSessionId, suffix);
               return suffix;
             },
-            openHistory: () => suggestionsRef.current.openExplicitList(),
+            openHistory: () => false,
           })
         ) {
           return false;
@@ -891,7 +1121,6 @@ export function TerminalPanel({
           if (selection) void copyToClipboard(selection);
           return false;
         }
-        const settings = useSettingsStore.getState();
         return handleSharedTerminalKeyEvent(e, {
           cognitoModeShortcut: cognitoShortcut,
           cognitoModeActive: cognitoActive,
@@ -933,33 +1162,39 @@ export function TerminalPanel({
 
       // Initial fit — container may be hidden (display:none); FitAddon safely no-ops if dims=0
       // Now safe because resize listener is already registered above.
-      scheduleTerminalFit(terminalEntry, {
-        focus: !shouldSuppressTerminalFocus,
-      });
+      if (isReadyForMutation()) {
+        scheduleTerminalFit(terminalEntry, {
+          focus: !shouldSuppressTerminalFocus,
+        });
+      }
 
       // Session creation belongs to the manager's explicit launch action.
       // Reattaching a kept-alive panel must never recreate a missing PTY.
 
       const sendAttach = (fromOffset?: number, retryAttempt = 0) => {
         if (!isCurrent()) return false;
-        suggestionsRef.current.handleReplay();
+        if (currentTarget && !isAuthorityVerified) {
+          term.options.disableStdin = true;
+          return false;
+        }
         // Every attach starts a new replay ownership window. In particular, a
         // reconnect must close the prior live-ready gate before sending attach so
         // old-stream output cannot render ahead of the replacement replay.
         resetActivityForUnavailableStream();
         attachSentGeneration = streamReplayGate.replayGeneration;
         setAttachState("attaching");
-        if (retryAttempt === 0) {
-          recordClientDiagnostic(
-            "transport",
-            "terminal-panel",
-            "terminal.attach",
-            {
-              sessionId: safeSessionId,
-              fromOffset,
-            },
-          );
-        }
+        recordClientDiagnostic(
+          "transport",
+          "terminal-panel",
+          "terminal.attach",
+          {
+            sessionId: safeSessionId,
+            profileId: ownerProfileId,
+            retryAttempt,
+            fromOffset,
+            instanceToken,
+          },
+        );
 
         return transport.terminalAttach
           ? transport.terminalAttach(safeSessionId, fromOffset) !== false
@@ -970,12 +1205,40 @@ export function TerminalPanel({
         sendAttach,
         checkAlive: () =>
           transport
-            .invoke<SessionInfo[]>("terminal:listDetailed")
-            .then((sessions) =>
-              sessions.some(
+            .invoke<TerminalInventoryDetailedPayload | SessionInfo[]>(
+              "terminal:listDetailedObservation",
+            )
+            .then((payload) => {
+              if (currentTarget) {
+                const termMeta =
+                  "termination" in payload ? payload.termination : null;
+                if (
+                  !termMeta ||
+                  termMeta.version !== 1 ||
+                  termMeta.serverEpoch !== currentTarget.serverEpoch
+                ) {
+                  return false;
+                }
+                const sessions =
+                  "sessions" in payload
+                    ? payload.sessions
+                    : (payload as SessionInfo[]);
+                return (sessions ?? []).some(
+                  (s) =>
+                    s.id === safeSessionId &&
+                    s.alive &&
+                    isTerminalInventoryRowEligible(s) &&
+                    s.incarnationExact === currentTarget.incarnation,
+                );
+              }
+              const sessions =
+                "sessions" in payload
+                  ? payload.sessions
+                  : (payload as SessionInfo[]);
+              return (sessions ?? []).some(
                 (session) => session.id === safeSessionId && session.alive,
-              ),
-            ),
+              );
+            }),
         create: () =>
           Promise.reject(new Error("Terminal session is unavailable")),
         shouldRetryAfterReplay: () => retryUnavailableAfterReplayRef.current,
@@ -1029,25 +1292,109 @@ export function TerminalPanel({
         });
       }
 
-      // Start initialization flow without ambient workspace.status()
+      // Start initialization flow with typed observation
       transport
-        .invoke<SessionInfo[]>("terminal:listDetailed")
-        .then((sessions) => {
+        .invoke<TerminalInventoryDetailedPayload | SessionInfo[]>(
+          "terminal:listDetailedObservation",
+        )
+        .then((payload) => {
           if (!isCurrent()) return;
-          const existingSession = sessions.find((s) => s.id === safeSessionId);
-          retryUnavailableAfterReplayRef.current =
-            existingSession?.targetUnavailable === true;
-          if (existingSession) {
+          if (ownerProfileId) {
+            const snap = getConnectionSnapshot(ownerProfileId);
+            if (
+              !snap ||
+              snap.status !== "connected" ||
+              (currentTarget &&
+                snap.owner.generation !== currentTarget.generation)
+            ) {
+              term.options.disableStdin = true;
+              syncEffectiveStdinSuppression(term);
+              setAttachState("idle");
+              return;
+            }
+          }
+          if (currentTarget) {
+            const termMeta =
+              "termination" in payload ? payload.termination : null;
+            if (
+              !termMeta ||
+              termMeta.version !== 1 ||
+              termMeta.serverEpoch !== currentTarget.serverEpoch
+            ) {
+              term.options.disableStdin = true;
+              syncEffectiveStdinSuppression(term);
+              setAttachState("idle");
+              recordClientDiagnostic(
+                "transport",
+                "terminal-panel",
+                "attach_refused_epoch_mismatch",
+                {
+                  sessionId: safeSessionId,
+                  expectedEpoch: currentTarget.serverEpoch,
+                  receivedEpoch: termMeta?.serverEpoch ?? null,
+                  instanceToken,
+                },
+              );
+              return;
+            }
+            const sessions =
+              "sessions" in payload
+                ? payload.sessions
+                : (payload as SessionInfo[]);
+            const matchingSession = (sessions ?? []).find(
+              (s) =>
+                s.id === safeSessionId &&
+                isTerminalInventoryRowEligible(s) &&
+                s.incarnationExact === currentTarget.incarnation,
+            );
+            if (!matchingSession) {
+              term.options.disableStdin = true;
+              syncEffectiveStdinSuppression(term);
+              setAttachState("idle");
+              recordClientDiagnostic(
+                "transport",
+                "terminal-panel",
+                "attach_refused_incarnation_mismatch",
+                {
+                  sessionId: safeSessionId,
+                  expectedIncarnation: currentTarget.incarnation,
+                  instanceToken,
+                },
+              );
+              return;
+            }
+            isAuthorityVerified = true;
+            scheduleTerminalFit(terminalEntry, {
+              focus: !shouldSuppressTerminalFocus,
+            });
+            retryUnavailableAfterReplayRef.current =
+              matchingSession.targetUnavailable === true;
             recoveryController?.start();
           } else {
-            setAttachState("idle");
+            const sessions =
+              "sessions" in payload
+                ? payload.sessions
+                : (payload as SessionInfo[]);
+            const existingSession = (sessions ?? []).find(
+              (s) => s.id === safeSessionId,
+            );
+            retryUnavailableAfterReplayRef.current =
+              existingSession?.targetUnavailable === true;
+            if (existingSession) {
+              isAuthorityVerified = true;
+              recoveryController?.start();
+            } else {
+              setAttachState("idle");
+            }
           }
         })
         .then(() => {
-          if (!isCurrent()) return;
+          if (!isCurrent() || !isReadyForMutation()) return;
           // Hidden terminals still fit when their presentation host changes.
           observer = new ResizeObserver(() => {
-            if (isCurrent()) scheduleTerminalFit(terminalEntry);
+            if (isReadyForMutation()) {
+              scheduleTerminalFit(terminalEntry);
+            }
           });
           observer.observe(container);
         })
@@ -1095,14 +1442,32 @@ export function TerminalPanel({
     let boundOwner: string | null = undefined as unknown as null;
     const syncConnection = () => {
       let nextOwner: string | null = null;
+      const currentTarget = terminalTargetRef.current;
       if (ownerProfileId) {
         const snapshot = getConnectionSnapshot(ownerProfileId);
-        nextOwner =
-          snapshot && snapshot.status === "connected"
-            ? JSON.stringify(snapshot.owner)
-            : null;
-      } else {
+        if (
+          currentTarget &&
+          (ownerProfileId !== currentTarget.profileId ||
+            !snapshot ||
+            snapshot.status !== "connected" ||
+            snapshot.owner.generation !== currentTarget.generation)
+        ) {
+          nextOwner = null;
+        } else {
+          nextOwner =
+            snapshot && snapshot.status === "connected"
+              ? JSON.stringify({
+                  ...snapshot.owner,
+                  serverEpoch: currentTarget?.serverEpoch,
+                  incarnation: currentTarget?.incarnation,
+                  terminalId: currentTarget?.terminalId,
+                })
+              : null;
+        }
+      } else if (!currentTarget) {
         nextOwner = `ambient:${transportGeneration}`;
+      } else {
+        nextOwner = null;
       }
       if (nextOwner === boundOwner) return;
       releaseConnection();
@@ -1127,23 +1492,49 @@ export function TerminalPanel({
       findUnsubscribeRef.current = null;
       findController.dispose();
       findControllerRef.current = null;
-      if (getTerminal(terminalRegistrationKey) === terminalEntry) {
-        removeTerminal(terminalRegistrationKey);
+      removeTerminal(terminalRegistrationKey);
+      if (effectiveTerminalRef) {
+        removeTerminal(effectiveTerminalRef);
       }
+      removeTerminal(safeSessionId);
       termRef.current = null;
       openedRef.current = false;
       rendererControllerRef.current?.dispose();
       rendererControllerRef.current = null;
+      recordClientDiagnostic("transport", "terminal-panel", "xterm_disposed", {
+        instanceToken,
+        sessionId: safeSessionId,
+        profileId: ownerProfileId,
+      });
       term.dispose();
-      terminalBoundary.removeEventListener("contextmenu", handleContextMenu);
       terminalBoundary.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     ownerProfileId,
-    terminalRegistrationKey,
     ownerProfileId ? null : transportGeneration,
   ]);
+
+  useEffect(() => {
+    if (!termRef.current) return;
+    const entry = getTerminal(terminalRegistrationKey);
+    if (!entry) {
+      const existingEntry = effectiveTerminalRef
+        ? getTerminal(effectiveTerminalRef)
+        : getTerminal(safeSessionId);
+      if (existingEntry) {
+        registerTerminal(
+          terminalRegistrationKey,
+          existingEntry.terminal,
+          existingEntry.fitAddon,
+          existingEntry.findController,
+          existingEntry.attachmentElement,
+          existingEntry.terminalRef,
+          existingEntry.commitDesiredRenderer,
+        );
+      }
+    }
+  }, [terminalRegistrationKey, effectiveTerminalRef, safeSessionId]);
 
   useClientLayoutEffect(() => {
     const term = termRef.current;

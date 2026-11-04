@@ -24,6 +24,10 @@ import {
   stepTransitionOutcomeUnknown,
   withRecipeLaunchLock,
 } from "./launch-records.js";
+import {
+  collectDesktopWindowIds,
+  evaluateSourceWindow,
+} from "./recipe-source-context.js";
 
 /**
  * Calculates matching and excluded windows for the chosen server/profile + project.
@@ -38,76 +42,36 @@ export function calculateSaveSubset(input: {
   const matching: MatchingWindowPreview[] = [];
   const excluded: ExcludedWindowPreview[] = [];
 
-  // Gather all windows present on this desktop (both tiled and floating)
-  const desktopWindowIds = new Set<string>();
-
-  function collectTreeWindowIds(node: TileNode<string> | null) {
-    if (!node) return;
-    if (node.type === "pane") {
-      for (const item of node.items) {
-        desktopWindowIds.add(item);
-      }
-    } else if (node.type === "split") {
-      for (const child of node.children) {
-        collectTreeWindowIds(child);
-      }
-    }
-  }
-
-  collectTreeWindowIds(input.desktop.tree);
-  for (const winId of input.desktop.floatingWindowIds) {
-    desktopWindowIds.add(winId);
-  }
+  const desktopWindowIds = collectDesktopWindowIds(input.desktop);
 
   for (const winId of desktopWindowIds) {
     const win = input.windows[winId];
     if (!win) continue;
 
-    // Fleet / contextless applications cannot be captured in a single-project recipe
-    if (win.appId === "system-monitor" || win.appId === "settings" || win.appId === "agent-hub") {
-      excluded.push({
-        windowId: win.id,
-        title: win.title,
-        appId: win.appId,
-        ctx: win.ctx,
-        reason: `Contextless / fleet application (${win.title}) cannot be captured in project recipe`,
-      });
-      continue;
-    }
-
-    // Profile check
-    if (win.ctx.profileId !== input.chosenProfileId) {
-      excluded.push({
-        windowId: win.id,
-        title: win.title,
-        appId: win.appId,
-        ctx: win.ctx,
-        reason: `Different host profile (${win.ctx.profileId || "unknown"}, not chosen ${input.chosenProfileId})`,
-      });
-      continue;
-    }
-
-    // Project check (same-project worktrees are included)
-    if (win.ctx.projectId !== input.chosenProjectId) {
-      excluded.push({
-        windowId: win.id,
-        title: win.title,
-        appId: win.appId,
-        ctx: win.ctx,
-        reason: `Different project (${win.ctx.projectId || "none"}, not chosen ${input.chosenProjectId})`,
-      });
-      continue;
-    }
-
-    // Matching window!
-    const stepKey = `step-${win.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-    matching.push({
-      windowId: win.id,
-      title: win.title,
-      appId: win.appId,
-      ctx: win.ctx,
-      stepKey,
+    const evaluation = evaluateSourceWindow({
+      win,
+      chosenProfileId: input.chosenProfileId,
+      chosenProjectId: input.chosenProjectId,
     });
+
+    if (evaluation.isMatch) {
+      const stepKey = `step-${win.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+      matching.push({
+        windowId: win.id,
+        title: win.title,
+        appId: win.appId,
+        ctx: win.ctx,
+        stepKey,
+      });
+    } else {
+      excluded.push({
+        windowId: win.id,
+        title: win.title,
+        appId: win.appId,
+        ctx: win.ctx,
+        reason: evaluation.reason ?? "Excluded from project recipe",
+      });
+    }
   }
 
   return {
@@ -115,7 +79,10 @@ export function calculateSaveSubset(input: {
     project: input.chosenProjectId,
     matchingWindows: matching,
     excludedWindows: excluded,
-    canSave: matching.length > 0,
+    canSave:
+      matching.length > 0 &&
+      Boolean(input.chosenProfileId.trim()) &&
+      Boolean(input.chosenProjectId.trim()),
   };
 }
 

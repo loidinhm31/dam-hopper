@@ -139,4 +139,64 @@ describe("OS Input Isolation & Cognito Privacy Browser Tests", () => {
 
     expect(disposition).toBe("ime-passthrough");
   });
+
+  it("DOM keydown listeners suppress command palette trigger when Cognito privacy mode is active", async () => {
+    await renderOsShell();
+
+    // Enable Cognito mode
+    act(() => {
+      useCognitoModeStore.getState().toggle("Mod+Alt+KeyB");
+    });
+    expect(useCognitoModeStore.getState().active).toBe(true);
+
+    // Dispatch physical Ctrl+Alt+K on window
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "k",
+          code: "KeyK",
+          ctrlKey: true,
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    // Command palette MUST NOT open
+    const palette = container?.querySelector('[role="dialog"][aria-label="Command Palette"]');
+    expect(palette).toBeNull();
+  });
+
+  it("DOM listener suppresses focus cycling when modal is active", async () => {
+    await renderOsShell();
+
+    // Open command palette
+    const paletteTrigger = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Open command palette"]',
+    );
+    act(() => {
+      paletteTrigger?.click();
+    });
+    expect(
+      container?.querySelector('[role="dialog"][aria-label="Command Palette"]'),
+    ).not.toBeNull();
+
+    // Dispatch Ctrl+Alt+Escape on window
+    const event = new KeyboardEvent("keydown", {
+      key: "Escape",
+      ctrlKey: true,
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    // Palette remains open, focus cycling not intercepted
+    expect(
+      container?.querySelector('[role="dialog"][aria-label="Command Palette"]'),
+    ).not.toBeNull();
+  });
 });

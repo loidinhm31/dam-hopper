@@ -278,6 +278,11 @@ pub fn build_router_with_web_dir_and_origins(
         .route("/api/terminal/detailed", get(terminal::list_detailed))
         .route("/api/terminal/{id}/buffer", get(terminal::get_buffer))
         .route(
+            "/api/terminal/{id}/terminate",
+            post(terminal::terminate_session)
+                .layer(DefaultBodyLimit::max(terminal::TERMINATION_MAX_BODY_BYTES)),
+        )
+        .route(
             "/api/terminal/{id}",
             delete(terminal::kill_session).patch(terminal::rename_session),
         )
@@ -708,6 +713,10 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
     const X_EXPECTED_SECURITY_REVISION: HeaderName =
         HeaderName::from_static("x-expected-security-revision");
     const X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
+    const X_DAM_HOPPER_TERMINATION_VERSION: HeaderName =
+        HeaderName::from_static("x-damhopper-termination-version");
+    const X_DAM_HOPPER_PTY_EPOCH: HeaderName =
+        HeaderName::from_static("x-damhopper-pty-epoch");
     let headers = [
         AUTHORIZATION,
         CONTENT_TYPE,
@@ -732,6 +741,8 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
         X_EXPECTED_SHA256,
         X_EXPECTED_SECURITY_REVISION,
         X_CONTENT_TYPE_OPTIONS,
+        X_DAM_HOPPER_TERMINATION_VERSION,
+        X_DAM_HOPPER_PTY_EPOCH,
     ];
     CorsLayer::new()
         .allow_origin(allowed_origins.to_vec())

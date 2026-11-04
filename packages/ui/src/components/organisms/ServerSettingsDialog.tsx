@@ -1,4 +1,16 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import {
+  useShellInputContext,
+  type ShellInputContextValue,
+} from "@/os/shell-input-context.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/Dialog.js";
 import { X, Server, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { revokeCurrentMediaSession } from "@/api/media-session.js";
 import {
@@ -117,7 +129,92 @@ export function ServerSettingsDialog({
   const hasMfaSetupData = Boolean(mfaSetupData);
   const [credentialDraftScope, setCredentialDraftScope] = useState<CredentialDraftScope | null>(null);
   const credentialDraftScopeRef = useRef<CredentialDraftScope | null>(null);
+  const { registerModalMount } = useShellInputContext();
+  const [dirtyConfirmOpen, setDirtyConfirmOpen] = useState(false);
 
+  useEffect(() => {
+    if (open) {
+      return registerModalMount("server-settings-dialog");
+    }
+  }, [open, registerModalMount]);
+
+  useEffect(() => {
+    if (dirtyConfirmOpen) {
+      return registerModalMount("confirm-dialog");
+    }
+  }, [dirtyConfirmOpen, registerModalMount]);
+
+  const isEditMode = profile !== undefined;
+
+  const isDirty = useMemo(() => {
+    if (isEditMode) {
+      if (profile) {
+        return (
+          name !== profile.name ||
+          url !== profile.url ||
+          authType !== profile.authType ||
+          username !== (profile.username || "") ||
+          password !== "" ||
+          token !== initialToken ||
+          autoConnect !== profile.autoConnect
+        );
+      }
+      return (
+        name !== "" ||
+        url !== "" ||
+        username !== "" ||
+        password !== "" ||
+        token !== ""
+      );
+    }
+    return (
+      url !== initialUrl ||
+      username !== getAuthUsername() ||
+      password !== "" ||
+      token !== initialToken
+    );
+  }, [
+    isEditMode,
+    profile,
+    name,
+    url,
+    authType,
+    username,
+    password,
+    token,
+    initialToken,
+    initialUrl,
+    autoConnect,
+  ]);
+
+  const isMutationAwaiting =
+    testState === "testing" || mfaSubmitting || mfaLoading;
+
+  const handleRequestClose = useCallback(() => {
+    if (!closable) return;
+    if (isMutationAwaiting) return;
+    if (isDirty && !saved) {
+      setDirtyConfirmOpen(true);
+    } else {
+      onClose();
+    }
+  }, [closable, isMutationAwaiting, isDirty, saved, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (dirtyConfirmOpen) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        handleRequestClose();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open, dirtyConfirmOpen, handleRequestClose]);
   const handleSelfRevoked = (owner: LoginDevicesOwner) => {
     if (!credentialDraftScope || credentialDraftScopeRef.current !== credentialDraftScope ||
         owner.profileId !== credentialDraftScope.profileId ||
@@ -127,7 +224,6 @@ export function ServerSettingsDialog({
     setInitialToken((initial) => initial === owner.token ? "" : initial);
   };
 
-  const isEditMode = profile !== undefined;
   const clearAuthDraft = useCallback(() => {
     setMfaChallengeToken("");
     setMfaSetupData(null);
@@ -429,9 +525,8 @@ export function ServerSettingsDialog({
     setTestState("idle");
   }
 
-  async function handleSave() {
-    if (!urlSchemeValid) return;
-
+  async function handleSave(): Promise<boolean> {
+    if (!urlSchemeValid) return false;
     const t = token.trim();
     const saveScope = credentialDraftScope;
     const saveProfileId = profile?.id ?? (profile === undefined ? getActiveProfileId() ?? undefined : undefined);
@@ -459,7 +554,7 @@ export function ServerSettingsDialog({
       if (persisted) expectedCredential = value;
       return persisted;
     };
-    if (!requireCredentialOwnership()) return;
+    if (!requireCredentialOwnership()) return false;
     const urlChanged = haveServerUrlsChanged(initialUrl, normalized);
     const tokenMustBeCleared = shouldClearAuthTokenForUrlChange(
       initialUrl,
@@ -534,7 +629,7 @@ export function ServerSettingsDialog({
               ? "Unable to persist the server profile in this browser"
               : "Unable to persist the server profile and restore the old login",
           );
-          return;
+          return false;
         }
         savedProfile = { ...profile, ...profileData };
       } else {
@@ -549,7 +644,7 @@ export function ServerSettingsDialog({
         ) {
           setTestState("fail");
           setTestError("Unable to persist the server profile in this browser");
-          return;
+          return false;
         }
         if (!setActiveProfile(savedProfile.id)) {
           const restored = restoreProfileState(savedProfile.id);
@@ -559,14 +654,14 @@ export function ServerSettingsDialog({
               ? "Unable to activate the new server profile"
               : "Unable to activate the new profile and restore the previous state",
           );
-          return;
+          return false;
         }
       }
 
       // Never carry a token across a backend URL change. A newly tested token
       // for the replacement URL may be stored instead.
       if (profile && urlChanged && !(await clearPreviousProfileToken())) {
-        return;
+        return false;
       }
       if (!tokenClearedForUrlChange && (tokenMustBeCleared || !t)) {
         if (shouldRevokePreviousProfileSession) {
@@ -584,7 +679,7 @@ export function ServerSettingsDialog({
               ? "Unable to clear the login token in this browser"
               : "Unable to clear the login token and restore the previous state",
           );
-          return;
+          return false;
         }
       }
       if (t && !tokenMustBeCleared && shouldRevokePreviousProfileSession) {
@@ -602,7 +697,7 @@ export function ServerSettingsDialog({
             ? "Unable to persist the login token in this browser"
             : "Unable to persist the login token and restore the previous state",
         );
-        return;
+        return false;
       }
 
       setSaved(true);
@@ -611,7 +706,7 @@ export function ServerSettingsDialog({
       onSaved?.(savedProfile);
 
       // Invalidate the runtime connection for this profile so changes take effect without reloading
-      if (!requireCredentialOwnership()) return;
+      if (!requireCredentialOwnership()) return false;
       if (urlChanged || tokenMustBeCleared || t) {
         disconnectProfile(savedProfile.id);
         if (
@@ -621,6 +716,7 @@ export function ServerSettingsDialog({
           void connectProfile(savedProfile.id);
         }
       }
+      return true;
     } else {
       // Legacy mode: direct URL/token storage
       const isSameOrigin =
@@ -677,10 +773,10 @@ export function ServerSettingsDialog({
             ? "Unable to persist the server URL in this browser"
             : "Unable to persist the server URL and restore the old login",
         );
-        return;
+        return false;
       }
       if (urlChanged && !(await clearPreviousLegacyToken())) {
-        return;
+        return false;
       }
       if (
         !tokenClearedForUrlChange &&
@@ -694,7 +790,7 @@ export function ServerSettingsDialog({
             ? "Unable to clear the login token in this browser"
             : "Unable to clear the login token and restore the previous state",
         );
-        return;
+        return false;
       }
       if (t && !tokenMustBeCleared && shouldRevokePreviousLegacySession) {
         await revokeCurrentMediaSession(
@@ -711,10 +807,10 @@ export function ServerSettingsDialog({
             ? "Unable to persist the login token in this browser"
             : "Unable to persist the login token and restore the previous state",
         );
-        return;
+        return false;
       }
 
-      if (!requireCredentialOwnership()) return;
+      if (!requireCredentialOwnership()) return false;
       if (username) {
         setAuthUsername(username.trim());
       } else {
@@ -723,6 +819,7 @@ export function ServerSettingsDialog({
 
       setSaved(true);
       setTimeout(() => window.location.reload(), 800);
+      return true;
     }
   }
 
@@ -806,7 +903,7 @@ export function ServerSettingsDialog({
       className="safe-area-inline safe-area-bottom fixed inset-0 z-50 flex items-center justify-center p-3"
       style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}
       onClick={(e) => {
-        if (closable && e.target === e.currentTarget) onClose();
+        if (closable && e.target === e.currentTarget) handleRequestClose();
       }}
     >
       <div
@@ -823,7 +920,7 @@ export function ServerSettingsDialog({
           </div>
           {closable && (
             <button
-              onClick={onClose}
+              onClick={handleRequestClose}
               className="rounded p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
             >
               <X size={14} />
@@ -1092,7 +1189,7 @@ export function ServerSettingsDialog({
           <div className="flex gap-2">
             {closable && (
               <button
-                onClick={onClose}
+                onClick={handleRequestClose}
                 className="rounded-lg px-3.5 py-2 text-xs font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
               >
                 Cancel
@@ -1122,6 +1219,59 @@ export function ServerSettingsDialog({
           </div>
         </div>
       </div>
+      <Dialog
+        open={dirtyConfirmOpen}
+        onOpenChange={(next) => {
+          if (!next) setDirtyConfirmOpen(false);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Unsaved Changes</DialogTitle>
+            <DialogDescription className="text-xs text-[var(--color-text-muted)]">
+              You have unsaved changes to this server profile. What would you like to do?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              autoFocus
+              onClick={() => setDirtyConfirmOpen(false)}
+              className="rounded-lg px-3 py-1.5 text-xs font-medium border border-[var(--color-border)] hover:bg-[var(--color-surface-hover)]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDirtyConfirmOpen(false);
+                onClose();
+              }}
+              className="rounded-lg px-3 py-1.5 text-xs font-medium text-red-400 border border-red-500/30 hover:bg-red-500/10"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              disabled={
+                !urlSchemeValid ||
+                testState !== "ok" ||
+                (authType === "basic" && (!username || !token))
+              }
+              onClick={async () => {
+                const ok = await handleSave();
+                if (ok) {
+                  setDirtyConfirmOpen(false);
+                  onClose();
+                }
+              }}
+              className="rounded-lg px-3 py-1.5 text-xs font-semibold text-white bg-[var(--color-primary)] hover:opacity-90 disabled:opacity-50"
+            >
+              Save & Close
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

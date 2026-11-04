@@ -5,7 +5,11 @@ import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay
 import { useWindowStore } from "./window-store.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { getConnectionSnapshot } from "@/api/connections.js";
-
+import { useShellInputContext } from "./shell-input-context.js";
+import {
+  terminalTargetKey,
+  type TerminalTarget,
+} from "@/api/terminal-session-contract.js";
 export interface OsResourceHostProps {
   mountedSessions?: MountedSession[];
   children: ReactNode;
@@ -181,6 +185,15 @@ export function OsResourceHost({
 }: OsResourceHostProps) {
   const sessionWindows = useWindowStore((state) => state.session.windows);
 
+  let isTerminalSuppressed = false;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const shellInput = useShellInputContext();
+    isTerminalSuppressed = shellInput.isTerminalSuppressed;
+  } catch {
+    // optional fallback if outside ShellInputProvider
+  }
+
   const derivedTerminalSessions: MountedSession[] = useMemo(() => {
     const sessions: MountedSession[] = [];
     for (const w of Object.values(sessionWindows)) {
@@ -190,11 +203,19 @@ export function OsResourceHost({
       const snap = getConnectionSnapshot(profileId);
       if (!snap && profileId !== "default") continue;
 
+      const target =
+        w.runtimeIdentity?.kind === "terminal"
+          ? w.runtimeIdentity.target
+          : (w.appState?.target as TerminalTarget | undefined);
+
       const sessionId =
+        target?.terminalId ??
         (w.appState?.sessionId as string | undefined) ??
         (w.appState?.terminalId as string | undefined) ??
         `${profileId}:${w.id}`;
+
       sessions.push({
+        mountKey: w.id,
         sessionId,
         project: w.ctx.projectId ?? "default",
         command: "",
@@ -203,6 +224,8 @@ export function OsResourceHost({
           profileId,
           id: sessionId,
         },
+        terminalTarget: target,
+        attachPolicy: target ? "existing-only" : undefined,
       });
     }
     return sessions;
@@ -212,9 +235,9 @@ export function OsResourceHost({
     const seen = new Set<string>();
     const merged: MountedSession[] = [];
     for (const s of [...mountedSessions, ...derivedTerminalSessions]) {
-      const pId = s.terminalRef?.profileId ?? s.profileId ?? "default";
-      const sId = s.terminalRef?.id ?? s.sessionId;
-      const key = `${pId}::${sId}`;
+      const key = s.terminalTarget
+        ? terminalTargetKey(s.terminalTarget)
+        : `${s.profileId ?? "default"}::${s.sessionId}::${s.mountKey ?? ""}`;
       if (!seen.has(key)) {
         seen.add(key);
         merged.push(s);
@@ -224,7 +247,10 @@ export function OsResourceHost({
   }, [mountedSessions, derivedTerminalSessions]);
   return (
     <MonacoKeepAliveHost>
-      <TerminalKeepAliveHost mountedSessions={allMountedSessions} />
+      <TerminalKeepAliveHost
+        mountedSessions={allMountedSessions}
+        suppressNativeKeyboard={isTerminalSuppressed}
+      />
       <OsBrowserKeepAliveHost />
       {children}
     </MonacoKeepAliveHost>

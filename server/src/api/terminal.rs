@@ -1,6 +1,9 @@
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{rejection::BytesRejection, Path, State},
+    http::{
+        header::{HeaderMap, HeaderName, HeaderValue, CACHE_CONTROL},
+        StatusCode,
+    },
     response::IntoResponse,
     Json,
 };
@@ -12,6 +15,10 @@ use crate::config::schema::{RestartPolicy, DEFAULT_RESTART_MAX_RETRIES};
 use crate::error::AppError;
 use crate::pty::manager::PtyCreateOpts;
 use crate::state::AppState;
+use crate::pty::manager::{
+    GuardedTerminationError, GuardedTerminationOutcome, TerminalInventoryState,
+};
+use crate::pty::SessionMeta;
 use crate::workspace_target::{
     target_path_is_within, target_path_relative, FilesystemTargetRef, ProjectTargetRef,
     ResolvedProjectTarget, WorkspaceTargetError,
@@ -211,7 +218,17 @@ pub async fn create_session(
             return Err(ApiError::from_app(error));
         }
     };
-    Ok(Json(meta))
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("x-damhopper-termination-version"),
+        HeaderValue::from_static("1"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-damhopper-pty-epoch"),
+        HeaderValue::try_from(state.pty_manager.server_epoch().to_string()).unwrap(),
+    );
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok((headers, Json(meta)))
 }
 
 async fn resolve_terminal_target(
@@ -324,8 +341,43 @@ fn default_untargeted_terminal_cwd() -> Result<String, ApiError> {
 // GET /api/terminal
 // ---------------------------------------------------------------------------
 
+#[derive(serde::Serialize)]
+pub struct TerminalInventoryRowDto {
+    #[serde(flatten)]
+    pub meta: SessionMeta,
+    #[serde(rename = "incarnationExact")]
+    pub incarnation_exact: String,
+    #[serde(rename = "terminationState")]
+    pub termination_state: TerminalInventoryState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buffer_bytes: Option<usize>,
+}
+
 pub async fn list_sessions(State(state): State<AppState>) -> impl IntoResponse {
-    Json(state.pty_manager.list()).into_response()
+    let snapshot = state.pty_manager.termination_inventory_snapshot(false);
+    let rows: Vec<TerminalInventoryRowDto> = snapshot
+        .rows
+        .into_iter()
+        .map(|row| TerminalInventoryRowDto {
+            meta: row.meta,
+            incarnation_exact: row.incarnation.to_string(),
+            termination_state: row.termination_state,
+            buffer_bytes: None,
+        })
+        .collect();
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("x-damhopper-termination-version"),
+        HeaderValue::from_static("1"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-damhopper-pty-epoch"),
+        HeaderValue::try_from(snapshot.server_epoch.to_string()).unwrap(),
+    );
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+
+    (headers, Json(rows))
 }
 
 // ---------------------------------------------------------------------------
@@ -333,7 +385,303 @@ pub async fn list_sessions(State(state): State<AppState>) -> impl IntoResponse {
 // ---------------------------------------------------------------------------
 
 pub async fn list_detailed(State(state): State<AppState>) -> impl IntoResponse {
-    Json(state.pty_manager.list_detailed()).into_response()
+    let snapshot = state.pty_manager.termination_inventory_snapshot(true);
+    let rows: Vec<TerminalInventoryRowDto> = snapshot
+        .rows
+        .into_iter()
+        .map(|row| TerminalInventoryRowDto {
+            meta: row.meta,
+            incarnation_exact: row.incarnation.to_string(),
+            termination_state: row.termination_state,
+            buffer_bytes: Some(row.buffer_bytes.unwrap_or(0)),
+        })
+        .collect();
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("x-damhopper-termination-version"),
+        HeaderValue::from_static("1"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-damhopper-pty-epoch"),
+        HeaderValue::try_from(snapshot.server_epoch.to_string()).unwrap(),
+    );
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+
+    (headers, Json(rows))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/terminal/:id/terminate
+// ---------------------------------------------------------------------------
+
+pub const TERMINATION_MAX_BODY_BYTES: usize = 512;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+struct TerminateRequestBody {
+    version: serde_json::Value,
+    expected_server_epoch: serde_json::Value,
+    expected_incarnation: serde_json::Value,
+}
+
+fn is_canonical_uuid(s: &str) -> bool {
+    if s.len() != 36 {
+        return false;
+    }
+    let b = s.as_bytes();
+    if b[8] != b'-' || b[13] != b'-' || b[18] != b'-' || b[23] != b'-' {
+        return false;
+    }
+    for (i, &c) in b.iter().enumerate() {
+        if i == 8 || i == 13 || i == 18 || i == 23 {
+            continue;
+        }
+        if !c.is_ascii_digit() && !(b'a'..=b'f').contains(&c) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_canonical_positive_u64(s: &str) -> bool {
+    if s.is_empty() || s.len() > 20 {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    if !bytes[0].is_ascii_digit() || bytes[0] == b'0' {
+        return false;
+    }
+    for &b in &bytes[1..] {
+        if !b.is_ascii_digit() {
+            return false;
+        }
+    }
+    if s.len() == 20 && s > "18446744073709551615" {
+        return false;
+    }
+    s.parse::<u64>().is_ok()
+}
+
+pub async fn terminate_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    payload: Result<axum::body::Bytes, BytesRejection>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let is_json = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.starts_with("application/json"))
+        .unwrap_or(false);
+    if !is_json {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Json(serde_json::json!({
+                "error": "Content-Type must be application/json",
+                "code": "TERMINATION_INVALID_REQUEST",
+            })),
+        );
+    }
+    let bytes = match payload {
+        Ok(b) => b,
+        Err(e) => {
+            if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                return (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    Json(serde_json::json!({
+                        "error": "Request body exceeds 512 bytes limit",
+                        "code": "TERMINATION_BODY_TOO_LARGE",
+                    })),
+                );
+            }
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Malformed termination request payload",
+                    "code": "TERMINATION_INVALID_REQUEST",
+                })),
+            );
+        }
+    };
+
+    if bytes.len() > TERMINATION_MAX_BODY_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({
+                "error": "Request body exceeds 512 bytes limit",
+                "code": "TERMINATION_BODY_TOO_LARGE",
+            })),
+        );
+    }
+
+    let body: TerminateRequestBody = match serde_json::from_slice(&bytes) {
+        Ok(b) => b,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Malformed termination request payload",
+                    "code": "TERMINATION_INVALID_REQUEST",
+                })),
+            );
+        }
+    };
+
+    // Check version
+    match body.version.as_i64() {
+        Some(1) => {}
+        Some(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Unsupported protocol version",
+                    "code": "TERMINATION_UNSUPPORTED_VERSION",
+                })),
+            );
+        }
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Malformed termination request payload",
+                    "code": "TERMINATION_INVALID_REQUEST",
+                })),
+            );
+        }
+    }
+
+    // Check expectedServerEpoch: must be string and canonical lowercase UUID
+    let epoch_str = match body.expected_server_epoch.as_str() {
+        Some(s) if is_canonical_uuid(s) => s,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Malformed termination request payload",
+                    "code": "TERMINATION_INVALID_REQUEST",
+                })),
+            );
+        }
+    };
+    let expected_epoch = match uuid::Uuid::parse_str(epoch_str) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Malformed termination request payload",
+                    "code": "TERMINATION_INVALID_REQUEST",
+                })),
+            );
+        }
+    };
+
+    // Check expectedIncarnation: must be string and canonical positive u64
+    let inc_str = match body.expected_incarnation.as_str() {
+        Some(s) if is_canonical_positive_u64(s) => s,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Malformed termination request payload",
+                    "code": "TERMINATION_INVALID_REQUEST",
+                })),
+            );
+        }
+    };
+    let expected_incarnation: u64 = match inc_str.parse() {
+        Ok(n) if n > 0 => n,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Malformed termination request payload",
+                    "code": "TERMINATION_INVALID_REQUEST",
+                })),
+            );
+        }
+    };
+
+    match state.pty_manager.request_termination(&id, &expected_epoch, expected_incarnation) {
+        Ok(GuardedTerminationOutcome::TerminationRequested) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "version": 1,
+                "serverEpoch": epoch_str,
+                "terminalId": id,
+                "incarnation": inc_str,
+                "outcome": "terminationRequested",
+            })),
+        ),
+        Ok(GuardedTerminationOutcome::RestartCancelled) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "version": 1,
+                "serverEpoch": epoch_str,
+                "terminalId": id,
+                "incarnation": inc_str,
+                "outcome": "restartCancelled",
+            })),
+        ),
+        Err(GuardedTerminationError::EpochMismatch) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "PTY server epoch mismatch",
+                "code": "TERMINATION_EPOCH_MISMATCH",
+            })),
+        ),
+        Err(GuardedTerminationError::ManagerClosing) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "PTY manager is shutting down",
+                "code": "TERMINATION_MANAGER_CLOSING",
+            })),
+        ),
+        Err(GuardedTerminationError::ReplacementPending) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "Replacement session creation already admitted",
+                "code": "TERMINATION_REPLACEMENT_PENDING",
+            })),
+        ),
+        Err(GuardedTerminationError::NotFound) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "Session not found",
+                "code": "TERMINATION_NOT_FOUND",
+            })),
+        ),
+        Err(GuardedTerminationError::IncarnationMismatch) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "Incarnation mismatch",
+                "code": "TERMINATION_INCARNATION_MISMATCH",
+            })),
+        ),
+        Err(GuardedTerminationError::AlreadyRequested) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "Termination already requested or cancelled",
+                "code": "TERMINATION_ALREADY_REQUESTED",
+            })),
+        ),
+        Err(GuardedTerminationError::NotLive) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "Session is not live or cancellable",
+                "code": "TERMINATION_NOT_LIVE",
+            })),
+        ),
+        Err(GuardedTerminationError::SignalFailed(_)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": "OS process signal dispatch failed",
+                "code": "TERMINATION_SIGNAL_FAILED",
+            })),
+        ),
+    }
 }
 
 pub async fn rename_session(
