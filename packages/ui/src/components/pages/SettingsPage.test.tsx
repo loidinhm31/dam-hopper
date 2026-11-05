@@ -480,6 +480,42 @@ describe("SettingsPage accordion collapse behavior", () => {
     expect(maintenanceBtn?.getAttribute("aria-expanded")).toBe("true");
     expect(maintPanel?.hasAttribute("hidden")).toBe(false);
   });
+  it("opens Appearance section when requestedSection and fresh deliveryId are provided", () => {
+    act(() => {
+      root.render(
+        <SettingsPage
+          noLayout={true}
+          requestedSection="appearance"
+          deliveryId="delivery-1"
+        />,
+      );
+    });
+
+    const appearanceDiv = container.querySelector(
+      '[data-testid="settings-section-appearance"]',
+    );
+    expect(appearanceDiv).not.toBeNull();
+    const button = appearanceDiv?.querySelector("button")!;
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+
+    // Manually collapse it
+    act(() => {
+      button.click();
+    });
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+
+    // Re-render with fresh deliveryId re-opens it
+    act(() => {
+      root.render(
+        <SettingsPage
+          noLayout={true}
+          requestedSection="appearance"
+          deliveryId="delivery-2"
+        />,
+      );
+    });
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+  });
 });
 
 describe("SettingsPage Session Changes toggle integration", () => {

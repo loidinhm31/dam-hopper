@@ -608,6 +608,23 @@ pub async fn update_global_ui(
     Ok(Json(serde_json::json!({ "updated": true })))
 }
 
+const EXTRA_ACTION_IDS: &[&str] = &[
+    "app.editor.open",
+    "app.browser.open",
+    "app.changes.open",
+    "app.conflict-resolver.open",
+    "app.session-changes.open",
+    "app.workflow-plans.open",
+    "app.agent-store.open",
+    "app.settings.open",
+    "app.system-monitor.open",
+    "app.agent-hub.open",
+    "app.recipes.open",
+    "app.terminals.new-window",
+    "app.editor.new-window",
+    "app.browser.new-window",
+];
+
 pub(crate) fn merge_global_ui_config(
     existing: Option<crate::config::schema::UiConfig>,
     incoming: &Value,
@@ -651,6 +668,35 @@ pub(crate) fn merge_global_ui_config(
                 .remove("terminalAgentNotifications");
         }
     }
+
+    // Per-entry appShortcuts merge against stored map with strict validation
+    let incoming_app_shortcuts = incoming.get("appShortcuts").or_else(|| incoming.get("app_shortcuts"));
+    if let Some(shortcuts_val) = incoming_app_shortcuts {
+        let Some(map) = shortcuts_val.as_object() else {
+            return Err(AppError::InvalidInput("appShortcuts must be an object".to_string()));
+        };
+        for (key, val) in map {
+            if !EXTRA_ACTION_IDS.contains(&key.as_str()) {
+                return Err(AppError::InvalidInput(format!("Invalid extra action ID in appShortcuts: {key}")));
+            }
+            if !val.is_null() && !val.is_string() {
+                return Err(AppError::InvalidInput(format!("appShortcuts entry for {key} must be string or null")));
+            }
+        }
+        if merged.get("appShortcuts").is_none() || !merged["appShortcuts"].is_object() {
+            merged["appShortcuts"] = serde_json::json!({});
+        }
+        if let Some(target_map) = merged["appShortcuts"].as_object_mut() {
+            for (key, val) in map {
+                target_map.insert(key.clone(), val.clone());
+            }
+        }
+        if let Some(inc_obj) = incoming.as_object_mut() {
+            inc_obj.remove("appShortcuts");
+            inc_obj.remove("app_shortcuts");
+        }
+    }
+
     merge_json_objects(&mut merged, &incoming);
     let new_ui: crate::config::schema::UiConfig = serde_json::from_value(merged)
         .map_err(|e| AppError::InvalidInput(format!("Invalid UI config: {e}")))?;
@@ -668,6 +714,12 @@ pub(crate) fn merge_global_ui_config(
         .map_err(AppError::InvalidInput)?;
     new_ui
         .validate_window_placement()
+        .map_err(AppError::InvalidInput)?;
+    new_ui
+        .validate_appearance()
+        .map_err(AppError::InvalidInput)?;
+    new_ui
+        .validate_cognito_mode_shortcut()
         .map_err(AppError::InvalidInput)?;
     Ok(new_ui)
 }

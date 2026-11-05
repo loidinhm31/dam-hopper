@@ -44,6 +44,8 @@ import {
   isTerminalFitEligible,
   scheduleTerminalFit,
 } from "@/lib/terminal-fit-scheduler.js";
+import { isEventHandledByCoordinator } from "@/os/action-dispatch.js";
+import { isContextMenuOpen, subscribeContextMenu } from "@/lib/context-menu-coordinator.js";
 import { syncTerminalInputSuppression } from "@/lib/terminal-input-policy.js";
 import {
   createTerminalRendererController,
@@ -216,7 +218,13 @@ export function TerminalPanel({
     syncConnectionRef.current();
   }, [transportGeneration]);
   const { level: appZoomLevel } = useAppZoom();
-  const shouldSuppressNativeKeyboard = Boolean(suppressNativeKeyboard);
+  const [contextMenuSuppressed, setContextMenuSuppressed] = useState(() => isContextMenuOpen());
+  useEffect(() => {
+    return subscribeContextMenu((isOpen) => {
+      setContextMenuSuppressed(isOpen);
+    });
+  }, []);
+  const shouldSuppressNativeKeyboard = Boolean(suppressNativeKeyboard) || contextMenuSuppressed;
   const shouldSuppressTerminalFocus =
     shouldSuppressNativeKeyboard || Boolean(suppressAutoFocus);
   const suppressInputRef = useRef(suppressInput);
@@ -1065,6 +1073,9 @@ export function TerminalPanel({
       // 7. One composed keyboard handler: an acceptance only wins after the
       // controller invalidates its current ghost and yields a suffix.
       const baseKeyEventHandler = (e: KeyboardEvent) => {
+        if (isEventHandledByCoordinator(e)) {
+          return false;
+        }
         if (!isCurrent() || Boolean(suppressInputRef.current)) {
           return false;
         }
@@ -1129,7 +1140,6 @@ export function TerminalPanel({
           panelShortcuts: [
             settings.gitPanelShortcut,
             settings.portsPanelShortcut,
-            settings.fleetTerminalShortcut,
           ],
           terminalFontSizeIncreaseShortcut:
             settings.terminalFontSizeIncreaseShortcut,

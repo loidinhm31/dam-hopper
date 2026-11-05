@@ -1,4 +1,5 @@
-import type { FsTargetRef } from "@/api/ownership.js";
+import type { ConnectionRef, FsTargetRef } from "@/api/ownership.js";
+import type { OsActionId, ExtraActionId, ScalarActionId } from "./actions.js";
 import type { TileNode } from "@/types/tile-tree.js";
 import type { TerminalTarget, ReviewTarget } from "../api/terminal-session-contract.js";
 
@@ -172,4 +173,138 @@ export interface ShellModalCallbacks {
    * Radix retains nested focus/dismissal ownership; this maintains explicit modal depth accounting.
    */
   readonly registerModalMount: (surface: ShellModalSurface) => () => void;
+}
+
+// ============================================================================
+// Re-exported Action IDs
+// ============================================================================
+
+export type { OsActionId, ExtraActionId, ScalarActionId };
+
+// ============================================================================
+// Geometry & Work Area Presentation (Architecture Contract C7)
+// ============================================================================
+
+export interface CanvasWorkArea {
+  readonly width: number;
+  readonly height: number;
+}
+
+export type WindowPresentationKind = "tile" | "float" | "maximized";
+
+// ============================================================================
+// Action Context & Payloads (Architecture Contracts C1 & C12)
+// ============================================================================
+
+export type ActionContext =
+  | {
+      readonly kind: "desktop";
+      readonly desktopId: string;
+      readonly windowContext?: WindowContext;
+      readonly owner?: ConnectionRef | null;
+      readonly target?: FsTargetRef;
+    }
+  | {
+      readonly kind: "editor";
+      readonly desktopId: string;
+      readonly windowId: string;
+      readonly resourceId: string;
+      readonly windowContext: WindowContext;
+      readonly owner: ConnectionRef;
+      readonly target: FsTargetRef;
+      readonly selectedText?: string;
+      readonly filePath?: string;
+      readonly worktreeId?: string;
+    }
+  | {
+      readonly kind: "running-window";
+      readonly desktopId: string;
+      readonly windowId: string;
+      readonly windowContext: WindowContext;
+      readonly owner?: ConnectionRef | null;
+      readonly runtimeIdentity?: OsWindowRuntimeIdentity;
+      readonly target?: FsTargetRef;
+    }
+  | {
+      readonly kind: "shell";
+      readonly desktopId?: string;
+      readonly windowContext?: WindowContext;
+      readonly owner?: ConnectionRef | null;
+      readonly target?: FsTargetRef;
+    };
+
+export type TerminalDirectoryKind =
+  | "explicit-folder"
+  | "target-root"
+  | "profile-default";
+
+export type TerminalCreatePayload = Readonly<{
+  target: FsTargetRef;
+  cwd: string | null;
+  directoryKind: TerminalDirectoryKind;
+  requestedTerminalId?: string;
+  sourceWindowId?: string;
+  owner: ConnectionRef;
+  destinationDesktopId: string;
+  windowContext: WindowContext;
+}>;
+
+export interface ConflictTargetRef {
+  readonly projectId: string;
+  readonly gitRootId: string;
+  readonly operation: string;
+}
+
+// ============================================================================
+// Action Request & Result (Architecture Contracts C1 & C13)
+// ============================================================================
+
+export type ActionRequest =
+  | {
+      readonly id: OsActionId;
+      readonly context: ActionContext;
+    }
+  | {
+      readonly id: "app.settings.open";
+      readonly context: ActionContext;
+      readonly settingsSection?: "appearance" | string;
+    }
+  | {
+      readonly id: "app.terminals.new-window";
+      readonly context: ActionContext;
+      readonly terminalCreate?: TerminalCreatePayload;
+    };
+
+export type ActionResult =
+  | { readonly kind: "focused"; readonly windowId: string }
+  | { readonly kind: "opened"; readonly windowId: string }
+  | { readonly kind: "executed" }
+  | { readonly kind: "disabled"; readonly reason: string }
+  | { readonly kind: "blocked"; readonly reason: string }
+  | { readonly kind: "failed"; readonly reason: string }
+  | { readonly kind: "uncertain"; readonly attemptId: string; readonly reason: string };
+
+// ============================================================================
+// Chooser & Target Selection Presentation (Architecture Contract C10)
+// ============================================================================
+
+export type ChooserPresentationState =
+  | {
+      readonly kind: "choose-target";
+      readonly capturedContext: ActionContext;
+      readonly ownerGeneration: number;
+      readonly destinationDesktopId: string;
+      readonly deliveryToken: string;
+    }
+  | {
+      readonly kind: "resource";
+      readonly target: FsTargetRef;
+      readonly filePath?: string;
+      readonly documentId?: string;
+      readonly url?: string;
+    };
+
+export interface SettingsDeliveryState {
+  readonly section: "appearance" | string;
+  readonly deliveryId: string;
 }

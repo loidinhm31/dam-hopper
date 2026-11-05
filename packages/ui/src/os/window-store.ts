@@ -37,6 +37,18 @@ import {
   updateDesktopTreeSizes,
   updateFloatBounds,
 } from "./window-ops.js";
+import { settleTerminalLaunch } from "./persistence.js";
+
+let monotonicFocusCounter = 0;
+const windowFocusTimestamps = new Map<string, number>();
+
+export function recordWindowFocus(windowId: string): void {
+  windowFocusTimestamps.set(windowId, ++monotonicFocusCounter);
+}
+
+export function getWindowFocusTimestamp(windowId: string): number {
+  return windowFocusTimestamps.get(windowId) ?? 0;
+}
 import { collectTilePanes, findTilePaneContaining } from "@/lib/tile-tree.js";
 import { useSettingsStore } from "@/stores/settings.js";
 
@@ -119,12 +131,25 @@ export const useWindowStore = create<WindowStoreState>((set, get) => ({
   },
 
   closeWindow: (windowId) => {
+    const win = get().session.windows[windowId];
+    if (win?.appId === "terminals") {
+      const attemptId = win.appState?.attemptId as string | undefined;
+      const isDispatched = Boolean(win.appState?.dispatched);
+      const isCreated = Boolean(win.appState?.target || win.appState?.incarnation);
+      if (attemptId && !isDispatched && !isCreated) {
+        void settleTerminalLaunch(attemptId, {
+          kind: "confirmed-not-created",
+          reason: "Terminal window closed before dispatch",
+        });
+      }
+    }
     set((state) => ({
       session: closeWindow(state.session, windowId),
     }));
   },
 
   focusWindow: (windowId) => {
+    recordWindowFocus(windowId);
     set((state) => ({
       session: focusWindow(state.session, windowId),
     }));

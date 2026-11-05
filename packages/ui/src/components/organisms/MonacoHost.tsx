@@ -39,6 +39,16 @@ import {
 import { EditorGitBlameGutter } from "./EditorGitBlameGutter.js";
 import { EditorGitBlameContextMenu } from "./EditorGitBlameContextMenu.js";
 
+let activeMonacoEditorInstance: monacoNs.editor.IStandaloneCodeEditor | null = null;
+
+export function getActiveMonacoSelectionText(): string | undefined {
+  if (!activeMonacoEditorInstance) return undefined;
+  const model = activeMonacoEditorInstance.getModel();
+  const selection = activeMonacoEditorInstance.getSelection();
+  if (!model || !selection || selection.isEmpty()) return undefined;
+  return model.getValueInRange(selection);
+}
+
 interface MonacoHostProps {
   tabKey: string;
   path?: string;
@@ -256,6 +266,14 @@ export function MonacoHost({
         editor.updateOptions({ readOnly: true });
       }
 
+      editor.onDidFocusEditorWidget?.(() => {
+        activeMonacoEditorInstance = editor;
+      });
+      editor.onDidBlurEditorWidget?.(() => {
+        if (activeMonacoEditorInstance === editor) {
+          activeMonacoEditorInstance = null;
+        }
+      });
       // Ctrl+S / Cmd+S → save (use ref so the latest handleSave is always called)
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
         readOnly ? undefined : onSaveRef.current(),
@@ -471,6 +489,9 @@ export function MonacoHost({
       if (ed) {
         const vs =
           typeof ed.saveViewState === "function" ? ed.saveViewState() : null;
+        if (activeMonacoEditorInstance === ed) {
+          activeMonacoEditorInstance = null;
+        }
         if (vs) {
           onViewStateChangeRef.current(vs, prevTabKeyRef.current);
         }

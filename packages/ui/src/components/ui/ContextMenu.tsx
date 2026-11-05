@@ -7,8 +7,20 @@ import {
 } from "@/lib/context-menu-coordinator.js";
 import { contextMenuTriggerMarker } from "@/lib/context-menu-trigger-marker.js";
 
+export interface ContextMenuOwnershipContextValue {
+  container?: HTMLElement | null;
+  portalOwner?: string;
+  isOwnedPortal?: boolean;
+}
+
+const ContextMenuOwnershipContext =
+  React.createContext<ContextMenuOwnershipContextValue>({});
+
 type RootProps = React.ComponentProps<typeof ContextMenuPrimitive.Root> & {
   defaultOpen?: boolean;
+  portalContainer?: HTMLElement | null;
+  portalOwner?: string;
+  isOwnedPortal?: boolean;
 };
 const PortalScope = React.createContext(false);
 
@@ -21,6 +33,9 @@ function ContextMenuRoot({
   open: openProp,
   defaultOpen = false,
   onOpenChange,
+  portalContainer,
+  portalOwner,
+  isOwnedPortal,
   ...props
 }: RootProps) {
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen);
@@ -38,29 +53,42 @@ function ContextMenuRoot({
 
   React.useEffect(() => {
     if (open) {
-      claimContextMenu(close);
+      claimContextMenu(close, portalOwner);
     } else {
       releaseContextMenu(close);
     }
     return () => releaseContextMenu(close);
-  }, [close, open]);
+  }, [close, open, portalOwner]);
 
   const handleOpenChange = React.useCallback(
     (nextOpen: boolean) => {
-      if (nextOpen) claimContextMenu(close);
+      if (nextOpen) claimContextMenu(close, portalOwner);
       else releaseContextMenu(close);
       if (!isControlled) setUncontrolledOpen(nextOpen);
       onOpenChangeRef.current?.(nextOpen);
     },
-    [close, isControlled],
+    [close, isControlled, portalOwner],
+  );
+
+  const ownershipValue = React.useMemo<ContextMenuOwnershipContextValue>(
+    () => ({
+      container: portalContainer,
+      portalOwner,
+      isOwnedPortal:
+        isOwnedPortal ??
+        (portalContainer !== undefined || portalOwner !== undefined),
+    }),
+    [portalContainer, portalOwner, isOwnedPortal],
   );
 
   return (
-    <ContextMenuPrimitive.Root
-      {...props}
-      open={open}
-      onOpenChange={handleOpenChange}
-    />
+    <ContextMenuOwnershipContext.Provider value={ownershipValue}>
+      <ContextMenuPrimitive.Root
+        {...props}
+        open={open}
+        onOpenChange={handleOpenChange}
+      />
+    </ContextMenuOwnershipContext.Provider>
   );
 }
 
@@ -109,35 +137,90 @@ const ContextMenuTrigger = React.forwardRef<
   );
 });
 
-type PortalProps = Omit<
-  React.ComponentProps<typeof ContextMenuPrimitive.Portal>,
-  "container"
->;
+type PortalProps = React.ComponentProps<
+  typeof ContextMenuPrimitive.Portal
+> & {
+  container?: HTMLElement | null;
+  portalOwner?: string;
+};
 
-function ContextMenuPortal({ children, ...props }: PortalProps) {
-  return (
-    <PortalScope.Provider value={true}>
-      <ContextMenuPrimitive.Portal {...props}>
-        {children}
-      </ContextMenuPrimitive.Portal>
-    </PortalScope.Provider>
+function ContextMenuPortal({
+  children,
+  container: containerProp,
+  portalOwner,
+  ...props
+}: PortalProps) {
+  const parentOwnership = React.useContext(ContextMenuOwnershipContext);
+  const container =
+    containerProp !== undefined ? containerProp : parentOwnership.container;
+  const effectiveOwner = portalOwner ?? parentOwnership.portalOwner;
+  const isOwned =
+    parentOwnership.isOwnedPortal ||
+    containerProp !== undefined ||
+    portalOwner !== undefined;
+
+  const ownershipValue = React.useMemo<ContextMenuOwnershipContextValue>(
+    () => ({
+      container,
+      portalOwner: effectiveOwner,
+      isOwnedPortal: isOwned,
+    }),
+    [container, effectiveOwner, isOwned],
   );
+
+  return (
+    <ContextMenuOwnershipContext.Provider value={ownershipValue}>
+      <PortalScope.Provider value={true}>
+        <ContextMenuPrimitive.Portal container={container} {...props}>
+          {children}
+        </ContextMenuPrimitive.Portal>
+      </PortalScope.Provider>
+    </ContextMenuOwnershipContext.Provider>
+  );
+}
+
+export interface ContextMenuContentProps
+  extends React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content> {
+  portalContainer?: HTMLElement | null;
+  portalOwner?: string;
 }
 
 const ContextMenuContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
+  ContextMenuContentProps
 >(function ContextMenuContent(
-  { className, avoidCollisions = true, collisionPadding = 8, onPointerDown, onMouseDown, ...props },
+  {
+    className,
+    avoidCollisions = true,
+    collisionPadding = 8,
+    onPointerDown,
+    onMouseDown,
+    portalContainer: portalContainerProp,
+    portalOwner: portalOwnerProp,
+    ...props
+  },
   ref,
 ) {
   const inPortal = React.useContext(PortalScope);
+  const ownership = React.useContext(ContextMenuOwnershipContext);
+  const container =
+    portalContainerProp !== undefined
+      ? portalContainerProp
+      : ownership.container;
+  const isOwned =
+    ownership.isOwnedPortal ||
+    portalContainerProp !== undefined ||
+    portalOwnerProp !== undefined;
+  const ownerAttr =
+    portalOwnerProp ?? ownership.portalOwner ?? (isOwned ? "true" : undefined);
+
   const content = (
     <ContextMenuPrimitive.Content
       ref={ref}
       avoidCollisions={avoidCollisions}
       collisionPadding={collisionPadding}
       updatePositionStrategy="always"
+      {...(isOwned ? { "data-os-menu-portal": ownerAttr } : {})}
       className={cn(
         "z-[100] max-h-[var(--radix-context-menu-content-available-height)] max-w-[var(--radix-context-menu-content-available-width)] min-w-40 overflow-y-auto overflow-x-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-1 text-[var(--color-text)] shadow-xl outline-none",
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
@@ -157,7 +240,9 @@ const ContextMenuContent = React.forwardRef<
   return inPortal ? (
     content
   ) : (
-    <ContextMenuPrimitive.Portal>{content}</ContextMenuPrimitive.Portal>
+    <ContextMenuPrimitive.Portal container={container}>
+      {content}
+    </ContextMenuPrimitive.Portal>
   );
 });
 ContextMenuContent.displayName = ContextMenuPrimitive.Content.displayName;
@@ -232,6 +317,70 @@ function ContextMenuSeparator({
     />
   );
 }
+const ContextMenuSub = ContextMenuPrimitive.Sub;
+
+const ContextMenuSubTrigger = React.forwardRef<
+  React.ElementRef<typeof ContextMenuPrimitive.SubTrigger>,
+  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubTrigger> & {
+    inset?: boolean;
+  }
+>(function ContextMenuSubTrigger(
+  { className, inset, children, ...props },
+  ref,
+) {
+  return (
+    <ContextMenuPrimitive.SubTrigger
+      ref={ref}
+      className={cn(
+        "flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-xs outline-none focus:bg-[var(--color-surface-hover,var(--color-surface-2))] focus:text-[var(--color-text)] data-[state=open]:bg-[var(--color-surface-hover,var(--color-surface-2))] data-[state=open]:text-[var(--color-text)]",
+        inset && "pl-8",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </ContextMenuPrimitive.SubTrigger>
+  );
+});
+ContextMenuSubTrigger.displayName = ContextMenuPrimitive.SubTrigger.displayName;
+
+export interface ContextMenuSubContentProps
+  extends React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent> {
+  portalContainer?: HTMLElement | null;
+}
+
+const ContextMenuSubContent = React.forwardRef<
+  React.ElementRef<typeof ContextMenuPrimitive.SubContent>,
+  ContextMenuSubContentProps
+>(function ContextMenuSubContent(
+  { className, portalContainer, ...props },
+  ref,
+) {
+  const ownership = React.useContext(ContextMenuOwnershipContext);
+  const container =
+    portalContainer !== undefined ? portalContainer : ownership.container;
+  const isOwned = ownership.isOwnedPortal || portalContainer !== undefined;
+  const ownerAttr = ownership.portalOwner ?? (isOwned ? "true" : undefined);
+  const subContent = (
+    <ContextMenuPrimitive.SubContent
+      ref={ref}
+      {...(isOwned ? { "data-os-menu-portal": ownerAttr } : {})}
+      className={cn(
+        "z-[100] min-w-32 overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-1 text-[var(--color-text)] shadow-lg outline-none",
+        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+        className,
+      )}
+      {...props}
+    />
+  );
+
+  return (
+    <ContextMenuPrimitive.Portal container={container}>
+      {subContent}
+    </ContextMenuPrimitive.Portal>
+  );
+});
+ContextMenuSubContent.displayName = ContextMenuPrimitive.SubContent.displayName;
 
 const ContextMenu = {
   Root: ContextMenuRoot,
@@ -242,6 +391,9 @@ const ContextMenu = {
   CheckboxItem: ContextMenuCheckboxItem,
   Label: ContextMenuLabel,
   Separator: ContextMenuSeparator,
+  Sub: ContextMenuSub,
+  SubTrigger: ContextMenuSubTrigger,
+  SubContent: ContextMenuSubContent,
 } as const;
 
 export {
@@ -254,4 +406,8 @@ export {
   ContextMenuCheckboxItem,
   ContextMenuLabel,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubTrigger,
+  ContextMenuSubContent,
+  ContextMenuOwnershipContext,
 };

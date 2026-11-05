@@ -31,6 +31,12 @@ export function SettingsAppearanceSection() {
     explorerShowHidden,
     cognitoModeStyle,
     defaultWindowPlacement,
+    dockPadding,
+    dockItemSpacing,
+    dockOuterSpacing,
+    dockRadius,
+    cursorTheme,
+    sourceUnset,
     saveDebounced,
   } = useSettingsStore();
 
@@ -248,6 +254,124 @@ export function SettingsAppearanceSection() {
           </SelectContent>
         </Select>
       </SettingRow>
+
+      {sourceUnset && (
+        <div
+          role="status"
+          className="rounded border border-[var(--color-warning)] bg-[var(--color-warning)]/10 p-2 text-xs text-[var(--color-warning)]"
+        >
+          No preference source connected. Preferences are kept in local snapshot until a profile connects.
+        </div>
+      )}
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Dock padding"
+        description="Internal padding of the floating dock (0–16 px)"
+      >
+        <NumberStepper
+          value={dockPadding ?? 8}
+          min={0}
+          max={16}
+          label="dock padding"
+          onChange={(v) => saveDebounced({ dockPadding: v })}
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Dock item spacing"
+        description="Vertical spacing between dock app icons (0–12 px)"
+      >
+        <NumberStepper
+          value={dockItemSpacing ?? 6}
+          min={0}
+          max={12}
+          label="dock item spacing"
+          onChange={(v) => saveDebounced({ dockItemSpacing: v })}
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Dock outer spacing"
+        description="Outer gutter margin around the floating dock (0–24 px)"
+      >
+        <NumberStepper
+          value={dockOuterSpacing ?? 12}
+          min={0}
+          max={24}
+          label="dock outer spacing"
+          onChange={(v) => saveDebounced({ dockOuterSpacing: v })}
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Dock corner radius"
+        description="Corner curvature radius of the floating dock container (0–28 px)"
+      >
+        <NumberStepper
+          value={dockRadius ?? 18}
+          min={0}
+          max={28}
+          label="dock radius"
+          onChange={(v) => saveDebounced({ dockRadius: v })}
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Cursor theme"
+        description="Use system default pointer or custom themed OS desktop cursor"
+      >
+        <Select
+          value={cursorTheme ?? "system"}
+          onValueChange={(val: "system" | "theme") =>
+            saveDebounced({ cursorTheme: val })
+          }
+        >
+          <SelectTrigger aria-label="Cursor theme" className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="system">System</SelectItem>
+            <SelectItem value="theme">Theme</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Reset appearance"
+        description="Reset dock layout and cursor style to defaults. Dock pins remain stored locally."
+      >
+        <button
+          type="button"
+          onClick={() =>
+            saveDebounced({
+              dockPadding: 8,
+              dockItemSpacing: 6,
+              dockOuterSpacing: 12,
+              dockRadius: 18,
+              cursorTheme: "system",
+            })
+          }
+          className="rounded border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+        >
+          Reset appearance defaults
+        </button>
+      </SettingRow>
+
+      <p className="text-xs text-[var(--color-text-muted)] mt-2">
+        Note: Dock layout and cursor style are workbench preferences saved to the server configuration. Dock app pins are stored locally in this browser.
+      </p>
     </section>
   );
 }

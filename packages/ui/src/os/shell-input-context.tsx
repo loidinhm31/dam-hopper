@@ -17,6 +17,7 @@ import type {
   ShellNonmodalSurface,
 } from "./types.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
+import { isContextMenuOpen, subscribeContextMenu } from "@/lib/context-menu-coordinator.js";
 
 export interface ShellInputContextValue
   extends ShellInputState,
@@ -55,6 +56,12 @@ export function ShellInputProvider({
   const activePalette =
     controlledPalette !== undefined ? controlledPalette : uncontrolledPalette;
 
+  const [contextMenuOpen, setContextMenuOpen] = useState(() => isContextMenuOpen());
+  useEffect(() => {
+    return subscribeContextMenu((isOpen) => {
+      setContextMenuOpen(isOpen);
+    });
+  }, []);
   const [activeModalTokens, setActiveModalTokens] = useState<
     readonly ModalMountToken[]
   >([]);
@@ -114,7 +121,11 @@ export function ShellInputProvider({
 
   const modalDepth = activeModalTokens.length;
   const isTerminalSuppressed =
-    cognitoActive || activePalette || modalDepth > 0 || activeNonmodal !== null;
+    cognitoActive ||
+    activePalette ||
+    modalDepth > 0 ||
+    activeNonmodal !== null ||
+    contextMenuOpen;
 
   const contextValue = useMemo<ShellInputContextValue>(
     () => ({
@@ -135,6 +146,7 @@ export function ShellInputProvider({
       modalDepth,
       activeModalTokens,
       isTerminalSuppressed,
+      contextMenuOpen,
       setSurfaceOpen,
       registerModalMount,
       closeActiveNonmodal,

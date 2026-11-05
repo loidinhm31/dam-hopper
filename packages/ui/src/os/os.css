@@ -3,8 +3,8 @@
 :root {
   --os-topbar-height: 40px;
   --os-dock-width: 48px;
+  --os-dock-gutter: 68px;
 }
-
 @media (max-width: 1279px) {
   :root {
     --os-topbar-height: 36px;
@@ -61,6 +61,32 @@
   cursor: grabbing;
 }
 
+
+/* Scoped theme cursor styling (Architecture Contract C8) */
+[data-cursor-theme="theme"] {
+  cursor: var(--os-cursor-default, auto);
+}
+
+[data-cursor-theme="theme"] a,
+[data-cursor-theme="theme"] button,
+[data-cursor-theme="theme"] [role="button"],
+[data-cursor-theme="theme"] [data-cursor="pointer"] {
+  cursor: var(--os-cursor-pointer, pointer);
+}
+
+[data-cursor-theme="theme"] input,
+[data-cursor-theme="theme"] textarea,
+[data-cursor-theme="theme"] [contenteditable="true"] {
+  cursor: text;
+}
+
+[data-cursor-theme="theme"] .os-drag-handle {
+  cursor: grab;
+}
+
+[data-cursor-theme="theme"] .os-drag-handle:active {
+  cursor: grabbing;
+}
 /* Viewport fallback notice */
 .os-viewport-fallback {
   background-color: var(--color-surface);

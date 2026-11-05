@@ -493,6 +493,7 @@ export function setWindowMode(
 
   const updatedWindow: OsWindow = {
     ...window,
+    maximized: false,
     mode,
     floatBounds:
       mode === "float"
@@ -591,6 +592,31 @@ export function toggleWindowMode(
   );
 }
 
+export function maximizeWindow(
+  session: OsSessionV1,
+  windowId: string,
+): OsSessionV1 {
+  const window = session.windows[windowId];
+  if (!window) return session;
+  if (window.maximized && !window.minimized) return session;
+
+  let nextSession = session;
+  if (window.minimized) {
+    nextSession = restoreWindow(nextSession, windowId);
+  }
+  const currentWin = nextSession.windows[windowId];
+  if (!currentWin) return nextSession;
+
+  const updatedWindow: OsWindow = {
+    ...currentWin,
+    maximized: true,
+  };
+  return {
+    ...nextSession,
+    windows: { ...nextSession.windows, [windowId]: updatedWindow },
+  };
+}
+
 export function toggleMaximizeWindow(
   session: OsSessionV1,
   windowId: string,
@@ -598,14 +624,10 @@ export function toggleMaximizeWindow(
   const window = session.windows[windowId];
   if (!window) return session;
 
-  const updatedWindow: OsWindow = {
-    ...window,
-    maximized: !window.maximized,
-  };
-  return {
-    ...session,
-    windows: { ...session.windows, [windowId]: updatedWindow },
-  };
+  if (window.maximized) {
+    return restoreWindow(session, windowId);
+  }
+  return maximizeWindow(session, windowId);
 }
 
 export function minimizeWindow(
@@ -645,45 +667,68 @@ export function restoreWindow(
   windowId: string,
 ): OsSessionV1 {
   const window = session.windows[windowId];
-  if (!window || !window.minimized) return session;
+  if (!window) return session;
+  if (!window.minimized && !window.maximized) return session;
 
-  const mode = window.restorePlacement?.mode ?? window.mode;
-  const desktopId = window.restorePlacement?.desktopId ?? window.desktopId;
-  const floatBounds = window.restorePlacement?.floatBounds ?? window.floatBounds;
+  if (window.minimized) {
+    const mode = window.restorePlacement?.mode ?? window.mode;
+    const desktopId = window.restorePlacement?.desktopId ?? window.desktopId;
+    const floatBounds = window.restorePlacement?.floatBounds ?? window.floatBounds;
 
-  const updatedWindow: OsWindow = {
-    ...window,
-    minimized: false,
-    mode,
-    desktopId,
-    floatBounds,
-    restorePlacement: undefined,
-  };
-  const updatedWindows = { ...session.windows, [windowId]: updatedWindow };
+    const updatedWindow: OsWindow = {
+      ...window,
+      minimized: false,
+      mode,
+      desktopId,
+      floatBounds,
+      restorePlacement: undefined,
+    };
+    const updatedWindows = { ...session.windows, [windowId]: updatedWindow };
 
-  return updateDesktop(
-    { ...session, windows: updatedWindows },
-    desktopId,
-    (d) => {
-      if (mode === "float") {
-        const floatingWindowIds = [
-          ...d.floatingWindowIds.filter((id) => id !== windowId),
-          windowId,
-        ];
-        return { ...d, floatingWindowIds, focusedWindowId: windowId };
-      }
-      let tree = d.tree;
-      if (!tree) {
-        tree = newTilePaneNode([windowId], windowId);
-      } else {
-        const targetPane = collectTilePanes(tree)[0];
-        tree = targetPane
-          ? insertItemIntoTilePane(tree, targetPane.id, windowId)
-          : newTilePaneNode([windowId], windowId);
-      }
-      return { ...d, tree, focusedWindowId: windowId };
-    },
-  );
+    return updateDesktop(
+      { ...session, windows: updatedWindows },
+      desktopId,
+      (d) => {
+        if (mode === "float") {
+          const floatingWindowIds = [
+            ...d.floatingWindowIds.filter((id) => id !== windowId),
+            windowId,
+          ];
+          return { ...d, floatingWindowIds, focusedWindowId: windowId };
+        }
+        let tree = d.tree;
+        if (!tree) {
+          tree = newTilePaneNode([windowId], windowId);
+        } else {
+          const existingPane = findTilePaneContaining(
+            tree,
+            (id) => id === windowId,
+          );
+          if (!existingPane) {
+            const targetPane = collectTilePanes(tree)[0];
+            tree = targetPane
+              ? insertItemIntoTilePane(tree, targetPane.id, windowId)
+              : newTilePaneNode([windowId], windowId);
+          }
+        }
+        return { ...d, tree, focusedWindowId: windowId };
+      },
+    );
+  }
+
+  // Not minimized, but maximized -> un-maximize!
+  if (window.maximized) {
+    const updatedWindow: OsWindow = {
+      ...window,
+      maximized: false,
+    };
+    return {
+      ...session,
+      windows: { ...session.windows, [windowId]: updatedWindow },
+    };
+  }
+
+  return session;
 }
 
 export function updateFloatBounds(

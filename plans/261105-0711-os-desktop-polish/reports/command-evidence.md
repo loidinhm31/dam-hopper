@@ -1,0 +1,35 @@
+# Command and lifecycle evidence
+
+Status: complete, source inspection only. Planning authorization: native-user `plan/parallel`, protocol v3; no implementation. Root `/home/loidinh/WS/dam-hopper`; Linux x64, React 19/Rust/pnpm; date command returned `261105`; branch command returned `main`.
+
+## Observed contracts
+- Approved scope and all ten acceptance rows: [brainstorm](../../reports/brainstorm-261105-0650-os-desktop-polish.md). Prior planning deferral is superseded by this explicit planning request, not by implementation authorization.
+- `packages/ui/src/os/app-registry.ts:3-157`: 17 static manifests. `:171-249`: singleton/profile/project/worktree/tuple matching; multi-instance returns no existing window; tuple matching currently permits missing generation. Do not reuse this as proof of correct generic Open / Focus MRU or protected review eligibility.
+- `packages/ui/src/os/OsShell.tsx:254-315`: keydown handles only palette/focus; modal/palette/nonmodal closure values absent from effect dependencies. `:1455-1540`: separate generic launcher; terminal creation captures owner but final publication uses then-active desktop, creates ordinary provenance from numeric incarnation and epoch.
+- `packages/ui/src/os/CommandPalette.tsx:128-215`: second launcher, terminal hint `Ctrl+\`` hardcoded; fallback `{profileId: "default"}`; post-await active desktop used. Cut over rather than retain aliases.
+- `packages/ui/src/os/input-arbiter.ts:83-139`: pure arbitration exists; defaults shadow remaps through OR with default-specific matchers; `||` also erases explicit empty unbinding. IME/Dead/Process/AltGraph guard exists at `:36-47`.
+- `packages/ui/src/os/shortcuts.ts:13-17`: extra hardcoded command constants exist. Migrate every live consumer; remove unused obsolete constants after references check.
+- `packages/ui/src/lib/terminal-keyboard-shortcuts.ts:113-184`: independent interception suppresses established panel/workspace/reveal/new-terminal chords; font/find/copy/Shift+Enter behavior exists. `components/organisms/TerminalPanel.tsx:1124-1158`: configured fields are fed to this helper, including obsolete Fleet row. Preserve normal terminal input and local find/copy/font behavior; new OS commands dispatch once, terminal only suppresses resolved handled bytes.
+- `packages/ui/src/hooks/use-shortcuts.ts:38-54,73-84`: capture listeners dispatch independently; DoubleShift detector instantiated per listener. Preserve ordinary Shift input; normal command resolution must consult current capture/menu/modal/Cognito/composition ownership.
+- `packages/ui/src/components/organisms/MonacoHost.tsx:356-395`: search listeners currently mutate ambient `useSearchUiStore` without exact editor owner/target. Change through editor-owned callback/typed context, not generic desktop fallback. Keep editor wheel zoom untouched.
+- `packages/ui/src/os/intents.ts:64-87`: `file:open`, `file:edit`, `file:reveal` already carry `FsTargetRef`; `search:query` at `:125-130` currently requires project and has no target/mode. Exact workspace-authorized search/reveal must not be reduced to fabricated project; freeze minimal additive payload/caller migration before workers.
+- `docs/code-standards.md:18-26,38-51`: owner capture/recheck, independent Settings source/target, input isolation and root keep-alive resources are normative.
+- `docs/architecture/preferences-settings-and-host-resources.md:25-31`: debounce captures source/client/generation/edit revision; source switch cancels only undispatched patches. Reuse, do not parallel-store OS preferences.
+
+## Design constraints for author
+1. Small typed action descriptor catalog derived from APP_MANIFESTS, not general command bus/runtime. Descriptor owns ID, label, supported launch modes, context requirement and exactly one setting authority/default. Existing scalar settings remain owners; extra map only for additional commands. Missing -> default, explicit null -> unbound; no duplicate effective overlapping binding.
+2. One shared executor: contextual editor commands take exact editor target/selected text; generic dock/palette commands capture desktop context; qualified window selection can switch to exact owner/desktop. Instancing-aware compatibility then current-desktop preference then explicit runtime MRU, never Object.values order.
+3. Capture desktopId + immutable context + owner generation before await. Publish only to captured still-valid desktop/owner; if destination removed or authority retired, reject publication without killing/retargeting resource. Repeated compatible Open / Focus coalesces; New Window stays distinct. Reuse exact returned provenance, never fabricate authority or retry uncertain creation. Unknown outcome remains blocking per inherited F1 contract; this plan does not repair Recipe execution.
+4. Session Changes requires immutable existing ReviewTarget eight-tuple; Conflict Resolver requires real qualified operation/root. Actionable disabled explanations are approved, preferable to fake metadata/implicit scans.
+5. Settle public action/context/settings/layout interfaces in P01 before concurrent writers. Shared OsShell and shared settings/schema/css files have explicit sequential ownership transfers. Only genuinely disjoint feature modules may run concurrently.
+
+## Related plans / architecture gate
+- `plans/261104-1529-os-session-management-and-interactions/plan.md:25-29,41-46,70-75`: originating PTY epoch/incarnation and presentation-independent termination coordinator already implemented; live authenticated container/human gates still open. Protect these surfaces; Close/End/Recipe redesign excluded.
+- `plans/261101-1738-ai-dev-os-redesign/plan.md:15-16,40,46-60`: F1 uncertainty is exact-proof/no-relaunch across reload/tabs; administrative DONE labels not qualification. Shared shell/editor/client/E2E/docs writers need exclusive handoff; do not import all predecessor unfinished work as prerequisite.
+- Architecture read: `docs/system-architecture.md` (775 lines), plus preference architecture and code standards. Historical app counts/legacy names conflict with current manifest; current source is authoritative. Relevant current invariants reviewed; intended polish must be labeled planned, never represented as deployed.
+- Preferred `docs/architecture.md`/root `ARCHITECTURE.md` not supplied; maintained `docs/system-architecture.md` is repository's explicit reference. Use its planned-design section plus selected-plan architecture contracts; no copy-only/style-only skip because work is structural.
+
+## Checks and limits
+No external research required: existing React/Lucide/Radix/config primitives sufficient. No product tests, runtime smoke, build, lint or formatter executed for planning; brainstorm runtime observations remain attributed prior evidence, not new proof. Parent validates Markdown/task graph with installed source parser without hydration/state creation.
+
+Unresolved questions: none user-blocking; scouts refresh preference and desktop interfaces before detailed authoring.

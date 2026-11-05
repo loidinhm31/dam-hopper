@@ -8,11 +8,11 @@ import { matchesTerminalCopyShortcut } from "@/lib/browser-shortcut-guard.js";
 export interface SharedTerminalKeyOptions {
   cognitoModeShortcut: string;
   cognitoModeActive: boolean;
-  workspaceShortcut: string;
-  revealActiveFileShortcut: string;
-  panelShortcuts?: string[];
-  terminalFontSizeIncreaseShortcut?: string;
-  terminalFontSizeDecreaseShortcut?: string;
+  workspaceShortcut?: string | null;
+  revealActiveFileShortcut?: string | null;
+  panelShortcuts?: Array<string | null | undefined>;
+  terminalFontSizeIncreaseShortcut?: string | null;
+  terminalFontSizeDecreaseShortcut?: string | null;
   onCopySelection: () => void;
   onFind?: () => void;
   onNewTerminal?: () => void;
@@ -49,7 +49,7 @@ export function shouldConsumeCognitoModeTerminalKey(
 }
 
 function matchesTerminalFontShortcut(
-  shortcut: string | undefined,
+  shortcut: string | null | undefined,
   event: ShortcutKeyEvent,
 ): boolean {
   if (!shortcut || event.type !== "keydown") return false;
@@ -68,8 +68,8 @@ function matchesTerminalFontShortcut(
 }
 
 interface TerminalFontSizeShortcutOptions {
-  increaseShortcut?: string;
-  decreaseShortcut?: string;
+  increaseShortcut?: string | null;
+  decreaseShortcut?: string | null;
   onIncrease?: () => void;
   onDecrease?: () => void;
 }

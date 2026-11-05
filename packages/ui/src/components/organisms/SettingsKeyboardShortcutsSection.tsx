@@ -5,7 +5,6 @@ import { useSettingsStore } from "@/stores/settings.js";
 import {
   DEFAULT_COGNITO_MODE_SHORTCUT,
   DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
-  DEFAULT_FLEET_TERMINAL_SHORTCUT,
   DEFAULT_GIT_PANEL_SHORTCUT,
   DEFAULT_PORTS_PANEL_SHORTCUT,
   DEFAULT_PROJECT_PANEL_SHORTCUT,
@@ -19,6 +18,7 @@ import {
   DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
   DoubleShiftDetector,
   displayShortcut,
+  formatShortcut,
   shortcutFromKeyboardEvent,
   validateShortcut,
   validateCognitoModeShortcut,
@@ -27,11 +27,11 @@ import {
 import { cn } from "@/lib/utils.js";
 
 interface ShortcutCaptureProps {
-  value: string;
-  defaultValue: string;
+  value: string | null;
+  defaultValue: string | null;
   label?: string;
-  onChange: (value: string) => void;
-  validate?: (value: string) => string | null;
+  onChange: (value: string | null) => void;
+  validate?: (value: string | null) => string | null;
 }
 
 function ShortcutCapture({
@@ -63,8 +63,8 @@ function ShortcutCapture({
     }
   }
 
-  function commit(next: string) {
-    const validation = validate(next);
+  function commit(next: string | null) {
+    const validation = validate ? validate(next) : null;
     setError(validation);
     detectorRef.current.reset();
     setCapturing(false);
@@ -83,6 +83,10 @@ function ShortcutCapture({
       return;
     }
 
+    if (event.key === "Backspace" || event.key === "Delete") {
+      commit(null);
+      return;
+    }
     if (
       event.repeat ||
       event.nativeEvent.isComposing ||
@@ -151,6 +155,55 @@ function ShortcutCapture({
   );
 }
 
+const SHORTCUT_LABELS: Record<string, string> = {
+  searchTextShortcut: "Text search",
+  searchFilenameShortcut: "Filename search",
+  terminalWorkspaceShortcut: "Terminal workspace",
+  terminalFontSizeIncreaseShortcut: "Increase terminal font size",
+  terminalFontSizeDecreaseShortcut: "Decrease terminal font size",
+  terminalFilePanelShortcut: "File panel",
+  revealActiveFileShortcut: "Reveal active file",
+  gitPanelShortcut: "Git panel",
+  portsPanelShortcut: "Ports panel",
+  projectPanelShortcut: "Project panel",
+  cognitoModeShortcut: "Cognito Mode",
+  osPaletteShortcut: "OS Command Palette",
+  osCycleFocusShortcut: "OS Focus Cycle",
+};
+
+function createShortcutValidator(
+  currentKey: string,
+  customValidator?: (value: string | null) => string | null,
+) {
+  return (next: string | null): string | null => {
+    if (customValidator) {
+      const err = customValidator(next);
+      if (err) return err;
+    } else {
+      const err = validateShortcut(next);
+      if (err) return err;
+    }
+    if (!next) return null;
+
+    const formatted = formatShortcut(next);
+    if (formatted === "Ctrl+Shift+KeyC" || formatted === "Cmd+Shift+KeyC") {
+      return "Conflicts with terminal copy";
+    }
+
+    const state = useSettingsStore.getState();
+    for (const [key, label] of Object.entries(SHORTCUT_LABELS)) {
+      if (key === currentKey) continue;
+      const existing = (state as unknown as Record<string, unknown>)[key];
+      if (typeof existing === "string" && existing.length > 0) {
+        if (formatShortcut(existing) === formatted) {
+          return `Conflicts with ${label}`;
+        }
+      }
+    }
+    return null;
+  };
+}
+
 export function SettingsKeyboardShortcutsSection() {
   const {
     searchTextShortcut,
@@ -163,7 +216,6 @@ export function SettingsKeyboardShortcutsSection() {
     gitPanelShortcut,
     portsPanelShortcut,
     projectPanelShortcut,
-    fleetTerminalShortcut,
     cognitoModeShortcut,
     osPaletteShortcut,
     osCycleFocusShortcut,
@@ -180,6 +232,8 @@ export function SettingsKeyboardShortcutsSection() {
         <ShortcutCapture
           value={searchTextShortcut}
           defaultValue={DEFAULT_SEARCH_TEXT_SHORTCUT}
+          label="Text search"
+          validate={createShortcutValidator("searchTextShortcut")}
           onChange={(shortcut) =>
             saveDebounced({ searchTextShortcut: shortcut })
           }
@@ -192,6 +246,8 @@ export function SettingsKeyboardShortcutsSection() {
         <ShortcutCapture
           value={searchFilenameShortcut}
           defaultValue={DEFAULT_SEARCH_FILENAME_SHORTCUT}
+          label="Filename search"
+          validate={createShortcutValidator("searchFilenameShortcut")}
           onChange={(shortcut) =>
             saveDebounced({ searchFilenameShortcut: shortcut })
           }
@@ -208,6 +264,7 @@ export function SettingsKeyboardShortcutsSection() {
           value={terminalWorkspaceShortcut}
           defaultValue={DEFAULT_TERMINAL_WORKSPACE_SHORTCUT}
           label="Terminal workspace"
+          validate={createShortcutValidator("terminalWorkspaceShortcut")}
           onChange={(shortcut) =>
             saveDebounced({ terminalWorkspaceShortcut: shortcut })
           }
@@ -224,6 +281,7 @@ export function SettingsKeyboardShortcutsSection() {
           value={terminalFontSizeIncreaseShortcut}
           defaultValue={DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT}
           label="Increase terminal font size"
+          validate={createShortcutValidator("terminalFontSizeIncreaseShortcut")}
           onChange={(shortcut) =>
             saveDebounced({ terminalFontSizeIncreaseShortcut: shortcut })
           }
@@ -240,6 +298,7 @@ export function SettingsKeyboardShortcutsSection() {
           value={terminalFontSizeDecreaseShortcut}
           defaultValue={DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT}
           label="Decrease terminal font size"
+          validate={createShortcutValidator("terminalFontSizeDecreaseShortcut")}
           onChange={(shortcut) =>
             saveDebounced({ terminalFontSizeDecreaseShortcut: shortcut })
           }
@@ -255,6 +314,8 @@ export function SettingsKeyboardShortcutsSection() {
         <ShortcutCapture
           value={terminalFilePanelShortcut}
           defaultValue={DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT}
+          label="File panel"
+          validate={createShortcutValidator("terminalFilePanelShortcut")}
           onChange={(shortcut) =>
             saveDebounced({ terminalFilePanelShortcut: shortcut })
           }
@@ -270,6 +331,8 @@ export function SettingsKeyboardShortcutsSection() {
         <ShortcutCapture
           value={revealActiveFileShortcut}
           defaultValue={DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT}
+          label="Reveal active file"
+          validate={createShortcutValidator("revealActiveFileShortcut")}
           onChange={(shortcut) =>
             saveDebounced({ revealActiveFileShortcut: shortcut })
           }
@@ -282,6 +345,8 @@ export function SettingsKeyboardShortcutsSection() {
         <ShortcutCapture
           value={gitPanelShortcut}
           defaultValue={DEFAULT_GIT_PANEL_SHORTCUT}
+          label="Git panel"
+          validate={createShortcutValidator("gitPanelShortcut")}
           onChange={(shortcut) => saveDebounced({ gitPanelShortcut: shortcut })}
         />
       </SettingRow>
@@ -295,6 +360,8 @@ export function SettingsKeyboardShortcutsSection() {
         <ShortcutCapture
           value={portsPanelShortcut}
           defaultValue={DEFAULT_PORTS_PANEL_SHORTCUT}
+          label="Ports panel"
+          validate={createShortcutValidator("portsPanelShortcut")}
           onChange={(shortcut) =>
             saveDebounced({ portsPanelShortcut: shortcut })
           }
@@ -311,23 +378,9 @@ export function SettingsKeyboardShortcutsSection() {
           value={projectPanelShortcut}
           defaultValue={DEFAULT_PROJECT_PANEL_SHORTCUT}
           label="Project panel"
+          validate={createShortcutValidator("projectPanelShortcut")}
           onChange={(shortcut) =>
             saveDebounced({ projectPanelShortcut: shortcut })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="Fleet Terminal"
-        description="Open or close the Fleet Terminal panel"
-      >
-        <ShortcutCapture
-          value={fleetTerminalShortcut}
-          defaultValue={DEFAULT_FLEET_TERMINAL_SHORTCUT}
-          onChange={(shortcut) =>
-            saveDebounced({ fleetTerminalShortcut: shortcut })
           }
         />
       </SettingRow>
@@ -342,9 +395,9 @@ export function SettingsKeyboardShortcutsSection() {
           value={cognitoModeShortcut}
           defaultValue={DEFAULT_COGNITO_MODE_SHORTCUT}
           label="Cognito Mode"
-          validate={validateCognitoModeShortcut}
+          validate={createShortcutValidator("cognitoModeShortcut", validateCognitoModeShortcut)}
           onChange={(shortcut) =>
-            saveDebounced({ cognitoModeShortcut: shortcut })
+            saveDebounced({ cognitoModeShortcut: shortcut ?? DEFAULT_COGNITO_MODE_SHORTCUT })
           }
         />
       </SettingRow>
@@ -359,6 +412,7 @@ export function SettingsKeyboardShortcutsSection() {
           value={osPaletteShortcut}
           defaultValue={DEFAULT_OS_PALETTE_SHORTCUT}
           label="OS Command Palette"
+          validate={createShortcutValidator("osPaletteShortcut")}
           onChange={(shortcut) =>
             saveDebounced({ osPaletteShortcut: shortcut })
           }
@@ -375,6 +429,7 @@ export function SettingsKeyboardShortcutsSection() {
           value={osCycleFocusShortcut}
           defaultValue={DEFAULT_OS_CYCLE_FOCUS_SHORTCUT}
           label="OS Focus Cycle"
+          validate={createShortcutValidator("osCycleFocusShortcut")}
           onChange={(shortcut) =>
             saveDebounced({ osCycleFocusShortcut: shortcut })
           }

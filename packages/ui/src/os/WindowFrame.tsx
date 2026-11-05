@@ -6,7 +6,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import type { OsWindow } from "./types.js";
+import type { CanvasWorkArea, OsWindow, WindowPresentationKind } from "./types.js";
 import { useWindowStore } from "./window-store.js";
 import { useWindowContext } from "./window-context.js";
 import { arbitrateKeyboardEvent } from "./input-arbiter.js";
@@ -48,9 +48,16 @@ function isInteractiveElement(target: EventTarget | null): boolean {
 export interface WindowFrameProps {
   window: OsWindow;
   children: ReactNode;
+  presentationKind?: WindowPresentationKind;
+  canvasArea?: CanvasWorkArea;
 }
 
-export function WindowFrame({ window, children }: WindowFrameProps) {
+export function WindowFrame({
+  window,
+  children,
+  presentationKind,
+  canvasArea,
+}: WindowFrameProps) {
   const qc = useQueryClient();
   const { isFocused, owner } = useWindowContext();
   const isCognitoActive = useCognitoModeStore((state) => state.active);
@@ -113,7 +120,10 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
 
   const handleStartDrag = useCallback(
     (e: ReactMouseEvent) => {
-      if (e.button !== 0 || isCognitoActive) return;
+      const isMax =
+        presentationKind === "maximized" ||
+        (presentationKind === undefined && window.maximized);
+      if (e.button !== 0 || isCognitoActive || isMax) return;
       if (isInteractiveElement(e.target)) return;
       focusWindow(window.id);
 
@@ -377,19 +387,25 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
     (d) => d.id !== window.desktopId,
   );
 
-  const frameStyle: React.CSSProperties = window.maximized
+  const isMaximizedPresentation =
+    presentationKind === "maximized" ||
+    (presentationKind === undefined && window.maximized);
+
+  const frameStyle: React.CSSProperties = isMaximizedPresentation
     ? {
-        position: "fixed",
+        position: "absolute",
         inset: 0,
-        zIndex: 50,
-        width: "100vw",
-        height: "100vh",
+        zIndex: isFocused ? 35 : 30,
+        width: "100%",
+        height: "100%",
+        pointerEvents: "auto",
       }
     : window.mode === "float"
       ? (() => {
+          const effectiveViewport = canvasArea ?? viewport;
           const bounds = window.floatBounds
-            ? projectFloatBounds(window.floatBounds, viewport)
-            : projectFloatBounds(DEFAULT_FLOAT_BOUNDS, viewport);
+            ? projectFloatBounds(window.floatBounds, effectiveViewport)
+            : projectFloatBounds(DEFAULT_FLOAT_BOUNDS, effectiveViewport);
           return {
             position: "absolute" as const,
             left: bounds.x,
@@ -397,12 +413,14 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
             width: bounds.width,
             height: bounds.height,
             zIndex: isFocused ? 30 : 20,
+            pointerEvents: "auto",
           };
         })()
       : {
           position: "relative" as const,
           width: "100%",
           height: "100%",
+          pointerEvents: "auto",
         };
   const RESIZE_HANDLES: Array<{
     dir: ResizeDirection;
@@ -422,30 +440,34 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
     <>
       <div
         role="region"
-      aria-label={window.title}
-      aria-labelledby={`window-title-${window.id}`}
-      data-os-window-frame={window.id}
-      data-testid={`window-frame-${window.id}`}
-      tabIndex={-1}
-      onPointerDown={handlePointerDown}
-      onKeyDownCapture={handleKeyDown}
-      style={frameStyle}
-      className={`flex flex-col overflow-hidden bg-[var(--color-surface)] border ${
-        isFocused
-          ? "border-[var(--color-primary)] shadow-xl"
-          : "border-[var(--color-border)] shadow-sm"
-      } ${window.mode === "float" ? "rounded-lg" : ""}`}
-    >
-      <div
-        data-os-frame-header="true"
-        onMouseDown={handleStartDrag}
-        onDoubleClick={handleHeaderDoubleClick}
-        className={`flex items-center justify-between px-3 py-1.5 border-b border-[var(--color-border)] select-none text-xs ${
+        aria-label={window.title}
+        aria-labelledby={`window-title-${window.id}`}
+        data-os-window-frame={window.id}
+        data-os-presentation-kind={
+          isMaximizedPresentation ? "maximized" : window.mode
+        }
+        data-os-maximized={window.maximized ? "true" : "false"}
+        data-testid={`window-frame-${window.id}`}
+        tabIndex={-1}
+        onPointerDown={handlePointerDown}
+        onKeyDownCapture={handleKeyDown}
+        style={frameStyle}
+        className={`flex flex-col overflow-hidden bg-[var(--color-surface)] border ${
           isFocused
-            ? "bg-[var(--color-surface-hover)]"
-            : "bg-[var(--color-surface)]"
-        } ${window.mode === "float" && !window.maximized ? "cursor-move" : "cursor-default"}`}
+            ? "border-[var(--color-primary)] shadow-xl"
+            : "border-[var(--color-border)] shadow-sm"
+        } ${window.mode === "float" && !isMaximizedPresentation ? "rounded-lg" : ""}`}
       >
+        <div
+          data-os-frame-header="true"
+          onMouseDown={handleStartDrag}
+          onDoubleClick={handleHeaderDoubleClick}
+          className={`flex items-center justify-between px-3 py-1.5 border-b border-[var(--color-border)] select-none text-xs ${
+            isFocused
+              ? "bg-[var(--color-surface-hover)]"
+              : "bg-[var(--color-surface)]"
+          } ${window.mode === "float" && !isMaximizedPresentation ? "cursor-move" : "cursor-default"}`}
+        >
         <div className="flex items-center gap-2 overflow-hidden">
           <span
             id={`window-title-${window.id}`}
@@ -518,6 +540,8 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
           <button
             type="button"
             aria-label={window.maximized ? "Restore" : "Maximize"}
+            title={window.maximized ? "Restore" : "Maximize"}
+            data-testid={`window-maximize-btn-${window.id}`}
             onClick={() => toggleMaximizeWindow(window.id)}
             className="p-1 rounded hover:bg-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-[10px]"
           >
@@ -561,7 +585,7 @@ export function WindowFrame({ window, children }: WindowFrameProps) {
       </div>
 
       {/* 8-Way Floating Resize Handles */}
-      {window.mode === "float" && !window.maximized && (
+      {window.mode === "float" && !isMaximizedPresentation && (
         <>
           {RESIZE_HANDLES.map(({ dir, className }) => (
             <div

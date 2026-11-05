@@ -168,6 +168,21 @@ fn serialize_global_config_for_toml(config: &GlobalConfig) -> Result<toml::Value
     Ok(toml::Value::Table(table))
 }
 
+pub(crate) const KNOWN_SCALAR_SHORTCUT_KEYS: &[&str] = &[
+    "search_text_shortcut",
+    "search_filename_shortcut",
+    "terminal_workspace_shortcut",
+    "terminal_file_panel_shortcut",
+    "project_panel_shortcut",
+    "reveal_active_file_shortcut",
+    "git_panel_shortcut",
+    "ports_panel_shortcut",
+    "terminal_font_size_increase_shortcut",
+    "terminal_font_size_decrease_shortcut",
+    "os_palette_shortcut",
+    "os_cycle_focus_shortcut",
+];
+
 pub(crate) fn normalize_ui_json_for_toml(value: &mut Value) {
     let Some(ui) = value.as_object_mut() else {
         return;
@@ -175,26 +190,29 @@ pub(crate) fn normalize_ui_json_for_toml(value: &mut Value) {
 
     let entries = std::mem::take(ui);
     for (key, mut value) in entries {
+        if key == "fleetTerminalShortcut" || key == "fleet_terminal_shortcut" {
+            continue;
+        }
+
         let toml_key = match key.as_str() {
-            "systemFontSize" => "system_font_size",
-            "editorFontSize" => "editor_font_size",
-            "terminalFontSize" => "terminal_font_size",
-            "editorZoomWheelEnabled" => "editor_zoom_wheel_enabled",
-            "searchTextShortcut" => "search_text_shortcut",
-            "searchFilenameShortcut" => "search_filename_shortcut",
-            "terminalWorkspaceShortcut" => "terminal_workspace_shortcut",
-            "terminalFilePanelShortcut" => "terminal_file_panel_shortcut",
-            "projectPanelShortcut" => "project_panel_shortcut",
-            "revealActiveFileShortcut" => "reveal_active_file_shortcut",
-            "gitPanelShortcut" => "git_panel_shortcut",
-            "portsPanelShortcut" => "ports_panel_shortcut",
-            "fleetTerminalShortcut" => "fleet_terminal_shortcut",
-            "terminalFontSizeIncreaseShortcut" => "terminal_font_size_increase_shortcut",
-            "terminalFontSizeDecreaseShortcut" => "terminal_font_size_decrease_shortcut",
-            "hostResourcePinnedMount" => "host_resource_pinned_mount",
-            "terminalSuggestionsEnabled" => "terminal_suggestions_enabled",
-            "terminalAutoSwitchProjectEnabled" => "terminal_auto_switch_project_enabled",
-            "terminalAgentNotifications" => "terminal_agent_notifications",
+            "systemFontSize" | "system_font_size" => "system_font_size",
+            "editorFontSize" | "editor_font_size" => "editor_font_size",
+            "terminalFontSize" | "terminal_font_size" => "terminal_font_size",
+            "editorZoomWheelEnabled" | "editor_zoom_wheel_enabled" => "editor_zoom_wheel_enabled",
+            "searchTextShortcut" | "search_text_shortcut" => "search_text_shortcut",
+            "searchFilenameShortcut" | "search_filename_shortcut" => "search_filename_shortcut",
+            "terminalWorkspaceShortcut" | "terminal_workspace_shortcut" => "terminal_workspace_shortcut",
+            "terminalFilePanelShortcut" | "terminal_file_panel_shortcut" => "terminal_file_panel_shortcut",
+            "projectPanelShortcut" | "project_panel_shortcut" => "project_panel_shortcut",
+            "revealActiveFileShortcut" | "reveal_active_file_shortcut" => "reveal_active_file_shortcut",
+            "gitPanelShortcut" | "git_panel_shortcut" => "git_panel_shortcut",
+            "portsPanelShortcut" | "ports_panel_shortcut" => "ports_panel_shortcut",
+            "terminalFontSizeIncreaseShortcut" | "terminal_font_size_increase_shortcut" => "terminal_font_size_increase_shortcut",
+            "terminalFontSizeDecreaseShortcut" | "terminal_font_size_decrease_shortcut" => "terminal_font_size_decrease_shortcut",
+            "hostResourcePinnedMount" | "host_resource_pinned_mount" => "host_resource_pinned_mount",
+            "terminalSuggestionsEnabled" | "terminal_suggestions_enabled" => "terminal_suggestions_enabled",
+            "terminalAutoSwitchProjectEnabled" | "terminal_auto_switch_project_enabled" => "terminal_auto_switch_project_enabled",
+            "terminalAgentNotifications" | "terminal_agent_notifications" => "terminal_agent_notifications",
             "agentSettingsPaths" | "agent_settings_paths" => {
                 if let Value::Object(inner) = &mut value {
                     let inner_entries: Vec<(String, Value)> =
@@ -212,25 +230,47 @@ pub(crate) fn normalize_ui_json_for_toml(value: &mut Value) {
                 }
                 "agent_settings_paths"
             }
-            "explorerShowHidden" => "explorer_show_hidden",
-            "explorerLanguageFilter" => "explorer_language_filter",
-            "mobileCustomKeyboardEnabled" => "mobile_custom_keyboard_enabled",
-            "mobileCustomKeyboardFontSize" => "mobile_custom_keyboard_font_size",
-            "mobileCustomKeyboardPadding" => "mobile_custom_keyboard_padding",
-            "mobileCustomKeyboardRowGap" => "mobile_custom_keyboard_row_gap",
-            "terminalOrder" => "terminal_order",
-            "projectOrder" => "project_order",
-            "projectCommandOrder" => "project_command_order",
-            "runtimeGroupOrder" => "runtime_group_order",
-            "runtimeItemOrder" => "runtime_item_order",
-            "terminalScrollButtonsEnabled" => "terminal_scroll_buttons_enabled",
-            "terminalCommitStatusEnabled" => "terminal_commit_status_enabled",
-            "terminalScrollStep" => "terminal_scroll_step",
+            "explorerShowHidden" | "explorer_show_hidden" => "explorer_show_hidden",
+            "explorerLanguageFilter" | "explorer_language_filter" => "explorer_language_filter",
+            "mobileCustomKeyboardEnabled" | "mobile_custom_keyboard_enabled" => "mobile_custom_keyboard_enabled",
+            "mobileCustomKeyboardFontSize" | "mobile_custom_keyboard_font_size" => "mobile_custom_keyboard_font_size",
+            "mobileCustomKeyboardPadding" | "mobile_custom_keyboard_padding" => "mobile_custom_keyboard_padding",
+            "mobileCustomKeyboardRowGap" | "mobile_custom_keyboard_row_gap" => "mobile_custom_keyboard_row_gap",
+            "terminalOrder" | "terminal_order" => "terminal_order",
+            "projectOrder" | "project_order" => "project_order",
+            "projectCommandOrder" | "project_command_order" => "project_command_order",
+            "runtimeGroupOrder" | "runtime_group_order" => "runtime_group_order",
+            "runtimeItemOrder" | "runtime_item_order" => "runtime_item_order",
+            "terminalScrollButtonsEnabled" | "terminal_scroll_buttons_enabled" => "terminal_scroll_buttons_enabled",
+            "terminalCommitStatusEnabled" | "terminal_commit_status_enabled" => "terminal_commit_status_enabled",
+            "terminalScrollStep" | "terminal_scroll_step" => "terminal_scroll_step",
             "cognitoModeShortcut" | "cognito_mode_shortcut" => "cognito_mode_shortcut",
             "cognitoModeStyle" | "cognito_mode_style" => "cognito_mode_style",
             "defaultWindowPlacement" | "default_window_placement" => "default_window_placement",
+            "osPaletteShortcut" | "os_palette_shortcut" => "os_palette_shortcut",
+            "osCycleFocusShortcut" | "os_cycle_focus_shortcut" => "os_cycle_focus_shortcut",
+            "dockPadding" | "dock_padding" => "dock_padding",
+            "dockItemSpacing" | "dock_item_spacing" => "dock_item_spacing",
+            "dockOuterSpacing" | "dock_outer_spacing" => "dock_outer_spacing",
+            "dockRadius" | "dock_radius" => "dock_radius",
+            "cursorTheme" | "cursor_theme" => "cursor_theme",
+            "appShortcuts" | "app_shortcuts" => "app_shortcuts",
             other => other,
         };
+
+        // Known shortcut paths only: encode explicit unbound as TOML "" before generic null dropping
+        if KNOWN_SCALAR_SHORTCUT_KEYS.contains(&toml_key) && value.is_null() {
+            value = Value::String("".to_string());
+        } else if toml_key == "app_shortcuts" {
+            if let Value::Object(inner) = &mut value {
+                for val in inner.values_mut() {
+                    if val.is_null() {
+                        *val = Value::String("".to_string());
+                    }
+                }
+            }
+        }
+
         ui.insert(toml_key.to_string(), value);
     }
 }

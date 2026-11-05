@@ -7,7 +7,6 @@ export const DEFAULT_PROJECT_PANEL_SHORTCUT = "Mod+Shift+KeyZ";
 export const DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT = "Alt+F1";
 export const DEFAULT_GIT_PANEL_SHORTCUT = "Mod+Shift+KeyG";
 export const DEFAULT_PORTS_PANEL_SHORTCUT = "Mod+Shift+KeyP";
-export const DEFAULT_FLEET_TERMINAL_SHORTCUT = "Mod+Shift+KeyM";
 export const DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT =
   "Ctrl+Alt+Shift+Equal";
 export const DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT = "Ctrl+Alt+Minus";
@@ -96,7 +95,10 @@ export function parseShortcut(shortcut: string): ParsedShortcut | null {
   return { kind: "keyboard", ...mods, code: normalizeCode(terminal) };
 }
 
-export function validateShortcut(shortcut: string): string | null {
+export function validateShortcut(shortcut: string | null | undefined): string | null {
+  if (shortcut === null || shortcut === undefined || shortcut.trim().length === 0) {
+    return null;
+  }
   const parsed = parseShortcut(shortcut);
   if (!parsed) return "Invalid shortcut";
   if (parsed.kind === "keyboard" && !parsed.code) return "Missing key";
@@ -172,7 +174,13 @@ function isUsableKeyCode(code: string): boolean {
   if (/^Numpad[A-Za-z0-9]+$/.test(code)) return true;
   return NAMED_KEY_CODES[code] === true;
 }
-export function validateCognitoModeShortcut(shortcut: string): string | null {
+export function validateCognitoModeShortcut(shortcut: string | null | undefined): string | null {
+  if (shortcut === null || shortcut === undefined || shortcut.trim().length === 0) {
+    return "Cognito mode shortcut cannot be unbound";
+  }
+  if (shortcut === "DoubleShift" || shortcut === "Mod+Wheel") {
+    return "Cognito mode requires a keyboard shortcut";
+  }
   const genericError = validateShortcut(shortcut);
   if (genericError) return genericError;
   const parsed = parseShortcut(shortcut);
@@ -183,6 +191,15 @@ export function validateCognitoModeShortcut(shortcut: string): string | null {
     return "Missing key";
   }
   return null;
+}
+
+export function formatOptionalShortcut(
+  shortcut: string | null | undefined,
+): string | null {
+  if (shortcut === null || shortcut === undefined) return null;
+  const trimmed = shortcut.trim();
+  if (trimmed.length === 0) return null;
+  return formatShortcut(trimmed);
 }
 
 export function normalizeCognitoModeShortcut(value: unknown): string {
@@ -211,13 +228,15 @@ export function formatShortcut(shortcut: string): string {
 }
 
 export function displayShortcut(
-  shortcut: string,
+  shortcut: string | null | undefined,
   isMac = isMacPlatform(),
 ): string {
+  if (shortcut === null || shortcut === undefined || shortcut.trim().length === 0) {
+    return "Unbound";
+  }
   const parsed = parseShortcut(shortcut);
   if (!parsed) return shortcut;
   if (parsed.kind === "double-shift") return "Double Shift";
-
   const parts: string[] = [];
   if (parsed.mod) parts.push(isMac ? "Cmd" : "Ctrl");
   if (parsed.ctrl) parts.push("Ctrl");
@@ -241,11 +260,11 @@ export function shortcutFromKeyboardEvent(event: ShortcutKeyEvent): string {
 }
 
 export function matchesKeyboardShortcut(
-  shortcut: string,
+  shortcut: string | null | undefined,
   event: ShortcutKeyEvent,
   isMac = isMacPlatform(),
 ): boolean {
-  if (event.repeat || event.isComposing) return false;
+  if (!shortcut || event.repeat || event.isComposing) return false;
   const parsed = parseShortcut(shortcut);
   if (!parsed || parsed.kind !== "keyboard" || !parsed.code) return false;
   return (
@@ -268,10 +287,11 @@ export function matchesNewTerminalShortcut(event: ShortcutKeyEvent): boolean {
 }
 
 export function matchesWheelShortcut(
-  shortcut: string,
+  shortcut: string | null | undefined,
   event: ShortcutWheelEvent,
   isMac = isMacPlatform(),
 ): boolean {
+  if (!shortcut) return false;
   const parsed = parseShortcut(shortcut);
   if (!parsed || parsed.kind !== "wheel") return false;
   return (
@@ -304,6 +324,11 @@ export class DoubleShiftDetector {
   reset() {
     this.lastShiftAt = 0;
   }
+}
+
+export function createDoubleShiftDetector(thresholdMs = DOUBLE_SHIFT_MS) {
+  const detector = new DoubleShiftDetector(thresholdMs);
+  return (event: ShortcutKeyEvent, now = Date.now()) => detector.match(event, now);
 }
 
 function expectedCtrl(parsed: ShortcutMods, isMac: boolean): boolean {

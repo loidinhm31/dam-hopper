@@ -169,8 +169,13 @@ function OsBrowserKeepAliveHost() {
       style={{ pointerEvents: "none" }}
     >
       {browserWindows.map((win) => {
-        const previewUrl =
-          (win.appState?.url as string | undefined) ?? "http://localhost:5173";
+        if (
+          (win.appState?.presentation as { kind?: string } | undefined)?.kind === "choose-target" ||
+          !win.appState?.url
+        ) {
+          return null;
+        }
+        const previewUrl = win.appState.url as string;
         return (
           <OsBrowserIframe key={win.id} windowId={win.id} url={previewUrl} />
         );
@@ -212,10 +217,11 @@ export function OsResourceHost({
         target?.terminalId ??
         (w.appState?.sessionId as string | undefined) ??
         (w.appState?.terminalId as string | undefined) ??
+        (w.appState?.requestedTerminalId as string | undefined) ??
         `${profileId}:${w.id}`;
 
       sessions.push({
-        mountKey: w.id,
+        mountKey: `${w.id}:${profileId}:${sessionId}`,
         sessionId,
         project: w.ctx.projectId ?? "default",
         command: "",

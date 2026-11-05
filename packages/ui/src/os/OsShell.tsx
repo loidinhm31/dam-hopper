@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useState, useRef } from "react";
-import type { OsWindow, OsAppId, WindowContext, ShellNonmodalSurface } from "./types.js";
+import type { ActionContext, OsWindow, OsAppId, WindowContext, ShellNonmodalSurface } from "./types.js";
 import { useWindowStore } from "./window-store.js";
 import { DesktopCanvas } from "./DesktopCanvas.js";
 import { OsResourceHost } from "./OsResourceHost.js";
@@ -26,7 +26,9 @@ import {
   getAppManifest,
 } from "./app-registry.js";
 import { getTerminal } from "@/lib/terminal-registry.js";
-import { parseOsDeepLink } from "./deep-links.js";
+import { parseOsDeepLink, qualifyOsDeepLink } from "./deep-links.js";
+import { executeAction } from "./action-executor.js";
+import { registerShellDelegate } from "./action-dispatch.js";
 import { readServerProfiles } from "@/api/server-config.js";
 import { getConnectionSnapshot, isCurrentConnection, getApi } from "@/api/connections.js";
 import { dispatchIntent, registerIntentHandler, createIntent } from "./intents.js";
@@ -52,6 +54,7 @@ import { useTerminalNotificationsStore } from "@/stores/terminal-notifications.j
 import { useAgentStatusStore } from "@/stores/agent-status.js";
 import { arbitrateKeyboardEvent } from "./input-arbiter.js";
 import "./os.css";
+import { syncCursorTheme, type CursorTheme } from "./cursor.js";
 import {
   loadOsSession,
   saveOsSession,
@@ -69,6 +72,18 @@ import type { FsArborNode } from "@/api/fs-types.js";
 export function OsShell() {
   const session = useWindowStore((state) => state.session);
   const setSession = useWindowStore((state) => state.setSession);
+  const shellRootRef = useRef<HTMLDivElement>(null);
+  const cursorTheme = useSettingsStore((s) => s.cursorTheme) ?? "system";
+  const dockPadding = useSettingsStore((s) => s.dockPadding) ?? 8;
+  const dockOuterSpacing = useSettingsStore((s) => s.dockOuterSpacing) ?? 12;
+  const dockGutter = 44 + 2 * dockPadding + 2 * dockOuterSpacing;
+
+  useEffect(() => {
+    return syncCursorTheme({
+      theme: cursorTheme as CursorTheme,
+      shellRoot: shellRootRef.current,
+    });
+  }, [cursorTheme]);
   const openWindow = useWindowStore((state) => state.openWindow);
   const switchDesktop = useWindowStore((state) => state.switchDesktop);
   const restoreWindow = useWindowStore((state) => state.restoreWindow);
@@ -192,8 +207,40 @@ export function OsShell() {
     if (parsed.status === "valid") {
       lastProcessedSearchRef.current = currentSearch;
 
-      if (parsed.intent) {
-        void dispatchIntent(parsed.intent).then((res) => {
+      const explicitProfile = parsed.ctx?.profileId ?? profileId;
+      const snap = getConnectionSnapshot(explicitProfile);
+      if (!snap || snap.status !== "connected") {
+        setDeepLinkNotice(`Profile '${explicitProfile}' is not connected`);
+        return;
+      }
+
+      const parsedProject = parsed.ctx?.projectId;
+      const explicitTarget: FsTargetRef = parsed.ctx?.target
+        ? parsed.ctx.target
+        : parsedProject
+          ? normalizeFsTarget({
+              profileId: explicitProfile,
+              project: parsedProject,
+              worktreePath: parsed.ctx?.worktreeId,
+            })
+          : activeProject
+            ? normalizeFsTarget({ profileId, project: activeProject })
+            : { kind: "workspace", profileId };
+
+      const qualified = qualifyOsDeepLink(parsed, {
+        owner: snap.owner,
+        target: explicitTarget,
+        projectId: parsedProject ?? (activeProject ?? undefined),
+        destinationDesktopId: useWindowStore.getState().session.activeDesktopId,
+      });
+
+      if (qualified.status === "unqualified") {
+        setDeepLinkNotice(qualified.reason);
+        return;
+      }
+
+      if (qualified.intent) {
+        void dispatchIntent(qualified.intent).then((res) => {
           if (res?.status === "handled") {
             try {
               window.history.replaceState({}, "", window.location.pathname);
@@ -204,31 +251,29 @@ export function OsShell() {
             setDeepLinkNotice(res.reason ?? "Could not handle deep link intent");
           }
         });
-      } else if (parsed.appId) {
-        const manifest = APP_MANIFESTS[parsed.appId];
+      } else if (qualified.appId) {
+        const manifest = APP_MANIFESTS[qualified.appId];
         if (manifest) {
           const currentSession = useWindowStore.getState().session;
-          const targetCtx: WindowContext = parsed.ctx ?? {
-            profileId,
-            projectId: activeProject ?? undefined,
-          };
+          const targetCtx: WindowContext = qualified.ctx;
           const existing = findExistingWindowForApp(
             currentSession.windows,
-            parsed.appId,
+            qualified.appId,
             targetCtx,
           );
           if (existing) {
             if (existing.minimized) restoreWindow(existing.id);
             focusWindow(existing.id);
           } else {
-            const newId = `${parsed.appId}-${generateUUID().slice(0, 8)}`;
+            const newId = `${qualified.appId}-${generateUUID().slice(0, 8)}`;
             openWindow(
               {
                 id: newId,
-                appId: parsed.appId,
+                appId: qualified.appId,
                 title: manifest.displayName,
                 ctx: targetCtx,
                 mode: manifest.defaultPlacement,
+                appState: qualified.appState,
               },
               currentSession.activeDesktopId,
             );
@@ -250,39 +295,30 @@ export function OsShell() {
     activeProject,
   ]);
 
-  // Shell-level global shortcut arbitration (e.g. Ctrl+Alt+K for Command Palette)
+  // Register Shell Input Delegate with the root keyboard coordinator (Architecture Contract C5)
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return;
-      const targetEl = e.target as HTMLElement | null;
-      if (targetEl?.closest?.('[data-shortcut-capture="true"]')) return;
-
-      const isCognitoActive = useCognitoModeStore.getState().active;
-      const disposition = arbitrateKeyboardEvent(e, {
-        isCognitoActive,
-        isComposing: Boolean(e.isComposing),
-        isFrameFocused: false,
-        isModalActive: isPaletteOpen || modalDepth > 0,
-        paletteShortcut: osPaletteShortcut,
-        cycleFocusShortcut: osCycleFocusShortcut,
-      });
-
-      if (disposition === "os-palette-handled") {
-        e.preventDefault();
-        e.stopPropagation();
+    return registerShellDelegate({
+      getActiveWindow: () => {
+        const session = useWindowStore.getState().session;
+        const desk = session.desktops.find(
+          (d) => d.id === session.activeDesktopId,
+        );
+        return desk?.focusedWindowId
+          ? session.windows[desk.focusedWindowId]
+          : undefined;
+      },
+      getActiveDesktopId: () =>
+        useWindowStore.getState().session.activeDesktopId,
+      getActivePalette: () => isPaletteOpen,
+      getActiveNonmodal: () => activeNonmodal,
+      getModalDepth: () => modalDepth,
+      closeActiveNonmodal: () => setActiveNonmodal(null),
+      closePalette: () => setIsPaletteOpen(false),
+      togglePalette: () => {
         setActiveNonmodal(null);
         setIsPaletteOpen((prev) => !prev);
-        return;
-      }
-
-      if (e.key === "Escape" && activeNonmodal !== null && !isPaletteOpen) {
-        e.preventDefault();
-        e.stopPropagation();
-        setActiveNonmodal(null);
-        return;
-      } else if (disposition === "os-shortcut-handled") {
-        e.preventDefault();
-        e.stopPropagation();
+      },
+      cycleFocus: () => {
         const currentDeskId = useWindowStore.getState().session.activeDesktopId;
         const currentWindows = useWindowStore.getState().session.windows;
         const visibleWindowIds = Object.keys(currentWindows).filter(
@@ -308,11 +344,9 @@ export function OsShell() {
             nextEl?.focus();
           }
         }
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [osPaletteShortcut, osCycleFocusShortcut, focusWindow]);
+      },
+    });
+  }, [isPaletteOpen, activeNonmodal, modalDepth, focusWindow]);
 
   // Register default OS intent consumers
   useEffect(() => {
@@ -345,7 +379,7 @@ export function OsShell() {
               id: terminalId,
               command: "",
               project: targetCtx.projectId,
-              cwd: intent.payload.cwd,
+              cwd: intent.payload.cwd ?? undefined,
               target: wireTarget,
               cols: 80,
               rows: 24,
@@ -1148,6 +1182,8 @@ export function OsShell() {
           focusWindow(existing.id);
           useWindowStore.getState().updateAppState(existing.id, {
             query: intent.payload.query,
+            mode: intent.payload.mode ?? "content",
+            searchMode: intent.payload.mode ?? "content",
             deliveryId: generateUUID(),
           });
           return { status: "handled", targetWindowId: existing.id };
@@ -1165,6 +1201,8 @@ export function OsShell() {
             mode: getPlacement(),
             appState: {
               query: intent.payload.query,
+              mode: intent.payload.mode ?? "content",
+              searchMode: intent.payload.mode ?? "content",
               deliveryId: generateUUID(),
             },
           },
@@ -1453,103 +1491,34 @@ export function OsShell() {
     session.desktops[0];
 
   const handleLaunchApp = useCallback(
-    async (appId: OsAppId) => {
-      const manifest = APP_MANIFESTS[appId];
-      if (!manifest) return;
+    async (appId: OsAppId, capturedContext?: ActionContext) => {
+      const defaultTarget: FsTargetRef = activeProject
+        ? normalizeFsTarget({ profileId, project: activeProject })
+        : { kind: "workspace", profileId };
       const targetCtx: WindowContext = activeDesktop?.defaultCtx ?? {
         profileId,
         projectId: activeProject ?? undefined,
+        target: defaultTarget,
+      };
+      const snap = getConnectionSnapshot(
+        capturedContext?.windowContext?.profileId ?? profileId,
+      );
+      const owner =
+        capturedContext?.owner ?? snap?.owner ?? { profileId, generation: 1 };
+
+      const context: ActionContext = capturedContext ?? {
+        kind: "desktop",
+        desktopId: session.activeDesktopId,
+        windowContext: targetCtx,
+        owner,
       };
 
-      const existing = findExistingWindowForApp(
-        session.windows,
-        appId,
-        targetCtx,
-      );
-      if (existing) {
-        if (existing.desktopId !== session.activeDesktopId) {
-          switchDesktop(existing.desktopId);
-        }
-        if (existing.minimized) restoreWindow(existing.id);
-        focusWindow(existing.id);
-        return;
-      }
-      const id = generateUUID();
-      let appState: Record<string, unknown> | undefined;
-      if (appId === "terminals") {
-        const terminalId = `term-${generateUUID()}`;
-        let createError: string | undefined;
-        let incarnation: number | undefined;
-        let serverEpoch: string | undefined;
-        const snap = getConnectionSnapshot(targetCtx.profileId);
-        if (snap && snap.status === "connected") {
-          const originatingGeneration = snap.owner.generation;
-          const originatingProfileId = snap.owner.profileId;
-          try {
-            const client = getApi(snap.owner);
-            const createdSession = await client.terminal.create({
-              id: terminalId,
-              command: "",
-              project: targetCtx.projectId,
-              cols: 80,
-              rows: 24,
-            });
-            const snapAfter = getConnectionSnapshot(targetCtx.profileId);
-            if (
-              snapAfter &&
-              snapAfter.status === "connected" &&
-              snapAfter.owner.profileId === originatingProfileId &&
-              snapAfter.owner.generation === originatingGeneration
-            ) {
-              incarnation = createdSession.incarnation;
-              if (createdSession.serverEpoch && isCanonicalUuid(createdSession.serverEpoch)) {
-                serverEpoch = createdSession.serverEpoch;
-              }
-            } else {
-              createError = "Connection owner changed during creation";
-            }
-          } catch (err) {
-            createError = err instanceof Error ? err.message : String(err);
-          }
-        }
-        appState = {
-          sessionId: terminalId,
-          terminalId,
-          ...(incarnation !== undefined && serverEpoch !== undefined
-            ? {
-                incarnation,
-                incarnationExact: String(incarnation),
-                generation: snap?.owner.generation,
-                profileId: snap?.owner.profileId,
-                serverEpoch,
-              }
-            : {}),
-          ...(createError ? { createError } : {}),
-        };
-      }
-      openWindow(
-        {
-          id,
-          appId,
-          title: manifest.displayName,
-          ctx: targetCtx,
-          mode: manifest.defaultPlacement,
-          appState,
-        },
-        useWindowStore.getState().session.activeDesktopId,
-      );
+      await executeAction({
+        id: `app.${appId}.open`,
+        context,
+      });
     },
-    [
-      openWindow,
-      focusWindow,
-      restoreWindow,
-      session.windows,
-      profileId,
-      activeProject,
-      activeDesktop?.defaultCtx,
-      session.activeDesktopId,
-      switchDesktop,
-    ],
+    [profileId, activeProject, activeDesktop, session.activeDesktopId],
   );
 
 
@@ -1606,8 +1575,10 @@ export function OsShell() {
         <ReviewRetirementHost />
         <OsResourceHost>
           <div
+            ref={shellRootRef}
             data-os-shell="true"
             data-testid="os-shell-root"
+            style={{ "--os-dock-gutter": `${dockGutter}px` } as React.CSSProperties}
             className="flex flex-col w-screen h-screen overflow-hidden bg-[var(--color-bg)] select-none"
           >
             {/* Top OS Bar */}
@@ -1666,6 +1637,7 @@ export function OsShell() {
                   <DesktopCanvas
                     desktop={activeDesktop}
                     renderApp={renderApp}
+                    onNotice={(msg) => setNotice({ kind: "storage-error", message: msg })}
                   />
                 )}
               </main>

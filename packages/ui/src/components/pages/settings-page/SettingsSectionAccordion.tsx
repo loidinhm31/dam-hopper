@@ -7,6 +7,8 @@ interface SettingsSectionAccordionProps {
   title: string;
   description: string;
   defaultOpen?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }
 
@@ -14,11 +16,24 @@ export function SettingsSectionAccordion({
   title,
   description,
   defaultOpen = false,
+  open: controlledOpen,
+  onOpenChange,
   children,
 }: SettingsSectionAccordionProps) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+  const isOpen =
+    controlledOpen !== undefined ? controlledOpen : uncontrolledOpen;
   const buttonId = useId();
   const panelId = useId();
+
+  const handleToggle = () => {
+    const next = !isOpen;
+    if (onOpenChange) {
+      onOpenChange(next);
+    } else {
+      setUncontrolledOpen(next);
+    }
+  };
 
   return (
     <section className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/70">
@@ -32,7 +47,7 @@ export function SettingsSectionAccordion({
           )}
           aria-expanded={isOpen}
           aria-controls={panelId}
-          onClick={() => setIsOpen((current) => !current)}
+          onClick={handleToggle}
         >
           <span className="min-w-0">
             <span className="block text-sm font-semibold text-[var(--color-text)]">

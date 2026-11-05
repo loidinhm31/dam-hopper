@@ -6,6 +6,7 @@ import {
   isOsGlobalShortcut,
   isOsPaletteShortcut,
 } from "./input-arbiter.js";
+import { DoubleShiftDetector } from "@/lib/shortcuts.js";
 
 describe("input-arbiter", () => {
   it("blocks input when Cognito mode is active", () => {
@@ -133,5 +134,99 @@ describe("input-arbiter", () => {
         isModalActive: true,
       }),
     ).toBe("cognito-blocked");
+  });
+
+  it("respects explicitly unbound (null) palette and focus shortcuts without hardcoded fallback", () => {
+    const paletteEvent = new KeyboardEvent("keydown", {
+      key: "k",
+      code: "KeyK",
+      ctrlKey: true,
+      altKey: true,
+    });
+    const paletteDisposition = arbitrateKeyboardEvent(paletteEvent, {
+      isCognitoActive: false,
+      isComposing: false,
+      isFrameFocused: false,
+      paletteShortcut: null,
+    });
+    expect(paletteDisposition).toBe("app-passthrough");
+
+    const osChord = new KeyboardEvent("keydown", {
+      key: "Escape",
+      code: "Escape",
+      ctrlKey: true,
+      altKey: true,
+    });
+    const osDisposition = arbitrateKeyboardEvent(osChord, {
+      isCognitoActive: false,
+      isComposing: false,
+      isFrameFocused: false,
+      cycleFocusShortcut: null,
+    });
+    expect(osDisposition).toBe("app-passthrough");
+  });
+
+  it("matches remapped palette and focus shortcuts", () => {
+    const customPalette = new KeyboardEvent("keydown", {
+      key: "p",
+      code: "KeyP",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    const disposition = arbitrateKeyboardEvent(customPalette, {
+      isCognitoActive: false,
+      isComposing: false,
+      isFrameFocused: false,
+      paletteShortcut: "Ctrl+Shift+KeyP",
+    });
+    expect(disposition).toBe("os-palette-handled");
+  });
+
+  it("resolves configured actions from settings projection and distinguishes DoubleShift from single Shift", () => {
+    const textSearchEvent = new KeyboardEvent("keydown", {
+      code: "KeyF",
+      key: "F",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    const textDisposition = arbitrateKeyboardEvent(textSearchEvent, {
+      isCognitoActive: false,
+      isComposing: false,
+      isFrameFocused: false,
+      settings: {
+        searchTextShortcut: "Ctrl+Shift+KeyF",
+      },
+    });
+    expect(textDisposition).toBe("action-handled");
+
+    // Single Shift does not trigger DoubleShift action
+    const detector = new DoubleShiftDetector();
+    const singleShiftEvent = new KeyboardEvent("keydown", {
+      code: "ShiftLeft",
+      key: "Shift",
+      shiftKey: true,
+    });
+    const singleShiftDisp = arbitrateKeyboardEvent(singleShiftEvent, {
+      isCognitoActive: false,
+      isComposing: false,
+      isFrameFocused: false,
+      settings: {
+        searchFilenameShortcut: "DoubleShift",
+      },
+      doubleShiftDetector: detector,
+    });
+    expect(singleShiftDisp).toBe("app-passthrough");
+
+    // Second Shift within threshold triggers DoubleShift
+    const secondShiftDisp = arbitrateKeyboardEvent(singleShiftEvent, {
+      isCognitoActive: false,
+      isComposing: false,
+      isFrameFocused: false,
+      settings: {
+        searchFilenameShortcut: "DoubleShift",
+      },
+      doubleShiftDetector: detector,
+    });
+    expect(secondShiftDisp).toBe("action-handled");
   });
 });

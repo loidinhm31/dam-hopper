@@ -38,6 +38,7 @@ interface SearchPanelProps {
   query?: string;
   onQueryChange?: (query: string) => void;
   isolatedState?: boolean;
+  initialMode?: "filename" | "content";
 }
 
 export function SearchPanel({
@@ -53,10 +54,8 @@ export function SearchPanel({
   query: controlledQuery,
   onQueryChange: controlledOnQueryChange,
   isolatedState = false,
+  initialMode,
 }: SearchPanelProps) {
-  const worktreePath = target && "worktreePath" in target ? target.worktreePath : undefined;
-  const targetProject = target && "project" in target ? target.project : project;
-  const targetProfileId = target?.profileId;
   const requestTarget = useMemo(() => {
     if (target && "kind" in target) {
       return target;
@@ -74,13 +73,13 @@ export function SearchPanel({
   const resolvedRef = inputRef ?? localInputRef;
   const globalStore = useSearchUiStore();
   const [localScope, setLocalScope] = useState<SearchScope>("project");
-  const [localMode, setLocalMode] = useState<"filename" | "content">("content");
+  const [localMode, setLocalMode] = useState<"filename" | "content">(initialMode ?? "content");
   const [localQueries, setLocalQueries] = useState<{
     filename: string;
     content: string;
   }>({
-    filename: "",
-    content: controlledQuery ?? initialQuery ?? "",
+    filename: initialMode === "filename" ? (controlledQuery ?? initialQuery ?? "") : "",
+    content: initialMode === "filename" ? "" : (controlledQuery ?? initialQuery ?? ""),
   });
   const [localReplaceQuery, setLocalReplaceQuery] = useState("");
 
@@ -104,7 +103,7 @@ export function SearchPanel({
     : globalStore.setQuery;
   const { selectOnOpen: shouldSelectOnOpen, consumeSelectOnOpen } = globalStore;
   const isControlledQuery = controlledQuery !== undefined;
-  const query = isControlledQuery ? controlledQuery : queries[mode];
+  const query = (isControlledQuery ? controlledQuery : (queries && mode ? queries[mode] : "")) ?? "";
   const {
     caseSensitive,
     setCaseSensitive,
@@ -353,7 +352,7 @@ export function SearchPanel({
           </div>
         )}
 
-        {query.length >= 2 && (
+        {(query?.length ?? 0) >= 2 && (
           <div className="text-2xs text-[var(--color-text-muted)] flex items-center gap-1.5">
             {isLoading ? (
               <>

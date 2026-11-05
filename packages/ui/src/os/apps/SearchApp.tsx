@@ -19,6 +19,9 @@ export function SearchApp({ window }: SearchAppProps) {
   const worktreeId = window.ctx.worktreeId;
   const requestedQuery = window.appState?.query as string | undefined;
   const deliveryId = window.appState?.deliveryId;
+  const rawMode = (window.appState?.searchMode ?? window.appState?.mode) as string | undefined;
+  const initialMode: "filename" | "content" = rawMode === "filename" ? "filename" : "content";
+
   const [searchScope, setSearchScope] = useState<"workspace" | "project">(
     (window.appState?.scope as "workspace" | "project") ?? (project ? "project" : "workspace"),
   );
@@ -151,6 +154,7 @@ export function SearchApp({ window }: SearchAppProps) {
             onResultClick={handleResultClick}
             autoFocus={false}
             isolatedState={true}
+            initialMode={initialMode}
           />
         )}
       </div>

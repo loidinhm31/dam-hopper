@@ -35,12 +35,16 @@ export interface SettingsPageProps {
   noLayout?: boolean;
   targetProfileId?: string | null;
   onTargetProfileChange?: (profileId: string | null) => void;
+  requestedSection?: string;
+  deliveryId?: string;
 }
 
 export function SettingsPage({
   noLayout = false,
   targetProfileId: explicitTargetProfileId,
   onTargetProfileChange,
+  requestedSection,
+  deliveryId,
 }: SettingsPageProps = {}) {
   const profilesResult = readServerProfiles();
   const profiles: ServerProfile[] =
@@ -82,6 +86,26 @@ export function SettingsPage({
   const switchPreferenceSource = useSettingsStore(
     (s) => s.switchPreferenceSource,
   );
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const appearanceRef = useRef<HTMLDivElement>(null);
+  const lastProcessedDeliveryIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (
+      requestedSection === "appearance" &&
+      deliveryId &&
+      deliveryId !== lastProcessedDeliveryIdRef.current
+    ) {
+      lastProcessedDeliveryIdRef.current = deliveryId;
+      setAppearanceOpen(true);
+      appearanceRef.current?.scrollIntoView?.({
+        behavior: "smooth",
+        block: "start",
+      });
+      const button = appearanceRef.current?.querySelector("button");
+      button?.focus();
+    }
+  }, [requestedSection, deliveryId]);
 
   const targetSnapshot = effectiveSettingsProfileId
     ? getConnectionSnapshot(effectiveSettingsProfileId)
@@ -418,12 +442,16 @@ export function SettingsPage({
             </div>
           </div>
         </section>
-        <SettingsSectionAccordion
-          title="Appearance"
-          description="Theme, layout density, editor behavior, and notification preferences."
-        >
-          <SettingsAppearanceSection />
-        </SettingsSectionAccordion>
+        <div ref={appearanceRef} data-testid="settings-section-appearance">
+          <SettingsSectionAccordion
+            title="Appearance"
+            description="Theme, layout density, editor behavior, and notification preferences."
+            open={appearanceOpen}
+            onOpenChange={setAppearanceOpen}
+          >
+            <SettingsAppearanceSection />
+          </SettingsSectionAccordion>
+        </div>
 
         <SettingsSectionAccordion
           title="Keyboard Shortcuts"

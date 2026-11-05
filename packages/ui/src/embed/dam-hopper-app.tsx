@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useState } from "react";
 import { logger } from "@dam-hopper/shared/logger";
 import { Server, LogIn } from "lucide-react";
 import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
@@ -42,10 +42,8 @@ import { HostSleepConsentHost } from "@/components/organisms/HostSleepConsentHos
 import { useCognitoModeInputGuard } from "@/hooks/use-cognito-mode-input-guard.js";
 import { CognitoModeOverlay } from "@/components/organisms/CognitoModeOverlay.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
-import { useBrowserShortcutGuard } from "@/hooks/use-browser-shortcut-guard.js";
 import { useBrowserContextMenuSuppression } from "@/hooks/use-browser-context-menu-suppression.js";
-import { handleTerminalFontSizeShortcut } from "@/lib/terminal-keyboard-shortcuts.js";
-import { isTerminalSurfaceTarget } from "@/lib/browser-shortcut-guard.js";
+import { installRootKeyboardCoordinator } from "@/os/action-dispatch.js";
 import { normalizeRouterBasename } from "@/lib/router-basename.js";
 import { recordClientRoute } from "@/lib/diagnostics-client.js";
 import {
@@ -71,7 +69,8 @@ function syncFontSizeCssVar(fontSize: number): void {
     `${fontSize}px`,
   );
 }
-
+const useClientLayoutEffect =
+  typeof window === "undefined" ? useEffect : useLayoutEffect;
 const OsShell = lazy(() =>
   import("@/os/OsShell.js").then((m) => ({
     default: m.OsShell,
@@ -227,44 +226,6 @@ function AuthenticatedOsRoute() {
   return <OsShell />;
 }
 
-/** Applies terminal font-size shortcuts anywhere in the current page. */
-function GlobalTerminalFontSizeShortcuts() {
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      // The xterm handler already applied the shortcut and prevented the
-      // browser default; page-level handling must not apply it a second time.
-      if (event.defaultPrevented && isTerminalSurfaceTarget(event.target)) {
-        return;
-      }
-      const settings = useSettingsStore.getState();
-      handleTerminalFontSizeShortcut(event, {
-        increaseShortcut: settings.terminalFontSizeIncreaseShortcut,
-        decreaseShortcut: settings.terminalFontSizeDecreaseShortcut,
-        onIncrease: () => {
-          const current = useSettingsStore.getState();
-          if (current.terminalFontSize < 32) {
-            current.saveDebounced({
-              terminalFontSize: current.terminalFontSize + 1,
-            });
-          }
-        },
-        onDecrease: () => {
-          const current = useSettingsStore.getState();
-          if (current.terminalFontSize > 10) {
-            current.saveDebounced({
-              terminalFontSize: current.terminalFontSize - 1,
-            });
-          }
-        },
-      });
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
-
-  return null;
-}
 
 function RouteDiagnostics() {
   const location = useLocation();
@@ -331,8 +292,10 @@ function LegacyDeepLinkNotice() {
 
 function DamHopperAppInner() {
   useCognitoModeInputGuard();
+  useClientLayoutEffect(() => {
+    return installRootKeyboardCoordinator();
+  }, []);
   const routerBasename = normalizeRouterBasename(import.meta.env.BASE_URL);
-  useBrowserShortcutGuard();
   useBrowserContextMenuSuppression();
   const cognitoActive = useCognitoModeStore((state) => state.active);
   const qc = useQueryClient();
@@ -434,7 +397,6 @@ function DamHopperAppInner() {
     <AppZoomProvider>
       <EncryptProvider>
         <CognitoModeOverlay />
-            <GlobalTerminalFontSizeShortcuts />
             <TerminalNotificationToastViewport />
             <AgentStatusBridge />
             <RouteDiagnostics />

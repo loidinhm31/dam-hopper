@@ -33,6 +33,13 @@ export function GitApp({ window }: GitAppProps) {
           profileId,
           projectId: project,
           worktreeId,
+          target: {
+            kind: "project",
+            profileId,
+            project,
+            worktreePath: worktreeId,
+          },
+          directoryKind: "target-root",
         },
         window.id,
       ),

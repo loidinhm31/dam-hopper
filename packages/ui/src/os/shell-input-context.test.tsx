@@ -9,6 +9,7 @@ import {
   useShellInputContext,
   type ShellInputContextValue,
 } from "./shell-input-context.js";
+import { claimContextMenu, releaseContextMenu } from "@/lib/context-menu-coordinator.js";
 
 describe("ShellInputContext modal registration", () => {
   let container: HTMLDivElement | null = null;
@@ -111,5 +112,34 @@ describe("ShellInputContext modal registration", () => {
     });
 
     expect(effectRunCount).toBe(1);
+  });
+
+  it("reflects context menu open state in isTerminalSuppressed", async () => {
+    let capturedContext: ShellInputContextValue | null = null;
+    function TestConsumer(): ReactElement {
+      capturedContext = useShellInputContext();
+      return createElement("div");
+    }
+
+    await act(async () => {
+      root?.render(
+        createElement(ShellInputProvider, null, createElement(TestConsumer)),
+      );
+    });
+
+    expect(capturedContext!.isTerminalSuppressed).toBe(false);
+
+    const close = () => {};
+    await act(async () => {
+      claimContextMenu(close);
+    });
+
+    expect(capturedContext!.isTerminalSuppressed).toBe(true);
+
+    await act(async () => {
+      releaseContextMenu(close);
+    });
+
+    expect(capturedContext!.isTerminalSuppressed).toBe(false);
   });
 });

@@ -50,7 +50,6 @@ const testState = vi.hoisted(() => ({
     terminalFilePanelShortcut: "mod+shift+e",
     gitPanelShortcut: "mod+shift+g",
     portsPanelShortcut: "mod+shift+p",
-    fleetTerminalShortcut: "mod+shift+t",
     revealActiveFileShortcut: "alt+f1",
     mobileCustomKeyboardEnabled: false,
     terminalAutoSwitchProjectEnabled: true,
@@ -219,6 +218,8 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@/api/queries.js", () => ({
+  terminalInventoryQueryOptions: vi.fn(() => ({ queryKey: ["terminal-sessions"], queryFn: vi.fn() })),
+  useTerminalInventory: () => ({ data: undefined, isLoading: false }),
   invalidateGitProjectQueries: vi.fn(),
   useGitExecuteOperation: () => ({ mutateAsync: vi.fn() }),
   useGitOperationStatus: () => ({ data: undefined, isLoading: false }),
@@ -812,7 +813,7 @@ describe("WorkspacePage project worktree target routing in Chromium", () => {
       testState.captures.diff,
       testState.captures.media,
     ]) {
-      expect(captures).toContainEqual(featureTarget);
+      expect(captures).toContainEqual(expect.objectContaining(featureTarget));
     }
     // Git panel retains project root target and does not switch to worktree
     for (const captures of [

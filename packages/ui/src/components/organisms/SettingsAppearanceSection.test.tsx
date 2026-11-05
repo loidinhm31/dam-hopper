@@ -66,6 +66,12 @@ const settingsStore = {
   mobileCustomKeyboardRowGap: 4,
   cognitoModeShortcut: "Mod+Alt+KeyB",
   cognitoModeStyle: "heavy-blur" as CognitoModeStyle,
+  dockPadding: 8,
+  dockItemSpacing: 6,
+  dockOuterSpacing: 12,
+  dockRadius: 18,
+  cursorTheme: "system" as "system" | "theme",
+  sourceUnset: false,
   saveDebounced,
   saveAgentNotificationPolicy,
 };
@@ -86,6 +92,12 @@ describe("SettingsAppearanceSection", () => {
     settingsStore.terminalAutoSwitchProjectEnabled = true;
     settingsStore.cognitoModeShortcut = "Mod+Alt+KeyB";
     settingsStore.cognitoModeStyle = "heavy-blur";
+    settingsStore.dockPadding = 8;
+    settingsStore.dockItemSpacing = 6;
+    settingsStore.dockOuterSpacing = 12;
+    settingsStore.dockRadius = 18;
+    settingsStore.cursorTheme = "system";
+    settingsStore.sourceUnset = false;
     saveDebounced.mockClear();
     useCognitoModeStore.getState().reset();
     container = document.createElement("div");
@@ -244,5 +256,67 @@ describe("SettingsAppearanceSection", () => {
     expect(settingsStore.editorFontSize).toBe(14);
     expect(settingsStore.terminalFontSize).toBe(13);
     expect(settingsStore.cognitoModeShortcut).toBe("Mod+Alt+KeyB");
+  });
+
+  it("renders dock layout, cursor theme, explanatory note, and handles stepper changes", async () => {
+    await act(async () => {
+      root?.render(<SettingsAppearanceSection />);
+    });
+
+    const dockPaddingInput = container?.querySelector<HTMLInputElement>(
+      'input[aria-label="dock padding in pixels"]',
+    );
+    expect(dockPaddingInput).not.toBeNull();
+    expect(dockPaddingInput?.value).toBe("8");
+
+    const increaseDockPaddingBtn = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Increase dock padding"]',
+    );
+    await act(async () => {
+      increaseDockPaddingBtn?.click();
+    });
+
+    expect(saveDebounced).toHaveBeenCalledWith({ dockPadding: 9 });
+
+    // Explanatory note
+    expect(container?.textContent).toContain(
+      "Dock layout and cursor style are workbench preferences saved to the server configuration. Dock app pins are stored locally in this browser.",
+    );
+  });
+
+  it("resets appearance defaults on reset button click", async () => {
+    await act(async () => {
+      root?.render(<SettingsAppearanceSection />);
+    });
+
+    const resetBtn = Array.from(
+      container?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    ).find((b) => b.textContent?.includes("Reset appearance defaults"));
+    expect(resetBtn).toBeDefined();
+
+    await act(async () => {
+      resetBtn?.click();
+    });
+
+    expect(saveDebounced).toHaveBeenCalledWith({
+      dockPadding: 8,
+      dockItemSpacing: 6,
+      dockOuterSpacing: 12,
+      dockRadius: 18,
+      cursorTheme: "system",
+    });
+  });
+
+  it("displays honest sourceUnset warning banner when no preference source is connected", async () => {
+    settingsStore.sourceUnset = true;
+    await act(async () => {
+      root?.render(<SettingsAppearanceSection />);
+    });
+
+    const statusBanner = container?.querySelector('[role="status"]');
+    expect(statusBanner).not.toBeNull();
+    expect(statusBanner?.textContent).toContain(
+      "No preference source connected",
+    );
   });
 });

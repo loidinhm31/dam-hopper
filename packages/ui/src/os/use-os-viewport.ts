@@ -12,16 +12,43 @@ export interface OsViewportState {
 
 export function useOsViewport(): OsViewportState {
   const viewport = useWindowStore((state) => state?.viewport);
-  const width = viewport?.width || (typeof window !== "undefined" ? window.innerWidth : 1440);
-  const height = viewport?.height || (typeof window !== "undefined" ? window.innerHeight : 900);
+
+  const [browserSize, setBrowserSize] = useState(() => ({
+    width: typeof window !== "undefined" ? window.innerWidth : 1440,
+    height: typeof window !== "undefined" ? window.innerHeight : 900,
+  }));
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleResize = () => {
+      setBrowserSize({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, []);
+
+  // Geometry authority: canvas ResizeObserver viewport when set, otherwise browser dimensions
+  const width = viewport?.width ?? browserSize.width;
+  const height = viewport?.height ?? browserSize.height;
+
+  // Support tiers: controlled exclusively by browser dimensions (1024x640 supported despite smaller reserved canvas)
+  const bw = browserSize.width;
+  const bh = browserSize.height;
 
   return {
     width,
     height,
-    isStandard: width >= 1280,
-    isCompact: width >= 1024 && width < 1280,
-    isNarrowHeight: height >= 640 && height < 768,
-    isUnsupported: width < 1024 || height < 640,
+    isStandard: bw >= 1280,
+    isCompact: bw >= 1024 && bw < 1280,
+    isNarrowHeight: bh >= 640 && bh < 768,
+    isUnsupported: bw < 1024 || bh < 640,
   };
 }
 

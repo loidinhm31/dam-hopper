@@ -160,22 +160,9 @@ The AI Dev OS redesign establishes a web-native multi-window, multi-desktop oper
 
 ### 8. Verification Evidence & Carried-Forward Qualification Gates
 
-- **Tester-Reported Verification (`plans/reports/tester-cycle4-261102-1120-lifecycle-prototype.md`):** 86/86 tests reported passed across 11 test files by the tester agent (not independently re-executed during this documentation update), clean typecheck, and clean production build:
-  - *Application Shell & Route Unit Tests (`packages/ui/src/embed/dam-hopper-app.test.tsx`):* 10 application-shell tests, including `/os` route gating (`/` dashboard, `/os` unauthenticated fallback, token present, `authType: "none"`), reactive unmounting when locally observed profile/token state changes, and `Ctrl+Backquote` shortcut isolation on `/os` while preserving it on `/`.
-  - *OS Core Unit Tests (`packages/ui/src/os/`):* 26 tests across 4 files (`resource-registry.test.ts`, `window-ops.test.ts`, `input-arbiter.test.ts`, `persistence.test.ts`).
-  - *Browser Component Regressions (`packages/ui/browser-tests/os-lifecycle.browser.tsx`):* 9 tests exercising DOM slot containment, element reference continuity (`toBe(initialEditorEl)`), and full transition matrix (tile → float → maximize → restore → minimize → restore → desktop-2 move) for terminal and editor resources, plus iframe preservation and Cognito mode input isolation.
-  - *Synthetic Browser Boundary:* The browser tests utilize cast DOM fixtures for the terminal and parked Monaco elements with a `null` editor instance. They confirm DOM slot reparenting and element reference persistence across all window and desktop states, but do not exercise live xterm PTY streaming, zero attach/replay counters, Monaco model buffer survival, or undo stack preservation under a live daemon.
-  - *Static E2E Typecheck:* `pnpm --filter @dam-hopper/ui test:e2e:typecheck` verified `tsconfig.e2e.json` with 0 errors.
-  - *Regression Unit Suite:* 41 tests passing across `tile-tree.test.ts`, `terminal-layout-docking.test.ts`, `TerminalKeepAliveHost.test.tsx`, `BrowserDebugKeepAliveHost.test.tsx`, and `MonacoHost.test.tsx`.
-  - *Production Web Bundle Build:* `pnpm --filter @dam-hopper/web build` succeeded with 6,118 modules transformed, producing `dist/assets/OsShell-i6mTIjX5.js` (41.86 kB).
-- **Application Playwright E2E Journey Structure (`packages/ui/e2e/os-lifecycle/os-lifecycle.spec.ts` & `review.md`):**
-  - Authored as a 10-step serial journey at 1440x900 viewport against containerized application services: (1) direct `/os` navigation and OsShell mount, (2) terminal launch and slot claim with DOM marker tagging (`data-test-terminal-identity`), (3) tile-to-float switch, (4) maximize and restore, (5) minimize to top bar tray and restore, (6) editor launch, (7) browser preview launch, (8) Desktop 2 addition and cross-desktop move, (9) Cognito privacy overlay visibility with attempted masked input (with behavioral outcome assertions, such as zero received PTY bytes, open under H2), (10) checkpoint evidence capture (`captureApplicationCheckpoint`).
-  - *Review Status:* `packages/ui/e2e/os-lifecycle/review.md` records `PENDING_REVIEW` pending local run evidence capture and operator visual inspection.
-- **Carried-Forward Review Findings (Reviewer Cycle 4, Score 7/10):**
-  - **H1 (E2E Lacks Live Lifecycle Oracle):** Current E2E test uses DOM attribute tagging on terminal container without proving live xterm object continuity, zero attach/replay counters, PTY streaming, dirty Monaco model/undo state, or preview JS execution continuity across transitions.
-  - **H2 (Privacy/Input Journey Lacks Behavioral Outcome Assertion):** Cognito test types text without establishing active app focus or asserting zero received PTY bytes / zero editor mutations under privacy mode.
-  - **C1/C2 & W1–W4 Carryover:** Editor save generation fencing, terminal owner retirement, Monaco parking reparenting (W2), and real resource controller integration (W3) remain open acceptance items carried to Phase 09.
-  - **Mandatory Lifecycle Acceptance Gate (Task 4):** Open. Live Playwright journey execution (`E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e -- os-lifecycle`) and human visual acceptance have not yet been executed.
+- **Prototype Automated Verification (`plans/reports/tester-cycle4-261102-1120-lifecycle-prototype.md`):** 86/86 tests reported passed across 11 files (10 shell unit tests, 26 OS core tests, 9 browser component tests, and 41 regression tests), clean TypeScript build, and bundle compilation.
+- **Carried-Forward Lifecycle Gates:** Live containerized Playwright journey (`os-lifecycle.spec.ts`) and operator visual inspection (`packages/ui/e2e/os-lifecycle/review.md`) remain open qualification gates carried forward to Phase 09, retaining open oracles (H1 live xterm object continuity, H2 behavioral Cognito outcome assertions, and C1/C2/W1–W4 carryovers).
+
 
 
 ## AI Dev OS Shell Chrome & Services Infrastructure (Phase 04)
@@ -207,15 +194,8 @@ Phase 04 builds upon the Phase 01 prototype to establish shell chrome and operat
 
 ### 2. Input Precedence, Remappable Shortcuts & `/os` Isolation
 
-- **5-Tier Arbitration Engine (`packages/ui/src/os/input-arbiter.ts`):**
-  1. `cognito-blocked`: Active Cognito Privacy Mode intercepts and suppresses keyboard input within the app document boundary.
-  2. `ime-passthrough`: Composition events (`isComposing`, `keyCode === 229`, `key === "Dead"`, `key === "Process"`, or `AltGraph`) pass through immediately.
-  3. `os-palette-handled` / `os-shortcut-handled`: OS Command Palette and Focus Cycle (`Ctrl+Alt+Escape`) chords intercept before application dispatch.
-  4. `frame-focused-handled`: Chrome toolbar and window frame header controls intercept when focused.
-  5. `app-passthrough`: Pass-through to active app body (xterm / Monaco / iframe).
-- **Remappable Shortcuts (`packages/ui/src/stores/settings.ts` & `lib/shortcuts.ts`):**
-  - `osPaletteShortcut` (default `Ctrl+Alt+KeyK`) and `osCycleFocusShortcut` (default `Ctrl+Alt+Escape`) are remappable in Settings > Keyboard Shortcuts (`SettingsKeyboardShortcutsSection.tsx`). In the current baseline, the arbiter continues to accept hard-coded default chords alongside configured shortcuts (tracked as limitation W1).
-  - Global isolation on `/os` avoids double dispatch: `GlobalShortcuts` ignores `matchesNewTerminalShortcut` on `/os` routes.
+- **Historical 5-Tier Arbiter (`packages/ui/src/os/input-arbiter.ts`):** Initially coordinated 5 priority tiers (Cognito -> IME -> OS palette/cycle -> frame-focused -> app-passthrough). Note: Superseded in the OS Desktop Polish release by the 7-stage Root Keyboard Coordinator (`packages/ui/src/os/action-dispatch.ts`), which unifies modal ownership, DoubleShift, and font scaling into a single capture layout effect.
+- **Remappable Shortcuts (`packages/ui/src/stores/settings.ts` & `lib/shortcuts.ts`):** `osPaletteShortcut` (default `Ctrl+Alt+KeyK`) and `osCycleFocusShortcut` (default `Ctrl+Alt+Escape`) are remappable in Settings > Keyboard Shortcuts (`SettingsKeyboardShortcutsSection.tsx`), with global isolation on `/os` avoiding double dispatch.
 
 ### 3. Fenced Services, Topics, Notifications & Intents
 
@@ -382,6 +362,42 @@ Phase 09 qualifies the full DamHopper OS web platform, including application jou
 - **Token Domain Separation:** Enforces explicit architectural separation between network dispatch fencing and UI modal presentation lifecycles:
   - *Network / Action Domain (`attemptToken`):* Strictly monotonic integer allocated by the action coordinator per target on reservation. Used in `recordOutcome` to fence late, out-of-order, or superseded network responses.
   - *UI Presentation Domain (`presentationToken` / `promptToken`):* Component ref-based token tracking the active modal prompt lifecycle (e.g., `promptTokenRef` in `PortsPanel` and `terminal-close-context.tsx`). Prevents completed async terminations from leaking outcome notifications or error banners into new or reopened modal dialogs after dismissal.
+## OS Desktop Polish Architecture & Subsystem Invariants
+
+The OS desktop polish release ([plan](../plans/261105-0711-os-desktop-polish/plan.md)) delivers unified action dispatch, persistent floating dock, work-area maximize, background context menu, scoped native cursors, and launch safety journaling.
+
+### 1. Unified Action Catalog & Sole Action Executor
+- **Manifest Action Catalog (`packages/ui/src/os/actions.ts`):** Pure action catalog statically derived from all 17 application manifests (`APP_MANIFESTS` in `app-registry.ts`). Normalizes application launch modes (`open`, `focus-or-open`, `new-window`, `action`) and binding sources (scalar preferences like `terminalWorkspaceShortcut` vs extra opt-in action bindings). Explicit unbinding survives round-trips via nullable `appShortcuts` in `UiConfig`.
+- **Sole Action Executor (`packages/ui/src/os/action-executor.ts`):** `executeAction` serves as the sole action executor across migrated catalog-driven entry points (Command Palette, Dock, Applications modal, and Desktop context menu). Maintains runtime MRU tracking across desktops and windows. Guarantees independent chooser state for Editor and Browser windows without premature PTY or network claims, and fences terminal creation through the launch safety journal.
+
+### 2. Single Root Keyboard & Input Coordinator
+- **7-Stage Resolution (`packages/ui/src/os/action-dispatch.ts`, `dam-hopper-app.tsx`):** Single layout-effect coordinator at application root supersedes scattered window-level listeners:
+  1. *Cognito Privacy Policy:* Intercepts physical codes first (`Mod+Alt+KeyB`).
+  2. *Settings Shortcut Capture:* Yields key recording when remapping shortcuts.
+  3. *IME/AltGraph Passthrough:* Passes composition events (`isComposing`, `keyCode 229`, `Dead`, `AltGraph`) without chord interception.
+  4. *Modal & Menu Ownership:* Traps Escape/navigation for open dialogs and context menus.
+  5. *Configured Action Resolution:* Resolves DoubleShift (Search), action catalog bindings, and page-wide terminal font scaling (`terminal.font-increase` / `decrease`).
+  6. *Browser Suppression:* Blocks reserved browser chords (e.g. `Mod+W`, `Mod+R` when intercepted).
+  7. *Local App Input:* Dispatches remaining keystrokes to active frame/xterm/Monaco/iframe.
+- **Deduplication:** WeakMap event caching eliminates duplicate dispatch across synthetic or replayed DOM events.
+
+### 3. Persistent Floating Dock & Canonical Pins
+- **Appearance Geometry (`packages/ui/src/os/Dock.tsx`, `dock-pins.ts`):** Content-height centered left floating dock dynamically reserves canvas margin via `--os-dock-gutter: ${44 + 2 * dockPadding + 2 * dockOuterSpacing}px`. Configurable via `UiConfig` (`dockPadding`, `dockItemSpacing`, `dockOuterSpacing`, `dockRadius`). Provides 44px hit targets with 20px SVG icons.
+- **Canonical Pins & Applications Modal:** Pins persist in browser storage with deduplication and cross-tab `storage` event synchronization. `AppLauncher.tsx` renders an accessible modal catalog grid to search, launch, and pin unopened apps.
+
+### 4. Canvas Work-Area Maximize & Runtime Continuity
+- **Presentation Plane (`packages/ui/src/os/DesktopCanvas.tsx`, `WindowFrame.tsx`):** Maximized windows render into a sibling presentation plane (`z-40`, inset 0 to canvas) preserving the underlying tile tree and float bounds.
+- **Stable Presentation Slots:** Single React owner reparenting preserves live xterm PTY instances, Monaco dirty/undo buffers, and iframe browsing contexts without unmounting, reload, or duplicate attach/replay. Decouples support tiers (1024×640 supported) from canvas ResizeObserver geometry.
+
+### 5. Background Desktop Context Menu & Scoped Native SVG Cursors
+- **Desktop Context Menu (`packages/ui/src/os/DesktopContextMenu.tsx`):** Rendered behind windows in `DesktopCanvas`, capturing target/directory context to offer New Terminal, Applications, Palette, and Desktop Appearance. Dismisses synchronously on Escape or Cognito activation via `context-menu-coordinator.ts`.
+- **Scoped Cursors (`packages/ui/src/os/cursor.ts`):** Applies scoped SVG cursors (`cursor-default.svg`, `cursor-pointer.svg`) to shell root and owned portals, honoring `forced-colors: active` system fallback.
+
+### 6. Hardened Launch Safety Journal & Terminal Rebind
+- **Web Lock Launch Safety Journal (`packages/ui/src/os/persistence.ts`):** Ordinary terminal launches reserve an atomic pre-send attempt in `dam-hopper:os-launch-journal` under `navigator.locks` (bounded to 1 MiB, max 100 records, 8 KiB/record). Prevents duplicate or destructive PTY recreation under repeated triggers within the same browser origin.
+- **Durable Settlement:** Dispatched attempts settle as `confirmed-success` (with validated `serverEpoch`, positive u64 `incarnationExact`, and `TerminalTarget`), `confirmed-not-created` (for pre-dispatch throws or authoritative API 4xx responses: 400, 401, 403, 404, 413, 422), or `uncertain` (timeouts, disconnections, 5xx). Uncertain records block duplicate reuse and require explicit operator review.
+- **Terminal Rebind (`TerminalPanel.tsx`, `TerminalsApp.tsx`):** Terminal views require complete originating lifetime provenance (`profileId`, `generation`, `serverEpoch`, `incarnationExact`) before acquiring destructive authority. During transport reconnection or replacement, `TerminalPanel` rebinds xterm instances only to the reconnecting owner, preserving terminal scrollback and active peer instances.
+
 ## Multi-Profile Ownership Model
 
 A browser-side `profileId` selects one saved server endpoint/identity. A monotonically replaced connection `generation` identifies the current runtime for that profile. UI work captures both before issuing requests.

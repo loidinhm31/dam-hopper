@@ -2057,17 +2057,16 @@ export interface UiConfig {
   editorFontSize: number;
   terminalFontSize?: number;
   editorZoomWheelEnabled: boolean;
-  searchTextShortcut: string;
-  searchFilenameShortcut: string;
-  terminalWorkspaceShortcut: string;
-  terminalFilePanelShortcut: string;
-  projectPanelShortcut: string;
-  revealActiveFileShortcut: string;
-  gitPanelShortcut: string;
-  portsPanelShortcut: string;
-  fleetTerminalShortcut: string;
-  terminalFontSizeIncreaseShortcut?: string;
-  terminalFontSizeDecreaseShortcut?: string;
+  searchTextShortcut?: string | null;
+  searchFilenameShortcut?: string | null;
+  terminalWorkspaceShortcut?: string | null;
+  terminalFilePanelShortcut?: string | null;
+  projectPanelShortcut?: string | null;
+  revealActiveFileShortcut?: string | null;
+  gitPanelShortcut?: string | null;
+  portsPanelShortcut?: string | null;
+  terminalFontSizeIncreaseShortcut?: string | null;
+  terminalFontSizeDecreaseShortcut?: string | null;
   terminalSuggestionsEnabled?: boolean;
   terminalAutoSwitchProjectEnabled?: boolean;
   terminalAgentNotifications?: TerminalAgentNotifications;
@@ -2089,6 +2088,14 @@ export interface UiConfig {
   cognitoModeShortcut?: string;
   cognitoModeStyle?: CognitoModeStyle;
   defaultWindowPlacement?: "float" | "tile";
+  osPaletteShortcut?: string | null;
+  osCycleFocusShortcut?: string | null;
+  dockPadding?: number;
+  dockItemSpacing?: number;
+  dockOuterSpacing?: number;
+  dockRadius?: number;
+  cursorTheme?: "system" | "theme";
+  appShortcuts?: Record<string, string | null>;
 }
 export interface GlobalConfig {
   workspace?: { name: string; root: string };

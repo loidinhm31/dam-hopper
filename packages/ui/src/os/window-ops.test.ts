@@ -11,6 +11,7 @@ import {
   dockWindowInDesktopTree,
   focusWindow,
   getVisibleFloatBounds,
+  maximizeWindow,
   minimizeWindow,
   moveTabWithinPane,
   moveWindowToDesktop,
@@ -582,5 +583,107 @@ describe("window-ops pure functions", () => {
 
     // desk-2 has term-min in float list exactly once
     expect(desk2.floatingWindowIds.filter((id) => id === "term-min").length).toBe(1);
+  });
+  it("preserves tile tree structure and floatBounds across maximize and restoreWindow", () => {
+    let session = createDefaultOsSession("desk-1");
+    session = openWindow(session, {
+      id: "tile-win-1",
+      appId: "editor",
+      title: "Editor 1",
+      ctx: testCtx,
+      mode: "tile",
+    });
+    session = openWindow(session, {
+      id: "tile-win-2",
+      appId: "terminals",
+      title: "Terminal 2",
+      ctx: testCtx,
+      mode: "tile",
+    });
+
+    const originalTree = JSON.parse(JSON.stringify(session.desktops[0].tree));
+
+    // Maximize tiled window
+    session = maximizeWindow(session, "tile-win-1");
+    expect(session.windows["tile-win-1"].maximized).toBe(true);
+    // Tree topology must be completely preserved
+    expect(session.desktops[0].tree).toEqual(originalTree);
+
+    // Restore tiled window from maximized
+    session = restoreWindow(session, "tile-win-1");
+    expect(session.windows["tile-win-1"].maximized).toBe(false);
+    expect(session.desktops[0].tree).toEqual(originalTree);
+  });
+
+  it("preserves saved floatBounds across maximize and restoreWindow for floating window", () => {
+    let session = createDefaultOsSession("desk-1");
+    const customBounds: FloatBounds = { x: 120, y: 150, width: 600, height: 400 };
+    session = openWindow(session, {
+      id: "float-win-1",
+      appId: "browser",
+      title: "Browser 1",
+      ctx: testCtx,
+      mode: "float",
+    });
+    session = updateFloatBounds(session, "float-win-1", customBounds);
+    expect(session.windows["float-win-1"].floatBounds).toEqual(customBounds);
+
+    // Maximize floating window
+    session = maximizeWindow(session, "float-win-1");
+    expect(session.windows["float-win-1"].maximized).toBe(true);
+    // floatBounds must NOT be overwritten by maximize
+    expect(session.windows["float-win-1"].floatBounds).toEqual(customBounds);
+
+    // Restore floating window
+    session = restoreWindow(session, "float-win-1");
+    expect(session.windows["float-win-1"].maximized).toBe(false);
+    expect(session.windows["float-win-1"].floatBounds).toEqual(customBounds);
+  });
+
+  it("retains maximization when un-minimizing a window that was minimized while maximized", () => {
+    let session = createDefaultOsSession("desk-1");
+    session = openWindow(session, {
+      id: "win-max",
+      appId: "terminals",
+      title: "Term",
+      ctx: testCtx,
+      mode: "float",
+    });
+    session = maximizeWindow(session, "win-max");
+    expect(session.windows["win-max"].maximized).toBe(true);
+
+    // Minimize while maximized
+    session = minimizeWindow(session, "win-max");
+    expect(session.windows["win-max"].minimized).toBe(true);
+    expect(session.windows["win-max"].maximized).toBe(true);
+    expect(session.windows["win-max"].restorePlacement).toBeDefined();
+
+    // First restoreWindow: un-minimizes and preserves maximized state
+    session = restoreWindow(session, "win-max");
+    expect(session.windows["win-max"].minimized).toBe(false);
+    expect(session.windows["win-max"].maximized).toBe(true);
+
+    // Second restoreWindow: un-maximizes back to normal floating
+    session = restoreWindow(session, "win-max");
+    expect(session.windows["win-max"].minimized).toBe(false);
+    expect(session.windows["win-max"].maximized).toBe(false);
+  });
+
+  it("setWindowMode exits maximization atomically and switches mode", () => {
+    let session = createDefaultOsSession("desk-1");
+    session = openWindow(session, {
+      id: "win-mode",
+      appId: "editor",
+      title: "Editor",
+      ctx: testCtx,
+      mode: "tile",
+    });
+    session = maximizeWindow(session, "win-mode");
+    expect(session.windows["win-mode"].maximized).toBe(true);
+
+    // setWindowMode to float
+    session = setWindowMode(session, "win-mode", "float");
+    expect(session.windows["win-mode"].mode).toBe("float");
+    expect(session.windows["win-mode"].maximized).toBe(false);
   });
 });

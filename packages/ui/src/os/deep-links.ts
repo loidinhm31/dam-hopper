@@ -1,4 +1,5 @@
 import type { ServerProfile } from "@/api/server-config.js";
+import type { ConnectionRef, FsTargetRef } from "@/api/ownership.js";
 import { isAppId, getAppManifest } from "./app-registry.js";
 import type { OsAppId, WindowContext } from "./types.js";
 import type { OsIntent } from "./intents.js";
@@ -11,6 +12,7 @@ export interface ParsedOsDeepLink {
   ctx?: WindowContext;
   action?: string;
   reason?: string;
+  searchParams?: URLSearchParams;
 }
 export interface LegacyRouteTranslation {
   status: "redirect" | "unqualified" | "removed" | "none";
@@ -234,26 +236,34 @@ export function parseOsDeepLink(
       break;
 
     case "editor":
-      intent = createIntent("file:open", {
-        profileId,
-        projectId: project ?? "default",
-        worktreeId: worktree,
-        filePath: file ?? "untitled.ts",
-        line,
-      });
+      if (file) {
+        intent = createIntent("file:open", {
+          profileId,
+          projectId: project ?? "default",
+          worktreeId: worktree,
+          filePath: file,
+          line,
+        });
+      }
       break;
 
     case "browser":
-      intent = createIntent("browser:open", {
-        profileId,
-        url: url ?? "http://localhost:5173",
-      });
+      if (url) {
+        intent = createIntent("browser:open", {
+          profileId,
+          url,
+        });
+      }
       break;
 
     case "files":
       if (file) {
         intent = createIntent("file:reveal", {
           profileId,
+          generation: 1,
+          target: project
+            ? { kind: "project", profileId, project, worktreePath: worktree }
+            : { kind: "workspace", profileId },
           projectId: project ?? "",
           worktreeId: worktree,
           filePath: file,
@@ -262,12 +272,7 @@ export function parseOsDeepLink(
       break;
 
     case "search":
-      intent = createIntent("search:query", {
-        profileId,
-        projectId: project ?? "",
-        worktreeId: worktree,
-        query: params.get("query") ?? "",
-      });
+      // In C11: parseOsDeepLink parses URL syntax, qualification builds required intent
       break;
 
     case "changes":
@@ -400,5 +405,203 @@ export function parseOsDeepLink(
     intent,
     ctx,
     action: actionParam ?? undefined,
+    searchParams: params,
+  };
+}
+
+// ============================================================================
+// Deep-Link Source Qualification (Architecture Contract C11)
+// ============================================================================
+
+export interface DeepLinkCaptureContext {
+  owner: ConnectionRef;
+  target?: FsTargetRef;
+  projectId?: string;
+  worktreeId?: string;
+  destinationDesktopId: string;
+}
+
+export type QualifiedDeepLinkResult =
+  | {
+      readonly status: "qualified";
+      readonly appId: OsAppId;
+      readonly intent?: OsIntent;
+      readonly ctx: WindowContext;
+      readonly appState?: Record<string, unknown>;
+    }
+  | {
+      readonly status: "unqualified";
+      readonly reason: string;
+    };
+
+export function qualifyOsDeepLink(
+  parsed: ParsedOsDeepLink,
+  capture: DeepLinkCaptureContext,
+): QualifiedDeepLinkResult {
+  if (parsed.status !== "valid" || !parsed.appId) {
+    return {
+      status: "unqualified",
+      reason: parsed.reason ?? "Deep link is invalid or empty",
+    };
+  }
+
+  if (capture.owner.profileId !== parsed.ctx?.profileId) {
+    return {
+      status: "unqualified",
+      reason: `Profile mismatch: link requested '${parsed.ctx?.profileId}', captured connection is '${capture.owner.profileId}'`,
+    };
+  }
+
+  // Generation authority verification (C11): URL generation never authority
+  if (
+    parsed.ctx?.generation !== undefined &&
+    parsed.ctx.generation !== capture.owner.generation
+  ) {
+    return {
+      status: "unqualified",
+      reason: `Stale generation: link requested generation ${parsed.ctx.generation}, current connection generation is ${capture.owner.generation}`,
+    };
+  }
+
+  const generation = capture.owner.generation;
+  const target = capture.target ?? {
+    kind: "workspace",
+    profileId: capture.owner.profileId,
+  };
+
+  const qualifiedCtx: WindowContext = {
+    ...parsed.ctx,
+    profileId: capture.owner.profileId,
+    generation,
+    target,
+    projectId: capture.projectId ?? parsed.ctx?.projectId,
+    worktreeId: capture.worktreeId ?? parsed.ctx?.worktreeId,
+  };
+
+  const params = parsed.searchParams;
+
+  if (parsed.appId === "search") {
+    const query = params?.get("query") ?? "";
+    const mode = params?.get("mode") === "filename" ? "filename" : "text";
+    const intent = createIntent("search:query", {
+      profileId: capture.owner.profileId,
+      generation,
+      target,
+      projectId: qualifiedCtx.projectId,
+      worktreeId: qualifiedCtx.worktreeId,
+      mode,
+      query,
+    });
+    return {
+      status: "qualified",
+      appId: "search",
+      intent,
+      ctx: qualifiedCtx,
+    };
+  }
+
+  if (parsed.appId === "files" && params?.get("file")) {
+    const filePath = params.get("file")!;
+    const intent = createIntent("file:reveal", {
+      profileId: capture.owner.profileId,
+      generation,
+      target,
+      projectId: qualifiedCtx.projectId,
+      worktreeId: qualifiedCtx.worktreeId,
+      filePath,
+    });
+    return {
+      status: "qualified",
+      appId: "files",
+      intent,
+      ctx: qualifiedCtx,
+    };
+  }
+
+  if (parsed.appId === "editor") {
+    const file = params?.get("file");
+    if (file) {
+      const intent = createIntent("file:open", {
+        profileId: capture.owner.profileId,
+        projectId: qualifiedCtx.projectId,
+        worktreeId: qualifiedCtx.worktreeId,
+        target,
+        filePath: file,
+        generation,
+      });
+      return {
+        status: "qualified",
+        appId: "editor",
+        intent,
+        ctx: qualifiedCtx,
+      };
+    }
+    // Omitted file: open real chooser, never fabricates defaults
+    return {
+      status: "qualified",
+      appId: "editor",
+      ctx: qualifiedCtx,
+      appState: {
+        presentation: {
+          kind: "choose-target",
+          capturedContext: {
+            kind: "desktop",
+            desktopId: capture.destinationDesktopId,
+            owner: capture.owner,
+          },
+          ownerGeneration: generation,
+          destinationDesktopId: capture.destinationDesktopId,
+          deliveryToken:
+            typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+              ? crypto.randomUUID()
+              : `tok-${Date.now()}`,
+        },
+      },
+    };
+  }
+
+  if (parsed.appId === "browser") {
+    const url = params?.get("url");
+    if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
+      const intent = createIntent("browser:open", {
+        profileId: capture.owner.profileId,
+        url,
+      });
+      return {
+        status: "qualified",
+        appId: "browser",
+        intent,
+        ctx: qualifiedCtx,
+      };
+    }
+    // Omitted valid URL: open real chooser
+    return {
+      status: "qualified",
+      appId: "browser",
+      ctx: qualifiedCtx,
+      appState: {
+        presentation: {
+          kind: "choose-target",
+          capturedContext: {
+            kind: "desktop",
+            desktopId: capture.destinationDesktopId,
+            owner: capture.owner,
+          },
+          ownerGeneration: generation,
+          destinationDesktopId: capture.destinationDesktopId,
+          deliveryToken:
+            typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+              ? crypto.randomUUID()
+              : `tok-${Date.now()}`,
+        },
+      },
+    };
+  }
+
+  return {
+    status: "qualified",
+    appId: parsed.appId,
+    intent: parsed.intent,
+    ctx: qualifiedCtx,
   };
 }

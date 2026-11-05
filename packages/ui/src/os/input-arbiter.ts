@@ -3,6 +3,7 @@ export type InputDisposition =
   | "ime-passthrough"
   | "os-shortcut-handled"
   | "os-palette-handled"
+  | "action-handled"
   | "frame-focused-handled"
   | "app-passthrough";
 
@@ -11,15 +12,21 @@ export interface InputArbiterContext {
   isComposing: boolean;
   isFrameFocused: boolean;
   isModalActive?: boolean;
-  cycleFocusShortcut?: string;
-  paletteShortcut?: string;
+  cycleFocusShortcut?: string | null;
+  paletteShortcut?: string | null;
+  settings?: ActionBindingsSettingsProjection | null;
+  doubleShiftDetector?: DoubleShiftDetector;
 }
 import {
   matchesKeyboardShortcut,
   DEFAULT_OS_PALETTE_SHORTCUT,
   DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
+  DoubleShiftDetector,
   type ShortcutKeyEvent,
 } from "@/lib/shortcuts.js";
+import { matchConfiguredAction } from "./shortcuts.js";
+import type { ActionBindingsSettingsProjection } from "./actions.js";
+
 export interface KeyLikeEvent {
   key: string;
   code?: string;
@@ -44,6 +51,28 @@ export function isImeOrCompositionEvent(event: KeyLikeEvent): boolean {
     event.key === "Process" ||
     isAltGr
   );
+}
+
+export function isInsideShortcutCapture(event: Event): boolean {
+  if (typeof event.composedPath === "function") {
+    const path = event.composedPath();
+    if (path && path.length > 0) {
+      for (const target of path) {
+        if (
+          target instanceof Element &&
+          target.getAttribute("data-shortcut-capture") === "true"
+        ) {
+          return true;
+        }
+      }
+    }
+  }
+  if (event.target instanceof Element) {
+    if (event.target.closest?.('[data-shortcut-capture="true"]')) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function isOsGlobalShortcut(event: KeyLikeEvent): boolean {
@@ -110,31 +139,41 @@ export function arbitrateKeyboardEvent(
     isComposing: Boolean(event.isComposing),
   };
 
-  // 3. Command Palette chord (configurable with default fallback)
-  const paletteChord = ctx.paletteShortcut || DEFAULT_OS_PALETTE_SHORTCUT;
-  if (
-    !event.repeat &&
-    (matchesKeyboardShortcut(paletteChord, normalizedEvent) ||
-      isOsPaletteShortcut(event))
-  ) {
+  // 3. Command Palette chord (configurable with presence-aware default fallback)
+  const paletteChord =
+    ctx.paletteShortcut !== undefined
+      ? ctx.paletteShortcut
+      : DEFAULT_OS_PALETTE_SHORTCUT;
+  if (!event.repeat && paletteChord && matchesKeyboardShortcut(paletteChord, normalizedEvent)) {
     return "os-palette-handled";
   }
 
-  // 4. Focus Cycle chord (configurable with default fallback)
-  const cycleChord = ctx.cycleFocusShortcut || DEFAULT_OS_CYCLE_FOCUS_SHORTCUT;
-  if (
-    !event.repeat &&
-    (matchesKeyboardShortcut(cycleChord, normalizedEvent) ||
-      isOsGlobalShortcut(event))
-  ) {
+  // 4. Focus Cycle chord (configurable with presence-aware default fallback)
+  const cycleChord =
+    ctx.cycleFocusShortcut !== undefined
+      ? ctx.cycleFocusShortcut
+      : DEFAULT_OS_CYCLE_FOCUS_SHORTCUT;
+  if (!event.repeat && cycleChord && matchesKeyboardShortcut(cycleChord, normalizedEvent)) {
     return "os-shortcut-handled";
   }
+  if (ctx.settings) {
+    const matched = matchConfiguredAction(
+      normalizedEvent,
+      ctx.settings,
+      ctx.doubleShiftDetector,
+    );
+    if (matched) {
+      if (matched.actionId === "os.palette") return "os-palette-handled";
+      if (matched.actionId === "os.cycle-focus") return "os-shortcut-handled";
+      return "action-handled";
+    }
+  }
 
-  // 4. Frame Chrome Focus: If frame toolbar/header is focused, frame intercepts
+  // 5. Frame Chrome Focus: If frame toolbar/header is focused, frame intercepts
   if (ctx.isFrameFocused) {
     return "frame-focused-handled";
   }
 
-  // 5. Default: Passthrough to active app body (xterm / Monaco / iframe)
+  // 6. Default: Passthrough to active app body (xterm / Monaco / iframe)
   return "app-passthrough";
 }

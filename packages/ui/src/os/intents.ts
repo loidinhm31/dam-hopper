@@ -53,8 +53,13 @@ export interface IntentPayloadMap {
     projectId?: string;
     worktreeId?: string;
     target?: FsTargetRef;
-    cwd?: string;
+    cwd?: string | null;
     terminalId?: string;
+    directoryKind?: "explicit-folder" | "target-root" | "profile-default";
+    requestedTerminalId?: string;
+    sourceWindowId?: string;
+    generation?: number;
+    destinationDesktopId?: string;
   };
   "terminal:focus": {
     profileId: string;
@@ -80,9 +85,10 @@ export interface IntentPayloadMap {
   };
   "file:reveal": {
     profileId: string;
+    generation: number;
+    target: FsTargetRef;
     projectId?: string;
     worktreeId?: string;
-    target?: FsTargetRef;
     filePath: string;
   };
   "browser:preview": {
@@ -124,8 +130,11 @@ export interface IntentPayloadMap {
   };
   "search:query": {
     profileId: string;
-    projectId: string;
+    generation: number;
+    target: FsTargetRef;
+    projectId?: string;
     worktreeId?: string;
+    mode: "text" | "filename";
     query: string;
   };
   "changes:stage": {

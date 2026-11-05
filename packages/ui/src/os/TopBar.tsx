@@ -322,8 +322,9 @@ export function TopBar({
                 "notification-center",
                 shellInput.activeNonmodal !== "notification-center",
               );
+            } else {
+              onOpenNotifications?.();
             }
-            onOpenNotifications?.();
           }}
         >
           <span className="text-sm">🔔</span>

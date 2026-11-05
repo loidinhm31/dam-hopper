@@ -19,7 +19,14 @@ describe("withUiConfigDefaults", () => {
     expect(ui.cognitoModeShortcut).toBe("Mod+Alt+KeyB");
     expect(ui.cognitoModeStyle).toBe("heavy-blur");
     expect(ui.portsPanelShortcut).toBe("Mod+Shift+KeyP");
-    expect(ui.fleetTerminalShortcut).toBe("Mod+Shift+KeyM");
+    expect(ui.osPaletteShortcut).toBe("Ctrl+Alt+KeyK");
+    expect(ui.osCycleFocusShortcut).toBe("Ctrl+Alt+Escape");
+    expect(ui.dockPadding).toBe(8);
+    expect(ui.dockItemSpacing).toBe(6);
+    expect(ui.dockOuterSpacing).toBe(12);
+    expect(ui.dockRadius).toBe(18);
+    expect(ui.cursorTheme).toBe("system");
+    expect(ui.appShortcuts).toEqual({});
     expect(ui.terminalFontSize).toBe(13);
     expect(ui.terminalFontSizeIncreaseShortcut).toBe("Ctrl+Alt+Shift+Equal");
     expect(ui.terminalFontSizeDecreaseShortcut).toBe("Ctrl+Alt+Minus");
@@ -79,7 +86,6 @@ describe("withUiConfigDefaults", () => {
       revealActiveFileShortcut: "alt+f1",
       gitPanelShortcut: "ctrl+shift+g",
       portsPanelShortcut: "ctrl+shift+p",
-      fleetTerminalShortcut: "ctrl+shift+m",
       terminalFontSizeIncreaseShortcut: "ctrl+alt+shift+equal",
       terminalFontSizeDecreaseShortcut: "ctrl+alt+minus",
       terminalAgentNotifications: {
@@ -124,7 +130,6 @@ describe("withUiConfigDefaults", () => {
     expect(ui.revealActiveFileShortcut).toBe("Alt+F1");
     expect(ui.gitPanelShortcut).toBe("Ctrl+Shift+KeyG");
     expect(ui.portsPanelShortcut).toBe("Ctrl+Shift+KeyP");
-    expect(ui.fleetTerminalShortcut).toBe("Ctrl+Shift+KeyM");
     expect(ui.terminalFontSizeIncreaseShortcut).toBe("Ctrl+Alt+Shift+Equal");
     expect(ui.terminalFontSizeDecreaseShortcut).toBe("Ctrl+Alt+Minus");
     expect(ui.terminalAgentNotifications?.agents.codex).toEqual({
@@ -377,5 +382,46 @@ describe("withUiConfigDefaults", () => {
     });
     expect(invalid.cognitoModeShortcut).toBe("Mod+Alt+KeyB");
     expect(invalid.cognitoModeStyle).toBe("heavy-blur");
+  });
+
+  it("preserves explicit null on shortcuts and does not resurrect defaults", () => {
+    const ui = withUiConfigDefaults({
+      searchTextShortcut: null,
+      terminalWorkspaceShortcut: null,
+      osPaletteShortcut: null,
+    });
+    expect(ui.searchTextShortcut).toBeNull();
+    expect(ui.terminalWorkspaceShortcut).toBeNull();
+    expect(ui.osPaletteShortcut).toBeNull();
+    // Omitted shortcut still gets default
+    expect(ui.gitPanelShortcut).toBe("Mod+Shift+KeyG");
+  });
+
+  it("clamps appearance properties to finite bounds and preserves valid zero", () => {
+    const clamped = withUiConfigDefaults({
+      dockPadding: 99,
+      dockItemSpacing: -10,
+      dockOuterSpacing: 0,
+      dockRadius: 50,
+      cursorTheme: "theme",
+    });
+    expect(clamped.dockPadding).toBe(16);
+    expect(clamped.dockItemSpacing).toBe(0);
+    expect(clamped.dockOuterSpacing).toBe(0);
+    expect(clamped.dockRadius).toBe(28);
+    expect(clamped.cursorTheme).toBe("theme");
+  });
+
+  it("normalizes appShortcuts entries preserving null and strings", () => {
+    const ui = withUiConfigDefaults({
+      appShortcuts: {
+        "app.editor.open": "mod+e",
+        "app.browser.open": null,
+      },
+    });
+    expect(ui.appShortcuts).toEqual({
+      "app.editor.open": "Mod+KeyE",
+      "app.browser.open": null,
+    });
   });
 });

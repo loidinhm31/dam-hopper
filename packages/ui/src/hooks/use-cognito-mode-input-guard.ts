@@ -7,7 +7,7 @@ import {
   DEFAULT_COGNITO_MODE_SHORTCUT,
   type ShortcutKeyEvent,
 } from "@/lib/shortcuts.js";
-
+import { setCognitoPhysicalPolicy, installRootKeyboardCoordinator } from "@/os/action-dispatch.js";
 const useClientLayoutEffect =
   typeof window === "undefined" ? useEffect : useLayoutEffect;
 
@@ -119,7 +119,7 @@ export function useCognitoModeInputGuard(): void {
         }
       }
     };
-    const handleKeyEvent = (event: KeyboardEvent) => {
+    const handleKeyEvent = (event: KeyboardEvent): boolean => {
       const { active, activationShortcut } = useCognitoModeStore.getState();
       const code = event.code;
 
@@ -131,7 +131,7 @@ export function useCognitoModeInputGuard(): void {
         }
         if (event.cancelable) event.preventDefault();
         event.stopImmediatePropagation();
-        return;
+        return true;
       }
 
       // 2. If active, choose frozen activationShortcut; consume all keys.
@@ -156,7 +156,7 @@ export function useCognitoModeInputGuard(): void {
           useCognitoModeStore.getState().toggle(chord);
           if (event.cancelable) event.preventDefault();
           event.stopImmediatePropagation();
-          return;
+          return true;
         }
 
         // All keys during active mode are consumed
@@ -167,13 +167,13 @@ export function useCognitoModeInputGuard(): void {
         }
         if (event.cancelable) event.preventDefault();
         event.stopImmediatePropagation();
-        return;
+        return true;
       }
 
       // 3. If inactive and target composedPath() includes [data-shortcut-capture="true"],
       // pass through so Settings capture works; no global toggle. Marker is only an inactive exemption.
       if (isInsideShortcutCapture(event)) {
-        return;
+        return false;
       }
 
       // 4. If inactive and matching the configured Cognito chord, synchronously activate;
@@ -196,7 +196,7 @@ export function useCognitoModeInputGuard(): void {
           useCognitoModeStore.getState().toggle(configuredShortcut);
           if (event.cancelable) event.preventDefault();
           event.stopImmediatePropagation();
-          return;
+          return true;
         }
 
         // Check if composing or repeated variant of the configured chord
@@ -207,11 +207,12 @@ export function useCognitoModeInputGuard(): void {
           }
           if (event.cancelable) event.preventDefault();
           event.stopImmediatePropagation();
-          return;
+          return true;
         }
       }
 
-      // 5. Otherwise leave ordinary events unchanged. Browser guard and existing app handlers then own them.
+      // 5. Otherwise leave ordinary events unchanged.
+      return false;
     };
 
     const handleFocusCapture = (event: FocusEvent) => {
@@ -242,9 +243,8 @@ export function useCognitoModeInputGuard(): void {
     for (const eventName of BLOCKED_POINTER_EVENTS) {
       window.addEventListener(eventName, handleBlockedEvent, listenerOptions);
     }
-    window.addEventListener("keydown", handleKeyEvent, listenerOptions);
-    window.addEventListener("keypress", handleKeyEvent, listenerOptions);
-    window.addEventListener("keyup", handleKeyEvent, listenerOptions);
+    const uninstallCoordinator = installRootKeyboardCoordinator();
+    setCognitoPhysicalPolicy(handleKeyEvent);
     window.addEventListener("focus", handleFocusCapture, listenerOptions);
     window.addEventListener("focusin", handleFocusCapture, listenerOptions);
     window.addEventListener("blur", handleWindowBlur);
@@ -291,9 +291,8 @@ export function useCognitoModeInputGuard(): void {
           listenerOptions,
         );
       }
-      window.removeEventListener("keydown", handleKeyEvent, listenerOptions);
-      window.removeEventListener("keypress", handleKeyEvent, listenerOptions);
-      window.removeEventListener("keyup", handleKeyEvent, listenerOptions);
+      setCognitoPhysicalPolicy(null);
+      uninstallCoordinator();
       window.removeEventListener("focus", handleFocusCapture, listenerOptions);
       window.removeEventListener("focusin", handleFocusCapture, listenerOptions);
       window.removeEventListener("blur", handleWindowBlur);

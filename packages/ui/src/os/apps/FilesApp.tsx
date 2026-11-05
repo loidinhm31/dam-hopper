@@ -164,7 +164,8 @@ export function FilesApp({ window }: FilesAppProps) {
             {
               profileId,
               target: { kind: "workspace", profileId },
-              cwd: cwd || undefined,
+              cwd: cwd || ".",
+              directoryKind: cwd ? "explicit-folder" : "target-root",
             },
             window.id,
           ),
@@ -191,7 +192,8 @@ export function FilesApp({ window }: FilesAppProps) {
               project: targetProject,
               worktreePath: worktreeId,
             },
-            cwd: targetCwd || undefined,
+            cwd: targetCwd || null,
+            directoryKind: targetCwd ? "explicit-folder" : "target-root",
           },
           window.id,
         ),
@@ -205,29 +207,31 @@ export function FilesApp({ window }: FilesAppProps) {
       if (intent.payload.profileId !== profileId) {
         return { status: "unhandled", reason: "Target profile mismatch" };
       }
-      const isWorkspace = effectiveMode === "workspace";
-      if (isWorkspace) {
-        if (intent.payload.target?.kind === "workspace") {
-          setRevealRequest({
-            project: "",
-            path: intent.payload.filePath,
-            nonce: Date.now(),
-          });
-          return { status: "handled", targetWindowId: window.id };
-        }
-      } else {
-        const currentProject = projectFilter !== "all" ? projectFilter : project;
-        if (
-          intent.payload.projectId === currentProject &&
-          intent.payload.worktreeId === worktreeId
-        ) {
-          setRevealRequest({
-            project: currentProject,
-            path: intent.payload.filePath,
-            nonce: Date.now(),
-          });
-          return { status: "handled", targetWindowId: window.id };
-        }
+      const isWorkspaceTarget = intent.payload.target?.kind === "workspace";
+      if (isWorkspaceTarget) {
+        setRevealRequest({
+          project: "",
+          path: intent.payload.filePath,
+          nonce: Date.now(),
+        });
+        return { status: "handled", targetWindowId: window.id };
+      }
+      const currentProject = projectFilter !== "all" ? projectFilter : project;
+      const targetProject =
+        intent.payload.projectId ??
+        (intent.payload.target?.kind === "project"
+          ? intent.payload.target.project
+          : undefined);
+      if (
+        targetProject === currentProject &&
+        intent.payload.worktreeId === worktreeId
+      ) {
+        setRevealRequest({
+          project: currentProject,
+          path: intent.payload.filePath,
+          nonce: Date.now(),
+        });
+        return { status: "handled", targetWindowId: window.id };
       }
       return { status: "unhandled", reason: "Target context mismatch" };
     });

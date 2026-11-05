@@ -2610,9 +2610,140 @@ async fn update_global_ui_at_path_persists_project_panel_shortcut_in_snake_case(
     assert!(!written.contains("projectPanelShortcut"));
 
     let ui = state.global_config.read().await.ui.clone().unwrap();
-    assert_eq!(ui.project_panel_shortcut, "Mod+Shift+KeyZ");
+    assert_eq!(ui.project_panel_shortcut.as_deref(), Some("Mod+Shift+KeyZ"));
+
+    // Patch to null unbinds: writes "" to TOML and deserializes as None
+    crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "projectPanelShortcut": null,
+        })),
+    )
+    .await
+    .unwrap();
+
+    let written_null = std::fs::read_to_string(&gc_path).unwrap();
+    assert!(written_null.contains("project_panel_shortcut = \"\""));
+
+    let ui_null = state.global_config.read().await.ui.clone().unwrap();
+    assert_eq!(ui_null.project_panel_shortcut, None);
 }
 
+#[tokio::test]
+async fn update_global_ui_app_shortcuts_merge_and_validation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    // 1. Initial patch with valid extra action ID
+    crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "appShortcuts": {
+                "app.editor.open": "Mod+KeyE",
+            },
+        })),
+    )
+    .await
+    .unwrap();
+
+    let ui = state.global_config.read().await.ui.clone().unwrap();
+    assert_eq!(
+        ui.app_shortcuts.get("app.editor.open").and_then(|v| v.as_deref()),
+        Some("Mod+KeyE")
+    );
+
+    // 2. Second patch merges per-entry (does not drop app.editor.open)
+    crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "appShortcuts": {
+                "app.browser.open": "Mod+KeyB",
+            },
+        })),
+    )
+    .await
+    .unwrap();
+
+    let ui2 = state.global_config.read().await.ui.clone().unwrap();
+    assert_eq!(
+        ui2.app_shortcuts.get("app.editor.open").and_then(|v| v.as_deref()),
+        Some("Mod+KeyE")
+    );
+    assert_eq!(
+        ui2.app_shortcuts.get("app.browser.open").and_then(|v| v.as_deref()),
+        Some("Mod+KeyB")
+    );
+
+    // 3. Unbind with null writes "" in TOML
+    crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "appShortcuts": {
+                "app.editor.open": null,
+            },
+        })),
+    )
+    .await
+    .unwrap();
+
+    let written = std::fs::read_to_string(&gc_path).unwrap();
+    assert!(written.contains("\"app.editor.open\" = \"\""));
+
+    // 4. Reject scalar-owned ID in appShortcuts
+    let err_scalar = crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "appShortcuts": {
+                "app.terminals.open": "Ctrl+KeyT",
+            },
+        })),
+    )
+    .await;
+    assert!(err_scalar.is_err());
+
+    // 5. Reject unknown action ID in appShortcuts
+    let err_unknown = crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "appShortcuts": {
+                "totally.fake.action": "Ctrl+KeyK",
+            },
+        })),
+    )
+    .await;
+    assert!(err_unknown.is_err());
+
+    // 6. Reject non-string non-null value in appShortcuts
+    let err_type = crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "appShortcuts": {
+                "app.browser.open": 12345,
+            },
+        })),
+    )
+    .await;
+    assert!(err_type.is_err());
+
+    // 7. Appearance bounds validation
+    let err_bounds = crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "dockPadding": 99.0,
+        })),
+    )
+    .await;
+    assert!(err_bounds.is_err());
+}
 #[tokio::test]
 async fn update_global_ui_at_path_persists_and_clears_host_resource_pinned_mount() {
     let tmp = tempfile::tempdir().unwrap();

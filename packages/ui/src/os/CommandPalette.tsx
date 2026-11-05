@@ -19,6 +19,10 @@ import { loadAllRecipes } from "./recipes/persistence.js";
 import { dispatchIntent, createIntent } from "./intents.js";
 import { getConnectionSnapshot, getApi } from "@/api/connections.js";
 import { isCanonicalUuid } from "@/api/terminal-session-contract.js";
+import { listActionDescriptors, resolveActionBinding } from "./actions.js";
+import { canExecuteAction, executeAction } from "./action-executor.js";
+import { APP_ICONS } from "./app-icons.js";
+import type { ActionContext, OsAppId } from "./types.js";
 export type PaletteMode =
   | "commands"
   | "agents"
@@ -32,6 +36,7 @@ export interface PaletteItem {
   title: string;
   description?: string;
   shortcut?: string;
+  appId?: OsAppId;
   disabled?: boolean;
   onSelect: () => void;
 }
@@ -127,97 +132,31 @@ export function CommandPalette({
 
   // Built-in Commands Provider
   const commandItems = useMemo<PaletteItem[]>(() => {
-    const appLaunchCommands: PaletteItem[] = Object.values(APP_MANIFESTS).map(
-      (manifest) => ({
-        id: `cmd-new-${manifest.appId}`,
+    const actionCommands: PaletteItem[] = listActionDescriptors().map((desc) => {
+      const binding = resolveActionBinding(desc.id, useSettingsStore.getState());
+      const actionContext: ActionContext = {
+        kind: "desktop",
+        desktopId: activeDesktop?.id ?? "desktop-1",
+        windowContext: activeDesktop?.defaultCtx ?? { profileId: "default" },
+      };
+      const check = canExecuteAction({ id: desc.id, context: actionContext });
+      return {
+        id: `cmd-action-${desc.id}`,
+        appId: desc.appId,
         mode: "commands" as const,
-        title: `Open ${manifest.displayName}`,
-        description: `Open ${manifest.displayName} window (${manifest.defaultPlacement})`,
-        shortcut: manifest.appId === "terminals" ? "Ctrl+`" : undefined,
+        title: desc.label,
+        description: check.canExecute ? desc.enabledExplanation : check.reason,
+        shortcut: binding ?? undefined,
+        disabled: !check.canExecute,
         onSelect: async () => {
-          const desktopCtx =
-            activeDesktop?.defaultCtx ?? { profileId: "default" };
-          const existing = findExistingWindowForApp(
-            session.windows,
-            manifest.appId,
-            desktopCtx,
-          );
-          if (existing) {
-            if (existing.minimized) restoreWindow(existing.id);
-            focusWindow(existing.id);
-            onClose();
-            return;
-          }
-          let appState: Record<string, unknown> | undefined;
-          if (manifest.appId === "terminals") {
-            const terminalId = `term-${generateUUID()}`;
-            let createError: string | undefined;
-            let incarnation: number | undefined;
-            let serverEpoch: string | undefined;
-            const snap = getConnectionSnapshot(desktopCtx.profileId);
-            if (snap && snap.status === "connected") {
-              const originatingGeneration = snap.owner.generation;
-              const originatingProfileId = snap.owner.profileId;
-              try {
-                const client = getApi(snap.owner);
-                const sessionRes = await client.terminal.create({
-                  id: terminalId,
-                  command: "",
-                  project: desktopCtx.projectId,
-                  cols: 80,
-                  rows: 24,
-                });
-                const snapAfter = getConnectionSnapshot(desktopCtx.profileId);
-                if (
-                  snapAfter &&
-                  snapAfter.status === "connected" &&
-                  snapAfter.owner.profileId === originatingProfileId &&
-                  snapAfter.owner.generation === originatingGeneration
-                ) {
-                  incarnation = sessionRes.incarnation;
-                  if (sessionRes.serverEpoch && isCanonicalUuid(sessionRes.serverEpoch)) {
-                    serverEpoch = sessionRes.serverEpoch;
-                  }
-                } else {
-                  createError = "Connection owner changed during creation";
-                }
-              } catch (err) {
-                createError = err instanceof Error ? err.message : String(err);
-              }
-            }
-            appState = {
-              sessionId: terminalId,
-              terminalId,
-              ...(incarnation !== undefined && serverEpoch !== undefined
-                ? {
-                    incarnation,
-                    incarnationExact: String(incarnation),
-                    generation: snap?.owner.generation,
-                    profileId: snap?.owner.profileId,
-                    serverEpoch,
-                  }
-                : {}),
-              ...(createError ? { createError } : {}),
-            };
-          }
-          openWindow(
-            {
-              id: `${manifest.appId}-${generateUUID().slice(0, 8)}`,
-              appId: manifest.appId,
-              title: manifest.displayName,
-              ctx: desktopCtx,
-              mode: manifest.defaultPlacement,
-              appState,
-            },
-            useWindowStore.getState().session.activeDesktopId,
-          );
+          await executeAction({ id: desc.id, context: actionContext });
           onClose();
         },
-      }),
-    );
+      };
+    });
 
     const items: PaletteItem[] = [
-      ...appLaunchCommands,
+      ...actionCommands,
       {
         id: "cmd-new-desktop",
         mode: "commands",
@@ -591,17 +530,23 @@ export function CommandPalette({
                         : "text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]"
                   }`}
                 >
-                  <div className="flex flex-col gap-0.5 truncate mr-2">
-                    <span className="font-medium truncate">{item.title}</span>
-                    {item.description && (
-                      <span
-                        className={`text-[11px] truncate ${
-                          isSelected ? "text-white/80" : "text-[var(--color-text-muted)]"
-                        }`}
-                      >
-                        {item.description}
-                      </span>
-                    )}
+                  <div className="flex items-center gap-2 truncate mr-2">
+                    {item.appId && APP_ICONS[item.appId] && (() => {
+                      const Icon = APP_ICONS[item.appId!];
+                      return <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />;
+                    })()}
+                    <div className="flex flex-col gap-0.5 truncate">
+                      <span className="font-medium truncate">{item.title}</span>
+                      {item.description && (
+                        <span
+                          className={`text-[11px] truncate ${
+                            isSelected ? "text-white/80" : "text-[var(--color-text-muted)]"
+                          }`}
+                        >
+                          {item.description}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   {item.shortcut && (
                     <kbd

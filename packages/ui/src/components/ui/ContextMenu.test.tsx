@@ -14,6 +14,9 @@ import {
   ContextMenuPortal,
   ContextMenuRoot,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "./ContextMenu.js";
 
@@ -138,6 +141,9 @@ describe("ContextMenu foundation", () => {
       CheckboxItem: ContextMenuCheckboxItem,
       Label: ContextMenuLabel,
       Separator: ContextMenuSeparator,
+      Sub: ContextMenuSub,
+      SubTrigger: ContextMenuSubTrigger,
+      SubContent: ContextMenuSubContent,
     });
   });
 

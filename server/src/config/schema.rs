@@ -712,32 +712,77 @@ fn default_editor_font_size() -> u16 {
 fn default_editor_zoom_wheel_enabled() -> bool {
     true
 }
-fn default_search_text_shortcut() -> String {
-    "Mod+Shift+KeyF".to_string()
+pub fn deserialize_optional_shortcut<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(s) if s.is_empty() => Ok(None),
+        Some(s) => Ok(Some(s)),
+    }
 }
-fn default_search_filename_shortcut() -> String {
-    "DoubleShift".to_string()
+
+pub fn deserialize_app_shortcuts<'de, D>(
+    deserializer: D,
+) -> Result<std::collections::BTreeMap<String, Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let map: std::collections::BTreeMap<String, Option<String>> =
+        std::collections::BTreeMap::deserialize(deserializer)?;
+    let normalized = map
+        .into_iter()
+        .map(|(k, v)| {
+            let val = match v {
+                Some(s) if s.is_empty() => None,
+                other => other,
+            };
+            (k, val)
+        })
+        .collect();
+    Ok(normalized)
 }
-fn default_terminal_workspace_shortcut() -> String {
-    "Mod+Shift+Backquote".to_string()
+
+fn default_search_text_shortcut() -> Option<String> {
+    Some("Mod+Shift+KeyF".to_string())
 }
-fn default_terminal_file_panel_shortcut() -> String {
-    "Mod+Shift+KeyE".to_string()
+fn default_search_filename_shortcut() -> Option<String> {
+    Some("DoubleShift".to_string())
 }
-fn default_project_panel_shortcut() -> String {
-    "Mod+Shift+KeyZ".to_string()
+fn default_terminal_workspace_shortcut() -> Option<String> {
+    Some("Mod+Shift+Backquote".to_string())
 }
-fn default_reveal_active_file_shortcut() -> String {
-    "Alt+F1".to_string()
+fn default_terminal_file_panel_shortcut() -> Option<String> {
+    Some("Mod+Shift+KeyE".to_string())
 }
-fn default_git_panel_shortcut() -> String {
-    "Mod+Shift+KeyG".to_string()
+fn default_project_panel_shortcut() -> Option<String> {
+    Some("Mod+Shift+KeyZ".to_string())
 }
-fn default_ports_panel_shortcut() -> String {
-    "Mod+Shift+KeyP".to_string()
+fn default_reveal_active_file_shortcut() -> Option<String> {
+    Some("Alt+F1".to_string())
 }
-fn default_fleet_terminal_shortcut() -> String {
-    "Mod+Shift+KeyM".to_string()
+fn default_git_panel_shortcut() -> Option<String> {
+    Some("Mod+Shift+KeyG".to_string())
+}
+fn default_ports_panel_shortcut() -> Option<String> {
+    Some("Mod+Shift+KeyP".to_string())
+}
+fn default_dock_padding() -> f64 {
+    8.0
+}
+fn default_dock_item_spacing() -> f64 {
+    6.0
+}
+fn default_dock_outer_spacing() -> f64 {
+    12.0
+}
+fn default_dock_radius() -> f64 {
+    18.0
+}
+fn default_cursor_theme() -> String {
+    "system".to_string()
 }
 fn default_mobile_custom_keyboard_font_size() -> u16 {
     11
@@ -756,12 +801,20 @@ fn default_terminal_font_size() -> u16 {
     13
 }
 
-fn default_terminal_font_size_increase_shortcut() -> String {
-    "Ctrl+Alt+Shift+Equal".to_string()
+fn default_terminal_font_size_increase_shortcut() -> Option<String> {
+    Some("Ctrl+Alt+Shift+Equal".to_string())
 }
 
-fn default_terminal_font_size_decrease_shortcut() -> String {
-    "Ctrl+Alt+Minus".to_string()
+fn default_terminal_font_size_decrease_shortcut() -> Option<String> {
+    Some("Ctrl+Alt+Minus".to_string())
+}
+
+fn default_os_palette_shortcut() -> Option<String> {
+    Some("Ctrl+Alt+KeyK".to_string())
+}
+
+fn default_os_cycle_focus_shortcut() -> Option<String> {
+    Some("Ctrl+Alt+Escape".to_string())
 }
 
 fn default_cognito_mode_shortcut() -> String {
@@ -1018,56 +1071,125 @@ pub struct UiConfig {
     pub editor_zoom_wheel_enabled: bool,
     #[serde(
         default = "default_search_text_shortcut",
-        alias = "search_text_shortcut"
+        alias = "search_text_shortcut",
+        alias = "searchTextShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub search_text_shortcut: String,
+    pub search_text_shortcut: Option<String>,
     #[serde(
         default = "default_search_filename_shortcut",
-        alias = "search_filename_shortcut"
+        alias = "search_filename_shortcut",
+        alias = "searchFilenameShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub search_filename_shortcut: String,
+    pub search_filename_shortcut: Option<String>,
     #[serde(
         default = "default_terminal_workspace_shortcut",
-        alias = "terminal_workspace_shortcut"
+        alias = "terminal_workspace_shortcut",
+        alias = "terminalWorkspaceShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub terminal_workspace_shortcut: String,
+    pub terminal_workspace_shortcut: Option<String>,
     #[serde(
         default = "default_terminal_file_panel_shortcut",
-        alias = "terminal_file_panel_shortcut"
+        alias = "terminal_file_panel_shortcut",
+        alias = "terminalFilePanelShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub terminal_file_panel_shortcut: String,
+    pub terminal_file_panel_shortcut: Option<String>,
     #[serde(
         default = "default_project_panel_shortcut",
-        alias = "project_panel_shortcut"
+        alias = "project_panel_shortcut",
+        alias = "projectPanelShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub project_panel_shortcut: String,
+    pub project_panel_shortcut: Option<String>,
     #[serde(
         default = "default_reveal_active_file_shortcut",
-        alias = "reveal_active_file_shortcut"
+        alias = "reveal_active_file_shortcut",
+        alias = "revealActiveFileShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub reveal_active_file_shortcut: String,
-    #[serde(default = "default_git_panel_shortcut", alias = "git_panel_shortcut")]
-    pub git_panel_shortcut: String,
+    pub reveal_active_file_shortcut: Option<String>,
+    #[serde(
+        default = "default_git_panel_shortcut",
+        alias = "git_panel_shortcut",
+        alias = "gitPanelShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
+    )]
+    pub git_panel_shortcut: Option<String>,
     #[serde(
         default = "default_ports_panel_shortcut",
-        alias = "ports_panel_shortcut"
+        alias = "ports_panel_shortcut",
+        alias = "portsPanelShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub ports_panel_shortcut: String,
-    #[serde(
-        default = "default_fleet_terminal_shortcut",
-        alias = "fleet_terminal_shortcut"
-    )]
-    pub fleet_terminal_shortcut: String,
+    pub ports_panel_shortcut: Option<String>,
     #[serde(
         default = "default_terminal_font_size_increase_shortcut",
-        alias = "terminal_font_size_increase_shortcut"
+        alias = "terminal_font_size_increase_shortcut",
+        alias = "terminalFontSizeIncreaseShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub terminal_font_size_increase_shortcut: String,
+    pub terminal_font_size_increase_shortcut: Option<String>,
     #[serde(
         default = "default_terminal_font_size_decrease_shortcut",
-        alias = "terminal_font_size_decrease_shortcut"
+        alias = "terminal_font_size_decrease_shortcut",
+        alias = "terminalFontSizeDecreaseShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub terminal_font_size_decrease_shortcut: String,
+    pub terminal_font_size_decrease_shortcut: Option<String>,
+    #[serde(
+        default = "default_os_palette_shortcut",
+        alias = "os_palette_shortcut",
+        alias = "osPaletteShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
+    )]
+    pub os_palette_shortcut: Option<String>,
+    #[serde(
+        default = "default_os_cycle_focus_shortcut",
+        alias = "os_cycle_focus_shortcut",
+        alias = "osCycleFocusShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
+    )]
+    pub os_cycle_focus_shortcut: Option<String>,
+    #[serde(
+        default = "default_dock_padding",
+        alias = "dock_padding",
+        alias = "dockPadding"
+    )]
+    pub dock_padding: f64,
+    #[serde(
+        default = "default_dock_item_spacing",
+        alias = "dock_item_spacing",
+        alias = "dockItemSpacing"
+    )]
+    pub dock_item_spacing: f64,
+    #[serde(
+        default = "default_dock_outer_spacing",
+        alias = "dock_outer_spacing",
+        alias = "dockOuterSpacing"
+    )]
+    pub dock_outer_spacing: f64,
+    #[serde(
+        default = "default_dock_radius",
+        alias = "dock_radius",
+        alias = "dockRadius"
+    )]
+    pub dock_radius: f64,
+    #[serde(
+        default = "default_cursor_theme",
+        alias = "cursor_theme",
+        alias = "cursorTheme"
+    )]
+    pub cursor_theme: String,
+    #[serde(
+        default,
+        alias = "app_shortcuts",
+        alias = "appShortcuts",
+        deserialize_with = "deserialize_app_shortcuts"
+    )]
+    pub app_shortcuts: std::collections::BTreeMap<String, Option<String>>,
     #[serde(default = "default_true", alias = "terminal_suggestions_enabled")]
     pub terminal_suggestions_enabled: bool,
     #[serde(
@@ -1181,7 +1303,6 @@ impl Default for UiConfig {
             reveal_active_file_shortcut: default_reveal_active_file_shortcut(),
             git_panel_shortcut: default_git_panel_shortcut(),
             ports_panel_shortcut: default_ports_panel_shortcut(),
-            fleet_terminal_shortcut: default_fleet_terminal_shortcut(),
             terminal_font_size_increase_shortcut: default_terminal_font_size_increase_shortcut(),
             terminal_font_size_decrease_shortcut: default_terminal_font_size_decrease_shortcut(),
             terminal_suggestions_enabled: true,
@@ -1205,6 +1326,14 @@ impl Default for UiConfig {
             cognito_mode_shortcut: default_cognito_mode_shortcut(),
             cognito_mode_style: CognitoModeStyle::default(),
             default_window_placement: DefaultWindowPlacement::default(),
+            os_palette_shortcut: default_os_palette_shortcut(),
+            os_cycle_focus_shortcut: default_os_cycle_focus_shortcut(),
+            dock_padding: default_dock_padding(),
+            dock_item_spacing: default_dock_item_spacing(),
+            dock_outer_spacing: default_dock_outer_spacing(),
+            dock_radius: default_dock_radius(),
+            cursor_theme: default_cursor_theme(),
+            app_shortcuts: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -1292,8 +1421,34 @@ impl UiConfig {
     pub fn validate_window_placement(&self) -> Result<(), String> {
         Ok(())
     }
-}
 
+    pub fn validate_appearance(&self) -> Result<(), String> {
+        if !self.dock_padding.is_finite() || !(0.0..=16.0).contains(&self.dock_padding) {
+            return Err("dock_padding must be finite and between 0 and 16".to_string());
+        }
+        if !self.dock_item_spacing.is_finite() || !(0.0..=12.0).contains(&self.dock_item_spacing) {
+            return Err("dock_item_spacing must be finite and between 0 and 12".to_string());
+        }
+        if !self.dock_outer_spacing.is_finite() || !(0.0..=24.0).contains(&self.dock_outer_spacing) {
+            return Err("dock_outer_spacing must be finite and between 0 and 24".to_string());
+        }
+        if !self.dock_radius.is_finite() || !(0.0..=28.0).contains(&self.dock_radius) {
+            return Err("dock_radius must be finite and between 0 and 28".to_string());
+        }
+        if self.cursor_theme != "system" && self.cursor_theme != "theme" {
+            return Err("cursor_theme must be either 'system' or 'theme'".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn validate_cognito_mode_shortcut(&self) -> Result<(), String> {
+        let s = self.cognito_mode_shortcut.trim();
+        if s.is_empty() || s == "DoubleShift" || s == "Mod+Wheel" {
+            return Err("cognito_mode_shortcut must be a valid non-empty keyboard chord".to_string());
+        }
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalConfig {

@@ -284,8 +284,14 @@ export function MonacoKeepAliveHost({ children }: MonacoKeepAliveHostProps) {
     const tabs = useEditorStore.getState().tabs;
     for (const w of Object.values(sessionWindows)) {
       if (w.appId !== "editor") continue;
-      const filePath =
-        (w.appState?.filePath as string | undefined) ?? "untitled.ts";
+      if (
+        (w.appState?.presentation as { kind?: string } | undefined)?.kind === "choose-target" ||
+        !w.appState?.filePath ||
+        w.appState?.filePath === "untitled.ts"
+      ) {
+        continue;
+      }
+      const filePath = w.appState.filePath as string;
       let target: FsTargetRef;
       if (w.ctx.target) {
         target = normalizeFsTarget(w.ctx.target, w.ctx.profileId);

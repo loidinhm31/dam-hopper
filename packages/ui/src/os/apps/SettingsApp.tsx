@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { OsWindow } from "../types.js";
 import { SettingsPage } from "@/components/pages/SettingsPage.js";
 import { DevicesPage } from "@/components/pages/DevicesPage.js";
@@ -17,9 +17,27 @@ export function SettingsApp({ window }: SettingsAppProps) {
   const [activeTab, setActiveTab] =
     useState<"general" | "devices">(requestedTab);
 
+  const requestedSection =
+    (window.appState?.settingsSection as string | undefined) ??
+    (window.appState?.section as string | undefined);
+  const deliveryId = window.appState?.deliveryId as string | undefined;
+  const lastConsumedDeliveryRef = useRef<string | null>(null);
+
   useEffect(() => {
+    if (deliveryId && deliveryId !== lastConsumedDeliveryRef.current) {
+      lastConsumedDeliveryRef.current = deliveryId;
+      if (requestedSection === "appearance") {
+        setActiveTab("general");
+        return;
+      }
+    }
+    if (!deliveryId && requestedSection === "appearance" && lastConsumedDeliveryRef.current === null) {
+      lastConsumedDeliveryRef.current = "initial";
+      setActiveTab("general");
+      return;
+    }
     setActiveTab(requestedTab);
-  }, [requestedTab]);
+  }, [requestedTab, requestedSection, deliveryId]);
 
   const hasTargetProfile = "targetProfileId" in (window.appState ?? {});
   const targetProfileId: string | null = hasTargetProfile
@@ -76,6 +94,8 @@ export function SettingsApp({ window }: SettingsAppProps) {
             noLayout={true}
             targetProfileId={targetProfileId}
             onTargetProfileChange={handleTargetProfileChange}
+            requestedSection={requestedSection}
+            deliveryId={deliveryId}
           />
         )}
         {activeTab === "devices" && (

@@ -7,11 +7,11 @@ import type {
   RestorePlacement,
   WindowContext,
 } from "./types.js";
+import type { TerminalTarget } from "../api/terminal-session-contract.js";
 import { isAppId } from "./app-registry.js";
 import { createDefaultOsSession } from "./window-ops.js";
 import { collectTilePanes, isValidTileNode } from "@/lib/tile-tree.js";
 import type { TileNode } from "@/types/tile-tree.js";
-
 export const OS_SESSION_STORAGE_KEY = "dam-hopper:os:v1:session";
 
 export interface PersistenceNotice {
@@ -686,16 +686,28 @@ export const DEFAULT_DOCK_PINS: OsAppId[] = [
   "browser",
 ];
 
+export function normalizeDockPins(raw: unknown): OsAppId[] {
+  if (!Array.isArray(raw)) return [...DEFAULT_DOCK_PINS];
+  const seen = new Set<OsAppId>();
+  const result: OsAppId[] = [];
+  for (const item of raw) {
+    if (isAppId(item) && !seen.has(item)) {
+      seen.add(item);
+      result.push(item);
+    }
+  }
+  return result;
+}
+
 export function loadDockPins(
   storageKey: string = OS_DOCK_STORAGE_KEY,
 ): OsAppId[] {
   try {
     const raw = localStorage.getItem(storageKey);
-    if (!raw) return [...DEFAULT_DOCK_PINS];
+    if (raw === null) return [...DEFAULT_DOCK_PINS];
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      const valid = parsed.filter(isAppId);
-      return valid.length > 0 ? valid : [...DEFAULT_DOCK_PINS];
+      return normalizeDockPins(parsed);
     }
     return [...DEFAULT_DOCK_PINS];
   } catch {
@@ -704,11 +716,11 @@ export function loadDockPins(
 }
 
 export function saveDockPins(
-  pins: OsAppId[],
+  pins: readonly OsAppId[],
   storageKey: string = OS_DOCK_STORAGE_KEY,
 ): boolean {
   try {
-    const valid = pins.filter(isAppId);
+    const valid = normalizeDockPins(pins);
     localStorage.setItem(storageKey, JSON.stringify(valid));
     return true;
   } catch {
@@ -729,7 +741,7 @@ export interface OsExportEnvelopeV1 {
 
 export function exportOsEnvelope(session: OsSessionV1): string {
   const sanitized = sanitizeSessionForPersistence(session);
-  const dock = loadDockPins();
+  const dock = dockPinsSnapshotProvider ? [...dockPinsSnapshotProvider()] : loadDockPins();
   let shortcuts: Record<string, string> | undefined;
   try {
     const raw = localStorage.getItem(OS_SHORTCUTS_STORAGE_KEY);
@@ -789,7 +801,8 @@ export function importOsEnvelope(raw: string): {
     // 2. Dock projection
     let projectedDock: OsAppId[] | undefined;
     if (Array.isArray(rawNamespaces.dock)) {
-      projectedDock = rawNamespaces.dock.filter(isAppId);
+      projectedDock = normalizeDockPins(rawNamespaces.dock);
+      saveDockPins(projectedDock);
     }
 
     // 3. Shortcuts projection
@@ -834,9 +847,448 @@ export function importOsEnvelope(raw: string): {
         notifications_prefs: projectedNotifs,
       },
     };
+    if (projectedDock !== undefined) {
+      try {
+        notifyDockPinsImported(projectedDock);
+      } catch (err) {
+        console.error("Failed to notify dock pins imported:", err);
+      }
+    }
 
     return { success: true, envelope: projectedEnvelope };
   } catch (err) {
     return { success: false, error: `Invalid JSON syntax: ${String(err)}` };
   }
+}
+
+// ============================================================================
+// Dock Pins Import Notification Seam (Architecture Contract C6)
+// ============================================================================
+
+type DockPinsImportListener = (pins: readonly OsAppId[]) => void;
+let dockPinsImportListener: DockPinsImportListener | null = null;
+
+export function registerDockPinsImportListener(
+  listener: DockPinsImportListener,
+): () => void {
+  dockPinsImportListener = listener;
+  return () => {
+    if (dockPinsImportListener === listener) {
+      dockPinsImportListener = null;
+    }
+  };
+}
+
+export function notifyDockPinsImported(pins: readonly OsAppId[]): void {
+  dockPinsImportListener?.(pins);
+}
+
+type DockPinsSnapshotProvider = () => readonly OsAppId[];
+let dockPinsSnapshotProvider: DockPinsSnapshotProvider | null = null;
+
+export function registerDockPinsSnapshotProvider(
+  provider: DockPinsSnapshotProvider,
+): () => void {
+  dockPinsSnapshotProvider = provider;
+  return () => {
+    if (dockPinsSnapshotProvider === provider) {
+      dockPinsSnapshotProvider = null;
+    }
+  };
+}
+
+// ============================================================================
+// Ordinary Resource-Launch Safety Journal (Architecture Contracts C3 & C12)
+// ============================================================================
+
+export const APP_LAUNCH_ATTEMPTS_STORAGE_KEY =
+  "dam-hopper:os:v1:app-launch-attempts";
+export const APP_LAUNCH_ATTEMPTS_LOCK_NAME =
+  "dam-hopper:os:v1:app-launch-attempts:transaction";
+
+export const MAX_LAUNCH_JOURNAL_RECORDS = 128;
+export const MAX_LAUNCH_RECORD_BYTES = 8192;
+export const MAX_LAUNCH_JOURNAL_DOCUMENT_BYTES = 1048576; // 1 MiB
+
+export type LaunchAttemptState =
+  | "reserved-dispatch-capable"
+  | "confirmed-success"
+  | "confirmed-not-created"
+  | "uncertain";
+
+export interface LaunchIdentityParams {
+  profileId: string;
+  endpointBinding: string;
+  action: "terminal.create";
+  targetKind: string;
+  workspaceId?: string | null;
+  projectId?: string | null;
+  worktreeId?: string | null;
+  authorizedPath?: string | null;
+  cwd?: string | null;
+}
+
+export interface StoredLaunchRecord {
+  readonly attemptId: string;
+  readonly canonicalIdentity: string;
+  readonly profileId: string;
+  readonly endpointBinding: string;
+  readonly action: "terminal.create";
+  readonly targetKind: string;
+  readonly workspaceId: string | null;
+  readonly projectId: string | null;
+  readonly worktreeId: string | null;
+  readonly authorizedPath: string | null;
+  readonly cwd: string | null;
+  readonly requestedTerminalId: string;
+  readonly ownerGeneration: number;
+  readonly destinationDesktopId: string;
+  readonly state: LaunchAttemptState;
+  readonly createdAt: number;
+  readonly settledAt?: number;
+  readonly provenance?: {
+    readonly terminalId: string;
+    readonly serverEpoch: string;
+    readonly incarnationExact: string;
+  };
+  readonly failureReason?: string;
+}
+
+export interface LaunchJournalDocument {
+  readonly version: 1;
+  readonly records: StoredLaunchRecord[];
+}
+
+export type ReserveLaunchResult =
+  | {
+      readonly status: "reserved";
+      readonly attemptId: string;
+      readonly requestedTerminalId: string;
+    }
+  | {
+      readonly status: "blocked";
+      readonly reason: string;
+      readonly existingAttemptId?: string;
+    };
+
+export type SettleLaunchResult =
+  | {
+      readonly status: "settled";
+    }
+  | {
+      readonly status: "uncertain";
+      readonly reason: string;
+    };
+
+export function buildCanonicalIdentityTuple(
+  params: LaunchIdentityParams,
+): string {
+  const tuple = [
+    1,
+    params.profileId,
+    params.endpointBinding,
+    params.action,
+    params.targetKind,
+    params.workspaceId ?? null,
+    params.projectId ?? null,
+    params.worktreeId ?? null,
+    params.authorizedPath ?? null,
+    params.cwd ?? null,
+  ];
+  return JSON.stringify(tuple);
+}
+
+let inMemoryLockChain: Promise<void> = Promise.resolve();
+
+function executeWithInMemoryLock<T>(fn: () => Promise<T>): Promise<T> {
+  const result = inMemoryLockChain.then(fn, fn);
+  inMemoryLockChain = result.then(
+    () => {},
+    () => {},
+  );
+  return result;
+}
+
+async function withLaunchJournalLock<T>(fn: () => Promise<T>): Promise<T> {
+  if (
+    typeof navigator !== "undefined" &&
+    navigator.locks &&
+    typeof navigator.locks.request === "function"
+  ) {
+    return navigator.locks.request(
+      APP_LAUNCH_ATTEMPTS_LOCK_NAME,
+      { mode: "exclusive" },
+      fn,
+    );
+  }
+  return executeWithInMemoryLock(fn);
+}
+
+function readLaunchJournalDocument(): LaunchJournalDocument {
+  if (typeof localStorage === "undefined") {
+    throw new Error("Durable storage (localStorage) is unavailable: launch journal cannot operate fail-closed");
+  }
+  const raw = localStorage.getItem(APP_LAUNCH_ATTEMPTS_STORAGE_KEY);
+  if (!raw) {
+    return { version: 1, records: [] };
+  }
+  if (raw.length > MAX_LAUNCH_JOURNAL_DOCUMENT_BYTES) {
+    throw new Error("Launch journal document exceeds maximum allowed size (1 MiB)");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`Corrupted launch journal JSON in storage: ${String(e)}`);
+  }
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Invalid launch journal format in storage");
+  }
+  const doc = parsed as { version?: unknown; records?: unknown };
+  if (doc.version !== 1 || !Array.isArray(doc.records)) {
+    throw new Error(`Unsupported launch journal version: ${String(doc.version)}`);
+  }
+  return {
+    version: 1,
+    records: doc.records as StoredLaunchRecord[],
+  };
+}
+
+function writeLaunchJournalDocument(doc: LaunchJournalDocument): void {
+  if (typeof localStorage === "undefined") {
+    throw new Error("Durable storage (localStorage) is unavailable: launch journal cannot operate fail-closed");
+  }
+  const serialized = JSON.stringify(doc);
+  if (serialized.length > MAX_LAUNCH_JOURNAL_DOCUMENT_BYTES) {
+    throw new Error("Launch journal document exceeds maximum allowed size (1 MiB)");
+  }
+  localStorage.setItem(APP_LAUNCH_ATTEMPTS_STORAGE_KEY, serialized);
+}
+
+// In-process Promise coalescing map
+const activeProcessLaunches = new Map<string, Promise<unknown>>();
+
+export function getInFlightLaunchPromise(canonicalIdentity: string): Promise<unknown> | undefined {
+  return activeProcessLaunches.get(canonicalIdentity);
+}
+
+export function registerInFlightLaunchPromise(
+  canonicalIdentity: string,
+  promise: Promise<unknown>,
+): void {
+  activeProcessLaunches.set(canonicalIdentity, promise);
+  const cleanup = () => {
+    if (activeProcessLaunches.get(canonicalIdentity) === promise) {
+      activeProcessLaunches.delete(canonicalIdentity);
+    }
+  };
+  promise.then(cleanup, cleanup);
+}
+
+export async function reserveTerminalLaunch(
+  params: LaunchIdentityParams,
+  meta: {
+    generation: number;
+    desktopId: string;
+    explicitRequestedTerminalId?: string;
+  },
+): Promise<ReserveLaunchResult> {
+  const canonicalIdentity = buildCanonicalIdentityTuple(params);
+
+  return withLaunchJournalLock(async () => {
+    let doc: LaunchJournalDocument;
+    try {
+      doc = readLaunchJournalDocument();
+    } catch (e) {
+      return {
+        status: "blocked",
+        reason: `Durable ordinary-launch journal is in an unreadable or corrupt state: ${String(e)}`,
+      };
+    }
+
+    // Check for any unresolved record with the same canonical identity (Contract C3: no TTL)
+    const unresolvedExisting = doc.records.find(
+      (r) =>
+        r.canonicalIdentity === canonicalIdentity &&
+        (r.state === "reserved-dispatch-capable" || r.state === "uncertain"),
+    );
+    if (unresolvedExisting) {
+      return {
+        status: "blocked",
+        reason: `An unresolved ordinary launch attempt (${unresolvedExisting.attemptId}) is already in progress for this destination.`,
+        existingAttemptId: unresolvedExisting.attemptId,
+      };
+    }
+
+    // Requested ID safety validation (C12)
+    let requestedId: string;
+    if (meta.explicitRequestedTerminalId) {
+      const isAlreadyUsed = doc.records.some(
+        (r) => r.requestedTerminalId === meta.explicitRequestedTerminalId,
+      );
+      if (isAlreadyUsed) {
+        return {
+          status: "blocked",
+          reason: `Requested terminal ID '${meta.explicitRequestedTerminalId}' has already been used in a previous launch attempt.`,
+        };
+      }
+      requestedId = meta.explicitRequestedTerminalId;
+    } else {
+      requestedId =
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `term-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    }
+
+    // Check capacity and compact settled records under lock if needed
+    let records = [...doc.records];
+    if (records.length >= MAX_LAUNCH_JOURNAL_RECORDS) {
+      // Compact older settled records; NEVER evict unresolved records
+      const unresolved = records.filter(
+        (r) =>
+          r.state === "reserved-dispatch-capable" || r.state === "uncertain",
+      );
+      if (unresolved.length >= MAX_LAUNCH_JOURNAL_RECORDS) {
+        return {
+          status: "blocked",
+          reason: `Launch journal capacity exhausted with ${unresolved.length} unresolved records. Cannot reserve new launch.`,
+        };
+      }
+      // Retain all unresolved plus most recent settled
+      const settled = records.filter(
+        (r) =>
+          r.state === "confirmed-success" ||
+          r.state === "confirmed-not-created",
+      );
+      settled.sort((a, b) => (b.settledAt ?? b.createdAt) - (a.settledAt ?? a.createdAt));
+      const remainingQuota = MAX_LAUNCH_JOURNAL_RECORDS - unresolved.length - 1;
+      records = [...unresolved, ...settled.slice(0, Math.max(0, remainingQuota))];
+    }
+
+    const attemptId =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `attempt-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+    const newRecord: StoredLaunchRecord = {
+      attemptId,
+      canonicalIdentity,
+      profileId: params.profileId,
+      endpointBinding: params.endpointBinding,
+      action: params.action,
+      targetKind: params.targetKind,
+      workspaceId: params.workspaceId ?? null,
+      projectId: params.projectId ?? null,
+      worktreeId: params.worktreeId ?? null,
+      authorizedPath: params.authorizedPath ?? null,
+      cwd: params.cwd ?? null,
+      requestedTerminalId: requestedId,
+      ownerGeneration: meta.generation,
+      destinationDesktopId: meta.desktopId,
+      state: "reserved-dispatch-capable",
+      createdAt: Date.now(),
+    };
+
+    const serializedRecord = JSON.stringify(newRecord);
+    if (new TextEncoder().encode(serializedRecord).length > MAX_LAUNCH_RECORD_BYTES) {
+      return {
+        status: "blocked",
+        reason: `Launch record exceeds maximum allowed size of ${MAX_LAUNCH_RECORD_BYTES} bytes`,
+      };
+    }
+    records.push(newRecord);
+
+    try {
+      writeLaunchJournalDocument({ version: 1, records });
+    } catch (e) {
+      return {
+        status: "blocked",
+        reason: `Failed to persist durable reservation to local storage: ${String(e)}`,
+      };
+    }
+
+    return {
+      status: "reserved",
+      attemptId,
+      requestedTerminalId: requestedId,
+    };
+  });
+}
+
+export async function settleTerminalLaunch(
+  attemptId: string,
+  outcome:
+    | { readonly kind: "confirmed-success"; readonly target: TerminalTarget }
+    | { readonly kind: "confirmed-not-created"; readonly reason: string }
+    | { readonly kind: "uncertain"; readonly reason: string },
+): Promise<SettleLaunchResult> {
+  return withLaunchJournalLock(async () => {
+    let doc: LaunchJournalDocument;
+    try {
+      doc = readLaunchJournalDocument();
+    } catch (e) {
+      return {
+        status: "uncertain",
+        reason: `Could not read launch journal for settlement: ${String(e)}`,
+      };
+    }
+
+    const index = doc.records.findIndex((r) => r.attemptId === attemptId);
+    if (index === -1) {
+      return {
+        status: "uncertain",
+        reason: `Launch attempt '${attemptId}' not found in journal.`,
+      };
+    }
+
+    const current = doc.records[index];
+    if (
+      current.state === "confirmed-success" ||
+      current.state === "confirmed-not-created"
+    ) {
+      // Terminal states are strictly immutable: already settled
+      return { status: "settled" };
+    }
+    const records = [...doc.records];
+
+    if (outcome.kind === "confirmed-success") {
+      records[index] = {
+        ...current,
+        state: "confirmed-success",
+        settledAt: Date.now(),
+        provenance: {
+          terminalId: outcome.target.terminalId,
+          serverEpoch: outcome.target.serverEpoch,
+          incarnationExact: String(outcome.target.incarnation),
+        },
+      };
+    } else if (outcome.kind === "confirmed-not-created") {
+      records[index] = {
+        ...current,
+        state: "confirmed-not-created",
+        settledAt: Date.now(),
+        failureReason: outcome.reason,
+      };
+    } else {
+      // Uncertain remains unresolved
+      records[index] = {
+        ...current,
+        state: "uncertain",
+        failureReason: outcome.reason,
+      };
+    }
+
+    try {
+      writeLaunchJournalDocument({ version: 1, records });
+    } catch (e) {
+      return {
+        status: "uncertain",
+        reason: `Failed to write settlement to launch journal: ${String(e)}`,
+      };
+    }
+
+    return outcome.kind === "uncertain"
+      ? { status: "uncertain", reason: outcome.reason }
+      : { status: "settled" };
+  });
 }

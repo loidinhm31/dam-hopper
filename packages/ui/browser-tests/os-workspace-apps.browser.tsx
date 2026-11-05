@@ -184,6 +184,12 @@ describe("OS Workspace Apps Browser Tests", () => {
     const result = await dispatchIntent(
       createIntent("file:reveal", {
         profileId: testProfile.id,
+        generation: 1,
+        target: {
+          kind: "project",
+          profileId: testProfile.id,
+          project: "demo-project",
+        },
         projectId: "demo-project",
         filePath: "src/main.rs",
       }),
@@ -201,7 +207,14 @@ describe("OS Workspace Apps Browser Tests", () => {
     const result = await dispatchIntent(
       createIntent("search:query", {
         profileId: testProfile.id,
+        generation: 1,
+        target: {
+          kind: "project",
+          profileId: testProfile.id,
+          project: "demo-project",
+        },
         projectId: "demo-project",
+        mode: "text",
         query: "mySearchQuery",
       }),
     );

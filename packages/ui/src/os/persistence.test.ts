@@ -9,8 +9,10 @@ import {
   isAutosaveSuspended,
   loadDockPins,
   loadOsSession,
+  normalizeDockPins,
   OS_DOCK_STORAGE_KEY,
   OS_SESSION_STORAGE_KEY,
+  registerDockPinsImportListener,
   resumeAutosave,
   sanitizeSessionForPersistence,
   saveDockPins,
@@ -314,6 +316,70 @@ describe("persistence", () => {
     // Invalid envelope
     expect(importOsEnvelope("invalid json").success).toBe(false);
     expect(importOsEnvelope(JSON.stringify({ version: 2 })).success).toBe(false);
+  });
+
+  it("preserves empty array [] for dock pins in load, save, import, and export", () => {
+    const session = createDefaultOsSession("d1", "Main");
+    saveDockPins([]);
+    expect(localStorage.getItem(OS_DOCK_STORAGE_KEY)).toBe("[]");
+    expect(loadDockPins()).toEqual([]);
+
+    const exported = exportOsEnvelope(session);
+    const parsed = JSON.parse(exported);
+    expect(parsed.namespaces.dock).toEqual([]);
+
+    // Clear localStorage, then import
+    localStorage.clear();
+    const importResult = importOsEnvelope(exported);
+    expect(importResult.success).toBe(true);
+    expect(importResult.envelope?.namespaces.dock).toEqual([]);
+    // Confirmed committed to storage
+    expect(loadDockPins()).toEqual([]);
+  });
+
+  it("normalizes dock pins by filtering unknown IDs and deduplicating", () => {
+    const dirty = ["terminals", "invalid-id", "terminals", "files"];
+    const normalized = normalizeDockPins(dirty);
+    expect(normalized).toEqual(["terminals", "files"]);
+
+    saveDockPins(dirty as unknown as OsAppId[]);
+    expect(loadDockPins()).toEqual(["terminals", "files"]);
+  });
+
+  it("commits imported dock pins to localStorage even when no listener is attached", () => {
+    const envelope = JSON.stringify({
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      namespaces: {
+        dock: ["settings", "git"],
+      },
+    });
+
+    const res = importOsEnvelope(envelope);
+    expect(res.success).toBe(true);
+    expect(loadDockPins()).toEqual(["settings", "git"]);
+  });
+
+  it("notifies registered dock pins listener during envelope import and handles listener exceptions gracefully", () => {
+    const listener = vi.fn().mockImplementation(() => {
+      throw new Error("Crash in listener");
+    });
+    const unregister = registerDockPinsImportListener(listener);
+
+    const envelope = JSON.stringify({
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      namespaces: {
+        dock: ["search", "editor"],
+      },
+    });
+
+    const res = importOsEnvelope(envelope);
+    expect(res.success).toBe(true);
+    expect(listener).toHaveBeenCalledWith(["search", "editor"]);
+    expect(loadDockPins()).toEqual(["search", "editor"]);
+
+    unregister();
   });
 
   it("explicitly strips runtimeIdentity and protected Review tuple fields from persistence and imports", () => {

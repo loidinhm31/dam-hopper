@@ -29,6 +29,7 @@ describe("SettingsKeyboardShortcutsSection", () => {
     __resetSettingsStoreTestState();
     useSettingsStore.setState({
       cognitoModeShortcut: DEFAULT_COGNITO_MODE_SHORTCUT,
+      osPaletteShortcut: null,
     });
     saveDebouncedSpy = vi.spyOn(useSettingsStore.getState(), "saveDebounced");
     useCognitoModeStore.getState().reset();
@@ -448,5 +449,69 @@ describe("SettingsKeyboardShortcutsSection", () => {
 
     expect(paletteBtn).not.toBeNull();
     expect(cycleBtn).not.toBeNull();
+  });
+
+  it("rejects duplicate conflicting shortcuts with exact conflict feedback", async () => {
+    useSettingsStore.setState({
+      osPaletteShortcut: "Ctrl+Alt+KeyK",
+    });
+
+    await act(async () => {
+      root?.render(<SettingsKeyboardShortcutsSection />);
+    });
+
+    const captureBtn = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Set shortcut for Cognito Mode"]',
+    );
+
+    await act(async () => {
+      captureBtn?.click();
+    });
+
+    await act(async () => {
+      captureBtn?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "k",
+          code: "KeyK",
+          ctrlKey: true,
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    const alert = container?.querySelector('[role="alert"]');
+    expect(alert?.textContent).toBe("Conflicts with OS Command Palette");
+    expect(saveDebouncedSpy).not.toHaveBeenCalled();
+  });
+
+  it("allows unbinding shortcuts using Backspace or Delete during capture", async () => {
+    await act(async () => {
+      root?.render(<SettingsKeyboardShortcutsSection />);
+    });
+
+    const textSearchBtn = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Set shortcut for Text search"]',
+    );
+
+    await act(async () => {
+      textSearchBtn?.click();
+    });
+
+    await act(async () => {
+      textSearchBtn?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Backspace",
+          code: "Backspace",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(saveDebouncedSpy).toHaveBeenCalledWith({
+      searchTextShortcut: null,
+    });
   });
 });

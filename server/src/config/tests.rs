@@ -1217,20 +1217,27 @@ fn ui_config_defaults() {
     assert_eq!(ui.editor_font_size, 14);
     assert_eq!(ui.terminal_font_size, 13);
     assert!(ui.editor_zoom_wheel_enabled);
-    assert_eq!(ui.search_text_shortcut, "Mod+Shift+KeyF");
-    assert_eq!(ui.search_filename_shortcut, "DoubleShift");
-    assert_eq!(ui.terminal_workspace_shortcut, "Mod+Shift+Backquote");
-    assert_eq!(ui.terminal_file_panel_shortcut, "Mod+Shift+KeyE");
-    assert_eq!(ui.project_panel_shortcut, "Mod+Shift+KeyZ");
-    assert_eq!(ui.reveal_active_file_shortcut, "Alt+F1");
-    assert_eq!(ui.git_panel_shortcut, "Mod+Shift+KeyG");
-    assert_eq!(ui.ports_panel_shortcut, "Mod+Shift+KeyP");
-    assert_eq!(ui.fleet_terminal_shortcut, "Mod+Shift+KeyM");
+    assert_eq!(ui.search_text_shortcut.as_deref(), Some("Mod+Shift+KeyF"));
+    assert_eq!(ui.search_filename_shortcut.as_deref(), Some("DoubleShift"));
+    assert_eq!(ui.terminal_workspace_shortcut.as_deref(), Some("Mod+Shift+Backquote"));
+    assert_eq!(ui.terminal_file_panel_shortcut.as_deref(), Some("Mod+Shift+KeyE"));
+    assert_eq!(ui.project_panel_shortcut.as_deref(), Some("Mod+Shift+KeyZ"));
+    assert_eq!(ui.reveal_active_file_shortcut.as_deref(), Some("Alt+F1"));
+    assert_eq!(ui.git_panel_shortcut.as_deref(), Some("Mod+Shift+KeyG"));
+    assert_eq!(ui.ports_panel_shortcut.as_deref(), Some("Mod+Shift+KeyP"));
     assert_eq!(
-        ui.terminal_font_size_increase_shortcut,
-        "Ctrl+Alt+Shift+Equal"
+        ui.terminal_font_size_increase_shortcut.as_deref(),
+        Some("Ctrl+Alt+Shift+Equal")
     );
-    assert_eq!(ui.terminal_font_size_decrease_shortcut, "Ctrl+Alt+Minus");
+    assert_eq!(ui.terminal_font_size_decrease_shortcut.as_deref(), Some("Ctrl+Alt+Minus"));
+    assert_eq!(ui.os_palette_shortcut.as_deref(), Some("Ctrl+Alt+KeyK"));
+    assert_eq!(ui.os_cycle_focus_shortcut.as_deref(), Some("Ctrl+Alt+Escape"));
+    assert_eq!(ui.dock_padding, 8.0);
+    assert_eq!(ui.dock_item_spacing, 6.0);
+    assert_eq!(ui.dock_outer_spacing, 12.0);
+    assert_eq!(ui.dock_radius, 18.0);
+    assert_eq!(ui.cursor_theme, "system");
+    assert!(ui.app_shortcuts.is_empty());
     assert!(ui.terminal_auto_switch_project_enabled);
     assert!(!ui.terminal_agent_notifications.agents.codex.enabled);
     assert!(!ui.terminal_agent_notifications.agents.omp.enabled);
@@ -1266,17 +1273,28 @@ fn ui_config_serde_roundtrip() {
             editor_font_size: 12,
             terminal_font_size: 15,
             editor_zoom_wheel_enabled: false,
-            search_text_shortcut: "Ctrl+Alt+KeyS".to_string(),
-            search_filename_shortcut: "Ctrl+KeyP".to_string(),
-            terminal_workspace_shortcut: "Ctrl+Shift+Backquote".to_string(),
-            terminal_file_panel_shortcut: "Ctrl+Shift+KeyE".to_string(),
-            project_panel_shortcut: "Ctrl+Shift+KeyZ".to_string(),
-            reveal_active_file_shortcut: "Alt+F1".to_string(),
-            git_panel_shortcut: "Ctrl+Shift+KeyG".to_string(),
-            ports_panel_shortcut: "Ctrl+Shift+KeyP".to_string(),
-            fleet_terminal_shortcut: "Ctrl+Shift+KeyM".to_string(),
-            terminal_font_size_increase_shortcut: "Ctrl+Alt+Shift+Equal".to_string(),
-            terminal_font_size_decrease_shortcut: "Ctrl+Alt+Minus".to_string(),
+            search_text_shortcut: Some("Ctrl+Alt+KeyS".to_string()),
+            search_filename_shortcut: Some("Ctrl+KeyP".to_string()),
+            terminal_workspace_shortcut: Some("Ctrl+Shift+Backquote".to_string()),
+            terminal_file_panel_shortcut: Some("Ctrl+Shift+KeyE".to_string()),
+            project_panel_shortcut: Some("Ctrl+Shift+KeyZ".to_string()),
+            reveal_active_file_shortcut: Some("Alt+F1".to_string()),
+            git_panel_shortcut: Some("Ctrl+Shift+KeyG".to_string()),
+            ports_panel_shortcut: Some("Ctrl+Shift+KeyP".to_string()),
+            terminal_font_size_increase_shortcut: Some("Ctrl+Alt+Shift+Equal".to_string()),
+            terminal_font_size_decrease_shortcut: Some("Ctrl+Alt+Minus".to_string()),
+            os_palette_shortcut: Some("Ctrl+Alt+KeyK".to_string()),
+            os_cycle_focus_shortcut: Some("Ctrl+Alt+Escape".to_string()),
+            dock_padding: 10.0,
+            dock_item_spacing: 5.0,
+            dock_outer_spacing: 14.0,
+            dock_radius: 20.0,
+            cursor_theme: "theme".to_string(),
+            app_shortcuts: {
+                let mut map = std::collections::BTreeMap::new();
+                map.insert("app.editor.open".to_string(), Some("Mod+KeyE".to_string()));
+                map
+            },
             terminal_suggestions_enabled: true,
             terminal_auto_switch_project_enabled: true,
             terminal_agent_notifications: super::schema::TerminalAgentNotifications {
@@ -1388,20 +1406,25 @@ fn ui_config_serde_roundtrip() {
     assert_eq!(ui.editor_font_size, 12);
     assert_eq!(ui.terminal_font_size, 15);
     assert_eq!(
-        ui.terminal_font_size_increase_shortcut,
-        "Ctrl+Alt+Shift+Equal"
+        ui.terminal_font_size_increase_shortcut.as_deref(),
+        Some("Ctrl+Alt+Shift+Equal")
     );
-    assert_eq!(ui.terminal_font_size_decrease_shortcut, "Ctrl+Alt+Minus");
+    assert_eq!(ui.terminal_font_size_decrease_shortcut.as_deref(), Some("Ctrl+Alt+Minus"));
     assert!(!ui.editor_zoom_wheel_enabled);
-    assert_eq!(ui.search_text_shortcut, "Ctrl+Alt+KeyS");
-    assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
-    assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
-    assert_eq!(ui.terminal_file_panel_shortcut, "Ctrl+Shift+KeyE");
-    assert_eq!(ui.project_panel_shortcut, "Ctrl+Shift+KeyZ");
-    assert_eq!(ui.reveal_active_file_shortcut, "Alt+F1");
-    assert_eq!(ui.git_panel_shortcut, "Ctrl+Shift+KeyG");
-    assert_eq!(ui.ports_panel_shortcut, "Ctrl+Shift+KeyP");
-    assert_eq!(ui.fleet_terminal_shortcut, "Ctrl+Shift+KeyM");
+    assert_eq!(ui.search_text_shortcut.as_deref(), Some("Ctrl+Alt+KeyS"));
+    assert_eq!(ui.search_filename_shortcut.as_deref(), Some("Ctrl+KeyP"));
+    assert_eq!(ui.terminal_workspace_shortcut.as_deref(), Some("Ctrl+Shift+Backquote"));
+    assert_eq!(ui.terminal_file_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyE"));
+    assert_eq!(ui.project_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyZ"));
+    assert_eq!(ui.reveal_active_file_shortcut.as_deref(), Some("Alt+F1"));
+    assert_eq!(ui.git_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyG"));
+    assert_eq!(ui.ports_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyP"));
+    assert_eq!(ui.dock_padding, 10.0);
+    assert_eq!(ui.cursor_theme, "theme");
+    assert_eq!(
+        ui.app_shortcuts.get("app.editor.open").and_then(|v| v.as_deref()),
+        Some("Mod+KeyE")
+    );
     assert!(ui.terminal_agent_notifications.agents.codex.enabled);
     assert!(ui.terminal_auto_switch_project_enabled);
     assert!(!ui.terminal_agent_notifications.agents.codex.toast);
@@ -1451,7 +1474,6 @@ project_panel_shortcut = "Ctrl+Shift+KeyZ"
 reveal_active_file_shortcut = "Alt+F1"
 git_panel_shortcut = "Ctrl+Shift+KeyG"
 ports_panel_shortcut = "Ctrl+Shift+KeyP"
-fleet_terminal_shortcut = "Ctrl+Shift+KeyM"
 terminal_agent_notifications_enabled = true
 mobile_custom_keyboard_enabled = false
 mobile_custom_keyboard_font_size = 14
@@ -1464,15 +1486,14 @@ mobile_custom_keyboard_row_gap = 6
     std::fs::write(&path, toml).unwrap();
     let loaded = read_global_config_at(&path).unwrap().unwrap();
     let ui = loaded.ui.unwrap();
-    assert_eq!(ui.search_text_shortcut, "Ctrl+Shift+KeyF");
-    assert_eq!(ui.search_filename_shortcut, "Ctrl+KeyP");
-    assert_eq!(ui.terminal_workspace_shortcut, "Ctrl+Shift+Backquote");
-    assert_eq!(ui.terminal_file_panel_shortcut, "Ctrl+Shift+KeyE");
-    assert_eq!(ui.project_panel_shortcut, "Ctrl+Shift+KeyZ");
-    assert_eq!(ui.reveal_active_file_shortcut, "Alt+F1");
-    assert_eq!(ui.git_panel_shortcut, "Ctrl+Shift+KeyG");
-    assert_eq!(ui.ports_panel_shortcut, "Ctrl+Shift+KeyP");
-    assert_eq!(ui.fleet_terminal_shortcut, "Ctrl+Shift+KeyM");
+    assert_eq!(ui.search_text_shortcut.as_deref(), Some("Ctrl+Shift+KeyF"));
+    assert_eq!(ui.search_filename_shortcut.as_deref(), Some("Ctrl+KeyP"));
+    assert_eq!(ui.terminal_workspace_shortcut.as_deref(), Some("Ctrl+Shift+Backquote"));
+    assert_eq!(ui.terminal_file_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyE"));
+    assert_eq!(ui.project_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyZ"));
+    assert_eq!(ui.reveal_active_file_shortcut.as_deref(), Some("Alt+F1"));
+    assert_eq!(ui.git_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyG"));
+    assert_eq!(ui.ports_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyP"));
     assert!(ui.terminal_agent_notifications.agents.codex.enabled);
     assert!(!ui.mobile_custom_keyboard_enabled);
     assert_eq!(ui.mobile_custom_keyboard_font_size, 14);

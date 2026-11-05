@@ -9,7 +9,6 @@ import type { ExplorerLanguageFilter } from "@/api/fs-types.js";
 import {
   DEFAULT_COGNITO_MODE_SHORTCUT,
   DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
-  DEFAULT_FLEET_TERMINAL_SHORTCUT,
   DEFAULT_GIT_PANEL_SHORTCUT,
   DEFAULT_PORTS_PANEL_SHORTCUT,
   DEFAULT_PROJECT_PANEL_SHORTCUT,
@@ -19,6 +18,8 @@ import {
   DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
   DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
   DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+  DEFAULT_OS_PALETTE_SHORTCUT,
+  DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
   formatShortcut,
   normalizeCognitoModeShortcut,
 } from "@/lib/shortcuts.js";
@@ -168,7 +169,6 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   revealActiveFileShortcut: DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
   gitPanelShortcut: DEFAULT_GIT_PANEL_SHORTCUT,
   portsPanelShortcut: DEFAULT_PORTS_PANEL_SHORTCUT,
-  fleetTerminalShortcut: DEFAULT_FLEET_TERMINAL_SHORTCUT,
   terminalFontSizeIncreaseShortcut:
     DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
   terminalFontSizeDecreaseShortcut:
@@ -176,7 +176,70 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   cognitoModeShortcut: DEFAULT_COGNITO_MODE_SHORTCUT,
   cognitoModeStyle: "heavy-blur",
   defaultWindowPlacement: "float",
+  osPaletteShortcut: DEFAULT_OS_PALETTE_SHORTCUT,
+  osCycleFocusShortcut: DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
+  dockPadding: 8,
+  dockItemSpacing: 6,
+  dockOuterSpacing: 12,
+  dockRadius: 18,
+  cursorTheme: "system",
+  appShortcuts: {},
 };
+
+export function clampDockPadding(val: unknown): number {
+  if (typeof val !== "number" || !Number.isFinite(val)) return 8;
+  return Math.min(16, Math.max(0, val));
+}
+
+export function clampDockItemSpacing(val: unknown): number {
+  if (typeof val !== "number" || !Number.isFinite(val)) return 6;
+  return Math.min(12, Math.max(0, val));
+}
+
+export function clampDockOuterSpacing(val: unknown): number {
+  if (typeof val !== "number" || !Number.isFinite(val)) return 12;
+  return Math.min(24, Math.max(0, val));
+}
+
+export function clampDockRadius(val: unknown): number {
+  if (typeof val !== "number" || !Number.isFinite(val)) return 18;
+  return Math.min(28, Math.max(0, val));
+}
+
+function resolveNullableShortcut(
+  ui: Partial<UiConfig> | null | undefined,
+  key: keyof UiConfig,
+  fallback: string,
+): string | null {
+  if (ui && Object.prototype.hasOwnProperty.call(ui, key)) {
+    const val = ui[key];
+    if (val === null) return null;
+    if (typeof val === "string") {
+      const trimmed = val.trim();
+      return trimmed.length > 0 ? formatShortcut(trimmed) : null;
+    }
+    return fallback;
+  }
+  return fallback;
+}
+
+function normalizeAppShortcuts(
+  map: unknown,
+): Record<string, string | null> {
+  if (!map || typeof map !== "object" || Array.isArray(map)) {
+    return {};
+  }
+  const result: Record<string, string | null> = {};
+  for (const [k, v] of Object.entries(map as Record<string, unknown>)) {
+    if (v === null) {
+      result[k] = null;
+    } else if (typeof v === "string") {
+      const trimmed = v.trim();
+      result[k] = trimmed.length > 0 ? formatShortcut(trimmed) : null;
+    }
+  }
+  return result;
+}
 
 export function isExplorerLanguageFilter(
   value: unknown,
@@ -246,44 +309,72 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     agentSettingsPaths: ui?.agentSettingsPaths,
     terminalFontSize:
       ui?.terminalFontSize ?? DEFAULT_UI_CONFIG.terminalFontSize,
-    searchTextShortcut: formatShortcut(
-      ui?.searchTextShortcut ?? DEFAULT_UI_CONFIG.searchTextShortcut,
+    searchTextShortcut: resolveNullableShortcut(
+      ui,
+      "searchTextShortcut",
+      DEFAULT_SEARCH_TEXT_SHORTCUT,
     ),
-    searchFilenameShortcut: formatShortcut(
-      ui?.searchFilenameShortcut ?? DEFAULT_UI_CONFIG.searchFilenameShortcut,
+    searchFilenameShortcut: resolveNullableShortcut(
+      ui,
+      "searchFilenameShortcut",
+      DEFAULT_SEARCH_FILENAME_SHORTCUT,
     ),
-    terminalWorkspaceShortcut: formatShortcut(
-      ui?.terminalWorkspaceShortcut ??
-        DEFAULT_UI_CONFIG.terminalWorkspaceShortcut,
+    terminalWorkspaceShortcut: resolveNullableShortcut(
+      ui,
+      "terminalWorkspaceShortcut",
+      DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
     ),
-    terminalFilePanelShortcut: formatShortcut(
-      ui?.terminalFilePanelShortcut ??
-        DEFAULT_UI_CONFIG.terminalFilePanelShortcut,
+    terminalFilePanelShortcut: resolveNullableShortcut(
+      ui,
+      "terminalFilePanelShortcut",
+      DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
     ),
-    projectPanelShortcut: formatShortcut(
-      ui?.projectPanelShortcut ?? DEFAULT_UI_CONFIG.projectPanelShortcut,
+    projectPanelShortcut: resolveNullableShortcut(
+      ui,
+      "projectPanelShortcut",
+      DEFAULT_PROJECT_PANEL_SHORTCUT,
     ),
-    revealActiveFileShortcut: formatShortcut(
-      ui?.revealActiveFileShortcut ??
-        DEFAULT_UI_CONFIG.revealActiveFileShortcut,
+    revealActiveFileShortcut: resolveNullableShortcut(
+      ui,
+      "revealActiveFileShortcut",
+      DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
     ),
-    gitPanelShortcut: formatShortcut(
-      ui?.gitPanelShortcut ?? DEFAULT_UI_CONFIG.gitPanelShortcut,
+    gitPanelShortcut: resolveNullableShortcut(
+      ui,
+      "gitPanelShortcut",
+      DEFAULT_GIT_PANEL_SHORTCUT,
     ),
-    portsPanelShortcut: formatShortcut(
-      ui?.portsPanelShortcut ?? DEFAULT_UI_CONFIG.portsPanelShortcut,
+    portsPanelShortcut: resolveNullableShortcut(
+      ui,
+      "portsPanelShortcut",
+      DEFAULT_PORTS_PANEL_SHORTCUT,
     ),
-    fleetTerminalShortcut: formatShortcut(
-      ui?.fleetTerminalShortcut ?? DEFAULT_UI_CONFIG.fleetTerminalShortcut,
+    terminalFontSizeIncreaseShortcut: resolveNullableShortcut(
+      ui,
+      "terminalFontSizeIncreaseShortcut",
+      DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
     ),
-    terminalFontSizeIncreaseShortcut: formatShortcut(
-      ui?.terminalFontSizeIncreaseShortcut ??
-        DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
+    terminalFontSizeDecreaseShortcut: resolveNullableShortcut(
+      ui,
+      "terminalFontSizeDecreaseShortcut",
+      DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
     ),
-    terminalFontSizeDecreaseShortcut: formatShortcut(
-      ui?.terminalFontSizeDecreaseShortcut ??
-        DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
+    osPaletteShortcut: resolveNullableShortcut(
+      ui,
+      "osPaletteShortcut",
+      DEFAULT_OS_PALETTE_SHORTCUT,
     ),
+    osCycleFocusShortcut: resolveNullableShortcut(
+      ui,
+      "osCycleFocusShortcut",
+      DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
+    ),
+    dockPadding: clampDockPadding(ui?.dockPadding),
+    dockItemSpacing: clampDockItemSpacing(ui?.dockItemSpacing),
+    dockOuterSpacing: clampDockOuterSpacing(ui?.dockOuterSpacing),
+    dockRadius: clampDockRadius(ui?.dockRadius),
+    cursorTheme: ui?.cursorTheme === "theme" ? "theme" : "system",
+    appShortcuts: normalizeAppShortcuts(ui?.appShortcuts),
     cognitoModeShortcut: normalizeCognitoModeShortcut(
       (ui as { cognitoModeShortcut?: unknown } | null | undefined)
         ?.cognitoModeShortcut,
