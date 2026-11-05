@@ -283,8 +283,6 @@ impl LiveSession {
                         %error,
                         "Failed to kill PTY process group"
                     );
-                } else {
-                    return;
                 }
             }
         }
@@ -305,12 +303,16 @@ impl LiveSession {
     /// if that fails or is unavailable, it falls back to killing the child process directly.
     /// Returns Ok(()) if any kill signal succeeded, or typed sanitized failure if all attempts fail.
     pub fn request_termination(&self) -> Result<(), String> {
+        let mut any_success = false;
+
         #[cfg(unix)]
         {
             let pgid = self.master.lock().unwrap().process_group_leader();
             if let Some(pgid) = pgid {
                 match killpg(Pid::from_raw(pgid), Signal::SIGKILL) {
-                    Ok(()) => return Ok(()),
+                    Ok(()) => {
+                        any_success = true;
+                    }
                     Err(error) => {
                         warn!(
                             session_id = %self.meta.id,
@@ -323,16 +325,24 @@ impl LiveSession {
             }
         }
 
+        // Always kill the root child process (e.g. bash shell) so background/child processes cannot survive
         match self.child_killer.lock().unwrap().kill() {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                any_success = true;
+            }
             Err(error) => {
                 warn!(
                     session_id = %self.meta.id,
                     %error,
                     "Failed to kill PTY child process during guarded termination"
                 );
-                Err("OS process signal dispatch failed".to_string())
             }
+        }
+
+        if any_success {
+            Ok(())
+        } else {
+            Err("OS process signal dispatch failed".to_string())
         }
     }
 
