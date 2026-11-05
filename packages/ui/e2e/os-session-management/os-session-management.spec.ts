@@ -247,24 +247,7 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
     await addTermBtn.click();
     const termFrame = page.locator("[data-os-window-frame]").first();
     await expect(termFrame).toBeVisible({ timeout: 15_000 });
-
-    // Open Close dialog
     const closeBtn = termFrame.locator("button[aria-label='Close']").first();
-    await closeBtn.click();
-    const closeDialog = page.locator('[data-testid="terminal-close-dialog"]').first();
-    await expect(closeDialog).toBeVisible({ timeout: 5_000 });
-
-    // Cancel has initial safe focus
-    const cancelBtn = closeDialog.locator('[data-testid="terminal-close-cancel-btn"]').first();
-    await expect(cancelBtn).toBeFocused();
-
-    // Verify End Session button attributes
-    const endBtn = closeDialog.locator('[data-testid="terminal-close-end-btn"]').first();
-    await expect(endBtn).toBeVisible();
-
-    // 1. Dismiss with Cancel first to verify safe cancel without mutation
-    await cancelBtn.click();
-    await expect(closeDialog).toHaveCount(0);
 
     // 2. Intercept and assert termination HTTP request (verifying exact echoed identity)
     let terminationRequestCount = 0;
@@ -297,11 +280,7 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
     });
 
     await closeBtn.click();
-    await expect(closeDialog).toBeVisible({ timeout: 5_000 });
-    const reEndBtn = closeDialog.locator('[data-testid="terminal-close-end-btn"]').first();
-    await expect(reEndBtn).toBeEnabled();
-    await reEndBtn.click();
-
+    await expect(termFrame).toHaveCount(0);
     // Verify exact request dispatch and dynamic echo verification
     expect(terminationRequestCount).toBe(1);
     expect(receivedTerminationBody).not.toBeNull();
@@ -344,8 +323,6 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
         );
       }
     }, { tId: interceptedTerminalId });
-
-    await expect(closeDialog).toHaveCount(0, { timeout: 10_000 });
     await expect(termFrame).toHaveCount(0, { timeout: 10_000 });
   });
   test("captures complete matrix evidence for os-session-management", async ({

@@ -88,30 +88,9 @@ test.describe("DamHopper OS Root Cutover, Hub Inventory & Close Guard Journey", 
     const closeBtn = termFrame.locator("button[aria-label='Close']").first();
     await expect(closeBtn).toBeVisible();
 
-    // 7. Test shared Close prompt (TerminalCloseDialog)
+    // 7. Test terminal close kills session immediately without ask dialog
     await closeBtn.click();
-    const closeDialog = page.locator('[data-testid="terminal-close-dialog"]').first();
-    await expect(closeDialog).toBeVisible({ timeout: 5_000 });
-
-    // Verify initial autoFocus is on safe Cancel button
-    const cancelBtn = closeDialog.locator('[data-testid="terminal-close-cancel-btn"]').first();
-    await expect(cancelBtn).toBeVisible();
-    await expect(cancelBtn).toBeFocused();
-
-    // Option 1: Cancel does not close window
-    await cancelBtn.click();
-    await expect(closeDialog).toHaveCount(0);
-    await expect(page.locator(`[data-os-window-frame="${termWindowId}"]`)).toHaveCount(1);
-
-    // Option 2: Close View disposes view but backend PTY survives
-    await closeBtn.click();
-    await expect(closeDialog).toBeVisible();
-    const closeViewBtn = closeDialog.locator('[data-testid="terminal-close-view-btn"]').first();
-    await expect(closeViewBtn).toBeVisible();
-    await closeViewBtn.click();
-    await expect(closeDialog).toHaveCount(0);
     await expect(page.locator(`[data-os-window-frame="${termWindowId}"]`)).toHaveCount(0);
-
     // 8. Reopen from Dock - adopts surviving session without duplicate backend create
     await dockTerminalBtn.click();
     await expect(
@@ -179,12 +158,10 @@ test.describe("DamHopper OS Root Cutover, Hub Inventory & Close Guard Journey", 
 
     await captureCombos("adjacent");
 
-    // 3. Close-prompt checkpoint: click Close button on terminal window to show TerminalCloseDialog
+    // 3. Close checkpoint: click Close button on terminal window to close immediately
     const closeBtn = termFrame.locator("button[aria-label='Close']").first();
     await closeBtn.click();
-    const closeDialog = page.locator('[data-testid="terminal-close-dialog"]').first();
-    await expect(closeDialog).toBeVisible({ timeout: 5_000 });
-
+    await expect(termFrame).toHaveCount(0);
     await captureCombos("close-prompt");
   });
 });

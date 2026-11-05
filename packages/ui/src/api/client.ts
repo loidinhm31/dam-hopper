@@ -3397,6 +3397,10 @@ export function createApiClient(
           { target, origin },
           options,
         ),
+      remove: (id: string) =>
+        transport.invoke<void>("terminal:remove", id),
+      kill: (id: string) =>
+        transport.invoke<void>("terminal:kill", id),
       getBuffer: (id: string) =>
         transport.invoke<string>("terminal:buffer", id),
       agentStatusSnapshot: async () =>
@@ -4157,6 +4161,8 @@ export interface ApiClient {
       origin: TerminationOrigin,
       options?: TransportInvokeOptions,
     ) => Promise<TerminationResult>;
+    remove: (id: string) => Promise<void>;
+    kill: (id: string) => Promise<void>;
     getBuffer: (id: string) => Promise<string>;
     agentStatusSnapshot: () => Promise<AgentStatusSnapshotV1>;
     getOmpExtensionStatus: (

@@ -33,6 +33,7 @@ import {
 import {
   resolveWindowTerminalObservation,
   type ReviewTarget,
+  type TerminalTarget,
 } from "@/api/terminal-session-contract.js";
 import { useAggregatedTerminalSessions } from "@/hooks/use-aggregated-terminal-sessions.js";
 import { useQueryClient } from "@tanstack/react-query";
@@ -305,26 +306,28 @@ export function WindowFrame({
         window,
         observations,
       );
+      const effectiveTarget =
+        target ??
+        (window.runtimeIdentity?.kind === "terminal"
+          ? (window.runtimeIdentity.target as TerminalTarget)
+          : null) ??
+        ((window.appState?.target ?? window.appState?.terminalTarget) as
+          | TerminalTarget
+          | undefined) ??
+        null;
 
       if (terminalClose) {
-        if (target && terminalClose.terminateSessionImmediately) {
-          void terminalClose.terminateSessionImmediately(target, window.id, (wId) => {
+        terminalClose.requestTerminalClose(
+          {
+            windowId: window.id,
+            entry: "frame",
+            target: effectiveTarget,
+            availability,
+          },
+          (wId) => {
             closeWindow(wId);
-          });
-        } else {
-          terminalClose.requestTerminalClose(
-            {
-              windowId: window.id,
-              entry: "frame",
-              target,
-              availability,
-            },
-            (wId) => {
-              closeWindow(wId);
-            },
-            { immediate: true },
-          );
-        }
+          },
+        );
         return;
       }
 

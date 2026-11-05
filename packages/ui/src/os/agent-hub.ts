@@ -274,6 +274,13 @@ export function buildAgentHubItems(
   // If explicit aggregated sessions inventory is provided, use it directly (inventory-first)
   if (input.sessions && input.sessions.length > 0) {
     for (const s of input.sessions) {
+      if (
+        s.alive === false ||
+        s.terminationState === "exited" ||
+        s.terminationState === "restartCancelled"
+      ) {
+        continue;
+      }
       const profileId = s.profileId;
       const conn = connections.get(profileId);
       const connStatus: ConnectionStatus = conn?.status ?? "disconnected";

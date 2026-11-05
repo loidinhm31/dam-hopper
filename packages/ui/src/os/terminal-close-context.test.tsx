@@ -143,6 +143,7 @@ describe("TerminalCloseProvider held-response prompt isolation", () => {
           availability: "live",
         },
         onCloseViewA,
+        { prompt: true },
       );
     });
 
@@ -168,6 +169,7 @@ describe("TerminalCloseProvider held-response prompt isolation", () => {
           availability: "live",
         },
         onCloseViewB,
+        { prompt: true },
       );
     });
 
@@ -246,6 +248,7 @@ describe("TerminalCloseProvider held-response prompt isolation", () => {
           availability: "restartPending",
         },
         onCloseViewA,
+        { prompt: true },
       );
     });
 

@@ -39,7 +39,7 @@ export interface TerminalCloseContextValue {
   readonly requestTerminalClose: (
     request: TerminalCloseRequest,
     onCloseView: (windowId: string) => void,
-    options?: { immediate?: boolean },
+    options?: { immediate?: boolean; prompt?: boolean },
   ) => void;
   readonly isPromptOpen: boolean;
   readonly currentRequest: TerminalCloseRequest | null;
@@ -231,12 +231,13 @@ export function TerminalCloseProvider({
     (
       request: TerminalCloseRequest,
       onCloseView: (windowId: string) => void,
-      options?: { immediate?: boolean },
+      options?: { immediate?: boolean; prompt?: boolean },
     ) => {
       const frozenRequest: TerminalCloseRequest = Object.freeze({ ...request });
       currentOnCloseViewRef.current = onCloseView;
 
-      if (options?.immediate) {
+      if (!options?.prompt) {
+        // Kill immediately, never ask dialog
         if (frozenRequest.target) {
           void terminateSessionImmediately(
             frozenRequest.target,
@@ -244,23 +245,28 @@ export function TerminalCloseProvider({
             onCloseView,
           );
         } else {
+          const win = useWindowStore.getState().session.windows[frozenRequest.windowId];
+          const sessionId =
+            (win?.appState?.sessionId as string | undefined) ??
+            (win?.appState?.terminalId as string | undefined);
+          const profileId = win?.ctx?.profileId ?? "default";
+          if (sessionId) {
+            try {
+              const snap = getConnectionSnapshot(profileId);
+              if (snap && snap.status === "connected") {
+                const api = getApi(snap.owner);
+                void api.terminal.remove(sessionId).catch(() => {
+                  void api.terminal.kill(sessionId).catch(() => {});
+                });
+              }
+            } catch {}
+          }
           onCloseView(frozenRequest.windowId);
         }
         return;
       }
 
-      // Exact exited, restartCancelled, or no target and not running -> presentation Close without prompt
-      if (
-        frozenRequest.availability === "exited" ||
-        frozenRequest.availability === "restartCancelled" ||
-        (!frozenRequest.target &&
-          frozenRequest.availability !== "live" &&
-          frozenRequest.availability !== "restartPending")
-      ) {
-        onCloseView(frozenRequest.windowId);
-        return;
-      }
-
+      // Explicit prompt requested (e.g. testing prompt isolation)
       const existingRecord = frozenRequest.target
         ? dispatchedActionsRef.current.get(targetKey(frozenRequest.target))
         : null;

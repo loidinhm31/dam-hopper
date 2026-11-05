@@ -96,6 +96,13 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
     const tabs: DisplayTabEntry[] = [];
 
     for (const s of rawSessions) {
+      if (
+        s.alive === false ||
+        s.terminationState === "exited" ||
+        s.terminationState === "restartCancelled"
+      ) {
+        continue;
+      }
       const termRef: TerminalRef = { profileId: s.profileId, id: s.id };
       const qSessionId = terminalKey(termRef);
       mounted.push({

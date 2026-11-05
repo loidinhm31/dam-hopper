@@ -784,6 +784,16 @@ function channelToEndpoint(
         },
       };
     }
+    case "terminal:remove":
+      return {
+        method: "DELETE",
+        url: `/api/terminal/${encodeURIComponent(data as string)}/remove`,
+      };
+    case "terminal:kill":
+      return {
+        method: "DELETE",
+        url: `/api/terminal/${encodeURIComponent(data as string)}`,
+      };
     case "terminal:agentStatusSnapshot":
       return { method: "GET", url: "/api/agent-status/v1/snapshot" };
     case "agentStatus:getOmpExtensionStatus": {

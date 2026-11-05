@@ -56,13 +56,13 @@ export function TerminalCloseDialog({
     terminationState?.status === "ended" ||
     terminationState?.status === "restartCancelled";
   const isEndEligible =
-    (isLive || isPending) &&
+    (isLive || isPending || (request.target !== null && request.availability !== "exited")) &&
     request.target !== null &&
     !isDispatching &&
     !isAlreadyActed;
   const title = isPending
     ? "Cancel Scheduled Restart"
-    : isLive
+    : (isLive || (request.target !== null && request.availability !== "exited"))
       ? "End Terminal Session"
       : "Close Terminal View";
 
