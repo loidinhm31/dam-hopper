@@ -187,8 +187,9 @@ describe("OS Lifecycle Component Browser Tests", () => {
     });
     const frameB = container?.querySelector('[data-os-window-frame="win-b"]') as HTMLElement | null;
     expect(frameB).not.toBeNull();
-    expect(frameB?.style.position).toBe("fixed");
-    expect(frameB?.style.width).toBe("100vw");
+    expect(frameB?.style.position).toBe("absolute");
+    expect(frameB?.style.width).toBe("100%");
+    expect(container?.querySelector('[data-os-maximized-layer="true"]')).not.toBeNull();
     // Verify exactly ONE frame instance exists in the DOM (no duplicate mounting)
     expect(container?.querySelectorAll('[data-os-window-frame="win-b"]').length).toBe(1);
 
@@ -474,7 +475,10 @@ describe("OS Lifecycle Component Browser Tests", () => {
         id: "win-edit-life",
         appId: "editor",
         title: "Editor Life",
-        ctx: { profileId: "default" },
+        ctx: {
+          profileId: "default",
+          target: { kind: "project", profileId: "default", project: "global" },
+        },
         mode: "tile",
         appState: { filePath: "src/index.ts" },
       });

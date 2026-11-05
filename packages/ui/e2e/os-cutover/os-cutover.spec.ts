@@ -76,7 +76,10 @@ test.describe("DamHopper OS Root Cutover, Hub Inventory & Close Guard Journey", 
     await expect(dockTerminalBtn).toBeVisible({ timeout: 10_000 });
     await dockTerminalBtn.click();
 
-    const initialFrame = page.locator("[data-os-window-frame]").first();
+    const initialFrame = page
+      .locator("[data-os-window-frame]")
+      .filter({ has: page.locator("[data-terminal-container], .xterm") })
+      .first();
     await expect(initialFrame).toBeVisible({ timeout: 15_000 });
     const termWindowId = await initialFrame.getAttribute("data-os-window-frame");
     expect(termWindowId).toBeTruthy();
@@ -111,7 +114,12 @@ test.describe("DamHopper OS Root Cutover, Hub Inventory & Close Guard Journey", 
 
     // 8. Reopen from Dock - adopts surviving session without duplicate backend create
     await dockTerminalBtn.click();
-    await expect(page.locator("[data-os-window-frame]").first()).toBeVisible({ timeout: 15_000 });
+    await expect(
+      page
+        .locator("[data-os-window-frame]")
+        .filter({ has: page.locator("[data-terminal-container], .xterm") })
+        .first(),
+    ).toBeVisible({ timeout: 15_000 });
   });
 
   test("captures complete matrix evidence for os-session-management-cutover", async ({
@@ -163,7 +171,10 @@ test.describe("DamHopper OS Root Cutover, Hub Inventory & Close Guard Journey", 
     // 2. Adjacent checkpoint: open terminal window adjacent to Agent Hub
     const dockTerminalBtn = page.locator("aside[aria-label='Application Dock'] button[title='Terminals']").first();
     await dockTerminalBtn.click();
-    const termFrame = page.locator("[data-os-window-frame]").first();
+    const termFrame = page
+      .locator("[data-os-window-frame]")
+      .filter({ has: page.locator("[data-terminal-container], .xterm") })
+      .first();
     await expect(termFrame).toBeVisible({ timeout: 15_000 });
 
     await captureCombos("adjacent");

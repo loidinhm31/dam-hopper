@@ -1,3 +1,4 @@
+import { terminalActionCoordinator } from "@/lib/terminal-session-action-coordinator.js";
 import "@/index.css";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -110,6 +111,7 @@ describe("OS System Monitor & Tray Browser Tests", () => {
     localStorage.clear();
     resetConnections();
     globalResourceRegistry.clear();
+    terminalActionCoordinator.resetForTests();
     useCognitoModeStore.getState().reset();
     useHostResourceAlertPresentationStore.getState().reset();
     saveProfiles([profileA, profileB]);
@@ -263,6 +265,8 @@ describe("OS System Monitor & Tray Browser Tests", () => {
     }
     saveProfiles([]);
     resetConnections();
+    globalResourceRegistry.clear();
+    terminalActionCoordinator.resetForTests();
     localStorage.clear();
     useCognitoModeStore.getState().reset();
     useHostResourceAlertPresentationStore.getState().reset();
@@ -301,13 +305,15 @@ describe("OS System Monitor & Tray Browser Tests", () => {
 
   it("isolates sessions across two profiles with identical terminal IDs during jump and kill", async () => {
     let focusedTerminal: { profileId: string; terminalId: string } | null = null;
-    const unsubFocus = registerIntentHandler("terminal:focus", (intent) => {
+    const handleFocus = (intent: { payload: { profileId?: string; terminalId?: string; target?: { profileId: string; terminalId: string } } }) => {
       focusedTerminal = {
-        profileId: intent.payload.profileId,
-        terminalId: intent.payload.terminalId,
+        profileId: intent.payload.target ? intent.payload.target.profileId : intent.payload.profileId!,
+        terminalId: intent.payload.target ? intent.payload.target.terminalId : intent.payload.terminalId!,
       };
-      return { status: "handled" };
-    });
+      return { status: "handled" as const };
+    };
+    const unsubFocus = registerIntentHandler("terminal:focus", handleFocus);
+    const unsubPlace = registerIntentHandler("terminal:place-existing", handleFocus);
 
     await act(async () => {
       root?.render(
@@ -366,6 +372,7 @@ describe("OS System Monitor & Tray Browser Tests", () => {
     expect(killCallsB).toHaveLength(0);
 
     unsubFocus();
+    unsubPlace();
   });
 
   it("rejects kill action if connection generation changed before confirmation", async () => {
@@ -386,13 +393,15 @@ describe("OS System Monitor & Tray Browser Tests", () => {
       await dispatchIntent(createIntent("system:monitor", { profileId: "profile-a" }));
     });
 
-    // Click kill on row
+    // Wait for session row to render
+    await vi.waitFor(() => {
+      expect(container?.querySelector("li[role='button']")).not.toBeNull();
+    });
     const row = container?.querySelector("li[role='button']");
     const killBtn = row?.querySelector("button[title='Kill session']");
     await act(async () => {
       (killBtn as HTMLButtonElement)?.click();
     });
-
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
 
     // Simulate profile disconnect & reconnect with new generation (stale generation change!)
@@ -432,7 +441,10 @@ describe("OS System Monitor & Tray Browser Tests", () => {
       await dispatchIntent(createIntent("system:monitor", { profileId: "profile-a" }));
     });
 
-    // Click kill on row
+    // Wait for session row to render
+    await vi.waitFor(() => {
+      expect(container?.querySelector("li[role='button']")).not.toBeNull();
+    });
     const row = container?.querySelector("li[role='button']");
     const killBtn = row?.querySelector("button[title='Kill session']");
     await act(async () => {
@@ -442,21 +454,32 @@ describe("OS System Monitor & Tray Browser Tests", () => {
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
 
     // Simulate replacement process with new incarnation
-    queryClient.setQueryData(
-      ["profile", "profile-a", 1, "terminal-sessions"],
-      [
+    await act(async () => {
+      queryClient.setQueryData(
+        ["profile", "profile-a", 1, "terminal-sessions"],
         {
-          id: identicalId,
-          command: "npm start",
-          project: "app-prod",
-          cwd: "/prod",
-          type: "terminal",
-          alive: true,
-          startedAt: Date.now(),
-          incarnation: 99, // Changed incarnation!
+          sessions: [
+            {
+              id: identicalId,
+              command: "npm start",
+              project: "app-prod",
+              cwd: "/prod",
+              type: "terminal",
+              alive: true,
+              startedAt: Date.now(),
+              incarnation: 99, // Changed incarnation!
+              incarnationExact: "99",
+              terminationState: "live",
+            },
+          ],
+          termination: {
+            version: 1,
+            serverEpoch: "00000000-0000-0000-0000-000000000001",
+          },
+          owner: { profileId: "profile-a", generation: 1 },
         },
-      ],
-    );
+      );
+    });
 
     // Click confirm in modal
     const confirmBtn = document.querySelector('[role="dialog"] button.bg-\\[var\\(--color-danger\\)\\]');
@@ -671,7 +694,10 @@ describe("OS System Monitor & Tray Browser Tests", () => {
       await dispatchIntent(createIntent("system:monitor", { profileId: "profile-a" }));
     });
 
-    // Click kill on row to open dialog
+    // Wait for session row to render
+    await vi.waitFor(() => {
+      expect(container?.querySelector("li[role='button']")).not.toBeNull();
+    });
     const row = container?.querySelector("li[role='button']");
     const killBtn = row?.querySelector("button[title='Kill session']");
     await act(async () => {

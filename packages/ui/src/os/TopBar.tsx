@@ -3,7 +3,7 @@ import {
   useShellInputContext,
   type ShellInputContextValue,
 } from "./shell-input-context.js";
-import { Server } from "lucide-react";
+import { Server, Search, Bell } from "lucide-react";
 import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import { useWindowStore } from "./window-store.js";
@@ -281,6 +281,7 @@ export function TopBar({
           onClick={onOpenPalette}
           className="flex items-center gap-2 px-2.5 py-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-primary)] transition-colors text-[11px]"
         >
+          <Search className="h-3 w-3 text-[var(--color-text-muted)] shrink-0" />
           <span>Search commands, agents…</span>
           <kbd className="hidden sm:inline-block px-1 py-0.2 rounded bg-[var(--color-surface)] border border-[var(--color-border)] font-mono text-[9px] text-[var(--color-text-muted)]">
             Ctrl+Alt+K
@@ -316,6 +317,7 @@ export function TopBar({
           type="button"
           aria-label={`Notifications (${unreadNotificationsCount} unread)`}
           data-os-nonmodal-trigger="notification-center"
+          className="relative p-1.5 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors flex items-center justify-center"
           onClick={() => {
             if (shellInput) {
               shellInput.setSurfaceOpen(
@@ -327,7 +329,7 @@ export function TopBar({
             }
           }}
         >
-          <span className="text-sm">🔔</span>
+          <Bell className="h-3.5 w-3.5 shrink-0" />
           {unreadNotificationsCount > 0 && (
             <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center px-0.5 text-[9px] font-bold rounded-full bg-[var(--color-warning)] text-black">
               {unreadNotificationsCount > 99 ? "99+" : unreadNotificationsCount}

@@ -238,7 +238,15 @@ export async function executeAction(
         "terminalCreate" in request ? request.terminalCreate : undefined;
       const target: FsTargetRef =
         terminalCreate?.target ??
-        request.context.target ?? { kind: "workspace", profileId };
+        request.context.target ??
+        (request.context.windowContext?.projectId
+          ? {
+              kind: "project",
+              profileId,
+              project: request.context.windowContext.projectId,
+              worktreePath: request.context.windowContext.worktreeId,
+            }
+          : { kind: "workspace", profileId });
       const cwd = terminalCreate?.cwd ?? null;
       const directoryKind =
         terminalCreate?.directoryKind ??

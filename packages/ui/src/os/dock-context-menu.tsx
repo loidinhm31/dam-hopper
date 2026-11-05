@@ -14,6 +14,7 @@ import { useWindowStore } from "./window-store.js";
 import { toggleDockPin } from "./dock-pins.js";
 import { getConnectionSnapshot } from "@/api/connections.js";
 import type { ConnectionRef } from "@/api/ownership.js";
+import { useServerProfile } from "@/hooks/use-server-profile.js";
 
 export interface DockContextMenuProps {
   appId: OsAppId;
@@ -49,6 +50,8 @@ export function DockContextMenu({
   const focusWindow = useWindowStore((state) => state.focusWindow);
   const restoreWindow = useWindowStore((state) => state.restoreWindow);
   const switchDesktop = useWindowStore((state) => state.switchDesktop);
+  const profile = useServerProfile();
+  const activeProfileId = profile?.id ?? "default";
 
   const [menuState, setMenuState] = React.useState<CapturedMenuState | null>(
     null,
@@ -68,7 +71,7 @@ export function DockContextMenu({
       const activeDesktop =
         session.desktops.find((d) => d.id === activeDesktopId) ??
         session.desktops[0];
-      const desktopCtx = activeDesktop?.defaultCtx ?? { profileId: "default" };
+      const desktopCtx = activeDesktop?.defaultCtx ?? { profileId: activeProfileId };
 
       let owner: ConnectionRef | null = null;
       if (desktopCtx.profileId) {
@@ -125,7 +128,7 @@ export function DockContextMenu({
         isSupportedNewWindowApp: isSupportedNewWindow,
       });
     },
-    [session, appId, isSupportedNewWindow],
+    [session, appId, isSupportedNewWindow, activeProfileId],
   );
 
   const handleOpenFocus = React.useCallback(() => {

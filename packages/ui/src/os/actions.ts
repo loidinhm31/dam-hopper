@@ -169,10 +169,10 @@ function buildActionCatalog(): Record<OsActionId, ActionDescriptor> {
     },
     {
       appId: "files",
-      requirement: "worktree",
+      requirement: "profile",
       bindingSource: { kind: "scalar", property: "terminalFilePanelShortcut" },
       defaultBinding: DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
-      enabledExplanation: "Requires project, worktree, or authorized workspace target",
+      enabledExplanation: "Requires an active profile connection",
     },
     {
       appId: "search",

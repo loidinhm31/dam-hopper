@@ -512,6 +512,23 @@ export function SystemMonitorApp({ window }: SystemMonitorAppProps) {
         return;
       }
 
+      // Currency check: verify process incarnation has not changed in aggregated sessions
+      const latestSession = aggregatedSessions.find(
+        (s) => s.id === confirmKill.sessionId && s.profileId === confirmKill.profileId,
+      );
+      if (
+        latestSession &&
+        confirmKill.incarnation !== undefined &&
+        latestSession.incarnation !== undefined &&
+        String(latestSession.incarnationExact ?? latestSession.incarnation) !==
+          String(confirmKill.incarnation)
+      ) {
+        setKillError(
+          "Process incarnation changed before confirmation. Session may have restarted or been replaced. Kill aborted.",
+        );
+        return;
+      }
+
       const client = getApi(currentSnap.owner);
       const result = await requestGuardedTermination(
         confirmKill.target,
@@ -548,7 +565,7 @@ export function SystemMonitorApp({ window }: SystemMonitorAppProps) {
     } finally {
       setKillPending(false);
     }
-  }, [confirmKill, qc]);
+  }, [confirmKill, qc, aggregatedSessions]);
 
   return (
     <div

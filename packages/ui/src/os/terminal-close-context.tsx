@@ -8,6 +8,7 @@ import {
   type ReactNode,
   type ReactElement,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type {
   TerminalCloseRequest,
   TerminationOrigin,
@@ -31,6 +32,7 @@ import { TerminalCloseDialog } from "./TerminalCloseDialog.js";
 import { useWindowStore } from "./window-store.js";
 import {
   terminalTargetKey,
+  resolveWindowTerminalObservation,
   type TerminalTarget,
 } from "@/api/terminal-session-contract.js";
 export interface TerminalCloseContextValue {
@@ -63,6 +65,7 @@ export function TerminalCloseProvider({
   children,
   client: overrideClient,
 }: TerminalCloseProviderProps): ReactElement {
+  const queryClient = useQueryClient();
   const [currentRequest, setCurrentRequest] = useState<TerminalCloseRequest | null>(null);
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [activeTerminationState, setActiveTerminationState] =
@@ -110,7 +113,8 @@ export function TerminalCloseProvider({
           const curTarget =
             win?.runtimeIdentity?.kind === "terminal"
               ? win.runtimeIdentity.target
-              : (win?.appState?.target as TerminalTarget | undefined);
+              : (win?.appState?.target as TerminalTarget | undefined) ??
+                (win ? resolveWindowTerminalObservation(win, observations).target : null);
           if (
             win &&
             curTarget &&
@@ -138,10 +142,13 @@ export function TerminalCloseProvider({
       const frozenRequest: TerminalCloseRequest = Object.freeze({ ...request });
       currentOnCloseViewRef.current = onCloseView;
 
-      // Exact exited or restartCancelled -> presentation Close without prompt
+      // Exact exited, restartCancelled, or no target and not running -> presentation Close without prompt
       if (
         frozenRequest.availability === "exited" ||
-        frozenRequest.availability === "restartCancelled"
+        frozenRequest.availability === "restartCancelled" ||
+        (!frozenRequest.target &&
+          frozenRequest.availability !== "live" &&
+          frozenRequest.availability !== "restartPending")
       ) {
         onCloseView(frozenRequest.windowId);
         return;
@@ -315,6 +322,33 @@ export function TerminalCloseProvider({
           setIsPromptOpen(false);
           setCurrentRequest(null);
         }
+      }
+
+      if (
+        resultState.status === "terminationRequested" ||
+        resultState.status === "ended"
+      ) {
+        queryClient.invalidateQueries({
+          predicate: (query) =>
+            Array.isArray(query.queryKey) && query.queryKey.includes("terminal-sessions"),
+        });
+
+        // 1500ms safety timeout: close view and dismiss prompt if observation push event is delayed
+        window.setTimeout(() => {
+          if (dispatchedActionsRef.current.has(tKey)) {
+            const win = useWindowStore.getState().session.windows[record.windowId];
+            if (win) {
+              record.onCloseView(record.windowId);
+            }
+            if (currentRequestRef.current?.windowId === record.windowId) {
+              promptTokenRef.current++;
+              currentRequestRef.current = null;
+              setIsPromptOpen(false);
+              setCurrentRequest(null);
+              setActiveTerminationState(null);
+            }
+          }
+        }, 1500);
       }
     } finally {
       inFlightTargetsRef.current.delete(tKey);

@@ -1,3 +1,4 @@
+import { getConnectionSnapshot } from "@/api/connections.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import type { FsTargetRef } from "@/api/ownership.js";
 import { getBrowserShortcutSuppression } from "@/lib/browser-shortcut-guard.js";
@@ -138,19 +139,48 @@ function resolveActiveActionContext(
       const editorCtx = getEditorContextForWindow(activeWindow.id);
       if (editorCtx) return editorCtx;
     }
+    const profileId = activeWindow.ctx.profileId;
+    let owner: ConnectionRef | null = null;
+    if (profileId) {
+      try {
+        const snap = getConnectionSnapshot(profileId);
+        if (snap && snap.status === "connected") {
+          owner = snap.owner;
+        }
+      } catch {
+        // Fall back gracefully
+      }
+    }
     return {
       kind: "running-window",
       desktopId: activeWindow.desktopId,
       windowId: activeWindow.id,
       windowContext: activeWindow.ctx,
       runtimeIdentity: activeWindow.runtimeIdentity,
+      owner,
       target: activeWindow.ctx.target,
     };
+  }
+
+  const desktopCtx = activeDesk?.defaultCtx ?? { profileId: "default" };
+  let owner: ConnectionRef | null = null;
+  if (desktopCtx.profileId) {
+    try {
+      const snap = getConnectionSnapshot(desktopCtx.profileId);
+      if (snap && snap.status === "connected") {
+        owner = snap.owner;
+      }
+    } catch {
+      // Fall back gracefully
+    }
   }
 
   return {
     kind: "desktop",
     desktopId: activeDesktopId,
+    windowContext: desktopCtx,
+    owner,
+    target: desktopCtx.target,
   };
 }
 

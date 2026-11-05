@@ -30,7 +30,12 @@ import { parseOsDeepLink, qualifyOsDeepLink } from "./deep-links.js";
 import { executeAction } from "./action-executor.js";
 import { registerShellDelegate } from "./action-dispatch.js";
 import { readServerProfiles } from "@/api/server-config.js";
-import { getConnectionSnapshot, isCurrentConnection, getApi } from "@/api/connections.js";
+import {
+  getConnectionSnapshot,
+  isCurrentConnection,
+  getApi,
+  useConnectionSnapshot,
+} from "@/api/connections.js";
 import { dispatchIntent, registerIntentHandler, createIntent } from "./intents.js";
 import { TerminalCloseProvider } from "./terminal-close-context.js";
 import { ReviewRetirementHost } from "./review-retirement.js";
@@ -148,6 +153,7 @@ export function OsShell() {
   const [notice, setNotice] = useState<PersistenceNotice | null>(null);
   const [deepLinkNotice, setDeepLinkNotice] = useState<string | null>(null);
   const [handlersReady, setHandlersReady] = useState(false);
+  const connectionSnap = useConnectionSnapshot(profileId);
   const lastProcessedSearchRef = useRef<string | null>(null);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [activeNonmodal, setActiveNonmodal] = useState<ShellNonmodalSurface | null>(null);
@@ -177,15 +183,31 @@ export function OsShell() {
     setSession(loaded);
   }, [setSession]);
 
-  // Debounced autosave
+  // Autosave
+  const prevWindowCountRef = useRef(Object.keys(session.windows).length);
   useEffect(() => {
+    const currentWindowCount = Object.keys(session.windows).length;
+    const delay = currentWindowCount < prevWindowCountRef.current ? 0 : 300;
+    prevWindowCountRef.current = currentWindowCount;
     const timer = window.setTimeout(() => {
       saveOsSession(session, undefined, setNotice);
-    }, 300);
+    }, delay);
     return () => {
       clearTimeout(timer);
     };
   }, [session]);
+
+  useEffect(() => {
+    const handleFlush = () => {
+      saveOsSession(useWindowStore.getState().session);
+    };
+    window.addEventListener("beforeunload", handleFlush);
+    window.addEventListener("pagehide", handleFlush);
+    return () => {
+      window.removeEventListener("beforeunload", handleFlush);
+      window.removeEventListener("pagehide", handleFlush);
+    };
+  }, []);
   // Handle /os deep links once intent handlers are registered and ready
   useEffect(() => {
     if (!handlersReady) return;
@@ -205,14 +227,14 @@ export function OsShell() {
     }
 
     if (parsed.status === "valid") {
-      lastProcessedSearchRef.current = currentSearch;
+       const explicitProfile = parsed.ctx?.profileId ?? profileId;
+       const snap = getConnectionSnapshot(explicitProfile);
+       if (!snap || snap.status !== "connected") {
+         setDeepLinkNotice(`Profile '${explicitProfile}' is not connected`);
+         return;
+       }
 
-      const explicitProfile = parsed.ctx?.profileId ?? profileId;
-      const snap = getConnectionSnapshot(explicitProfile);
-      if (!snap || snap.status !== "connected") {
-        setDeepLinkNotice(`Profile '${explicitProfile}' is not connected`);
-        return;
-      }
+      lastProcessedSearchRef.current = currentSearch;
 
       const parsedProject = parsed.ctx?.projectId;
       const explicitTarget: FsTargetRef = parsed.ctx?.target
@@ -249,6 +271,8 @@ export function OsShell() {
             }
           } else if (res?.status === "unhandled") {
             setDeepLinkNotice(res.reason ?? "Could not handle deep link intent");
+          } else if (res?.status === "invalid") {
+            setDeepLinkNotice(res.error ?? "Invalid deep link intent");
           }
         });
       } else if (qualified.appId) {
@@ -293,6 +317,7 @@ export function OsShell() {
     restoreWindow,
     profileId,
     activeProject,
+    connectionSnap?.status,
   ]);
 
   // Register Shell Input Delegate with the root keyboard coordinator (Architecture Contract C5)

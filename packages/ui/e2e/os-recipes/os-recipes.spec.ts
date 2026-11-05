@@ -30,10 +30,13 @@ test.describe("DamHopper OS Recipes & Save Desktop Subset Journey", () => {
     await addTermBtn.click();
     await expect(page.locator("[data-os-window-frame]").first()).toBeVisible({ timeout: 15_000 });
 
-    // 2. Open Recipes from Dock
-    const dockRecipesBtn = page.locator("aside[aria-label='Application Dock'] button[title='Recipes']").first();
-    await expect(dockRecipesBtn).toBeVisible({ timeout: 10_000 });
-    await dockRecipesBtn.click();
+    // 2. Open Recipes from App Launcher
+    const appsTrigger = page.locator('[data-testid="dock-apps-trigger"]').first();
+    await expect(appsTrigger).toBeVisible({ timeout: 10_000 });
+    await appsTrigger.click();
+    const recipesCard = page.locator('[data-testid="app-card-recipes"]').first();
+    await expect(recipesCard).toBeVisible({ timeout: 10_000 });
+    await recipesCard.click();
 
     const recipesApp = page.locator("[data-os-recipes]").first();
     await expect(recipesApp).toBeVisible({ timeout: 15_000 });
@@ -153,9 +156,13 @@ test.describe("DamHopper OS Recipes & Save Desktop Subset Journey", () => {
     await addFilesBtn.click();
     await page.waitForTimeout(150);
 
-    // Open Recipes and Save Desktop subset view
-    const dockRecipesBtn = page.locator("aside[aria-label='Application Dock'] button[title='Recipes']").first();
-    await dockRecipesBtn.click();
+    // Open Recipes from App Launcher and Save Desktop subset view
+    const appsTrigger = page.locator('[data-testid="dock-apps-trigger"]').first();
+    await expect(appsTrigger).toBeVisible({ timeout: 10_000 });
+    await appsTrigger.click();
+    const recipesCard = page.locator('[data-testid="app-card-recipes"]').first();
+    await expect(recipesCard).toBeVisible({ timeout: 10_000 });
+    await recipesCard.click();
     const saveDesktopBtn = page.locator('[data-testid="recipes-save-desktop-btn"]').first();
     await expect(saveDesktopBtn).toBeVisible({ timeout: 15_000 });
     await saveDesktopBtn.click();

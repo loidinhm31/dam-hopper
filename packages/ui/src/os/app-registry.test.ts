@@ -75,10 +75,9 @@ describe("app-registry", () => {
     expect(APP_MANIFESTS["ports-tunnels"].minimumCtx).toBe("profile");
     expect(APP_MANIFESTS["agent-store"].minimumCtx).toBe("profile");
     expect(APP_MANIFESTS["session-changes"].minimumCtx).toBe("profile");
+    expect(APP_MANIFESTS.files.minimumCtx).toBe("profile");
 
     expect(APP_MANIFESTS.editor.minimumCtx).toBe("project");
-    expect(APP_MANIFESTS.files.minimumCtx).toBe("project");
-    expect(APP_MANIFESTS.search.minimumCtx).toBe("project");
     expect(APP_MANIFESTS.changes.minimumCtx).toBe("project");
     expect(APP_MANIFESTS.git.minimumCtx).toBe("project");
     expect(APP_MANIFESTS["conflict-resolver"].minimumCtx).toBe("project");

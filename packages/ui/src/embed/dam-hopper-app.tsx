@@ -94,12 +94,17 @@ function LegacyRouteHandler() {
 
   if (translation.status === "unqualified") {
     return (
-      <div
-        role="alert"
-        data-testid="legacy-unqualified-notice"
-        className="bg-red-500/10 border-b border-red-500/30 px-4 py-2 text-xs text-red-400"
-      >
-        {translation.guidance}
+      <div className="flex flex-col h-full w-full">
+        <div
+          role="alert"
+          data-testid="legacy-unqualified-notice"
+          className="bg-red-500/10 border-b border-red-500/30 px-4 py-2 text-xs text-red-400 shrink-0 select-none z-50"
+        >
+          {translation.guidance}
+        </div>
+        <div className="flex-1 min-h-0">
+          <AuthenticatedOsRoute />
+        </div>
       </div>
     );
   }

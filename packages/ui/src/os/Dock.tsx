@@ -14,6 +14,7 @@ import { AppLauncher } from "./AppLauncher.js";
 import { executeAction } from "./action-executor.js";
 import { getConnectionSnapshot } from "@/api/connections.js";
 import type { ConnectionRef } from "@/api/ownership.js";
+import { useServerProfile } from "@/hooks/use-server-profile.js";
 
 export interface DockProps {
   onLaunchApp?: (appId: OsAppId, capturedContext?: ActionContext) => void;
@@ -30,6 +31,8 @@ export function Dock({ onLaunchApp, className = "" }: DockProps) {
   );
 
   const session = useWindowStore((state) => state.session);
+  const profile = useServerProfile();
+  const activeProfileId = profile?.id ?? "default";
 
   // Appearance preferences from settings store
   const dockPadding = useSettingsStore((s) => s.dockPadding) ?? 8;
@@ -44,7 +47,7 @@ export function Dock({ onLaunchApp, className = "" }: DockProps) {
   const handleLaunch = React.useCallback(
     (appId: OsAppId) => {
       const activeDesktopId = session.activeDesktopId;
-      const desktopCtx = activeDesktop?.defaultCtx ?? { profileId: "default" };
+      const desktopCtx = activeDesktop?.defaultCtx ?? { profileId: activeProfileId };
 
       let owner: ConnectionRef | null = null;
       if (desktopCtx.profileId) {
@@ -76,7 +79,7 @@ export function Dock({ onLaunchApp, className = "" }: DockProps) {
         context: capturedContext,
       });
     },
-    [onLaunchApp, session.activeDesktopId, activeDesktop?.defaultCtx],
+    [onLaunchApp, session.activeDesktopId, activeDesktop?.defaultCtx, activeProfileId],
   );
 
   // Calculate items to display:

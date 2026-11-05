@@ -62,9 +62,10 @@ test.describe("DamHopper OS Prototype Lifecycle & Placement Continuity", () => {
       if (termEl) termEl.setAttribute("data-test-terminal-identity", `term-live-${winId}`);
     }, termWindowId);
 
+    // Wait for initial terminal attach and buffer replay
+    await page.waitForTimeout(500);
     // Capture initial baseline observation
-    const { sessionId: termSessionId } = await observer.resolveActiveTerminalSessionId();
-    const baseline = await observer.snapshot(termSessionId);
+    const baseline = await observer.snapshot(termWindowId!);
     expect(baseline.token).toBeTruthy();
 
     // 3. Transition: Float -> Tile
@@ -125,13 +126,15 @@ test.describe("DamHopper OS Prototype Lifecycle & Placement Continuity", () => {
     observer.assertZeroDelta(baseline, snapMinimizedRestore, "minimize -> restore");
 
     // 7. Desktop move via Radix Select
-    const addDesktopBtn = page.locator("[role='tablist'][aria-label='Virtual Desktops'] button[aria-label='New desktop']").first();
+    const addDesktopBtn = page.locator("[role='tablist'][aria-label='Virtual Desktops'] button[aria-label='Add Desktop'], [role='tablist'][aria-label='Virtual Desktops'] button[aria-label='New desktop']").first();
     await expect(addDesktopBtn).toBeVisible();
     await addDesktopBtn.click();
 
     const desktop2Tab = page.locator("[role='tablist'][aria-label='Virtual Desktops']").locator("[role='tab']").nth(1);
     await expect(desktop2Tab).toBeVisible();
-
+    const desktop2AriaControls = await desktop2Tab.getAttribute("aria-controls");
+    expect(desktop2AriaControls).toBeTruthy();
+    const desktop2Id = desktop2AriaControls!.replace("desktop-canvas-", "");
     // Switch back to Desktop 1
     await desktop1Tab.click();
     await expect(page.locator('[data-os-desktop-canvas="desktop-1"]')).toBeVisible();
@@ -147,7 +150,7 @@ test.describe("DamHopper OS Prototype Lifecycle & Placement Continuity", () => {
 
     // Switch to desktop 2 and verify terminal survives with zero delta
     await desktop2Tab.click();
-    const canvas2 = page.locator('[data-os-desktop-canvas="desktop-2"]');
+    const canvas2 = page.locator(`[data-os-desktop-canvas="${desktop2Id}"]`);
     await expect(canvas2).toBeVisible();
     await expect(canvas2.locator(`[data-os-window-frame="${termWindowId}"]`)).toHaveCount(1);
 

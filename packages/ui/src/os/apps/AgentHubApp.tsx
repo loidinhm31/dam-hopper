@@ -699,7 +699,7 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
                             }`}
                             title={isCognitoActive ? undefined : item.terminalTitle}
                           >
-                            {isCognitoActive ? "[Protected Session]" : item.terminalTitle}
+                            {isCognitoActive ? (item.isAgent ? "[Protected Agent]" : "[Protected Session]") : item.terminalTitle}
                           </span>
                           <span
                             className={`text-[11px] text-[var(--color-text-muted)] truncate ${

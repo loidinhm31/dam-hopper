@@ -3302,9 +3302,25 @@ export class WsTransport implements Transport {
         if (channel === "terminal:create") {
           const termination = decodeTerminationHeaders(response.headers);
           if (termination.version === 1 && termination.serverEpoch) {
+            const rawInc =
+              json && typeof json === "object" && "incarnation" in json
+                ? json.incarnation
+                : undefined;
+            const incExact =
+              json &&
+              typeof json === "object" &&
+              "incarnationExact" in json &&
+              typeof json.incarnationExact === "string"
+                ? json.incarnationExact
+                : typeof rawInc === "number" &&
+                    Number.isSafeInteger(rawInc) &&
+                    rawInc > 0
+                  ? String(rawInc)
+                  : undefined;
             return Object.freeze({
               ...(typeof json === "object" && json !== null ? json : {}),
               serverEpoch: termination.serverEpoch,
+              ...(incExact ? { incarnationExact: incExact } : {}),
             }) as T;
           }
         }

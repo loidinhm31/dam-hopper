@@ -63,7 +63,7 @@ test.describe("DamHopper OS Desktop Polish User Journey (P08)", () => {
     // 5. Open desktop background context menu
     const bgTrigger = page.locator('[data-os-desktop-trigger]').first();
     await expect(bgTrigger).toBeVisible();
-    await bgTrigger.click({ button: "right" });
+    await bgTrigger.click({ button: "right", position: { x: 50, y: 50 } });
 
     const contextMenu = page.locator('[data-testid="desktop-context-menu"]').first();
     await expect(contextMenu).toBeVisible({ timeout: 5_000 });

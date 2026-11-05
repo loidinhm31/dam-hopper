@@ -7,6 +7,7 @@ import { useResourceClaim } from "../resource-registry.js";
 import {
   attachMonacoToSlot,
   getMonacoParkingHost,
+  getParkedMonacoEntry,
   parkMonacoElement,
   subscribeToMonacoParking,
 } from "../MonacoKeepAliveHost.js";
@@ -359,7 +360,8 @@ function EditorResourceView({
       </div>
     );
   }
-  if (!tab || tab.loading) {
+  const hasParkedEntry = Boolean(getParkedMonacoEntry(documentKey, tabKey));
+  if ((!tab || tab.loading) && !hasParkedEntry) {
     return (
       <div
         data-os-editor-app={window.id}

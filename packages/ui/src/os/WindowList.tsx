@@ -188,6 +188,11 @@ export function WindowList({ className = "" }: WindowListProps) {
         observations,
       );
 
+      if (availability !== "live" && availability !== "restartPending") {
+        closeWindow(win.id);
+        return;
+      }
+
       terminalClose.requestTerminalClose(
         {
           windowId: win.id,

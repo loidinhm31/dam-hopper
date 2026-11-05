@@ -411,7 +411,7 @@ export const PaneContainer = memo(function PaneContainer({
           </Panel>
           <Separator
             aria-label="Resize terminal and browser panels"
-            className="w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize"
+            className="relative w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] active:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize z-20 after:absolute after:inset-y-0 after:-inset-x-2 after:z-30"
           />
           <Panel id={`${node.id}:browser`} defaultSize={40} minSize={20}>
             <div className="h-full min-w-0 overflow-hidden">

@@ -77,7 +77,7 @@ export function WindowFrame({
   const resizeFloatBounds = useWindowStore((state) => state.resizeFloatBounds);
   const viewport = useWindowStore((state) => state.viewport);
   const [isResizing, setIsResizing] = useState(false);
-
+  const [activeResizeDir, setActiveResizeDir] = useState<ResizeDirection | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const dragSuppressedRef = useRef(false);
@@ -170,16 +170,15 @@ export function WindowFrame({
 
       const handleMouseUp = () => {
         setIsDragging(false);
-        globalThis.removeEventListener("mousemove", handleMouseMove);
-        globalThis.removeEventListener("mouseup", handleMouseUp);
+        globalThis.removeEventListener("mousemove", handleMouseMove, true);
+        globalThis.removeEventListener("mouseup", handleMouseUp, true);
         dragCleanupRef.current = null;
       };
 
-      globalThis.addEventListener("mousemove", handleMouseMove);
-      globalThis.addEventListener("mouseup", handleMouseUp);
+      globalThis.addEventListener("mousemove", handleMouseMove, true);
+      globalThis.addEventListener("mouseup", handleMouseUp, true);
       dragCleanupRef.current = handleMouseUp;
-    },
-    [
+    }, [
       isCognitoActive,
       window.mode,
       window.maximized,
@@ -206,17 +205,23 @@ export function WindowFrame({
   );
 
   const handleStartResize = useCallback(
-    (direction: ResizeDirection, e: ReactMouseEvent) => {
+    (direction: ResizeDirection, e: React.PointerEvent) => {
       if (window.mode !== "float" || window.maximized || isCognitoActive) return;
       e.stopPropagation();
       e.preventDefault();
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {
+        // Safe fallback if target element unmounts or capture unsupported
+      }
       focusWindow(window.id);
       setIsResizing(true);
+      setActiveResizeDir(direction);
 
       let prevX = e.clientX;
       let prevY = e.clientY;
 
-      const handleMouseMove = (moveEvent: MouseEvent) => {
+      const handlePointerMove = (moveEvent: PointerEvent) => {
         const deltaX = moveEvent.clientX - prevX;
         const deltaY = moveEvent.clientY - prevY;
         prevX = moveEvent.clientX;
@@ -224,18 +229,18 @@ export function WindowFrame({
         resizeFloatBounds(window.id, deltaX, deltaY, direction);
       };
 
-      const handleMouseUp = () => {
+      const handlePointerUp = () => {
         setIsResizing(false);
-        globalThis.removeEventListener("mousemove", handleMouseMove);
-        globalThis.removeEventListener("mouseup", handleMouseUp);
+        setActiveResizeDir(null);
+        globalThis.removeEventListener("pointermove", handlePointerMove, true);
+        globalThis.removeEventListener("pointerup", handlePointerUp, true);
         dragCleanupRef.current = null;
       };
 
-      globalThis.addEventListener("mousemove", handleMouseMove);
-      globalThis.addEventListener("mouseup", handleMouseUp);
-      dragCleanupRef.current = handleMouseUp;
-    },
-    [
+      globalThis.addEventListener("pointermove", handlePointerMove, true);
+      globalThis.addEventListener("pointerup", handlePointerUp, true);
+      dragCleanupRef.current = handlePointerUp;
+    }, [
       window.mode,
       window.maximized,
       window.id,
@@ -301,6 +306,11 @@ export function WindowFrame({
         observations,
       );
 
+      if (availability !== "live" && availability !== "restartPending") {
+        closeWindow(window.id);
+        return;
+      }
+
       terminalClose.requestTerminalClose(
         {
           windowId: window.id,
@@ -345,6 +355,14 @@ export function WindowFrame({
         isFrameFocused,
         isModalActive,
       });
+      if (disposition === "cognito-blocked") {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (isModalActive) {
+        return;
+      }
       if (
         isFrameFocused &&
         (e.nativeEvent.metaKey || e.nativeEvent.ctrlKey) &&
@@ -353,11 +371,6 @@ export function WindowFrame({
         e.preventDefault();
         e.stopPropagation();
         handleClose();
-        return;
-      }
-      if (disposition === "cognito-blocked") {
-        e.preventDefault();
-        e.stopPropagation();
         return;
       }
       if (disposition === "os-shortcut-handled") {
@@ -380,7 +393,7 @@ export function WindowFrame({
         }
       }
     },
-    [isCognitoActive, session.windows, window.desktopId, window.id, focusWindow],
+    [isCognitoActive, session.windows, window.desktopId, window.id, focusWindow, handleClose],
   );
 
   const otherDesktops = session.desktops.filter(
@@ -565,6 +578,9 @@ export function WindowFrame({
         data-os-window-slot={window.id}
         className="flex-1 min-h-0 relative overflow-hidden"
       >
+        {(isResizing || isDragging) && (
+          <div className="absolute inset-0 z-50 cursor-inherit select-none pointer-events-auto" />
+        )}
         {!owner.targetValid ? (
           <div
             data-os-target-unavailable="true"
@@ -591,13 +607,25 @@ export function WindowFrame({
             <div
               key={dir}
               data-os-resize-handle={dir}
-              onMouseDown={(e) => handleStartResize(dir, e)}
-              className={`absolute z-40 select-none ${className}`}
+              onPointerDown={(e) => handleStartResize(dir, e)}
+              className={`absolute z-40 select-none touch-none ${className}`}
             />
           ))}
         </>
       )}
       </div>
+      {(isResizing || isDragging) && (
+        <div
+          className="fixed inset-0 z-[99999] select-none pointer-events-auto"
+          style={{
+            cursor: activeResizeDir
+              ? `${activeResizeDir}-resize`
+              : isDragging
+                ? "move"
+                : "default",
+          }}
+        />
+      )}
       <ConfirmDialog
         open={confirmCloseOpen}
         onClose={() => setConfirmCloseOpen(false)}

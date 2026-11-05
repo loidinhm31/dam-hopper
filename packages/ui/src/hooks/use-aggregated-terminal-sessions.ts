@@ -113,18 +113,20 @@ export function useAggregatedTerminalSessions(): {
       const obs = result.data as TerminalInventoryDetailedObservation | undefined;
       if (obs && (!obs.owner || isCurrentConnection(obs.owner))) {
         observationsList.push(obs);
-        for (const row of obs.sessions) {
-          const terminationTarget = createTerminalTargetFromObservation(
-            obs,
-            row,
-          );
-          sessionsList.push({
-            ...row,
-            profileId: obs.owner ? obs.owner.profileId : "default",
-            generation: obs.owner?.generation,
-            terminationState: row.terminationState,
-            terminationTarget,
-          });
+        if (Array.isArray(obs.sessions)) {
+          for (const row of obs.sessions) {
+            const terminationTarget = createTerminalTargetFromObservation(
+              obs,
+              row,
+            );
+            sessionsList.push({
+              ...row,
+              profileId: obs.owner ? obs.owner.profileId : "default",
+              generation: obs.owner?.generation,
+              terminationState: row.terminationState,
+              terminationTarget,
+            });
+          }
         }
       }
     }

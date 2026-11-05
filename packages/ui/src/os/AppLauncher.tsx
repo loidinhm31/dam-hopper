@@ -13,6 +13,7 @@ import { executeAction } from "./action-executor.js";
 import { getConnectionSnapshot } from "@/api/connections.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { useOptionalShellInputContext } from "./shell-input-context.js";
+import { useServerProfile } from "@/hooks/use-server-profile.js";
 
 export interface AppLauncherProps {
   isOpen: boolean;
@@ -29,6 +30,8 @@ export function AppLauncher({
 }: AppLauncherProps) {
   const [search, setSearch] = React.useState("");
   const searchInputRef = React.useRef<HTMLInputElement>(null);
+  const profile = useServerProfile();
+  const activeProfileId = profile?.id ?? "default";
 
   const pinnedApps = React.useSyncExternalStore(
     subscribeDockPins,
@@ -78,7 +81,7 @@ export function AppLauncher({
   const activeDesktop =
     session.desktops.find((d) => d.id === activeDesktopId) ??
     session.desktops[0];
-  const desktopCtx = activeDesktop?.defaultCtx ?? { profileId: "default" };
+  const desktopCtx = activeDesktop?.defaultCtx ?? { profileId: activeProfileId };
 
   let owner: ConnectionRef | null = null;
   if (desktopCtx.profileId) {

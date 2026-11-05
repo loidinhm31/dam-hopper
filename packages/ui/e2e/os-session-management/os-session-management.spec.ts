@@ -30,10 +30,26 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
 
     await page.goto(`${appServices.appOrigin}/os`);
     const osShell = page.locator("[data-os-shell='true']").first();
-    await expect(osShell).toBeVisible({ timeout: 20_000 });
+    const { profileId, generation } = await page.evaluate(() => {
+      const pId =
+        localStorage.getItem("damhopper_active_profile_id") || "default";
+      const qc = (window as unknown as { __DAM_HOPPER_QUERY_CLIENT__?: { getQueryCache: () => { getAll: () => Array<{ queryKey: unknown[] }> } } }).__DAM_HOPPER_QUERY_CLIENT__;
+      const queries = qc?.getQueryCache()?.getAll() || [];
+      const profileQuery = queries.find(
+        (q) =>
+          Array.isArray(q.queryKey) &&
+          q.queryKey[0] === "profile" &&
+          q.queryKey[1] === pId &&
+          typeof q.queryKey[2] === "number",
+      );
+      const gen = typeof profileQuery?.queryKey[2] === "number" ? profileQuery.queryKey[2] : 2;
+      return { profileId: pId, generation: gen };
+    });
 
     // 1. Incomplete Review Target Tuple fails closed
-    await page.goto(`${appServices.appOrigin}/os?open=session-changes&profile=default&terminal=term-1`);
+    await page.goto(
+      `${appServices.appOrigin}/os?open=session-changes&profile=${profileId}&terminal=term-1`,
+    );
     await expect(page.locator("[data-os-shell='true']").first()).toBeVisible({ timeout: 20_000 });
     // Incomplete deep link must not open session-changes window
     const invalidReviewFrame = page.locator("[data-os-window-frame]").filter({ hasText: "Session Changes" });
@@ -41,7 +57,7 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
 
     // 2. Open valid Review window via 8-tuple deep link
     await page.goto(
-      `${appServices.appOrigin}/os?open=session-changes&profile=default&generation=1&terminal=term-1&incarnation=1&ompSession=omp-session-1&serverEpoch=c18f1f50-3bf0-4566-b333-e18e8df52ea2&root=root-commit-sha&baseline=baseline-commit-sha`,
+      `${appServices.appOrigin}/os?open=session-changes&profile=${profileId}&generation=${generation}&terminal=term-1&incarnation=1&ompSession=omp-session-1&serverEpoch=c18f1f50-3bf0-4566-b333-e18e8df52ea2&root=root-commit-sha&baseline=baseline-commit-sha`,
     );
     await expect(page.locator("[data-os-shell='true']").first()).toBeVisible({ timeout: 20_000 });
 
@@ -50,37 +66,35 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
     await expect(reviewFrame).toBeVisible({ timeout: 15_000 });
     const closeBtn = reviewFrame.locator("button[aria-label='Close']").first();
     await expect(closeBtn).toBeVisible();
-    // Seed target A and sibling target B in query cache to verify targeted close
-    await page.evaluate(() => {
+    await page.evaluate(({ pId, gen }) => {
       const qc = (window as unknown as { __DAM_HOPPER_QUERY_CLIENT__?: { setQueryData: (k: unknown[], d: unknown) => void } }).__DAM_HOPPER_QUERY_CLIENT__;
       if (!qc) throw new Error("Expected __DAM_HOPPER_QUERY_CLIENT__ on window, found none");
       qc.setQueryData(
-        ["profile", "default", 1, "session-changes", "files", "term-1", "1", "omp-session-1", "c18f1f50-3bf0-4566-b333-e18e8df52ea2", "baseline-commit-sha", "initial", null, null, "."],
+        ["profile", pId, gen, "session-changes", "files", "term-1", "1", "omp-session-1", "c18f1f50-3bf0-4566-b333-e18e8df52ea2", "baseline-commit-sha", "initial", null, null, "root-commit-sha"],
         { files: ["a.ts"] },
       );
       qc.setQueryData(
-        ["profile", "default", 1, "session-changes", "files", "term-2", "1", "omp-session-2", "c18f1f50-3bf0-4566-b333-e18e8df52ea2", "baseline-commit-sha", "initial", null, null, "."],
+        ["profile", pId, gen, "session-changes", "files", "term-2", "1", "omp-session-2", "c18f1f50-3bf0-4566-b333-e18e8df52ea2", "baseline-commit-sha", "initial", null, null, "."],
         { files: ["b.ts"] },
       );
-    });
+    }, { pId: profileId, gen: generation });
 
     // Closing review window cleans up target A while preserving sibling B
     await closeBtn.click();
     await expect(reviewFrame).toHaveCount(0);
-
-    const siblingPreserved = await page.evaluate(() => {
+    const siblingPreserved = await page.evaluate(({ pId, gen }) => {
       const qc = (window as unknown as { __DAM_HOPPER_QUERY_CLIENT__?: { getQueryData: (k: unknown[]) => unknown } }).__DAM_HOPPER_QUERY_CLIENT__;
       if (!qc) throw new Error("Expected __DAM_HOPPER_QUERY_CLIENT__ on window, found none");
       const dataA = qc.getQueryData([
-        "profile", "default", 1, "session-changes", "files",
-        "term-1", "1", "omp-session-1", "c18f1f50-3bf0-4566-b333-e18e8df52ea2", "baseline-commit-sha", "initial", null, null, "."
+        "profile", pId, gen, "session-changes", "files",
+        "term-1", "1", "omp-session-1", "c18f1f50-3bf0-4566-b333-e18e8df52ea2", "baseline-commit-sha", "initial", null, null, "root-commit-sha"
       ]);
       const dataB = qc.getQueryData([
-        "profile", "default", 1, "session-changes", "files",
+        "profile", pId, gen, "session-changes", "files",
         "term-2", "1", "omp-session-2", "c18f1f50-3bf0-4566-b333-e18e8df52ea2", "baseline-commit-sha", "initial", null, null, "."
       ]);
       return dataA === undefined && dataB !== undefined;
-    });
+    }, { pId: profileId, gen: generation });
     expect(siblingPreserved).toBe(true);
   });
 
@@ -101,16 +115,17 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
     await expect(termFrame).toBeVisible({ timeout: 15_000 });
 
     // Focus terminal surface and start byte oracle
-    const terminalSurface = termFrame.locator(".xterm, [data-terminal-container]").first();
-    await expect(terminalSurface).toBeAttached({ timeout: 15_000 });
-    await terminalSurface.click();
-
-    // Start od byte inspector in raw no-echo mode with single-byte width (-w1)
-    await page.keyboard.type("stty raw -echo; od -An -v -tx1 -w1\n");
+    const textarea = termFrame.locator(".xterm-helper-textarea").first();
+    await expect(textarea).toBeAttached({ timeout: 15_000 });
+    await textarea.focus();
     await page.waitForTimeout(500);
 
+    // Start od byte inspector in raw no-echo mode with single-byte width (-w1)
+    await page.keyboard.type("clear; stty raw -echo; od -An -v -tx1 -w1\n", { delay: 20 });
+    await page.waitForTimeout(1000);
+
     // Send positive control bytes: "A" (0x41)
-    await page.keyboard.type("A");
+    await page.keyboard.type("A", { delay: 50 });
     await expect(termFrame).toContainText("41", { timeout: 10_000 });
 
     // 2. Exercise Target Selector nonmodal surface with sentinel bracket: [ ... ]
@@ -131,6 +146,7 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
     await page.keyboard.press("Escape");
     await expect(targetSurface).toHaveCount(0);
 
+    await textarea.focus();
     // Closing sentinel: "]" -> 0x5d
     await page.keyboard.type("]");
     await expect(termFrame).toContainText("5d", { timeout: 10_000 });
@@ -156,6 +172,7 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
     await page.mouse.click(20, 20);
     await expect(windowListSurface).toHaveCount(0);
 
+    await textarea.focus();
     // Closing sentinel: "}" -> 0x7d
     await page.keyboard.type("}");
     await expect(termFrame).toContainText("7d", { timeout: 10_000 });
@@ -175,7 +192,9 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
     await page.keyboard.type("D");
     await page.keyboard.press("Escape");
     await expect(palette).toHaveCount(0);
+    await page.waitForTimeout(300);
 
+    await textarea.focus();
     // Closing sentinel: ">" -> 0x3e
     await page.keyboard.type(">");
     await expect(termFrame).toContainText("3e", { timeout: 10_000 });
@@ -195,7 +214,9 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
     await page.keyboard.type("E");
     await page.keyboard.press("Control+Alt+KeyB");
     await expect(cognitoOverlay).toHaveCount(0);
+    await page.waitForTimeout(300);
 
+    await textarea.focus();
     // Closing sentinel: ")" -> 0x29
     await page.keyboard.type(")");
     await expect(termFrame).toContainText("29", { timeout: 10_000 });
@@ -203,7 +224,11 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
     // Assert Cognito keystroke '45' (E) never reached PTY
     await expect(termFrame).not.toContainText("45");
     // 6. Positive restoration control: verify terminal receives input again after surfaces close
-    await terminalSurface.click();
+    if (await textarea.count() > 0) {
+      await textarea.focus();
+    } else {
+      await termFrame.click({ force: true });
+    }
     await page.keyboard.type("Z");
     await expect(termFrame).toContainText("5a", { timeout: 10_000 });
   });
@@ -250,7 +275,7 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
       terminationRequestCount++;
       const url = route.request().url();
       const parts = url.split("/");
-      const tId = parts[parts.indexOf("terminal") + 1];
+      const tId = decodeURIComponent(parts[parts.indexOf("terminal") + 1]);
       interceptedTerminalId = tId;
       try {
         receivedTerminationBody = JSON.parse(route.request().postData() ?? "{}");
@@ -422,9 +447,11 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
     await expect(profilesDialog).toHaveCount(0);
 
     // 7. settings checkpoint
-    const dockSettingsBtn = page.locator("aside[aria-label='Application Dock'] button[title='Settings']").first();
-    await expect(dockSettingsBtn).toBeVisible();
-    await dockSettingsBtn.click();
+    const appsTrigger = page.locator('[data-testid="dock-apps-trigger"]').first();
+    await appsTrigger.click();
+    const settingsCard = page.locator('[data-testid="app-card-settings"]').first();
+    await expect(settingsCard).toBeVisible({ timeout: 5_000 });
+    await settingsCard.click();
     const settingsFrame = page.locator("[data-os-window-frame]").filter({ hasText: "Settings" }).first();
     await expect(settingsFrame).toBeVisible({ timeout: 5_000 });
     await captureCombos("settings", async () => {
@@ -436,7 +463,7 @@ test.describe("DamHopper OS Session Management, Review Authority, Physical PTY O
       `${appServices.appOrigin}/os?open=session-changes&profile=unavailable-profile`,
     );
     await expect(page.locator("[data-os-shell='true']").first()).toBeVisible({ timeout: 20_000 });
-    const invalidReviewFrame = page.locator("[data-os-window-frame]").filter({ hasText: "Session Changes" });
+    const invalidReviewFrame = page.locator("[data-os-window-frame][aria-label='Session Changes']");
     await expect(invalidReviewFrame).toHaveCount(0);
     await captureCombos("review-unavailable", async () => {
       await expect(invalidReviewFrame).toHaveCount(0);

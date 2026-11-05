@@ -1,3 +1,4 @@
+import type { ConnectionRef } from "@/api/ownership.js";
 import {
   useState,
   useMemo,
@@ -7,6 +8,7 @@ import {
   type KeyboardEvent,
   type ChangeEvent,
 } from "react";
+import { Search } from "lucide-react";
 import { useShellInputContext } from "./shell-input-context.js";
 import { useWindowStore } from "./window-store.js";
 import { useSettingsStore } from "@/stores/settings.js";
@@ -131,13 +133,28 @@ export function CommandPalette({
   }, [query, activeMode]);
 
   // Built-in Commands Provider
+  const desktopCtx = activeDesktop?.defaultCtx ?? { profileId: "default" };
+  let desktopOwner: ConnectionRef | null = null;
+  if (desktopCtx.profileId) {
+    try {
+      const snap = getConnectionSnapshot(desktopCtx.profileId);
+      if (snap && snap.status === "connected") {
+        desktopOwner = snap.owner;
+      }
+    } catch {
+      // Fall back gracefully
+    }
+  }
+
   const commandItems = useMemo<PaletteItem[]>(() => {
     const actionCommands: PaletteItem[] = listActionDescriptors().map((desc) => {
       const binding = resolveActionBinding(desc.id, useSettingsStore.getState());
       const actionContext: ActionContext = {
         kind: "desktop",
         desktopId: activeDesktop?.id ?? "desktop-1",
-        windowContext: activeDesktop?.defaultCtx ?? { profileId: "default" },
+        windowContext: desktopCtx,
+        owner: desktopOwner,
+        target: desktopCtx.target,
       };
       const check = canExecuteAction({ id: desc.id, context: actionContext });
       return {
@@ -382,9 +399,14 @@ export function CommandPalette({
     return pool.filter(
       (item) =>
         item.title.toLowerCase().includes(lower) ||
-        item.description?.toLowerCase().includes(lower),
+        item.description?.toLowerCase().includes(lower) ||
+        item.shortcut?.toLowerCase().includes(lower),
     );
   }, [currentMode, cleanQuery, commandItems, windowItems, agentItems, fileItems, recipeItems]);
+
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [cleanQuery, currentMode]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
@@ -455,10 +477,11 @@ export function CommandPalette({
       >
         {/* Search Input Header */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]">
-          <span className="text-sm text-[var(--color-text-muted)]">🔍</span>
+          <Search className="h-4 w-4 text-[var(--color-text-muted)] shrink-0" />
           <input
             ref={inputRef}
             type="text"
+            autoFocus
             aria-label="Search commands, agents, windows, files, recipes"
             placeholder="Type a command, or > (commands), # (windows), @ (agents), / (files), ! (recipes)..."
             value={query}

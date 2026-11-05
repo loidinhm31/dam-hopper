@@ -32,7 +32,7 @@ export const APP_MANIFESTS: Record<OsAppId, AppManifest> = {
     appId: "files",
     displayName: "Files",
     instancing: "worktree-instance",
-    minimumCtx: "project",
+    minimumCtx: "profile",
     defaultPlacement: "float",
     minSize: { width: 240, height: 200 },
     intents: ["file:reveal"],

@@ -70,7 +70,7 @@ export function TerminalCloseDialog({
 
   // Disabled reason for End
   let disabledReason: string | null = null;
-  if (!isEndEligible) {
+  if (!isEndEligible && !isDispatching) {
     if (request.reason) {
       disabledReason = request.reason;
     } else if (request.availability === "unknown") {
@@ -207,7 +207,7 @@ export function TerminalCloseDialog({
           {/* Option 2: Presentation Close View (Always Available) */}
           <Button
             type="button"
-            variant="secondary"
+            variant={!isEndEligible ? "primary" : "secondary"}
             size="sm"
             data-testid="terminal-close-view-btn"
             onClick={onCloseView}

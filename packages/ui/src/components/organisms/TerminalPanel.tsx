@@ -227,8 +227,9 @@ export function TerminalPanel({
   const shouldSuppressNativeKeyboard = Boolean(suppressNativeKeyboard) || contextMenuSuppressed;
   const shouldSuppressTerminalFocus =
     shouldSuppressNativeKeyboard || Boolean(suppressAutoFocus);
-  const suppressInputRef = useRef(suppressInput);
-  suppressInputRef.current = suppressInput;
+  const isInputSuppressed = Boolean(suppressInput) || shouldSuppressNativeKeyboard;
+  const suppressInputRef = useRef(isInputSuppressed);
+  suppressInputRef.current = isInputSuppressed;
   const terminalFontSize = useSettingsStore((state) => state.terminalFontSize);
   const appZoomFactor = appZoomLevel / 100;
   const terminalDisplayFontSize = terminalFontSize * appZoomFactor;
@@ -310,7 +311,7 @@ export function TerminalPanel({
   );
   useEffect(() => {
     syncEffectiveStdinSuppression(termRef.current);
-  }, [suppressInput, syncEffectiveStdinSuppression]);
+  }, [isInputSuppressed, syncEffectiveStdinSuppression]);
 
   // Term element state — triggers re-render to mount portal after open()
   const [termElement, setTermElement] = useState<HTMLElement | null>(null);

@@ -112,7 +112,7 @@ export async function createSeedTree(
     config.idleSuspendPolicy === "agent-free"
       ? `\n[server.idle_suspend]\nenabled = true\nautomatic_policy = "agent-free"\nquiet_period_seconds = 10800\nwake_after_seconds = 600\n`
       : "";
-  const tomlContent = `[workspace]\nname = "${workspaceName}"\n\n[server]\nsession_db_path = "/e2e/session.db"\n${idleSuspendSection}\n[[projects]]\nname = "${projectName}"\npath = "/e2e/workspace/${projectName}"\ntype = "custom"\n\n[[projects]]\nname = "${secondaryProjectName}"\npath = "/e2e/workspace/${secondaryProjectName}"\ntype = "custom"\n`;
+  const tomlContent = `[workspace]\nname = "${workspaceName}"\n\n[server]\nsession_db_path = "/e2e/session.db"\nsession_changes_enabled = true\n${idleSuspendSection}\n[[projects]]\nname = "${projectName}"\npath = "/e2e/workspace/${projectName}"\ntype = "custom"\n\n[[projects]]\nname = "${secondaryProjectName}"\npath = "/e2e/workspace/${secondaryProjectName}"\ntype = "custom"\n`;
   await fs.writeFile(path.join(hostStagingDir, "dam-hopper.toml"), tomlContent);
   const seedDigest = createHash("sha256")
     .update(serverToken)

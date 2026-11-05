@@ -155,7 +155,7 @@ export function GenericTileRenderer<T>({
       </Panel>
       <Separator
         aria-label="Resize split pane"
-        className="bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:w-px data-[orientation=vertical]:cursor-col-resize data-[orientation=horizontal]:h-px data-[orientation=horizontal]:cursor-row-resize"
+        className="relative bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] active:bg-[var(--color-primary)] data-[orientation=vertical]:w-1 data-[orientation=vertical]:cursor-col-resize data-[orientation=horizontal]:h-1 data-[orientation=horizontal]:cursor-row-resize z-20 after:absolute after:inset-y-0 after:-inset-x-2 after:z-30 data-[orientation=horizontal]:after:inset-x-0 data-[orientation=horizontal]:after:-inset-y-2"
       />
       <Panel
         id={node.children[1].id}

@@ -13,6 +13,7 @@ import { useWindowOwner } from "../window-context.js";
 import { useResourceClaim } from "../resource-registry.js";
 import { attachTerminalsToHost } from "@/lib/terminal-host-attachment.js";
 import { getTerminal, subscribeToRegistryChanges } from "@/lib/terminal-registry.js";
+import { scheduleTerminalFit } from "@/lib/terminal-fit-scheduler.js";
 import { latestTerminalSessionIncarnation } from "@/lib/terminal-incarnation-state.js";
 import { useWindowStore } from "../window-store.js";
 import { toServerFsTarget, type FsTargetRef } from "@/api/ownership.js";
@@ -38,7 +39,7 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
   const requestedId = window.appState?.requestedTerminalId as string | undefined;
   const attemptId = window.appState?.attemptId as string | undefined;
   const isExistingOnly = Boolean(
-    target || window.appState?.attachPolicy === "existing-only" || !attemptId,
+    target || window.appState?.attachPolicy === "existing-only",
   );
   const sessionId =
     target?.terminalId ??
@@ -118,14 +119,23 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
         throw new Error("Connection generation changed before launch");
       }
       const client = getApi(snap.owner);
-      const wireTarget = window.ctx.target ? toServerFsTarget(window.ctx.target) : undefined;
+      const isWorkspaceTarget = window.ctx.target?.kind === "workspace";
+      const rawCwd = (window.appState?.cwd as string | undefined) ?? undefined;
+      const wireTarget =
+        window.ctx.target
+          ? isWorkspaceTarget && !rawCwd
+            ? undefined
+            : toServerFsTarget(window.ctx.target)
+          : undefined;
+      const projectParam = isWorkspaceTarget ? undefined : window.ctx.projectId;
+      const cwdParam = rawCwd;
 
       requestSent = true;
       const sessionRes = await client.terminal.create({
         id: sessionId,
         command: (window.appState?.command as string | undefined) ?? "",
-        project: window.ctx.projectId,
-        cwd: (window.appState?.cwd as string | undefined) ?? undefined,
+        project: projectParam,
+        cwd: cwdParam,
         target: wireTarget,
         cols: 80,
         rows: 24,
@@ -135,10 +145,16 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
         sessionRes.serverEpoch && isCanonicalUuid(sessionRes.serverEpoch)
           ? sessionRes.serverEpoch
           : undefined;
+      const incExactValue =
+        sessionRes &&
+        typeof sessionRes === "object" &&
+        "incarnationExact" in sessionRes &&
+        typeof sessionRes.incarnationExact === "string"
+          ? sessionRes.incarnationExact
+          : undefined;
       const rawIncarnation =
-        typeof (sessionRes as { incarnationExact?: string }).incarnationExact === "string" &&
-        isCanonicalPositiveU64((sessionRes as { incarnationExact?: string }).incarnationExact)
-          ? (sessionRes as { incarnationExact?: string }).incarnationExact
+        incExactValue && isCanonicalPositiveU64(incExactValue)
+          ? incExactValue
           : typeof sessionRes.incarnation === "number" &&
             Number.isSafeInteger(sessionRes.incarnation) &&
             sessionRes.incarnation > 0
@@ -188,7 +204,8 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
       const winSessionId =
         (currentWin?.appState?.sessionId as string | undefined) ??
         (currentWin?.appState?.terminalId as string | undefined) ??
-        (currentWin?.appState?.requestedTerminalId as string | undefined);
+        (currentWin?.appState?.requestedTerminalId as string | undefined) ??
+        (currentWin ? `${currentWin.ctx.profileId}:${currentWin.id}` : undefined);
       const isWindowStillPresent = Boolean(
         currentWin &&
           currentWin.appId === "terminals" &&
@@ -241,11 +258,10 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
     window.id,
   ]);
 
-  // Auto-launch upon window mount if reserved and not yet dispatched or attached
+  // Auto-launch upon window mount if not yet dispatched or attached
   useEffect(() => {
     if (
       !isExistingOnly &&
-      attemptId &&
       !isDispatched &&
       !isRemoteAttached &&
       claimStatus.success &&
@@ -255,7 +271,6 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
     }
   }, [
     isExistingOnly,
-    attemptId,
     isDispatched,
     isRemoteAttached,
     claimStatus.success,
@@ -338,6 +353,24 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
       unsubscribe();
     };
   }, [sessionId, claimStatus.success, owner.profileId, target]);
+  // Fit terminal on slot resize (window resize, split pane resize)
+  useEffect(() => {
+    const el = slotRef.current;
+    if (!el) return;
+
+    const lookupKey = target
+      ? terminalTargetKey(target)
+      : { profileId: owner.profileId, id: sessionId };
+
+    const observer = new ResizeObserver(() => {
+      scheduleTerminalFit(getTerminal(lookupKey));
+    });
+
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+    };
+  }, [sessionId, target, owner.profileId]);
 
   if (!claimStatus.success) {
     const holderId = claimStatus.existingHolderWindowId ?? "unknown";

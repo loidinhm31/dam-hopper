@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, Search } from "lucide-react";
 import { SettingRow } from "@/components/molecules/SettingRow.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import {
@@ -205,6 +205,7 @@ function createShortcutValidator(
 }
 
 export function SettingsKeyboardShortcutsSection() {
+  const [searchQuery, setSearchQuery] = useState("");
   const {
     searchTextShortcut,
     searchFilenameShortcut,
@@ -222,219 +223,190 @@ export function SettingsKeyboardShortcutsSection() {
     saveDebounced,
   } = useSettingsStore();
 
+  const rows = [
+    {
+      id: "searchTextShortcut",
+      title: "Text search",
+      description: "Open content search",
+      value: searchTextShortcut,
+      defaultValue: DEFAULT_SEARCH_TEXT_SHORTCUT,
+      label: "Text search",
+      validate: createShortcutValidator("searchTextShortcut"),
+      onChange: (s: string | null) => saveDebounced({ searchTextShortcut: s }),
+    },
+    {
+      id: "searchFilenameShortcut",
+      title: "Filename search",
+      description: "Open file finder",
+      value: searchFilenameShortcut,
+      defaultValue: DEFAULT_SEARCH_FILENAME_SHORTCUT,
+      label: "Filename search",
+      validate: createShortcutValidator("searchFilenameShortcut"),
+      onChange: (s: string | null) => saveDebounced({ searchFilenameShortcut: s }),
+    },
+    {
+      id: "terminalWorkspaceShortcut",
+      title: "Terminal workspace",
+      description: "Switch IDE and terminal modes",
+      value: terminalWorkspaceShortcut,
+      defaultValue: DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+      label: "Terminal workspace",
+      validate: createShortcutValidator("terminalWorkspaceShortcut"),
+      onChange: (s: string | null) => saveDebounced({ terminalWorkspaceShortcut: s }),
+    },
+    {
+      id: "terminalFontSizeIncreaseShortcut",
+      title: "Increase terminal font size",
+      description: "Increase terminal text by 1 px. Default: Ctrl+Alt+Shift+Equal (the + key).",
+      value: terminalFontSizeIncreaseShortcut,
+      defaultValue: DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
+      label: "Increase terminal font size",
+      validate: createShortcutValidator("terminalFontSizeIncreaseShortcut"),
+      onChange: (s: string | null) => saveDebounced({ terminalFontSizeIncreaseShortcut: s }),
+    },
+    {
+      id: "terminalFontSizeDecreaseShortcut",
+      title: "Decrease terminal font size",
+      description: "Decrease terminal text by 1 px. Default: Ctrl+Alt+Minus.",
+      value: terminalFontSizeDecreaseShortcut,
+      defaultValue: DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
+      label: "Decrease terminal font size",
+      validate: createShortcutValidator("terminalFontSizeDecreaseShortcut"),
+      onChange: (s: string | null) => saveDebounced({ terminalFontSizeDecreaseShortcut: s }),
+    },
+    {
+      id: "terminalFilePanelShortcut",
+      title: "File panel",
+      description: "Open or close the floating file explorer",
+      value: terminalFilePanelShortcut,
+      defaultValue: DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT,
+      label: "File panel",
+      validate: createShortcutValidator("terminalFilePanelShortcut"),
+      onChange: (s: string | null) => saveDebounced({ terminalFilePanelShortcut: s }),
+    },
+    {
+      id: "revealActiveFileShortcut",
+      title: "Reveal active file",
+      description: "Reveal the active editor file in Explorer",
+      value: revealActiveFileShortcut,
+      defaultValue: DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
+      label: "Reveal active file",
+      validate: createShortcutValidator("revealActiveFileShortcut"),
+      onChange: (s: string | null) => saveDebounced({ revealActiveFileShortcut: s }),
+    },
+    {
+      id: "gitPanelShortcut",
+      title: "Git panel",
+      description: "Open or close the Git panel",
+      value: gitPanelShortcut,
+      defaultValue: DEFAULT_GIT_PANEL_SHORTCUT,
+      label: "Git panel",
+      validate: createShortcutValidator("gitPanelShortcut"),
+      onChange: (s: string | null) => saveDebounced({ gitPanelShortcut: s }),
+    },
+    {
+      id: "portsPanelShortcut",
+      title: "Ports panel",
+      description: "Open or close the Ports panel",
+      value: portsPanelShortcut,
+      defaultValue: DEFAULT_PORTS_PANEL_SHORTCUT,
+      label: "Ports panel",
+      validate: createShortcutValidator("portsPanelShortcut"),
+      onChange: (s: string | null) => saveDebounced({ portsPanelShortcut: s }),
+    },
+    {
+      id: "projectPanelShortcut",
+      title: "Project panel",
+      description: "Open or close the floating Project panel",
+      value: projectPanelShortcut,
+      defaultValue: DEFAULT_PROJECT_PANEL_SHORTCUT,
+      label: "Project panel",
+      validate: createShortcutValidator("projectPanelShortcut"),
+      onChange: (s: string | null) => saveDebounced({ projectPanelShortcut: s }),
+    },
+    {
+      id: "cognitoModeShortcut",
+      title: "Cognito Mode",
+      description: "Toggle privacy screen mask on or off. Requires the same keyboard shortcut to dismiss.",
+      value: cognitoModeShortcut,
+      defaultValue: DEFAULT_COGNITO_MODE_SHORTCUT,
+      label: "Cognito Mode",
+      validate: createShortcutValidator("cognitoModeShortcut", validateCognitoModeShortcut),
+      onChange: (s: string | null) => saveDebounced({ cognitoModeShortcut: s ?? DEFAULT_COGNITO_MODE_SHORTCUT }),
+    },
+    {
+      id: "osPaletteShortcut",
+      title: "OS Command Palette",
+      description: "Open the DamHopper OS command palette",
+      value: osPaletteShortcut,
+      defaultValue: DEFAULT_OS_PALETTE_SHORTCUT,
+      label: "OS Command Palette",
+      validate: createShortcutValidator("osPaletteShortcut"),
+      onChange: (s: string | null) => saveDebounced({ osPaletteShortcut: s }),
+    },
+    {
+      id: "osCycleFocusShortcut",
+      title: "OS Focus Cycle",
+      description: "Cycle focus between OS windows without emitting terminal escape bytes",
+      value: osCycleFocusShortcut,
+      defaultValue: DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
+      label: "OS Focus Cycle",
+      validate: createShortcutValidator("osCycleFocusShortcut"),
+      onChange: (s: string | null) => saveDebounced({ osCycleFocusShortcut: s }),
+    },
+  ];
+
+  const lowerQuery = searchQuery.trim().toLowerCase();
+  const filteredRows = lowerQuery
+    ? rows.filter(
+        (r) =>
+          r.title.toLowerCase().includes(lowerQuery) ||
+          r.description.toLowerCase().includes(lowerQuery) ||
+          (r.value && r.value.toLowerCase().includes(lowerQuery)) ||
+          (r.defaultValue && r.defaultValue.toLowerCase().includes(lowerQuery)) ||
+          (r.value && displayShortcut(r.value).toLowerCase().includes(lowerQuery)),
+      )
+    : rows;
+
   return (
     <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-4">
-      <h3 className="text-sm font-medium text-[var(--color-text)]">
-        Keyboard Shortcuts
-      </h3>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <h3 className="text-sm font-medium text-[var(--color-text)]">
+          Keyboard Shortcuts
+        </h3>
+        <div className="relative w-full sm:w-56">
+          <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-[var(--color-text-muted)] pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Search shortcuts…"
+            aria-label="Search keyboard shortcuts"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] pl-7 pr-2.5 py-1 text-xs text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
+          />
+        </div>
+      </div>
 
-      <SettingRow title="Text search" description="Open content search">
-        <ShortcutCapture
-          value={searchTextShortcut}
-          defaultValue={DEFAULT_SEARCH_TEXT_SHORTCUT}
-          label="Text search"
-          validate={createShortcutValidator("searchTextShortcut")}
-          onChange={(shortcut) =>
-            saveDebounced({ searchTextShortcut: shortcut })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow title="Filename search" description="Open file finder">
-        <ShortcutCapture
-          value={searchFilenameShortcut}
-          defaultValue={DEFAULT_SEARCH_FILENAME_SHORTCUT}
-          label="Filename search"
-          validate={createShortcutValidator("searchFilenameShortcut")}
-          onChange={(shortcut) =>
-            saveDebounced({ searchFilenameShortcut: shortcut })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="Terminal workspace"
-        description="Switch IDE and terminal modes"
-      >
-        <ShortcutCapture
-          value={terminalWorkspaceShortcut}
-          defaultValue={DEFAULT_TERMINAL_WORKSPACE_SHORTCUT}
-          label="Terminal workspace"
-          validate={createShortcutValidator("terminalWorkspaceShortcut")}
-          onChange={(shortcut) =>
-            saveDebounced({ terminalWorkspaceShortcut: shortcut })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="Increase terminal font size"
-        description="Increase terminal text by 1 px. Default: Ctrl+Alt+Shift+Equal (the + key)."
-      >
-        <ShortcutCapture
-          value={terminalFontSizeIncreaseShortcut}
-          defaultValue={DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT}
-          label="Increase terminal font size"
-          validate={createShortcutValidator("terminalFontSizeIncreaseShortcut")}
-          onChange={(shortcut) =>
-            saveDebounced({ terminalFontSizeIncreaseShortcut: shortcut })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="Decrease terminal font size"
-        description="Decrease terminal text by 1 px. Default: Ctrl+Alt+Minus."
-      >
-        <ShortcutCapture
-          value={terminalFontSizeDecreaseShortcut}
-          defaultValue={DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT}
-          label="Decrease terminal font size"
-          validate={createShortcutValidator("terminalFontSizeDecreaseShortcut")}
-          onChange={(shortcut) =>
-            saveDebounced({ terminalFontSizeDecreaseShortcut: shortcut })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="File panel"
-        description="Open or close the floating file explorer"
-      >
-        <ShortcutCapture
-          value={terminalFilePanelShortcut}
-          defaultValue={DEFAULT_TERMINAL_FILE_PANEL_SHORTCUT}
-          label="File panel"
-          validate={createShortcutValidator("terminalFilePanelShortcut")}
-          onChange={(shortcut) =>
-            saveDebounced({ terminalFilePanelShortcut: shortcut })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="Reveal active file"
-        description="Reveal the active editor file in Explorer"
-      >
-        <ShortcutCapture
-          value={revealActiveFileShortcut}
-          defaultValue={DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT}
-          label="Reveal active file"
-          validate={createShortcutValidator("revealActiveFileShortcut")}
-          onChange={(shortcut) =>
-            saveDebounced({ revealActiveFileShortcut: shortcut })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow title="Git panel" description="Open or close the Git panel">
-        <ShortcutCapture
-          value={gitPanelShortcut}
-          defaultValue={DEFAULT_GIT_PANEL_SHORTCUT}
-          label="Git panel"
-          validate={createShortcutValidator("gitPanelShortcut")}
-          onChange={(shortcut) => saveDebounced({ gitPanelShortcut: shortcut })}
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="Ports panel"
-        description="Open or close the Ports panel"
-      >
-        <ShortcutCapture
-          value={portsPanelShortcut}
-          defaultValue={DEFAULT_PORTS_PANEL_SHORTCUT}
-          label="Ports panel"
-          validate={createShortcutValidator("portsPanelShortcut")}
-          onChange={(shortcut) =>
-            saveDebounced({ portsPanelShortcut: shortcut })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="Project panel"
-        description="Open or close the floating Project panel"
-      >
-        <ShortcutCapture
-          value={projectPanelShortcut}
-          defaultValue={DEFAULT_PROJECT_PANEL_SHORTCUT}
-          label="Project panel"
-          validate={createShortcutValidator("projectPanelShortcut")}
-          onChange={(shortcut) =>
-            saveDebounced({ projectPanelShortcut: shortcut })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="Cognito Mode"
-        description="Toggle privacy screen mask on or off. Requires the same keyboard shortcut to dismiss."
-      >
-        <ShortcutCapture
-          value={cognitoModeShortcut}
-          defaultValue={DEFAULT_COGNITO_MODE_SHORTCUT}
-          label="Cognito Mode"
-          validate={createShortcutValidator("cognitoModeShortcut", validateCognitoModeShortcut)}
-          onChange={(shortcut) =>
-            saveDebounced({ cognitoModeShortcut: shortcut ?? DEFAULT_COGNITO_MODE_SHORTCUT })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="OS Command Palette"
-        description="Open the DamHopper OS command palette"
-      >
-        <ShortcutCapture
-          value={osPaletteShortcut}
-          defaultValue={DEFAULT_OS_PALETTE_SHORTCUT}
-          label="OS Command Palette"
-          validate={createShortcutValidator("osPaletteShortcut")}
-          onChange={(shortcut) =>
-            saveDebounced({ osPaletteShortcut: shortcut })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="OS Focus Cycle"
-        description="Cycle focus between OS windows without emitting terminal escape bytes"
-      >
-        <ShortcutCapture
-          value={osCycleFocusShortcut}
-          defaultValue={DEFAULT_OS_CYCLE_FOCUS_SHORTCUT}
-          label="OS Focus Cycle"
-          validate={createShortcutValidator("osCycleFocusShortcut")}
-          onChange={(shortcut) =>
-            saveDebounced({ osCycleFocusShortcut: shortcut })
-          }
-        />
-      </SettingRow>
+      {filteredRows.length === 0 ? (
+        <div className="text-xs text-[var(--color-text-muted)] text-center py-6">
+          No keyboard shortcuts match &ldquo;{searchQuery}&rdquo;
+        </div>
+      ) : (
+        filteredRows.map((row, index) => (
+          <div key={row.id}>
+            {index > 0 && <div className="border-t border-[var(--color-border)] my-4" />}
+            <SettingRow title={row.title} description={row.description}>
+              <ShortcutCapture
+                value={row.value}
+                defaultValue={row.defaultValue}
+                label={row.label}
+                validate={row.validate}
+                onChange={row.onChange}
+              />
+            </SettingRow>
+          </div>
+        ))
+      )}
     </section>
   );
 }
