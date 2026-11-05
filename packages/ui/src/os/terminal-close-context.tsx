@@ -39,11 +39,17 @@ export interface TerminalCloseContextValue {
   readonly requestTerminalClose: (
     request: TerminalCloseRequest,
     onCloseView: (windowId: string) => void,
+    options?: { immediate?: boolean },
   ) => void;
   readonly isPromptOpen: boolean;
   readonly currentRequest: TerminalCloseRequest | null;
   readonly activeTerminationState: TerminationState | null;
   readonly endSession?: () => Promise<void>;
+  readonly terminateSessionImmediately?: (
+    target: TerminalTarget,
+    windowId: string,
+    onCloseView: (windowId: string) => void,
+  ) => Promise<void>;
 }
 
 const TerminalCloseContext = createContext<TerminalCloseContextValue | null>(null);
@@ -137,10 +143,111 @@ export function TerminalCloseProvider({
     }
   }, [actions, currentRequest]);
 
+  const terminateSessionImmediately = useCallback(
+    async (
+      target: TerminalTarget,
+      windowId: string,
+      onCloseView: (windowId: string) => void,
+    ) => {
+      onCloseView(windowId);
+
+      const tKey = targetKey(target);
+      const origin: TerminationOrigin = "live";
+
+      const reservation = terminalActionCoordinator.reserveDispatch(target, origin);
+      if (!reservation.allowed) {
+        return;
+      }
+
+      const initialDispatchState: TerminationState = Object.freeze({
+        status: "dispatching",
+        target,
+        origin,
+        reason: "user_end_confirmed",
+      });
+      const record: DispatchedActionRecord = {
+        target,
+        windowId,
+        onCloseView,
+        state: initialDispatchState,
+      };
+      dispatchedActionsRef.current.set(tKey, record);
+
+      const checkCurrent = () =>
+        isCurrentConnection({
+          profileId: target.profileId,
+          generation: target.generation,
+        });
+
+      let terminationClient: GuardedTerminationClient;
+      if (overrideClient) {
+        terminationClient = overrideClient;
+      } else {
+        const snap = getConnectionSnapshot(target.profileId);
+        if (!snap || snap.status !== "connected") {
+          const failedState = Object.freeze<TerminationState>({
+            status: "failed",
+            target,
+            origin,
+            error: {
+              category: "abort",
+              message: `Target profile ${target.profileId} is disconnected`,
+            },
+          });
+          terminalActionCoordinator.recordOutcome(target, failedState, reservation.attemptToken);
+          record.state = failedState;
+          return;
+        }
+        terminationClient = getApi(snap.owner);
+      }
+
+      try {
+        const resultState = await requestGuardedTermination(
+          target,
+          origin,
+          terminationClient,
+          checkCurrent,
+        );
+        terminalActionCoordinator.recordOutcome(target, resultState, reservation.attemptToken);
+        record.state = resultState;
+        queryClient.invalidateQueries({
+          predicate: (query) =>
+            Array.isArray(query.queryKey) &&
+            query.queryKey.some(
+              (part) =>
+                part === "terminal-sessions" || part === "terminal-inventory",
+            ),
+        });
+      } catch {
+        // Fallback error safely handled
+      } finally {
+        inFlightTargetsRef.current.delete(tKey);
+      }
+    },
+    [overrideClient, queryClient],
+  );
+
   const requestTerminalClose = useCallback(
-    (request: TerminalCloseRequest, onCloseView: (windowId: string) => void) => {
+    (
+      request: TerminalCloseRequest,
+      onCloseView: (windowId: string) => void,
+      options?: { immediate?: boolean },
+    ) => {
       const frozenRequest: TerminalCloseRequest = Object.freeze({ ...request });
       currentOnCloseViewRef.current = onCloseView;
+
+      if (options?.immediate) {
+        if (frozenRequest.target) {
+          void terminateSessionImmediately(
+            frozenRequest.target,
+            frozenRequest.windowId,
+            onCloseView,
+          );
+        } else {
+          onCloseView(frozenRequest.windowId);
+        }
+        return;
+      }
 
       // Exact exited, restartCancelled, or no target and not running -> presentation Close without prompt
       if (
@@ -164,7 +271,7 @@ export function TerminalCloseProvider({
       setActiveTerminationState(existingRecord?.state ?? null);
       setIsPromptOpen(true);
     },
-    [],
+    [terminateSessionImmediately],
   );
 
   const handleCancel = useCallback(() => {
@@ -361,8 +468,8 @@ export function TerminalCloseProvider({
     currentRequest,
     activeTerminationState,
     endSession: handleEndSession,
+    terminateSessionImmediately,
   };
-
   return (
     <TerminalCloseContext.Provider value={contextValue}>
       {children}

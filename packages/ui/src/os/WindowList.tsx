@@ -182,28 +182,35 @@ export function WindowList({ className = "" }: WindowListProps) {
       closeWindow(win.id);
       return;
     }
-    if (win.appId === "terminals" && terminalClose) {
+    if (win.appId === "terminals") {
       const { target, availability } = resolveWindowTerminalObservation(
         win,
         observations,
       );
 
-      if (availability !== "live" && availability !== "restartPending") {
-        closeWindow(win.id);
+      if (terminalClose) {
+        if (target && terminalClose.terminateSessionImmediately) {
+          void terminalClose.terminateSessionImmediately(target, win.id, (wId) => {
+            closeWindow(wId);
+          });
+        } else {
+          terminalClose.requestTerminalClose(
+            {
+              windowId: win.id,
+              entry: "window-list",
+              target,
+              availability,
+            },
+            (wId) => {
+              closeWindow(wId);
+            },
+            { immediate: true },
+          );
+        }
         return;
       }
 
-      terminalClose.requestTerminalClose(
-        {
-          windowId: win.id,
-          entry: "window-list",
-          target,
-          availability,
-        },
-        (wId) => {
-          closeWindow(wId);
-        },
-      );
+      closeWindow(win.id);
       return;
     }
     closeWindow(win.id);

@@ -356,11 +356,16 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
   // Fit terminal on slot resize (window resize, split pane resize)
   useEffect(() => {
     const el = slotRef.current;
-    if (!el) return;
+    if (!el || !claimStatus.success) return;
 
     const lookupKey = target
       ? terminalTargetKey(target)
       : { profileId: owner.profileId, id: sessionId };
+
+    const entry = getTerminal(lookupKey);
+    if (entry) {
+      scheduleTerminalFit(entry);
+    }
 
     const observer = new ResizeObserver(() => {
       scheduleTerminalFit(getTerminal(lookupKey));
@@ -370,8 +375,7 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
     return () => {
       observer.disconnect();
     };
-  }, [sessionId, target, owner.profileId]);
-
+  }, [sessionId, target, owner.profileId, claimStatus.success]);
   if (!claimStatus.success) {
     const holderId = claimStatus.existingHolderWindowId ?? "unknown";
     return (

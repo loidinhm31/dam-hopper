@@ -300,28 +300,35 @@ export function WindowFrame({
       closeWindow(window.id);
       return;
     }
-    if (window.appId === "terminals" && terminalClose) {
+    if (window.appId === "terminals") {
       const { target, availability } = resolveWindowTerminalObservation(
         window,
         observations,
       );
 
-      if (availability !== "live" && availability !== "restartPending") {
-        closeWindow(window.id);
+      if (terminalClose) {
+        if (target && terminalClose.terminateSessionImmediately) {
+          void terminalClose.terminateSessionImmediately(target, window.id, (wId) => {
+            closeWindow(wId);
+          });
+        } else {
+          terminalClose.requestTerminalClose(
+            {
+              windowId: window.id,
+              entry: "frame",
+              target,
+              availability,
+            },
+            (wId) => {
+              closeWindow(wId);
+            },
+            { immediate: true },
+          );
+        }
         return;
       }
 
-      terminalClose.requestTerminalClose(
-        {
-          windowId: window.id,
-          entry: "frame",
-          target,
-          availability,
-        },
-        (wId) => {
-          closeWindow(wId);
-        },
-      );
+      closeWindow(window.id);
       return;
     }
     closeWindow(window.id);

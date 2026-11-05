@@ -54,9 +54,14 @@ export function decodeTerminationHeaders(
     return null;
   };
 
-  const versionHeader = getHeader(X_DAM_HOPPER_TERMINATION_VERSION);
-  const epochHeader = getHeader(X_DAM_HOPPER_PTY_EPOCH);
-
+  const versionHeader =
+    getHeader(X_DAM_HOPPER_TERMINATION_VERSION) ??
+    getHeader("x-damhopper-termination-version") ??
+    getHeader("x-dam-hopper-termination-version");
+  const epochHeader =
+    getHeader(X_DAM_HOPPER_PTY_EPOCH) ??
+    getHeader("x-damhopper-pty-epoch") ??
+    getHeader("x-dam-hopper-pty-epoch");
   if (versionHeader !== "1") {
     return Object.freeze({
       version: null,
