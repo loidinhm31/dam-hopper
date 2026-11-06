@@ -397,4 +397,150 @@ describe("DesktopCanvas maximized presentation plane", () => {
       container.querySelector('[data-testid="input-val"]')?.textContent,
     ).toBe("modified unsaved buffer");
   });
+
+  it("elevates float layer z-index above maximized plane when a float window is focused, and lowers it when maximized window is focused (B2)", () => {
+    // 1. Open maximized window
+    act(() => {
+      useWindowStore.getState().openWindow({
+        id: "hub-win",
+        appId: "terminals",
+        title: "Agent Hub",
+        ctx: testCtx,
+        mode: "tile",
+      });
+      useWindowStore.getState().toggleMaximizeWindow("hub-win");
+    });
+
+    // 2. Open floating window
+    act(() => {
+      useWindowStore.getState().openWindow({
+        id: "float-win",
+        appId: "editor",
+        title: "Floating Editor",
+        ctx: testCtx,
+        mode: "float",
+      });
+    });
+
+    renderDesktop();
+
+    const deskId = useWindowStore.getState().session.desktops[0].id;
+    const floatLayer = container.querySelector(
+      `[data-testid="float-layer-${deskId}"]`,
+    ) as HTMLElement;
+    const maxLayer = container.querySelector(
+      `[data-testid="maximized-layer-${deskId}"]`,
+    ) as HTMLElement;
+
+    expect(floatLayer).not.toBeNull();
+    expect(maxLayer).not.toBeNull();
+
+    // Float window was opened last and is focused -> float layer elevated
+    expect(floatLayer.style.zIndex).toBe("60");
+    expect(maxLayer.style.zIndex).toBe("40");
+
+    // 3. Focus the maximized window -> maximized plane takes precedence without un-maximizing
+    act(() => {
+      useWindowStore.getState().focusWindow("hub-win");
+    });
+    renderDesktop();
+
+    expect(useWindowStore.getState().session.windows["hub-win"].maximized).toBe(true);
+    expect(floatLayer.style.zIndex).toBe("20");
+    expect(maxLayer.style.zIndex).toBe("40");
+
+    const maxSlot = container.querySelector(
+      `[data-testid="maximized-slot-hub-win"]`,
+    ) as HTMLElement;
+    expect(maxSlot.style.zIndex).toBe("50");
+
+    // 4. Re-focus floating window -> float layer elevated back to 60
+    act(() => {
+      useWindowStore.getState().focusWindow("float-win");
+    });
+    renderDesktop();
+
+    expect(floatLayer.style.zIndex).toBe("60");
+    expect(maxLayer.style.zIndex).toBe("40");
+  });
+
+  it("handles multiple maximized windows and float window with stable portal containers across focus swaps", () => {
+    act(() => {
+      let session = useWindowStore.getState().session;
+      session = openWindow(session, {
+        id: "max-1",
+        appId: "terminals",
+        title: "Max 1",
+        ctx: testCtx,
+        mode: "tile",
+      });
+      session = openWindow(session, {
+        id: "max-2",
+        appId: "terminals",
+        title: "Max 2",
+        ctx: testCtx,
+        mode: "tile",
+      });
+      session = splitWindow(session, "max-1", "max-2", "right");
+      session = maximizeWindow(session, "max-1");
+      session = maximizeWindow(session, "max-2");
+      session = openWindow(session, {
+        id: "float-1",
+        appId: "editor",
+        title: "Float 1",
+        ctx: testCtx,
+        mode: "float",
+      });
+      useWindowStore.setState({ session });
+    });
+
+    renderDesktop();
+
+    const deskId = useWindowStore.getState().session.desktops[0].id;
+    const floatLayer = container.querySelector(
+      `[data-testid="float-layer-${deskId}"]`,
+    ) as HTMLElement;
+    const maxLayer = container.querySelector(
+      `[data-testid="maximized-layer-${deskId}"]`,
+    ) as HTMLElement;
+
+    // Float is focused
+    expect(floatLayer.style.zIndex).toBe("60");
+    expect(maxLayer.style.zIndex).toBe("40");
+
+    const appMax1 = container.querySelector('[data-testid="app-max-1"]')!;
+    const appMax2 = container.querySelector('[data-testid="app-max-2"]')!;
+    const appFloat1 = container.querySelector('[data-testid="app-float-1"]')!;
+
+    expect(appMax1).not.toBeNull();
+    expect(appMax2).not.toBeNull();
+    expect(appFloat1).not.toBeNull();
+
+    // Focus max-1
+    act(() => {
+      useWindowStore.getState().focusWindow("max-1");
+    });
+    renderDesktop();
+
+    expect(floatLayer.style.zIndex).toBe("20");
+    const slotMax1 = container.querySelector('[data-testid="maximized-slot-max-1"]') as HTMLElement;
+    expect(slotMax1.style.zIndex).toBe("50");
+
+    // Assert portal DOM nodes preserved (no remount)
+    expect(container.querySelector('[data-testid="app-max-1"]')).toBe(appMax1);
+    expect(container.querySelector('[data-testid="app-max-2"]')).toBe(appMax2);
+    expect(container.querySelector('[data-testid="app-float-1"]')).toBe(appFloat1);
+
+    // Focus max-2
+    act(() => {
+      useWindowStore.getState().focusWindow("max-2");
+    });
+    renderDesktop();
+
+    const slotMax2 = container.querySelector('[data-testid="maximized-slot-max-2"]') as HTMLElement;
+    expect(slotMax2.style.zIndex).toBe("50");
+    expect(container.querySelector('[data-testid="app-max-1"]')).toBe(appMax1);
+    expect(container.querySelector('[data-testid="app-max-2"]')).toBe(appMax2);
+    expect(container.querySelector('[data-testid="app-float-1"]')).toBe(appFloat1);
+  });
 });

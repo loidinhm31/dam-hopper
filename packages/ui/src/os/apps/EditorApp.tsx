@@ -12,7 +12,7 @@ import {
   subscribeToMonacoParking,
 } from "../MonacoKeepAliveHost.js";
 import { useWindowStore } from "../window-store.js";
-import { editorFileTabKey, useEditorStore } from "@/stores/editor.js";
+import { editorDiffTabKey, editorFileTabKey, useEditorStore } from "@/stores/editor.js";
 import { normalizeFsTarget, type FsTargetRef } from "@/api/ownership.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 import { ImagePreview } from "@/components/organisms/ImagePreview.js";
@@ -24,9 +24,15 @@ import { registerEditorSlot } from "../action-dispatch.js";
 import { getActiveMonacoSelectionText } from "@/components/organisms/MonacoHost.js";
 import { getConnectionSnapshot } from "@/api/connections.js";
 
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 const MarkdownHost = lazy(() =>
   import("@/components/organisms/MarkdownHost.js").then((m) => ({
     default: m.MarkdownHost,
+  })),
+);
+const DiffViewer = lazy(() =>
+  import("@/components/organisms/DiffViewer.js").then((m) => ({
+    default: m.DiffViewer,
   })),
 );
 
@@ -230,11 +236,13 @@ function EditorResourceView({
   owner: ConnectionRef;
 }) {
   const slotRef = useRef<HTMLDivElement>(null);
+  const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
   const focusWindow = useWindowStore((state) => state.focusWindow);
   const filePath = (window.appState?.filePath as string | undefined) ?? "";
+  const isDiff = Boolean(window.appState?.isDiff);
   const tabKey = useMemo(
-    () => editorFileTabKey(target, filePath),
-    [target, filePath],
+    () => (isDiff ? editorDiffTabKey(target, filePath) : editorFileTabKey(target, filePath)),
+    [isDiff, target, filePath],
   );
   const appStateDocumentKey =
     typeof window.appState?.documentKey === "string" && window.appState.documentKey
@@ -256,6 +264,9 @@ function EditorResourceView({
     [filePath, tab?.size, tab?.tier],
   );
   useEffect(() => {
+    if (isDiff) {
+      return;
+    }
     if (!tab && filePath && filePath !== "untitled.ts") {
       const fileNode: FsArborNode = {
         id: filePath,
@@ -268,7 +279,7 @@ function EditorResourceView({
       };
       void useEditorStore.getState().open(target, fileNode);
     }
-  }, [tab, target, filePath]);
+  }, [isDiff, tab, target, filePath]);
 
   const documentKey = useEditorStore(
     useCallback(
@@ -382,16 +393,77 @@ function EditorResourceView({
         className="flex h-full w-full flex-col items-center justify-center text-xs text-red-400 gap-2 p-4 text-center bg-[var(--color-bg)]"
       >
         <p>Failed to load {filePath}: {tab.error}</p>
-        <button
-          type="button"
-          onClick={() => tab && void useEditorStore.getState().reloadTab(tab.key)}
-          className="px-3 py-1 rounded bg-[var(--color-surface-2)] text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] border border-[var(--color-border)] cursor-pointer"
-        >
-          Retry
-        </button>
+        {tab.saveBlockedReason && (
+          <p className="text-amber-400 max-w-md" data-testid={`editor-save-blocked-error-${window.id}`}>
+            {tab.saveBlockedReason}
+          </p>
+        )}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => tab && void useEditorStore.getState().reloadTab(tab.key)}
+            className="px-3 py-1 rounded bg-[var(--color-surface-2)] text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] border border-[var(--color-border)] cursor-pointer"
+          >
+            Retry
+          </button>
+          {tab.saveBlockedReason && (
+            <button
+              type="button"
+              onClick={() => setConfirmDiscardOpen(true)}
+              className="px-3 py-1 rounded bg-red-800 text-white hover:bg-red-700 cursor-pointer"
+            >
+              Discard changes and reload
+            </button>
+          )}
+        </div>
+        <ConfirmDialog
+          open={confirmDiscardOpen}
+          onClose={() => setConfirmDiscardOpen(false)}
+          onConfirm={() => {
+            setConfirmDiscardOpen(false);
+            if (tab) void useEditorStore.getState().discardAndReload(tab.key);
+          }}
+          title="Discard unsaved changes?"
+          description="Your local modifications will be discarded and the file will be reloaded from the current server."
+          confirmText="Discard and Reload"
+          variant="danger"
+        />
       </div>
     );
   }
+
+  const blockedBanner = tab?.saveBlockedReason ? (
+    <div
+      data-testid={`editor-save-blocked-${window.id}`}
+      className="absolute top-0 left-0 right-0 z-30 bg-amber-900/90 text-amber-200 text-xs px-3 py-2 flex items-center justify-between gap-2 border-b border-amber-700 shadow-md backdrop-blur-sm"
+    >
+      <span className="truncate" title={tab.saveBlockedReason}>
+        {tab.saveBlockedReason}
+      </span>
+      <button
+        type="button"
+        onClick={() => setConfirmDiscardOpen(true)}
+        className="shrink-0 px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 text-amber-100 text-xs font-medium cursor-pointer"
+      >
+        Discard changes and reload
+      </button>
+    </div>
+  ) : null;
+
+  const discardConfirmDialog = (
+    <ConfirmDialog
+      open={confirmDiscardOpen}
+      onClose={() => setConfirmDiscardOpen(false)}
+      onConfirm={() => {
+        setConfirmDiscardOpen(false);
+        if (tab) void useEditorStore.getState().discardAndReload(tab.key);
+      }}
+      title="Discard unsaved changes?"
+      description="Your local modifications will be discarded and the file will be reloaded from the current server."
+      confirmText="Discard and Reload"
+      variant="danger"
+    />
+  );
 
   if (format === "image") {
     return (
@@ -400,6 +472,8 @@ function EditorResourceView({
         data-testid={`editor-app-${window.id}`}
         className="relative w-full h-full bg-[var(--color-bg)] overflow-hidden"
       >
+        {blockedBanner}
+        {discardConfirmDialog}
         <ImagePreview
           project={target.kind === "project" ? target.project : ""}
           target={target}
@@ -417,6 +491,8 @@ function EditorResourceView({
         data-testid={`editor-app-${window.id}`}
         className="relative w-full h-full bg-[var(--color-bg)] overflow-hidden"
       >
+        {blockedBanner}
+        {discardConfirmDialog}
         <VideoPreview
           project={target.kind === "project" ? target.project : ""}
           target={target}
@@ -434,6 +510,8 @@ function EditorResourceView({
         data-testid={`editor-app-${window.id}`}
         className="relative w-full h-full bg-[var(--color-bg)] overflow-hidden"
       >
+        {blockedBanner}
+        {discardConfirmDialog}
         <LargeFileViewer
           project={target.kind === "project" ? target.project : ""}
           target={target}
@@ -452,6 +530,8 @@ function EditorResourceView({
         data-testid={`editor-app-${window.id}`}
         className="relative w-full h-full bg-[var(--color-bg)] overflow-hidden"
       >
+        {blockedBanner}
+        {discardConfirmDialog}
         <BinaryPreview
           base64={tab?.content ?? ""}
           fileName={filePath.split("/").pop() ?? filePath}
@@ -468,6 +548,8 @@ function EditorResourceView({
         data-testid={`editor-app-${window.id}`}
         className="relative w-full h-full bg-[var(--color-bg)] overflow-hidden"
       >
+        {blockedBanner}
+        {discardConfirmDialog}
         <Suspense
           fallback={
             <div className="flex h-full items-center justify-center">
@@ -496,6 +578,8 @@ function EditorResourceView({
         data-testid={`editor-app-${window.id}`}
         className="relative w-full h-full bg-[var(--color-bg)] overflow-hidden"
       >
+        {blockedBanner}
+        {discardConfirmDialog}
         <Suspense
           fallback={
             <div className="flex h-full items-center justify-center">
@@ -518,6 +602,48 @@ function EditorResourceView({
     );
   }
 
+  if (window.appState?.isDiff || tab?.tier === "diff") {
+    return (
+      <div
+        data-os-editor-app={window.id}
+        data-testid={`editor-app-${window.id}`}
+        className="relative w-full h-full bg-[var(--color-bg)] overflow-hidden"
+      >
+        <Suspense
+          fallback={
+            <div className="flex h-full items-center justify-center">
+              <Loader2 className="h-5 w-5 animate-spin text-[var(--color-primary)]" />
+            </div>
+          }
+        >
+          <DiffViewer
+            key={`diff-${filePath}`}
+            project={target.kind === "project" ? target.project : (window.ctx.projectId ?? "")}
+            target={
+              target.kind === "project"
+                ? {
+                    project: target.project,
+                    profileId: target.profileId,
+                    worktreePath: target.worktreePath,
+                  }
+                : undefined
+            }
+            filePath={filePath}
+            fileStatus={(window.appState?.fileStatus as string) || tab?.fileStatus || "modified"}
+            additions={tab?.additions ?? 0}
+            deletions={tab?.deletions ?? 0}
+            commitHash={tab?.commitHash}
+            gitRootId={tab?.gitRootId}
+            diffPath={tab?.diffPath}
+            onClose={() => {
+              useEditorStore.getState().close(tab?.key ?? tabKey);
+              useWindowStore.getState().closeWindow(window.id);
+            }}
+          />
+        </Suspense>
+      </div>
+    );
+  }
   return (
     <div
       ref={slotRef}
@@ -525,6 +651,8 @@ function EditorResourceView({
       data-testid={`editor-app-${window.id}`}
       className="relative w-full h-full bg-[var(--color-bg)] overflow-hidden"
     >
+      {blockedBanner}
+      {discardConfirmDialog}
       <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--color-text-muted)] pointer-events-none">
         Editor slot: {filePath}
       </div>

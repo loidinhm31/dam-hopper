@@ -123,10 +123,52 @@ function sanitizeAppState(
   }
   if (appId === "agent-hub") {
     const projected: Record<string, unknown> = {};
-    if (typeof rawState.urgencyFilter === "string")
-      projected.urgencyFilter = rawState.urgencyFilter;
-    if (typeof rawState.profileFilter === "string")
-      projected.profileFilter = rawState.profileFilter;
+    if (Array.isArray(rawState.openWorkspaces)) {
+      const openWorkspaces: { profileId: string; project: string }[] = [];
+      for (const item of rawState.openWorkspaces) {
+        if (
+          item &&
+          typeof item === "object" &&
+          "profileId" in item &&
+          "project" in item &&
+          typeof item.profileId === "string" &&
+          typeof item.project === "string" &&
+          item.profileId.length > 0 &&
+          item.project.length > 0
+        ) {
+          openWorkspaces.push({
+            profileId: item.profileId,
+            project: item.project,
+          });
+          if (openWorkspaces.length >= 64) break;
+        }
+      }
+      if (openWorkspaces.length > 0) {
+        projected.openWorkspaces = openWorkspaces;
+      }
+    }
+    if (typeof rawState.sidebarHidden === "boolean") {
+      projected.sidebarHidden = rawState.sidebarHidden;
+    }
+    if (Array.isArray(rawState.disclosedWorkspaces)) {
+      const disclosed: string[] = [];
+      for (const item of rawState.disclosedWorkspaces) {
+        if (typeof item === "string" && item.length > 0 && item.length <= 1024) {
+          disclosed.push(item);
+          if (disclosed.length >= 64) break;
+        }
+      }
+      if (disclosed.length > 0) {
+        projected.disclosedWorkspaces = disclosed;
+      }
+    }
+    if (
+      typeof rawState.selectedWorkspace === "string" &&
+      rawState.selectedWorkspace.length > 0 &&
+      rawState.selectedWorkspace.length <= 1024
+    ) {
+      projected.selectedWorkspace = rawState.selectedWorkspace;
+    }
     return Object.keys(projected).length > 0 ? projected : undefined;
   }
   if (appId === "recipes") {
@@ -1291,4 +1333,26 @@ export async function settleTerminalLaunch(
       ? { status: "uncertain", reason: outcome.reason }
       : { status: "settled" };
   });
+}
+
+export type LaunchAttemptRead =
+  | { status: "ok"; record: StoredLaunchRecord }
+  | { status: "missing" }
+  | { status: "unreadable"; reason: string };
+
+export function getLaunchAttempt(attemptId: string): LaunchAttemptRead {
+  let doc: LaunchJournalDocument;
+  try {
+    doc = readLaunchJournalDocument();
+  } catch (e) {
+    return {
+      status: "unreadable",
+      reason: e instanceof Error ? e.message : String(e),
+    };
+  }
+  const record = doc.records.find((r) => r.attemptId === attemptId);
+  if (!record) {
+    return { status: "missing" };
+  }
+  return { status: "ok", record };
 }

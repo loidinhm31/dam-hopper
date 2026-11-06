@@ -6,19 +6,20 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWindowStore } from "@/os/window-store.js";
 import { createDefaultOsSession } from "@/os/window-ops.js";
-import { globalResourceRegistry } from "@/os/resource-registry.js";
-import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import { __setConnectionSnapshotForTests, resetConnections } from "@/api/connections.js";
 import { saveProfiles, type ServerProfile } from "@/api/server-config.js";
+import { globalResourceRegistry } from "@/os/resource-registry.js";
+import { terminalRegistry } from "@/lib/terminal-registry.js";
+import { useHubTerminalMountsStore } from "@/os/agent-hub/hub-terminal-mounts-store.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { useAgentStatusStore } from "@/stores/agent-status.js";
 import { AgentHubApp } from "@/os/apps/AgentHubApp.js";
 import { createAgentHubDesktopTemplate } from "@/os/desktop-templates.js";
 import { registerIntentHandler } from "@/os/intents.js";
-import { MAX_U64_STRING } from "@/api/terminal-session-contract.js";
+import { profileQueryKey } from "@/api/query-client.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import type { SessionInfo } from "@/api/client.js";
-import type { TerminalAgentStatusRow } from "@/api/agent-status-types.js";
+import type { OsWindow } from "@/os/types.js";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -31,7 +32,7 @@ const profileA: ServerProfile = {
   url: "http://127.0.0.1:4801",
   authType: "none",
   createdAt: 1,
-  autoConnect: true,
+  autoConnect: false,
 };
 
 const profileB: ServerProfile = {
@@ -40,10 +41,13 @@ const profileB: ServerProfile = {
   url: "http://127.0.0.1:4802",
   authType: "none",
   createdAt: 2,
-  autoConnect: true,
+  autoConnect: false,
 };
 
-function createMockTransport(sessionsList: SessionInfo[]): WsTransport {
+function createMockTransport(
+  sessionsList: SessionInfo[],
+  projectsList: { name: string; path?: string }[] = [],
+): WsTransport {
   return {
     invoke: vi.fn().mockImplementation((action: string) => {
       if (
@@ -54,8 +58,8 @@ function createMockTransport(sessionsList: SessionInfo[]): WsTransport {
         return Promise.resolve({
           sessions: sessionsList.map((s) => ({
             ...s,
-            incarnationExact: (s as { incarnationExact?: string }).incarnationExact ?? String(s.incarnation ?? 1),
-            terminationState: (s as { terminationState?: string }).terminationState ?? (s.alive ? "live" : "exited"),
+            incarnationExact: String(s.incarnation ?? 1),
+            terminationState: s.alive ? "live" : "exited",
           })),
           termination: {
             version: 1,
@@ -63,11 +67,16 @@ function createMockTransport(sessionsList: SessionInfo[]): WsTransport {
           },
         });
       }
+      if (action === "projects:list" || action === "project:list") {
+        return Promise.resolve(projectsList);
+      }
       return Promise.resolve([]);
     }),
     request: vi.fn().mockResolvedValue([]),
     terminalWrite: vi.fn(),
     terminalResize: vi.fn(),
+    onTerminalData: vi.fn().mockReturnValue(() => {}),
+    onTerminalExit: vi.fn().mockReturnValue(() => {}),
     onEvent: vi.fn().mockReturnValue(() => {}),
     onClose: vi.fn().mockReturnValue(() => {}),
     close: vi.fn(),
@@ -78,6 +87,7 @@ describe("os-agent-hub.browser", () => {
   let container: HTMLDivElement;
   let root: Root;
   let queryClient: QueryClient;
+  let hubWindow: OsWindow;
 
   beforeEach(() => {
     container = document.createElement("div");
@@ -92,10 +102,13 @@ describe("os-agent-hub.browser", () => {
         queries: { retry: false, staleTime: Infinity },
       },
     });
+    globalResourceRegistry.clear();
+    terminalRegistry.clear();
+    useHubTerminalMountsStore.setState({ mountsByHub: {} });
+    useCognitoModeStore.getState().reset();
 
-    saveProfiles([profileA, profileB], profileA.id);
+    saveProfiles([profileA], profileA.id);
 
-    // Initial OS window store setup with Agent Hub template
     const hubTemplate = createAgentHubDesktopTemplate("Hub", "desktop-hub");
     const session = createDefaultOsSession();
     session.desktops = [hubTemplate.desktop];
@@ -105,9 +118,7 @@ describe("os-agent-hub.browser", () => {
       session.windows[w.id] = w;
     }
     useWindowStore.getState().setSession(session);
-
-    // Reset Cognito mode
-    useCognitoModeStore.getState().reset();
+    hubWindow = hubTemplate.windows[0];
   });
 
   afterEach(async () => {
@@ -117,27 +128,21 @@ describe("os-agent-hub.browser", () => {
     container.remove();
     resetConnections();
     queryClient.clear();
-    useAgentStatusStore.setState({ profiles: new Map() });
+    globalResourceRegistry.clear();
+    terminalRegistry.clear();
+    useHubTerminalMountsStore.setState({ mountsByHub: {} });
     useCognitoModeStore.getState().reset();
+    useAgentStatusStore.setState({ profiles: new Map() });
     vi.restoreAllMocks();
   });
 
-  it("renders multi-profile Agent Hub with urgency grouping and filters", async () => {
+  it("renders terminal-first Agent Hub with Header and Traditional projects display without roster or filters", async () => {
     const sessionA: SessionInfo = {
-      id: "term-omp-1",
-      name: "OMP Worker",
-      command: "omp task",
-      cwd: "/repo/alpha",
-      type: "shell",
-      startedAt: Date.now(),
-      alive: true,
-      incarnation: 1,
-    };
-    const sessionB: SessionInfo = {
-      id: "term-codex-1",
-      name: "Codex Agent",
-      command: "codex exec",
-      cwd: "/repo/beta",
+      id: "term-1",
+      name: "Worker 1",
+      command: "bash",
+      cwd: "/repo/dam-hopper",
+      project: "dam-hopper",
       type: "shell",
       startedAt: Date.now(),
       alive: true,
@@ -145,7 +150,6 @@ describe("os-agent-hub.browser", () => {
     };
 
     const transportA = createMockTransport([sessionA]);
-    const transportB = createMockTransport([sessionB]);
 
     __setConnectionSnapshotForTests(
       profileA.id,
@@ -159,155 +163,40 @@ describe("os-agent-hub.browser", () => {
       transportA,
     );
 
-    __setConnectionSnapshotForTests(
-      profileB.id,
-      {
-        owner: { profileId: profileB.id, generation: 1 },
-        status: "connected",
-        intent: true,
-        serverUrl: profileB.url,
-        error: null,
-      },
-      transportB,
-    );
-
-    // Populate agent status store:
-    // term-omp-1 is Idle
-    // term-codex-1 is Blocked (Needs attention)
-    const statusRowA: TerminalAgentStatusRow = {
-      id: "term-omp-1",
-      incarnation: 1,
-      agentKind: "omp",
-      agentSessionId: "omp-session-1",
-      reporterEpoch: 1,
-      state: "idle",
-      source: "lifecycle",
-      attentionRevision: 0,
-    };
-
-    const statusRowB: TerminalAgentStatusRow = {
-      id: "term-codex-1",
-      incarnation: 1,
-      agentKind: "codex",
-      agentSessionId: "codex-session-1",
-      reporterEpoch: 1,
-      state: "blocked",
-      reason: "approval",
-      source: "hook",
-      attentionRevision: 1,
-    };
-
-    useAgentStatusStore.setState({
-      profiles: new Map([
-        [
-          profileA.id,
-          {
-            owner: { profileId: profileA.id, generation: 1 },
-            epoch: 1,
-            revision: 1,
-            availability: "ready",
-            rows: new Map([["term-omp-1", statusRowA]]),
-            cursors: new Map(),
-          },
-        ],
-        [
-          profileB.id,
-          {
-            owner: { profileId: profileB.id, generation: 1 },
-            epoch: 1,
-            revision: 1,
-            availability: "ready",
-            rows: new Map([["term-codex-1", statusRowB]]),
-            cursors: new Map(),
-          },
-        ],
-      ]),
-    });
-
-    queryClient.setQueryData(
-      ["profile", profileA.id, 1, "terminal-sessions"],
-      {
-        sessions: [
-          {
-            ...sessionA,
-            profileId: profileA.id,
-            incarnationExact: String(sessionA.incarnation ?? 1),
-            terminationState: "live",
-          },
-        ],
-        termination: {
-          version: 1,
-          serverEpoch: "00000000-0000-0000-0000-000000000001",
-        },
-        owner: { profileId: profileA.id, generation: 1 },
-      },
-    );
-    queryClient.setQueryData(
-      ["profile", profileB.id, 1, "terminal-sessions"],
-      {
-        sessions: [
-          {
-            ...sessionB,
-            profileId: profileB.id,
-            incarnationExact: String(sessionB.incarnation ?? 1),
-            terminationState: "live",
-          },
-        ],
-        termination: {
-          version: 1,
-          serverEpoch: "00000000-0000-0000-0000-000000000002",
-        },
-        owner: { profileId: profileB.id, generation: 1 },
-      },
-    );
-
-    const hubWindow = Object.values(useWindowStore.getState().session.windows)[0];
-
     await act(async () => {
       root.render(
-        <QueryClientProvider client={queryClient}>
-          <EncryptProvider>
-            <MemoryRouter>
-              <AgentHubApp window={hubWindow} />
-            </MemoryRouter>
-          </EncryptProvider>
-        </QueryClientProvider>,
+        <MemoryRouter>
+          <QueryClientProvider client={queryClient}>
+            <AgentHubApp window={hubWindow} />
+          </QueryClientProvider>
+        </MemoryRouter>,
       );
     });
+    expect(container.querySelector('[data-testid="agent-hub-app"]')).not.toBeNull();
 
-    // Verify Agent Hub rendered
-    const hubRoot = container.querySelector(`[data-os-agent-hub="${hubWindow.id}"]`);
-    expect(hubRoot).not.toBeNull();
+    // Header elements
+    const toggleBtn = container.querySelector("button[aria-label='Toggle projects sidebar']");
+    expect(toggleBtn).not.toBeNull();
+    expect(toggleBtn?.getAttribute("aria-expanded")).toBe("true");
 
-    // Verify Urgency Summary Pills
-    const filterAll = container.querySelector('[data-testid="agent-hub-filter-all"]');
-    expect(filterAll?.textContent).toContain("All");
+    const header = container.querySelector("header");
+    expect(header?.textContent).toContain("Agent Hub");
+    expect(container.querySelector('[data-testid="agent-hub-context-pill"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="agent-hub-attn-counter"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="agent-hub-work-counter"]')).not.toBeNull();
 
-    const filterNeedsAttention = container.querySelector(
-      '[data-testid="agent-hub-filter-needs-attention"]',
-    );
-    expect(filterNeedsAttention?.textContent).toContain("Needs Attention");
+    // Roster / filter pills / Jump / Open beside MUST NOT exist (B4)
+    expect(container.querySelector('[data-testid="agent-hub-card-roster"]')).toBeNull();
+    expect(container.querySelector('[data-testid="agent-hub-search-input"]')).toBeNull();
+    expect(container.querySelector('button[title="Jump to terminal"]')).toBeNull();
+    expect(container.querySelector('button[title="Open beside"]')).toBeNull();
 
-    // Needs attention group should be rendered
-    const needsAttentionGroup = container.querySelector(
-      '[data-testid="agent-hub-group-needs-attention"]',
-    );
-    expect(needsAttentionGroup).not.toBeNull();
+    // TraditionalTerminalProjectsDisplay must be present
+    expect(container.querySelector('main[key="terminal-surface"], main#traditional-terminal-project-panel-project\\:dam-hopper, main[role="tabpanel"]')).not.toBeNull();
   });
 
-  it("masks agent titles when Cognito Privacy Mode is activated", async () => {
-    const sessionA: SessionInfo = {
-      id: "term-secret-1",
-      name: "Super Secret Project Terminal",
-      command: "secret-cmd",
-      cwd: "/repo/secret",
-      type: "shell",
-      startedAt: Date.now(),
-      alive: true,
-      incarnation: 1,
-    };
-
-    const transportA = createMockTransport([sessionA]);
+  it("toggles sidebar visibility while preserving the terminal-surface main container", async () => {
+    const transportA = createMockTransport([]);
     __setConnectionSnapshotForTests(
       profileA.id,
       {
@@ -320,106 +209,41 @@ describe("os-agent-hub.browser", () => {
       transportA,
     );
 
-    useAgentStatusStore.setState({
-      profiles: new Map([
-        [
-          profileA.id,
-          {
-            owner: { profileId: profileA.id, generation: 1 },
-            epoch: 1,
-            revision: 1,
-            availability: "ready",
-            rows: new Map([
-              [
-                "term-secret-1",
-                {
-                  id: "term-secret-1",
-                  incarnation: 1,
-                  agentKind: "omp",
-                  agentSessionId: "s-1",
-                  reporterEpoch: 1,
-                  state: "working",
-                  source: "lifecycle",
-                  attentionRevision: 0,
-                },
-              ],
-            ]),
-            cursors: new Map(),
-          },
-        ],
-      ]),
-    });
-
-    queryClient.setQueryData(
-      ["profile", profileA.id, 1, "terminal-sessions"],
-      {
-        sessions: [
-          {
-            ...sessionA,
-            profileId: profileA.id,
-            incarnationExact: String(sessionA.incarnation ?? 1),
-            terminationState: "live",
-          },
-        ],
-        termination: {
-          version: 1,
-          serverEpoch: "00000000-0000-0000-0000-000000000001",
-        },
-        owner: { profileId: profileA.id, generation: 1 },
-      },
-    );
-
-    const hubWindow = Object.values(useWindowStore.getState().session.windows)[0];
-
     await act(async () => {
       root.render(
-        <QueryClientProvider client={queryClient}>
-          <EncryptProvider>
-            <MemoryRouter>
-              <AgentHubApp window={hubWindow} />
-            </MemoryRouter>
-          </EncryptProvider>
-        </QueryClientProvider>,
+        <MemoryRouter>
+          <QueryClientProvider client={queryClient}>
+            <AgentHubApp window={hubWindow} />
+          </QueryClientProvider>
+        </MemoryRouter>,
       );
     });
 
-    // Initially title is visible
-    expect(container.textContent).toContain("Super Secret Project Terminal");
+    const toggleBtn = container.querySelector<HTMLButtonElement>("button[aria-label='Toggle projects sidebar']");
+    expect(toggleBtn).not.toBeNull();
+    expect(toggleBtn?.getAttribute("aria-expanded")).toBe("true");
 
-    // Activate Cognito Privacy Mode
+    // Click toggle to hide sidebar
     await act(async () => {
-      useCognitoModeStore.getState().toggle("Ctrl+Shift+C");
+      toggleBtn?.click();
     });
 
-    // Title should be masked as [Protected Agent]
-    expect(container.textContent).toContain("[Protected Agent]");
-    expect(container.textContent).not.toContain("Super Secret Project Terminal");
+    // Sidebar navigator should be hidden
+    expect(container.querySelector('nav[aria-label="Terminal projects and agents"]')).toBeNull();
+
+    // But main terminal-surface is still present and preserved!
+    expect(container.querySelector('main[role="tabpanel"]')).not.toBeNull();
+
+    // Click toggle again to restore sidebar
+    await act(async () => {
+      toggleBtn?.click();
+    });
+
+    expect(container.querySelector('nav[aria-label="Terminal projects and agents"]')).not.toBeNull();
   });
 
-  it("filters sessions by All, Agents, and Background scope pills", async () => {
-    const sessionLive: SessionInfo = {
-      id: "term-agent-live",
-      name: "Agent In View",
-      command: "omp task",
-      cwd: "/repo/live",
-      type: "shell",
-      startedAt: Date.now(),
-      alive: true,
-      incarnation: 1,
-    };
-
-    const sessionBg: SessionInfo = {
-      id: "term-agent-bg",
-      name: "Agent In Background",
-      command: "omp background",
-      cwd: "/repo/bg",
-      type: "shell",
-      startedAt: Date.now(),
-      alive: true,
-      incarnation: 1,
-    };
-
-    const transportA = createMockTransport([sessionLive, sessionBg]);
+  it("dispatches recipes:open when clicking Recipes in header", async () => {
+    const transportA = createMockTransport([]);
     __setConnectionSnapshotForTests(
       profileA.id,
       {
@@ -432,193 +256,79 @@ describe("os-agent-hub.browser", () => {
       transportA,
     );
 
-    useAgentStatusStore.setState({
-      profiles: new Map([
-        [
-          profileA.id,
-          {
-            owner: { profileId: profileA.id, generation: 1 },
-            epoch: 1,
-            revision: 1,
-            availability: "ready",
-            rows: new Map([
-              [
-                "term-agent-live",
-                {
-                  id: "term-agent-live",
-                  incarnation: 1,
-                  agentKind: "omp",
-                  agentSessionId: "s-live",
-                  reporterEpoch: 1,
-                  state: "working",
-                  source: "lifecycle",
-                  attentionRevision: 0,
-                },
-              ],
-              [
-                "term-agent-bg",
-                {
-                  id: "term-agent-bg",
-                  incarnation: 1,
-                  agentKind: "omp",
-                  agentSessionId: "s-bg",
-                  reporterEpoch: 1,
-                  state: "idle",
-                  source: "lifecycle",
-                  attentionRevision: 0,
-                },
-              ],
-            ]),
-            cursors: new Map(),
-          },
-        ],
-      ]),
-    });
-
-    queryClient.setQueryData(
-      ["profile", profileA.id, 1, "terminal-sessions"],
-      {
-        sessions: [
-          { ...sessionLive, profileId: profileA.id, incarnationExact: "1", terminationState: "live" },
-          { ...sessionBg, profileId: profileA.id, incarnationExact: "1", terminationState: "live" },
-        ],
-        termination: {
-          version: 1,
-          serverEpoch: "00000000-0000-0000-0000-000000000001",
-        },
-        owner: { profileId: profileA.id, generation: 1 },
-      },
-    );
-
-    // Open a terminal window displaying term-agent-live
-    const winLive = {
-      id: "win-term-live",
-      appId: "terminals" as const,
-      title: "Agent In View",
-      ctx: { profileId: profileA.id },
-      mode: "tile" as const,
-      desktopId: "desktop-hub",
-      maximized: false,
-      minimized: false,
-      runtimeIdentity: {
-        kind: "terminal" as const,
-        target: {
-          profileId: profileA.id,
-          generation: 1,
-          serverEpoch: "00000000-0000-0000-0000-000000000001",
-          terminalId: "term-agent-live",
-          incarnation: "1",
-        },
-      },
-    };
-
-    const sessionState = useWindowStore.getState().session;
-    useWindowStore.getState().setSession({
-      ...sessionState,
-      windows: {
-        ...sessionState.windows,
-        [winLive.id]: winLive,
-      },
-    });
-
-    const hubWindow = Object.values(useWindowStore.getState().session.windows)[0];
-
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <EncryptProvider>
-            <MemoryRouter>
-              <AgentHubApp window={hubWindow} />
-            </MemoryRouter>
-          </EncryptProvider>
-        </QueryClientProvider>,
-      );
-    });
-
-    const filterAgents = container.querySelector('[data-testid="agent-hub-filter-agents"]');
-    const filterBg = container.querySelector('[data-testid="agent-hub-filter-background"]');
-    expect(filterAgents).not.toBeNull();
-    expect(filterBg).not.toBeNull();
-
-    // Background badge should appear on term-agent-bg
-    const bgBadge = container.querySelector('[data-testid="agent-hub-background-badge"]');
-    expect(bgBadge).not.toBeNull();
-  });
-
-  it("dispatches frozen terminal:place-existing intent when jumping to background session", async () => {
-    const sessionBg: SessionInfo = {
-      id: "term-bg-jump",
-      name: "Background Process",
-      command: "sleep 100",
-      cwd: "/repo/bg",
-      type: "shell",
-      startedAt: Date.now(),
-      alive: true,
-      incarnation: 1,
-    };
-
-    const transportA = createMockTransport([sessionBg]);
-    __setConnectionSnapshotForTests(
-      profileA.id,
-      {
-        owner: { profileId: profileA.id, generation: 1 },
-        status: "connected",
-        intent: true,
-        serverUrl: profileA.url,
-        error: null,
-      },
-      transportA,
-    );
-
-    queryClient.setQueryData(
-      ["profile", profileA.id, 1, "terminal-sessions"],
-      {
-        sessions: [
-          {
-            ...sessionBg,
-            profileId: profileA.id,
-            incarnationExact: "1",
-            terminationState: "live",
-          },
-        ],
-        termination: {
-          version: 1,
-          serverEpoch: "00000000-0000-0000-0000-000000000001",
-        },
-        owner: { profileId: profileA.id, generation: 1 },
-      },
-    );
-
-    const hubWindow = Object.values(useWindowStore.getState().session.windows)[0];
-
-    let receivedIntent: unknown = null;
-    const unregister = registerIntentHandler("terminal:place-existing", (intent) => {
-      receivedIntent = intent.payload;
+    const receivedIntents: unknown[] = [];
+    const unregister = registerIntentHandler("recipes:open", (intent) => {
+      receivedIntents.push(intent);
+      return { handled: true };
     });
 
     await act(async () => {
       root.render(
-        <QueryClientProvider client={queryClient}>
-          <EncryptProvider>
-            <MemoryRouter>
-              <AgentHubApp window={hubWindow} />
-            </MemoryRouter>
-          </EncryptProvider>
-        </QueryClientProvider>,
+        <MemoryRouter>
+          <QueryClientProvider client={queryClient}>
+            <AgentHubApp window={hubWindow} />
+          </QueryClientProvider>
+        </MemoryRouter>,
       );
     });
 
-    const jumpBtn = container.querySelector('button[data-testid^="agent-hub-jump-"]');
-    expect(jumpBtn).not.toBeNull();
+    const recipesBtn = container.querySelector<HTMLButtonElement>("button[aria-label='Open Recipes']");
+    expect(recipesBtn).not.toBeNull();
 
     await act(async () => {
-      (jumpBtn as HTMLButtonElement)?.click();
+      recipesBtn?.click();
     });
 
-    expect(receivedIntent).not.toBeNull();
-    const payload = receivedIntent as { action: string; target: { terminalId: string } };
-    expect(payload.action).toBe("open-beside");
-    expect(payload.target.terminalId).toBe("term-bg-jump");
+    expect(receivedIntents).toHaveLength(1);
     unregister();
+  });
+
+  it("renders empty state with New Terminal and Recipes when zero-terminal workspace is open", async () => {
+    const hubWithZeroWorkspace: OsWindow = {
+      ...hubWindow,
+      appState: {
+        openWorkspaces: [{ profileId: "profile-a", project: "dam-hopper" }],
+        selectedWorkspace: '["profile-a","dam-hopper"]',
+      },
+    };
+
+    useWindowStore.getState().session.windows[hubWithZeroWorkspace.id] = hubWithZeroWorkspace;
+
+    const transportA = createMockTransport(
+      [],
+      [{ name: "dam-hopper", path: "/repos/dam-hopper" }],
+    );
+    __setConnectionSnapshotForTests(
+      profileA.id,
+      {
+        owner: { profileId: profileA.id, generation: 1 },
+        status: "connected",
+        intent: true,
+        serverUrl: profileA.url,
+        error: null,
+        projects: [{ name: "dam-hopper", path: "/repos/dam-hopper" }],
+      },
+      transportA,
+    );
+    queryClient.setQueryData(
+      profileQueryKey({ profileId: profileA.id, generation: 1 }, "projects"),
+      [{ name: "dam-hopper", path: "/repos/dam-hopper" }],
+    );
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <QueryClientProvider client={queryClient}>
+            <AgentHubApp window={hubWithZeroWorkspace} />
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    await act(async () => {
+      await queryClient.refetchQueries();
+    });
+    const emptyState = container.querySelector('[data-testid="traditional-terminal-empty-workspace"]');
+    expect(emptyState).not.toBeNull();
+    expect(emptyState?.textContent).toContain("No terminals running in this workspace");
+    expect(emptyState?.querySelector("button")?.textContent).toContain("New Terminal");
   });
 });

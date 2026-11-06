@@ -118,4 +118,48 @@ describe("OS Typed Intents", () => {
     expect(result.status).toBe("handled");
     expect(handler).toHaveBeenCalledWith(intent);
   });
+
+  it("supports file:open with legacy payload without mode", async () => {
+    const handler = vi.fn().mockResolvedValue({
+      status: "handled" as const,
+      targetWindowId: "win-editor-1",
+    });
+    registerIntentHandler("file:open", handler);
+
+    // Legacy caller: no mode, no generation
+    const legacyIntent = createIntent("file:open", {
+      profileId: "p1",
+      projectId: "proj1",
+      filePath: "/src/main.rs",
+      line: 42,
+    });
+
+    const result = await dispatchIntent(legacyIntent);
+    expect(result.status).toBe("handled");
+    expect(handler).toHaveBeenCalledWith(legacyIntent);
+    expect(legacyIntent.payload.mode).toBeUndefined();
+  });
+
+  it("supports file:open with optional float mode and generation", async () => {
+    const handler = vi.fn().mockResolvedValue({
+      status: "handled" as const,
+      targetWindowId: "win-editor-2",
+    });
+    registerIntentHandler("file:open", handler);
+
+    const floatIntent = createIntent("file:open", {
+      profileId: "p1",
+      projectId: "proj1",
+      worktreeId: "wt-1",
+      filePath: "/src/lib.rs",
+      generation: 3,
+      mode: "float",
+    });
+
+    const result = await dispatchIntent(floatIntent);
+    expect(result.status).toBe("handled");
+    expect(handler).toHaveBeenCalledWith(floatIntent);
+    expect(floatIntent.payload.mode).toBe("float");
+    expect(floatIntent.payload.generation).toBe(3);
+  });
 });

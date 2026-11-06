@@ -26,7 +26,10 @@ import { PaneContainer } from "@/components/organisms/PaneContainer.js";
 import type { DragItem } from "@/components/organisms/TabBar.js";
 import { fitAllTerminals } from "@/lib/terminal-fit-scheduler.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
-import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
+import type {
+  MountedSession,
+  TerminalAttachGate,
+} from "@/components/organisms/MultiTerminalDisplay.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
@@ -53,6 +56,7 @@ interface LayoutTreeProps {
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
   onOpenSessionChanges?: (sessionId: string) => void;
+  attachGate?: TerminalAttachGate;
 }
 
 function LayoutTree(props: LayoutTreeProps) {
@@ -90,6 +94,7 @@ function LayoutTree(props: LayoutTreeProps) {
           renderBrowserContent={props.renderBrowserContent}
           onCloseBrowser={props.onCloseBrowser}
           onOpenSessionChanges={props.onOpenSessionChanges}
+          attachGate={props.attachGate}
         />
       )}
     />
@@ -192,6 +197,7 @@ export interface SplitLayoutProps {
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
   onOpenSessionChanges?: (sessionId: string) => void;
+  attachGate?: TerminalAttachGate;
 }
 
 export function parseDockTarget(id: string): DockTarget | null {
@@ -238,6 +244,7 @@ export function SplitLayout({
   renderBrowserContent,
   onCloseBrowser,
   onOpenSessionChanges,
+  attachGate,
 }: SplitLayoutProps) {
   const shouldSuppressTerminalFocus = Boolean(suppressTerminalFocus);
   // ── dnd-kit drag sensors (8px activation so clicks still work) ──────────
@@ -322,6 +329,7 @@ export function SplitLayout({
           renderBrowserContent={renderBrowserContent}
           onCloseBrowser={onCloseBrowser}
           onOpenSessionChanges={onOpenSessionChanges}
+          attachGate={attachGate}
         />
       </div>
       {/* Drag overlay: floating tab label following the pointer */}

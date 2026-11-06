@@ -49,6 +49,7 @@ export interface TerminalCloseContextValue {
     target: TerminalTarget,
     windowId: string,
     onCloseView: (windowId: string) => void,
+    availability?: TerminalCloseRequest["availability"],
   ) => Promise<void>;
 }
 
@@ -83,6 +84,7 @@ export function TerminalCloseProvider({
     readonly target: TerminalTarget;
     readonly windowId: string;
     readonly onCloseView: (windowId: string) => void;
+    readonly entry?: TerminalCloseRequest["entry"];
     state: TerminationState;
   }
 
@@ -115,6 +117,7 @@ export function TerminalCloseProvider({
         }
         // Authoritative exit or cancellation closes the bound window
         if (nextState.status === "ended" || nextState.status === "restartCancelled") {
+          const isPaneTab = record.entry === "pane-tab";
           const win = useWindowStore.getState().session.windows[record.windowId];
           const curTarget =
             win?.runtimeIdentity?.kind === "terminal"
@@ -122,13 +125,14 @@ export function TerminalCloseProvider({
               : (win?.appState?.target as TerminalTarget | undefined) ??
                 (win ? resolveWindowTerminalObservation(win, observations).target : null);
           if (
-            win &&
-            curTarget &&
-            curTarget.profileId === record.target.profileId &&
-            curTarget.generation === record.target.generation &&
-            curTarget.terminalId === record.target.terminalId &&
-            curTarget.incarnation === record.target.incarnation &&
-            curTarget.serverEpoch === record.target.serverEpoch
+            isPaneTab ||
+            (win &&
+              curTarget &&
+              curTarget.profileId === record.target.profileId &&
+              curTarget.generation === record.target.generation &&
+              curTarget.terminalId === record.target.terminalId &&
+              curTarget.incarnation === record.target.incarnation &&
+              curTarget.serverEpoch === record.target.serverEpoch)
           ) {
             record.onCloseView(record.windowId);
           }
@@ -148,12 +152,13 @@ export function TerminalCloseProvider({
       target: TerminalTarget,
       windowId: string,
       onCloseView: (windowId: string) => void,
+      availability?: TerminalCloseRequest["availability"],
     ) => {
       onCloseView(windowId);
 
       const tKey = targetKey(target);
-      const origin: TerminationOrigin = "live";
-
+      const origin: TerminationOrigin =
+        availability === "restartPending" ? "restartPending" : "live";
       const reservation = terminalActionCoordinator.reserveDispatch(target, origin);
       if (!reservation.allowed) {
         return;
@@ -169,6 +174,7 @@ export function TerminalCloseProvider({
         target,
         windowId,
         onCloseView,
+        entry: currentRequestRef.current?.entry,
         state: initialDispatchState,
       };
       dispatchedActionsRef.current.set(tKey, record);
@@ -243,6 +249,7 @@ export function TerminalCloseProvider({
             frozenRequest.target,
             frozenRequest.windowId,
             onCloseView,
+            frozenRequest.availability,
           );
         } else {
           const win = useWindowStore.getState().session.windows[frozenRequest.windowId];
@@ -325,6 +332,7 @@ export function TerminalCloseProvider({
       target,
       windowId,
       onCloseView: boundOnCloseView,
+      entry: currentRequest?.entry,
       state: initialDispatchState,
     };
     dispatchedActionsRef.current.set(tKey, record);
@@ -417,14 +425,16 @@ export function TerminalCloseProvider({
           win?.runtimeIdentity?.kind === "terminal"
             ? win.runtimeIdentity.target
             : (win?.appState?.target as TerminalTarget | undefined);
+        const isPaneTab = record.entry === "pane-tab";
         const matchesExactTarget = Boolean(
-          win &&
+          isPaneTab ||
+          (win &&
             curTarget &&
             curTarget.profileId === target.profileId &&
             curTarget.generation === target.generation &&
             curTarget.terminalId === target.terminalId &&
             curTarget.incarnation === target.incarnation &&
-            curTarget.serverEpoch === target.serverEpoch,
+            curTarget.serverEpoch === target.serverEpoch),
         );
         if (matchesExactTarget) {
           record.onCloseView(record.windowId);

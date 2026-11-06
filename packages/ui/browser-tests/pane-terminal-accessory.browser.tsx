@@ -68,6 +68,7 @@ vi.mock("@/components/organisms/TerminalDockPreview.js", () => ({
 
 vi.mock("@/lib/terminal-host-attachment.js", () => ({
   attachTerminalsToHost: vi.fn(),
+  parkTerminalElement: vi.fn(),
 }));
 
 vi.mock("@/lib/terminal-fit-scheduler.js", () => ({

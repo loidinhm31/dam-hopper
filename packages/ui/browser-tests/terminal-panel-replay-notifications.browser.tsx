@@ -276,6 +276,7 @@ vi.mock("@/api/client.js", () => ({
   }),
   projectTargetCacheKey: (target: unknown) => "root",
   isProjectTargetError: () => false,
+  isGitUnavailableError: () => false,
   ApiRequestError: class ApiRequestError extends Error {
     constructor(
       message: string,

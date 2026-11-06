@@ -5,6 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { applyTerminalBufferReplay } from "@/lib/terminal-buffer-replay.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
+import {
+  acquireTerminalPresentation,
+  releaseTerminalPresentation,
+  setPresenterInputSuppression,
+} from "@/lib/terminal-presentation-input.js";
 import { TerminalPanel } from "./TerminalPanel.js";
 
 interface TestTerminal {
@@ -1233,5 +1238,81 @@ describe("TerminalPanel owned connections", () => {
       term.resize.forEach((listener) => listener({ cols: 100, rows: 30 }));
     });
     expect(t.terminalResize).not.toHaveBeenCalled();
+  });
+
+  it("composes presentation input management with panel suppression (R7b)", async () => {
+    const target = {
+      profileId: "pres-test",
+      generation: 1,
+      terminalId: "pres-term",
+      serverEpoch: "epoch-pres-1",
+      incarnation: "1",
+    };
+    const t = await connect("pres-test", 1);
+
+    t.invoke.mockImplementation(async (channel: string) => {
+      if (channel === "terminal:listDetailedObservation") {
+        return {
+          termination: {
+            version: 1,
+            serverEpoch: "epoch-pres-1",
+          },
+          sessions: [
+            {
+              id: "pres-term",
+              alive: true,
+              incarnation: 1,
+              incarnationExact: "1",
+            },
+          ],
+        };
+      }
+      return [];
+    });
+
+    await act(async () => {
+      root.render(
+        createElement(TerminalPanel, {
+          profileId: "pres-test",
+          sessionId: "pres-term",
+          project: "test",
+          command: "bash",
+          terminalTarget: target,
+        }),
+      );
+    });
+
+    const term = state.terminals[state.terminals.length - 1]!;
+
+    // 1. Unmanaged terminal: replay finishes -> stdin enabled
+    await act(async () => {
+      t.buffers.forEach((cb) => cb({ offset: 10, data: "ready\n", incarnation: 1 }));
+    });
+    expect(term.options.disableStdin).toBe(false);
+
+    // 2. Terminal becomes managed, presenter acquires and then releases
+    let token = acquireTerminalPresentation(term as never, "hub-pane-1");
+    expect(term.options.disableStdin).toBe(false);
+
+    // Presenter releases -> managed terminal with no presenter must be suppressed
+    releaseTerminalPresentation(term as never, token);
+    expect(term.options.disableStdin).toBe(true);
+
+    // 3. Replay completion on a managed terminal with no presenter keeps it suppressed
+    await act(async () => {
+      t.buffers.forEach((cb) => cb({ offset: 20, data: "more output\n", incarnation: 1 }));
+    });
+    expect(term.options.disableStdin).toBe(true);
+
+    // 4. Acquisition on a quiet PTY (no output) re-enables stdin
+    token = acquireTerminalPresentation(term as never, "standalone-win-1");
+    expect(term.options.disableStdin).toBe(false);
+
+    // 5. Presenter reason + panel compose (either suppresses)
+    setPresenterInputSuppression(term as never, token, "inactive-tab", true);
+    expect(term.options.disableStdin).toBe(true);
+
+    setPresenterInputSuppression(term as never, token, "inactive-tab", false);
+    expect(term.options.disableStdin).toBe(false);
   });
 });

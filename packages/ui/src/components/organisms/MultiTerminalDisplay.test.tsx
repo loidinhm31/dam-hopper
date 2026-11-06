@@ -232,4 +232,35 @@ describe("MultiTerminalDisplay floating controls", () => {
     expect(onVisibleSessionIdsChange).toHaveBeenCalledTimes(2);
     expect([...onVisibleSessionIdsChange.mock.calls[1][0]]).toEqual([]);
   });
+
+  it("retains denied and unresolved sessions in layout pruning checks when attachGate is present", async () => {
+    const sessions = [
+      { sessionId: "session-1", project: "demo", command: "" },
+      { sessionId: "session-denied", project: "demo", command: "" },
+    ];
+
+    const gate = {
+      resolveTerminal: vi.fn((id: string) => (id === "session-1" ? ({} as never) : undefined)),
+      renderPlaceholder: vi.fn(() => <div>Denied</div>),
+      revision: 1,
+    };
+
+    await act(async () => {
+      root.render(
+        <MultiTerminalDisplay
+          activeSessionId="session-1"
+          mountedSessions={sessions}
+          openTabs={[]}
+          layoutStorageKey="terminal-layout:test"
+          renderTerminals={false}
+          attachGate={gate}
+        />,
+      );
+    });
+
+    // pruneSessions must receive the full set of mountedSessions including the denied one
+    expect(mockLayout.pruneSessions).toHaveBeenCalledWith(
+      new Set(["session-1", "session-denied"]),
+    );
+  });
 });

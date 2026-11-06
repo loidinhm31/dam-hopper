@@ -51,6 +51,8 @@ let mockProjects = [
     status: null,
   },
 ];
+let mockLanguageScanCache: Record<string, unknown> | null = null;
+let mockLanguageFilter = "all";
 
 vi.mock("@/api/queries.js", () => ({
   useProjects: () => ({
@@ -61,7 +63,7 @@ vi.mock("@/api/queries.js", () => ({
   useProject: () => ({ data: null }),
   useGitDiff: () => ({ data: null }),
   useExplorerLanguageScan: () => ({
-    cache: null,
+    cache: mockLanguageScanCache,
     scan: { isPending: false },
   }),
   useMarkProject: () => ({
@@ -119,7 +121,7 @@ vi.mock("@/contexts/EncryptContext.js", () => ({
 vi.mock("@/stores/settings.js", () => ({
   useSettingsStore: () => ({
     explorerShowHidden: false,
-    explorerLanguageFilter: "all",
+    explorerLanguageFilter: mockLanguageFilter,
     systemFontSize: 14,
     saveDebounced: vi.fn(),
   }),
@@ -402,5 +404,42 @@ describe("FileTree Component & Dual Modes", () => {
       expect(onFileOpen).toHaveBeenCalledOnce();
       expect(onFileOpen).toHaveBeenCalledWith(expect.objectContaining({ id: "README.md" }));
     }
+  });
+  it("invokes onFileOpen on single click in language mode", async () => {
+    mockLanguageFilter = "typescript";
+    mockLanguageScanCache = {
+      result: {
+        files: [{ path: "src/index.ts", language: "typescript" }],
+        truncated: false,
+        limit: 1000,
+      },
+      scannedAt: Date.now(),
+    };
+
+    const onFileOpen = vi.fn();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <FileTree
+          mode="workspace"
+          onFileOpen={onFileOpen}
+        />,
+      );
+    });
+
+    const fileRow = container.querySelector('[data-testid="file-tree-item-src/index.ts"]') as HTMLElement | null;
+    if (fileRow) {
+      await act(async () => {
+        fileRow.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      expect(onFileOpen).toHaveBeenCalledOnce();
+      expect(onFileOpen).toHaveBeenCalledWith(expect.objectContaining({ id: "src/index.ts" }));
+    }
+
+    mockLanguageFilter = "all";
+    mockLanguageScanCache = null;
   });
 });

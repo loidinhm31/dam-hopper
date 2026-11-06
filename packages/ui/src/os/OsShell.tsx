@@ -70,7 +70,7 @@ import { generateUUID } from "@/lib/utils.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
 import { useWorkspaceStore } from "@/stores/workspace.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { editorFileTabKey, useEditorStore } from "@/stores/editor.js";
+import { editorDiffTabKey, editorFileTabKey, useEditorStore } from "@/stores/editor.js";
 import { normalizeFsTarget, toServerFsTarget, type FsTargetRef } from "@/api/ownership.js";
 import { normalizeProjectTarget } from "@/api/client.js";
 import type { FsArborNode } from "@/api/fs-types.js";
@@ -457,7 +457,19 @@ export function OsShell() {
       }),
       registerIntentHandler("file:open", async (intent) => {
         if (
+          intent.payload.mode === "float" &&
+          intent.payload.generation === undefined &&
           intent.payload.profileId &&
+          intent.payload.profileId !== "default"
+        ) {
+          return {
+            status: "unhandled",
+            reason: "File open with mode 'float' requires a defined generation",
+          };
+        }
+        if (
+          intent.payload.profileId &&
+          intent.payload.profileId !== "default" &&
           intent.payload.generation !== undefined
         ) {
           const snap = getConnectionSnapshot(intent.payload.profileId);
@@ -499,13 +511,19 @@ export function OsShell() {
         };
 
         const currentTabs = useEditorStore.getState().tabs;
-        const currentTabKey = editorFileTabKey(targetRef, intent.payload.filePath);
+        const currentTabKey = intent.payload.isDiff
+          ? editorDiffTabKey(targetRef, intent.payload.filePath)
+          : editorFileTabKey(targetRef, intent.payload.filePath);
         const currentTab = currentTabs.find((t) => t.key === currentTabKey);
         const canonicalDocKey = currentTab?.documentKey;
 
         const existing = Object.values(useWindowStore.getState().session.windows).find(
           (w) => {
             if (w.appId !== "editor") return false;
+            // CRITICAL: Diff windows must never match non-diff windows!
+            if (Boolean(w.appState?.isDiff) !== Boolean(intent.payload.isDiff)) {
+              return false;
+            }
             if (canonicalDocKey && w.appState?.documentKey === canonicalDocKey) return true;
             let wTarget: FsTargetRef;
             if (w.ctx.target) {
@@ -519,7 +537,9 @@ export function OsShell() {
             } else {
               wTarget = { kind: "workspace", profileId: w.ctx.profileId ?? "" };
             }
-            const wTabKey = editorFileTabKey(wTarget, (w.appState?.filePath as string) ?? "");
+            const wTabKey = w.appState?.isDiff
+              ? editorDiffTabKey(wTarget, (w.appState?.filePath as string) ?? "")
+              : editorFileTabKey(wTarget, (w.appState?.filePath as string) ?? "");
             if (wTabKey === currentTabKey) return true;
             return (
               w.ctx.profileId === targetCtx.profileId &&
@@ -530,6 +550,40 @@ export function OsShell() {
           },
         );
         if (existing) {
+          if (intent.payload.mode === "float") {
+            if (
+              existing.ctx.generation !== undefined &&
+              existing.ctx.generation !== intent.payload.generation
+            ) {
+              useWindowStore.getState().revealWindow(existing.id);
+              return {
+                status: "unhandled",
+                reason: "Document belongs to a retired connection; reopen it from its window",
+              };
+            }
+            useWindowStore.getState().presentWindowAsFloat(
+              existing.id,
+              useWindowStore.getState().session.activeDesktopId,
+            );
+            if (intent.payload.line !== undefined) {
+              useWindowStore.getState().updateAppState(existing.id, {
+                line: intent.payload.line,
+              });
+            }
+            if (intent.payload.isDiff) {
+              useEditorStore.getState().openDiff(
+                targetRef,
+                intent.payload.filePath,
+                intent.payload.fileStatus || "modified",
+                0,
+                0,
+              );
+            } else {
+              void useEditorStore.getState().open(targetRef, fileNode);
+            }
+            return { status: "handled", targetWindowId: existing.id };
+          }
+
           if (existing.minimized) restoreWindow(existing.id);
           focusWindow(existing.id);
           if (intent.payload.line !== undefined) {
@@ -537,23 +591,49 @@ export function OsShell() {
               line: intent.payload.line,
             });
           }
-          void useEditorStore.getState().open(targetRef, fileNode);
+          if (intent.payload.isDiff) {
+            useEditorStore.getState().openDiff(
+              targetRef,
+              intent.payload.filePath,
+              intent.payload.fileStatus || "modified",
+              0,
+              0,
+            );
+          } else {
+            void useEditorStore.getState().open(targetRef, fileNode);
+          }
           return { status: "handled", targetWindowId: existing.id };
         }
 
-        void useEditorStore.getState().open(targetRef, fileNode);
+        if (intent.payload.isDiff) {
+          useEditorStore.getState().openDiff(
+            targetRef,
+            intent.payload.filePath,
+            intent.payload.fileStatus || "modified",
+            0,
+            0,
+          );
+        } else {
+          void useEditorStore.getState().open(targetRef, fileNode);
+        }
         const id = `editor-${generateUUID().slice(0, 8)}`;
-        const placement = useSettingsStore.getState().defaultWindowPlacement ?? "float";
+        const placement = intent.payload.mode === "float"
+          ? "float"
+          : (useSettingsStore.getState().defaultWindowPlacement ?? "float");
+        const fileName = intent.payload.filePath.split("/").pop() || "Editor";
+        const title = intent.payload.isDiff ? `Diff: ${fileName}` : fileName;
         openWindow(
           {
             id,
             appId: "editor",
-            title: intent.payload.filePath.split("/").pop() || "Editor",
+            title,
             ctx: targetCtx,
             mode: placement,
             appState: {
               filePath: intent.payload.filePath,
               line: intent.payload.line,
+              isDiff: intent.payload.isDiff,
+              fileStatus: intent.payload.fileStatus,
               ...(canonicalDocKey ? { documentKey: canonicalDocKey } : {}),
             },
           },

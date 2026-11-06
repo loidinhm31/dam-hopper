@@ -5,6 +5,26 @@ import {
 } from "@/lib/terminal-fit-scheduler.js";
 import { getTerminal, type TerminalEntry } from "@/lib/terminal-registry.js";
 
+const originParents = new WeakMap<HTMLElement, HTMLElement>();
+
+export function parkTerminalElement(
+  entry: TerminalEntry,
+  fromHost: HTMLElement,
+): boolean {
+  const element = entry.attachmentElement ?? entry.terminal.element;
+  if (!element || element.parentElement !== fromHost) {
+    return false;
+  }
+  const origin = originParents.get(element);
+  if (origin) {
+    cancelScheduledTerminalFit(entry);
+    element.style.display = "none";
+    element.style.visibility = "";
+    origin.appendChild(element);
+    return true;
+  }
+  return false;
+}
 interface AttachTerminalsToHostOptions {
   host: HTMLElement;
   sessionIds: Iterable<string>;
@@ -36,6 +56,14 @@ export function attachTerminalsToHost({
     const entry = resolveTerminal(sessionId);
     const element = entry?.attachmentElement ?? entry?.terminal.element;
     if (!entry || !element) continue;
+
+    if (
+      element.parentElement &&
+      element.parentElement !== host &&
+      !originParents.has(element)
+    ) {
+      originParents.set(element, element.parentElement);
+    }
 
     const isActive = sessionId === activeSessionId;
     const isMovingToHost = element.parentElement !== host;

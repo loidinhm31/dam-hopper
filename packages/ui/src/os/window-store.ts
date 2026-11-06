@@ -25,7 +25,9 @@ import {
   renameDesktop,
   type ResizeDirection,
   resizeFloatBounds,
+  presentWindowAsFloat,
   restoreWindow,
+  revealWindow,
   selectPaneTab,
   setDefaultCtx,
   sendWindowToBack,
@@ -70,6 +72,8 @@ export interface WindowStoreState {
   toggleMaximizeWindow: (windowId: string) => void;
   minimizeWindow: (windowId: string) => void;
   restoreWindow: (windowId: string) => void;
+  revealWindow: (windowId: string) => void;
+  presentWindowAsFloat: (windowId: string, desktopId: string) => void;
   updateFloatBounds: (windowId: string, bounds: FloatBounds) => void;
   dockWindow: (
     desktopId: string,
@@ -193,6 +197,29 @@ export const useWindowStore = create<WindowStoreState>((set, get) => ({
   restoreWindow: (windowId) => {
     set((state) => ({
       session: restoreWindow(state.session, windowId),
+    }));
+  },
+
+  revealWindow: (windowId) => {
+    const win = get().session.windows[windowId];
+    if (!win) {
+      return;
+    }
+    recordWindowFocus(windowId);
+    set((state) => ({
+      session: revealWindow(state.session, windowId),
+    }));
+  },
+
+  presentWindowAsFloat: (windowId, desktopId) => {
+    const win = get().session.windows[windowId];
+    if (!win) {
+      return;
+    }
+    const { viewport } = get();
+    recordWindowFocus(windowId);
+    set((state) => ({
+      session: presentWindowAsFloat(state.session, windowId, desktopId, viewport),
     }));
   },
 

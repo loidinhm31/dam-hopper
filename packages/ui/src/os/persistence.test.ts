@@ -112,6 +112,48 @@ describe("persistence", () => {
     expect(state.secretAuth).toBeUndefined();
     expect(state.unsupportedField).toBeUndefined();
   });
+  it("sanitizes agent-hub appState to allowlisted workspace fields, dropping legacy and runtime authority", () => {
+    let session = createDefaultOsSession("d1", "Main");
+    session = openWindow(session, {
+      id: "w-hub",
+      appId: "agent-hub",
+      title: "Agent Hub",
+      ctx: { profileId: "" },
+      mode: "tile",
+      appState: {
+        openWorkspaces: [
+          { profileId: "p1", project: "dam-hopper" },
+          { profileId: "p2", project: "other-proj" },
+          { invalid: true },
+          null,
+          { profileId: "", project: "missing-profile" },
+        ],
+        sidebarHidden: true,
+        disclosedWorkspaces: ['["p1","dam-hopper"]'],
+        selectedWorkspace: '["p1","dam-hopper"]',
+        // Legacy keys to drop
+        urgencyFilter: "needs-attention",
+        profileFilter: "p1",
+        // Runtime authority to never persist
+        generation: 42,
+        serverEpoch: "epoch-123",
+        incarnation: "inc-1",
+        terminalId: "term-1",
+        target: { profileId: "p1", terminalId: "term-1" },
+      },
+    });
+
+    const sanitized = sanitizeSessionForPersistence(session);
+    expect(sanitized.windows["w-hub"].appState).toEqual({
+      openWorkspaces: [
+        { profileId: "p1", project: "dam-hopper" },
+        { profileId: "p2", project: "other-proj" },
+      ],
+      sidebarHidden: true,
+      disclosedWorkspaces: ['["p1","dam-hopper"]'],
+      selectedWorkspace: '["p1","dam-hopper"]',
+    });
+  });
 
   it("suspends autosave and preserves corrupt bytes when JSON is malformed", () => {
     const noticeHandler = vi.fn();

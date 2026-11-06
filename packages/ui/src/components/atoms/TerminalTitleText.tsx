@@ -15,17 +15,20 @@ export function TerminalTitleText({
   baseClassName,
   suffixClassName,
 }: TerminalTitleTextProps) {
+  const hasBase = Boolean(title.baseLabel && title.baseLabel.trim());
   return (
     <span className={cn("flex min-w-0", className)}>
       <span className="sr-only">{title.fullText}</span>
-      <span
-        aria-hidden="true"
-        className={cn("min-w-0 truncate", baseClassName)}
-      >
-        {title.baseLabel}
-      </span>
+      {hasBase && (
+        <span
+          aria-hidden="true"
+          className={cn("min-w-0 truncate", baseClassName)}
+        >
+          {title.baseLabel}
+        </span>
+      )}
       <span aria-hidden="true" className={cn("shrink-0", suffixClassName)}>
-        {` #${title.ordinal}`}
+        {hasBase ? ` #${title.ordinal}` : `#${title.ordinal}`}
       </span>
     </span>
   );

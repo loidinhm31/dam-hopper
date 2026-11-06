@@ -22,6 +22,8 @@ import {
   renameDesktop,
   resizeFloatBounds,
   restoreWindow,
+  presentWindowAsFloat,
+  revealWindow,
   selectPaneTab,
   sendWindowToBack,
   setDefaultCtx,
@@ -34,9 +36,9 @@ import {
   updateFloatBounds,
 } from "./window-ops.js";
 import { validateOsSession } from "./persistence.js";
-import type { FloatBounds, WindowContext } from "./types.js";
+import type { FloatBounds, OsDesktop, OsSessionV1, WindowContext } from "./types.js";
 import { collectTilePanes, newTilePaneNode } from "@/lib/tile-tree.js";
-import { useWindowStore } from "./window-store.js";
+import { getWindowFocusTimestamp, useWindowStore } from "./window-store.js";
 
 const testCtx: WindowContext = {
   profileId: "profile-1",
@@ -685,5 +687,513 @@ describe("window-ops pure functions", () => {
     session = setWindowMode(session, "win-mode", "float");
     expect(session.windows["win-mode"].mode).toBe("float");
     expect(session.windows["win-mode"].maximized).toBe(false);
+  });
+
+  describe("revealWindow", () => {
+    it("switches to holder's desktop and focuses window when on a different desktop", () => {
+      let session = createDefaultOsSession("desk-1");
+      session = addDesktop(session, "Desk 2");
+      const desk2Id = session.desktops[session.desktops.length - 1].id;
+
+      session = openWindow(
+        session,
+        {
+          id: "win-target",
+          appId: "editor",
+          title: "Target Editor",
+          ctx: testCtx,
+          mode: "float",
+        },
+        desk2Id,
+      );
+
+      // Active desktop is desk-1, window is on desk-2
+      expect(session.activeDesktopId).toBe("desk-1");
+      expect(session.windows["win-target"].desktopId).toBe(desk2Id);
+
+      const revealed = revealWindow(session, "win-target");
+      expect(revealed.activeDesktopId).toBe(desk2Id);
+      const desk2Obj = revealed.desktops.find((d) => d.id === desk2Id)!;
+      expect(desk2Obj.focusedWindowId).toBe("win-target");
+      expect(validateOsSession(revealed).valid).toBe(true);
+    });
+
+    it("un-minimizes a minimized window and switches to its destination desktop", () => {
+      let session = createDefaultOsSession("desk-1");
+      session = addDesktop(session, "Desk 2");
+      const desk2Id = session.desktops[session.desktops.length - 1].id;
+
+      session = openWindow(
+        session,
+        {
+          id: "win-min",
+          appId: "terminals",
+          title: "Terminal",
+          ctx: testCtx,
+          mode: "float",
+        },
+        desk2Id,
+      );
+      session = minimizeWindow(session, "win-min");
+      expect(session.windows["win-min"].minimized).toBe(true);
+
+      // Active desktop is desk-1
+      session = switchDesktop(session, "desk-1");
+      expect(session.activeDesktopId).toBe("desk-1");
+
+      const revealed = revealWindow(session, "win-min");
+      expect(revealed.activeDesktopId).toBe(desk2Id);
+      expect(revealed.windows["win-min"].minimized).toBe(false);
+      const desk2Obj = revealed.desktops.find((d) => d.id === desk2Id)!;
+      expect(desk2Obj.focusedWindowId).toBe("win-min");
+      expect(desk2Obj.floatingWindowIds).toContain("win-min");
+      expect(validateOsSession(revealed).valid).toBe(true);
+    });
+
+    it("reveals a minimized window whose restorePlacement.desktopId differs from its current desktopId", () => {
+      let session = createDefaultOsSession("desk-1");
+      session = addDesktop(session, "Desk 2");
+      const desk2Id = session.desktops[session.desktops.length - 1].id;
+
+      session = openWindow(
+        session,
+        {
+          id: "win-relocated",
+          appId: "editor",
+          title: "Editor",
+          ctx: testCtx,
+          mode: "float",
+        },
+        "desk-1",
+      );
+      session = minimizeWindow(session, "win-relocated");
+      // Manually set restorePlacement to desk2Id (relocated destination)
+      session = {
+        ...session,
+        windows: {
+          ...session.windows,
+          "win-relocated": {
+            ...session.windows["win-relocated"],
+            restorePlacement: {
+              mode: "float",
+              desktopId: desk2Id,
+              floatBounds: DEFAULT_FLOAT_BOUNDS,
+            },
+          },
+        },
+      };
+
+      const revealed = revealWindow(session, "win-relocated");
+      expect(revealed.activeDesktopId).toBe(desk2Id);
+      expect(revealed.windows["win-relocated"].desktopId).toBe(desk2Id);
+      expect(revealed.windows["win-relocated"].minimized).toBe(false);
+      const desk2Obj = revealed.desktops.find((d) => d.id === desk2Id)!;
+      expect(desk2Obj.focusedWindowId).toBe("win-relocated");
+      expect(validateOsSession(revealed).valid).toBe(true);
+    });
+
+    it("preserves maximized state when un-minimizing a window that was minimized while maximized", () => {
+      let session = createDefaultOsSession("desk-1");
+      session = openWindow(session, {
+        id: "win-min-max",
+        appId: "terminals",
+        title: "Terminal",
+        ctx: testCtx,
+        mode: "float",
+      });
+      session = maximizeWindow(session, "win-min-max");
+      session = minimizeWindow(session, "win-min-max");
+      expect(session.windows["win-min-max"].minimized).toBe(true);
+      expect(session.windows["win-min-max"].maximized).toBe(true);
+
+      const revealed = revealWindow(session, "win-min-max");
+      expect(revealed.windows["win-min-max"].minimized).toBe(false);
+      expect(revealed.windows["win-min-max"].maximized).toBe(true);
+      expect(revealed.desktops[0].focusedWindowId).toBe("win-min-max");
+      expect(validateOsSession(revealed).valid).toBe(true);
+    });
+
+    it("preserves maximized state when revealing a maximized window", () => {
+      let session = createDefaultOsSession("desk-1");
+      session = openWindow(session, {
+        id: "win-max",
+        appId: "editor",
+        title: "Maximized Editor",
+        ctx: testCtx,
+        mode: "float",
+      });
+      session = maximizeWindow(session, "win-max");
+      expect(session.windows["win-max"].maximized).toBe(true);
+
+      const revealed = revealWindow(session, "win-max");
+      expect(revealed.windows["win-max"].maximized).toBe(true);
+      expect(revealed.windows["win-max"].minimized).toBe(false);
+      expect(revealed.desktops[0].focusedWindowId).toBe("win-max");
+      expect(validateOsSession(revealed).valid).toBe(true);
+    });
+
+    it("returns the exact same session object for unknown window id", () => {
+      const session = createDefaultOsSession("desk-1");
+      const revealed = revealWindow(session, "non-existent-window");
+      expect(revealed).toBe(session);
+    });
+
+    it("executes store revealWindow atomically with a single subscriber notification", () => {
+      let session = createDefaultOsSession("desk-1");
+      session = addDesktop(session, "Desk 2");
+      const desk2Id = session.desktops[session.desktops.length - 1].id;
+
+      session = openWindow(
+        session,
+        {
+          id: "store-win",
+          appId: "terminals",
+          title: "Store Terminal",
+          ctx: testCtx,
+          mode: "float",
+        },
+        desk2Id,
+      );
+      session = minimizeWindow(session, "store-win");
+      useWindowStore.getState().setSession(session);
+
+      let notificationCount = 0;
+      let subscriberSession: OsSessionV1 | null = null;
+      const unsub = useWindowStore.subscribe((state) => {
+        notificationCount++;
+        subscriberSession = state.session;
+      });
+
+      const counterBefore = getWindowFocusTimestamp("store-win");
+      useWindowStore.getState().revealWindow("store-win");
+      unsub();
+
+      expect(notificationCount).toBe(1);
+      expect(subscriberSession).not.toBeNull();
+      expect(subscriberSession!.activeDesktopId).toBe(desk2Id);
+      expect(subscriberSession!.windows["store-win"].minimized).toBe(false);
+      const targetDesktop = subscriberSession!.desktops.find(
+        (d) => d.id === desk2Id,
+      )!;
+      expect(targetDesktop.focusedWindowId).toBe("store-win");
+      expect(validateOsSession(subscriberSession!).valid).toBe(true);
+      expect(getWindowFocusTimestamp("store-win")).toBeGreaterThan(
+        counterBefore,
+      );
+    });
+  });
+
+  describe("presentWindowAsFloat", () => {
+    it("converts a tiled window to float on requested desktop and validates session", () => {
+      let session = createDefaultOsSession("desk-1");
+      session = openWindow(
+        session,
+        {
+          id: "win-tiled",
+          appId: "editor",
+          title: "Editor",
+          ctx: testCtx,
+          mode: "tile",
+          appState: { filePath: "/foo/bar.ts", line: 12 },
+        },
+        "desk-1",
+      );
+      const initialWin = session.windows["win-tiled"];
+      expect(initialWin.mode).toBe("tile");
+
+      const updated = presentWindowAsFloat(session, "win-tiled", "desk-1");
+      const win = updated.windows["win-tiled"];
+      expect(win.mode).toBe("float");
+      expect(win.minimized).toBe(false);
+      expect(win.maximized).toBe(false);
+      expect(win.desktopId).toBe("desk-1");
+      expect(win.floatBounds).toBeDefined();
+      // Invariant: id, appState, ctx unchanged
+      expect(win.id).toBe(initialWin.id);
+      expect(win.appState).toEqual(initialWin.appState);
+      expect(win.ctx).toEqual(initialWin.ctx);
+
+      const desk = updated.desktops.find((d) => d.id === "desk-1")!;
+      expect(desk.floatingWindowIds).toContain("win-tiled");
+      expect(desk.focusedWindowId).toBe("win-tiled");
+      expect(validateOsSession(updated).valid).toBe(true);
+    });
+
+    it("un-minimizes a window minimized from tile and presents as float", () => {
+      let session = createDefaultOsSession("desk-1");
+      session = openWindow(
+        session,
+        {
+          id: "win-min-tile",
+          appId: "editor",
+          title: "Editor",
+          ctx: testCtx,
+          mode: "tile",
+        },
+        "desk-1",
+      );
+      session = minimizeWindow(session, "win-min-tile");
+      expect(session.windows["win-min-tile"].minimized).toBe(true);
+      expect(session.windows["win-min-tile"].restorePlacement?.mode).toBe("tile");
+
+      const updated = presentWindowAsFloat(session, "win-min-tile", "desk-1");
+      const win = updated.windows["win-min-tile"];
+      expect(win.minimized).toBe(false);
+      expect(win.maximized).toBe(false);
+      expect(win.mode).toBe("float");
+      expect(win.restorePlacement).toBeUndefined();
+      expect(win.desktopId).toBe("desk-1");
+
+      const desk = updated.desktops.find((d) => d.id === "desk-1")!;
+      expect(desk.floatingWindowIds).toContain("win-min-tile");
+      expect(desk.focusedWindowId).toBe("win-min-tile");
+      expect(validateOsSession(updated).valid).toBe(true);
+    });
+
+    it("un-minimizes a window minimized from float and preserves floatBounds", () => {
+      let session = createDefaultOsSession("desk-1");
+      const customBounds: FloatBounds = { x: 120, y: 140, width: 600, height: 400 };
+      session = openWindow(
+        session,
+        {
+          id: "win-min-float",
+          appId: "editor",
+          title: "Editor",
+          ctx: testCtx,
+          mode: "float",
+          floatBounds: customBounds,
+        },
+        "desk-1",
+      );
+      session = minimizeWindow(session, "win-min-float");
+      expect(session.windows["win-min-float"].minimized).toBe(true);
+
+      const updated = presentWindowAsFloat(session, "win-min-float", "desk-1");
+      const win = updated.windows["win-min-float"];
+      expect(win.minimized).toBe(false);
+      expect(win.maximized).toBe(false);
+      expect(win.mode).toBe("float");
+      expect(win.restorePlacement).toBeUndefined();
+      expect(win.floatBounds).toEqual(customBounds);
+      expect(validateOsSession(updated).valid).toBe(true);
+    });
+
+    it("un-maximizes a maximized window and presents as float", () => {
+      let session = createDefaultOsSession("desk-1");
+      session = openWindow(
+        session,
+        {
+          id: "win-max",
+          appId: "editor",
+          title: "Editor",
+          ctx: testCtx,
+          mode: "tile",
+        },
+        "desk-1",
+      );
+      session = toggleMaximizeWindow(session, "win-max");
+      expect(session.windows["win-max"].maximized).toBe(true);
+
+      const updated = presentWindowAsFloat(session, "win-max", "desk-1");
+      const win = updated.windows["win-max"];
+      expect(win.maximized).toBe(false);
+      expect(win.mode).toBe("float");
+      expect(win.minimized).toBe(false);
+
+      const desk = updated.desktops.find((d) => d.id === "desk-1")!;
+      expect(desk.floatingWindowIds).toContain("win-max");
+      expect(desk.focusedWindowId).toBe("win-max");
+      expect(validateOsSession(updated).valid).toBe(true);
+    });
+
+    it("moves window from other desktop to target desktop as float and switches desktop", () => {
+      let session = createDefaultOsSession("desk-1");
+      session = addDesktop(session, "Desk 2");
+      const desk2Id = session.desktops[1].id;
+      session = openWindow(
+        session,
+        {
+          id: "win-other",
+          appId: "editor",
+          title: "Editor",
+          ctx: testCtx,
+          mode: "tile",
+        },
+        desk2Id,
+      );
+      expect(session.windows["win-other"].desktopId).toBe(desk2Id);
+
+      const updated = presentWindowAsFloat(session, "win-other", "desk-1");
+      const win = updated.windows["win-other"];
+      expect(win.desktopId).toBe("desk-1");
+      expect(win.mode).toBe("float");
+      expect(updated.activeDesktopId).toBe("desk-1");
+
+      const desk1 = updated.desktops.find((d) => d.id === "desk-1")!;
+      const desk2 = updated.desktops.find((d) => d.id === desk2Id)!;
+      expect(desk1.floatingWindowIds).toContain("win-other");
+      expect(desk1.focusedWindowId).toBe("win-other");
+      expect(desk2.floatingWindowIds).not.toContain("win-other");
+      expect(validateOsSession(updated).valid).toBe(true);
+    });
+
+    it("moves minimized window from other desktop to target desktop as float", () => {
+      let session = createDefaultOsSession("desk-1");
+      session = addDesktop(session, "Desk 2");
+      const desk2Id = session.desktops[1].id;
+      session = openWindow(
+        session,
+        {
+          id: "win-other-min",
+          appId: "editor",
+          title: "Editor",
+          ctx: testCtx,
+          mode: "tile",
+        },
+        desk2Id,
+      );
+      session = minimizeWindow(session, "win-other-min");
+
+      const updated = presentWindowAsFloat(session, "win-other-min", "desk-1");
+      const win = updated.windows["win-other-min"];
+      expect(win.desktopId).toBe("desk-1");
+      expect(win.minimized).toBe(false);
+      expect(win.mode).toBe("float");
+      expect(win.restorePlacement).toBeUndefined();
+      expect(updated.activeDesktopId).toBe("desk-1");
+      expect(validateOsSession(updated).valid).toBe(true);
+    });
+
+    it("is a no-op apart from focus and active desktop when already float on same desktop", () => {
+      let session = createDefaultOsSession("desk-1");
+      const customBounds: FloatBounds = { x: 50, y: 60, width: 500, height: 350 };
+      session = openWindow(
+        session,
+        {
+          id: "win-float-same",
+          appId: "editor",
+          title: "Editor",
+          ctx: testCtx,
+          mode: "float",
+          floatBounds: customBounds,
+        },
+        "desk-1",
+      );
+      session = openWindow(
+        session,
+        {
+          id: "win-float-other",
+          appId: "editor",
+          title: "Other",
+          ctx: testCtx,
+          mode: "float",
+        },
+        "desk-1",
+      );
+      expect(session.desktops[0].focusedWindowId).toBe("win-float-other");
+
+      const updated = presentWindowAsFloat(session, "win-float-same", "desk-1");
+      const win = updated.windows["win-float-same"];
+      expect(win.floatBounds).toEqual(customBounds);
+      expect(updated.desktops[0].focusedWindowId).toBe("win-float-same");
+      expect(validateOsSession(updated).valid).toBe(true);
+    });
+
+    it("preserves other maximized windows when presenting window as float", () => {
+      let session = createDefaultOsSession("desk-1");
+      session = openWindow(
+        session,
+        {
+          id: "win-max-1",
+          appId: "terminals",
+          title: "Hub",
+          ctx: testCtx,
+          mode: "tile",
+        },
+        "desk-1",
+      );
+      session = toggleMaximizeWindow(session, "win-max-1");
+      session = openWindow(
+        session,
+        {
+          id: "win-to-float",
+          appId: "editor",
+          title: "Editor",
+          ctx: testCtx,
+          mode: "tile",
+        },
+        "desk-1",
+      );
+      expect(session.windows["win-max-1"].maximized).toBe(true);
+
+      const updated = presentWindowAsFloat(session, "win-to-float", "desk-1");
+      expect(updated.windows["win-max-1"].maximized).toBe(true);
+      expect(updated.windows["win-to-float"].maximized).toBe(false);
+      expect(updated.windows["win-to-float"].mode).toBe("float");
+      expect(updated.desktops[0].focusedWindowId).toBe("win-to-float");
+      expect(validateOsSession(updated).valid).toBe(true);
+    });
+
+    it("returns session untouched for unknown windowId or unknown desktopId", () => {
+      const session = createDefaultOsSession("desk-1");
+      const updated1 = presentWindowAsFloat(session, "nonexistent", "desk-1");
+      expect(updated1).toBe(session);
+
+      const sessionWithWin = openWindow(
+        session,
+        {
+          id: "w1",
+          appId: "editor",
+          title: "Editor",
+          ctx: testCtx,
+          mode: "float",
+        },
+        "desk-1",
+      );
+      const updated2 = presentWindowAsFloat(sessionWithWin, "w1", "nonexistent-desk");
+      expect(updated2).toBe(sessionWithWin);
+    });
+
+    it("executes store presentWindowAsFloat atomically with a single subscriber notification and updates focus timestamp", () => {
+      let session = createDefaultOsSession("desk-1");
+      session = addDesktop(session, "Desk 2");
+      const desk2Id = session.desktops[1].id;
+      session = openWindow(
+        session,
+        {
+          id: "store-float-win",
+          appId: "editor",
+          title: "Editor",
+          ctx: testCtx,
+          mode: "tile",
+        },
+        desk2Id,
+      );
+      session = minimizeWindow(session, "store-float-win");
+      useWindowStore.getState().setSession(session);
+
+      let notificationCount = 0;
+      let subscriberSession: OsSessionV1 | null = null;
+      const unsub = useWindowStore.subscribe((state) => {
+        notificationCount++;
+        subscriberSession = state.session;
+      });
+
+      const counterBefore = getWindowFocusTimestamp("store-float-win");
+      useWindowStore.getState().presentWindowAsFloat("store-float-win", "desk-1");
+      unsub();
+
+      expect(notificationCount).toBe(1);
+      expect(subscriberSession).not.toBeNull();
+      expect(subscriberSession!.activeDesktopId).toBe("desk-1");
+      const placedWin = subscriberSession!.windows["store-float-win"];
+      expect(placedWin.minimized).toBe(false);
+      expect(placedWin.mode).toBe("float");
+      expect(placedWin.desktopId).toBe("desk-1");
+      const desk1 = subscriberSession!.desktops.find((d) => d.id === "desk-1")!;
+      expect(desk1.focusedWindowId).toBe("store-float-win");
+      expect(validateOsSession(subscriberSession!).valid).toBe(true);
+      expect(getWindowFocusTimestamp("store-float-win")).toBeGreaterThan(counterBefore);
+    });
   });
 });

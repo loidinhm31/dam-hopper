@@ -35,6 +35,7 @@ export function useAggregatedTerminalSessions(): {
   observations: TerminalInventoryDetailedObservation[];
   isSuccess: boolean;
   isLoading: boolean;
+  loadedProfileIds: ReadonlySet<string>;
 } {
   const profileVersion = useSyncExternalStore(
     subscribeToProfileChanges,
@@ -79,7 +80,7 @@ export function useAggregatedTerminalSessions(): {
 
   const queryResults = useQueries({ queries: querySpecs });
 
-  const { sessions, observations, isSuccess, isLoading } = useMemo(() => {
+  const { sessions, observations, isSuccess, isLoading, loadedProfileIds } = useMemo(() => {
     if (profiles.length === 0) {
       const list: AggregatedSessionInfo[] = [];
       if (ambientObservation) {
@@ -102,16 +103,22 @@ export function useAggregatedTerminalSessions(): {
         observations: ambientObservation ? [ambientObservation] : [],
         isSuccess: ambientSuccess,
         isLoading: ambientLoading,
+        loadedProfileIds: new Set(ambientSuccess ? ["default"] : []),
       };
     }
     const sessionsList: AggregatedSessionInfo[] = [];
     const observationsList: TerminalInventoryDetailedObservation[] = [];
+    const loadedProfiles = new Set<string>();
     let anyLoading = false;
 
-    for (const result of queryResults) {
+    queryResults.forEach((result, idx) => {
       if (result.isLoading) anyLoading = true;
       const obs = result.data as TerminalInventoryDetailedObservation | undefined;
       if (obs && (!obs.owner || isCurrentConnection(obs.owner))) {
+        const profile = profiles[idx];
+        if (profile && result.isSuccess) {
+          loadedProfiles.add(profile.id);
+        }
         observationsList.push(obs);
         if (Array.isArray(obs.sessions)) {
           for (const row of obs.sessions) {
@@ -129,15 +136,15 @@ export function useAggregatedTerminalSessions(): {
           }
         }
       }
-    }
-
+    });
     return {
       sessions: sessionsList,
       observations: observationsList,
       isSuccess:
         queryResults.length > 0 && queryResults.some((r) => r.isSuccess),
       isLoading: anyLoading,
+      loadedProfileIds: loadedProfiles,
     };
   }, [profiles, ambientObservation, queryResults, ambientSuccess, ambientLoading]);
-  return { sessions, observations, isSuccess, isLoading };
+  return { sessions, observations, isSuccess, isLoading, loadedProfileIds };
 }

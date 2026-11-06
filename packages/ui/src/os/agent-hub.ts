@@ -13,12 +13,11 @@ import {
   buildTraditionalTerminalAgentRows,
   type BuildTraditionalTerminalAgentsInput,
 } from "@/lib/traditional-terminal-agents.js";
-import type { OsWindow, WindowContext } from "./types.js";
+import type { OsWindow } from "./types.js";
 import type { AggregatedSessionInfo } from "@/hooks/use-aggregated-terminal-sessions.js";
 import {
   proveNumericEvidenceJoin,
   type TerminalInventoryTerminationState,
-  type TerminalPlacementIntent,
   type TerminalTarget,
 } from "@/api/terminal-session-contract.js";
 
@@ -209,20 +208,6 @@ export function findMatchingTerminalWindow(
   return null;
 }
 
-/**
- * Constructs an immutable TerminalPlacementIntent for dispatching terminal:place-existing.
- */
-export function createTerminalPlacementIntent(
-  sourceHubWindowId: string,
-  target: TerminalTarget,
-  action: "focus-existing" | "open-beside" | "move-beside",
-): TerminalPlacementIntent {
-  return Object.freeze({
-    sourceHubWindowId,
-    target,
-    action,
-  });
-}
 
 export interface BuildAgentHubItemsInput
   extends Partial<BuildTraditionalTerminalAgentsInput> {
@@ -277,7 +262,8 @@ export function buildAgentHubItems(
       if (
         s.alive === false ||
         s.terminationState === "exited" ||
-        s.terminationState === "restartCancelled"
+        s.terminationState === "restartCancelled" ||
+        s.terminationState === "terminationRequested"
       ) {
         continue;
       }
@@ -333,6 +319,16 @@ export function buildAgentHubItems(
             tradRow.presentation,
             isConnected ? "connected" : "disconnected",
           );
+        } else if (!isConnected || profileStatusView?.availability !== "ready") {
+          isAgent = false;
+          urgency = "unavailable";
+          presentation = {
+            label: "Unavailable",
+            reasonLabel: null,
+            outcomeHint: null,
+            sourceLabel: "Lifecycle observation",
+            coverageHint: null,
+          };
         } else {
           // Synthesize presentation from status
           presentation = {
@@ -553,217 +549,3 @@ export function computeAgentHubSummary(
   };
 }
 
-export type AgentHubFilterScope = "all" | "agents" | "background";
-
-export interface AgentHubFilterOptions {
-  scope?: AgentHubFilterScope;
-  urgency?: AgentHubUrgency | "all";
-  profileId?: string | "all";
-  searchQuery?: string;
-  harness?: "OMP" | "Codex" | "Claude" | "all";
-}
-
-/**
- * Filter items by scope (All / Agents / Background), urgency, profile, harness, or search terms.
- */
-export function filterAgentHubItems(
-  items: readonly AgentHubItem[],
-  filters: AgentHubFilterOptions,
-): readonly AgentHubItem[] {
-  const query = filters.searchQuery?.trim().toLowerCase();
-
-  return items.filter((item) => {
-    // Scope filter (All / Agents / Background)
-    if (filters.scope === "agents" && !item.isAgent) {
-      return false;
-    }
-    if (filters.scope === "background" && !item.isBackground) {
-      return false;
-    }
-
-    // Urgency filter
-    if (
-      filters.urgency &&
-      filters.urgency !== "all" &&
-      item.urgency !== filters.urgency
-    ) {
-      return false;
-    }
-
-    // Profile filter
-    if (
-      filters.profileId &&
-      filters.profileId !== "all" &&
-      item.profileId !== filters.profileId
-    ) {
-      return false;
-    }
-
-    // Harness filter
-    if (
-      filters.harness &&
-      filters.harness !== "all" &&
-      item.harnessLabel !== filters.harness
-    ) {
-      return false;
-    }
-
-    // Search query
-    if (query) {
-      const match =
-        item.terminalTitle.toLowerCase().includes(query) ||
-        item.projectLabel.toLowerCase().includes(query) ||
-        item.profileLabel.toLowerCase().includes(query) ||
-        item.sessionId.toLowerCase().includes(query) ||
-        item.harnessLabel.toLowerCase().includes(query) ||
-        (item.presentation.reasonLabel &&
-          item.presentation.reasonLabel.toLowerCase().includes(query));
-      if (!match) return false;
-    }
-
-    return true;
-  });
-}
-
-export interface FencedJumpValidationResult {
-  valid: boolean;
-  reason?: string;
-  existingWindowId?: string;
-  targetDesktopId?: string;
-  targetContext?: WindowContext;
-  action?: "focus-existing" | "open-beside" | "move-beside";
-  matchingWindow?: {
-    window: OsWindow;
-    windowId: string;
-    desktopId: string;
-    minimized: boolean;
-  } | null;
-}
-
-/**
- * Validates a jump/placement intent target with exact owner and generation fencing.
- * Checks exact runtime target against session windows.
- */
-export type LiveTerminalSnapshotMap = ReadonlyMap<
-  string,
-  ReadonlyMap<string, { alive: boolean; incarnation?: number }>
->;
-
-export function validateAgentHubJump(
-  item: AgentHubItem,
-  connections: ReadonlyMap<string, ConnectionSnapshot>,
-  windows: Record<string, OsWindow>,
-  aliveTerminalIdsByProfile?:
-    | LiveTerminalSnapshotMap
-    | ReadonlyMap<string, ReadonlySet<string>>,
-): FencedJumpValidationResult {
-  const conn = connections.get(item.profileId);
-  if (!conn || conn.status !== "connected") {
-    return {
-      valid: false,
-      reason: `Target profile "${item.profileLabel}" is disconnected or unavailable`,
-    };
-  }
-
-  if (conn.owner.generation !== item.statusOwner.generation) {
-    return {
-      valid: false,
-      reason: `Target profile "${item.profileLabel}" generation changed (expected ${item.statusOwner.generation}, actual ${conn.owner.generation})`,
-    };
-  }
-
-  // Check live session existence and incarnation match if map provided
-  if (aliveTerminalIdsByProfile) {
-    const profileAlive = aliveTerminalIdsByProfile.get(item.profileId);
-    if (!profileAlive) {
-      return {
-        valid: false,
-        reason: `Terminal session "${item.terminalRef.id}" is no longer alive on host`,
-      };
-    }
-
-    if (profileAlive instanceof Set) {
-      if (!profileAlive.has(item.terminalRef.id)) {
-        return {
-          valid: false,
-          reason: `Terminal session "${item.terminalRef.id}" is no longer alive on host`,
-        };
-      }
-    } else {
-      const snap = (
-        profileAlive as ReadonlyMap<
-          string,
-          { alive: boolean; incarnation?: number }
-        >
-      ).get(item.terminalRef.id);
-      if (!snap || !snap.alive) {
-        return {
-          valid: false,
-          reason: `Terminal session "${item.terminalRef.id}" is no longer alive on host`,
-        };
-      }
-      if (
-        snap.incarnation !== undefined &&
-        item.incarnation !== undefined &&
-        snap.incarnation !== item.incarnation
-      ) {
-        return {
-          valid: false,
-          reason: `Terminal session "${item.terminalRef.id}" incarnation changed (expected ${item.incarnation}, live ${snap.incarnation})`,
-        };
-      }
-    }
-  }
-
-  // Exact target match across session windows
-  const matchingWin = findMatchingTerminalWindow(item.terminationTarget, windows);
-
-  if (matchingWin) {
-    return {
-      valid: true,
-      existingWindowId: matchingWin.windowId,
-      targetDesktopId: matchingWin.desktopId,
-      targetContext: matchingWin.window.ctx,
-      action: "focus-existing",
-      matchingWindow: matchingWin,
-    };
-  }
-
-  // Fallback for legacy tests: look up by appId and sessionId
-  const windowList = Object.values(windows);
-  const existingWindow = windowList.find(
-    (w) =>
-      w.appId === "terminals" &&
-      w.ctx.profileId === item.profileId &&
-      ((w.appState?.sessionId as string | undefined) === item.sessionId ||
-        (w.appState?.sessionId as string | undefined) === item.terminalRef.id ||
-        (w.appState?.terminalId as string | undefined) === item.terminalRef.id),
-  );
-
-  if (existingWindow) {
-    return {
-      valid: true,
-      existingWindowId: existingWindow.id,
-      targetDesktopId: existingWindow.desktopId,
-      targetContext: existingWindow.ctx,
-      action: "focus-existing",
-      matchingWindow: {
-        window: existingWindow,
-        windowId: existingWindow.id,
-        desktopId: existingWindow.desktopId,
-        minimized: existingWindow.minimized ?? false,
-      },
-    };
-  }
-
-  // No window currently displays it: Background session
-  return {
-    valid: true,
-    action: "open-beside",
-    matchingWindow: null,
-    targetContext: {
-      profileId: item.profileId,
-      generation: item.statusOwner.generation,
-    },
-  };
-}

@@ -8,7 +8,12 @@ import { useWindowStore } from "./window-store.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import type { ActionRequest } from "./types.js";
-
+import {
+  executeTerminalLaunch,
+  isLaunchAttemptActive,
+  resetActiveLaunchAttemptsForTests,
+} from "./terminal-launch-lifecycle.js";
+import { getLaunchAttempt } from "./persistence.js";
 vi.mock("@/api/connections.js", () => ({
   getConnectionSnapshot: vi.fn((profileId: string) => ({
     owner: { profileId, generation: 1 },
@@ -54,6 +59,7 @@ describe("action-executor (C1, C2, C10, C12, C13)", () => {
       },
     });
     useCognitoModeStore.getState().reset();
+    resetActiveLaunchAttemptsForTests();
   });
 
   it("validates context requirements in canExecuteAction", () => {
@@ -217,5 +223,128 @@ describe("action-executor (C1, C2, C10, C12, C13)", () => {
       context: { kind: "shell" },
     });
     expect(fontResult).toEqual({ kind: "executed" });
+  });
+
+  describe("app.terminals.new-window identity params & in-flight tracking (B3, F8)", () => {
+    it("reserves with correct identity params for workspace and explicit cwd cases", async () => {
+      // Workspace default case
+      const req1: ActionRequest = {
+        id: "app.terminals.new-window",
+        context: {
+          kind: "desktop",
+          desktopId: "desk-1",
+          owner: { profileId: "prof-1", generation: 1 },
+        },
+      };
+      const res1 = await executeAction(req1);
+      expect(res1.kind).toBe("opened");
+      if (res1.kind === "opened") {
+        const win = useWindowStore.getState().session.windows[res1.windowId];
+        const attemptId = win.appState?.attemptId as string;
+        expect(attemptId).toBeDefined();
+        const record = getLaunchAttempt(attemptId);
+        expect(record.status).toBe("ok");
+        if (record.status === "ok") {
+          expect(record.record.targetKind).toBe("workspace");
+          expect(record.record.workspaceId).toBe("prof-1");
+          expect(record.record.cwd).toBeNull();
+        }
+      }
+
+      // Explicit CWD case
+      const req2: ActionRequest = {
+        id: "app.terminals.new-window",
+        context: {
+          kind: "desktop",
+          desktopId: "desk-1",
+          owner: { profileId: "prof-1", generation: 1 },
+        },
+        terminalCreate: {
+          cwd: "/custom/path",
+          target: { kind: "workspace", profileId: "prof-1" },
+        },
+      };
+      const res2 = await executeAction(req2);
+      expect(res2.kind).toBe("opened");
+      if (res2.kind === "opened") {
+        const win = useWindowStore.getState().session.windows[res2.windowId];
+        const attemptId = win.appState?.attemptId as string;
+        const record = getLaunchAttempt(attemptId);
+        expect(record.status).toBe("ok");
+        if (record.status === "ok") {
+          expect(record.record.targetKind).toBe("workspace");
+          expect(record.record.cwd).toBe("/custom/path");
+        }
+      }
+    });
+
+    it("reserves with correct identity params for project target", async () => {
+      const req: ActionRequest = {
+        id: "app.terminals.new-window",
+        context: {
+          kind: "desktop",
+          desktopId: "desk-1",
+          owner: { profileId: "prof-1", generation: 1 },
+          windowContext: {
+            projectId: "proj-fallback",
+            worktreeId: "wt-fallback",
+          },
+        },
+        terminalCreate: {
+          target: {
+            kind: "project",
+            profileId: "prof-1",
+            project: "my-project",
+            worktreePath: "/repo/worktree",
+          },
+        },
+      };
+      const res = await executeAction(req);
+      expect(res.kind).toBe("opened");
+      if (res.kind === "opened") {
+        const win = useWindowStore.getState().session.windows[res.windowId];
+        const attemptId = win.appState?.attemptId as string;
+        const record = getLaunchAttempt(attemptId);
+        expect(record.status).toBe("ok");
+        if (record.status === "ok") {
+          expect(record.record.targetKind).toBe("project");
+          expect(record.record.projectId).toBe("my-project");
+          expect(record.record.worktreeId).toBe("/repo/worktree");
+        }
+      }
+    });
+
+    it("attempt stays active from reservation until executeTerminalLaunch settles", async () => {
+      const req: ActionRequest = {
+        id: "app.terminals.new-window",
+        context: {
+          kind: "desktop",
+          desktopId: "desk-1",
+          owner: { profileId: "prof-1", generation: 1 },
+        },
+      };
+      const res = await executeAction(req);
+      expect(res.kind).toBe("opened");
+      if (res.kind !== "opened") return;
+
+      const win = useWindowStore.getState().session.windows[res.windowId];
+      const attemptId = win.appState?.attemptId as string;
+      const terminalId = win.appState?.sessionId as string;
+
+      // Reserved attempt is active in this page!
+      expect(isLaunchAttemptActive(attemptId)).toBe(true);
+
+      // Execute launch settles the attempt
+      const outcome = await executeTerminalLaunch({
+        owner: { profileId: "prof-1", generation: 1 },
+        attemptId,
+        terminalId,
+        command: "",
+      });
+      expect(outcome.kind).toBe("created");
+
+      // After settlement, attempt is no longer active in this page
+      expect(isLaunchAttemptActive(attemptId)).toBe(false);
+    });
   });
 });

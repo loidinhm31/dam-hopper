@@ -44,7 +44,7 @@ export function ProfileBadge({
       role="status"
       aria-label={`Server profile: ${trimmedName}`}
       className={cn(
-        "inline-flex items-center rounded-sm px-1.5 py-0.5 text-[9px] font-mono font-medium tracking-wide lowercase border shrink-0",
+        "inline-flex items-center rounded-sm px-1.5 py-0.5 text-xs font-mono font-medium tracking-wide lowercase border shrink-0",
         colorClass,
         className,
       )}

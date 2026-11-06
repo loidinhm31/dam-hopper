@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   APP_LAUNCH_ATTEMPTS_STORAGE_KEY,
   buildCanonicalIdentityTuple,
+  getLaunchAttempt,
   importOsEnvelope,
   reserveTerminalLaunch,
   settleTerminalLaunch,
@@ -274,5 +275,82 @@ describe("Ordinary Resource-Launch Safety Journal (C3 & C12 Contracts)", () => {
     const record = doc.records.find((r: any) => r.attemptId === res.attemptId);
     expect(record.state).toBe("confirmed-success");
     expect(record.provenance.terminalId).toBe("term-1");
+  });
+
+  describe("getLaunchAttempt (read-only query)", () => {
+    it("returns ok for an existing reserved attempt", async () => {
+      const res = await reserveTerminalLaunch(baseParams, {
+        generation: 1,
+        desktopId: "desk-1",
+      });
+      expect(res.status).toBe("reserved");
+      if (res.status !== "reserved") return;
+
+      const read = getLaunchAttempt(res.attemptId);
+      expect(read.status).toBe("ok");
+      if (read.status === "ok") {
+        expect(read.record.attemptId).toBe(res.attemptId);
+        expect(read.record.state).toBe("reserved-dispatch-capable");
+        expect(read.record.requestedTerminalId).toBe(res.requestedTerminalId);
+      }
+    });
+
+    it("returns missing for an unknown attemptId", () => {
+      const read = getLaunchAttempt("non-existent-attempt-id");
+      expect(read).toEqual({ status: "missing" });
+    });
+
+    it("returns unreadable when storage contains corrupted JSON", () => {
+      localStorage.setItem(APP_LAUNCH_ATTEMPTS_STORAGE_KEY, "invalid-json{");
+      const read = getLaunchAttempt("any-attempt");
+      expect(read.status).toBe("unreadable");
+      if (read.status === "unreadable") {
+        expect(read.reason).toContain("Corrupted launch journal JSON");
+      }
+    });
+
+    it("returns unreadable when localStorage throws an error", () => {
+      const spy = vi
+        .spyOn(Storage.prototype, "getItem")
+        .mockImplementation(() => {
+          throw new Error("QuotaExceeded or SecurityError");
+        });
+      try {
+        const read = getLaunchAttempt("any-attempt");
+        expect(read.status).toBe("unreadable");
+        if (read.status === "unreadable") {
+          expect(read.reason).toContain("QuotaExceeded or SecurityError");
+        }
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("never mutates the journal or storage contents", async () => {
+      const res = await reserveTerminalLaunch(baseParams, {
+        generation: 1,
+        desktopId: "desk-1",
+      });
+      expect(res.status).toBe("reserved");
+      if (res.status !== "reserved") return;
+
+      const rawBefore = localStorage.getItem(APP_LAUNCH_ATTEMPTS_STORAGE_KEY);
+      const read1 = getLaunchAttempt(res.attemptId);
+      expect(read1.status).toBe("ok");
+      if (read1.status === "ok") {
+        // Mutating the returned record object does not change stored state
+        (read1.record as unknown as Record<string, unknown>).state =
+          "confirmed-not-created";
+      }
+
+      const read2 = getLaunchAttempt(res.attemptId);
+      expect(read2.status).toBe("ok");
+      if (read2.status === "ok") {
+        expect(read2.record.state).toBe("reserved-dispatch-capable");
+      }
+
+      const rawAfter = localStorage.getItem(APP_LAUNCH_ATTEMPTS_STORAGE_KEY);
+      expect(rawAfter).toBe(rawBefore);
+    });
   });
 });

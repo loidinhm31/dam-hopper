@@ -7,12 +7,18 @@ import {
   useTerminalLayout,
 } from "@/hooks/use-terminal-layout.js";
 import { fitAllTerminals } from "@/lib/terminal-fit-scheduler.js";
-import { terminalRegistry } from "@/lib/terminal-registry.js";
+import { terminalRegistry, type TerminalEntry } from "@/lib/terminal-registry.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import type { TerminalRef } from "@/api/ownership.js";
 import type { TerminalTarget } from "../../api/terminal-session-contract.js";
 
+export interface TerminalAttachGate {
+  readonly hubWindowId?: string;
+  resolveTerminal(sessionId: string): TerminalEntry | undefined;
+  renderPlaceholder(sessionId: string): ReactNode | null;
+  readonly revision: number;
+}
 export interface MountedSession {
   mountKey?: string;
   sessionId: string;
@@ -47,6 +53,7 @@ interface Props {
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
   onOpenSessionChanges?: (sessionId: string) => void;
+  attachGate?: TerminalAttachGate;
 }
 
 export function MultiTerminalDisplay({
@@ -69,6 +76,7 @@ export function MultiTerminalDisplay({
   renderBrowserContent,
   onCloseBrowser,
   onOpenSessionChanges,
+  attachGate,
 }: Props) {
   const layout = useTerminalLayout(layoutStorageKey);
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
@@ -204,6 +212,7 @@ export function MultiTerminalDisplay({
           renderBrowserContent={renderBrowserContent}
           onCloseBrowser={onCloseBrowser}
           onOpenSessionChanges={onOpenSessionChanges}
+          attachGate={attachGate}
         />
       </div>
     </div>

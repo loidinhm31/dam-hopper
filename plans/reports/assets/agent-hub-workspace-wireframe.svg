@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" fill="none" font-family="ui-monospace, monospace" font-size="14">
+  <rect x="1" y="1" width="958" height="538" rx="6" stroke="var(--border)"/>
+  <path d="M1 43H959 M1 85H959 M252 85V539" stroke="var(--border)"/>
+  <text x="16" y="27" fill="var(--fg)" font-weight="700">☰  Agent Hub</text>
+  <text x="625" y="27" fill="var(--muted)">Attention: 2  ·  Launch recipe</text>
+  <rect x="9" y="49" width="257" height="30" rx="3" stroke="var(--accent)"/>
+  <text x="20" y="69" fill="var(--accent)">local / dam-hopper     ×</text>
+  <text x="286" y="69" fill="var(--muted)">dev-server / backend  ×</text>
+  <text x="570" y="69" fill="var(--muted)">+ Open project</text>
+  <text x="15" y="112" fill="var(--muted)" font-size="12">PROJECTS &amp; AGENTS</text>
+  <text x="16" y="142" fill="var(--fg)">▾ dam-hopper</text>
+  <circle cx="33" cy="166" r="4" fill="var(--success)"/>
+  <text x="47" y="171" fill="var(--fg)">OMP · Working</text>
+  <circle cx="33" cy="194" r="4" fill="var(--warning)"/>
+  <text x="47" y="199" fill="var(--fg)">Codex · Needs input</text>
+  <text x="47" y="227" fill="var(--muted)">bash</text>
+  <text x="16" y="259" fill="var(--muted)">▸ backend         !1</text>
+  <path d="M1 279H252" stroke="var(--border)"/>
+  <text x="15" y="305" fill="var(--muted)" font-size="12">FILES · dam-hopper</text>
+  <text x="17" y="335" fill="var(--fg)">▾ packages</text>
+  <text x="35" y="363" fill="var(--fg)">▾ ui</text>
+  <text x="54" y="391" fill="var(--fg)">▾ src</text>
+  <text x="74" y="419" fill="var(--accent)">AgentHubApp.tsx</text>
+  <text x="17" y="447" fill="var(--muted)">▸ server</text>
+  <text x="17" y="475" fill="var(--muted)">README.md</text>
+  <text x="15" y="520" fill="var(--muted)" font-size="12">↔ Resizable · ☰ Hide sidebar</text>
+  <path d="M252 125H959 M252 325H959 M252 365H959 M252 509H959" stroke="var(--border)"/>
+  <text x="269" y="111" fill="var(--accent)">AgentHubApp.tsx ●</text>
+  <text x="475" y="111" fill="var(--muted)">README.md  ×</text>
+  <text x="855" y="111" fill="var(--muted)">Maximize</text>
+  <text x="280" y="159" fill="var(--muted)">1</text>
+  <text x="310" y="159" fill="var(--fg)">export function AgentHubApp() {</text>
+  <text x="280" y="187" fill="var(--muted)">2</text>
+  <text x="310" y="187" fill="var(--fg)">  …</text>
+  <text x="280" y="215" fill="var(--muted)">3</text>
+  <text x="310" y="215" fill="var(--fg)">}</text>
+  <text x="460" y="292" fill="var(--muted)">Editor / format-specific viewer</text>
+  <text x="269" y="351" fill="var(--accent)">OMP</text>
+  <text x="344" y="351" fill="var(--muted)">Codex !</text>
+  <text x="449" y="351" fill="var(--muted)">bash</text>
+  <text x="624" y="351" fill="var(--muted)">+ New  ·  Split  ·  Maximize</text>
+  <text x="277" y="397" fill="var(--fg)">$ omp</text>
+  <text x="277" y="428" fill="var(--fg)">Working on dam-hopper…</text>
+  <text x="277" y="479" fill="var(--accent)">▌</text>
+  <text x="269" y="530" fill="var(--muted)" font-size="12">local / dam-hopper · main                 OMP · Working</text>
+</svg>

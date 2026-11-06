@@ -18,9 +18,9 @@ import {
 import { useSettingsStore } from "@/stores/settings.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import {
-  reserveTerminalLaunch,
-  type LaunchIdentityParams,
-} from "./persistence.js";
+  buildTerminalLaunchIdentity,
+  reserveTrackedTerminalLaunch,
+} from "./terminal-launch-lifecycle.js";
 import type { FsTargetRef } from "@/api/ownership.js";
 import { createIntent, dispatchIntent } from "./intents.js";
 import { getActiveShellDelegate } from "./action-dispatch.js";
@@ -252,25 +252,15 @@ export async function executeAction(
         terminalCreate?.directoryKind ??
         (cwd ? "explicit-folder" : "profile-default");
 
-      const endpointBinding = "default-endpoint";
-      const identityParams: LaunchIdentityParams = {
+      const identityParams = buildTerminalLaunchIdentity({
         profileId,
-        endpointBinding,
-        action: "terminal.create",
-        targetKind: target.kind,
-        workspaceId: target.kind === "workspace" ? target.profileId : null,
-        projectId:
-          target.kind === "project"
-            ? target.project
-            : request.context.windowContext?.projectId ?? null,
-        worktreeId:
-          target.kind === "project"
-            ? target.worktreePath ?? null
-            : request.context.windowContext?.worktreeId ?? null,
+        target,
+        fallbackProjectId: request.context.windowContext?.projectId,
+        fallbackWorktreeId: request.context.windowContext?.worktreeId,
         cwd,
-      };
+      });
 
-      const reserveResult = await reserveTerminalLaunch(identityParams, {
+      const reserveResult = await reserveTrackedTerminalLaunch(identityParams, {
         generation,
         desktopId: activeDesktopId,
         explicitRequestedTerminalId: terminalCreate?.requestedTerminalId,

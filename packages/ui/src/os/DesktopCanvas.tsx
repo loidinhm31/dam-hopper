@@ -120,6 +120,16 @@ export function DesktopCanvas({
     return list;
   }, [activeWindowIds, desktop.focusedWindowId, session.windows]);
 
+  const focusedWin = desktop.focusedWindowId
+    ? session.windows[desktop.focusedWindowId]
+    : undefined;
+  const floatOnTop = Boolean(
+    focusedWin &&
+      focusedWin.mode === "float" &&
+      !focusedWin.minimized &&
+      !focusedWin.maximized,
+  );
+
   const renderTiledPane = (pane: TilePaneNode<string>) => {
     if (pane.items.length === 0) return null;
     const activeId = pane.active ?? pane.items[0];
@@ -201,7 +211,7 @@ export function DesktopCanvas({
       ref={containerRef}
       data-os-desktop-canvas={desktop.id}
       data-testid={`desktop-canvas-${desktop.id}`}
-      className="relative flex-1 w-full h-full overflow-hidden bg-[var(--color-bg)]"
+      className="relative isolate flex-1 w-full h-full overflow-hidden bg-[var(--color-bg)]"
     >
       {/* 0. Background Context Menu (Sibling behind all window layers) */}
       <DesktopContextMenu
@@ -246,7 +256,7 @@ export function DesktopCanvas({
         data-os-float-layer="true"
         data-testid={`float-layer-${desktop.id}`}
         className="absolute inset-0 pointer-events-none"
-        style={{ zIndex: 20 }}
+        style={{ zIndex: floatOnTop ? 60 : 20 }}
       >
         {desktop.floatingWindowIds.map((winId) => {
           const win = session.windows[winId];

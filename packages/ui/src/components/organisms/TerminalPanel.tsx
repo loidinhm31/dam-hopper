@@ -48,6 +48,10 @@ import { isEventHandledByCoordinator } from "@/os/action-dispatch.js";
 import { isContextMenuOpen, subscribeContextMenu } from "@/lib/context-menu-coordinator.js";
 import { syncTerminalInputSuppression } from "@/lib/terminal-input-policy.js";
 import {
+  computePresentedInputSuppression,
+  subscribeTerminalPresentation,
+} from "@/lib/terminal-presentation-input.js";
+import {
   createTerminalRendererController,
   type TerminalRendererController,
 } from "@/lib/terminal-renderer.js";
@@ -304,7 +308,11 @@ export function TerminalPanel({
       const isSuppressed =
         Boolean(suppressInputRef.current) ||
         shouldSuppressNativeKeyboardRef.current;
-      const effectiveSuppression = isSuppressed || isReplayOrAttachActive;
+      const panelSuppression = isSuppressed || isReplayOrAttachActive;
+      const effectiveSuppression = computePresentedInputSuppression(
+        targetTerm,
+        panelSuppression,
+      );
       syncTerminalInputSuppression(targetTerm, effectiveSuppression);
     },
     [],
@@ -441,6 +449,9 @@ export function TerminalPanel({
 
     // Expose terminal instance and element for suggestions hook + portal
     termRef.current = term;
+    const unsubscribePresentation = subscribeTerminalPresentation(term, () => {
+      syncEffectiveStdinSuppression(termRef.current);
+    });
     syncEffectiveStdinSuppression(term);
     setTermElement(term.element ?? null);
     const rendererController = createTerminalRendererController(term);
@@ -1499,6 +1510,7 @@ export function TerminalPanel({
         cursorGeometryAdapterRef.current = null;
       }
       cancelScheduledTerminalFit(terminalEntry);
+      unsubscribePresentation();
       findUnsubscribeRef.current?.();
       findUnsubscribeRef.current = null;
       findController.dispose();

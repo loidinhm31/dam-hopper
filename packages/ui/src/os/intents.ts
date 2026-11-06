@@ -74,6 +74,13 @@ export interface IntentPayloadMap {
     filePath: string;
     line?: number;
     generation?: number;
+    /**
+     * Optional placement mode for the opened editor window.
+     * Note: "float" requires generation; handled by OsShell P02.
+     */
+    mode?: "float";
+    isDiff?: boolean;
+    fileStatus?: string;
   };
   "file:edit": {
     profileId: string;

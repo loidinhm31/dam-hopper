@@ -315,10 +315,9 @@ describe("TraditionalTerminalProjectsNavigator", () => {
   it("shows project Git metadata and the selected-project terminal action", () => {
     const onNewTerminal = vi.fn();
     renderNavigator({ onNewTerminal, width: 300 });
-    const metadata = container.querySelector('[role="status"]');
-    expect(metadata?.getAttribute("aria-label")).toContain("Branch feature/demo");
-    expect(metadata?.textContent).toContain("/workspace/demo");
-    expect(metadata?.textContent).toContain("Ship the demo terminal workflow");
+    const chip = container.querySelector('[aria-label^="Commit 1234567"]');
+    expect(chip?.getAttribute("aria-label")).toContain("Ship the demo terminal workflow");
+    expect(chip?.textContent).toContain("1234567");
     const newTerminal = container.querySelector<HTMLButtonElement>('[aria-label="New terminal in selected project"]')!;
     act(() => newTerminal.click());
     expect(onNewTerminal).toHaveBeenCalledOnce();
@@ -333,15 +332,47 @@ describe("TraditionalTerminalProjectsNavigator", () => {
       isLoading: false,
       isError: false,
     });
+    mocks.useProjectStatus.mockImplementation((targetInput: unknown) => {
+      if (
+        targetInput &&
+        typeof targetInput === "object" &&
+        "worktreePath" in targetInput &&
+        targetInput.worktreePath === "/workspace/feature"
+      ) {
+        return {
+          data: {
+            ...mocks.status,
+            branch: "feature",
+            lastCommit: {
+              ...mocks.status.lastCommit!,
+              hash: "abcdef1234567890",
+              message: "Feature commit",
+            },
+          },
+          isLoading: false,
+          isError: false,
+        };
+      }
+      return {
+        data: mocks.status,
+        isLoading: false,
+        isError: false,
+      };
+    });
     useProjectTargetStore.getState().selectTarget("demo", "/workspace/feature");
     renderNavigator({ groups: [group], activeGroupId: group.id });
-    const status = container.querySelector('[role="status"]');
-    expect(status?.textContent).toContain("/workspace/feature");
-    expect(status?.textContent).not.toContain("/workspace/main");
+    const status = container.querySelector('[aria-label^="Commit abcdef1"]');
+    expect(status?.textContent).toContain("abcdef1");
+    expect(container.textContent).not.toContain("1234567");
     const combobox = container.querySelector(
       '[role="combobox"][aria-label^="Worktree for"]',
     );
     expect(combobox?.getAttribute("aria-label")).toContain("feature");
+    mocks.useProjectStatus.mockImplementation(() => ({
+      data: mocks.status,
+      isLoading: false,
+      isError: false,
+    }));
   });
 
   it("hides metadata for unavailable worktrees", () => {
@@ -358,8 +389,7 @@ describe("TraditionalTerminalProjectsNavigator", () => {
       />,
     );
 
-    expect(markup).not.toContain("feature/demo");
-    expect(markup).not.toContain("/workspace/demo");
+    expect(markup).not.toContain("1234567");
   });
 
   it("does not query status or render commit metadata when preference is disabled, but keeps worktree selector", () => {
@@ -372,7 +402,7 @@ describe("TraditionalTerminalProjectsNavigator", () => {
       />,
     );
 
-    expect(markup).not.toContain("Ship the demo terminal workflow");
+    expect(markup).not.toContain("1234567");
     // Worktree dropdown remains present
     const doc = new DOMParser().parseFromString(markup, "text/html");
     const worktreeCombobox = doc.querySelector(
@@ -404,10 +434,13 @@ describe("TraditionalTerminalProjectsNavigator", () => {
       { profileId: "profile-2", project: "demo" },
       true,
     );
-    expect(mocks.useWorktrees).toHaveBeenCalledWith({
-      profileId: "profile-2",
-      project: "demo",
-    });
+    expect(mocks.useWorktrees).toHaveBeenCalledWith(
+      {
+        profileId: "profile-2",
+        project: "demo",
+      },
+      { enabled: true },
+    );
   });
 
   it("keeps Projects first with complete terminal counts and profile context, separate from observed agents", () => {
@@ -426,7 +459,7 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     };
     renderNavigator({ groups: [completeGroup, freeGroup], agentRows: [agent], onSelectAgent: vi.fn() });
     const headings = Array.from(container.querySelectorAll("h2")).map((heading) => heading.textContent?.trim());
-    expect(headings).toEqual(["projects", "agents"]);
+    expect(headings).toEqual(["projects (2)", "agents"]);
     const projects = container.querySelector('[role="tablist"][aria-label="Open terminal projects"]')!;
     const tabs = projects.querySelectorAll('[role="tab"]');
     expect(tabs).toHaveLength(2);
@@ -540,7 +573,7 @@ describe("TraditionalTerminalProjectsNavigator", () => {
 
   it("supports additive empty props without inventing a Settings target and disables absent selection", () => {
     renderNavigator();
-    expect(container.querySelector("h2")!.textContent?.trim()).toBe("projects");
+    expect(container.querySelector("h2")!.textContent?.trim()).toBe("projects (1)");
     expect(container.querySelectorAll("h2")[1]!.textContent?.trim()).toBe("agents");
     expect(container.querySelector("a")).toBeNull();
     const agent = makeAgentRow("server-a", "Observed terminal");
@@ -1388,6 +1421,124 @@ describe("TraditionalTerminalProjectsNavigator", () => {
           .textContent,
       ).toBe("2");
       expect(getAgentButtons()).toHaveLength(2);
+    });
+  });
+
+  describe("Workspace rows & open picker integration (Phase 05)", () => {
+    it("renders OpenProjectWorkspacePicker in header and forwards onOpen callback", async () => {
+      const onOpen = vi.fn();
+      const item = {
+        profileId: "server-a",
+        profileName: "Server Alpha",
+        serverUrl: "http://server-a.local",
+        project: { name: "inventory-project", path: "/workspace/inventory-project" },
+        ref: { profileId: "server-a", project: "inventory-project" },
+      };
+
+      renderNavigator({
+        picker: {
+          items: [item],
+          openGroupIds: new Set(),
+          isLoading: false,
+          onOpen,
+        },
+      });
+
+      const pickerTrigger = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Open project workspace"]',
+      )!;
+      expect(pickerTrigger).not.toBeNull();
+
+      act(() => pickerTrigger.click());
+      const option = container.querySelector<HTMLButtonElement>('[role="option"]')!;
+      expect(option.textContent).toContain("inventory-project");
+
+      act(() => option.click());
+      expect(onOpen).toHaveBeenCalledWith({
+        profileId: "server-a",
+        project: "inventory-project",
+      });
+    });
+
+    it("forwards disclosure state and toggle action to workspace rows", async () => {
+      const onToggleDisclosure = vi.fn();
+      const disclosedGroupIds = new Set([group.id]);
+
+      renderNavigator({
+        groups: [group],
+        disclosedGroupIds,
+        onToggleDisclosure,
+      });
+
+      const disclosureBtn = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Collapse demo files"]',
+      )!;
+      expect(disclosureBtn).not.toBeNull();
+      expect(disclosureBtn.getAttribute("aria-expanded")).toBe("true");
+
+      act(() => disclosureBtn.click());
+      expect(onToggleDisclosure).toHaveBeenCalledWith(group.id);
+    });
+
+    it("renders [+] in row and forwards onNewTerminalInGroup", async () => {
+      const onNewTerminalInGroup = vi.fn();
+
+      renderNavigator({
+        groups: [group],
+        onNewTerminalInGroup,
+      });
+
+      const newBtn = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="New terminal in demo"]',
+      )!;
+      expect(newBtn).not.toBeNull();
+
+      act(() => newBtn.click());
+      expect(onNewTerminalInGroup).toHaveBeenCalledWith(group.id);
+    });
+
+    it("renders [×] only for zero-terminal workspaces and forwards onCloseWorkspace", async () => {
+      const onCloseWorkspace = vi.fn();
+      const zeroGroup: TraditionalTerminalProjectGroup = {
+        id: "project:zero",
+        projectName: "zero",
+        label: "zero",
+        terminalTabs: [],
+        mountedSessions: [],
+      };
+
+      renderNavigator({
+        groups: [group, zeroGroup],
+        onCloseWorkspace,
+      });
+
+      // Group with active terminals has no close button
+      const tabs = container.querySelectorAll('[role="tab"]');
+      expect(tabs).toHaveLength(2);
+
+      const firstRow = tabs[0]!.parentElement!;
+      expect(firstRow.querySelector('button[aria-label^="Close"]')).toBeNull();
+
+      // Zero-terminal row has close button
+      const secondRow = tabs[1]!.parentElement!;
+      const closeBtn = secondRow.querySelector<HTMLButtonElement>(
+        'button[aria-label="Close zero workspace"]',
+      )!;
+      expect(closeBtn).not.toBeNull();
+
+      act(() => closeBtn.click());
+      expect(onCloseWorkspace).toHaveBeenCalledWith(zeroGroup.id);
+    });
+
+    it("provides independent bounded scroll containers for projects and agents", () => {
+      renderNavigator({ groups: [group] });
+
+      const tablist = container.querySelector('[role="tablist"]')!;
+      expect(tablist.className).toContain("overflow-y-auto");
+
+      const agentsSection = container.querySelectorAll("section")[1]!;
+      const fieldset = agentsSection.querySelector("fieldset")!;
+      expect(fieldset.className).toContain("overflow-y-auto");
     });
   });
 });

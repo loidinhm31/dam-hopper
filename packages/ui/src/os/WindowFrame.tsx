@@ -470,6 +470,7 @@ export function WindowFrame({
           isMaximizedPresentation ? "maximized" : window.mode
         }
         data-os-maximized={window.maximized ? "true" : "false"}
+        data-os-focused={isFocused ? "true" : "false"}
         data-testid={`window-frame-${window.id}`}
         tabIndex={-1}
         onPointerDown={handlePointerDown}

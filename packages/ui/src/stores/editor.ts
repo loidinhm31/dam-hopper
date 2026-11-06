@@ -38,6 +38,12 @@ import {
   type ProjectTargetRef,
 } from "@/api/client.js";
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
+import { normalizeServerUrl } from "@/api/server-config.js";
+
+export interface EndpointIdentity {
+  profileId: string;
+  serverUrl: string;
+}
 export type FileTier = FT | "diff";
 
 const EDITOR_PERSIST_VERSION = 3;
@@ -58,6 +64,7 @@ export interface DocumentState {
   stale?: boolean;
   viewState?: unknown;
   editRevision: number;
+  endpointIdentity?: EndpointIdentity;
 }
 
 export function editorDocumentKey(
@@ -301,6 +308,8 @@ export interface Tab {
   resourceBinding?: ResourceBinding;
   /** Session-only flag for Git blame line annotation gutter (excluded from persistence). */
   blameEnabled?: boolean;
+  endpointIdentity?: EndpointIdentity;
+  saveBlockedReason?: string;
 }
 
 interface EditorState {
@@ -314,7 +323,7 @@ interface EditorState {
 
   open: (target: FsTargetRef | ProjectTargetInput, node: FsArborNode) => Promise<void>;
   openDiff: (
-    target: ProjectTargetInput,
+    target: FsTargetRef | ProjectTargetInput,
     path: string,
     fileStatus: string,
     additions: number,
@@ -331,6 +340,7 @@ interface EditorState {
   save: (key: string) => Promise<boolean>;
   forceOverwrite: (key: string) => Promise<void>;
   reloadTab: (key: string) => Promise<void>;
+  discardAndReload: (key: string) => Promise<void>;
   clearConflict: (key: string) => void;
   clearStale: (key: string) => void;
   reconcileGitMutationFiles: (
@@ -404,18 +414,31 @@ export interface MigratedEditorTab {
   blameEnabled: boolean;
   documentKey?: string;
   fileIdentity?: FileIdentity;
+  endpointIdentity?: EndpointIdentity;
+  saveBlockedReason?: string;
 }
 
 function resolveTabTransport(tab: Pick<Tab, "target">): {
   transport: WsTransport;
   connectionRef?: ConnectionRef;
+  endpointIdentity?: EndpointIdentity;
 } {
   const profileId = tab.target.profileId;
   if (profileId) {
     try {
       const conn = captureConnection(profileId);
-      const t = getConnectionsTransport(conn) as WsTransport;
-      return { transport: t, connectionRef: conn };
+      const snap = getConnectionSnapshot(profileId);
+      if (snap && snap.serverUrl) {
+        const t = getConnectionsTransport(conn) as WsTransport;
+        return {
+          transport: t,
+          connectionRef: conn,
+          endpointIdentity: {
+            profileId,
+            serverUrl: normalizeServerUrl(snap.serverUrl),
+          },
+        };
+      }
     } catch {
       // Disconnected or offline
     }
@@ -537,6 +560,17 @@ function persistedTab(value: unknown, keyMap: Map<string, string>): Tab | null {
   const savedContent =
     typeof raw.savedContent === "string" ? raw.savedContent : "";
 
+  const rawEi = asRecord(raw.endpointIdentity);
+  const endpointIdentity: EndpointIdentity | undefined =
+    rawEi &&
+    typeof rawEi.profileId === "string" &&
+    typeof rawEi.serverUrl === "string"
+      ? {
+          profileId: rawEi.profileId,
+          serverUrl: rawEi.serverUrl,
+        }
+      : undefined;
+
   return {
     key,
     project,
@@ -568,6 +602,8 @@ function persistedTab(value: unknown, keyMap: Map<string, string>): Tab | null {
     blameEnabled: false,
     documentKey,
     fileIdentity,
+    endpointIdentity,
+    saveBlockedReason: typeof raw.saveBlockedReason === "string" ? raw.saveBlockedReason : undefined,
   };
 }
 
@@ -610,6 +646,8 @@ export function migrateEditorState(persisted: unknown): PersistedEditorSlice {
         blameEnabled: false,
         documentKey: normalized.documentKey,
         fileIdentity: normalized.fileIdentity,
+        endpointIdentity: normalized.endpointIdentity,
+        saveBlockedReason: normalized.saveBlockedReason,
       },
     ];
   });
@@ -647,6 +685,17 @@ export function migrateEditorState(persisted: unknown): PersistedEditorSlice {
             }
           : undefined;
 
+      const rawDocEi = asRecord(rawDoc.endpointIdentity);
+      const endpointIdentity: EndpointIdentity | undefined =
+        rawDocEi &&
+        typeof rawDocEi.profileId === "string" &&
+        typeof rawDocEi.serverUrl === "string"
+          ? {
+              profileId: rawDocEi.profileId,
+              serverUrl: rawDocEi.serverUrl,
+            }
+          : undefined;
+
       documents[docKey] = {
         documentKey: docKey,
         fileIdentity,
@@ -663,6 +712,7 @@ export function migrateEditorState(persisted: unknown): PersistedEditorSlice {
         conflicted: false,
         editRevision:
           typeof rawDoc.editRevision === "number" ? rawDoc.editRevision : 0,
+        endpointIdentity,
       };
     }
   }
@@ -859,7 +909,7 @@ export const useEditorStore = create<EditorState>()(
           const isLarge = optimisticTier === "large";
 
           const requestGeneration = beginRequest(key);
-          const { transport: t, connectionRef } = resolveTabTransport({
+          const { transport: t, connectionRef, endpointIdentity: capturedIdentity } = resolveTabTransport({
             target: targetRef,
           });
           try {
@@ -979,6 +1029,7 @@ export const useEditorStore = create<EditorState>()(
                         viewState: existingDoc.viewState,
                         fileIdentity: existingDoc.fileIdentity ?? fileIdentity,
                         documentKey,
+                        endpointIdentity: existingDoc.endpointIdentity,
                       }
                     : tab,
                 ),
@@ -1003,6 +1054,7 @@ export const useEditorStore = create<EditorState>()(
                     conflicted: false,
                     stale: false,
                     editRevision: 0,
+                    endpointIdentity: capturedIdentity,
                   }
                 : undefined;
 
@@ -1024,6 +1076,7 @@ export const useEditorStore = create<EditorState>()(
                       binaryBase64,
                       fileIdentity,
                       documentKey,
+                      endpointIdentity: capturedIdentity,
                     }
                   : tab,
               ),
@@ -1228,9 +1281,37 @@ export const useEditorStore = create<EditorState>()(
 
           const documentKey = tab.documentKey;
           const doc = documentKey ? get().documents[documentKey] : undefined;
+          const docIdentity = doc ? doc.endpointIdentity : tab.endpointIdentity;
+
+          const profileId = tab.target.profileId;
+          if (profileId || docIdentity) {
+            const checkProfileId = profileId || docIdentity?.profileId || "";
+            const liveSnapshot = checkProfileId ? getConnectionSnapshot(checkProfileId) : null;
+            const isEndpointValid = Boolean(
+              docIdentity &&
+              checkProfileId &&
+              docIdentity.profileId === checkProfileId &&
+              liveSnapshot &&
+              liveSnapshot.status === "connected" &&
+              docIdentity.serverUrl === normalizeServerUrl(liveSnapshot.serverUrl)
+            );
+
+            if (!isEndpointValid) {
+              const origin = docIdentity?.serverUrl || "<old or unknown endpoint>";
+              const reason = `This file was loaded from ${origin}; reload to discard your changes or copy them first.`;
+              set((s) => ({
+                tabs: s.tabs.map((t) =>
+                  (documentKey && t.documentKey === documentKey) || t.key === key
+                    ? { ...t, saving: false, saveBlockedReason: reason }
+                    : t,
+                ),
+              }));
+              return false;
+            }
+          }
+
           const contentToSave = doc ? doc.content : tab.content;
           const mtimeToExpect = doc ? doc.mtime : tab.mtime;
-
           const requestGeneration = beginRequest(key);
           const { transport: tabTransport, connectionRef } =
             resolveTabTransport(tab);
@@ -1310,6 +1391,7 @@ export const useEditorStore = create<EditorState>()(
                       mtime: newMtime,
                       fileIdentity: fileIdentity ?? t.fileIdentity,
                       documentKey: newDocKey ?? t.documentKey,
+                      saveBlockedReason: undefined,
                     };
                   }
                   return t;
@@ -1439,6 +1521,36 @@ export const useEditorStore = create<EditorState>()(
               len: 0,
             });
             if (!isCurrentRequest(key, requestGeneration)) return;
+
+            const currentDoc = tab.documentKey ? get().documents[tab.documentKey] : undefined;
+            const currentDocIdentity = currentDoc ? currentDoc.endpointIdentity : tab.endpointIdentity;
+            const profileId = tab.target.profileId;
+            const checkProfileId = profileId || currentDocIdentity?.profileId || "";
+            if (checkProfileId || currentDocIdentity) {
+              const liveSnap = checkProfileId ? getConnectionSnapshot(checkProfileId) : null;
+              const isCurrentEndpointValid = Boolean(
+                currentDocIdentity &&
+                checkProfileId &&
+                currentDocIdentity.profileId === checkProfileId &&
+                liveSnap &&
+                liveSnap.status === "connected" &&
+                currentDocIdentity.serverUrl === normalizeServerUrl(liveSnap.serverUrl)
+              );
+
+              if (!isCurrentEndpointValid) {
+                const origin = currentDocIdentity?.serverUrl || "<old or unknown endpoint>";
+                const reason = `This file was loaded from ${origin}; reload to discard your changes or copy them first.`;
+                set((s) => ({
+                  tabs: s.tabs.map((t) =>
+                    (tab.documentKey && t.documentKey === tab.documentKey) || t.key === key
+                      ? { ...t, saving: false, saveBlockedReason: reason }
+                      : t,
+                  ),
+                }));
+                return;
+              }
+            }
+
             if (connectionRef && !isCurrentConnection(connectionRef)) return;
 
             const statTargetUnavailable =
@@ -1465,6 +1577,7 @@ export const useEditorStore = create<EditorState>()(
               return;
             }
 
+
             const currentMtime = stat.ok
               ? stat.mtime
               : "mtime" in stat
@@ -1489,6 +1602,7 @@ export const useEditorStore = create<EditorState>()(
                         stale: false,
                         savedContent,
                         mtime: result.newMtime,
+                        saveBlockedReason: undefined,
                       }
                     : t,
                 ),
@@ -1569,9 +1683,8 @@ export const useEditorStore = create<EditorState>()(
           }
 
           const requestGeneration = beginRequest(key);
-          const { transport: tabTransport, connectionRef } =
+          const { transport: tabTransport, connectionRef, endpointIdentity: capturedIdentity } =
             resolveTabTransport(tab);
-
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.key === key ? { ...t, loading: true, conflicted: false } : t,
@@ -1602,30 +1715,56 @@ export const useEditorStore = create<EditorState>()(
               return;
             }
             const decoded = result.binary ? "" : b64ToUtf8(result.content);
-            set((s) => ({
-              tabs: s.tabs.map((t) => {
-                if (t.key !== key) return t;
-                if (t.dirty) {
-                  return {
-                    ...t,
-                    loading: false,
-                    stale: decoded !== t.savedContent,
-                  };
-                }
+            const documentKey = tab.documentKey;
+            set((s) => {
+              const currentTab = s.tabs.find((t) => t.key === key);
+              if (currentTab?.dirty) {
+                return {
+                  tabs: s.tabs.map((t) =>
+                    t.key === key
+                      ? {
+                          ...t,
+                          loading: false,
+                          stale: decoded !== t.savedContent,
+                        }
+                      : t,
+                  ),
+                };
+              }
+              const nextDocs =
+                documentKey && s.documents[documentKey]
+                  ? {
+                      ...s.documents,
+                      [documentKey]: {
+                        ...s.documents[documentKey],
+                        content: decoded,
+                        savedContent: decoded,
+                        mtime: result.mtime,
+                        size: typeof result.size === "number" ? result.size : s.documents[documentKey].size,
+                        dirty: false,
+                        stale: false,
+                        endpointIdentity: capturedIdentity,
+                      },
+                    }
+                  : s.documents;
+              const nextTabs = s.tabs.map((t) => {
+                if (t.key !== key && (!documentKey || t.documentKey !== documentKey)) return t;
                 return {
                   ...t,
                   loading: false,
                   content: decoded,
                   savedContent: decoded,
                   mtime: result.mtime,
-                  size:
-                    typeof result.size === "number" ? result.size : t.size,
+                  size: typeof result.size === "number" ? result.size : t.size,
                   dirty: false,
                   stale: false,
                   binaryBase64: result.binary ? result.content : undefined,
+                  endpointIdentity: capturedIdentity,
+                  saveBlockedReason: undefined,
                 };
-              }),
-            }));
+              });
+              return { documents: nextDocs, tabs: nextTabs };
+            });
           } catch (e) {
             const message = e instanceof Error ? e.message : "Reload failed";
             if (!isCurrentRequest(key, requestGeneration)) return;
@@ -1645,6 +1784,86 @@ export const useEditorStore = create<EditorState>()(
                       error: t.content ? undefined : message,
                     }
                   : t,
+              ),
+            }));
+          }
+        },
+
+        // ---------------------------------------------------------------------------
+        // discardAndReload — explicit user action: discard edits, reload from server, rebind endpoint
+        // ---------------------------------------------------------------------------
+        discardAndReload: async (key: string) => {
+          const tab = get().tabs.find((t) => t.key === key);
+          if (!tab || !tab.targetAvailable) return;
+
+          const requestGeneration = beginRequest(key);
+          const { transport: tabTransport, connectionRef, endpointIdentity: capturedIdentity } =
+            resolveTabTransport(tab);
+
+          set((s) => ({
+            tabs: s.tabs.map((t) =>
+              t.key === key ? { ...t, loading: true, conflicted: false } : t,
+            ),
+          }));
+
+          try {
+            const result = await tabTransport.fsRead(tab.target, tab.path);
+            if (!isCurrentRequest(key, requestGeneration)) return;
+            if (connectionRef && !isCurrentConnection(connectionRef)) return;
+            if (!result.ok) {
+              set((s) => ({
+                tabs: s.tabs.map((t) =>
+                  t.key === key ? { ...t, loading: false } : t,
+                ),
+              }));
+              return;
+            }
+
+            const decoded = result.binary ? "" : b64ToUtf8(result.content);
+            const documentKey = tab.documentKey;
+
+            set((s) => ({
+              documents:
+                documentKey && s.documents[documentKey]
+                  ? {
+                      ...s.documents,
+                      [documentKey]: {
+                        ...s.documents[documentKey],
+                        content: decoded,
+                        savedContent: decoded,
+                        dirty: false,
+                        conflicted: false,
+                        stale: false,
+                        mtime: result.mtime,
+                        size: typeof result.size === "number" ? result.size : s.documents[documentKey].size,
+                        endpointIdentity: capturedIdentity,
+                      },
+                    }
+                  : s.documents,
+              tabs: s.tabs.map((t) => {
+                if (t.key !== key && (!documentKey || t.documentKey !== documentKey)) return t;
+                return {
+                  ...t,
+                  loading: false,
+                  content: decoded,
+                  savedContent: decoded,
+                  mtime: result.mtime,
+                  size: typeof result.size === "number" ? result.size : t.size,
+                  dirty: false,
+                  stale: false,
+                  conflicted: false,
+                  saveBlockedReason: undefined,
+                  endpointIdentity: capturedIdentity,
+                  binaryBase64: result.binary ? result.content : undefined,
+                };
+              }),
+            }));
+          } catch {
+            if (!isCurrentRequest(key, requestGeneration)) return;
+            if (connectionRef && !isCurrentConnection(connectionRef)) return;
+            set((s) => ({
+              tabs: s.tabs.map((t) =>
+                t.key === key ? { ...t, loading: false } : t,
               ),
             }));
           }
@@ -1802,9 +2021,8 @@ export const useEditorStore = create<EditorState>()(
           }
 
           const requestGeneration = beginRequest(key);
-          const { transport: tabTransport, connectionRef } =
+          const { transport: tabTransport, connectionRef, endpointIdentity: capturedIdentity } =
             resolveTabTransport(tab);
-
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.key === key ? { ...t, loading: true } : t,
@@ -1869,17 +2087,41 @@ export const useEditorStore = create<EditorState>()(
             const decoded = result.binary ? "" : b64ToUtf8(result.content);
             const binaryBase64 = result.binary ? result.content : undefined;
 
-            set((s) => ({
-              tabs: s.tabs.map((t) => {
-                if (t.key !== key) return t;
-                if (t.dirty) {
-                  return {
-                    ...t,
-                    loading: false,
-                    hydrated: false,
-                    stale: decoded !== t.savedContent,
-                  };
-                }
+            const documentKey = tab.documentKey;
+            set((s) => {
+              const currentTab = s.tabs.find((t) => t.key === key);
+              if (currentTab?.dirty) {
+                return {
+                  tabs: s.tabs.map((t) =>
+                    t.key === key
+                      ? {
+                          ...t,
+                          loading: false,
+                          hydrated: false,
+                          stale: decoded !== t.savedContent,
+                        }
+                      : t,
+                  ),
+                };
+              }
+              const nextDocs =
+                documentKey && s.documents[documentKey]
+                  ? {
+                      ...s.documents,
+                      [documentKey]: {
+                        ...s.documents[documentKey],
+                        content: decoded,
+                        savedContent: decoded,
+                        mtime: result.mtime,
+                        size: result.size,
+                        dirty: false,
+                        stale: false,
+                        endpointIdentity: capturedIdentity,
+                      },
+                    }
+                  : s.documents;
+              const nextTabs = s.tabs.map((t) => {
+                if (t.key !== key && (!documentKey || t.documentKey !== documentKey)) return t;
                 return {
                   ...t,
                   loading: false,
@@ -1893,9 +2135,12 @@ export const useEditorStore = create<EditorState>()(
                   hydrated: false,
                   dirty: false,
                   stale: false,
+                  endpointIdentity: capturedIdentity,
+                  saveBlockedReason: undefined,
                 };
-              }),
-            }));
+              });
+              return { documents: nextDocs, tabs: nextTabs };
+            });
           } catch (e) {
             const message = e instanceof Error ? e.message : "Unknown error";
             if (!isCurrentRequest(key, requestGeneration)) return;
@@ -2065,6 +2310,8 @@ export const useEditorStore = create<EditorState>()(
           conflicted: false,
           stale: false,
           blameEnabled: false,
+          endpointIdentity: t.endpointIdentity,
+          saveBlockedReason: t.saveBlockedReason,
         })),
         documents: Object.fromEntries(
           Object.entries(state.documents).filter(([, doc]) => doc.dirty),

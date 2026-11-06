@@ -6,6 +6,8 @@ const fsWriteFile = vi.fn();
 vi.mock("@/api/transport.js", () => ({
   getTransport: () => ({ fsRead, fsWriteFile }),
 }));
+import type { Transport } from "@/api/transport.js";
+const testTransport = { fsRead, fsWriteFile } as unknown as Transport;
 
 import {
   countDirtyTabsForTarget,
@@ -19,6 +21,7 @@ import {
   type Tab,
 } from "./editor.js";
 import { normalizeFsTarget, type FsTargetRef } from "@/api/ownership.js";
+import { __setConnectionSnapshotForTests } from "@/api/connections.js";
 
 function makeTab(project: string, path: string): Tab {
   const target = normalizeFsTarget(project);
@@ -1217,6 +1220,18 @@ describe("Phase 03: Canonical Editor Document Identity and Routes", () => {
     resetEditorStore();
     fsRead.mockReset();
     fsWriteFile.mockReset();
+    __setConnectionSnapshotForTests(
+      "profile-1",
+      {
+        status: "connected",
+        serverUrl: "http://127.0.0.1:4801",
+        owner: { profileId: "profile-1", generation: 1, serverEpoch: "epoch-1" },
+      },
+      testTransport,
+    );
+  });
+  afterEach(() => {
+    __setConnectionSnapshotForTests("profile-1", null);
   });
 
   it("generates and parses server-normalized documentKey", () => {
@@ -1523,5 +1538,627 @@ describe("Phase 03: Canonical Editor Document Identity and Routes", () => {
 
     // Explicit null active key is respected
     expect(editorActiveKeyForTarget(activeKeys, { project: "explicit-null" })).toBeNull();
+  });
+});
+
+describe("Phase 02: Endpoint-identity save fence (R7)", () => {
+  const profileA = "profile-a";
+  const urlA = "http://127.0.0.1:4801";
+  const urlB = "http://127.0.0.1:4802";
+  const targetA: FsTargetRef = { kind: "project", profileId: profileA, project: "app" };
+  const mockFileIdentity = {
+    workspaceId: "ws-fence",
+    workspaceEpoch: 1,
+    canonicalPath: "/workspace/app/src/main.ts",
+  };
+
+  beforeEach(() => {
+    resetEditorStore();
+    fsRead.mockReset();
+    fsWriteFile.mockReset();
+    __setConnectionSnapshotForTests(
+      profileA,
+      {
+        status: "connected",
+        serverUrl: urlA,
+        owner: { profileId: profileA, generation: 1, serverEpoch: "epoch-1" },
+      },
+      testTransport,
+    );
+  });
+
+  afterEach(() => {
+    __setConnectionSnapshotForTests(profileA, null);
+  });
+
+  it("same-endpoint reconnect (new generation/serverEpoch) saves; disconnected snapshot is denied", async () => {
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("initial server content"),
+      mime: "text/plain",
+      mtime: 10,
+      size: 22,
+      fileIdentity: mockFileIdentity,
+    });
+    await useEditorStore.getState().open(targetA, {
+      id: "src/main.ts",
+      name: "main.ts",
+      kind: "file",
+      size: 22,
+      mtime: 10,
+      isSymlink: false,
+    });
+
+    const tabKey = editorFileTabKey(targetA, "src/main.ts");
+    useEditorStore.getState().setContent(tabKey, "dirty local edits");
+
+    // Reconnect on same endpoint: generation 1 -> 2, new serverEpoch
+    __setConnectionSnapshotForTests(
+      profileA,
+      {
+        status: "connected",
+        serverUrl: urlA,
+        owner: { profileId: profileA, generation: 2, serverEpoch: "epoch-2" },
+      },
+      testTransport,
+    );
+
+    fsWriteFile.mockResolvedValueOnce({ ok: true, newMtime: 20 });
+    const saved = await useEditorStore.getState().save(tabKey);
+    expect(saved).toBe(true);
+    expect(fsWriteFile).toHaveBeenCalledTimes(1);
+
+    // Make dirty again
+    useEditorStore.getState().setContent(tabKey, "more dirty edits");
+    fsWriteFile.mockClear();
+
+    // Now profile disconnects
+    __setConnectionSnapshotForTests(
+      profileA,
+      {
+        status: "disconnected",
+        serverUrl: urlA,
+        owner: { profileId: profileA, generation: 2, serverEpoch: "epoch-2" },
+      },
+      testTransport,
+    );
+
+    const savedWhenDisconnected = await useEditorStore.getState().save(tabKey);
+    expect(savedWhenDisconnected).toBe(false);
+    expect(fsWriteFile).not.toHaveBeenCalled();
+    const tab = useEditorStore.getState().tabs.find((t) => t.key === tabKey)!;
+    expect(tab.dirty).toBe(true);
+    expect(tab.content).toBe("more dirty edits");
+    expect(tab.saveBlockedReason).toBeDefined();
+    expect(tab.saveBlockedReason).toContain("http://127.0.0.1:4801");
+  });
+
+  it("A-dirty tab repointed to B and reloaded via dirty-skip denies save and forceOverwrite, retaining identity A", async () => {
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("alpha content"),
+      mime: "text/plain",
+      mtime: 10,
+      size: 13,
+      fileIdentity: mockFileIdentity,
+    });
+    await useEditorStore.getState().open(targetA, {
+      id: "src/main.ts",
+      name: "main.ts",
+      kind: "file",
+      size: 13,
+      mtime: 10,
+      isSymlink: false,
+    });
+
+    const tabKey = editorFileTabKey(targetA, "src/main.ts");
+    useEditorStore.getState().setContent(tabKey, "A dirty content");
+
+    // Re-point profileA to endpoint B
+    __setConnectionSnapshotForTests(profileA, null);
+    __setConnectionSnapshotForTests(
+      profileA,
+      {
+        status: "connected",
+        serverUrl: urlB,
+        owner: { profileId: profileA, generation: 3, serverEpoch: "epoch-3" },
+      },
+      testTransport,
+    );
+
+    // reloadTab from B (returns different content on disk from B)
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("beta content from server B"),
+      mime: "text/plain",
+      mtime: 30,
+      size: 26,
+      fileIdentity: mockFileIdentity,
+    });
+
+    await useEditorStore.getState().reloadTab(tabKey);
+
+    const tabAfterReload = useEditorStore.getState().tabs.find((t) => t.key === tabKey)!;
+    expect(tabAfterReload.dirty).toBe(true);
+    expect(tabAfterReload.content).toBe("A dirty content");
+    expect(tabAfterReload.stale).toBe(true);
+    // Provenance invariant: identity MUST still be endpoint A!
+    expect(tabAfterReload.endpointIdentity?.serverUrl).toBe(urlA);
+
+    // Save must be denied with zero fsWriteFile calls
+    const saved = await useEditorStore.getState().save(tabKey);
+    expect(saved).toBe(false);
+    expect(fsWriteFile).not.toHaveBeenCalled();
+
+    const tabAfterSave = useEditorStore.getState().tabs.find((t) => t.key === tabKey)!;
+    expect(tabAfterSave.dirty).toBe(true);
+    expect(tabAfterSave.content).toBe("A dirty content");
+    expect(tabAfterSave.saveBlockedReason).toContain(urlA);
+
+    // forceOverwrite must also be denied with zero fsWriteFile calls
+    fsRead.mockResolvedValueOnce({ ok: true, mtime: 30 }); // 0-byte stat
+    await useEditorStore.getState().forceOverwrite(tabKey);
+    expect(fsWriteFile).not.toHaveBeenCalled();
+
+    const tabAfterOverwrite = useEditorStore.getState().tabs.find((t) => t.key === tabKey)!;
+    expect(tabAfterOverwrite.dirty).toBe(true);
+    expect(tabAfterOverwrite.content).toBe("A dirty content");
+    expect(tabAfterOverwrite.saveBlockedReason).toContain(urlA);
+  });
+
+  it("A-dirty tab repointed to B and loaded via loadContent dirty-skip denies save", async () => {
+    const tabKey = editorFileTabKey(targetA, "src/main.ts");
+    const docKey = editorDocumentKey(profileA, mockFileIdentity);
+    useEditorStore.setState({
+      tabs: [
+        {
+          key: tabKey,
+          project: "app",
+          target: targetA,
+          targetKey: "root",
+          targetAvailable: true,
+          path: "src/main.ts",
+          name: "main.ts",
+          mtime: 10,
+          size: 14,
+          tier: "normal",
+          content: "dirty edits A",
+          savedContent: "original A",
+          dirty: true,
+          loading: false,
+          saving: false,
+          conflicted: false,
+          hydrated: true,
+          documentKey: docKey,
+          fileIdentity: mockFileIdentity,
+          endpointIdentity: { profileId: profileA, serverUrl: urlA },
+        },
+      ],
+      documents: {
+        [docKey]: {
+          documentKey: docKey,
+          fileIdentity: mockFileIdentity,
+          content: "dirty edits A",
+          savedContent: "original A",
+          dirty: true,
+          mtime: 10,
+          size: 14,
+          tier: "normal",
+          saving: false,
+          conflicted: false,
+          editRevision: 1,
+          endpointIdentity: { profileId: profileA, serverUrl: urlA },
+        },
+      },
+    });
+
+    // Re-point profile to endpoint B
+    __setConnectionSnapshotForTests(profileA, null);
+    __setConnectionSnapshotForTests(
+      profileA,
+      {
+        status: "connected",
+        serverUrl: urlB,
+        owner: { profileId: profileA, generation: 2, serverEpoch: "epoch-2" },
+      },
+      testTransport,
+    );
+
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("content on server B"),
+      mime: "text/plain",
+      mtime: 40,
+      size: 19,
+    });
+
+    await useEditorStore.getState().loadContent(tabKey);
+
+    const tab = useEditorStore.getState().tabs.find((t) => t.key === tabKey)!;
+    expect(tab.dirty).toBe(true);
+    expect(tab.content).toBe("dirty edits A");
+    expect(tab.endpointIdentity?.serverUrl).toBe(urlA);
+
+    const saved = await useEditorStore.getState().save(tabKey);
+    expect(saved).toBe(false);
+    expect(fsWriteFile).not.toHaveBeenCalled();
+    const tabAfterSave = useEditorStore.getState().tabs.find((t) => t.key === tabKey)!;
+    expect(tabAfterSave.saveBlockedReason).toBeDefined();
+  });
+
+  it("alias/canonical open of an A-dirty doc via endpoint B retains A identity and blocks writes in both tabs", async () => {
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("initial A content"),
+      mime: "text/plain",
+      mtime: 10,
+      size: 17,
+      fileIdentity: mockFileIdentity,
+    });
+    await useEditorStore.getState().open(targetA, {
+      id: "src/main.ts",
+      name: "main.ts",
+      kind: "file",
+      size: 17,
+      mtime: 10,
+      isSymlink: false,
+    });
+
+    const tabAKey = editorFileTabKey(targetA, "src/main.ts");
+    useEditorStore.getState().setContent(tabAKey, "dirty content A");
+
+    // Profile re-pointed to B
+    __setConnectionSnapshotForTests(profileA, null);
+    __setConnectionSnapshotForTests(
+      profileA,
+      {
+        status: "connected",
+        serverUrl: urlB,
+        owner: { profileId: profileA, generation: 2, serverEpoch: "epoch-2" },
+      },
+      testTransport,
+    );
+
+    // Open alias route (workspace route) resolving to same documentKey
+    const wsTarget: FsTargetRef = { kind: "workspace", profileId: profileA };
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("ignored B content"),
+      mime: "text/plain",
+      mtime: 20,
+      size: 17,
+      fileIdentity: mockFileIdentity,
+    });
+
+    await useEditorStore.getState().open(wsTarget, {
+      id: "src/main.ts",
+      name: "main.ts",
+      kind: "file",
+      size: 17,
+      mtime: 20,
+      isSymlink: false,
+    });
+
+    const tabBKey = editorFileTabKey(wsTarget, "src/main.ts");
+    const tabA = useEditorStore.getState().tabs.find((t) => t.key === tabAKey)!;
+    const tabB = useEditorStore.getState().tabs.find((t) => t.key === tabBKey)!;
+
+    expect(tabA.dirty).toBe(true);
+    expect(tabB.dirty).toBe(true);
+    expect(tabB.content).toBe("dirty content A");
+
+    expect(tabA.endpointIdentity?.serverUrl).toBe(urlA);
+    expect(tabB.endpointIdentity?.serverUrl).toBe(urlA);
+    const docKey = editorDocumentKey(profileA, mockFileIdentity);
+    expect(useEditorStore.getState().documents[docKey]?.endpointIdentity?.serverUrl).toBe(urlA);
+
+    expect(await useEditorStore.getState().save(tabAKey)).toBe(false);
+    expect(fsWriteFile).not.toHaveBeenCalled();
+
+    expect(await useEditorStore.getState().save(tabBKey)).toBe(false);
+    expect(fsWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("discardAndReload rebinds identity on read success; read failure keeps buffer, identity, and block unchanged", async () => {
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("initial A content"),
+      mime: "text/plain",
+      mtime: 10,
+      size: 17,
+      fileIdentity: mockFileIdentity,
+    });
+    await useEditorStore.getState().open(targetA, {
+      id: "src/main.ts",
+      name: "main.ts",
+      kind: "file",
+      size: 17,
+      mtime: 10,
+      isSymlink: false,
+    });
+
+    const tabKey = editorFileTabKey(targetA, "src/main.ts");
+    useEditorStore.getState().setContent(tabKey, "dirty content A");
+
+    // Profile repointed to B
+    __setConnectionSnapshotForTests(profileA, null);
+    __setConnectionSnapshotForTests(
+      profileA,
+      {
+        status: "connected",
+        serverUrl: urlB,
+        owner: { profileId: profileA, generation: 2, serverEpoch: "epoch-2" },
+      },
+      testTransport,
+    );
+
+    expect(await useEditorStore.getState().save(tabKey)).toBe(false);
+    let tab = useEditorStore.getState().tabs.find((t) => t.key === tabKey)!;
+    expect(tab.saveBlockedReason).toBeDefined();
+
+    // 1. discardAndReload read failure
+    fsRead.mockRejectedValueOnce(new Error("Network drop"));
+    await useEditorStore.getState().discardAndReload(tabKey);
+
+    tab = useEditorStore.getState().tabs.find((t) => t.key === tabKey)!;
+    expect(tab.dirty).toBe(true);
+    expect(tab.content).toBe("dirty content A");
+    expect(tab.endpointIdentity?.serverUrl).toBe(urlA);
+    expect(tab.saveBlockedReason).toBeDefined();
+
+    // 2. discardAndReload succeeds
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("clean content from server B"),
+      mime: "text/plain",
+      mtime: 50,
+      size: 27,
+      fileIdentity: mockFileIdentity,
+    });
+
+    await useEditorStore.getState().discardAndReload(tabKey);
+
+    tab = useEditorStore.getState().tabs.find((t) => t.key === tabKey)!;
+    expect(tab.dirty).toBe(false);
+    expect(tab.content).toBe("clean content from server B");
+    expect(tab.endpointIdentity?.serverUrl).toBe(urlB);
+    expect(tab.saveBlockedReason).toBeUndefined();
+
+    // Now modify and save to server B
+    useEditorStore.getState().setContent(tabKey, "edits on server B");
+    fsWriteFile.mockResolvedValueOnce({ ok: true, newMtime: 60 });
+    const saved = await useEditorStore.getState().save(tabKey);
+    expect(saved).toBe(true);
+    expect(fsWriteFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("hydrated dirty tab without endpointIdentity is denied; with matching persisted identity saves", async () => {
+    const tabKey = editorFileTabKey(targetA, "src/main.ts");
+    const docKey = editorDocumentKey(profileA, mockFileIdentity);
+
+    // Legacy hydrated payload missing endpointIdentity
+    useEditorStore.setState({
+      tabs: [
+        {
+          key: tabKey,
+          project: "app",
+          target: targetA,
+          targetKey: "root",
+          targetAvailable: true,
+          path: "src/main.ts",
+          name: "main.ts",
+          mtime: 10,
+          size: 14,
+          tier: "normal",
+          content: "legacy dirty edits",
+          savedContent: "disk base",
+          dirty: true,
+          loading: false,
+          saving: false,
+          conflicted: false,
+          documentKey: docKey,
+          fileIdentity: mockFileIdentity,
+        },
+      ],
+      documents: {
+        [docKey]: {
+          documentKey: docKey,
+          fileIdentity: mockFileIdentity,
+          content: "legacy dirty edits",
+          savedContent: "disk base",
+          dirty: true,
+          mtime: 10,
+          size: 14,
+          tier: "normal",
+          saving: false,
+          conflicted: false,
+          editRevision: 1,
+        },
+      },
+    });
+
+    expect(await useEditorStore.getState().save(tabKey)).toBe(false);
+    expect(fsWriteFile).not.toHaveBeenCalled();
+    const tab = useEditorStore.getState().tabs.find((t) => t.key === tabKey)!;
+    expect(tab.saveBlockedReason).toBeDefined();
+
+    // Now with matching persisted identity
+    useEditorStore.setState({
+      tabs: [
+        {
+          ...tab,
+          endpointIdentity: { profileId: profileA, serverUrl: urlA },
+        },
+      ],
+      documents: {
+        [docKey]: {
+          ...useEditorStore.getState().documents[docKey],
+          endpointIdentity: { profileId: profileA, serverUrl: urlA },
+        },
+      },
+    });
+
+    fsWriteFile.mockResolvedValueOnce({ ok: true, newMtime: 20 });
+    expect(await useEditorStore.getState().save(tabKey)).toBe(true);
+    expect(fsWriteFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("non-dirty reload from B replaces content and commits B identity", async () => {
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("initial A content"),
+      mime: "text/plain",
+      mtime: 10,
+      size: 17,
+      fileIdentity: mockFileIdentity,
+    });
+    await useEditorStore.getState().open(targetA, {
+      id: "src/main.ts",
+      name: "main.ts",
+      kind: "file",
+      size: 17,
+      mtime: 10,
+      isSymlink: false,
+    });
+
+    const tabKey = editorFileTabKey(targetA, "src/main.ts");
+
+    // Re-point profile to B
+    __setConnectionSnapshotForTests(profileA, null);
+    __setConnectionSnapshotForTests(
+      profileA,
+      {
+        status: "connected",
+        serverUrl: urlB,
+        owner: { profileId: profileA, generation: 2, serverEpoch: "epoch-2" },
+      },
+      testTransport,
+    );
+
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("updated content from server B"),
+      mime: "text/plain",
+      mtime: 50,
+      size: 29,
+      fileIdentity: mockFileIdentity,
+    });
+
+    await useEditorStore.getState().reloadTab(tabKey);
+
+    const tab = useEditorStore.getState().tabs.find((t) => t.key === tabKey)!;
+    expect(tab.content).toBe("updated content from server B");
+    expect(tab.savedContent).toBe("updated content from server B");
+    expect(tab.dirty).toBe(false);
+    expect(tab.endpointIdentity?.serverUrl).toBe(urlB);
+
+    // Save should now work against endpoint B
+    useEditorStore.getState().setContent(tabKey, "new edits on B");
+    fsWriteFile.mockResolvedValueOnce({ ok: true, newMtime: 60 });
+    expect(await useEditorStore.getState().save(tabKey)).toBe(true);
+  });
+
+  it("live-owner window document is protected by the same endpoint fence", async () => {
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("initial content"),
+      mime: "text/plain",
+      mtime: 10,
+      size: 15,
+      fileIdentity: mockFileIdentity,
+    });
+    await useEditorStore.getState().open(targetA, {
+      id: "src/main.ts",
+      name: "main.ts",
+      kind: "file",
+      size: 15,
+      mtime: 10,
+      isSymlink: false,
+    });
+
+    const tabKey = editorFileTabKey(targetA, "src/main.ts");
+    useEditorStore.getState().setContent(tabKey, "live-owner edits");
+
+    // Repoint profile to B
+    __setConnectionSnapshotForTests(profileA, null);
+    __setConnectionSnapshotForTests(
+      profileA,
+      {
+        status: "connected",
+        serverUrl: urlB,
+        owner: { profileId: profileA, generation: 5, serverEpoch: "epoch-5" },
+      },
+      testTransport,
+    );
+
+    expect(await useEditorStore.getState().save(tabKey)).toBe(false);
+    expect(fsWriteFile).not.toHaveBeenCalled();
+    const tab = useEditorStore.getState().tabs.find((t) => t.key === tabKey)!;
+    expect(tab.saveBlockedReason).toBeDefined();
+    expect(tab.dirty).toBe(true);
+  });
+
+  it("forceOverwrite pre-write check denies save if profile is repointed during stat read", async () => {
+    fsRead.mockResolvedValueOnce({
+      ok: true,
+      binary: false,
+      content: btoa("initial content"),
+      mime: "text/plain",
+      mtime: 10,
+      size: 15,
+      fileIdentity: mockFileIdentity,
+    });
+    await useEditorStore.getState().open(targetA, {
+      id: "src/main.ts",
+      name: "main.ts",
+      kind: "file",
+      size: 15,
+      mtime: 10,
+      isSymlink: false,
+    });
+
+    const tabKey = editorFileTabKey(targetA, "src/main.ts");
+    useEditorStore.getState().setContent(tabKey, "conflicted edit");
+
+    // Set up deferred stat read
+    const statDeferred = deferred<{ ok: boolean; mtime: number }>();
+    fsRead.mockReturnValueOnce(statDeferred.promise);
+
+    const overwritePromise = useEditorStore.getState().forceOverwrite(tabKey);
+
+    // While stat read is in-flight, re-point profile to endpoint B
+    __setConnectionSnapshotForTests(profileA, null);
+    __setConnectionSnapshotForTests(
+      profileA,
+      {
+        status: "connected",
+        serverUrl: urlB,
+        owner: { profileId: profileA, generation: 2, serverEpoch: "epoch-2" },
+      },
+      testTransport,
+    );
+
+    // Now resolve stat read
+    statDeferred.resolve({ ok: true, mtime: 20 });
+    await overwritePromise;
+
+    // Must be denied before fsWriteFile!
+    expect(fsWriteFile).not.toHaveBeenCalled();
+    const tab = useEditorStore.getState().tabs.find((t) => t.key === tabKey)!;
+    expect(tab.dirty).toBe(true);
+    expect(tab.content).toBe("conflicted edit");
+    expect(tab.saveBlockedReason).toBeDefined();
+    expect(tab.saveBlockedReason).toContain(urlA);
   });
 });

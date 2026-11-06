@@ -731,6 +731,114 @@ export function restoreWindow(
   return session;
 }
 
+/**
+ * Reveals a window as a single atomic transition:
+ * 1. Restores the window if it is minimized (maximized windows stay maximized).
+ * 2. Switches to the window's final active desktop (accounting for restorePlacement).
+ * 3. Focuses the window.
+ *
+ * If windowId does not exist, returns session unchanged.
+ */
+export function revealWindow(
+  session: OsSessionV1,
+  windowId: string,
+): OsSessionV1 {
+  const target = session.windows[windowId];
+  if (!target) return session;
+
+  let s = session;
+  if (target.minimized) {
+    s = restoreWindow(s, windowId);
+  }
+  const currentWin = s.windows[windowId];
+  const finalDesktopId = currentWin?.desktopId ?? target.desktopId;
+  s = switchDesktop(s, finalDesktopId);
+  s = focusWindow(s, windowId);
+  return s;
+}
+
+/**
+ * Presents a window as a focused, floating window on the target desktop:
+ * 1. If windowId does not exist or desktopId is not found, returns session unchanged.
+ * 2. If the window is already a non-minimized, non-maximized float on desktopId:
+ *    switches active desktop to desktopId and focuses windowId.
+ * 3. Otherwise:
+ *    - Removes window from all current desktop placements (floating and tile trees).
+ *    - Un-minimizes (clears restorePlacement) and un-maximizes (maximized: false).
+ *    - Sets mode: "float" and desktopId: desktopId.
+ *    - Preserves floatBounds (or restored floatBounds from restorePlacement, or calculates next floatBounds).
+ *    - Adds windowId to target desktop's floatingWindowIds.
+ *    - Switches active desktop to desktopId.
+ *    - Focuses windowId.
+ * Preserves window id, appState, and ctx unchanged.
+ */
+export function presentWindowAsFloat(
+  session: OsSessionV1,
+  windowId: string,
+  desktopId: string,
+  viewport?: { width: number; height: number },
+): OsSessionV1 {
+  const targetWin = session.windows[windowId];
+  if (!targetWin) return session;
+  if (!session.desktops.some((d) => d.id === desktopId)) return session;
+
+  if (
+    targetWin.mode === "float" &&
+    targetWin.desktopId === desktopId &&
+    !targetWin.minimized &&
+    !targetWin.maximized
+  ) {
+    let s = session;
+    if (s.activeDesktopId !== desktopId) {
+      s = switchDesktop(s, desktopId);
+    }
+    return focusWindow(s, windowId);
+  }
+
+  // Remove window from all desktop placements
+  let s = removeWindowFromAllDesktopPlacements(session, windowId);
+
+  const floatBounds =
+    targetWin.floatBounds ??
+    targetWin.restorePlacement?.floatBounds ??
+    calculateNextFloatBounds(
+      s,
+      desktopId,
+      viewport ?? { width: 1280, height: 800 },
+    );
+
+  const updatedWindow: OsWindow = {
+    ...targetWin,
+    desktopId,
+    mode: "float",
+    minimized: false,
+    maximized: false,
+    floatBounds,
+    restorePlacement: undefined,
+  };
+
+  s = {
+    ...s,
+    windows: {
+      ...s.windows,
+      [windowId]: updatedWindow,
+    },
+  };
+
+  s = updateDesktop(s, desktopId, (d) => ({
+    ...d,
+    floatingWindowIds: [
+      ...d.floatingWindowIds.filter((id) => id !== windowId),
+      windowId,
+    ],
+    focusedWindowId: windowId,
+  }));
+
+  s = switchDesktop(s, desktopId);
+  s = focusWindow(s, windowId);
+  return s;
+}
+
 export function updateFloatBounds(
   session: OsSessionV1,
   windowId: string,

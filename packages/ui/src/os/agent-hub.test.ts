@@ -9,9 +9,7 @@ import {
   buildAgentHubItems,
   classifyAgentUrgency,
   computeAgentHubSummary,
-  filterAgentHubItems,
   getUrgencyRank,
-  validateAgentHubJump,
   findMatchingTerminalWindow,
   type AgentHubItem,
 } from "./agent-hub.js";
@@ -216,7 +214,7 @@ describe("agent-hub", () => {
     });
   });
 
-  describe("computeAgentHubSummary and filtering", () => {
+  describe("computeAgentHubSummary", () => {
     it("computes accurate summary counts across urgency groups", () => {
       const fixA = createFixture({ state: "idle" }, "server-a", "term-a1");
       const fixB = createFixture(
@@ -239,156 +237,7 @@ describe("agent-hub", () => {
       expect(summary.unavailable).toBe(0);
       expect(summary.connectedProfiles).toBe(2);
     });
-
-    it("filters items by urgency, profile, and search query", () => {
-      const fixA = createFixture({ state: "idle" }, "server-a", "term-a1");
-      const fixB = createFixture(
-        { state: "blocked", reason: "question" },
-        "server-b",
-        "term-b1",
-      );
-      const items = buildAgentHubItems({
-        groups: [fixA.group, fixB.group],
-        profiles: new Map([...fixA.profiles, ...fixB.profiles]),
-        connections: new Map([...fixA.connections, ...fixB.connections]),
-        profileLabels: new Map([...fixA.profileLabels, ...fixB.profileLabels]),
-      });
-
-      const filteredByUrgency = filterAgentHubItems(items, { urgency: "needs-attention" });
-      expect(filteredByUrgency).toHaveLength(1);
-      expect(filteredByUrgency[0].profileId).toBe("server-b");
-
-      const filteredByProfile = filterAgentHubItems(items, { profileId: "server-a" });
-      expect(filteredByProfile).toHaveLength(1);
-      expect(filteredByProfile[0].profileId).toBe("server-a");
-
-      const filteredByQuery = filterAgentHubItems(items, { searchQuery: "term-b1" });
-      expect(filteredByQuery).toHaveLength(1);
-      expect(filteredByQuery[0].terminalRef.id).toBe("term-b1");
-    });
   });
-
-  describe("validateAgentHubJump", () => {
-    const mockItem: AgentHubItem = {
-      key: "server-a::term-1::1",
-      sessionId: "server-a::term-1",
-      terminalRef: { profileId: "server-a", id: "term-1" },
-      incarnation: 1,
-      groupId: "group-1",
-      projectLabel: "Project",
-      profileId: "server-a",
-      profileLabel: "SERVER-A",
-      terminalTitle: "Terminal 1",
-      harnessLabel: "OMP",
-      statusOwner: { profileId: "server-a", generation: 1 },
-      availability: "ready",
-      status: makeStatus(),
-      presentation: {
-        label: "Idle",
-        reasonLabel: null,
-        outcomeHint: null,
-        sourceLabel: "Lifecycle observation",
-        coverageHint: null,
-      },
-      urgency: "idle",
-      connectionStatus: "connected",
-      isConnected: true,
-    };
-
-    it("approves jump when connection is connected and generation matches", () => {
-      const connections = new Map<string, ConnectionSnapshot>([
-        [
-          "server-a",
-          {
-            owner: { profileId: "server-a", generation: 1 },
-            status: "connected",
-            intent: true,
-            serverUrl: "http://localhost:4801",
-            error: null,
-          },
-        ],
-      ]);
-      const windows: Record<string, OsWindow> = {
-        "win-1": {
-          id: "win-1",
-          appId: "terminals",
-          title: "Terminals",
-          ctx: { profileId: "server-a" },
-          mode: "tile",
-          desktopId: "desktop-1",
-          maximized: false,
-          minimized: false,
-          appState: { sessionId: "server-a::term-1" },
-        },
-      };
-
-      const result = validateAgentHubJump(mockItem, connections, windows);
-      expect(result.valid).toBe(true);
-      expect(result.existingWindowId).toBe("win-1");
-      expect(result.targetDesktopId).toBe("desktop-1");
-    });
-
-    it("rejects jump if connection status is disconnected", () => {
-      const connections = new Map<string, ConnectionSnapshot>([
-        [
-          "server-a",
-          {
-            owner: { profileId: "server-a", generation: 1 },
-            status: "disconnected",
-            intent: true,
-            serverUrl: "http://localhost:4801",
-            error: null,
-          },
-        ],
-      ]);
-
-      const result = validateAgentHubJump(mockItem, connections, {});
-      expect(result.valid).toBe(false);
-      expect(result.reason).toContain("disconnected or unavailable");
-    });
-
-    it("rejects jump if connection generation changed (retired owner)", () => {
-      const connections = new Map<string, ConnectionSnapshot>([
-        [
-          "server-a",
-          {
-            owner: { profileId: "server-a", generation: 2 }, // changed generation!
-            status: "connected",
-            intent: true,
-            serverUrl: "http://localhost:4801",
-            error: null,
-          },
-        ],
-      ]);
-
-      const result = validateAgentHubJump(mockItem, connections, {});
-      expect(result.valid).toBe(false);
-      expect(result.reason).toContain("generation changed");
-    });
-
-    it("rejects jump if terminal session is dead on host", () => {
-      const connections = new Map<string, ConnectionSnapshot>([
-        [
-          "server-a",
-          {
-            owner: { profileId: "server-a", generation: 1 },
-            status: "connected",
-            intent: true,
-            serverUrl: "http://localhost:4801",
-            error: null,
-          },
-        ],
-      ]);
-      const aliveMap = new Map<string, Set<string>>([
-        ["server-a", new Set(["term-999"])], // term-1 is NOT alive!
-      ]);
-
-      const result = validateAgentHubJump(mockItem, connections, {}, aliveMap);
-      expect(result.valid).toBe(false);
-      expect(result.reason).toContain("no longer alive on host");
-    });
-  });
-
   describe("Architecture Contract C2 & C3: Inventory-first, Proof, and Background", () => {
     it("includes unobserved sessions from aggregate inventory even without agent evidence", () => {
       const owner: ConnectionRef = { profileId: "server-a", generation: 1 };
