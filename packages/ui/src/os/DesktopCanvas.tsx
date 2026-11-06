@@ -10,6 +10,7 @@ import { collectTilePanes } from "@/lib/tile-tree.js";
 
 import { getConnectionSnapshot } from "@/api/connections.js";
 import { DesktopContextMenu } from "./DesktopContextMenu.js";
+import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 export interface DesktopCanvasProps {
   desktop: OsDesktop;
   renderApp: (window: OsWindow) => ReactNode;
@@ -30,6 +31,11 @@ export function DesktopCanvas({
   const toggleMaximizeWindow = useWindowStore(
     (state) => state.toggleMaximizeWindow,
   );
+  const cognitoActive = useCognitoModeStore((state) => state.active);
+  const desktopDisplayName = cognitoActive
+    ? "PROTECTED"
+    : (desktop.name || desktop.id).toUpperCase();
+
 
   // ResizeObserver authority for canvas geometry work area
   useEffect(() => {
@@ -213,6 +219,83 @@ export function DesktopCanvas({
       data-testid={`desktop-canvas-${desktop.id}`}
       className="relative isolate flex-1 w-full h-full overflow-hidden bg-[var(--color-bg)]"
     >
+      {/* 0a. Holographic Decorative Background Layer (Non-interactive, aria-hidden) */}
+      <div
+        aria-hidden="true"
+        data-testid={`desktop-hologram-bg-${desktop.id}`}
+        className="os-hologram-bg pointer-events-none absolute inset-0 z-0 overflow-hidden select-none"
+      >
+        {/* Dual-scale Cyber Grid with Radial Vignette Mask */}
+        <div className="os-hologram-grid absolute inset-0" />
+
+        {/* Center Focal Reticle & Coordinate Ring */}
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center">
+          <svg
+            viewBox="0 0 400 400"
+            className="w-[340px] h-[340px] sm:w-[440px] sm:h-[440px] text-[var(--color-primary)] opacity-[0.14]"
+            fill="none"
+          >
+            {/* Outer dashed telemetry ring */}
+            <circle
+              cx="200"
+              cy="200"
+              r="180"
+              stroke="currentColor"
+              strokeWidth="1"
+              strokeDasharray="4 8"
+            />
+            {/* Middle segmented arc ring */}
+            <circle
+              cx="200"
+              cy="200"
+              r="136"
+              stroke="var(--color-info)"
+              strokeWidth="1"
+              strokeDasharray="48 16 12 16"
+            />
+            {/* Inner precision ring */}
+            <circle
+              cx="200"
+              cy="200"
+              r="72"
+              stroke="currentColor"
+              strokeWidth="0.75"
+              strokeOpacity="0.7"
+            />
+            {/* Cardinal crosshair ticks */}
+            <line x1="200" y1="8" x2="200" y2="44" stroke="currentColor" strokeWidth="1" />
+            <line x1="200" y1="356" x2="200" y2="392" stroke="currentColor" strokeWidth="1" />
+            <line x1="8" y1="200" x2="44" y2="200" stroke="currentColor" strokeWidth="1" />
+            <line x1="356" y1="200" x2="392" y2="200" stroke="currentColor" strokeWidth="1" />
+            {/* Center micro-reticle */}
+            <circle cx="200" cy="200" r="3" fill="currentColor" fillOpacity="0.6" />
+            <path
+              d="M190 200 H195 M205 200 H210 M200 190 V195 M200 205 V210"
+              stroke="currentColor"
+              strokeWidth="1"
+            />
+          </svg>
+          <span className="absolute mt-[168px] sm:mt-[216px] font-mono text-[9px] tracking-[0.25em] uppercase text-[var(--color-primary)]/25">
+            DH//OS · SYS.GRID // {desktopDisplayName}
+          </span>
+        </div>
+
+        {/* Corner Cybernetic HUD Reticle Brackets & Coordinate Ticks */}
+        <div className="absolute top-3 left-3 w-5 h-5 border-t border-l border-[var(--color-primary)]/25" />
+        <div className="absolute top-3 right-3 w-5 h-5 border-t border-r border-[var(--color-primary)]/25" />
+        <div className="absolute bottom-3 left-3 w-5 h-5 border-b border-l border-[var(--color-primary)]/25" />
+        <div className="absolute bottom-3 right-3 w-5 h-5 border-b border-r border-[var(--color-primary)]/25" />
+
+        <div className="hidden sm:flex absolute bottom-3.5 left-10 items-center gap-3 font-mono text-[9px] tracking-widest text-[var(--color-text-muted)]/35 uppercase">
+          <span>SEC // 01</span>
+          <span>·</span>
+          <span>GRID // 64PX</span>
+        </div>
+        <div className="hidden sm:flex absolute bottom-3.5 right-10 items-center gap-2 font-mono text-[9px] tracking-widest text-[var(--color-primary)]/30 uppercase">
+          <span>SYNC // NOMINAL</span>
+        </div>
+      </div>
+
       {/* 0. Background Context Menu (Sibling behind all window layers) */}
       <DesktopContextMenu
         desktopId={desktop.id}

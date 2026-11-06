@@ -15,13 +15,15 @@ import { executeAction } from "./action-executor.js";
 import { getConnectionSnapshot } from "@/api/connections.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
+import type { DockPosition } from "@/lib/ui-config.js";
 
 export interface DockProps {
   onLaunchApp?: (appId: OsAppId, capturedContext?: ActionContext) => void;
   className?: string;
+  position?: DockPosition;
 }
 
-export function Dock({ onLaunchApp, className = "" }: DockProps) {
+export function Dock({ onLaunchApp, className = "", position }: DockProps) {
   const [isAppLauncherOpen, setIsAppLauncherOpen] = React.useState(false);
 
   const pinnedApps = React.useSyncExternalStore(
@@ -35,11 +37,14 @@ export function Dock({ onLaunchApp, className = "" }: DockProps) {
   const activeProfileId = profile?.id ?? "default";
 
   // Appearance preferences from settings store
+  const storedPosition = useSettingsStore((s) => s.dockPosition) ?? "left";
+  const dockPosition: DockPosition = position ?? storedPosition;
+  const isHorizontal = dockPosition === "top" || dockPosition === "bottom";
+
   const dockPadding = useSettingsStore((s) => s.dockPadding) ?? 8;
   const dockItemSpacing = useSettingsStore((s) => s.dockItemSpacing) ?? 6;
   const dockOuterSpacing = useSettingsStore((s) => s.dockOuterSpacing) ?? 12;
   const dockRadius = useSettingsStore((s) => s.dockRadius) ?? 18;
-
   const activeDesktop =
     session.desktops.find((d) => d.id === session.activeDesktopId) ??
     session.desktops[0];
@@ -112,32 +117,66 @@ export function Dock({ onLaunchApp, className = "" }: DockProps) {
 
   const gutterWidth = 44 + 2 * dockPadding + 2 * dockOuterSpacing;
 
+  const asideStyle: React.CSSProperties = isHorizontal
+    ? {
+        height: `${gutterWidth}px`,
+        width: "100%",
+        paddingTop: `${dockOuterSpacing}px`,
+        paddingBottom: `${dockOuterSpacing}px`,
+      }
+    : {
+        width: `${gutterWidth}px`,
+        height: "100%",
+        paddingLeft: `${dockOuterSpacing}px`,
+        paddingRight: `${dockOuterSpacing}px`,
+      };
+
+  const panelStyle: React.CSSProperties = {
+    padding: `${dockPadding}px`,
+    borderRadius: `${dockRadius}px`,
+    gap: `${dockItemSpacing}px`,
+    ...(isHorizontal
+      ? { maxWidth: `calc(100% - ${2 * dockOuterSpacing}px)` }
+      : { maxHeight: `calc(100% - ${2 * dockOuterSpacing}px)` }),
+  };
+
+  let runningPipPositionClass = "left-1 top-1/2 -translate-y-1/2 flex flex-col";
+  if (dockPosition === "right") {
+    runningPipPositionClass = "right-1 top-1/2 -translate-y-1/2 flex flex-col";
+  } else if (dockPosition === "top") {
+    runningPipPositionClass = "top-1 left-1/2 -translate-x-1/2 flex flex-row";
+  } else if (dockPosition === "bottom") {
+    runningPipPositionClass = "bottom-1 left-1/2 -translate-x-1/2 flex flex-row";
+  }
+
   return (
     <>
       <aside
         role="navigation"
         aria-label="Application Dock"
-        style={{
-          width: `${gutterWidth}px`,
-          paddingLeft: `${dockOuterSpacing}px`,
-          paddingRight: `${dockOuterSpacing}px`,
-        }}
-        className={`h-full flex flex-col items-center justify-center pointer-events-none select-none z-40 shrink-0 ${className}`}
+        data-dock-position={dockPosition}
+        style={asideStyle}
+        className={`${
+          isHorizontal
+            ? "w-full flex flex-row items-center justify-center"
+            : "h-full flex flex-col items-center justify-center"
+        } pointer-events-none select-none z-40 shrink-0 ${className}`}
       >
         <div
-          style={{
-            padding: `${dockPadding}px`,
-            borderRadius: `${dockRadius}px`,
-            gap: `${dockItemSpacing}px`,
-            maxHeight: `calc(100% - ${2 * dockOuterSpacing}px)`,
-          }}
-          className="flex flex-col items-center border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg pointer-events-auto overflow-hidden shrink-0"
+          style={panelStyle}
+          className={`flex ${
+            isHorizontal ? "flex-row" : "flex-col"
+          } items-center border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg pointer-events-auto overflow-hidden shrink-0`}
           data-testid="dock-panel"
         >
-          {/* Scrollable app items scroller with reserved horizontal indicator clearance */}
+          {/* Scrollable app items scroller with reserved indicator clearance */}
           <div
             style={{ gap: `${dockItemSpacing}px` }}
-            className="flex-1 min-h-0 flex flex-col items-center overflow-y-auto overflow-x-hidden no-scrollbar w-full py-0.5"
+            className={`flex-1 ${
+              isHorizontal
+                ? "min-w-0 flex flex-row items-center overflow-x-auto overflow-y-hidden h-full px-0.5"
+                : "min-h-0 flex flex-col items-center overflow-y-auto overflow-x-hidden w-full py-0.5"
+            } no-scrollbar`}
             data-testid="dock-items-scroller"
           >
             {displayAppIds.map((appId) => {
@@ -202,14 +241,18 @@ export function Dock({ onLaunchApp, className = "" }: DockProps) {
                     {/* Running Indicator Pip */}
                     {isRunning && (
                       <div
-                        className="absolute left-1 top-1/2 -translate-y-1/2 flex flex-col gap-0.5 pointer-events-none"
+                        className={`absolute ${runningPipPositionClass} gap-0.5 pointer-events-none`}
                         data-testid={`dock-running-indicator-${appId}`}
                       >
                         <span
                           className={`rounded-full transition-all ${
                             isFocused
-                              ? "w-1.5 h-3 bg-[var(--color-primary)]"
-                              : "w-1 h-2 bg-[var(--color-text-muted)]"
+                              ? isHorizontal
+                                ? "w-3 h-1.5 bg-[var(--color-primary)]"
+                                : "w-1.5 h-3 bg-[var(--color-primary)]"
+                              : isHorizontal
+                                ? "w-2 h-1 bg-[var(--color-text-muted)]"
+                                : "w-1 h-2 bg-[var(--color-text-muted)]"
                           }`}
                         />
                       </div>
@@ -232,8 +275,16 @@ export function Dock({ onLaunchApp, className = "" }: DockProps) {
 
           {/* Permanent reachable Apps button outside overflow scroller */}
           <div
-            style={{ paddingTop: `${dockItemSpacing}px` }}
-            className="border-t border-[var(--color-border)] shrink-0 flex flex-col items-center w-full"
+            style={
+              isHorizontal
+                ? { paddingLeft: `${dockItemSpacing}px` }
+                : { paddingTop: `${dockItemSpacing}px` }
+            }
+            className={`${
+              isHorizontal
+                ? "border-l flex flex-row h-full"
+                : "border-t flex flex-col w-full"
+            } border-[var(--color-border)] shrink-0 items-center`}
           >
             <button
               type="button"

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AgentHubHeader } from "./AgentHubHeader.js";
@@ -31,6 +31,15 @@ describe("AgentHubHeader", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => {
+      root?.unmount();
+    });
+    container?.remove();
+    container = null;
+    root = null;
   });
 
   it("renders toggle button with correct aria attributes and triggers onToggleSidebar", () => {
@@ -126,5 +135,162 @@ describe("AgentHubHeader", () => {
       recipesBtn.click();
     });
     expect(onOpenRecipes).toHaveBeenCalled();
+  });
+
+  it("renders git button disabled when selectedGroup is null or has no project", () => {
+    const onOpenGit = vi.fn();
+
+    // Case 1: selectedGroup is null
+    act(() => {
+      root?.render(
+        <AgentHubHeader
+          sidebarHidden={false}
+          selectedGroup={null}
+          summary={makeSummary()}
+          onToggleSidebar={() => {}}
+          onOpenRecipes={() => {}}
+          onOpenGit={onOpenGit}
+        />,
+      );
+    });
+
+    const gitBtnNull = container?.querySelector(
+      "button[aria-label='Open Git panel (no project selected)']",
+    ) as HTMLButtonElement;
+    expect(gitBtnNull).toBeDefined();
+    expect(gitBtnNull.disabled).toBe(true);
+    expect(gitBtnNull.getAttribute("title")).toBe("Open Git panel (no project selected)");
+    act(() => {
+      gitBtnNull.click();
+    });
+    expect(onOpenGit).not.toHaveBeenCalled();
+
+    // Case 2: selectedGroup has projectName: null
+    const groupWithNullProject: TraditionalTerminalProjectGroup = {
+      id: "free-terminals",
+      label: "Free terminals",
+      projectName: null,
+      terminalTabs: [],
+      mountedSessions: [],
+    };
+    act(() => {
+      root?.render(
+        <AgentHubHeader
+          sidebarHidden={false}
+          selectedGroup={groupWithNullProject}
+          summary={makeSummary()}
+          onToggleSidebar={() => {}}
+          onOpenRecipes={() => {}}
+          onOpenGit={onOpenGit}
+        />,
+      );
+    });
+
+    const gitBtnNullProj = container?.querySelector(
+      "button[aria-label='Open Git panel (no project selected)']",
+    ) as HTMLButtonElement;
+    expect(gitBtnNullProj).toBeDefined();
+    expect(gitBtnNullProj.disabled).toBe(true);
+
+    // Case 3: selectedGroup has projectName: ""
+    const groupWithEmptyProject: TraditionalTerminalProjectGroup = {
+      id: "empty-project",
+      label: "Empty project",
+      projectName: "",
+      terminalTabs: [],
+      mountedSessions: [],
+    };
+    act(() => {
+      root?.render(
+        <AgentHubHeader
+          sidebarHidden={false}
+          selectedGroup={groupWithEmptyProject}
+          summary={makeSummary()}
+          onToggleSidebar={() => {}}
+          onOpenRecipes={() => {}}
+          onOpenGit={onOpenGit}
+        />,
+      );
+    });
+
+    const gitBtnEmptyProj = container?.querySelector(
+      "button[aria-label='Open Git panel (no project selected)']",
+    ) as HTMLButtonElement;
+    expect(gitBtnEmptyProj).toBeDefined();
+    expect(gitBtnEmptyProj.disabled).toBe(true);
+    act(() => {
+      gitBtnEmptyProj.click();
+    });
+    expect(onOpenGit).not.toHaveBeenCalled();
+  });
+
+  it("renders git button enabled when project is selected, with correct accessible label, and invokes onOpenGit", () => {
+    const onOpenGit = vi.fn();
+    const group: TraditionalTerminalProjectGroup = {
+      id: "p1:proj-a",
+      label: "proj-a",
+      projectName: "proj-a",
+      profileId: "p1",
+      terminalTabs: [],
+      mountedSessions: [],
+    };
+
+    act(() => {
+      root?.render(
+        <AgentHubHeader
+          sidebarHidden={false}
+          selectedGroup={group}
+          summary={makeSummary()}
+          onToggleSidebar={() => {}}
+          onOpenRecipes={() => {}}
+          onOpenGit={onOpenGit}
+        />,
+      );
+    });
+
+    const gitBtn = container?.querySelector(
+      "button[aria-label='Open Git panel (proj-a)']",
+    ) as HTMLButtonElement;
+    expect(gitBtn).toBeDefined();
+    expect(gitBtn.disabled).toBe(false);
+    expect(gitBtn.getAttribute("title")).toBe("Open Git panel (proj-a)");
+
+    act(() => {
+      gitBtn.click();
+    });
+    expect(onOpenGit).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders action cluster in Recipes -> Git -> Files order", () => {
+    const group: TraditionalTerminalProjectGroup = {
+      id: "p1:proj-a",
+      label: "proj-a",
+      projectName: "proj-a",
+      profileId: "p1",
+      terminalTabs: [],
+      mountedSessions: [],
+    };
+
+    act(() => {
+      root?.render(
+        <AgentHubHeader
+          sidebarHidden={false}
+          selectedGroup={group}
+          summary={makeSummary()}
+          onToggleSidebar={() => {}}
+          onOpenRecipes={() => {}}
+          onOpenGit={() => {}}
+          onToggleFileTree={() => {}}
+        />,
+      );
+    });
+
+    const buttons = Array.from(container?.querySelectorAll("header > div:last-child button") ?? []);
+    const labels = buttons.map((b) => b.getAttribute("aria-label"));
+    expect(labels).toEqual([
+      "Open Recipes",
+      "Open Git panel (proj-a)",
+      "Toggle files sidebar",
+    ]);
   });
 });

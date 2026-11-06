@@ -154,6 +154,23 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
     dispatchIntent(createIntent("recipes:open", {}, window.id));
   }, [window.id]);
 
+  // Git float intent
+  const handleOpenGit = useCallback(() => {
+    if (!selectedGroup?.projectName || !selectedGroup.profileId) return;
+    dispatchIntent(
+      createIntent(
+        "git:status",
+        {
+          profileId: selectedGroup.profileId,
+          projectId: selectedGroup.projectName,
+          worktreeId: selectedWorktree ?? undefined,
+          mode: "float",
+        },
+        window.id,
+      ),
+    );
+  }, [selectedGroup, selectedWorktree, window.id]);
+
   return (
     <div
       data-testid="agent-hub-app"
@@ -168,6 +185,7 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
         selectedWorktree={selectedWorktree}
         summary={summary}
         onOpenRecipes={handleOpenRecipes}
+        onOpenGit={handleOpenGit}
       />
 
       {feedbackNotice && (
@@ -259,6 +277,7 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
           onCloseTab={tabActions.onCloseTab}
           onOpenFile={handleOpenFile}
           onOpenRecipes={handleOpenRecipes}
+          onOpenGit={handleOpenGit}
           onOpenSessionChanges={handleOpenSessionChanges}
           onSelectedGroupChange={workspaces.handleSelectedGroupChange}
           selectGroupRequest={workspaces.selectGroupRequest}

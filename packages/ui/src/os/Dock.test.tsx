@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Dock } from "./Dock.js";
 import { useWindowStore } from "./window-store.js";
+import { useSettingsStore } from "@/stores/settings.js";
 import { createDefaultOsSession, openWindow } from "./window-ops.js";
 import * as dockPins from "./dock-pins.js";
 import * as actionExecutor from "./action-executor.js";
@@ -39,6 +40,7 @@ describe("Dock", () => {
   beforeEach(() => {
     localStorage.clear();
     dockPins._reloadDockPinsFromStorageForTesting();
+    useSettingsStore.setState({ dockPosition: "left" });
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -52,6 +54,7 @@ describe("Dock", () => {
       root.unmount();
     });
     container.remove();
+    useSettingsStore.setState({ dockPosition: "left" });
     vi.restoreAllMocks();
   });
 
@@ -387,5 +390,190 @@ describe("Dock", () => {
     clickElement(appsTrigger);
 
     expect(document.body.querySelector("[data-testid='app-launcher-panel']")).not.toBeNull();
+  });
+
+  it("renders correctly in all 4 positions (left, right, top, bottom)", () => {
+    dockPins.setDockPins(["terminals"]);
+    let session = useWindowStore.getState().session;
+    session = openWindow(
+      session,
+      {
+        id: "term-1",
+        appId: "terminals",
+        title: "Terminal",
+        ctx: { profileId: "p1" },
+        mode: "tile",
+      },
+      "d1",
+    );
+    useWindowStore.setState({ session });
+
+    // 1. Left
+    act(() => {
+      root.render(<Dock position="left" />);
+    });
+    const asideLeft = container.querySelector("aside") as HTMLElement;
+    const panelLeft = container.querySelector("[data-testid='dock-panel']") as HTMLElement;
+    const scrollerLeft = container.querySelector("[data-testid='dock-items-scroller']") as HTMLElement;
+    const triggerWrapLeft = container.querySelector("[data-testid='dock-apps-trigger']")?.parentElement as HTMLElement;
+    const indicatorLeft = container.querySelector("[data-testid='dock-running-indicator-terminals']") as HTMLElement;
+
+    expect(asideLeft.getAttribute("data-dock-position")).toBe("left");
+    expect(asideLeft.className).toContain("flex-col");
+    expect(asideLeft.className).toContain("h-full");
+    expect(panelLeft.className).toContain("flex-col");
+    expect(panelLeft.style.maxHeight).toBe("calc(100% - 24px)");
+    expect(panelLeft.style.maxWidth).toBe("");
+    expect(scrollerLeft.className).toContain("overflow-y-auto");
+    expect(scrollerLeft.className).toContain("flex-col");
+    expect(triggerWrapLeft.className).toContain("border-t");
+    expect(indicatorLeft.className).toContain("left-1");
+    expect(indicatorLeft.className).toContain("top-1/2");
+
+    // 2. Right
+    act(() => {
+      root.render(<Dock position="right" />);
+    });
+    const asideRight = container.querySelector("aside") as HTMLElement;
+    const panelRight = container.querySelector("[data-testid='dock-panel']") as HTMLElement;
+    const scrollerRight = container.querySelector("[data-testid='dock-items-scroller']") as HTMLElement;
+    const triggerWrapRight = container.querySelector("[data-testid='dock-apps-trigger']")?.parentElement as HTMLElement;
+    const indicatorRight = container.querySelector("[data-testid='dock-running-indicator-terminals']") as HTMLElement;
+
+    expect(asideRight.getAttribute("data-dock-position")).toBe("right");
+    expect(asideRight.className).toContain("flex-col");
+    expect(asideRight.className).toContain("h-full");
+    expect(panelRight.className).toContain("flex-col");
+    expect(panelRight.style.maxHeight).toBe("calc(100% - 24px)");
+    expect(panelRight.style.maxWidth).toBe("");
+    expect(scrollerRight.className).toContain("overflow-y-auto");
+    expect(scrollerRight.className).toContain("flex-col");
+    expect(triggerWrapRight.className).toContain("border-t");
+    expect(indicatorRight.className).toContain("right-1");
+    expect(indicatorRight.className).toContain("top-1/2");
+
+    // 3. Top
+    act(() => {
+      root.render(<Dock position="top" />);
+    });
+    const asideTop = container.querySelector("aside") as HTMLElement;
+    const panelTop = container.querySelector("[data-testid='dock-panel']") as HTMLElement;
+    const scrollerTop = container.querySelector("[data-testid='dock-items-scroller']") as HTMLElement;
+    const triggerWrapTop = container.querySelector("[data-testid='dock-apps-trigger']")?.parentElement as HTMLElement;
+    const indicatorTop = container.querySelector("[data-testid='dock-running-indicator-terminals']") as HTMLElement;
+
+    expect(asideTop.getAttribute("data-dock-position")).toBe("top");
+    expect(asideTop.className).toContain("flex-row");
+    expect(asideTop.className).toContain("w-full");
+    expect(panelTop.className).toContain("flex-row");
+    expect(panelTop.style.maxWidth).toBe("calc(100% - 24px)");
+    expect(panelTop.style.maxHeight).toBe("");
+    expect(scrollerTop.className).toContain("overflow-x-auto");
+    expect(scrollerTop.className).toContain("flex-row");
+    expect(triggerWrapTop.className).toContain("border-l");
+    expect(indicatorTop.className).toContain("top-1");
+    expect(indicatorTop.className).toContain("left-1/2");
+
+    // 4. Bottom
+    act(() => {
+      root.render(<Dock position="bottom" />);
+    });
+    const asideBottom = container.querySelector("aside") as HTMLElement;
+    const panelBottom = container.querySelector("[data-testid='dock-panel']") as HTMLElement;
+    const scrollerBottom = container.querySelector("[data-testid='dock-items-scroller']") as HTMLElement;
+    const triggerWrapBottom = container.querySelector("[data-testid='dock-apps-trigger']")?.parentElement as HTMLElement;
+    const indicatorBottom = container.querySelector("[data-testid='dock-running-indicator-terminals']") as HTMLElement;
+
+    expect(asideBottom.getAttribute("data-dock-position")).toBe("bottom");
+    expect(asideBottom.className).toContain("flex-row");
+    expect(asideBottom.className).toContain("w-full");
+    expect(panelBottom.className).toContain("flex-row");
+    expect(panelBottom.style.maxWidth).toBe("calc(100% - 24px)");
+    expect(panelBottom.style.maxHeight).toBe("");
+    expect(scrollerBottom.className).toContain("overflow-x-auto");
+    expect(scrollerBottom.className).toContain("flex-row");
+    expect(triggerWrapBottom.className).toContain("border-l");
+    expect(indicatorBottom.className).toContain("bottom-1");
+    expect(indicatorBottom.className).toContain("left-1/2");
+  });
+
+  it("prioritizes explicit position prop over useSettingsStore value", () => {
+    useSettingsStore.setState({ dockPosition: "right" });
+
+    // When position prop is omitted, it reads from settings store
+    act(() => {
+      root.render(<Dock />);
+    });
+    expect(container.querySelector("aside")?.getAttribute("data-dock-position")).toBe("right");
+
+    // When position prop is provided, it overrides settings store
+    act(() => {
+      root.render(<Dock position="top" />);
+    });
+    expect(container.querySelector("aside")?.getAttribute("data-dock-position")).toBe("top");
+  });
+
+  it("reactively updates orientation when settings store changes", () => {
+    act(() => {
+      root.render(<Dock />);
+    });
+    expect(container.querySelector("aside")?.getAttribute("data-dock-position")).toBe("left");
+
+    act(() => {
+      useSettingsStore.setState({ dockPosition: "bottom" });
+    });
+    expect(container.querySelector("aside")?.getAttribute("data-dock-position")).toBe("bottom");
+    expect(container.querySelector("[data-testid='dock-panel']")?.className).toContain("flex-row");
+  });
+
+  it("handles live position prop transitions without stale styles", () => {
+    act(() => {
+      root.render(<Dock position="left" />);
+    });
+    const panel = container.querySelector("[data-testid='dock-panel']") as HTMLElement;
+    expect(panel.style.maxHeight).toBe("calc(100% - 24px)");
+    expect(panel.style.maxWidth).toBe("");
+
+    act(() => {
+      root.render(<Dock position="top" />);
+    });
+    expect(panel.style.maxWidth).toBe("calc(100% - 24px)");
+    expect(panel.style.maxHeight).toBe("");
+
+    act(() => {
+      root.render(<Dock position="right" />);
+    });
+    expect(panel.style.maxHeight).toBe("calc(100% - 24px)");
+    expect(panel.style.maxWidth).toBe("");
+
+    act(() => {
+      root.render(<Dock position="bottom" />);
+    });
+    expect(panel.style.maxWidth).toBe("calc(100% - 24px)");
+    expect(panel.style.maxHeight).toBe("");
+  });
+
+  it("restores stored position when position prop is removed on rerender", () => {
+    useSettingsStore.setState({ dockPosition: "right" });
+
+    // Step 1: Render with override "top"
+    act(() => {
+      root.render(<Dock position="top" />);
+    });
+    let aside = container.querySelector("aside") as HTMLElement;
+    let panel = container.querySelector("[data-testid='dock-panel']") as HTMLElement;
+    expect(aside.getAttribute("data-dock-position")).toBe("top");
+    expect(panel.style.maxWidth).toBe("calc(100% - 24px)");
+    expect(panel.style.maxHeight).toBe("");
+
+    // Step 2: Render without prop -> falls back to stored "right"
+    act(() => {
+      root.render(<Dock />);
+    });
+    aside = container.querySelector("aside") as HTMLElement;
+    panel = container.querySelector("[data-testid='dock-panel']") as HTMLElement;
+    expect(aside.getAttribute("data-dock-position")).toBe("right");
+    expect(panel.style.maxHeight).toBe("calc(100% - 24px)");
+    expect(panel.style.maxWidth).toBe("");
   });
 });

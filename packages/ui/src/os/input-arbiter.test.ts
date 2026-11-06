@@ -18,6 +18,17 @@ describe("input-arbiter", () => {
     });
     expect(disposition).toBe("cognito-blocked");
   });
+  it("blocks input when Lock Screen is active", () => {
+    const event = new KeyboardEvent("keydown", { key: "a" });
+    const disposition = arbitrateKeyboardEvent(event, {
+      isCognitoActive: false,
+      isLockScreenActive: true,
+      isComposing: false,
+      isFrameFocused: false,
+    });
+    expect(disposition).toBe("lock-screen-blocked");
+  });
+
 
   it("passes through IME composition and dead keys without chord interception", () => {
     const imeEvent = new KeyboardEvent("keydown", { key: "Process", keyCode: 229 });

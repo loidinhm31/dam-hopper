@@ -162,4 +162,25 @@ describe("OS Typed Intents", () => {
     expect(floatIntent.payload.mode).toBe("float");
     expect(floatIntent.payload.generation).toBe(3);
   });
+
+  it("supports git:status with optional float mode", async () => {
+    const handler = vi.fn().mockResolvedValue({
+      status: "handled" as const,
+      targetWindowId: "win-git-1",
+    });
+    registerIntentHandler("git:status", handler);
+
+    const gitIntent = createIntent("git:status", {
+      profileId: "p1",
+      projectId: "proj-repo",
+      worktreeId: "feat-branch",
+      mode: "float",
+    });
+
+    const result = await dispatchIntent(gitIntent);
+    expect(result.status).toBe("handled");
+    expect(handler).toHaveBeenCalledWith(gitIntent);
+    expect(gitIntent.payload.mode).toBe("float");
+    expect(gitIntent.payload.projectId).toBe("proj-repo");
+  });
 });

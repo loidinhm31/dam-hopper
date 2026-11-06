@@ -30,6 +30,9 @@ import {
   clampDockItemSpacing,
   clampDockOuterSpacing,
   clampDockRadius,
+  type DockPosition,
+  isDockPosition,
+  normalizeDockPosition,
 } from "@/lib/ui-config.js";
 import {
   DEFAULT_COGNITO_MODE_SHORTCUT,
@@ -118,6 +121,7 @@ interface PersistedSettingsState {
   dockItemSpacing: number;
   dockOuterSpacing: number;
   dockRadius: number;
+  dockPosition: DockPosition;
   cursorTheme: "system" | "theme";
   appShortcuts: Record<string, string | null>;
 }
@@ -238,6 +242,10 @@ function applySnapshotToStore(
     (snapshot as Record<string, unknown>).default_window_placement;
   if (placement === "float" || placement === "tile")
     clamped.defaultWindowPlacement = placement;
+  const pos =
+    snapshot.dockPosition ??
+    (snapshot as Record<string, unknown>).dock_position;
+  if (isDockPosition(pos)) clamped.dockPosition = pos;
   if (typeof snapshot.terminalSuggestionsEnabled === "boolean")
     clamped.terminalSuggestionsEnabled = snapshot.terminalSuggestionsEnabled;
   if (typeof snapshot.terminalAutoSwitchProjectEnabled === "boolean")
@@ -337,6 +345,7 @@ function pickPersistedSettings(
     dockItemSpacing: state.dockItemSpacing ?? 6,
     dockOuterSpacing: state.dockOuterSpacing ?? 12,
     dockRadius: state.dockRadius ?? 18,
+    dockPosition: state.dockPosition ?? "left",
     cursorTheme: state.cursorTheme ?? "system",
     appShortcuts: state.appShortcuts ?? {},
   };
@@ -397,6 +406,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   dockOuterSpacing: 12,
   dockRadius: 18,
   cursorTheme: "system",
+  dockPosition: "left",
   appShortcuts: {},
   hydrated: false,
   sourceUnset: false,
@@ -508,6 +518,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         cognitoModeShortcut: ui.cognitoModeShortcut,
         cognitoModeStyle: ui.cognitoModeStyle,
         defaultWindowPlacement: ui.defaultWindowPlacement ?? "float",
+        dockPosition: ui.dockPosition ?? "left",
         hydrated: true,
         sourceUnset: false,
       });
@@ -640,6 +651,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     ) {
       clamped.defaultWindowPlacement = partial.defaultWindowPlacement;
     }
+    if (isDockPosition(partial.dockPosition))
+      clamped.dockPosition = partial.dockPosition;
     if (partial.osPaletteShortcut !== undefined)
       clamped.osPaletteShortcut = partial.osPaletteShortcut;
     if (partial.osCycleFocusShortcut !== undefined)

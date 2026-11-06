@@ -18,6 +18,7 @@ import {
 } from "./window-ops.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { useEditorStore } from "@/stores/editor.js";
+import { useLockScreenStore } from "@/stores/lock-screen.js";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 import {
   Select,
@@ -359,13 +360,15 @@ export function WindowFrame({
           document.querySelector('[data-os-modal="true"], [role="dialog"]'),
       );
 
+      const isLockScreenActive = useLockScreenStore.getState().isLocked;
       const disposition = arbitrateKeyboardEvent(e.nativeEvent, {
         isCognitoActive,
+        isLockScreenActive,
         isComposing: Boolean(e.nativeEvent.isComposing),
         isFrameFocused,
         isModalActive,
       });
-      if (disposition === "cognito-blocked") {
+      if (disposition === "cognito-blocked" || disposition === "lock-screen-blocked") {
         e.preventDefault();
         e.stopPropagation();
         return;

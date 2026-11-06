@@ -3,7 +3,8 @@ import {
   useShellInputContext,
   type ShellInputContextValue,
 } from "./shell-input-context.js";
-import { Server, Search, Bell } from "lucide-react";
+import { Server, Search, Bell, Lock } from "lucide-react";
+import { useLockScreenStore } from "@/stores/lock-screen.js";
 import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
 import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import { useWindowStore } from "./window-store.js";
@@ -19,6 +20,7 @@ export interface TopBarProps {
   onOpenPalette?: () => void;
   onOpenNotifications?: () => void;
   onOpenMonitor?: (profileId?: string, incidentId?: string) => void;
+  onRequestSetupPin?: () => void;
   unreadNotificationsCount?: number;
   className?: string;
 }
@@ -28,8 +30,15 @@ export function TopBar({
   onOpenNotifications,
   unreadNotificationsCount = 0,
   onOpenMonitor,
+  onRequestSetupPin,
   className = "",
 }: TopBarProps) {
+  const hasPinConfigured = useLockScreenStore((s) => s.hasPin);
+  const lockScreen = useLockScreenStore((s) => s.lock);
+
+  useEffect(() => {
+    useLockScreenStore.getState().init();
+  }, []);
   const session = useWindowStore((state) => state.session);
   const setDefaultCtx = useWindowStore((state) => state.setDefaultCtx);
   const restoreWindow = useWindowStore((state) => state.restoreWindow);
@@ -335,6 +344,23 @@ export function TopBar({
               {unreadNotificationsCount > 99 ? "99+" : unreadNotificationsCount}
             </span>
           )}
+        </button>
+        {/* Lock Screen Button */}
+        <button
+          type="button"
+          data-testid="topbar-lock-button"
+          aria-label={hasPinConfigured ? "Lock screen" : "Set up lock screen PIN"}
+          title={hasPinConfigured ? "Lock screen" : "Set up lock screen PIN"}
+          onClick={() => {
+            if (hasPinConfigured) {
+              lockScreen();
+            } else {
+              onRequestSetupPin?.();
+            }
+          }}
+          className="relative p-1.5 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]"
+        >
+          <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         </button>
       </div>
       {isProfilesDialogOpen && (

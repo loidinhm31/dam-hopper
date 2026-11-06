@@ -253,6 +253,7 @@ pub(crate) fn normalize_ui_json_for_toml(value: &mut Value) {
             "dockItemSpacing" | "dock_item_spacing" => "dock_item_spacing",
             "dockOuterSpacing" | "dock_outer_spacing" => "dock_outer_spacing",
             "dockRadius" | "dock_radius" => "dock_radius",
+            "dockPosition" | "dock_position" => "dock_position",
             "cursorTheme" | "cursor_theme" => "cursor_theme",
             "appShortcuts" | "app_shortcuts" => "app_shortcuts",
             other => other,

@@ -12,6 +12,7 @@ import {
   type ShortcutKeyEvent,
 } from "@/lib/shortcuts.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
+import { useLockScreenStore } from "@/stores/lock-screen.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { canExecuteAction, executeAction } from "./action-executor.js";
 import { listActionDescriptors, resolveActionBinding } from "./actions.js";
@@ -200,6 +201,13 @@ export function handleCoordinatorKeyEvent(event: KeyboardEvent): boolean {
       return true;
     }
   }
+  // --------------------------------------------------------------------------
+  // Stage 1b: Lock Screen Protection (Suppresses shortcuts while locked)
+  // --------------------------------------------------------------------------
+  if (useLockScreenStore.getState().isLocked) {
+    return false;
+  }
+
 
   // --------------------------------------------------------------------------
   // Stage 2: Settings Shortcut Capture Ownership

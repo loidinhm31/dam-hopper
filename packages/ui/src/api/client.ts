@@ -2094,6 +2094,7 @@ export interface UiConfig {
   dockItemSpacing?: number;
   dockOuterSpacing?: number;
   dockRadius?: number;
+  dockPosition?: "left" | "right" | "top" | "bottom";
   cursorTheme?: "system" | "theme";
   appShortcuts?: Record<string, string | null>;
 }

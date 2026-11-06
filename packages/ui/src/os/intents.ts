@@ -110,6 +110,7 @@ export interface IntentPayloadMap {
     profileId: string;
     projectId: string;
     worktreeId?: string;
+    mode?: "tile" | "float";
   };
   "git:diff": {
     profileId: string;

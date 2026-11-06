@@ -20,6 +20,9 @@ import { SettingsApp } from "./apps/SettingsApp.js";
 import { SystemMonitorApp } from "./apps/SystemMonitorApp.js";
 import { AgentHubApp } from "./apps/AgentHubApp.js";
 import { RecipesApp } from "./apps/RecipesApp.js";
+import { LockScreenOverlay } from "./LockScreenOverlay.js";
+import { PinSetupDialog } from "./PinSetupDialog.js";
+import { useLockScreenStore } from "@/stores/lock-screen.js";
 import {
   APP_MANIFESTS,
   findExistingWindowForApp,
@@ -82,6 +85,18 @@ export function OsShell() {
   const dockPadding = useSettingsStore((s) => s.dockPadding) ?? 8;
   const dockOuterSpacing = useSettingsStore((s) => s.dockOuterSpacing) ?? 12;
   const dockGutter = 44 + 2 * dockPadding + 2 * dockOuterSpacing;
+  const [isPinSetupOpen, setIsPinSetupOpen] = useState(false);
+  const isLocked = useLockScreenStore((s) => s.isLocked);
+  const dockPosition = useSettingsStore((s) => s.dockPosition) ?? "left";
+
+  const workspaceFlexClass =
+    dockPosition === "right"
+      ? "flex-row-reverse"
+      : dockPosition === "top"
+        ? "flex-col"
+        : dockPosition === "bottom"
+          ? "flex-col-reverse"
+          : "flex-row";
 
   useEffect(() => {
     return syncCursorTheme({
@@ -796,35 +811,6 @@ export function OsShell() {
         focusWindow(id);
         return { status: "handled", targetWindowId: id };
       }),
-      registerIntentHandler("git:status", (intent) => {
-        const targetCtx: WindowContext = {
-          profileId: intent.payload.profileId,
-          projectId: intent.payload.projectId,
-          worktreeId: intent.payload.worktreeId,
-        };
-        const existing = findExistingWindowForApp(
-          useWindowStore.getState().session.windows,
-          "git",
-          targetCtx,
-        );
-        if (existing) {
-          if (existing.minimized) restoreWindow(existing.id);
-          focusWindow(existing.id);
-          return { status: "handled", targetWindowId: existing.id };
-        }
-        const id = `git-${generateUUID().slice(0, 8)}`;
-        openWindow(
-          {
-            id,
-            appId: "git",
-            title: "Git",
-            ctx: targetCtx,
-            mode: getPlacement(),
-          },
-          useWindowStore.getState().session.activeDesktopId,
-        );
-        return { status: "handled", targetWindowId: id };
-      }),
       registerIntentHandler("workflow:open-item", (intent) => {
         const targetCtx: WindowContext = {
           profileId: intent.payload.profileId,
@@ -1377,14 +1363,26 @@ export function OsShell() {
           projectId: intent.payload.projectId,
           worktreeId: intent.payload.worktreeId,
         };
+        const state = useWindowStore.getState();
         const existing = findExistingWindowForApp(
-          useWindowStore.getState().session.windows,
+          state.session.windows,
           "git",
           targetCtx,
           intent.payload,
         );
         if (existing) {
-          if (existing.minimized) restoreWindow(existing.id);
+          if (existing.desktopId !== state.session.activeDesktopId) {
+            switchDesktop(existing.desktopId);
+          }
+          if (existing.minimized) {
+            restoreWindow(existing.id);
+          }
+          if (existing.maximized) {
+            state.toggleMaximizeWindow(existing.id);
+          }
+          if (intent.payload.mode === "float" && existing.mode === "tile") {
+            state.toggleWindowMode(existing.id);
+          }
           focusWindow(existing.id);
           return { status: "handled", targetWindowId: existing.id };
         }
@@ -1395,10 +1393,11 @@ export function OsShell() {
             appId: "git",
             title: "Source Control",
             ctx: targetCtx,
-            mode: getPlacement(),
+            mode: intent.payload.mode ?? getPlacement(),
           },
           useWindowStore.getState().session.activeDesktopId,
         );
+        focusWindow(id);
         return { status: "handled", targetWindowId: id };
       }),
       registerIntentHandler("agent-hub:open", (intent) => {
@@ -1683,11 +1682,13 @@ export function OsShell() {
             ref={shellRootRef}
             data-os-shell="true"
             data-testid="os-shell-root"
+            inert={isLocked ? true : undefined}
             style={{ "--os-dock-gutter": `${dockGutter}px` } as React.CSSProperties}
             className="flex flex-col w-screen h-screen overflow-hidden bg-[var(--color-bg)] select-none"
           >
             {/* Top OS Bar */}
             <TopBar
+              onRequestSetupPin={() => setIsPinSetupOpen(true)}
               onOpenPalette={() => {
                 setActiveNonmodal(null);
                 setIsPaletteOpen(true);
@@ -1732,12 +1733,15 @@ export function OsShell() {
               </div>
             )}
 
-            {/* Desktop Canvas */}
-            {/* Main Workspace: Left Dock + Desktop Canvas */}
-            <div className="flex flex-1 min-h-0 w-full overflow-hidden">
-              <Dock onLaunchApp={handleLaunchApp} />
+            {/* Main Workspace: Dock + Desktop Canvas */}
+            <div
+              data-testid="os-workspace-container"
+              data-dock-position={dockPosition}
+              className={`flex ${workspaceFlexClass} flex-1 min-h-0 min-w-0 w-full overflow-hidden`}
+            >
+              <Dock onLaunchApp={handleLaunchApp} position={dockPosition} />
 
-              <main className="flex-1 min-h-0 relative overflow-hidden" role="main">
+              <main className="flex-1 min-h-0 min-w-0 relative overflow-hidden" role="main">
                 {activeDesktop && (
                   <DesktopCanvas
                     desktop={activeDesktop}
@@ -1760,6 +1764,14 @@ export function OsShell() {
               onClose={() => setActiveNonmodal(null)}
             />
           </div>
+            {/* Lock Screen Overlay */}
+            <LockScreenOverlay />
+
+            {/* PIN Setup Dialog */}
+            <PinSetupDialog
+              open={isPinSetupOpen}
+              onOpenChange={setIsPinSetupOpen}
+            />
         </OsResourceHost>
       </TerminalCloseProvider>
     </ShellInputProvider>

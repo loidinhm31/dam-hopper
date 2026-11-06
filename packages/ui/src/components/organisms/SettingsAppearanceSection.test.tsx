@@ -8,6 +8,8 @@ import { SettingsAppearanceSection } from "./SettingsAppearanceSection.js";
 import { CognitoModeOverlay } from "./CognitoModeOverlay.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import type { CognitoModeStyle } from "@/api/client.js";
+import type { DockPosition } from "@/lib/ui-config.js";
+import { useLockScreenStore } from "@/stores/lock-screen.js";
 
 const saveDebounced = vi.fn((patch: Partial<typeof settingsStore>) => {
   Object.assign(settingsStore, patch);
@@ -66,6 +68,7 @@ const settingsStore = {
   mobileCustomKeyboardRowGap: 4,
   cognitoModeShortcut: "Mod+Alt+KeyB",
   cognitoModeStyle: "heavy-blur" as CognitoModeStyle,
+  dockPosition: "left" as DockPosition,
   dockPadding: 8,
   dockItemSpacing: 6,
   dockOuterSpacing: 12,
@@ -92,6 +95,7 @@ describe("SettingsAppearanceSection", () => {
     settingsStore.terminalAutoSwitchProjectEnabled = true;
     settingsStore.cognitoModeShortcut = "Mod+Alt+KeyB";
     settingsStore.cognitoModeStyle = "heavy-blur";
+    settingsStore.dockPosition = "left";
     settingsStore.dockPadding = 8;
     settingsStore.dockItemSpacing = 6;
     settingsStore.dockOuterSpacing = 12;
@@ -284,7 +288,8 @@ describe("SettingsAppearanceSection", () => {
     );
   });
 
-  it("resets appearance defaults on reset button click", async () => {
+  it("resets appearance defaults on reset button click, restoring dockPosition to left", async () => {
+    settingsStore.dockPosition = "bottom";
     await act(async () => {
       root?.render(<SettingsAppearanceSection />);
     });
@@ -299,12 +304,90 @@ describe("SettingsAppearanceSection", () => {
     });
 
     expect(saveDebounced).toHaveBeenCalledWith({
+      dockPosition: "left",
       dockPadding: 8,
       dockItemSpacing: 6,
       dockOuterSpacing: 12,
       dockRadius: 18,
       cursorTheme: "system",
     });
+    // Rerender to verify displayed selection reflects restored "left"
+    await act(async () => {
+      root?.render(<SettingsAppearanceSection />);
+    });
+    const triggerAfterReset = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Dock position"]',
+    );
+    expect(triggerAfterReset?.textContent).toContain("Left");
+  });
+
+  it("changes dock position via select trigger and calls saveDebounced", async () => {
+    await act(async () => {
+      root?.render(<SettingsAppearanceSection />);
+    });
+
+    const trigger = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Dock position"]',
+    );
+    expect(trigger).not.toBeNull();
+    expect(trigger?.textContent).toContain("Left");
+
+    // Open select dropdown
+    await act(async () => {
+      trigger?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      );
+    });
+
+    const rightOption = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ).find((el) => el.textContent?.trim() === "Right");
+    expect(rightOption).toBeDefined();
+
+    await act(async () => {
+      rightOption?.click();
+    });
+
+    expect(saveDebounced).toHaveBeenCalledWith({ dockPosition: "right" });
+    // Rerender to verify displayed selection reflects new "right" value
+    await act(async () => {
+      root?.render(<SettingsAppearanceSection />);
+    });
+    expect(
+      container?.querySelector<HTMLButtonElement>(
+        'button[aria-label="Dock position"]',
+      )?.textContent,
+    ).toContain("Right");
+
+    saveDebounced.mockClear();
+    // Open select dropdown and choose Top
+    await act(async () => {
+      trigger?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      );
+    });
+    const topOption = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ).find((el) => el.textContent?.trim() === "Top");
+    await act(async () => {
+      topOption?.click();
+    });
+    expect(saveDebounced).toHaveBeenCalledWith({ dockPosition: "top" });
+    saveDebounced.mockClear();
+
+    // Open select dropdown and choose Bottom
+    await act(async () => {
+      trigger?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      );
+    });
+    const bottomOption = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ).find((el) => el.textContent?.trim() === "Bottom");
+    await act(async () => {
+      bottomOption?.click();
+    });
+    expect(saveDebounced).toHaveBeenCalledWith({ dockPosition: "bottom" });
   });
 
   it("displays honest sourceUnset warning banner when no preference source is connected", async () => {
@@ -318,5 +401,37 @@ describe("SettingsAppearanceSection", () => {
     expect(statusBanner?.textContent).toContain(
       "No preference source connected",
     );
+  });
+
+  it("renders screen lock PIN controls and status correctly", async () => {
+    useLockScreenStore.getState().reset();
+
+    await act(async () => {
+      root?.render(<SettingsAppearanceSection />);
+    });
+
+    const badge = container?.querySelector('[data-testid="settings-pin-status-badge"]');
+    expect(badge?.textContent).toBe("Not Set");
+
+    const setupBtn = container?.querySelector('[data-testid="settings-setup-pin-button"]');
+    expect(setupBtn).not.toBeNull();
+
+    // Setup PIN
+    await useLockScreenStore.getState().setPin("1234");
+    await act(async () => {
+      root?.render(<SettingsAppearanceSection />);
+    });
+
+    expect(container?.querySelector('[data-testid="settings-pin-status-badge"]')?.textContent).toBe("PIN Active");
+    const lockNowBtn = container?.querySelector('[data-testid="settings-lock-now-button"]');
+    expect(lockNowBtn).not.toBeNull();
+    expect(container?.querySelector('[data-testid="settings-change-pin-button"]')).not.toBeNull();
+    expect(container?.querySelector('[data-testid="settings-remove-pin-button"]')).not.toBeNull();
+
+    // Click Lock Now
+    await act(async () => {
+      lockNowBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(useLockScreenStore.getState().isLocked).toBe(true);
   });
 });

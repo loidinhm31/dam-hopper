@@ -89,6 +89,61 @@ function MonitorTrayInner({ onOpenMonitor, className = "" }: MonitorTrayProps) {
     const used = memoryBytes.totalBytes - memoryBytes.availableBytes;
     return Math.max(0, Math.min(100, (used / memoryBytes.totalBytes) * 100));
   }, [memoryBytes]);
+  // Battery telemetry validation and presentation
+  const battery = activeEntry?.snapshot?.battery;
+  const hasValidBattery = useMemo(() => {
+    if (!battery) return false;
+    if (
+      typeof battery.count !== "number" ||
+      !Number.isInteger(battery.count) ||
+      battery.count <= 0
+    ) {
+      return false;
+    }
+    if (
+      battery.availability?.state !== "available" &&
+      battery.availability?.state !== "stale"
+    ) {
+      return false;
+    }
+    return (
+      typeof battery.capacityPercent === "number" &&
+      Number.isFinite(battery.capacityPercent) &&
+      battery.capacityPercent >= 0 &&
+      battery.capacityPercent <= 100
+    );
+  }, [battery]);
+
+  const batteryPercent =
+    hasValidBattery && typeof battery?.capacityPercent === "number"
+      ? Math.round(battery.capacityPercent)
+      : undefined;
+  const isCharging = battery?.status === "charging";
+  const isFull = battery?.status === "full";
+  const isStaleBattery = battery?.availability?.state === "stale";
+
+  const batValueColorClass =
+    typeof batteryPercent === "number"
+      ? batteryPercent < 20
+        ? "text-[var(--color-danger)] font-bold"
+        : batteryPercent < 30
+          ? "text-[var(--color-warning)] font-bold"
+          : "text-[var(--color-text)]"
+      : "text-[var(--color-text)]";
+
+  const batSummary =
+    cognitoActive || !isConnected
+      ? ""
+      : hasValidBattery && batteryPercent !== undefined
+        ? `, BAT ${batteryPercent}%${isCharging ? " (Charging)" : isFull ? " (Full)" : ""}${isStaleBattery ? " (Stale)" : ""}`
+        : "";
+
+  const batTitleSummary =
+    cognitoActive || !isConnected
+      ? ""
+      : hasValidBattery && batteryPercent !== undefined
+        ? ` · BAT ${batteryPercent}%${isCharging ? " (Charging)" : isFull ? " (Full)" : ""}${isStaleBattery ? " (Stale)" : ""}`
+        : "";
 
   // Honest status text and color
   const statusDisplay = useMemo(() => {
@@ -160,15 +215,15 @@ function MonitorTrayInner({ onOpenMonitor, className = "" }: MonitorTrayProps) {
         aria-label={
           cognitoActive
             ? "System Monitor Tray (Protected)"
-            : `System Monitor: ${profileLabel} (${statusDisplay.label}), CPU ${cpuText}, MEM ${memText}`
+            : `System Monitor: ${profileLabel} (${statusDisplay.label}), CPU ${cpuText}, MEM ${memText}${batSummary}`
         }
         title={
           cognitoActive
             ? "System Monitor: Protected"
-            : `${profileLabel} [${statusDisplay.label}] · CPU ${cpuText} · MEM ${memText}`
+            : `${profileLabel} [${statusDisplay.label}] · CPU ${cpuText} · MEM ${memText}${batTitleSummary}`
         }
         onClick={() => handleOpen(activeEntry?.profile.id)}
-        className="flex items-center gap-2 px-2 py-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-primary)] text-[10px] font-mono text-[var(--color-text)] transition-colors max-w-[190px] sm:max-w-none"
+        className="flex items-center gap-2 px-2 py-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-primary)] text-[10px] font-mono text-[var(--color-text)] transition-colors max-w-[248px] sm:max-w-none"
       >
         <span
           className={`h-1.5 w-1.5 rounded-full shrink-0 ${statusDisplay.dotColor}`}
@@ -219,6 +274,27 @@ function MonitorTrayInner({ onOpenMonitor, className = "" }: MonitorTrayProps) {
                 {memText}
               </span>
             </span>
+
+            {/* BAT meter (rendered only when host reports valid battery hardware) */}
+            {hasValidBattery && batteryPercent !== undefined && (
+              <span
+                data-testid="os-monitor-tray-battery"
+                data-stale={isStaleBattery ? "true" : undefined}
+                className={`inline-flex items-center gap-0.5 ${isStaleBattery ? "opacity-60" : ""}`}
+              >
+                <span className="text-[var(--color-text-muted)]">B:</span>
+                {isCharging && (
+                  <span
+                    data-testid="os-monitor-tray-battery-charging"
+                    className="text-[var(--color-warning)] leading-none"
+                    aria-hidden="true"
+                  >
+                    ⚡
+                  </span>
+                )}
+                <span className={batValueColorClass}>{batteryPercent}%</span>
+              </span>
+            )}
           </div>
         )}
       </button>

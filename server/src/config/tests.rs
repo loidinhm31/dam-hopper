@@ -1289,6 +1289,7 @@ fn ui_config_serde_roundtrip() {
             dock_item_spacing: 5.0,
             dock_outer_spacing: 14.0,
             dock_radius: 20.0,
+            dock_position: "left".to_string(),
             cursor_theme: "theme".to_string(),
             app_shortcuts: {
                 let mut map = std::collections::BTreeMap::new();

@@ -7,7 +7,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { Plus, BookOpen, Folder, X } from "lucide-react";
+import { Plus, BookOpen, Folder, X, GitBranch } from "lucide-react";
 import { TraditionalProjectWorkspaceTree } from "@/components/organisms/TraditionalProjectWorkspaceTree.js";
 import { TraditionalProjectFileChanges } from "@/components/organisms/TraditionalProjectFileChanges.js";
 import {
@@ -106,6 +106,7 @@ export interface TraditionalTerminalProjectsDisplayProps {
   onNewTerminalInGroup?: (groupId: string) => void;
   onOpenFile?: (payload: IntentPayloadMap["file:open"]) => void;
   onOpenRecipes?: () => void;
+  onOpenGit?: () => void;
   onSelectedGroupChange?: (group: TraditionalTerminalProjectGroup | null) => void;
   selectGroupRequest?: { groupId: string; nonce: number };
   hubAttach?: {
@@ -150,6 +151,7 @@ export function TraditionalTerminalProjectsDisplay({
   onNewTerminalInGroup,
   onOpenFile,
   onOpenRecipes,
+  onOpenGit,
   onSelectedGroupChange,
   selectGroupRequest,
   hubAttach,
@@ -489,6 +491,27 @@ export function TraditionalTerminalProjectsDisplay({
                 <span>Recipes</span>
               </button>
             )}
+            {onOpenGit && (
+              <button
+                type="button"
+                onClick={onOpenGit}
+                disabled={!selectedGroup.projectName}
+                aria-label={
+                  selectedGroup.projectName
+                    ? `Open Git panel (${selectedGroup.projectName})`
+                    : "Open Git panel (no project selected)"
+                }
+                title={
+                  selectedGroup.projectName
+                    ? `Open Git panel (${selectedGroup.projectName})`
+                    : "Open Git panel (no project selected)"
+                }
+                className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <GitBranch className="h-4 w-4" aria-hidden="true" />
+                <span>Git</span>
+              </button>
+            )}
           </div>
         </div>
       );
@@ -543,15 +566,37 @@ export function TraditionalTerminalProjectsDisplay({
               />
             )}
           </span>
-          <button
-            type="button"
-            aria-label="New terminal in selected project"
-            onClick={handleNewTerminal}
-            title="New terminal in selected project"
-            className="ml-auto flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] active:bg-[var(--color-border)]"
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-          </button>
+          <div className="ml-auto flex items-center gap-1.5">
+            {onOpenGit && (
+              <button
+                type="button"
+                aria-label={
+                  selectedGroup?.projectName
+                    ? `Open Git panel (${selectedGroup.projectName})`
+                    : "Open Git panel (no project selected)"
+                }
+                title={
+                  selectedGroup?.projectName
+                    ? `Open Git panel (${selectedGroup.projectName})`
+                    : "Open Git panel (no project selected)"
+                }
+                onClick={onOpenGit}
+                disabled={!selectedGroup?.projectName}
+                className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] active:bg-[var(--color-border)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <GitBranch className="h-4 w-4" aria-hidden="true" />
+              </button>
+            )}
+            <button
+              type="button"
+              aria-label="New terminal in selected project"
+              onClick={handleNewTerminal}
+              title="New terminal in selected project"
+              className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] active:bg-[var(--color-border)]"
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
           <button
             ref={projectsOpenerRef}
             type="button"

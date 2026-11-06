@@ -182,6 +182,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   dockItemSpacing: 6,
   dockOuterSpacing: 12,
   dockRadius: 18,
+  dockPosition: "left",
   cursorTheme: "system",
   appShortcuts: {},
 };
@@ -205,6 +206,16 @@ export function clampDockRadius(val: unknown): number {
   if (typeof val !== "number" || !Number.isFinite(val)) return 18;
   return Math.min(28, Math.max(0, val));
 }
+export type DockPosition = "left" | "right" | "top" | "bottom";
+
+export function isDockPosition(val: unknown): val is DockPosition {
+  return val === "left" || val === "right" || val === "top" || val === "bottom";
+}
+
+export function normalizeDockPosition(val: unknown): DockPosition {
+  return isDockPosition(val) ? val : "left";
+}
+
 
 function resolveNullableShortcut(
   ui: Partial<UiConfig> | null | undefined,
@@ -373,6 +384,7 @@ export function withUiConfigDefaults(ui?: Partial<UiConfig> | null): UiConfig {
     dockItemSpacing: clampDockItemSpacing(ui?.dockItemSpacing),
     dockOuterSpacing: clampDockOuterSpacing(ui?.dockOuterSpacing),
     dockRadius: clampDockRadius(ui?.dockRadius),
+    dockPosition: normalizeDockPosition(ui?.dockPosition),
     cursorTheme: ui?.cursorTheme === "theme" ? "theme" : "system",
     appShortcuts: normalizeAppShortcuts(ui?.appShortcuts),
     cognitoModeShortcut: normalizeCognitoModeShortcut(

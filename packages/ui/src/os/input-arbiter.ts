@@ -1,5 +1,6 @@
 export type InputDisposition =
   | "cognito-blocked"
+  | "lock-screen-blocked"
   | "ime-passthrough"
   | "os-shortcut-handled"
   | "os-palette-handled"
@@ -12,6 +13,7 @@ export interface InputArbiterContext {
   isComposing: boolean;
   isFrameFocused: boolean;
   isModalActive?: boolean;
+  isLockScreenActive?: boolean;
   cycleFocusShortcut?: string | null;
   paletteShortcut?: string | null;
   settings?: ActionBindingsSettingsProjection | null;
@@ -117,6 +119,11 @@ export function arbitrateKeyboardEvent(
   if (ctx.isCognitoActive) {
     return "cognito-blocked";
   }
+  // 1b. Lock Screen: Blocks physical input behind lock screen
+  if (ctx.isLockScreenActive) {
+    return "lock-screen-blocked";
+  }
+
 
   // 2. IME Composition / Dead keys / AltGr: Passthrough immediately without chord interception
   if (ctx.isComposing || isImeOrCompositionEvent(event)) {

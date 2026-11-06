@@ -781,6 +781,9 @@ fn default_dock_outer_spacing() -> f64 {
 fn default_dock_radius() -> f64 {
     18.0
 }
+fn default_dock_position() -> String {
+    "left".to_string()
+}
 fn default_cursor_theme() -> String {
     "system".to_string()
 }
@@ -1178,6 +1181,12 @@ pub struct UiConfig {
     )]
     pub dock_radius: f64,
     #[serde(
+        default = "default_dock_position",
+        alias = "dock_position",
+        alias = "dockPosition"
+    )]
+    pub dock_position: String,
+    #[serde(
         default = "default_cursor_theme",
         alias = "cursor_theme",
         alias = "cursorTheme"
@@ -1332,6 +1341,7 @@ impl Default for UiConfig {
             dock_item_spacing: default_dock_item_spacing(),
             dock_outer_spacing: default_dock_outer_spacing(),
             dock_radius: default_dock_radius(),
+            dock_position: default_dock_position(),
             cursor_theme: default_cursor_theme(),
             app_shortcuts: std::collections::BTreeMap::new(),
         }
@@ -1434,6 +1444,9 @@ impl UiConfig {
         }
         if !self.dock_radius.is_finite() || !(0.0..=28.0).contains(&self.dock_radius) {
             return Err("dock_radius must be finite and between 0 and 28".to_string());
+        }
+        if !["left", "right", "top", "bottom"].contains(&self.dock_position.as_str()) {
+            return Err("dock_position must be one of: 'left', 'right', 'top', 'bottom'".to_string());
         }
         if self.cursor_theme != "system" && self.cursor_theme != "theme" {
             return Err("cursor_theme must be either 'system' or 'theme'".to_string());

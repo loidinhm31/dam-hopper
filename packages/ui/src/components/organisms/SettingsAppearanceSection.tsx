@@ -15,9 +15,16 @@ import {
   isHistoryEnabled,
   setHistoryEnabled,
 } from "@/lib/command-history.js";
-import { isCognitoModeStyle } from "@/lib/ui-config.js";
+import { isCognitoModeStyle, isDockPosition } from "@/lib/ui-config.js";
+import { useLockScreenStore } from "@/stores/lock-screen.js";
+import { PinSetupDialog, type PinDialogMode } from "@/os/PinSetupDialog.js";
+import { cn } from "@/lib/utils.js";
 export function SettingsAppearanceSection() {
   const [historyEnabled, setHistoryEnabledState] = useState(isHistoryEnabled);
+  const [pinDialogOpen, setPinDialogOpen] = useState(false);
+  const [pinDialogMode, setPinDialogMode] = useState<PinDialogMode>("setup");
+  const hasPin = useLockScreenStore((s) => s.hasPin);
+  const lock = useLockScreenStore((s) => s.lock);
   const {
     systemFontSize,
     editorFontSize,
@@ -31,6 +38,7 @@ export function SettingsAppearanceSection() {
     explorerShowHidden,
     cognitoModeStyle,
     defaultWindowPlacement,
+    dockPosition,
     dockPadding,
     dockItemSpacing,
     dockOuterSpacing,
@@ -267,6 +275,32 @@ export function SettingsAppearanceSection() {
       <div className="border-t border-[var(--color-border)]" />
 
       <SettingRow
+        title="Dock position"
+        description="Screen edge placement for the application dock"
+      >
+        <Select
+          value={dockPosition ?? "left"}
+          onValueChange={(value) => {
+            if (isDockPosition(value)) {
+              saveDebounced({ dockPosition: value });
+            }
+          }}
+        >
+          <SelectTrigger aria-label="Dock position" className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="left">Left</SelectItem>
+            <SelectItem value="right">Right</SelectItem>
+            <SelectItem value="top">Top</SelectItem>
+            <SelectItem value="bottom">Bottom</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
         title="Dock padding"
         description="Internal padding of the floating dock (0–16 px)"
       >
@@ -283,7 +317,7 @@ export function SettingsAppearanceSection() {
 
       <SettingRow
         title="Dock item spacing"
-        description="Vertical spacing between dock app icons (0–12 px)"
+        description="Spacing between dock app icons (0–12 px)"
       >
         <NumberStepper
           value={dockItemSpacing ?? 6}
@@ -345,6 +379,73 @@ export function SettingsAppearanceSection() {
           </SelectContent>
         </Select>
       </SettingRow>
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Screen Lock PIN"
+        description="Require a 4–8 digit numeric PIN to lock the DamHopper OS workspace in this browser. Stored locally; not a replacement for server authentication."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            data-testid="settings-pin-status-badge"
+            className={cn(
+              "rounded px-2 py-0.5 text-[10px] font-mono font-semibold uppercase",
+              hasPin
+                ? "bg-[var(--color-success)]/15 text-[var(--color-success)] border border-[var(--color-success)]/30"
+                : "bg-[var(--color-surface-2)] text-[var(--color-text-muted)] border border-[var(--color-border)]",
+            )}
+          >
+            {hasPin ? "PIN Active" : "Not Set"}
+          </span>
+
+          {hasPin ? (
+            <>
+              <button
+                type="button"
+                data-testid="settings-lock-now-button"
+                onClick={() => lock()}
+                className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface)] transition-colors"
+              >
+                Lock Now
+              </button>
+              <button
+                type="button"
+                data-testid="settings-change-pin-button"
+                onClick={() => {
+                  setPinDialogMode("change");
+                  setPinDialogOpen(true);
+                }}
+                className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface)] transition-colors"
+              >
+                Change PIN…
+              </button>
+              <button
+                type="button"
+                data-testid="settings-remove-pin-button"
+                onClick={() => {
+                  setPinDialogMode("remove");
+                  setPinDialogOpen(true);
+                }}
+                className="rounded border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-2.5 py-1 text-xs text-[var(--color-danger)] hover:bg-[var(--color-danger)]/20 transition-colors"
+              >
+                Remove PIN…
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              data-testid="settings-setup-pin-button"
+              onClick={() => {
+                setPinDialogMode("setup");
+                setPinDialogOpen(true);
+              }}
+              className="rounded border border-[var(--color-primary)]/40 bg-[var(--color-primary)]/15 px-3 py-1 text-xs font-medium text-[var(--color-primary)] hover:bg-[var(--color-primary)]/25 transition-colors"
+            >
+              Set Up PIN…
+            </button>
+          )}
+        </div>
+      </SettingRow>
 
       <div className="border-t border-[var(--color-border)]" />
 
@@ -356,6 +457,7 @@ export function SettingsAppearanceSection() {
           type="button"
           onClick={() =>
             saveDebounced({
+              dockPosition: "left",
               dockPadding: 8,
               dockItemSpacing: 6,
               dockOuterSpacing: 12,
@@ -372,6 +474,11 @@ export function SettingsAppearanceSection() {
       <p className="text-xs text-[var(--color-text-muted)] mt-2">
         Note: Dock layout and cursor style are workbench preferences saved to the server configuration. Dock app pins are stored locally in this browser.
       </p>
+      <PinSetupDialog
+        open={pinDialogOpen}
+        onOpenChange={setPinDialogOpen}
+        mode={pinDialogMode}
+      />
     </section>
   );
 }
