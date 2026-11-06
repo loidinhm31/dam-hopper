@@ -85,10 +85,9 @@ mode skips ancestry lane construction and graph SVGs while preserving the
 same commit rows, selection, keyboard interaction, and context-menu actions.
 `emptyMessage` allows a surface to supply its empty-state text.
 
-## Workspace Git panel integration
+## OS Git App and Workspace Git panel integration
 
-`WorkspacePage` mounts `WorkspaceGitPanel` in the desktop IDE Git tool, terminal floating panel, and compact Git surface. Each mount retains the project root target (`{ profileId, project }`) and connection-bound availability. Repository history, branches, and commit mutations remain anchored to the configured project root while editor, file explorer, and terminal surfaces track the active worktree checkout.
-
+In DamHopper OS, `GitApp` (`packages/ui/src/os/apps/GitApp.tsx`) mounts `WorkspaceGitPanel` within an application window inside `OsShell` (and as floating frames via `git:status` intents from Agent Hub). Each mount retains the project root target (`{ profileId, project }`) and connection-bound availability. Repository history, branches, and commit mutations remain anchored to the configured project root while editor, file explorer, and terminal surfaces track the active worktree checkout.
 The shared controller supplies persisted VCS-root and history-branch choices plus search, paging, selected commit, and refresh state. Target/root/branch/generation changes reset transient history state; the panel also resets pending mutation dialogs at the effective-scope boundary. Choosing a history branch is view-only and never checks it out.
 
 Details, file diffs, and Git actions use the selected target and effective VCS root, including child-root-relative paths. Viewing an inactive local branch allows commit-message edits and squash via branch-qualified snapshots and CAS ref locking; non-rewrite actions like cherry-pick and revert continue to apply to the checked-out branch with the panel warning. Push and leased force-publish retain the selected root and existing SSH-retry and confirmation flows.
@@ -161,14 +160,14 @@ the independent writer.
 - `server/src/git/squash_commits.rs` and `server/tests/git_squash_api.rs` — raw-object linear squash engine and authenticated root/worktree API behavior.
 - Focused UI regressions: `packages/ui/src/stores/git-history.test.ts`, `packages/ui/src/api/ws-transport.test.ts`, `packages/ui/src/api/queries.test.ts`, and `packages/ui/src/api/ownership.test.ts`.
 - Server route/filter: `server/src/api/git.rs` and the Git repository log implementation.
-- `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx` and `packages/ui/src/components/pages/WorkspacePage.tsx` — Workspace mounts, availability, history presentation, and target/root-scoped actions.
+- `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx` and `packages/ui/src/os/apps/GitApp.tsx` — OS Git application mounts, availability, history presentation, and target/root-scoped actions.
 - Workspace integration regression coverage: `packages/ui/src/components/organisms/WorkspaceGitPanel.test.ts`.
 - Git-page integration and regression coverage: `packages/ui/src/components/pages/GitPage.tsx`, `packages/ui/src/components/pages/GitPage.test.tsx`, and `packages/ui/src/components/organisms/ProjectInfoHelpers.ts`.
 ## Android Native Git History Implementation (Phase 12)
 
 The Kotlin Multiplatform native Android client (`native-app/`) implements non-browser Git history browsing and search using `GitQueryRepository.getLog` (`/api/git/{project}/log?messageQuery=...`), `GitHistoryController`, `GitRewriteActionController`, and `GitHistoryActionController` in Compose UI (`GitHistoryView`, `GitCommitRow`).
 
-**Qualification Boundary:** The prior end-to-end qualification of Git history search and selection persistence applies strictly to the web and desktop (Tauri) clients. The native Android implementation is verified by 139 static assertions in `tests/test-phase-12-git-history.sh` and targeted JVM unit tests; live device qualification and server integration remain open gates under Phase 18. Documented limitations from Cycle 3 review (score 6/10, not accepted) are recorded in the [Android Native Acceptance Ledger](../android-native-acceptance.md#715-phase-12-complete-git-and-safe-history-workflows-baseline).
+**Qualification Boundary:** The prior end-to-end qualification of Git history search and selection persistence applies strictly to the web client (the former desktop Tauri host was retired in Phase 02). The native Android implementation is verified by 139 static assertions in `tests/test-phase-12-git-history.sh` and targeted JVM unit tests; live device qualification and server integration remain open gates under Phase 18. Documented limitations from Cycle 3 review (score 6/10, not accepted) are recorded in the [Android Native Acceptance Ledger](../android-native-acceptance.md#715-phase-12-complete-git-workflows--focused-git-view-increment).
 
 
 See the [API Reference: Commit history](../api-reference.md#commit-history) and [Git history search standards](../code-standards.md#git-history-changes).

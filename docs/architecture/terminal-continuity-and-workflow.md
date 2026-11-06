@@ -172,6 +172,6 @@ A terminal display may be hidden, reparented, or disposed while its remote sessi
 | History and suggestions | `command-history.ts`, `TerminalPanel.tsx` |
 | Workflow reveal/target checks | `workflow-workspace-integration.ts`, `workflow-queries.ts` |
 | Notification selection | `terminal-notification-navigation.ts`, `terminal-notifications.ts` |
-| Diagnostic capture/export | `diagnostics-client.ts`, `diagnostics-export.ts`, `WorkspacePage.tsx` |
+| Diagnostic capture/export | `diagnostics-client.ts`, `diagnostics-export.ts`, `SettingsPage.tsx` |
 | Fresh reset | `fresh-state-reset.ts` |
 | Focused contract proof | `terminal-continuity-unified-profile.test.ts` |

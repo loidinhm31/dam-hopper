@@ -616,6 +616,7 @@ Example:
 
 ```toml
 [ui]
+dock_position = "left" # OS Dock placement: "left", "right", "top", or "bottom"
 terminal_workspace_shortcut = "Mod+Shift+Backquote"
 git_panel_shortcut = "Mod+Shift+KeyG"
 project_panel_shortcut = "Mod+Shift+KeyZ"

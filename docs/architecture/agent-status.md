@@ -22,7 +22,7 @@ The separate Codex and Claude rollout delivers contract definitions, private one
 
 ## End-to-end data flow
 
-````text
+```text
 installed managed OMP extension -- private loopback WebSocket --> AgentStatusRuntime
           ^                                                    |
 PTY spawn injects scoped capability                             +-- protected REST snapshot
@@ -31,7 +31,7 @@ PTY spawn injects scoped capability                             +-- protected RE
                                                app-root per-profile watcher
                                                                         |
                                                status store + notification service
-
+```
 The server binds the private collector to Linux loopback TCP and keeps it off the
 public API router and tunnel discovery. A persistent local connection lets a
 reporter disconnect invalidate status while its parent shell remains alive;
@@ -193,7 +193,7 @@ profiles need their explicit agent-directory path.
 dam-hopper-server integration omp install --agent-dir <absolute-agent-dir>
 dam-hopper-server integration omp status --agent-dir <absolute-agent-dir>
 dam-hopper-server integration omp uninstall --agent-dir <absolute-agent-dir>
-````
+```
 
 `--json` is optional for each action. These local integration commands dispatch
 before server token, database, and listener startup; they do not require normal
@@ -231,7 +231,7 @@ Traditional mode adds a separate Agents list after Projects, scoped to admitted 
 
 This list uses **Working** for `working`; existing terminal badges retain their current vocabulary. **Idle**, **Needs attention** (Approval/Question/Error) and **Unknown** preserve reducer meaning. The secondary **Done (turn ended)** hint requires ready current-owner evidence, nonexpired `idle`, explicit `lastOutcome: ended` and no current `turnId`. Interrupted/failed/expired/unavailable evidence never shows it. Silent snapshots may retain historical hints without sending alerts; notification policy does not gate roster status.
 
-Canonical qualified UI terminal IDs are projected to raw server metadata only at the display's builder boundary after exact identity agreement. Mounted/tab ownership, concrete incarnation and status identity must agree; stale callbacks cannot activate replacements. Settings links carry the selected registered project owner; ownerless Settings requires choice and invalid/disconnected/removed owners cannot mount query-bearing UI. `WorkspacePage` keeps the sole `TerminalKeepAliveHost` stable above responsive shell switches. See [runtime qualification report](../../plans/261008-0233-traditional-terminal-agents-sidebar/reports/04-runtime-qualification.md) for full qualification matrix results across OMP, Codex, and Claude; prior backend version qualifications do not certify newer installed CLIs.
+Canonical qualified UI terminal IDs are projected to raw server metadata only at the display's builder boundary after exact identity agreement. Mounted/tab ownership, concrete incarnation and status identity must agree; stale callbacks cannot activate replacements. Settings links carry the selected registered project owner; ownerless Settings requires choice and invalid/disconnected/removed owners cannot mount query-bearing UI. `OsResourceHost` inside `OsShell` keeps the sole `TerminalKeepAliveHost` stable across window docking, floating, and desktop switches (F2 invariant: same parked xterm, zero placement attach/replay/reset). See [runtime qualification report](../../plans/261008-0233-traditional-terminal-agents-sidebar/reports/04-runtime-qualification.md) for full qualification matrix results across OMP, Codex, and Claude; prior backend version qualifications do not certify newer installed CLIs.
 
 
 ## Agent Store path verification

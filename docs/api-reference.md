@@ -10,7 +10,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 | --- | --- |
 | [Authentication](./api/authentication.md) | Login, MFA, login session inventory and revocation, development-mode behavior |
 | [Workflow tracking](./api/workflow.md) | Workflow REST routes |
-| [System services](./api/system-services.md) | Diagnostics, browser-debug artifacts, native SSH forwarding, host resources |
+| [System services](./api/system-services.md) | Diagnostics, browser-debug artifacts, ports & quick tunnels, host resources |
 | [Terminal idle suspend](./api/idle-suspend.md) | Status, timing, manual force, helper protocol and status events |
 | [Agent status and sessions](./api/rest-endpoints.md#agent-status-api) | Agent snapshot and PTY session persistence |
 | [Git API](./api/git.md) | Worktrees, branches, history search, commit rewrite/squash, leased publication |

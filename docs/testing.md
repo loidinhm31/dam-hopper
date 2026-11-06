@@ -159,41 +159,32 @@ Application E2E tests interact with authentic production binaries rather than sy
 
 Application E2E journeys validate end-to-end user workflows across containerized services:
 
-1. **Privacy Mode Heavy Blur (`packages/ui/e2e/privacy-heavy-blur/privacy-heavy-blur.spec.ts` — A04):**
-   - Navigates through actual `apps/web` entry, switches to `/settings`, configures Heavy Blur.
-   - Returns to `/workspace`, activates Cognito mode via `Control+Alt+KeyB`.
-   - Validates complete viewport coverage, backdrop blur styles (`blur(20px) saturate(140%)`), and accessibility attributes (`aria-hidden="true"`, `inert`).
-   - Verifies input isolation: clicks, typing chords, and terminal inputs do not leak into live editors or terminals.
-   - Tests dismissal and reload retention.
-2. **SQLite Auth Lite Mode (`packages/ui/e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`):**
-   - Starts isolated application services with `authBackend: "sqlite"` (starting no MongoDB container) and seeds an enabled `admin` session via `application_e2e_seed`.
-   - Verifies unauthenticated `GET /api/projects` returns `401`, while bearer-authenticated `GET /api/auth/status` reports `authenticated: true`, `user: "admin"`, `role: "admin"`, and omits `devMode`.
-   - Verifies `POST /api/auth/register` with JSON `{ "username", "password" }` returns `200` `{ "ok": true }` and that subsequent `POST /api/auth/login` for that unapproved account returns `401` with `code: "ACCOUNT_DISABLED"`.
-   - Navigates through `/settings` and `/workspace` and captures full-viewport visual evidence (`E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`).
-3. **Device Login Management (`packages/ui/e2e/device-login-management/device-login-management.spec.ts`):**
-   - Starts isolated application services with real backend and seeds initial admin authentication.
-   - Creates secondary same-account sessions and foreign user sessions to verify session isolation.
-   - Verifies `GET /api/auth/sessions` lists active account sessions with untrusted client hint text, current session indicator, and keyset pagination.
-   - Revokes another session and verifies immediate rejection of revoked credentials for protected HTTP and WebSocket endpoints while current session remains authenticated.
-   - Tests self-revocation from Server Settings dialog, confirming local profile credential clearing, no unintended cookie mutation, and draft Save protection.
-   - Captures full-viewport visual evidence across desktop (1440x900) and narrow viewports (320x667). Automated runs initialize `review.md` to `PENDING_HUMAN_REVIEW` pending operator visual inspection.
-4. **OS Lifecycle Prototype (`packages/ui/e2e/os-lifecycle/os-lifecycle.spec.ts`):**
-   - Authored 10-step serial Playwright E2E journey targeting `/os` at 1440x900 viewport against containerized application services.
-   - Navigates directly to `/os` and verifies `OsShell` header and Desktop 1 canvas.
-   - Launches a terminal window, claims resource slot via `ResourceRegistry`, waits for terminal surface attachment, and tags the live DOM container with an invariant identity marker (`data-test-terminal-identity`).
-   - Traverses window placement transitions: switches to float mode, maximizes float window, restores float window, minimizes to top bar tray, and restores from tray, asserting DOM identity marker survival at each step.
-   - Launches an editor window and browser preview window to establish multi-window canvas occupancy.
-   - Adds Desktop 2, moves terminal window to Desktop 2, switches between Desktop 1 and Desktop 2, asserting identical terminal identity marker rendered on Desktop 2 canvas.
-   - Selects terminal window on Desktop 2, activates Cognito Privacy Mode (`Control+Alt+KeyB`), asserts overlay visibility and `inert` attribute, clicks overlay, attempts typed input while masked, and dismisses Cognito mode (with behavioral outcome verification, such as zero written PTY bytes, recorded as an open blocker under H2).
-   - Captures checkpoint evidence via `captureApplicationCheckpoint`. Colocated governance file `packages/ui/e2e/os-lifecycle/review.md` records `PENDING_REVIEW` pending operator visual inspection.
-   - *Technical Lifecycle Qualification Boundary:* Live PTY streaming continuity across reparenting, zero attach/replay counters, Monaco model/undo stack preservation under a live daemon, and behavioral outcome assertions (zero written PTY bytes under Cognito) remain open qualification blockers (H1/H2) carried forward to Phase 09.
-5. **OS Root Cutover (`packages/ui/e2e/os-cutover/os-cutover.spec.ts`):**
+1. **OS Root Cutover (`packages/ui/e2e/os-cutover/os-cutover.spec.ts`):**
    - Serial Playwright journey targeting `/` at 1440x900 viewport against containerized application services.
    - Verifies root `/` cutover to `OsShell` header, Dock, and Desktop 1 canvas.
    - Validates legacy route translation (`/workspace`, `/terminals`, `/ide`, `/git`, `/settings`, `/devices`, `/agent-store`) to qualified OS deep links (`open=terminals|git|settings|agent-store|editor`).
    - Validates zero-network retirement boundary for `/usage` and `/ssh-forwarding` rendering `RemovedRouteScreen` with zero child service/network requests.
    - Asserts xterm window placement continuity across placement mode transitions (tile, float, max, tray restore).
-   - Colocated governance record `packages/ui/e2e/os-cutover/review.md` records `PENDING_REVIEW` pending operator visual inspection.
+   - Colocated governance record `packages/ui/e2e/os-cutover/review.md` records `PENDING_HUMAN_REVIEW` pending operator visual inspection.
+2. **OS Lifecycle (`packages/ui/e2e/os-lifecycle/os-lifecycle.spec.ts`):**
+   - Multi-step serial Playwright journey targeting `/os` at 1440x900 viewport against containerized application services.
+   - Traverses window placement transitions: switches to float mode, maximizes float window, restores float window, minimizes to top bar tray, and restores from tray, asserting DOM identity marker survival at each step.
+   - Validates multi-desktop window moves and Cognito Privacy Mode overlay input isolation.
+   - Colocated governance file `packages/ui/e2e/os-lifecycle/review.md` records `PENDING_HUMAN_REVIEW`.
+3. **OS Launch Recipes (`packages/ui/e2e/os-recipes/os-recipes.spec.ts`):**
+   - Tests declarative launch recipes manager (`RecipesApp`), authoring (`RecipeEditor`), and execution (`LaunchReview`).
+   - Verifies Save subset project/server filtering, excluded-window preview, binary topology pruning, and Web Locks synchronization.
+   - Colocated governance record `packages/ui/e2e/os-recipes/review.md` records `PENDING_HUMAN_REVIEW`.
+4. **OS Session Management (`packages/ui/e2e/os-session-management/os-session-management.spec.ts`):**
+   - Validates guarded terminal process termination (`POST /api/terminal/{id}/terminate`) with manager-lifetime UUID epoch fencing (`X-DamHopper-PTY-Epoch`).
+   - Verifies tri-choice close confirmation dialog, restart cancellation, and ReviewTarget 8-tuple retirement guards.
+   - Colocated governance record `packages/ui/e2e/os-session-management/review.md` records `PENDING_HUMAN_REVIEW`.
+5. **OS Desktop Polish (`packages/ui/e2e/os-desktop-polish/os-desktop-polish.spec.ts`):**
+   - Validates unified action catalog execution (`actions.ts`), floating dock geometry and canonical pins, work-area maximize plane, desktop context menu, and launch safety journal.
+   - Colocated governance record `packages/ui/e2e/os-desktop-polish/review.md` records `PENDING_HUMAN_REVIEW`.
+6. **OS Agent Hub Workspace (`packages/ui/e2e/os-agent-hub-workspace/os-agent-hub-workspace.spec.ts`):**
+   - Validates terminal-first Agent Hub stage (`TraditionalTerminalProjectsDisplay`), collapsible right-sidebar file tree, presentation-based input suppression, and per-profile pin retention.
+   - Colocated governance record `packages/ui/e2e/os-agent-hub-workspace/review.md` records `PENDING_HUMAN_REVIEW`.
 ---
 
 ## 6. Visual Evidence Authenticity & Governance

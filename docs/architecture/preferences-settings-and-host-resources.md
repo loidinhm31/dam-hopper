@@ -47,7 +47,7 @@ When hosted within OS windows (`SettingsApp`), `SettingsPage` operates in contro
 - `SettingsPage` includes a dedicated **Session Changes** section binding to `targetOwner` (`config.server.sessionChangesEnabled`). Full configuration updates preserve all other server fields (`[key: string]: unknown`). Async mutation captures `{ actionProfileId, actionGeneration }` to avoid applying late notices if the operator switches targets. On successful mutation, the UI invalidates the target owner's config queries and cancels/removes all cached `session-changes` queries for that owner. Enabling displays an honest notice to restart active OMP sessions; failures surface actionable server error messages without optimistic UI state.
 ## Host Resources and Idle Suspend
 
-In single-profile mode the host popover resolves an effective owner in this order: explicit `owner`, `settingsProfileId`, then the active profile. Snapshot, alert history, legacy metrics, idle-suspend status, and UiConfig updates all use that owner. When no `owner` is supplied and more than one profile is configured, the top-nav popover enters Fleet mode instead: it opens the read-only fleet deck, and a connected profile selection supplies the exact owner for the shared drilldown. The optional `hostResourcePinnedMount` remains a presentation preference in the owning server's UiConfig. A missing saved mount stays visibly missing rather than silently binding to another filesystem.
+In DamHopper OS, `SystemMonitorApp` (`packages/ui/src/os/apps/SystemMonitorApp.tsx`) and `MonitorTray` (`packages/ui/src/os/MonitorTray.tsx`) host fleet health and status (the legacy `HostResourcePopover` was deleted in Phase 08). Snapshot, alert history, metrics, idle-suspend status, and `hostResourcePinnedMount` stay owner-local. When inspecting hosts across profiles, `HostResourceFleetDeck` provides fleet inspection with connected/disconnected profile state.
 
 Fleet mode is documented in [System Architecture](../system-architecture.md#multi-profile-ownership-model): its toolbar keeps a Fleet toggle and profile pills. Visible connected detail uses SSE streaming with a 5-second REST fallback under the owner/QueryClient source gate.
 
@@ -72,7 +72,7 @@ In the Android native client (`native-app/`):
 | Preferences and selector persistence | `packages/ui/src/stores/settings.ts`, `stores/workbench-selections.ts` |
 | Owner-qualified query/mutation routing | `packages/ui/src/api/queries.ts`, `api/client.ts`, `hooks/use-sse.ts` |
 | Settings composition and import/export | `components/pages/SettingsPage.tsx`, `components/pages/settings-page/*`, `components/organisms/{GlobalConfigEditor,ConfigEditor}.tsx` |
-| Host status, incidents, and manual action | `HostResourcePopover.tsx`, `HostIdleSuspendStatus.tsx`, `ForceSleepDialog.tsx`, `use-host-resource-alert-presentation.ts` |
+| Host status, incidents, and manual action | `SystemMonitorApp.tsx`, `MonitorTray.tsx`, `HostIdleSuspendStatus.tsx`, `ForceSleepDialog.tsx`, `use-host-resource-alert-presentation.ts` |
 | Android native Resources panel & zero-FAB UI | `native-app/shared/.../features/host/ResourcesUnifiedPanelScreen.kt`, `FleetScreens.kt` |
 | Android native SSE streaming & coordinator | `native-app/shared/.../core/transport/HostResourceSseClient.kt`, `features/host/ResourceStreamCoordinator.kt` |
 | Android native repositories & controllers | `native-app/shared/.../features/host/HostResourceRepository.kt`, `HostResourceController.kt` |

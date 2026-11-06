@@ -11,9 +11,9 @@ commands, ports, media cleanup, host status, and Browser handoff:
 - `useCommandSearch` accepts an owner and sends catalog queries through the
   bound API. `usePorts` memoizes target profiles and owner-qualified port/tunnel
   keys, so equal numeric ports remain separate.
-- `TopNav`, `DashboardPage`, and `WorkspacePage` use aggregated projects and
-  bound clients. Browser artifact creation rechecks owner, target revision, and
-  terminal incarnation after each await.
+- In DamHopper OS, `SystemMonitorApp`, `MonitorTray`, and `OsShell` use aggregated projects and
+  bound clients. (Legacy `TopNav`, `DashboardPage`, and `WorkspacePage` were retired in Phase 08).
+  Browser artifact creation rechecks owner, target revision, and terminal incarnation after each await.
 - `ImportDialog` captures its opening owner in state; `HostIdleSuspendStatus`
   and `getActiveSessionCount` handle nullable fleet snapshots without
   fabricating remote state. Settings revocation passes the profile's
@@ -25,8 +25,7 @@ Chromium channel/executable. The live
 runner checks S01–S12 against isolated Server A/B roots (`14801`/`14802`) and
 four embedded workflow/terminal browser assertions. Automated verification
 records 3,504 passing tests (nine skipped/ignored); web integration passed.
-Native desktop remains an operational qualification gate pending physical
-Windows S13 runtime, SSH, WebView2/DPAPI, and Browser relay verification.
+(Former desktop Tauri host `apps/native` was retired in Phase 02; web and Android native hosts remain supported).
 
 ## Host-resource fleet deck and cards
 
@@ -68,11 +67,14 @@ timer per card. Focused behavior is covered by
 
 ## Host-resource alert presentation
 
-**Locations:** `packages/ui/src/components/organisms/HostResourcePopover.tsx`,
+**Locations:** `packages/ui/src/os/apps/SystemMonitorApp.tsx`,
+`packages/ui/src/os/MonitorTray.tsx`,
 `HostResourceDiagnosis.tsx`, `HostResourceDiagnosisRows.tsx`,
 `packages/ui/src/hooks/use-sse.ts`, and `use-host-resource-alert-presentation.ts`.
 
-The top-nav popover reads the legacy memory `alert` and additive `currentAlerts`
+In DamHopper OS, `SystemMonitorApp` embeds host diagnosis and fleet metrics, while `MonitorTray`
+renders compact TopBar meters. (Legacy `HostResourcePopover` was retired in Phase 08).
+The monitor tray reads the memory `alert` and additive `currentAlerts`
 from the authoritative snapshot, while the diagnosis panel renders the bounded,
 mixed alert-history response. Concurrent thermal and disk incidents are tracked
 by `incidentId`; a recovery event with `resolvedAt` removes only that target and
@@ -217,13 +219,11 @@ guard ordering, and storage failures.
 
 ### Explorer-local transport errors
 
-`WorkspacePage` wraps the desktop IDE Explorer, compact IDE Explorer, and
-terminal floating Explorer in separate `ErrorBoundary` instances. Each boundary
-is keyed by surface, profile, project, and target, and keeps the existing
-`Suspense` fallback inside the boundary. A FileTree render/effect failure
-therefore replaces only its Explorer region; it does not remount the workspace
-shell, editor, or active terminal hosts. Changing the target clears a latched
-boundary error without resetting unrelated workspace state.
+`FilesApp` and embedded explorer views wrap `FileTree` in an `ErrorBoundary`
+keyed by surface, profile, project, and target, keeping the existing `Suspense` fallback
+inside the boundary. A FileTree render/effect failure therefore replaces only its Explorer region;
+it does not remount the OS desktop shell, editor windows, or active terminal hosts.
+Changing the target clears a latched boundary error without resetting unrelated workspace state.
 
 ## Latest Commit in Terminal
 

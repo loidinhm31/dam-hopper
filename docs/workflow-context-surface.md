@@ -90,8 +90,7 @@ For the complete component architecture and keyboard/focus contracts, see the
 
 ## Workflow context surface components
 
-**Status:** Responsive workflow context UI and `WorkspacePage` shell
-integration complete (2026-09-02). The surface reads the
+**Status:** Responsive workflow context UI integrated into `WorkflowPlansApp` inside `OsShell` (following Phase 08 legacy shell retirement). The surface reads the
 bounded workflow overview and keeps presentation state local; the server
 remains authoritative for workflow validation, timestamps, target ownership,
 and mutation replay. Selected-item note rendering, per-note deletion, and inline
@@ -113,35 +112,23 @@ and [selected-item editing](#selected-item-editing) contracts below.
 | `packages/ui/src/components/molecules/WorkflowSessionCard.tsx`           | Running/past session details, duration, manual end/abandon controls, links, and suggested end-time review.             |
 | `packages/ui/src/components/molecules/WorkflowExecutionList.tsx`         | Start/end session controls and manual Agent Harness/Agent Run linking.                                                 |
 | `packages/ui/src/components/molecules/WorkflowProjectList.tsx`           | Project/worktree target switcher with plan, task, and running-session counts.                                          |
-| `packages/ui/src/components/organisms/WorkflowContextRibbon.tsx`         | Compact ambient summary with loading, retry, status, duration, progress, and live-region output.                       |
+| `packages/ui/src/components/organisms/WorkflowContextSurface.tsx`        | Top-level overview query, selectors, timer, keyboard handling, and deck/sheet orchestration.                           |
 | `packages/ui/src/components/organisms/WorkflowContextDeck.tsx`           | Non-modal desktop context region with project, item, quick-capture, and execution panes.                               |
 | `packages/ui/src/components/organisms/WorkflowContextSheet.tsx`          | Mobile bottom Dialog with Projects, Plans & Work, and Execution segments.                                              |
 | `packages/ui/src/components/organisms/WorkflowContextSurface.tsx`        | Top-level overview query, selectors, timer, keyboard handling, and deck/sheet orchestration.                           |
 | `packages/ui/src/hooks/use-workflow-surface-actions.ts`                  | Request-ID-bearing workflow mutation callbacks used by the surface.                                                    |
 
-### WorkspacePage and shell integration
+### OS Desktop Integration & Legacy Shell Retirement
 
-`WorkspacePage` builds one memoized `workflowToolbarActions` node containing
-`WorkflowContextSurface`. The same node passes through the existing
-`toolbarActions` prop in every workspace branch:
+In DamHopper OS, `WorkflowPlansApp` (`packages/ui/src/os/apps/WorkflowPlansApp.tsx`) embeds `WorkflowContextSurface` as a registered application within `OsShell`. The legacy workspace shell wrappers (`WorkspacePage`, `IdeShell`, `TerminalWorkspaceShell`, `MobileWorkspaceShell`, `TopNav`) were permanently retired and deleted in Phase 08.
 
-| Shell                    | Placement                                                                               |
-| ------------------------ | --------------------------------------------------------------------------------------- |
-| `IdeShell`               | 40px companion row above editor/tool content.                                           |
-| `TerminalWorkspaceShell` | 40px companion row above terminal/overlay content.                                      |
-| `MobileWorkspaceShell`   | Safe-area-aware inline action row; existing compact surface selector remains unchanged. |
-
-The surface is not a route, activity-bar tool, mobile surface, TopNav item, or
-second PTY lifecycle. Shell mode changes therefore preserve the existing
-terminal manager, terminal buffers, editor state, and Browser keep-alive.
+Within `WorkflowPlansApp`, `WorkflowContextSurface` renders context tracking across project plans and execution sessions. Shell mode changes preserve the existing terminal manager, terminal buffers, editor state, and Browser keep-alive in root keep-alive hosts.
 
 Navigation uses existing owners and pure decisions from
 `packages/ui/src/lib/workflow-workspace-integration.ts`:
 
 - `resolveWorkflowTerminalReveal` rejects blank, profile-mismatched, or unknown
-  session IDs, then `WorkspacePage` calls existing `handleSelectTerminal`.
-  Compact mode additionally requests the existing Terminal surface; it does
-  not force workspace mode or add URL parameters.
+  session IDs, dispatching `terminal:focus` intents to the owning terminal window in `OsShell`.
 - `resolveWorkflowTargetSelection` requires a configured project and available
   worktree. Successful selection calls `setActiveProject` and
   `useProjectTargetStore.selectTarget`; unavailable historical targets stay
@@ -155,7 +142,7 @@ Callback paths are explicit: `onOpenTerminal` flows from
 `WorkflowContextSheet`, `WorkflowExecutionList`, and `WorkflowSessionCard`;
 the card invokes it only for a clicked linked terminal. `onSelectTarget` flows
 from the surface through the deck/sheet to `WorkflowProjectList`, then returns
-to `WorkspacePage` for store selection.
+for store selection.
 
 `WorkflowContextSurface` is keyed by `activeProfileId`. A profile switch
 remounts only workflow presentation state (open state, target/item selections,

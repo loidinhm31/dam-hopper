@@ -80,7 +80,7 @@ session_changes_enabled = false
   - Fences mutations with captured `{ actionProfileId, actionGeneration }` against concurrent target switching (switching targets during in-flight mutation clears the captured target's query cache, but does not purge the switched-to target until that server is toggled or refreshed).
   - On success, invalidates config queries and cancels/removes all `session-changes` queries for that target owner.
   - Surfaces an honest restart notice on enable (`Restart active OMP sessions to load the Session Changes extension`) and actionable errors on failure without optimistic local state.
-  - Terminal triggers across desktop `TabBar`, `ActiveTerminalRuntimeDisplay`, and mobile `MobileTerminalAccessoryBar` query `useSessionChangesEnabled(terminalOwner)` and hide/disable when tracking is disabled, loading, or unavailable.
+  - Terminal triggers across desktop `TabBar`, `ActiveTerminalRuntimeDisplay`, and `TerminalAccessoryControls` query `useSessionChangesEnabled(terminalOwner)` and hide/disable when tracking is disabled, loading, or unavailable.
 ### Deferred host-action scaffolding (inactive)
 
 The current release has no supported host-action configuration or client

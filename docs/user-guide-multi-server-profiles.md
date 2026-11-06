@@ -32,7 +32,7 @@ global connection switch.
 
 ### Manual creation
 
-1. Open **Server Connections** from the top-nav connection button.
+1. Open **Server Connections** from the OS TopBar menu ("Manage Profiles…") or Settings.
 2. Select **Add Server Connection**.
 3. Enter a display name, normalized HTTP(S) URL, and authentication type.
 4. For Basic authentication, enter the username and login credentials when
@@ -71,7 +71,7 @@ Actions are profile-scoped:
 - **Remove** revokes that profile's media when possible, removes the local
   profile and connection state, and does not delete data from the remote server.
 
-The top-nav connection button summarizes all profile runtimes. It shows
+The OS TopBar connection indicator summarizes all profile runtimes. It shows
 `No connections` when none are configured, the profile name when exactly one
 profile is configured, and a connected/total count when multiple profiles are
 present. Focus, route changes, and project selection do not reconnect or

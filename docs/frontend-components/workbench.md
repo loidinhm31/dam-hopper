@@ -45,7 +45,7 @@ Connection attempts are independent per profile:
   records, preserves profiles/auth/server data, is idempotent, and rejects
   unqualified `project`/`session` deep links.
 
-The top-nav connection button summarizes all profile runtimes. Server
+The OS TopBar connection menu summarizes all profile runtimes. Server
 configuration inside Settings reuses the profile/project switcher and is not a
 second hierarchy. Browser and Windows native hosts may use approved
 cross-origin profiles; non-Windows native hosts require exact same-origin
@@ -55,27 +55,27 @@ Query state remains memory-only. Host `QueryClient` instances use ordinary
 defaults; profile and generation ownership is encoded by
 `profileQueryKey(owner, ...)` instead of a global active-profile hash.
 
-## Application Routing and Hidden Authenticated `/os` Route
+## Application Routing and Root OS Cutover
 
 **Location:** `packages/ui/src/embed/dam-hopper-app.tsx`
 
-`DamHopperApp` configures React Router (`BrowserRouter` with `basename` normalized via `normalizeRouterBasename`). It lazily mounts major workbench surfaces: `/` and `/dashboard` (`DashboardPage`), `/workspace` (`WorkspacePage`), `/git` (`GitPage`), `/settings` (`SettingsPage`), `/agent-store` (`AgentStorePage`), and `/devices` (`DevicesPage`). Legacy `/terminals` and `/ide` URLs are redirected to `/workspace` via `LegacyRedirect`. A retired feature placeholder is displayed for `/ssh-forwarding`.
+`DamHopperApp` configures React Router (`BrowserRouter` with `basename` normalized via `normalizeRouterBasename`). Following the Phase 08 root cutover, both root `/` and `/os` route directly to `OsShell` via `AuthenticatedOsRoute` under `ErrorBoundary` and `Suspense`. Legacy shell templates (`WorkspacePage`, `DashboardPage`, `IdeShell`, `TerminalWorkspaceShell`, `MobileWorkspaceShell`, `TopNav`, `AppLayout`) are permanently deleted.
 
-### Authenticated `/os` Route Boundary
+### Authenticated OS Route Boundary
 
-The unadvertised `/os` route provides access to the AI Dev OS multi-window desktop prototype, wrapped in an `ErrorBoundary` and `Suspense`:
+The root OS route provides access to the AI Dev OS multi-window desktop shell:
 - **Auth Guard (`AuthenticatedOsRoute`):** Inspects the active profile via `useServerProfile()` and evaluates `Boolean(profile && (profile.authType === "none" || token))`.
 - **Authenticated Access:** If an active profile has a locally available token (or `authType === "none"` for local development), dynamically loads and renders `<OsShell />`.
 - **Unauthenticated Fallback:** If no profile is connected or authentication is missing, renders an explicit fallback card (`data-testid="os-unauthenticated"`) instructing the operator to connect to an active authenticated server profile.
 - **Reactive Unmounting:** When a locally observed change makes the guard evaluate false (such as token revocation or profile logout), the route reactively unmounts `<OsShell />` and restores the unauthenticated fallback card without requiring a page reload.
 
-### Global Shortcut Isolation
+### Legacy Route Translation & Retired Feature Boundary
 
-`GlobalShortcuts` binds `Ctrl+Backquote` (backtick / `matchesNewTerminalShortcut`) to navigate to `/workspace?action=new-terminal`. To prevent workbench shortcuts from navigating away while working inside the OS shell:
-- It checks `if (location.pathname.startsWith("/os")) return;`, isolating keyboard navigation inside the `/os` route.
-- Operating system window management and keyboard shortcuts (such as `Ctrl+Alt+Escape` focus cycling) are handled within the OS shell by `WindowFrame` and `input-arbiter.ts`.
+- **Legacy Path Translation:** Requests to legacy routes (`/workspace`, `/terminals`, `/ide`, `/git`, `/settings`, `/devices`, `/agent-store`) are intercepted and translated via `translateLegacyRoute` in `packages/ui/src/os/deep-links.ts` into qualified OS deep links (`open=terminals|git|settings|devices|agent-store|editor`). Missing legacy qualification displays actionable upgrade guidance rather than falling back to ambient profiles.
+- **Zero-Network Retirement Boundary:** Navigation to permanently retired routes (`/usage`, `/ssh-forwarding`) is intercepted at the outer router boundary: `AppContentRouter` checks `isRemovedRoutePath(location.pathname)`, rendering `RemovedRouteScreen` with zero mounted network hooks and zero mutations across initial loads and browser Back/Forward history navigation.
+- **Global Shortcut Isolation:** Window management and keyboard shortcuts (such as `Ctrl+Alt+Escape` focus cycling) are handled within the OS shell by `WindowFrame` and `input-arbiter.ts`.
 
-See [AI Dev OS Lifecycle Architecture](../system-architecture.md#ai-dev-os-lifecycle-architecture-phase-01-prototype) for full multi-window and keep-alive specifications.
+See [System Architecture](../system-architecture.md) for full multi-window and keep-alive specifications.
 
 ## Profile-owned enrollment and MFA UI
 
@@ -86,8 +86,7 @@ See [AI Dev OS Lifecycle Architecture](../system-architecture.md#ai-dev-os-lifec
   and `packages/ui/src/api/server-config.ts`
 - `packages/ui/src/components/molecules/MfaChallengeForm.tsx`
 - `packages/ui/src/components/organisms/ServerSettingsDialog.tsx`,
-  `ServerProfilesDialog.tsx`, and `TopNav.tsx`
-- `packages/ui/src/lib/android-chrome-input-policy.ts`
+  `ServerProfilesDialog.tsx`, and `packages/ui/src/os/TopBar.tsx`
 
 The typed auth client models password login as a challenge-or-session result
 and auth status as authenticated, MFA-required, or login-required. It validates
@@ -112,7 +111,7 @@ and footer pinned (`shrink-0`) while scrolling its body region
 (`data-dialog-scroll-body="true"`) within `.dialog-viewport-fit`, adjusting
 `scrollTop` when an MFA challenge opens, receives focus/input, or resizes via
 `visualViewport` so the verification/enrollment action buttons remain reachable
-on mobile viewports. `ServerProfilesDialog` and `TopNav`
+on mobile viewports. `ServerProfilesDialog` and the OS `TopBar`
 expose/report each profile's state without turning one stale profile into a
 global lockout.
 `connections.ts` maps `MFA_REQUIRED` status/REST errors and WebSocket close
@@ -121,12 +120,7 @@ live stale transport is retired; the profile token remains available for HTTP
 step-up. Full-login-required outcomes stop reconnect, and expired/revoked tokens
 are cleared only for that profile.
 
-On Android Chrome, auth controls marked `data-auth-input` or contained by
-`data-auth-container` bypass the native-input suppression policy; the policy
-also recognizes the explicit `data-dh-allow-native-input="true"` marker.
-Login credentials, TOTP, and the server URL are explicitly exempt so Android
-Chrome can use native keyboard input without relaxing editor/terminal policy.
-Physical target-browser verification remains an operational qualification gate.
+Terminal input suppression across modal dialogs and Privacy Mode is enforced generically via `syncTerminalInputSuppression` (`packages/ui/src/lib/terminal-input-policy.ts`), synchronizing xterm's hidden textarea (`inputMode = "none"`, `tabIndex = -1`, `blur()`) and `disableStdin = true`.
 
 See the [Frontend Components index](../frontend-components.md) for the
 implementation boundary and adjacent UI guides.
@@ -192,9 +186,7 @@ live launcher or surviving toolbar without leaving the app input-locked.
 Squash requires an available connected target on a local branch (`refs/heads/*`), active or inactive (`isViewingLocalBranch`), and rejects selected or rewritten-descendant merges. The success receipt captures the target branch and offers **Publish rewritten branch** through a separate leased confirmation bound to `receipt.branch`. Publication uses the same history owner/root and verified new branch tip—not Git-page bulk root selection or ambient HEAD. Nothing pushes automatically. Scope/generation changes fence late preparation, rewrite, publication, and SSH-retry completions.
 
 See the [Git-history search architecture](../architecture/git-history-search.md)
-for transport, query, and persistence details. Workspace integration is
-implemented across the desktop IDE dock, terminal floating panel, and compact
-Git surface, using the shared controller and selected-target availability.
+for transport, query, and persistence details. Workspace integration is implemented within `GitApp` inside `OsShell` and as floating frames via `git:status` intents, using the shared controller and selected-target availability.
 Standalone Git page integration persists qualified checkbox selections, fails
 closed on unavailable projects, and reuses the shared history controller for
 single-project view. Integrated qualification across both surfaces verified
@@ -217,13 +209,9 @@ Settings config, TOML import/export, maintenance, and idle
 suspend timing all receive the selected owner. Import captures owner and
 generation before confirmation and `file.text()`, rejects drift before
 dispatch, and leaves server validation/backup/rollback authoritative.
-`HostResourcePopover` keeps explicit-owner compatibility for one configured
-profile or an explicit `owner`: snapshot, incidents, compatibility metrics,
-idle-suspend state, and `hostResourcePinnedMount` stay owner-local. With no
-`owner` and more than one configured profile, it opens in Fleet mode on
-`HostResourceFleetDeck`; a labelled toolbar provides a Fleet toggle and one
-profile pill per watched entry. Connected pills enter a profile drilldown;
-disconnected pills remain status-only.
+`SystemMonitorApp` and `MonitorTray` embed host diagnosis and fleet metrics (the legacy `HostResourcePopover` was deleted in Phase 08).
+Snapshot, incidents, compatibility metrics, idle-suspend state, and `hostResourcePinnedMount` stay owner-local.
+`HostResourceFleetDeck` provides fleet inspection with connected/disconnected profile state.
 
 The shared drilldown binds reads and actions to the selected `ConnectionRef`.
 Fleet opening marks no profile read; inspection marks only the selected profile.
@@ -278,23 +266,22 @@ for source arbitration. The [Preferences, Settings, and Host Resources architect
 **Locations:**
 
 - `packages/ui/src/components/organisms/ChangedFilesList.tsx`
-- `packages/ui/src/components/pages/WorkspacePage.tsx`
+- `packages/ui/src/os/apps/ConflictResolverApp.tsx`
 - `packages/ui/src/hooks/use-conflict-resolver.ts`
 - `packages/ui/src/components/organisms/ConflictResolverPanel.tsx`
 - `packages/ui/src/components/organisms/ConflictResolverToolbar.tsx`
 - `packages/ui/src/components/organisms/ConflictRegionNav.tsx`
 - `packages/ui/src/components/organisms/MergeConflictEditor.tsx`
 - `packages/ui/src/hooks/use-floating-panel-geometry.ts`
-- `packages/ui/src/lib/terminal-workspace-panel.ts`
 - `packages/ui/src/lib/conflict-resolver-panel-state.ts`
 - `packages/ui/src/lib/conflict-editor-decorations.ts`
 
 *(Note: Legacy `packages/ui/src/lib/conflict-parser.ts` and `ConflictBlock` types were retired and deleted in Phase 08.)*
-The floating Git conflict resolver provides a cross-shell resolution workbench mounted directly in `WorkspacePage` above `IdeShell`, `TerminalWorkspaceShell`, and `MobileWorkspaceShell`.
+The floating Git conflict resolver provides a cross-shell resolution workbench mounted in `ConflictResolverApp` or as an OS floating frame inside `OsShell`.
 
 ### Component Roles & Host Integration
 
-- **`ConflictResolverPanel`:** Root floating frame container rendered inside an overlay boundary (`fixed inset-0 z-40`). Mounted conditionally in `WorkspacePage` when `isPanelVisible` is true. Receives controlled `open`, `zIndex`, `isTopmost`, `onActivate`, and `onHide` props. Does not own draft models in local state: draft text and decision states are retained in `ConflictDraftRegistry` outside the component lifecycle, so unmounting and remounting reloads the retained draft by deterministic `DraftKey` (while Monaco-specific view states like scroll position and local undo command stacks reset on remount). Tracks `lastConsumedNonceRef` during component mount to apply `revealIntent` file paths once without snapping back during background refetches (unmounting resets the ref, re-evaluating fresh reveal intents on remount).
+- **`ConflictResolverPanel`:** Root floating frame container rendered inside an overlay boundary. Mounted inside `ConflictResolverApp` or within the OS desktop canvas when `isPanelVisible` is true. Receives controlled `open`, `zIndex`, `isTopmost`, `onActivate`, and `onHide` props governed by OS frame authority (`OS_RESOLVER_PANEL_TOPMOST_Z_INDEX = 30`). Does not own draft models in local state: draft text and decision states are retained in `ConflictDraftRegistry` outside component lifecycle, so unmounting and remounting reloads the retained draft by deterministic `DraftKey` (while Monaco-specific view states like scroll position and local undo command stacks reset on remount). Tracks `lastConsumedNonceRef` during component mount to apply `revealIntent` file paths once without snapping back during background refetches (unmounting resets the ref, re-evaluating fresh reveal intents on remount).
 - **Reveal Intent Routing (`ConflictRevealIntent`):** Changed Files conflict row clicks emit typed `{ nonce, filePath, root }` via `buildConflictRevealIntent`, calling `handleOpenConflictResolver(selection)` instead of `onSelectFile`. `openChangedFileDiff` returns immediately for conflicted entries, preventing editor tabs or diff viewers from opening. Aggregate and multi-root views derive the entry's actual worktree root (`selection.gitRootId !== "." ? selection.gitRootId : undefined`).
 - **Staging Bypass Closures:** Conflicted row checkboxes in `ChangedFilesList` are disabled (`disabled={isConflicted}`, `readOnly`, `cursor-not-allowed`, click handler early returns). Context menu popover replaces stage/unstage/discard with "Resolve conflict…". Bulk staging (`handleStageAll`) filters out conflicted files (`files.filter(f => f.status !== "conflicted")`). Backend `stage_files` rejects conflicted batches with HTTP 400 `INVALID_INPUT` under `GitMutationCoordinator` lock, and legacy resolve payloads fail closed with HTTP 400 `LEGACY_PAYLOAD_REJECTED`.
 - **Active Operation Banner & Floating Pill:** `ChangedFilesList` renders a `GitMerge` status banner when `useGitOperationStatus` returns an active operation (`merge`, `rebase`, `cherry-pick`, `revert`), displaying stopped reasons (`conflicts`, `messageEditRequired`) and providing an "Open Resolver" button. A floating conflict pill also mounts when conflicts exist or an active operation is stopped while the panel is hidden.
@@ -302,14 +289,11 @@ The floating Git conflict resolver provides a cross-shell resolution workbench m
 - **`ConflictResolverToolbar`:** Provides title bar drag handling (`onMouseDown={onDragStart}`), active Git operation indicator badge (e.g. `MERGE`, `REBASE`, `CHERRY-PICK`, `REVERT`), project label, file selection dropdown for multi-file conflict lists, continue and abort operation controls, maximize/restore toggle, and close/hide control.
 - **`MergeConflictEditor`:** 3-panel merge editor consuming the Phase 06 `ConflictMergeModel`, `useConflictResolver`, `useGitConflictFile`, and `useGitFileDiff`. Renders read-only source editors for Theirs and Ours (plus optional Base) alongside the editable Result editor.
 - **`ConflictRegionNav`:** Chunk navigation bar rendering conflict chips, prev/next navigation (`ChevronUp` / `ChevronDown`), and decision actions (`Accept Ours`, `Accept Theirs`, `Accept Both`, `Ignore`, `Mark Reviewed`) keyed strictly to stable `region.id` identifiers.
-### Unified Panel Stacking (`terminal-workspace-panel.ts`)
+### OS Frame Authority and Layering
 
-Floating surfaces across the workbench share a single stacking model:
+Floating surfaces within the OS desktop shell are governed directly by OS frame authority:
 
-- **Identifier Union:** `TerminalFloatingPanelId` is defined as `"files" | "tool" | "resolver"`.
-- **Ordered Stack Management:** `updateFloatingPanelStack(stack, panelId, action)` manages an array of panel IDs where the last item is topmost.
-- **Deterministic Z-Index Resolution:** `resolveFloatingPanelStackZIndex(panelId, stack)` maps the panel's position in the stack to a CSS z-index (`TERMINAL_FLOATING_PANEL_BASE_Z_INDEX = 20`, +2 per stack depth), coordinating logical stack ordering across `WorkspacePage` and `TerminalWorkspaceShell`, provided compatible ancestor CSS stacking contexts are maintained.
-
+- **Layering Authority:** Layering and z-index ordering for floating conflict resolution is governed directly by OS frame authority (`OS_RESOLVER_PANEL_TOPMOST_Z_INDEX = 30`), coordinating z-index hierarchy within the desktop canvas without legacy panel stack registries.
 ### Scoped Keyboard Arbitration & Escape Priority
 
 Keyboard shortcut arbitration in `handleResolverPanelKeyDown` enforces strict safety boundaries:

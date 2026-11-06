@@ -1,6 +1,6 @@
 # Phase 10: P5 completion — Documentation and hand-off
 
-Estimate: 24h; implementation status **pending**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
+Estimate: 24h; implementation status **DONE (2026-11-07 07:00:00 +07:00)**. [Overview](plan.md) · [Ownership](ownership.md) · [Acceptance](acceptance.md).
 
 ## Context / requirements
 Final OS docs follow ordinary Phase09 web qualification/human review. They never gate the independently published P0 early release in Phase03. Validated V1–V6 override older source reports: no Usage migration code/documentation/history; no external Resolver/native gate. This authoring only changes selected plan artifacts, never product/docs/runtime.
@@ -64,6 +64,9 @@ Project-relative paths below; all others read-only. Every listed existing doc is
 | Modify | `docs/configuration/index.md` |
 | Modify | `docs/configuration/server-configuration.md` |
 | Modify | `docs/codebase-summary-release.md` |
+| Modify | `docs/architecture/terminal-continuity-and-workflow.md` |
+| Modify | `docs/architecture/preferences-settings-and-host-resources.md` |
+| Delete | `docs/development-roadmap.md` |
 
 ## Durable task contracts
 
@@ -111,7 +114,10 @@ Project-relative paths below; all others read-only. Every listed existing doc is
       "docs/architecture/agent-status.md",
       "docs/configuration/index.md",
       "docs/configuration/server-configuration.md",
-      "docs/codebase-summary-release.md"
+      "docs/codebase-summary-release.md",
+      "docs/architecture/terminal-continuity-and-workflow.md",
+      "docs/architecture/preferences-settings-and-host-resources.md",
+      "docs/development-roadmap.md"
     ],
     "constraints": [
       "Only listed paths writable; escalate additions to coordinator before editing.",
@@ -131,4 +137,4 @@ Project-relative paths below; all others read-only. Every listed existing doc is
 ]
 ```
 
-- [ ] <!-- evcrate-task:publish-os-documentation --> Publish accurate OS architecture guides removals and evidence-linked hand-off
+- [x] <!-- evcrate-task:publish-os-documentation --> Publish accurate OS architecture guides removals and evidence-linked hand-off

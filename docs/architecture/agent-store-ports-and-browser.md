@@ -108,7 +108,7 @@ The hook returns a reason for non-available states and `useFeatureFlag` is the b
 | Draft and import identity | `packages/ui/src/components/organisms/MemoryEditor.tsx`, `ImportDialog.tsx` |
 | Port/tunnel aggregation | `packages/ui/src/hooks/use-ports.ts`, `use-tunnels.ts` |
 | Browser target trust | `packages/ui/src/hooks/use-browser-debug.ts`, `packages/ui/src/lib/browser-debug-origin.ts` |
-| Capture/handoff fences | `packages/ui/src/components/pages/WorkspacePage.tsx`, `packages/ui/src/lib/browser-terminal-handoff.ts` |
+| Capture/handoff fences | `packages/ui/src/os/apps/BrowserApp.tsx`, `packages/ui/src/lib/browser-terminal-handoff.ts` |
 | Artifact/PTY admission | `server/src/api/browser_debug.rs`, `server/src/browser_debug/store.rs`, `server/src/pty/manager.rs` |
 | Availability state | `packages/ui/src/hooks/use-feature-flag.ts` |
 

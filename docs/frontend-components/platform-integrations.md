@@ -66,8 +66,7 @@ policy, handshake/load-error UX, and CSP framing guidance.
 
 `packages/ui` is the reusable surface exported as the app, styles, and API/lib
 entry points. Hosts provide the transport and QueryClient bootstrap before
-mounting `DamHopperApp`. Provider order is AppZoom → Encrypt →
-AndroidChromeInputPolicy → Router, followed by guards, shortcuts, notifications,
+mounting `DamHopperApp`. Provider order is AppZoom → Encrypt → Router, followed by guards, shortcuts, notifications,
 and diagnostics.
 
 Use semantic dark tokens from `index.css`, JetBrains Mono, safe-area/layout
@@ -80,5 +79,4 @@ labels and exact-key duplicates join the existing request. Disabling encryption
 or retiring a connection clears passphrases and zeroes mutable key buffers.
 Encrypted writes use one captured `WsTransport` for OPAQUE, WebCrypto, and the
 final filesystem operation, with freshness fences and no plaintext fallback.
-Browser Debug keeps one host alive across shell changes; native geometry uses
-raw rendered bounds and mirrored app zoom.
+Browser Debug keeps one host alive across OS window movements in `OsBrowserKeepAliveHost`; the web iframe positions over active slots using raw rendered bounds.
