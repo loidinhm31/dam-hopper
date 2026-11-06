@@ -158,7 +158,6 @@ export function TraditionalTerminalProjectWorkspaceRow({
       )}
     >
       <div className="flex items-center gap-1">
-
         <button
           id={traditionalTerminalProjectTabId(group.id)}
           ref={(element) => setButtonRef(group.id, element)}
@@ -172,48 +171,58 @@ export function TraditionalTerminalProjectWorkspaceRow({
           onClick={() => onSelectGroup(group.id)}
           onKeyDown={(event) => onKeyDown(event, index)}
           className={cn(
-            "flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded px-1.5 py-1 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-primary)]",
-            touchOptimized && "min-h-11",
+            touchOptimized
+              ? "flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded px-1.5 py-1 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-primary)]"
+              : "flex min-h-8 min-w-0 flex-1 flex-col items-start gap-1 rounded px-1.5 py-1 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-primary)]",
           )}
         >
-          {group.terminalTabs.length > 0 ? (
-            <TerminalProjectActivityIndicator tabs={group.terminalTabs} />
-          ) : (
+          <div className="flex w-full min-w-0 items-center gap-2">
+            {group.terminalTabs.length > 0 ? (
+              <TerminalProjectActivityIndicator tabs={group.terminalTabs} />
+            ) : (
+              <span
+                aria-hidden="true"
+                className="flex h-3 w-3 shrink-0 items-center justify-center text-xs text-[var(--color-text-muted)] select-none"
+              >
+                ○
+              </span>
+            )}
             <span
-              aria-hidden="true"
-              className="flex h-3 w-3 shrink-0 items-center justify-center text-xs text-[var(--color-text-muted)] select-none"
+              className={cn(
+                "min-w-0 truncate font-mono text-xs",
+                isActive
+                  ? "text-[var(--color-selection-text)] font-semibold"
+                  : "text-current",
+              )}
             >
-              ○
+              {group.label}
             </span>
-          )}
-          <span
-            className={cn(
-              "min-w-0 truncate font-mono text-xs",
-              isActive
-                ? "text-[var(--color-selection-text)] font-semibold"
-                : "text-current",
+            {touchOptimized && group.profileName && (
+              <ProfileBadge
+                profileId={group.profileId}
+                name={group.profileName}
+              />
             )}
-          >
-            {group.label}
-          </span>
-          {group.profileName && (
-            <ProfileBadge
-              profileId={group.profileId}
-              name={group.profileName}
-            />
+            <span
+              className={cn(
+                "ml-auto shrink-0 flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-mono font-medium",
+                isActive
+                  ? "bg-[var(--color-selection-text)]/20 text-[var(--color-selection-text)]"
+                  : "bg-[var(--color-surface-2)] text-[var(--color-text-muted)]",
+              )}
+            >
+              {group.terminalTabs.length}
+            </span>
+          </div>
+          {!touchOptimized && group.profileName && (
+            <div className="order-first flex items-center pl-5">
+              <ProfileBadge
+                profileId={group.profileId}
+                name={group.profileName}
+              />
+            </div>
           )}
-          <span
-            className={cn(
-              "ml-auto shrink-0 text-xs font-mono font-medium",
-              isActive
-                ? "text-[var(--color-selection-text)]/90"
-                : "text-[var(--color-text-muted)]",
-            )}
-          >
-            {group.terminalTabs.length}
-          </span>
         </button>
-
         {onNewTerminalInGroup ? (
           <button
             type="button"
@@ -252,7 +261,13 @@ export function TraditionalTerminalProjectWorkspaceRow({
       </div>
 
       {group.projectName && isGitProject && (isActive || isDisclosed) ? (
-        <div className="flex items-center gap-2 pl-7 pr-1 pb-1">
+        <div
+          className={cn(
+            touchOptimized
+              ? "flex items-center gap-2 pl-7 pr-1 pb-1"
+              : "flex flex-col gap-1 pl-7 pr-1 pb-1",
+          )}
+        >
           <div className="min-w-0 flex-1">
             <TraditionalTerminalWorktreeSelect
               projectName={group.projectName}
@@ -273,10 +288,18 @@ export function TraditionalTerminalProjectWorkspaceRow({
                   ? `Commit ${shortHash}: ${worktreeStatus.lastCommit.message}`
                   : `Commit ${shortHash}`
               }
-              className="flex shrink-0 items-center gap-1 rounded bg-[var(--color-surface-2)]/60 px-1.5 py-0.5 font-mono text-xs font-medium text-[var(--color-text-muted)]"
+              className={cn(
+                "flex items-center gap-1.5 rounded bg-[var(--color-surface-2)]/60 px-1.5 py-0.5 font-mono text-[11px] text-[var(--color-text-muted)]",
+                touchOptimized ? "shrink-0" : "w-full min-w-0 truncate",
+              )}
             >
-              <GitCommit className="h-3 w-3 shrink-0" aria-hidden="true" />
-              <span>{shortHash}</span>
+              <GitCommit className="h-3 w-3 shrink-0 text-[var(--color-primary)]" aria-hidden="true" />
+              <span className="shrink-0 font-semibold">{shortHash}</span>
+              {!touchOptimized && worktreeStatus?.lastCommit?.message ? (
+                <span className="min-w-0 truncate text-[10px] opacity-80">
+                  {worktreeStatus.lastCommit.message}
+                </span>
+              ) : null}
             </span>
           ) : null}
         </div>

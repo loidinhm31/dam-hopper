@@ -213,6 +213,60 @@ export function EditorApp({ window }: EditorAppProps) {
     }
     return { kind: "workspace", profileId: owner.profileId ?? "" };
   }, [window.ctx.target, owner.profileId, window.ctx.projectId, window.ctx.worktreeId]);
+  const isDiff = Boolean(window.appState?.isDiff);
+  if (isDiff) {
+    const filePath = (window.appState?.filePath as string | undefined) ?? "";
+    const diffProject =
+      target.kind === "project" ? target.project : (window.ctx.projectId ?? "");
+    const diffTarget =
+      target.kind === "project"
+        ? {
+            project: target.project,
+            profileId: target.profileId,
+            worktreePath: target.worktreePath,
+          }
+        : window.ctx.projectId
+          ? {
+              project: window.ctx.projectId,
+              profileId: owner.profileId,
+              worktreePath: window.ctx.worktreeId,
+            }
+          : undefined;
+
+    return (
+      <div
+        data-os-editor-app={window.id}
+        data-testid={`editor-app-${window.id}`}
+        className="relative w-full h-full bg-[var(--color-bg)] overflow-hidden"
+      >
+        <Suspense
+          fallback={
+            <div className="flex h-full items-center justify-center">
+              <Loader2 className="h-5 w-5 animate-spin text-[var(--color-primary)]" />
+            </div>
+          }
+        >
+          <DiffViewer
+            key={`diff-${filePath}`}
+            project={diffProject}
+            target={diffTarget}
+            filePath={filePath}
+            fileStatus={(window.appState?.fileStatus as string) || "modified"}
+            additions={(window.appState?.additions as number) ?? 0}
+            deletions={(window.appState?.deletions as number) ?? 0}
+            commitHash={window.appState?.commitHash as string | undefined}
+            gitRootId={window.appState?.gitRootId as string | undefined}
+            diffPath={window.appState?.diffPath as string | undefined}
+            onClose={() => {
+              const tabKey = editorDiffTabKey(target, filePath);
+              useEditorStore.getState().close(tabKey);
+              useWindowStore.getState().closeWindow(window.id);
+            }}
+          />
+        </Suspense>
+      </div>
+    );
+  }
 
   const presentation = window.appState?.presentation as { kind?: string } | undefined;
   const isChooser =
@@ -225,7 +279,6 @@ export function EditorApp({ window }: EditorAppProps) {
 
   return <EditorResourceView window={window} target={target} owner={owner} />;
 }
-
 function EditorResourceView({
   window,
   target,
@@ -602,48 +655,6 @@ function EditorResourceView({
     );
   }
 
-  if (window.appState?.isDiff || tab?.tier === "diff") {
-    return (
-      <div
-        data-os-editor-app={window.id}
-        data-testid={`editor-app-${window.id}`}
-        className="relative w-full h-full bg-[var(--color-bg)] overflow-hidden"
-      >
-        <Suspense
-          fallback={
-            <div className="flex h-full items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-[var(--color-primary)]" />
-            </div>
-          }
-        >
-          <DiffViewer
-            key={`diff-${filePath}`}
-            project={target.kind === "project" ? target.project : (window.ctx.projectId ?? "")}
-            target={
-              target.kind === "project"
-                ? {
-                    project: target.project,
-                    profileId: target.profileId,
-                    worktreePath: target.worktreePath,
-                  }
-                : undefined
-            }
-            filePath={filePath}
-            fileStatus={(window.appState?.fileStatus as string) || tab?.fileStatus || "modified"}
-            additions={tab?.additions ?? 0}
-            deletions={tab?.deletions ?? 0}
-            commitHash={tab?.commitHash}
-            gitRootId={tab?.gitRootId}
-            diffPath={tab?.diffPath}
-            onClose={() => {
-              useEditorStore.getState().close(tab?.key ?? tabKey);
-              useWindowStore.getState().closeWindow(window.id);
-            }}
-          />
-        </Suspense>
-      </div>
-    );
-  }
   return (
     <div
       ref={slotRef}
