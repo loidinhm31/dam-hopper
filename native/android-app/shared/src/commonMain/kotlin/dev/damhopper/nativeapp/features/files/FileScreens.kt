@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.FilterChip
 import dev.damhopper.nativeapp.features.settings.ExplorerLanguageFilter
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import dev.damhopper.nativeapp.ui.theme.DamHopperTypography
@@ -104,7 +105,10 @@ fun FilesPanelScreen(
     val languageFilter by treeState.languageFilter.collectAsState()
     val languageScan by treeState.languageScan.collectAsState()
     val familyActive = languageFilter != ExplorerLanguageFilter.ALL
-
+    val activeTarget by treeState.activeBrowsingTarget.collectAsState()
+    val targetStatus by treeState.targetBrowseStatus.collectAsState()
+    val targetError by treeState.targetBrowseError.collectAsState()
+    val registeredProjects by treeState.registeredProjects.collectAsState()
     val isMutating by mutationCoordinator.isMutating.collectAsState()
     val unresolvedOperations by mutationCoordinator.unresolvedOperations.collectAsState()
     val feedbackNotice by mutationCoordinator.lastFeedbackNotice.collectAsState()
@@ -159,8 +163,12 @@ fun FilesPanelScreen(
             },
             focusedWorkspaceMode = focusedWorkspaceMode,
             isMutating = isMutating,
-            canMutate = canMutate,
+            canMutate = canMutate && targetStatus == TargetBrowseStatus.CONFIGURED && activeTarget is FilesystemTargetRef.Project,
             isSelectionUnresolved = isSelectionUnresolved,
+            browsingTarget = activeTarget,
+            defaultProjectTarget = treeState.defaultProjectTarget,
+            onSelectBrowsingTarget = { treeState.selectBrowsingTarget(it) },
+            registeredProjects = registeredProjects,
         )
 
         when (effectiveSubTab) {
@@ -170,6 +178,28 @@ fun FilesPanelScreen(
                     onSelect = onSelectLanguageFilter,
                     migrationNotice = languageFilterNotice,
                 )
+                if (targetStatus == TargetBrowseStatus.UNCONFIGURED) {
+                    Text(
+                        text = targetError ?: "Project is not configured in this workspace.",
+                        style = DamHopperTypography.labelSmall,
+                        color = DamHopperColors.Warning,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                } else if (targetStatus == TargetBrowseStatus.UNAVAILABLE) {
+                    Text(
+                        text = targetError ?: "Target unavailable: target does not match active authority.",
+                        style = DamHopperTypography.labelSmall,
+                        color = DamHopperColors.Error,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                } else if (targetStatus == TargetBrowseStatus.UNSUPPORTED) {
+                    Text(
+                        text = targetError ?: "Target type is unsupported.",
+                        style = DamHopperTypography.labelSmall,
+                        color = DamHopperColors.Error,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
                 if (connectionStatus == ExplorerConnectionStatus.TARGET_UNAVAILABLE) {
                     Text(
                         text = "Target unavailable: project/worktree does not match active workspace authority.",
@@ -294,21 +324,37 @@ fun FilesPanelScreen(
                         modifier = Modifier.fillMaxSize().padding(4.dp),
                     ) {
                         items(visibleNodes, key = { it.first.path }) { (node, depth) ->
+                            val isNodeProject = node.isDirectory && (
+                                registeredProjects.contains(node.path) ||
+                                (activeTarget is FilesystemTargetRef.Workspace && !node.path.contains('/') && registeredProjects.contains(node.name))
+                            )
                             FileTreeNodeRow(
                                 node = node,
                                 depth = depth,
                                 isSelected = selectedPath == node.path,
                                 isUnresolved = mutationCoordinator.isPathUnresolved(node.path),
+                                isProject = isNodeProject,
                                 onToggleFolder = { if (!familyActive) treeState.toggleFolder(it) },
                                 onSelectNode = { path ->
                                     treeState.selectPath(path)
                                     if (!node.isDirectory) {
-                                        onOpenFile(treeState.target, path)
+                                        when (val t = activeTarget) {
+                                            is FilesystemTargetRef.Project -> {
+                                                onOpenFile(t.toProjectTargetRef(), path)
+                                            }
+                                            is FilesystemTargetRef.Workspace -> {
+                                                val matchingProj = registeredProjects.find { path.startsWith("$it/") || path == it }
+                                                if (matchingProj != null) {
+                                                    val relPath = if (path == matchingProj) "" else path.removePrefix("$matchingProj/")
+                                                    onOpenFile(ProjectTargetRef(profileId = t.profileId, project = matchingProj), relPath)
+                                                }
+                                            }
+                                        }
                                     }
                                 },
-                                onHoldNode = { node ->
-                                    treeState.selectPath(node.path)
-                                    contextMenuNode = node
+                                onHoldNode = { n ->
+                                    treeState.selectPath(n.path)
+                                    contextMenuNode = n
                                 },
                             )
                         }
@@ -393,21 +439,21 @@ fun FilesPanelScreen(
     )
 
     contextMenuNode?.let { node ->
+        val isProject = node.isDirectory && (
+            registeredProjects.contains(node.path) ||
+            (activeTarget is FilesystemTargetRef.Workspace && !node.path.contains('/') && registeredProjects.contains(node.name))
+        )
+        val projName = if (isProject) (registeredProjects.find { it == node.path || (activeTarget is FilesystemTargetRef.Workspace && it == node.name && !node.path.contains('/')) } ?: node.name) else null
+        val canMutateNode = activeTarget is FilesystemTargetRef.Project
         FileItemActionsModal(
             node = node,
+            isProjectFolder = isProject,
+            projectName = projName,
             onDismiss = { contextMenuNode = null },
-            onRename = { path ->
-                mutationCoordinator.openRenameDialog(path)
-            },
-            onDelete = { path ->
-                mutationCoordinator.openDeleteDialog(path)
-            },
-            onNewFile = { parentDir ->
-                mutationCoordinator.openCreateFileDialog(parentDir)
-            },
-            onNewFolder = { parentDir ->
-                mutationCoordinator.openCreateDirectoryDialog(parentDir)
-            },
+            onRename = { path -> mutationCoordinator.openRenameDialog(path) },
+            onDelete = { path -> mutationCoordinator.openDeleteDialog(path) },
+            onNewFile = { parentDir -> mutationCoordinator.openCreateFileDialog(parentDir) },
+            onNewFolder = { parentDir -> mutationCoordinator.openCreateDirectoryDialog(parentDir) },
             onUploadFile = transferHost?.let { host ->
                 { targetDir -> host.onUploadFile(targetDir) }
             },
@@ -423,7 +469,13 @@ fun FilesPanelScreen(
                     clipboardManager.setText(AnnotatedString(remotePath))
                     onCopyRemotePath?.invoke(remotePath)
                 }
-            }
+            },
+            onMarkProject = { folderPath, defaultName ->
+                mutationCoordinator.openMarkProjectDialog(folderPath, defaultName)
+            },
+            onUnmarkProject = { pName, folderPath ->
+                mutationCoordinator.openUnmarkProjectDialog(pName, folderPath)
+            },
         )
     }
 }

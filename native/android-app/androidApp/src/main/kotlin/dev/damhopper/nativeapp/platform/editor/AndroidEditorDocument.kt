@@ -59,7 +59,8 @@ class AndroidEditorDocument(
     private var pendingReplaceDeleteChars = 0
     private var attachedEditor: CodeEditor? = null
     private var receipt: SubscriptionReceipt<ContentChangeEvent>? = null
-    private var isClosed = false
+    override var isClosed: Boolean = false
+        private set
     var isInputAllowed: () -> Boolean = { true }
     var fileIdentity: FileIdentityDto? = null
     var canonicalPath: String? = null

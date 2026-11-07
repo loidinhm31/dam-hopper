@@ -152,6 +152,18 @@ class EditorTabsState(
 
     val activeTab: EditorTab? get() = _tabs.value.find { it.key == _activeTabKey.value }
     fun getSession(key: String): EditorSession? = sessions[key]
+    private fun resolveCanonicalKey(tab: EditorTab): String {
+        return tab.fileIdentity?.let {
+            dev.damhopper.nativeapp.features.files.CanonicalDocumentKey(
+                profileId = tab.profileId,
+                normalizedEndpoint = editorRepository.fileRepository.owner.normalizedBaseUrl,
+                authenticatedAccount = editorRepository.fileRepository.owner.accountUser,
+                workspaceId = it.workspaceId ?: "workspace",
+                workspaceEpoch = it.workspaceEpoch ?: 0L,
+                canonicalPath = it.canonicalPath ?: tab.path,
+            ).key
+        } ?: tab.key
+    }
 
     private fun updateMetadataFlow() {
         _openTabs.value = _tabs.value.map { tab ->
@@ -173,7 +185,7 @@ class EditorTabsState(
                 error = tab.error,
                 rangeWindow = tab.rangeWindow,
                 fileIdentity = tab.fileIdentity,
-                canonicalKey = tab.canonicalPath,
+                canonicalKey = resolveCanonicalKey(tab),
             )
         }
         val currentKey = _activeTabKey.value

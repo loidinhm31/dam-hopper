@@ -1009,6 +1009,11 @@ fun WorkbenchScreen(
                                 )
                             }
                         },
+                        onSelectFilesystemTarget = { fsTarget ->
+                            gitWorkspace.selectBrowsingTarget(fsTarget)
+                        },
+                        isWholeWorkspaceSelected = gitWorkspace.fileTreeState.activeBrowsingTarget.value is dev.damhopper.nativeapp.core.model.FilesystemTargetRef.Workspace,
+                        profileId = activeProfileId,
                         onDismiss = { navigation.closeTargetPicker() }
                     )
                 }

@@ -168,9 +168,22 @@ fun NotificationTransients(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Column(modifier = Modifier.weight(1f).clickable { onOpen(record) }) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .sizeIn(minHeight = 48.dp)
+                        .clickable(
+                            onClickLabel = "Open notification",
+                            onClick = { onOpen(record) },
+                        )
+                        .semantics {
+                            contentDescription = "Notification alert: ${record.title}. ${record.body}"
+                        },
+                    verticalArrangement = Arrangement.Center,
+                ) {
                     Text(record.title, color = DamHopperColors.TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(record.body, color = DamHopperColors.TextSecondary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val bodyText = if (record.key == feed.activatingKey) "${record.body} (Opening...)" else record.body
+                    Text(bodyText, color = DamHopperColors.TextSecondary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Box(
                     modifier = Modifier
@@ -215,7 +228,12 @@ fun NotificationCenter(
         }
         routeNotice?.let {
             Row(
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(DamHopperColors.SurfaceVariant).padding(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(DamHopperColors.SurfaceVariant)
+                    .padding(8.dp)
+                    .semantics { contentDescription = "Route notice: $it" },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -240,8 +258,15 @@ fun NotificationCenter(
                         modifier = Modifier
                             .fillMaxWidth()
                             .sizeIn(minHeight = 48.dp)
-                            .clickable { onOpen(record) }
+                            .clickable(
+                                onClickLabel = "Open notification",
+                                onClick = { onOpen(record) },
+                            )
+                            .semantics {
+                                contentDescription = "${if (record.read) "Read" else "Unread"} notification: ${record.title}. ${record.body}"
+                            }
                             .padding(vertical = 4.dp),
+                        verticalArrangement = Arrangement.Center,
                     ) {
                         Text(
                             text = if (record.read) record.title else "● ${record.title}",
@@ -251,14 +276,14 @@ fun NotificationCenter(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        Text(record.body, color = DamHopperColors.TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        val bodyText = if (record.key == feed.activatingKey) "${record.body} (Opening...)" else record.body
+                        Text(bodyText, color = DamHopperColors.TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
         }
     }
 }
-
 @Composable
 private fun TextAction(label: String, enabled: Boolean, onClick: () -> Unit) {
     Box(

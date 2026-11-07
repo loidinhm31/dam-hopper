@@ -130,6 +130,7 @@ interface RetainedRootServices {
 
     /** Validates [target] against authoritative live state and routes it; null when routed, else the refusal text. */
     suspend fun openNotification(target: NotificationTarget): String?
+    suspend fun activateNotification(key: String): String?
 
     /** Hands the root's EXISTING socket to the retained owner (one collector per runtime; no new connection). */
     suspend fun attachRuntime(client: ApiClient, ws: WsConnection, accountId: String)
@@ -633,8 +634,7 @@ private fun RootContent(
     fun openRecord(record: NotificationRecord) {
         val svc = services ?: return
         scope.launch {
-            svc.markNotificationRead(record.key)
-            svc.openNotification(record.target)
+            svc.activateNotification(record.key)
         }
     }
 

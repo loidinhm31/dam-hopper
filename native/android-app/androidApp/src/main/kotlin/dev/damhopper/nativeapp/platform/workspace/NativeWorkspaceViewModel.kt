@@ -1542,6 +1542,19 @@ class NativeWorkspaceViewModel(
         _routeNotice.value = null
     }
 
+    override suspend fun activateNotification(key: String): String? {
+        return coordinator.activate(key) { target ->
+            val refusal = routeNotification(target)
+            if (refusal != null) {
+                _routeNotice.value = refusal
+                flowNavigation.openNotifications()
+            } else {
+                _routeNotice.value = null
+            }
+            refusal
+        }
+    }
+
     override suspend fun attachRuntime(client: ApiClient, ws: WsConnection, accountId: String) {
         if (!lifetime.awaitEligible()) return
         runtimes.attach(client, ws, accountId)

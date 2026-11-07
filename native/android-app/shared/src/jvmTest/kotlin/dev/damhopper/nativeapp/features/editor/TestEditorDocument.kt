@@ -93,7 +93,8 @@ class TestEditorDocument(
 
     private var matches: List<Pair<Int, Int>> = emptyList() // startOffset, endOffset
     private var currentMatchIndex: Int = -1
-    private var isClosed = false
+    override var isClosed: Boolean = false
+        private set
 
     fun getText(): String = text.toString()
 

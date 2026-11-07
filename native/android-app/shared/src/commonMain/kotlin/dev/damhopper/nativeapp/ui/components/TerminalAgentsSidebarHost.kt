@@ -55,18 +55,30 @@ import dev.damhopper.nativeapp.features.terminal.TerminalAgentsSidebarUiState
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import kotlinx.coroutines.launch
 
-/** Width at/above which the Agents sidebar is pinned beside the terminal (otherwise a modal sheet). */
-val TERMINAL_AGENTS_PINNED_MIN_WIDTH: Dp = 600.dp
+/** Pinned navigator/sidebar rail width. */
+val AGENT_HUB_RAIL_WIDTH: Dp = 280.dp
 
-/** Pinned sidebar width. */
-val TERMINAL_AGENTS_PINNED_WIDTH: Dp = 280.dp
+/** Minimum content stage width required after subtracting the rail. */
+val AGENT_HUB_CONTENT_MIN_WIDTH: Dp = 360.dp
 
-/** Upper bound of the compact sheet; the sheet is additionally clamped to the available width. */
-val TERMINAL_AGENTS_SHEET_MAX_WIDTH: Dp = 320.dp
+/** Width at/above which the rail is admitted beside the stage: 280dp + 360dp = 640dp. */
+val AGENT_HUB_PINNED_MIN_WIDTH: Dp = AGENT_HUB_RAIL_WIDTH + AGENT_HUB_CONTENT_MIN_WIDTH
 
-/** True when [availableWidth] pins the sidebar (>= 600 dp). */
-fun isTerminalAgentsPinned(availableWidth: Dp): Boolean = availableWidth >= TERMINAL_AGENTS_PINNED_MIN_WIDTH
+/** Upper bound of the compact sheet/modal; additionally clamped to the available width. */
+val AGENT_HUB_MODAL_MAX_WIDTH: Dp = 320.dp
 
+/**
+ * True when [usableWidth] admits a pinned 280dp rail while leaving >=360dp for the content stage.
+ * Usable width is the width after subtracting system insets and display hinge/fold.
+ */
+fun isAgentHubRailAdmitted(usableWidth: Dp): Boolean =
+    (usableWidth - AGENT_HUB_RAIL_WIDTH) >= AGENT_HUB_CONTENT_MIN_WIDTH
+
+/** Legacy alias delegating to the authoritative 640dp Hub rail admission rule. */
+val TERMINAL_AGENTS_PINNED_MIN_WIDTH: Dp = AGENT_HUB_PINNED_MIN_WIDTH
+val TERMINAL_AGENTS_PINNED_WIDTH: Dp = AGENT_HUB_RAIL_WIDTH
+val TERMINAL_AGENTS_SHEET_MAX_WIDTH: Dp = AGENT_HUB_MODAL_MAX_WIDTH
+fun isTerminalAgentsPinned(availableWidth: Dp): Boolean = isAgentHubRailAdmitted(availableWidth)
 /**
  * Narrow root-owned cover/exclusivity record of the Agents sidebar (NOT an overlay framework). The root keeps ONE
  * instance across rotation (only [open] is saved) and derives every input cover from it:
@@ -93,6 +105,16 @@ class TerminalAgentsHostState(initialOpen: Boolean = false) {
     private val _popupVisible = mutableStateOf(false)
     val popupVisible: Boolean get() = _popupVisible.value
     private val localSources = mutableStateListOf<Any>()
+
+    private val _filesRailActive = mutableStateOf(false)
+    val filesRailActive: Boolean get() = _filesRailActive.value
+
+    fun setFilesRailActive(active: Boolean) {
+        _filesRailActive.value = active
+    }
+
+    /** Single navigation rail exclusivity: rail can be pinned only if Files rail is not active. */
+    val canPinRail: Boolean get() = !filesRailActive
 
     val localCover: Boolean get() = localSources.isNotEmpty()
 
@@ -215,7 +237,7 @@ fun TerminalAgentsTrigger(agents: TerminalAgentsContext, modifier: Modifier = Mo
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
             .background(if (host.open) DamHopperColors.PrimaryVariant else DamHopperColors.SurfaceVariant)
-            .sizeIn(minWidth = 48.dp, minHeight = 32.dp)
+            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
             .semantics { contentDescription = "Agents, $count eligible terminals" }
             .clickable(enabled = enabled) { host.toggle() }
             .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -300,17 +322,32 @@ fun TerminalAgentsSidebarOverlay(
         onDismiss = { host.close() },
         onPopupVisibilityChanged = { host.setPopupVisible(it) },
     )
+    val navUiState = dev.damhopper.nativeapp.features.terminal.AgentHubNavigatorUiState(
+        agentsUiState = uiState,
+    )
+    val navCallbacks = dev.damhopper.nativeapp.features.terminal.AgentHubNavigatorCallbacks(
+        onSelectProject = {},
+        onCreateSession = {},
+        onDismissProject = {},
+        onOpenProjectPicker = {},
+        onAgentGroupClick = callbacks.onGroupClick,
+        onFilterChange = callbacks.onFilterChange,
+        onRefresh = callbacks.onRefresh,
+        onOpenSettings = callbacks.onOpenSettings,
+        onDismissNavigator = callbacks.onDismiss,
+        onPopupVisibilityChanged = callbacks.onPopupVisibilityChanged,
+    )
 
-    val pinned = isTerminalAgentsPinned(maxWidth)
+    val pinned = isAgentHubRailAdmitted(maxWidth) && host.canPinRail
     val pinnedOpen = host.open && pinned
 
     Box(modifier = modifier.fillMaxSize()) {
         if (pinnedOpen) {
             Box(modifier = Modifier.align(Alignment.CenterStart).fillMaxHeight().width(TERMINAL_AGENTS_PINNED_WIDTH)) {
-                TerminalAgentsSidebar(
-                    state = uiState,
-                    mode = TerminalAgentsSidebarMode.PINNED,
-                    callbacks = callbacks,
+                AgentHubNavigator(
+                    state = navUiState,
+                    mode = dev.damhopper.nativeapp.features.terminal.AgentHubNavigatorMode.RAIL,
+                    callbacks = navCallbacks,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -357,10 +394,10 @@ fun TerminalAgentsSidebarOverlay(
                         }
                     },
             ) {
-                TerminalAgentsSidebar(
-                    state = uiState,
-                    mode = TerminalAgentsSidebarMode.SHEET,
-                    callbacks = callbacks,
+                AgentHubNavigator(
+                    state = navUiState,
+                    mode = dev.damhopper.nativeapp.features.terminal.AgentHubNavigatorMode.MODAL,
+                    callbacks = navCallbacks,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

@@ -70,6 +70,8 @@ enum class ShortcutAction(
     PROJECT_PANEL("Projects", ShortcutDefaults.PROJECT_PANEL, null),
     FLEET_TERMINAL("Fleet terminal", ShortcutDefaults.FLEET_TERMINAL, "There is no Fleet destination in this app."),
     COGNITO("Cognito privacy mode", ShortcutDefaults.COGNITO_MODE, null);
+    val isNativeSupported: Boolean get() = unavailableReason == null
+
 
     fun read(p: WorkbenchPreferences): String = when (this) {
         SEARCH_TEXT -> p.searchTextShortcut
@@ -120,7 +122,7 @@ fun shortcutBindingProblem(action: ShortcutAction, binding: String, prefs: Workb
         if (!modifiers && !functionKey) return "Add Ctrl, Alt, Shift or Meta so ordinary typing is never captured."
     }
     ShortcutAction.entries.firstOrNull { other ->
-        other != action && shortcutsCollide(parsed, ShortcutGrammar.parse(other.read(prefs)))
+        other != action && other.read(prefs).isNotBlank() && shortcutsCollide(parsed, ShortcutGrammar.parse(other.read(prefs)))
     }?.let { return "Already used by \"${it.title}\"." }
     return null
 }
@@ -538,10 +540,11 @@ private fun ShortcutEditor(settingsRepository: SettingsRepository, preferences: 
             }
             captureMessage?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 
-            ShortcutAction.entries.forEach { action ->
+            ShortcutAction.entries.filter { it.isNativeSupported }.forEach { action ->
                 val binding = action.read(preferences)
-                val parsed = ShortcutGrammar.parse(binding)
-                val androidProblem = if (parsed?.kind == ShortcutKind.KEYBOARD && parsed.code != null &&
+                val isBound = binding.isNotBlank()
+                val parsed = if (isBound) ShortcutGrammar.parse(binding) else null
+                val androidProblem = if (isBound && parsed?.kind == ShortcutKind.KEYBOARD && parsed.code != null &&
                     !ShortcutGrammar.isAndroidDispatchable(parsed.code)
                 ) {
                     "No Android physical key produces ${parsed.code}; the binding is preserved but cannot trigger here."
@@ -556,14 +559,27 @@ private fun ShortcutEditor(settingsRepository: SettingsRepository, preferences: 
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(action.title, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                            Text(binding, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
+                            if (isBound) {
+                                Text(binding, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
+                            } else {
+                                Text("Unbound", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
-                        if (action.unavailableReason == null) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                             OutlinedButton(
                                 enabled = capturing == null,
                                 onClick = { captureMessage = null; capturing = action },
                                 modifier = Modifier.defaultMinSize(minHeight = 48.dp),
                             ) { Text("Set") }
+                            if (isBound) {
+                                TextButton(
+                                    enabled = capturing == null,
+                                    onClick = {
+                                        settingsRepository.updatePreferences { action.write(it, "") }
+                                        captureMessage = "${action.title} unbound"
+                                    },
+                                ) { Text("Unbind") }
+                            }
                             TextButton(
                                 enabled = capturing == null && binding != action.defaultBinding,
                                 onClick = {
@@ -577,9 +593,6 @@ private fun ShortcutEditor(settingsRepository: SettingsRepository, preferences: 
                                 },
                             ) { Text("Reset") }
                         }
-                    }
-                    action.unavailableReason?.let {
-                        Text("Unavailable: $it The binding is preserved.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     androidProblem?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
                 }

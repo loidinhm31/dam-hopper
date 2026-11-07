@@ -6,15 +6,19 @@ import androidx.compose.runtime.setValue
 import dev.damhopper.nativeapp.core.lifecycle.LifecycleAware
 import dev.damhopper.nativeapp.core.lifecycle.LifecycleCoordinator
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.features.editor.CloseIntent
 import dev.damhopper.nativeapp.features.editor.EditorDocumentFactory
 import dev.damhopper.nativeapp.features.editor.EditorRepository
 import dev.damhopper.nativeapp.features.editor.EditorTabsState
+import dev.damhopper.nativeapp.features.editor.ViewLeaseToken
 import dev.damhopper.nativeapp.features.files.FileMutationCoordinator
 import dev.damhopper.nativeapp.features.files.FileOperationOutcome
 import dev.damhopper.nativeapp.features.files.FileRepository
 import dev.damhopper.nativeapp.features.files.FileTreeState
+import dev.damhopper.nativeapp.features.files.TargetBrowseResult
+import dev.damhopper.nativeapp.features.files.TargetBrowseStatus
 import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
 import dev.damhopper.nativeapp.features.git.GitWorkspaceState
 import dev.damhopper.nativeapp.features.git.GitWorkspaceRuntime
@@ -106,6 +110,40 @@ class ProjectWorkspaceState(
     var editorRepository: EditorRepository = initialEditorRepository
         private set
 
+    val browsingTarget: StateFlow<FilesystemTargetRef>
+        get() = fileTreeState.activeBrowsingTarget
+
+    val targetBrowseStatus: StateFlow<TargetBrowseStatus>
+        get() = fileTreeState.targetBrowseStatus
+
+    val isProjectSelected: Boolean
+        get() = fileTreeState.activeBrowsingTarget.value is FilesystemTargetRef.Project
+
+    fun selectBrowsingTarget(newTarget: FilesystemTargetRef): TargetBrowseResult {
+        val result = fileTreeState.selectBrowsingTarget(newTarget)
+        if (result.status == TargetBrowseStatus.CONFIGURED && newTarget is FilesystemTargetRef.Workspace) {
+            if (_activePanel.value == WorkspacePanel.GIT) {
+                selectPanel(WorkspacePanel.FILES)
+            }
+        }
+        return result
+    }
+
+    private val ownedViewLeases = mutableSetOf<Pair<String, ViewLeaseToken>>()
+
+    fun acquireWorkspaceViewLease(canonicalKey: String, surfaceId: String): ViewLeaseToken? {
+        val doc = editorTabsState.getCanonicalDocument(canonicalKey) ?: return null
+        val token = doc.acquireViewLease(surfaceId)
+        ownedViewLeases.add(canonicalKey to token)
+        return token
+    }
+
+    fun releaseWorkspaceViewLease(canonicalKey: String, token: ViewLeaseToken) {
+        if (ownedViewLeases.remove(canonicalKey to token)) {
+            editorTabsState.getCanonicalDocument(canonicalKey)?.releaseViewLease(token)
+        }
+    }
+
     var isSavingDeparture: Boolean by mutableStateOf(false)
         internal set
     var departureError: String? by mutableStateOf(null)
@@ -145,6 +183,10 @@ class ProjectWorkspaceState(
      * Switches the active focused panel.
      */
     fun selectPanel(panel: WorkspacePanel) {
+        if (panel == WorkspacePanel.GIT && !isProjectSelected) {
+            // Whole workspace browsing cannot enter Git or dispatch Git operations
+            return
+        }
         _activePanel.value = panel
         terminalState?.setPanelVisible(panel == WorkspacePanel.TERMINAL)
         if (panel == WorkspacePanel.GIT) {
@@ -185,7 +227,7 @@ class ProjectWorkspaceState(
                 fileTreeState.resumeWatching()
             } catch (_: Throwable) {}
         }
-        if (_activePanel.value == WorkspacePanel.GIT) {
+        if (_activePanel.value == WorkspacePanel.GIT && isProjectSelected) {
             gitRuntime?.refresh(GitRefreshReason.FOREGROUND)
         }
         updateInputGate()
@@ -473,6 +515,14 @@ class ProjectWorkspaceState(
         gitRuntime = null
         coroutineScope.cancel()
         fileTreeState.dispose()
+
+        // Release only workspace-owned view leases
+        for ((canonicalKey, token) in ownedViewLeases) {
+            editorTabsState.getCanonicalDocument(canonicalKey)?.releaseViewLease(token)
+        }
+        ownedViewLeases.clear()
+
+        // Release workspace-owned alias leases via editorTabsState
         editorTabsState.closeAll()
     }
 

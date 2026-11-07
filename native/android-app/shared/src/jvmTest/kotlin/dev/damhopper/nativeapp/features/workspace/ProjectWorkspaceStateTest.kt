@@ -2,8 +2,11 @@ package dev.damhopper.nativeapp.features.workspace
 
 import com.sun.net.httpserver.HttpServer
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.core.model.SocketInstanceRef
+import dev.damhopper.nativeapp.features.editor.AliasLeaseToken
+import dev.damhopper.nativeapp.features.editor.ViewLeaseToken
 import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.core.transport.ClientMsg
 import dev.damhopper.nativeapp.core.transport.ServerMsg
@@ -258,5 +261,61 @@ class ProjectWorkspaceStateTest {
         state.applyVerifiedSelectionEffects()
         assertTrue(terminal.isPanelVisible)
         assertEquals("term-9", terminal.activeSessionId)
+    }
+
+    @Test
+    fun testGitGatedOnProjectSelected() = runTest {
+        val state = createWorkspaceState()
+        // Initial state is project target -> isProjectSelected is true
+        assertTrue(state.isProjectSelected)
+        state.selectPanel(WorkspacePanel.GIT)
+        assertEquals(WorkspacePanel.GIT, state.activePanel.value)
+
+        // Switch to whole workspace browsing -> isProjectSelected becomes false
+        state.selectBrowsingTarget(FilesystemTargetRef.Workspace(profileId = "prof-test"))
+        assertFalse(state.isProjectSelected)
+
+        // Switch to FILES first
+        state.selectPanel(WorkspacePanel.FILES)
+        assertEquals(WorkspacePanel.FILES, state.activePanel.value)
+
+        // Attempting to select GIT when whole workspace is selected must be refused
+        state.selectPanel(WorkspacePanel.GIT)
+        assertEquals(WorkspacePanel.FILES, state.activePanel.value, "GIT must not be entered when whole-workspace browsing is active")
+        state.close()
+    }
+
+    @Test
+    fun testCloseReleasesWorkspaceViewLeasesWithoutDisposingSurvivingAliases() = runTest {
+        val state = createWorkspaceState()
+        state.editorTabsState.openTab(state.target, "Main.kt")
+        val tab = state.editorTabsState.openTabs.value.first()
+        val doc = state.editorTabsState.getDocument(tab.id)
+        assertNotNull(doc)
+
+        // Acquire a second alias lease to simulate another workspace or tool retaining the document
+        val externalAliasLease = doc.acquireAliasLease("external-alias-99")
+        assertFalse(doc.canDispose)
+
+        // Acquire a workspace view lease through ProjectWorkspaceState
+        val canonicalKey = requireNotNull(tab.canonicalKey) { "tab.canonicalKey must not be null" }
+        val viewLease = state.acquireWorkspaceViewLease(canonicalKey, "editor-surface-1")
+        assertNotNull(viewLease)
+        assertFalse(doc.canDispose)
+
+        // Close the workspace: releases this workspace's alias and view leases
+        state.close()
+        assertTrue(state.isAuthorityRetired.value)
+        assertEquals(0, state.editorTabsState.tabs.value.size)
+
+        // The document must NOT be closed because externalAliasLease is still held!
+        assertFalse(doc.isClosed)
+        assertFalse(doc.canDispose)
+
+        // Releasing the final external alias lease permits disposal
+        doc.releaseAliasLease(externalAliasLease)
+        assertTrue(doc.canDispose)
+        doc.close()
+        assertTrue(doc.isClosed)
     }
 }

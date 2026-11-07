@@ -2,6 +2,7 @@ package dev.damhopper.nativeapp.core.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.put
 
 /**
  * Target reference for filesystem operations: either whole workspace or a specific project/worktree.
@@ -42,6 +43,21 @@ sealed class FilesystemTargetRef {
     }
 
     /**
+     * Converts to JSON matching Rust serde `{ tag: "type", rename_all: "camelCase" }`.
+     */
+    fun toServerJsonElement(): kotlinx.serialization.json.JsonObject = when (this) {
+        is Workspace -> kotlinx.serialization.json.buildJsonObject {
+            put("type", "workspace")
+            workspaceEpoch?.let { put("workspaceEpoch", it) }
+        }
+        is Project -> kotlinx.serialization.json.buildJsonObject {
+            put("type", "project")
+            put("project", project)
+            worktreePath?.let { put("worktreePath", it) }
+        }
+    }
+
+    /**
      * Converts to query parameters for REST filesystem endpoints.
      */
     fun toQueryParams(): List<Pair<String, String>> = when (this) {
@@ -58,7 +74,7 @@ sealed class FilesystemTargetRef {
     }
 
     companion object {
-        fun fromProjectTargetRef(target: ProjectTargetRef): FilesystemTargetRef =
+        fun fromProjectTargetRef(target: ProjectTargetRef): Project =
             Project(profileId = target.profileId, project = target.project, worktreePath = target.worktreePath)
     }
 }

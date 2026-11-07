@@ -118,6 +118,41 @@ fun FileModalsHost(
                 },
             )
         }
+        is ExplorerDialogState.MarkProject -> {
+            MarkProjectDialog(
+                folderPath = dialog.folderPath,
+                draftName = dialog.draftName,
+                onDraftChange = { mutationCoordinator.updateDialogDraft(it) },
+                isSubmitting = dialog.isSubmitting,
+                isUnresolved = dialog.unknownOutcome != null,
+                errorMessage = dialog.errorMessage,
+                onConfirm = {
+                    coroutineScope.launch {
+                        mutationCoordinator.submitCurrentDialog()
+                    }
+                },
+                onDismiss = {
+                    mutationCoordinator.dismissDialog()
+                },
+            )
+        }
+        is ExplorerDialogState.UnmarkProject -> {
+            UnmarkProjectDialog(
+                projectName = dialog.projectName,
+                folderPath = dialog.folderPath,
+                isSubmitting = dialog.isSubmitting,
+                isUnresolved = dialog.unknownOutcome != null,
+                errorMessage = dialog.errorMessage,
+                onConfirm = {
+                    coroutineScope.launch {
+                        mutationCoordinator.submitCurrentDialog()
+                    }
+                },
+                onDismiss = {
+                    mutationCoordinator.dismissDialog()
+                },
+            )
+        }
         ExplorerDialogState.None -> Unit
     }
 }

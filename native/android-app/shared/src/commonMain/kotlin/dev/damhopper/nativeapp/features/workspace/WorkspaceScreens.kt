@@ -1,8 +1,9 @@
 package dev.damhopper.nativeapp.features.workspace
 
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
@@ -55,6 +56,9 @@ fun ProjectTargetPickerModal(
     onSelectTarget: (project: String, worktreePath: String?) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    onSelectFilesystemTarget: ((FilesystemTargetRef) -> Unit)? = null,
+    isWholeWorkspaceSelected: Boolean = false,
+    profileId: String? = null,
 ) {
     var activeProj by remember { mutableStateOf(currentProject) }
 
@@ -83,6 +87,34 @@ fun ProjectTargetPickerModal(
                 )
                 TextButton(onClick = onDismiss) {
                     Text(text = "Close", color = DamHopperColors.Accent)
+                }
+            }
+
+
+            // Whole Workspace Target Chip
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (isWholeWorkspaceSelected) DamHopperColors.Accent else DamHopperColors.SurfaceVariant)
+                        .clickable {
+                            onSelectFilesystemTarget?.invoke(FilesystemTargetRef.Workspace(profileId = profileId))
+                            onDismiss()
+                        }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "Whole Workspace",
+                        color = if (isWholeWorkspaceSelected) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
             }
 
@@ -155,6 +187,7 @@ fun ProjectTargetPickerModal(
                             )
                             .clickable {
                                 onSelectTarget(activeProj, null)
+                                onSelectFilesystemTarget?.invoke(FilesystemTargetRef.Project(profileId = profileId, project = activeProj))
                                 onDismiss()
                             }
                             .padding(10.dp)
@@ -205,6 +238,7 @@ fun ProjectTargetPickerModal(
                             )
                             .clickable(enabled = isClickable) {
                                 onSelectTarget(activeProj, wt.path)
+                                onSelectFilesystemTarget?.invoke(FilesystemTargetRef.Project(profileId = profileId, project = activeProj, worktreePath = wt.path))
                                 onDismiss()
                             }
                             .padding(10.dp)

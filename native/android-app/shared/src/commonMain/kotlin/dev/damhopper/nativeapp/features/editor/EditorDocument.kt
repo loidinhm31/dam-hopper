@@ -174,6 +174,7 @@ interface EditorDocument {
      * Releases retained native Content and listeners.
      */
     fun close()
+    val isClosed: Boolean get() = false
 
     val activeAliasLeases: StateFlow<Set<AliasLeaseToken>> get() = MutableStateFlow(emptySet())
     val activeViewLeases: StateFlow<Set<ViewLeaseToken>> get() = MutableStateFlow(emptySet())

@@ -32,7 +32,11 @@ data class NotificationRecord(
 data class NotificationFeedState(
     val records: List<NotificationRecord> = emptyList(),
     val transients: List<String> = emptyList(),
-)
+    val isVisible: Boolean = false,
+    val activatingKey: String? = null,
+) {
+    val visible: Boolean get() = isVisible
+}
 
 /**
  * Owns the process-memory notification feed and every user-visible side effect of an accepted live
@@ -79,6 +83,8 @@ class NotificationCoordinator(
     private val osPosted = LinkedHashMap<String, ConnectionRef>()
     private val retiredGeneration = HashMap<ProfileId, Long>()
     private var audioOwner: ConnectionRef? = null
+    private var activationToken: Long = 0L
+    private var isActivating: Boolean = false
 
     /**
      * Admits one reducer-accepted event. [readinessOwner] must be the exact runtime captured by the caller
@@ -115,6 +121,7 @@ class NotificationCoordinator(
                 accountId = readinessOwner.accountId,
                 agentSessionId = row.agentSessionId,
                 agentKind = agent.wireName(),
+                socketInstanceId = readinessOwner.socket.socketId,
             )
         } catch (_: IllegalArgumentException) {
             return
@@ -155,6 +162,59 @@ class NotificationCoordinator(
     fun dismissTransient(key: String) = updateFeed { state ->
         state.copy(transients = state.transients.filterNot { it == key })
     }
+    fun setFeedVisible(visible: Boolean) = updateFeed { it.copy(isVisible = visible) }
+
+    fun toggleFeedVisible() = updateFeed { it.copy(isVisible = !it.isVisible) }
+
+    fun openFeed() = setFeedVisible(true)
+
+    fun closeFeed() = setFeedVisible(false)
+
+    fun setActivatingKey(key: String?) = updateFeed { it.copy(activatingKey = key) }
+
+    /**
+     * Activates a notification record by [key] through the supplied [route] callback.
+     * Marks the record read immediately (read-mark is independent of routing outcome).
+     * Single-flight admission: concurrent activation while another is active is refused.
+     * Missing or already evicted records refuse cleanly with a descriptive message.
+     * Lock is NEVER held across the suspending [route] callback.
+     * Token-qualified cleanup ensures an older route completion never clears a newer activation.
+     * Transports full exact [NotificationTarget] to [route], never raw-ID replacement.
+     */
+    suspend fun activate(
+        key: String,
+        route: suspend (NotificationTarget) -> String?,
+    ): String? {
+        val (record, token) = synchronized(lock) {
+            val record = _feed.value.records.firstOrNull { it.key == key }
+                ?: return "That notification is no longer in history."
+            if (isActivating || _feed.value.activatingKey != null) {
+                return "Another notification activation is currently in progress."
+            }
+            isActivating = true
+            val nextToken = ++activationToken
+            _feed.value = _feed.value.copy(
+                records = _feed.value.records.map { if (it.key == key && !it.read) it.copy(read = true) else it },
+                activatingKey = key,
+            )
+            record to nextToken
+        }
+
+        return try {
+            route(record.target)
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            "Failed to activate notification: ${t.message ?: "unknown error"}"
+        } finally {
+            synchronized(lock) {
+                if (activationToken == token) {
+                    isActivating = false
+                    _feed.value = _feed.value.copy(activatingKey = null)
+                }
+            }
+        }
+    }
 
     /**
      * Clears the in-app history and transients and cancels this app's posted attention entries. Does not
@@ -162,7 +222,11 @@ class NotificationCoordinator(
      */
     fun clear() {
         synchronized(lock) {
-            _feed.value = NotificationFeedState()
+            _feed.value = _feed.value.copy(
+                records = emptyList(),
+                transients = emptyList(),
+                activatingKey = null,
+            )
             cancelPostedLocked(osPosted.keys.toList())
         }
     }
@@ -231,7 +295,7 @@ class NotificationCoordinator(
             } else {
                 _feed.value.transients.filter { it in keptKeys }
             }
-            _feed.value = NotificationFeedState(kept, transients)
+            _feed.value = _feed.value.copy(records = kept, transients = transients)
             if (evicted.isNotEmpty()) cancelPostedLocked(evicted)
 
             // Tracking of OS entries is bounded without ever evicting an entry that might still be in the
@@ -288,7 +352,12 @@ class NotificationCoordinator(
                 val s = _feed.value
                 val remaining = s.records.filterNot { it.target.profileId == owner.profileId && it.target.generation == owner.generation }
                 val remainingKeys = remaining.mapTo(HashSet()) { it.key }
-                _feed.value = NotificationFeedState(remaining, s.transients.filter { it in remainingKeys })
+                val remainingActivating = s.activatingKey?.takeIf { it in remainingKeys }
+                _feed.value = s.copy(
+                    records = remaining,
+                    transients = s.transients.filter { it in remainingKeys },
+                    activatingKey = remainingActivating,
+                )
             } catch (t: Throwable) {
                 failures += t
             }

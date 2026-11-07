@@ -53,6 +53,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.sp
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import dev.damhopper.nativeapp.features.editor.CloseDecision
 import dev.damhopper.nativeapp.features.editor.EditorPanelScreen
 import dev.damhopper.nativeapp.features.editor.LocalNativeEditorSurfaceHost
@@ -129,6 +130,8 @@ fun ProjectWorkspaceScreen(
     val inputSuspended by workspaceState.isInputSuspended.collectAsState()
     val tabs by workspaceState.editorTabsState.tabs.collectAsState()
     val hasDirtyDocs = tabs.any { it.isDirty }
+    val browsingTarget by workspaceState.browsingTarget.collectAsState()
+    val isProjectSelected = browsingTarget is FilesystemTargetRef.Project
 
     // One reactive preference truth (the retained repository); hidden files and the language family follow it live.
     val prefAccess = preferenceAccess ?: workspaceState.preferenceAccess
@@ -275,7 +278,9 @@ fun ProjectWorkspaceScreen(
                 PanelTabButton(
                     label = "Git",
                     isSelected = activePanel == WorkspacePanel.GIT,
-                    onClick = { if (!routeLocked) workspaceState.selectPanel(WorkspacePanel.GIT) }
+                    enabled = isProjectSelected,
+                    onClick = { if (!routeLocked && isProjectSelected) workspaceState.selectPanel(WorkspacePanel.GIT) },
+                    contentDescription = if (isProjectSelected) null else "Git is available only for registered projects",
                 )
             }
         }
@@ -316,7 +321,9 @@ fun ProjectWorkspaceScreen(
                         onOpenFile = { target, path ->
                             coroutineScope.launch {
                                 workspaceState.editorTabsState.openTab(target, path)
-                                workspaceState.selectPanel(WorkspacePanel.EDITOR)
+                                if (workspaceState.editorTabsState.tabs.value.any { it.path == path }) {
+                                    workspaceState.selectPanel(WorkspacePanel.EDITOR)
+                                }
                             }
                         },
                         modifier = Modifier.fillMaxSize(),
@@ -424,23 +431,36 @@ fun ProjectWorkspaceScreen(
                 }
 
                 WorkspacePanel.GIT -> {
-                    val gitRuntime = workspaceState.gitRuntime
-                    if (gitRuntime != null) {
-                        GitPanelScreen(
-                            runtime = gitRuntime,
-                            state = workspaceState.gitState,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    } else {
+                    if (!isProjectSelected) {
                         Box(
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier.fillMaxSize().padding(16.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "Git runtime unavailable",
+                                text = "Git is available only for registered projects. Select or register a project to view Git status, changes, and history.",
                                 style = DamHopperTypography.bodyMedium,
                                 color = DamHopperColors.TextSecondary
                             )
+                        }
+                    } else {
+                        val gitRuntime = workspaceState.gitRuntime
+                        if (gitRuntime != null) {
+                            GitPanelScreen(
+                                runtime = gitRuntime,
+                                state = workspaceState.gitState,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Git runtime unavailable",
+                                    style = DamHopperTypography.bodyMedium,
+                                    color = DamHopperColors.TextSecondary
+                                )
+                            }
                         }
                     }
                 }
@@ -604,18 +624,33 @@ private fun PanelTabButton(
     label: String,
     isSelected: Boolean,
     badgeCount: Int? = null,
+    enabled: Boolean = true,
     onClick: () -> Unit,
+    contentDescription: String? = null,
     modifier: Modifier = Modifier,
 ) {
-    val bgColor = if (isSelected) DamHopperColors.PrimaryVariant else DamHopperColors.SurfaceVariant
-    val textColor = if (isSelected) DamHopperColors.Primary else DamHopperColors.TextSecondary
+    val bgColor = when {
+        !enabled -> DamHopperColors.SurfaceVariant.copy(alpha = 0.5f)
+        isSelected -> DamHopperColors.PrimaryVariant
+        else -> DamHopperColors.SurfaceVariant
+    }
+    val textColor = when {
+        !enabled -> DamHopperColors.TextSecondary.copy(alpha = 0.4f)
+        isSelected -> DamHopperColors.Primary
+        else -> DamHopperColors.TextSecondary
+    }
 
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
             .background(bgColor)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .semantics {
+                if (contentDescription != null) {
+                    this.contentDescription = contentDescription
+                }
+            },
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -631,7 +666,7 @@ private fun PanelTabButton(
             if (badgeCount != null && badgeCount > 0) {
                 Text(
                     text = "($badgeCount)",
-                    color = DamHopperColors.TextSecondary,
+                    color = textColor,
                     fontSize = 11.sp,
                 )
             }

@@ -55,8 +55,10 @@ fun SettingsHostView(
     services: SettingsTargetServices?,
     targetLabel: String?,
     sourceLabel: String,
-    /** Why administration is read-only even though services exist (e.g. no-auth server); null when editable. */
+    /** Why administration is read-only even though services exist; null when editable. */
     adminBlockedReason: String? = null,
+    /** Warning when the server runs in no-auth/dev-mode; administration is supported with capabilities noted. */
+    adminWarning: String? = null,
     /** Why idle-suspend mutations cannot be submitted (e.g. no-auth/dev-mode server); null when allowed. */
     idleBlockedReason: String? = null,
     initialSection: HostSettingsSection = HostSettingsSection.IDLE,
@@ -69,7 +71,16 @@ fun SettingsHostView(
 
     Column(modifier = modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Host administration", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-        Text("Target server: $label", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            Column {
+                Text("Admin Target B: $label", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                Text("Preference Source A: $sourceLabel", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
             HostSettingsSection.entries.forEach { entry ->
                 FilterChip(
@@ -93,6 +104,9 @@ fun SettingsHostView(
         }
         adminBlockedReason?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+        }
+        adminWarning?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
         }
 
         // Lazy lists (idle, usage data) must not sit inside a vertical scroll container.

@@ -114,8 +114,10 @@ fun GlobalSettingsView(
 
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Global settings", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-        Text("Server: $targetLabel. Paths are server paths.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-
+        Text("Admin Target B: $targetLabel. Paths are remote server paths.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (mutationAuthority == null) {
+            Text("Administration on $targetLabel is read-only. Settings cannot be modified.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Workspace root", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)

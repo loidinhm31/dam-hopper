@@ -1,8 +1,11 @@
 package dev.damhopper.nativeapp.features.files
 
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.core.transport.FsEventDto
+import dev.damhopper.nativeapp.core.transport.ProtocolJson
 import dev.damhopper.nativeapp.core.transport.WsState
+import dev.damhopper.nativeapp.features.workspace.DocumentId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -78,6 +81,21 @@ enum class ExplorerConnectionStatus {
 }
 
 /**
+ * Authoritative target browsing selection status.
+ */
+enum class TargetBrowseStatus {
+    CONFIGURED,
+    UNCONFIGURED,
+    UNAVAILABLE,
+    UNSUPPORTED,
+}
+
+data class TargetBrowseResult(
+    val status: TargetBrowseStatus,
+    val target: FilesystemTargetRef,
+    val error: String? = null,
+)
+/**
  * Observable controller managing lazy directory tree expansion, selection, scroll retention,
  * demand-shared WebSocket watch subscriptions, watermark-fenced listings, and overflow recovery.
  */
@@ -86,7 +104,23 @@ class FileTreeState(
     repository: FileRepository,
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
     watchCoordinator: FileWatchCoordinator? = null,
+    initialFsTarget: FilesystemTargetRef? = null,
 ) {
+    constructor(
+        fsTarget: FilesystemTargetRef,
+        repository: FileRepository,
+        coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
+        watchCoordinator: FileWatchCoordinator? = null,
+    ) : this(
+        target = when (fsTarget) {
+            is FilesystemTargetRef.Project -> fsTarget.toProjectTargetRef()
+            is FilesystemTargetRef.Workspace -> ProjectTargetRef(profileId = fsTarget.profileId, project = "workspace")
+        },
+        repository = repository,
+        coroutineScope = coroutineScope,
+        watchCoordinator = watchCoordinator,
+        initialFsTarget = fsTarget,
+    )
     var repository: FileRepository = repository
         private set
 
@@ -96,6 +130,102 @@ class FileTreeState(
         coroutineScope = coroutineScope,
     )
         private set
+
+    private val _activeBrowsingTarget = MutableStateFlow<FilesystemTargetRef>(
+        initialFsTarget ?: FilesystemTargetRef.fromProjectTargetRef(target)
+    )
+    val activeBrowsingTarget: StateFlow<FilesystemTargetRef> = _activeBrowsingTarget.asStateFlow()
+
+    private val _targetBrowseStatus = MutableStateFlow(TargetBrowseStatus.CONFIGURED)
+    val targetBrowseStatus: StateFlow<TargetBrowseStatus> = _targetBrowseStatus.asStateFlow()
+
+    private val _targetBrowseError = MutableStateFlow<String?>(null)
+    val targetBrowseError: StateFlow<String?> = _targetBrowseError.asStateFlow()
+
+    private val _registeredProjects = MutableStateFlow<List<String>>(
+        if (target.project.isNotBlank()) listOf(target.project) else emptyList()
+    )
+    val registeredProjects: StateFlow<List<String>> = _registeredProjects.asStateFlow()
+
+    fun updateRegisteredProjects(projects: List<String>) {
+        _registeredProjects.value = projects
+    }
+    private var lastProjectTarget: FilesystemTargetRef.Project = FilesystemTargetRef.Project(profileId = target.profileId, project = target.project, worktreePath = target.worktreePath)
+    val defaultProjectTarget: FilesystemTargetRef.Project get() = lastProjectTarget
+
+
+    fun selectBrowsingTarget(newTarget: FilesystemTargetRef): TargetBrowseResult {
+        when (newTarget) {
+            is FilesystemTargetRef.Workspace -> {
+                if (newTarget.profileId != null && repository.owner.profileId != null &&
+                    newTarget.profileId != repository.owner.profileId) {
+                    val err = "Target unavailable: workspace profile (${newTarget.profileId}) does not match active authority (${repository.owner.profileId})"
+                    _targetBrowseStatus.value = TargetBrowseStatus.UNAVAILABLE
+                    _targetBrowseError.value = err
+                    return TargetBrowseResult(TargetBrowseStatus.UNAVAILABLE, newTarget, err)
+                }
+                _activeBrowsingTarget.value = newTarget
+                _targetBrowseStatus.value = TargetBrowseStatus.CONFIGURED
+                _targetBrowseError.value = null
+                resetRootForTarget(newTarget)
+                return TargetBrowseResult(TargetBrowseStatus.CONFIGURED, newTarget)
+            }
+            is FilesystemTargetRef.Project -> {
+                if (newTarget.project.isBlank()) {
+                    val err = "Project target is unsupported: project name cannot be blank"
+                    _targetBrowseStatus.value = TargetBrowseStatus.UNSUPPORTED
+                    _targetBrowseError.value = err
+                    return TargetBrowseResult(TargetBrowseStatus.UNSUPPORTED, newTarget, err)
+                }
+                val known = _registeredProjects.value
+                if (known.isNotEmpty() && !known.contains(newTarget.project)) {
+                    val err = "Project '${newTarget.project}' is not configured in this workspace"
+                    _targetBrowseStatus.value = TargetBrowseStatus.UNCONFIGURED
+                    _targetBrowseError.value = err
+                    return TargetBrowseResult(TargetBrowseStatus.UNCONFIGURED, newTarget, err)
+                }
+                val projRef = newTarget.toProjectTargetRef()
+                if (!repository.owner.matchesTarget(projRef)) {
+                    val err = "Target unavailable: project target does not match active authority"
+                    _targetBrowseStatus.value = TargetBrowseStatus.UNAVAILABLE
+                    _targetBrowseError.value = err
+                    return TargetBrowseResult(TargetBrowseStatus.UNAVAILABLE, newTarget, err)
+                }
+                lastProjectTarget = newTarget
+                _activeBrowsingTarget.value = newTarget
+                _targetBrowseStatus.value = TargetBrowseStatus.CONFIGURED
+                _targetBrowseError.value = null
+                resetRootForTarget(newTarget)
+                return TargetBrowseResult(TargetBrowseStatus.CONFIGURED, newTarget)
+            }
+        }
+    }
+
+    private var browsingTargetGeneration: Long = 0L
+
+    private fun resetRootForTarget(newTarget: FilesystemTargetRef) {
+        ++browsingTargetGeneration
+        scanTicket++
+        scanJob?.cancel()
+        _languageScan.value = LanguageScanState()
+        if (newTarget is FilesystemTargetRef.Workspace && _languageFilter.value != ExplorerLanguageFilter.ALL) {
+            _languageFilter.value = ExplorerLanguageFilter.ALL
+        }
+        watchCoordinator.releaseAllExplorerDemands()
+        val (projRef, name) = when (newTarget) {
+            is FilesystemTargetRef.Workspace -> {
+                target to "Workspace Root"
+            }
+            is FilesystemTargetRef.Project -> {
+                val pRef = newTarget.toProjectTargetRef()
+                val label = if (!newTarget.worktreePath.isNullOrBlank()) "${newTarget.project} (${newTarget.worktreePath})" else newTarget.project
+                pRef to label
+            }
+        }
+        _root.value = FileTreeNode(projRef, "", name, isDirectory = true, isExpanded = true)
+        _selectedPath.value = null
+        loadDirectory("")
+    }
     @Volatile
     private var isDisposed: Boolean = false
 
@@ -240,28 +370,49 @@ class FileTreeState(
 
     private suspend fun initTreeAndSubscriptionInternal() {
         if (isDisposed) return
-        if (!repository.owner.matchesTarget(target)) {
-            _connectionStatus.value = ExplorerConnectionStatus.TARGET_UNAVAILABLE
-            _error.value = "Target does not match workspace owner"
-            return
+        val currentTarget = _activeBrowsingTarget.value
+        if (currentTarget is FilesystemTargetRef.Project) {
+            val pRef = currentTarget.toProjectTargetRef()
+            if (!repository.owner.matchesTarget(pRef)) {
+                _connectionStatus.value = ExplorerConnectionStatus.TARGET_UNAVAILABLE
+                _error.value = "Target does not match workspace owner"
+                return
+            }
         }
         _isLoading.value = true
         _error.value = null
         _refreshWarning.value = null
+        val capturedGen = browsingTargetGeneration
         try {
-            watchCoordinator.acquireExplorerDemand("")
-            when (val result = watchCoordinator.fetchDirectoryOrdered("")) {
-                is OrderedDirectoryListingResult.Published -> {
-                    _root.value = FileTreeHelpers.updateChildren(_root.value, "", result.entries, target)
-                    _error.value = null
-                    _isLoading.value = false
-                }
-                is OrderedDirectoryListingResult.Failed -> {
-                    _error.value = result.error.message ?: "Failed to load directory"
-                    _isLoading.value = false
-                }
-                is OrderedDirectoryListingResult.Superseded -> {
-                    // A newer request owns the loading/error state
+            if (currentTarget is FilesystemTargetRef.Workspace) {
+                val params = currentTarget.toQueryParams().toMutableList()
+                params.add("path" to ".")
+                val json = repository.apiClient.get("/api/fs/list", params.toMap())
+                val entries = ProtocolJson.decodeFromString(
+                    ListResponseDto.serializer(), json
+                ).entries
+                val projRef = target
+                if (capturedGen != browsingTargetGeneration || isDisposed) return
+                _root.value = FileTreeHelpers.updateChildren(_root.value, "", entries, projRef)
+                _error.value = null
+                _isLoading.value = false
+            } else {
+                val currentProjectRef = (currentTarget as? FilesystemTargetRef.Project)?.toProjectTargetRef() ?: target
+                watchCoordinator.acquireExplorerDemand("")
+                when (val result = watchCoordinator.fetchDirectoryOrdered("")) {
+                    is OrderedDirectoryListingResult.Published -> {
+                        if (capturedGen != browsingTargetGeneration || isDisposed) return
+                        _root.value = FileTreeHelpers.updateChildren(_root.value, "", result.entries, currentProjectRef)
+                        _error.value = null
+                        _isLoading.value = false
+                    }
+                    is OrderedDirectoryListingResult.Failed -> {
+                        _error.value = result.error.message ?: "Failed to load directory"
+                        _isLoading.value = false
+                    }
+                    is OrderedDirectoryListingResult.Superseded -> {
+                        // A newer request owns the loading/error state
+                    }
                 }
             }
         } catch (e: CancellationException) {
@@ -318,6 +469,7 @@ class FileTreeState(
         isPostMutationRefresh: Boolean = false,
     ): Boolean {
         if (isDisposed) return false
+        val capturedGen = browsingTargetGeneration
         val cleanPath = watchCoordinator.normalizeDirectoryPath(path)
         if (cleanPath.isEmpty()) {
             _isLoading.value = true
@@ -327,34 +479,56 @@ class FileTreeState(
             }
         }
         return try {
-            watchCoordinator.acquireExplorerDemand(cleanPath)
-            when (val result = watchCoordinator.fetchDirectoryOrdered(cleanPath)) {
-                is OrderedDirectoryListingResult.Published -> {
-                    _root.value = FileTreeHelpers.updateChildren(_root.value, cleanPath, result.entries, target)
-                    if (cleanPath.isEmpty()) {
-                        _isLoading.value = false
-                        _error.value = null
-                    }
-                    _refreshWarning.value = null
-                    true
+            val currentTarget = _activeBrowsingTarget.value
+            if (currentTarget is FilesystemTargetRef.Workspace) {
+                val cleanRelPath = if (cleanPath.isBlank() || cleanPath == ".") "." else DocumentId.normalizeRelativePath(cleanPath)
+                val params = currentTarget.toQueryParams().toMutableList()
+                params.add("path" to cleanRelPath)
+                val json = repository.apiClient.get("/api/fs/list", params.toMap())
+                val entries = ProtocolJson.decodeFromString(
+                    ListResponseDto.serializer(), json
+                ).entries
+                val projRef = target
+                if (capturedGen != browsingTargetGeneration || isDisposed) return false
+                _root.value = FileTreeHelpers.updateChildren(_root.value, cleanPath, entries, projRef)
+                if (cleanPath.isEmpty()) {
+                    _isLoading.value = false
+                    _error.value = null
                 }
-                is OrderedDirectoryListingResult.Failed -> {
-                    val msg = result.error.message ?: "Failed to read folder"
-                    if (isPostMutationRefresh) {
-                        _refreshWarning.value = "Operation succeeded, but directory refresh failed: $msg"
-                        if (cleanPath.isEmpty()) _isLoading.value = false
-                        else _root.value = FileTreeHelpers.updateNode(_root.value, cleanPath) { it.copy(isLoading = false) }
-                    } else if (cleanPath.isEmpty()) {
-                        _isLoading.value = false
-                        _error.value = msg
-                    } else {
-                        _root.value = FileTreeHelpers.updateNode(_root.value, cleanPath) {
-                            it.copy(isLoading = false, error = msg)
+                _refreshWarning.value = null
+                true
+            } else {
+                val currentProjectRef = (currentTarget as? FilesystemTargetRef.Project)?.toProjectTargetRef() ?: target
+                watchCoordinator.acquireExplorerDemand(cleanPath)
+                when (val result = watchCoordinator.fetchDirectoryOrdered(cleanPath)) {
+                    is OrderedDirectoryListingResult.Published -> {
+                        if (capturedGen != browsingTargetGeneration || isDisposed) return false
+                        _root.value = FileTreeHelpers.updateChildren(_root.value, cleanPath, result.entries, currentProjectRef)
+                        if (cleanPath.isEmpty()) {
+                            _isLoading.value = false
+                            _error.value = null
                         }
+                        _refreshWarning.value = null
+                        true
                     }
-                    false
+                    is OrderedDirectoryListingResult.Failed -> {
+                        val msg = result.error.message ?: "Failed to read folder"
+                        if (isPostMutationRefresh) {
+                            _refreshWarning.value = "Operation succeeded, but directory refresh failed: $msg"
+                            if (cleanPath.isEmpty()) _isLoading.value = false
+                            else _root.value = FileTreeHelpers.updateNode(_root.value, cleanPath) { it.copy(isLoading = false) }
+                        } else if (cleanPath.isEmpty()) {
+                            _isLoading.value = false
+                            _error.value = msg
+                        } else {
+                            _root.value = FileTreeHelpers.updateNode(_root.value, cleanPath) {
+                                it.copy(isLoading = false, error = msg)
+                            }
+                        }
+                        false
+                    }
+                    is OrderedDirectoryListingResult.Superseded -> true
                 }
-                is OrderedDirectoryListingResult.Superseded -> true
             }
         } catch (e: CancellationException) {
             throw e

@@ -4,9 +4,12 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.unit.dp
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
-import dev.damhopper.nativeapp.core.transport.ApiClient
+import dev.damhopper.nativeapp.features.files.ExplorerDialogState
+import dev.damhopper.nativeapp.features.workspace.WorkspacePanel
 import dev.damhopper.nativeapp.core.transport.WsConnection
+import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.features.editor.EditorRepository
 import dev.damhopper.nativeapp.features.files.FileOperationArbiter
 import dev.damhopper.nativeapp.features.files.FileRepository
@@ -308,5 +311,50 @@ class FileScreensPhase08Test {
         state.setInputSuspended(false)
         assertTrue(state.isInteractiveEditAllowed(), "Lifting the cover restores exactly the previous eligibility")
         assertTrue(state.isEditorSidebarOpen.value)
+    }
+
+    @Test
+    fun testWholeWorkspaceVsProjectTargetBrowsingAndGitGating() = withWorkspaceState { state ->
+        // Initial state is project target
+        assertTrue(state.isProjectSelected)
+        state.selectPanel(WorkspacePanel.GIT)
+        assertEquals(WorkspacePanel.GIT, state.activePanel.value)
+
+        // Switch to whole workspace browsing
+        state.selectBrowsingTarget(FilesystemTargetRef.Workspace(profileId = "prof-test"))
+        assertFalse(state.isProjectSelected)
+
+        // Switch to FILES
+        state.selectPanel(WorkspacePanel.FILES)
+        assertEquals(WorkspacePanel.FILES, state.activePanel.value)
+
+        // Attempting to select GIT when whole workspace browsing is active must be blocked
+        state.selectPanel(WorkspacePanel.GIT)
+        assertEquals(WorkspacePanel.FILES, state.activePanel.value, "Git panel must not be entered during whole-workspace browsing")
+    }
+
+    @Test
+    fun testNestedRegistrationAndUnmarkPreservesFiles() = withWorkspaceState { state ->
+        val coordinator = state.fileMutationCoordinator
+
+        // Open mark project dialog on nested folder
+        coordinator.openMarkProjectDialog("packages/ui", "ui-pkg")
+        val markDialog = coordinator.dialogState.value
+        assertTrue(markDialog is ExplorerDialogState.MarkProject)
+        assertEquals("packages/ui", (markDialog as ExplorerDialogState.MarkProject).folderPath)
+        assertEquals("ui-pkg", markDialog.draftName)
+
+        coordinator.dismissDialog()
+        assertTrue(coordinator.dialogState.value is ExplorerDialogState.None)
+
+        // Open unmark project dialog on nested project
+        coordinator.openUnmarkProjectDialog("ui-pkg", "packages/ui")
+        val unmarkDialog = coordinator.dialogState.value
+        assertTrue(unmarkDialog is ExplorerDialogState.UnmarkProject)
+        assertEquals("ui-pkg", (unmarkDialog as ExplorerDialogState.UnmarkProject).projectName)
+        assertEquals("packages/ui", unmarkDialog.folderPath)
+
+        coordinator.dismissDialog()
+        assertTrue(coordinator.dialogState.value is ExplorerDialogState.None)
     }
 }

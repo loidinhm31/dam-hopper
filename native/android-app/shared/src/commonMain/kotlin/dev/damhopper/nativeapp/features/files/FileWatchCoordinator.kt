@@ -214,6 +214,17 @@ class FileWatchCoordinator(
             releaseDemand(cleanDir, consumerId, WatchConsumerKind.EXPLORER_EXPANDED_DIRECTORY)
         }
     }
+    fun releaseAllExplorerDemands(consumerId: String = DEFAULT_EXPLORER_CONSUMER) {
+        val dirs = synchronized(stateLock) {
+            demands.entries
+                .filter { (_, d) -> d.consumers.any { it.kind == WatchConsumerKind.EXPLORER_EXPANDED_DIRECTORY && it.consumerId == consumerId } }
+                .map { it.key }
+        }
+        for (dir in dirs) {
+            releaseExplorerDemandImmediate(dir, consumerId)
+        }
+    }
+
 
     suspend fun acquireDocumentParentDemand(
         documentPath: String,
