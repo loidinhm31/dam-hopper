@@ -38,13 +38,17 @@ export function buildTraditionalTerminalProjectGroups<T extends TabEntry>(
       (parseTerminalKey(tab.sessionId)?.id ? mountedBySessionId.get(parseTerminalKey(tab.sessionId)!.id) : undefined);
     if (!mounted) continue;
 
-    const projectName = mounted.project || null;
+    const projectName = mounted.project?.trim() ? mounted.project.trim() : null;
     const profileId = mounted.terminalRef?.profileId ?? mounted.profileId ?? parseTerminalKey(tab.sessionId)?.profileId;
-    const projectRef = profileId ? {profileId, project: projectName ?? ""} : undefined;
+    const projectRef = profileId && projectName ? { profileId, project: projectName } : undefined;
     const profileName = profileId ? (getProfiles().find((p) => p.id === profileId)?.name ?? (profileId !== "default" ? profileId : undefined)) : undefined;
-    const id = projectRef ? projectKey(projectRef) : projectName
-      ? `project:${projectName}`
-      : FREE_TRADITIONAL_TERMINAL_GROUP_ID;
+    const id = projectRef
+      ? projectKey(projectRef)
+      : projectName
+        ? `project:${projectName}`
+        : profileId
+          ? `${profileId}:${FREE_TRADITIONAL_TERMINAL_GROUP_ID}`
+          : FREE_TRADITIONAL_TERMINAL_GROUP_ID;
     let group = groupsById.get(id);
     if (!group) {
       group = {

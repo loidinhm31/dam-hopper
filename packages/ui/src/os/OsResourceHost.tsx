@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -79,6 +80,8 @@ function OsBrowserIframe({
   url: string;
 }) {
   const isCognitoActive = useCognitoModeStore((state) => state.active);
+  const targetWindow = useWindowStore((state) => state.session.windows[windowId]);
+  const activeDesktopId = useWindowStore((state) => state.session.activeDesktopId);
   const [slot, setSlot] = useState<BrowserSlotRegistration | null>(() =>
     browserSlots.get(windowId) ?? null,
   );
@@ -106,7 +109,7 @@ function OsBrowserIframe({
     };
   }, [windowId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!slot || !slot.isVisible || !slot.element) {
       setGeometry((prev) =>
         prev.visible
@@ -120,12 +123,23 @@ function OsBrowserIframe({
     const updateGeometry = () => {
       const rect = el.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
-        setGeometry({
-          top: rect.top,
-          left: rect.left,
-          width: rect.width,
-          height: rect.height,
-          visible: true,
+        setGeometry((prev) => {
+          if (
+            prev.top === rect.top &&
+            prev.left === rect.left &&
+            prev.width === rect.width &&
+            prev.height === rect.height &&
+            prev.visible === true
+          ) {
+            return prev;
+          }
+          return {
+            top: rect.top,
+            left: rect.left,
+            width: rect.width,
+            height: rect.height,
+            visible: true,
+          };
         });
       }
     };
@@ -135,14 +149,26 @@ function OsBrowserIframe({
     observer.observe(el);
     window.addEventListener("resize", updateGeometry);
     window.addEventListener("scroll", updateGeometry, true);
+    window.addEventListener("pointermove", updateGeometry, { passive: true });
 
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", updateGeometry);
       window.removeEventListener("scroll", updateGeometry, true);
+      window.removeEventListener("pointermove", updateGeometry);
     };
-  }, [slot]);
-
+  }, [
+    slot,
+    targetWindow?.floatBounds?.x,
+    targetWindow?.floatBounds?.y,
+    targetWindow?.floatBounds?.width,
+    targetWindow?.floatBounds?.height,
+    targetWindow?.mode,
+    targetWindow?.maximized,
+    targetWindow?.desktopId,
+    targetWindow?.minimized,
+    activeDesktopId,
+  ]);
   const isEffectiveVisible = geometry.visible && !isCognitoActive;
 
   return (

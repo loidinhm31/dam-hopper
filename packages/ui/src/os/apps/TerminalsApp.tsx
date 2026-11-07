@@ -94,12 +94,10 @@ export function TerminalsApp({ window }: TerminalsAppProps) {
     const rawCwd = (window.appState?.cwd as string | undefined) ?? undefined;
     const wireTarget =
       window.ctx.target
-        ? isWorkspaceTarget && !rawCwd
-          ? undefined
-          : toServerFsTarget(window.ctx.target)
+        ? toServerFsTarget(window.ctx.target)
         : undefined;
     const projectParam = isWorkspaceTarget ? undefined : window.ctx.projectId;
-    const cwdParam = rawCwd;
+    const cwdParam = isWorkspaceTarget ? (rawCwd || ".") : rawCwd;
 
     try {
       const outcome = await executeTerminalLaunch({

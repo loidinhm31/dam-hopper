@@ -268,9 +268,15 @@ async fn resolve_terminal_cwd(
     requested_cwd: Option<String>,
 ) -> Result<String, ApiError> {
     let Some(target) = target else {
-        return requested_cwd
-            .map(Ok)
-            .unwrap_or_else(default_untargeted_terminal_cwd);
+        if let Some(cwd) = requested_cwd {
+            return Ok(cwd);
+        }
+        if let Ok(sandbox) = state.workspace_sandbox() {
+            if sandbox.root().is_dir() {
+                return Ok(sandbox.root().to_string_lossy().into_owned());
+            }
+        }
+        return default_untargeted_terminal_cwd();
     };
 
     let sandbox = state

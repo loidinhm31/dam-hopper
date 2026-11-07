@@ -1,4 +1,7 @@
 import { create } from "zustand";
+import { pbkdf2Async } from "@noble/hashes/pbkdf2";
+import { sha256 } from "@noble/hashes/sha256";
+import { bytesToHex } from "@noble/hashes/utils";
 
 export interface LockVerifierRecord {
   version: 1;
@@ -14,40 +17,32 @@ export const LOCK_COOLDOWN_STORAGE_KEY = "dam-hopper:os-lock-cooldown";
 
 export const MAX_LOCK_ATTEMPTS = 5;
 export const LOCK_COOLDOWN_MS = 15_000;
-
 export async function deriveLockHash(pin: string, saltHex: string): Promise<string> {
   const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(pin),
-    { name: "PBKDF2" },
-    false,
-    ["deriveBits"],
-  );
+  const saltMatches = saltHex.match(/.{1,2}/g);
   const salt = new Uint8Array(
-    saltHex.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) ?? [],
+    saltMatches ? saltMatches.map((byte) => parseInt(byte, 16)) : [],
   );
-  const derived = await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      salt,
-      iterations: 100_000,
-      hash: "SHA-256",
-    },
-    keyMaterial,
-    256,
-  );
-  return Array.from(new Uint8Array(derived))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+
+  // Use pbkdf2Async from @noble/hashes (pure JS, Secure Context independent)
+  // Matches standard WebCrypto PBKDF2 with SHA-256, 100,000 iterations, 32 bytes (256 bits).
+  const derived = await pbkdf2Async(sha256, enc.encode(pin), salt, {
+    c: 100_000,
+    dkLen: 32,
+  });
+  return bytesToHex(derived);
 }
 
 export function generateLockSalt(): string {
+  const cryptoObj = typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
+  if (!cryptoObj || typeof cryptoObj.getRandomValues !== "function") {
+    throw new Error(
+      "Secure random number generator (crypto.getRandomValues) is unavailable.",
+    );
+  }
   const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  cryptoObj.getRandomValues(bytes);
+  return bytesToHex(bytes);
 }
 
 export interface LockScreenState {

@@ -465,7 +465,7 @@ describe("TraditionalTerminalProjectsNavigator", () => {
     expect(tabs).toHaveLength(2);
     expect(tabs[0]!.textContent).toContain("demo");
     expect(tabs[0]!.textContent).toContain("3");
-    expect(tabs[0]!.querySelector('[aria-label="Server profile: Development"]')).not.toBeNull();
+    expect(projects.querySelector('[aria-label="Server profile: Development"]')).not.toBeNull();
     expect(tabs[1]!.textContent).toContain("Free terminals");
     expect(tabs[1]!.textContent).toContain("1");
     const agents = container.querySelector('ul[aria-label="Observed agents in open terminals"]')!;
@@ -504,6 +504,51 @@ describe("TraditionalTerminalProjectsNavigator", () => {
       expect(selected).toHaveBeenLastCalledWith(groups[targetIndex]!.id);
     }
     expect(selected).toHaveBeenCalledTimes(6);
+  });
+
+  it("supports expanding and collapsing profile sections in the sidebar", () => {
+    const profileAGroups: TraditionalTerminalProjectGroup[] = [
+      { id: "project:pA1", projectName: "pA1", label: "pA1", profileId: "profile-a", profileName: "Profile A", terminalTabs: [{ sessionId: "a1", label: "A1" }], mountedSessions: [] },
+      { id: "project:pA2", projectName: "pA2", label: "pA2", profileId: "profile-a", profileName: "Profile A", terminalTabs: [{ sessionId: "a2", label: "A2" }], mountedSessions: [] },
+    ];
+    const profileBGroups: TraditionalTerminalProjectGroup[] = [
+      { id: "project:pB1", projectName: "pB1", label: "pB1", profileId: "profile-b", profileName: "Profile B", terminalTabs: [{ sessionId: "b1", label: "B1" }], mountedSessions: [] },
+    ];
+
+    renderNavigator({ groups: [...profileAGroups, ...profileBGroups], activeGroupId: "project:pA1" });
+
+    // Both profile headers exist and are expanded by default
+    const profileAHeader = container.querySelector('[aria-label="Server profile: Profile A"]');
+    const profileBHeader = container.querySelector('[aria-label="Server profile: Profile B"]');
+    expect(profileAHeader).not.toBeNull();
+    expect(profileBHeader).not.toBeNull();
+    expect(profileAHeader!.getAttribute("aria-expanded")).toBe("true");
+    expect(profileBHeader!.getAttribute("aria-expanded")).toBe("true");
+
+    // All 3 project tabs are visible initially
+    let tabs = container.querySelectorAll('[role="tab"]');
+    expect(tabs).toHaveLength(3);
+
+    // Click to collapse Profile A
+    act(() => {
+      profileAHeader!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(profileAHeader!.getAttribute("aria-expanded")).toBe("false");
+    expect(profileBHeader!.getAttribute("aria-expanded")).toBe("true");
+
+    // Now only Profile B's tab is visible
+    tabs = container.querySelectorAll('[role="tab"]');
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0]!.textContent).toContain("pB1");
+
+    // Click again to expand Profile A
+    act(() => {
+      profileAHeader!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    expect(profileAHeader!.getAttribute("aria-expanded")).toBe("true");
+    tabs = container.querySelectorAll('[role="tab"]');
+    expect(tabs).toHaveLength(3);
   });
 
   it("selects the exact agent session without project-tab semantics or project selection", () => {
