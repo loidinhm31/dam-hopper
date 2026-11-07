@@ -20,6 +20,7 @@ import dev.damhopper.nativeapp.features.git.GitWorkspaceState
 import dev.damhopper.nativeapp.features.git.GitWorkspaceRuntime
 import dev.damhopper.nativeapp.features.git.GitRefreshReason
 import dev.damhopper.nativeapp.features.settings.SettingsOwner
+import dev.damhopper.nativeapp.features.settings.PreferencesStore
 import dev.damhopper.nativeapp.ui.screens.ObservableCommandHistory
 import dev.damhopper.nativeapp.ui.screens.PreferenceAccess
 import dev.damhopper.nativeapp.ui.screens.ProjectTerminalState
@@ -88,6 +89,7 @@ class ProjectWorkspaceState(
     val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Main.immediate),
     var lifecycleCoordinator: LifecycleCoordinator? = null,
 ) : LifecycleAware {
+    var preferencesStore: PreferencesStore? = null
 
     val gitState: GitWorkspaceState = GitWorkspaceState()
     var gitRuntime: GitWorkspaceRuntime? = null
@@ -267,7 +269,7 @@ class ProjectWorkspaceState(
         editorTabsState.rebindRepository(newEditorRepo)
         fileTreeState.rebindRepository(newFileRepo)
         fileMutationCoordinator.rebindRepository(newFileRepo)
-        terminalState?.rebindTransports(newConnection, dev.damhopper.nativeapp.features.terminal.TerminalRepository(newFileRepo.apiClient, newFileRepo.wsConnection))
+        terminalState?.rebindTransports(newConnection, dev.damhopper.nativeapp.features.terminal.TerminalRepository(newFileRepo.apiClient, newFileRepo.wsConnection, preferencesStore))
         if (gitRuntime?.connection != newConnection) {
             gitRuntime?.revoke()
             gitRuntime = null
@@ -489,6 +491,7 @@ class ProjectWorkspaceState(
             preferenceAccess: PreferenceAccess? = null,
             commandHistory: ObservableCommandHistory? = null,
             historyOwner: SettingsOwner? = null,
+            preferencesStore: PreferencesStore? = null,
         ): ProjectWorkspaceState {
             val tabsState = EditorTabsState(
                 profileId = owner.profileId ?: "default",
@@ -527,6 +530,7 @@ class ProjectWorkspaceState(
             )
             lifecycleCoordinator?.register(created)
             created.bindPreferenceConsumers(preferenceAccess, commandHistory, historyOwner)
+            created.preferencesStore = preferencesStore
             return created
         }
     }

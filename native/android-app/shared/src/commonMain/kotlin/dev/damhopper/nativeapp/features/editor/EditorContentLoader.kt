@@ -50,6 +50,8 @@ class EditorContentLoader(private val fileRepository: FileRepository) {
             isEof = isEof,
             bytesRead = validLen,
             rangeWindow = rangeWindow,
+            fileIdentity = readResult.fileIdentity,
+            canonicalPath = readResult.fileIdentity?.canonicalPath ?: path,
         )
     }
 
@@ -66,6 +68,8 @@ class EditorContentLoader(private val fileRepository: FileRepository) {
             isBinary = true,
             binaryBase64 = b64,
             isEof = true,
+            fileIdentity = readResult.fileIdentity,
+            canonicalPath = readResult.fileIdentity?.canonicalPath ?: path,
         )
     }
 
@@ -90,6 +94,8 @@ class EditorContentLoader(private val fileRepository: FileRepository) {
             isBinary = false,
             isEof = true,
             bytesRead = readResult.textContent.encodeToByteArray().size,
+            fileIdentity = readResult.fileIdentity,
+            canonicalPath = readResult.fileIdentity?.canonicalPath ?: path,
         )
     }
 }

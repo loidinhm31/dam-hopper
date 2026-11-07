@@ -4,6 +4,9 @@ import io.github.rosemoe.sora.lang.Language
 import dev.damhopper.nativeapp.features.editor.DocumentBudgetMetrics
 import dev.damhopper.nativeapp.features.editor.DocumentEvent
 import dev.damhopper.nativeapp.features.editor.DocumentSaveSnapshot
+import dev.damhopper.nativeapp.features.editor.AliasLeaseToken
+import dev.damhopper.nativeapp.features.editor.ViewLeaseToken
+import dev.damhopper.nativeapp.features.files.FileIdentityDto
 import dev.damhopper.nativeapp.features.editor.DocumentViewState
 import dev.damhopper.nativeapp.features.editor.EditorDocument
 import dev.damhopper.nativeapp.features.editor.EditorDocumentFactory
@@ -58,6 +61,39 @@ class AndroidEditorDocument(
     private var receipt: SubscriptionReceipt<ContentChangeEvent>? = null
     private var isClosed = false
     var isInputAllowed: () -> Boolean = { true }
+    var fileIdentity: FileIdentityDto? = null
+    var canonicalPath: String? = null
+
+    private val _activeAliasLeases = MutableStateFlow<Set<AliasLeaseToken>>(emptySet())
+    override val activeAliasLeases: StateFlow<Set<AliasLeaseToken>> = _activeAliasLeases.asStateFlow()
+
+    private val _activeViewLeases = MutableStateFlow<Set<ViewLeaseToken>>(emptySet())
+    override val activeViewLeases: StateFlow<Set<ViewLeaseToken>> = _activeViewLeases.asStateFlow()
+
+    override val canDispose: Boolean
+        get() = _activeAliasLeases.value.isEmpty() && _activeViewLeases.value.isEmpty() && !_isDirty.value
+
+    override fun acquireAliasLease(aliasId: String): AliasLeaseToken {
+        checkNotClosed()
+        val token = AliasLeaseToken("alias-$aliasId", aliasId, _revision.value)
+        _activeAliasLeases.value = _activeAliasLeases.value + token
+        return token
+    }
+
+    override fun releaseAliasLease(token: AliasLeaseToken) {
+        _activeAliasLeases.value = _activeAliasLeases.value - token
+    }
+
+    override fun acquireViewLease(surfaceId: String): ViewLeaseToken {
+        checkNotClosed()
+        val token = ViewLeaseToken("view-$surfaceId", surfaceId)
+        _activeViewLeases.value = _activeViewLeases.value + token
+        return token
+    }
+
+    override fun releaseViewLease(token: ViewLeaseToken) {
+        _activeViewLeases.value = _activeViewLeases.value - token
+    }
 
     /** Exact UTF-8 size of the content, maintained incrementally from content listener callbacks. */
     private var utf8Bytes: Long = utf8Size(initialText)
@@ -440,7 +476,9 @@ class AndroidEditorDocument(
             id = id,
             revision = _revision.value,
             utf8Bytes = snapshotBytes(),
-            mtime = serverMtime
+            mtime = serverMtime,
+            fileIdentity = fileIdentity,
+            canonicalPath = canonicalPath,
         )
     }
 

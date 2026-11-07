@@ -1,5 +1,6 @@
 package dev.damhopper.nativeapp.features.editor
 
+import dev.damhopper.nativeapp.features.files.FileIdentityDto
 import dev.damhopper.nativeapp.features.workspace.DocumentId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -29,6 +30,39 @@ class TestEditorDocument(
     private val undoStack: ArrayDeque<String> = ArrayDeque()
     private val redoStack: ArrayDeque<String> = ArrayDeque()
     private var currentUndoBytes: Long = 0L
+    var fileIdentity: FileIdentityDto? = null
+    var canonicalPath: String? = null
+
+    private val _activeAliasLeases = MutableStateFlow<Set<AliasLeaseToken>>(emptySet())
+    override val activeAliasLeases: StateFlow<Set<AliasLeaseToken>> = _activeAliasLeases.asStateFlow()
+
+    private val _activeViewLeases = MutableStateFlow<Set<ViewLeaseToken>>(emptySet())
+    override val activeViewLeases: StateFlow<Set<ViewLeaseToken>> = _activeViewLeases.asStateFlow()
+
+    override val canDispose: Boolean
+        get() = _activeAliasLeases.value.isEmpty() && _activeViewLeases.value.isEmpty() && !_isDirty.value
+
+    override fun acquireAliasLease(aliasId: String): AliasLeaseToken {
+        checkNotClosed()
+        val token = AliasLeaseToken("alias-$aliasId", aliasId, _revision.value)
+        _activeAliasLeases.value = _activeAliasLeases.value + token
+        return token
+    }
+
+    override fun releaseAliasLease(token: AliasLeaseToken) {
+        _activeAliasLeases.value = _activeAliasLeases.value - token
+    }
+
+    override fun acquireViewLease(surfaceId: String): ViewLeaseToken {
+        checkNotClosed()
+        val token = ViewLeaseToken("view-$surfaceId", surfaceId)
+        _activeViewLeases.value = _activeViewLeases.value + token
+        return token
+    }
+
+    override fun releaseViewLease(token: ViewLeaseToken) {
+        _activeViewLeases.value = _activeViewLeases.value - token
+    }
 
     private val _revision = MutableStateFlow(1L)
     override val revision: StateFlow<Long> = _revision.asStateFlow()
@@ -307,7 +341,9 @@ class TestEditorDocument(
             id = id,
             revision = _revision.value,
             utf8Bytes = text.toString().encodeToByteArray(),
-            mtime = serverMtime
+            mtime = serverMtime,
+            fileIdentity = fileIdentity,
+            canonicalPath = canonicalPath,
         )
     }
 

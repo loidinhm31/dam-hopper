@@ -2,6 +2,8 @@ package dev.damhopper.nativeapp.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import dev.damhopper.nativeapp.features.terminal.TerminateSessionRequest
+import dev.damhopper.nativeapp.features.settings.PreferencesStore
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
@@ -1233,8 +1235,29 @@ fun ProjectTerminalScreen(
                                     controllers[targetId]?.isPanelActive = false
                                     bumpActiveSessionEpoch()
                                     try {
-                                        withContext(Dispatchers.Default) {
-                                            terminalRepo.removeSession(targetId)
+                                        val expectedEpoch = oldSession?.serverPtyEpoch
+                                        val expectedIncarnation = oldSession?.incarnationExact ?: oldSession?.incarnation?.toString()
+                                        if (expectedEpoch.isNullOrBlank() || !TerminateSessionRequest.isValidEpoch(expectedEpoch) ||
+                                            expectedIncarnation.isNullOrBlank() || !TerminateSessionRequest.isValidIncarnation(expectedIncarnation)
+                                        ) {
+                                            uiErrorBanner = "Cannot restart: missing verified server PTY epoch"
+                                            return@launch
+                                        }
+                                        val termOutcome = withContext(Dispatchers.Default) {
+                                            terminalRepo.terminateSession(
+                                                id = targetId,
+                                                expectedServerEpoch = expectedEpoch,
+                                                expectedIncarnation = expectedIncarnation,
+                                            )
+                                        }
+                                        if (!termOutcome.requested && !termOutcome.restartCancelled) {
+                                            uiErrorBanner = "Restart refused by server (${termOutcome.statusCode}): ${termOutcome.message ?: "refused"}"
+                                            return@launch
+                                        }
+                                        if (termOutcome.requested) {
+                                            uiErrorBanner = "Termination requested; awaiting process exit before restart"
+                                            refreshSessions()
+                                            return@launch
                                         }
                                         removeSessionLocal(targetId)
                                         sessions = sessions.filter { it.id != targetId }
@@ -1242,7 +1265,6 @@ fun ProjectTerminalScreen(
                                         if (activeSessionId == targetId) {
                                             selectSession(next)
                                         }
-
                                         val newId = withContext(Dispatchers.Default) {
                                             val id = "term-${Clock.System.now().toEpochMilliseconds()}"
                                             terminalRepo.createSession(
@@ -1283,33 +1305,12 @@ fun ProjectTerminalScreen(
                             .clickable {
                                 if (isDestructiveOpInProgress) return@clickable
                                 val targetId = activeSessionId ?: return@clickable
-                                ownerScope.launch {
-                                    isDestructiveOpInProgress = true
-                                    destroyingSessionIds[targetId] = true
-                                    controllers[targetId]?.isPanelActive = false
-                                    bumpActiveSessionEpoch()
-                                    try {
-                                        withContext(Dispatchers.Default) {
-                                            terminalRepo.removeSession(targetId)
-                                        }
-                                        removeSessionLocal(targetId)
-                                        sessions = sessions.filter { it.id != targetId }
-                                        val next = sessions.filter { isSessionSelectable(it) }.firstOrNull()?.id
-                                        if (activeSessionId == targetId) {
-                                            selectSession(next)
-                                        }
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (e: Exception) {
-                                        uiErrorBanner = "Removal failed: ${e.message ?: "remote error"}"
-                                    } finally {
-                                        destroyingSessionIds.remove(targetId)
-                                        isDestructiveOpInProgress = false
-                                        val syncSuccess = refreshSessions()
-                                        if (!syncSuccess && activeSessionId == targetId) {
-                                            controllers[targetId]?.isPanelActive = isEligibleForInput(targetId)
-                                        }
-                                    }
+                                // Local close hides qualified view only: zero server mutation
+                                removeSessionLocal(targetId)
+                                sessions = sessions.filter { it.id != targetId }
+                                val next = sessions.filter { isSessionSelectable(it) }.firstOrNull()?.id
+                                if (activeSessionId == targetId) {
+                                    selectSession(next)
                                 }
                             }
                             .padding(horizontal = 6.dp, vertical = 2.dp)
@@ -1641,6 +1642,16 @@ fun ProjectTerminalScreen(
             onDismissKill = { sessionToKill = null },
             onConfirmKill = { targetId ->
                 if (isDestructiveOpInProgress) return@TerminalDialogs
+                val targetSession = sessions.find { it.id == targetId }
+                val expectedEpoch = targetSession?.serverPtyEpoch
+                val expectedIncarnation = targetSession?.incarnationExact ?: targetSession?.incarnation?.toString()
+                if (expectedEpoch.isNullOrBlank() || !TerminateSessionRequest.isValidEpoch(expectedEpoch) ||
+                    expectedIncarnation.isNullOrBlank() || !TerminateSessionRequest.isValidIncarnation(expectedIncarnation)
+                ) {
+                    uiErrorBanner = "Cannot end session: missing verified server PTY epoch"
+                    sessionToKill = null
+                    return@TerminalDialogs
+                }
                 sessionToKill = null
                 ownerScope.launch {
                     isDestructiveOpInProgress = true
@@ -1648,14 +1659,28 @@ fun ProjectTerminalScreen(
                     controllers[targetId]?.isPanelActive = false
                     bumpActiveSessionEpoch()
                     try {
-                        withContext(Dispatchers.Default) {
-                            terminalRepo?.removeSession(targetId)
+                        val termOutcome = withContext(Dispatchers.Default) {
+                            terminalRepo?.terminateSession(
+                                id = targetId,
+                                expectedServerEpoch = expectedEpoch,
+                                expectedIncarnation = expectedIncarnation,
+                            )
                         }
-                        removeSessionLocal(targetId)
-                        sessions = sessions.filter { it.id != targetId }
-                        val next = sessions.filter { isSessionSelectable(it) }.firstOrNull()?.id
-                        if (activeSessionId == targetId) {
-                            selectSession(next)
+                        if (termOutcome == null || (!termOutcome.requested && !termOutcome.restartCancelled)) {
+                            val code = termOutcome?.statusCode ?: 0
+                            uiErrorBanner = "End session refused ($code): ${termOutcome?.message ?: "refused"}"
+                        } else if (termOutcome.requested) {
+                            uiErrorBanner = "Termination requested; awaiting process exit"
+                            controllers[targetId]?.isPanelActive = false
+                            destroyingSessionIds.remove(targetId)
+                            refreshSessions()
+                        } else if (termOutcome.restartCancelled) {
+                            removeSessionLocal(targetId)
+                            sessions = sessions.filter { it.id != targetId }
+                            val next = sessions.filter { isSessionSelectable(it) }.firstOrNull()?.id
+                            if (activeSessionId == targetId) {
+                                selectSession(next)
+                            }
                         }
                     } catch (e: CancellationException) {
                         throw e
@@ -1690,6 +1715,7 @@ fun ProjectTerminalScreen(
     initialSessionId: String? = null,
     onSessionSelected: ((String?) -> Unit)? = null,
     preferenceAccess: PreferenceAccess? = null,
+    preferencesStore: PreferencesStore? = null,
 ) {
     val profiles by profileRepository.profiles.collectAsState()
     val activeProfile = profiles.find { it.id == profileId }
@@ -1710,7 +1736,7 @@ fun ProjectTerminalScreen(
             } catch (_: Exception) {
                 null
             }
-            terminalRepo = TerminalRepository(client, ws)
+            terminalRepo = TerminalRepository(client, ws, preferencesStore)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {}

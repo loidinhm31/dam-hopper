@@ -2,7 +2,9 @@
 
 package dev.damhopper.nativeapp.features.files
 
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import dev.damhopper.nativeapp.core.model.ServerFsTarget
 import dev.damhopper.nativeapp.core.transport.ApiClient
 import dev.damhopper.nativeapp.core.transport.ClientMsg
 import dev.damhopper.nativeapp.core.transport.FsEventDto
@@ -72,7 +74,7 @@ class FileRepository(
     suspend fun listDirectory(target: ProjectTargetRef, relativePath: String = ""): List<DirEntryDto> {
         assertTargetMatchesOwner(target, "listDirectory")
         val cleanPath = if (relativePath.isBlank() || relativePath == ".") "." else dev.damhopper.nativeapp.features.workspace.DocumentId.normalizeRelativePath(relativePath)
-        val queryParams = mutableMapOf("project" to target.project, "path" to cleanPath)
+        val queryParams = mutableMapOf("targetType" to "project", "project" to target.project, "path" to cleanPath)
         target.worktreePath?.let { queryParams["worktreePath"] = it }
         val json = apiClient.get("/api/fs/list", queryParams)
         return ProtocolJson.decodeFromString(ListResponseDto.serializer(), json).entries
@@ -94,7 +96,7 @@ class FileRepository(
     suspend fun stat(target: ProjectTargetRef, relativePath: String): FileStatDto {
         assertTargetMatchesOwner(target, "stat")
         val cleanPath = if (relativePath.isBlank() || relativePath == ".") "." else dev.damhopper.nativeapp.features.workspace.DocumentId.normalizeRelativePath(relativePath)
-        val queryParams = mutableMapOf("project" to target.project, "path" to cleanPath)
+        val queryParams = mutableMapOf("targetType" to "project", "project" to target.project, "path" to cleanPath)
         target.worktreePath?.let { queryParams["worktreePath"] = it }
         val json = apiClient.get("/api/fs/stat", queryParams)
         return ProtocolJson.decodeFromString(FileStatDto.serializer(), json)
@@ -112,8 +114,7 @@ class FileRepository(
         val reqId = wsConnection.nextReqId()
         val readMsg = ClientMsg.FsRead(
             reqId = reqId,
-            project = target.project,
-            worktreePath = target.worktreePath,
+            target = ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath),
             path = cleanPath,
             offset = offset,
             len = len,
@@ -191,19 +192,26 @@ class FileRepository(
         len: ULong?,
         maxBytes: Long,
     ): FsFileReadResult {
-        val queryParams = mutableMapOf("project" to target.project, "path" to cleanPath)
+        val queryParams = mutableMapOf("targetType" to "project", "project" to target.project, "path" to cleanPath)
         target.worktreePath?.let { queryParams["worktreePath"] = it }
         offset?.let { queryParams["offset"] = it.toString() }
         len?.let { queryParams["len"] = it.toString() }
 
         return try {
-            val statResult = try { stat(target, cleanPath) } catch (_: Throwable) { null }
-            val epoch = statResult?.effectiveEpoch
-            val idDto = statResult?.fileIdentity ?: statResult?.fileIdentitySnake
-            val rawBytes = apiClient.getBytesBounded("/api/fs/read", queryParams, maxBytes = maxBytes)
+            val resp = apiClient.getBytesBoundedWithHeaders("/api/fs/read", queryParams, maxBytes = maxBytes)
+            val rawBytes = resp.bytes
+            val headerIdDto = resp.fileIdentityJson?.let {
+                try { ProtocolJson.decodeFromString(FileIdentityDto.serializer(), it) } catch (_: Throwable) { null }
+            }
             val rawString = rawBytes.decodeToString()
             if (rawString.contains("\"binary\":true") || rawString.contains("\"binary\": true")) {
-                FsFileReadResult(ok = true, isBinary = true, textContent = null, workspaceEpoch = epoch, fileIdentity = idDto)
+                val bodyIdDto = try {
+                    val element = ProtocolJson.parseToJsonElement(rawString) as? kotlinx.serialization.json.JsonObject
+                    val idObj = element?.get("file_identity") ?: element?.get("fileIdentity")
+                    idObj?.let { ProtocolJson.decodeFromJsonElement(FileIdentityDto.serializer(), it) }
+                } catch (_: Throwable) { null }
+                val effectiveId = headerIdDto ?: bodyIdDto
+                FsFileReadResult(ok = true, isBinary = true, textContent = null, workspaceEpoch = effectiveId?.workspaceEpoch, fileIdentity = effectiveId)
             } else {
                 val text = try {
                     rawBytes.decodeToString(throwOnInvalidSequence = true)
@@ -217,8 +225,8 @@ class FileRepository(
                         textContent = text,
                         size = rawBytes.size.toULong(),
                         binaryData = rawBytes,
-                        workspaceEpoch = epoch,
-                        fileIdentity = idDto,
+                        workspaceEpoch = headerIdDto?.workspaceEpoch,
+                        fileIdentity = headerIdDto,
                     )
                 } else {
                     FsFileReadResult(
@@ -227,8 +235,8 @@ class FileRepository(
                         textContent = null,
                         size = rawBytes.size.toULong(),
                         binaryData = rawBytes,
-                        workspaceEpoch = epoch,
-                        fileIdentity = idDto,
+                        workspaceEpoch = headerIdDto?.workspaceEpoch,
+                        fileIdentity = headerIdDto,
                     )
                 }
             }
@@ -324,8 +332,7 @@ class FileRepository(
         val opMsg = ClientMsg.FsOp(
             reqId = reqId,
             op = op,
-            project = target.project,
-            worktreePath = target.worktreePath,
+            target = ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath),
             path = cleanPath,
             newPath = cleanNewPath,
             forceGit = forceGit,

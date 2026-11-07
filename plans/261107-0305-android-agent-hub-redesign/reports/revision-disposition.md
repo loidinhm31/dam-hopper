@@ -1,0 +1,42 @@
+# Revision disposition — accepted F1/F2
+
+## Result and authority
+Authoring revision COMPLETE; implementation/readiness not approved. Canonical [plan.md](../plan.md) and required YAML retained; same eight phases, 19 stable task IDs and 158h estimate. Initial independent review COMPLETE with two High findings; parent accepted both in [read-only triage](review-triage.md). This report records propagation, not a targeted-follow-up pass. Parent owns that one follow-up and final optional two-topic validation.
+
+## F1 — accepted, propagated
+| Surface | Actual revision / completion check |
+|---|---|
+| Overview, C9, execution-ownership | Finite W01–W13 selected-wave policy on existing helper; no new operation/runtime/flag. Contract and each atomic API task stop/check/complete alone; four first G-A tasks W05, four second tasks W06; focused Git W07; root W08 and lifetime W09 sequential; P08 full release gates W10–13. |
+| Exact DAG | Each W06 task now blocked_by all four W05 IDs; focused Git blocked_by all four W06 IDs. Existing root prerequisites preserve downstream barrier. Safe disjoint branches retained; no next-wave claim/start before stopped-wave evidence completion. |
+| All 15 P01–P07 tasks | Removed defer-all-checks-to-P08 prohibition. Implementers author regressions, never run checks. After every selected writer stops, coordinator runs applicable compile, focused behavioral regressions, separately meaningful task-local smoke, independent review; only then current-fingerprint helper evidence/completion and dependent admission. No checks while siblings edit; terminal implementation alone is insufficient. |
+| Task-local versus final acceptance | P01 compiled model/serializer contract smoke; P02 current provider/all-caller/native component smoke; G-A current production component/host smoke through settled ports; P07 focused actual MainActivity root then retained-lifetime smoke. No task waits for a dependent future root/release deliverable. Tests/source review alone never count as smoke. |
+| Receipts and ownership | Each P01–P07 task grants one exact coordinator-only completion Markdown plus evidence JSON; each P08 task adds its exact evidence JSON alongside existing report. Thirty-four new unique future receipt paths; none created as runtime evidence now. Two existing workspace paths transfer sequentially through both P06 tasks. Ledger/actions match fences; no overlapping report writer. |
+| P08 | Full integrated/live/device/human release suites repeat once after P07 completed gates, not first prerequisite verification. Each P08 task has its own smoke/review/evidence barrier, including basic built-app smoke before automated qualification completes and docs walkthrough after qualified runtime. |
+| Acceptance/commands | A27 covers all tasks and stop/check/evidence/admit ordering. Command timing separates scoped existing Gradle compilation/regression filters and actual component/provider smoke W01–W09 from full package/device suites P08. Missing required local or final native/device fixture blocks its gate; no waiver or invented runtime result. |
+
+## F2 — accepted, propagated
+| Surface / tasks | Actual revision / required regression |
+|---|---|
+| C4; P01 freeze-native-contracts | Freeze existing retained owner as canonical native-holder lifetime owner, not merely shared-map lookup. Additive ports model alias/session leases, exact widget/view lease, captured owner/revision, immutable save snapshot and all-alias incarnation replacement before any caller migrates. Contract fixtures/model smoke are distinct from later native behavior. |
+| P02 cutover-filesystem-callers | Atomic migration of EditorSession, EditorTabsState, ProjectWorkspaceState, existing factories and AndroidEditorDocument/Surface callers. Remove session-owned native close/alias-local replacement authority; implement guarded plumbing with current owner/component, before future root integration. Existing exact allowlists already cover callers/tests. |
+| P06 present-codebase-browser, retain-canonical-documents | Workspace close releases only its aliases/listeners/exact view. Canonical task additionally owns existing ProjectWorkspaceState and its test sequentially after browser task. Existing holder owner alone retires token/disposes exactly once, only after zero aliases, active view leases, dirty retention and in-flight snapshots/saves. No registry/runtime added. |
+| Final alias close | Existing canonical save/discard/cancel guard; save rechecks captured revision/intervening edits; busy/cancel/failure leaves original accessible. No unreachable silently retained dirty holder or implicit discard. Retirement immediately fences authority/stale callbacks while retaining recoverable in-process dirty/undo; no process-death draft recovery claim. |
+| Canonical replacement | Reload/discard/tier change one owner/revision transaction, busy during in-flight snapshot/save; dirty consent then owner/revision revalidation; publish successor to every alias and rotate every incarnation atomically. Failure/staleness preserves original dirty/native undo, no mixed authorities. |
+| Exact active native view | One active widget/view lease per canonical doc. Late old detach may clean only old widget resources; cannot unsubscribe successor receipt, overwrite successor view state, disable current input or close document. |
+| P07 integrate-retained-lifetimes | Wire actual existing retained ViewModel holder lifetime owner across workspace/project factories; preserve dirty recovery access and authority retirement fences. Activity/workspace detach obeys exact lease rules; no another-alias disposal. |
+| Local + final proof | P02 current component regressions; P06 JVM/session/workspace/save-race/native assertions and separate actual shared-factory/native smoke; P07 focused MainActivity smoke before completion; P08 final full MainActivity/device assertions. Required sequence: edit A → open B → close A tab AND workspace → B undo/save; reverse order; final dirty save/discard/cancel; close/reload during in-flight save; tier replacement to all aliases; late old-view detach after successor attachment. A06/A07 retain identity, CAS, explicit rebind and no crash-recovery limitations. |
+
+## Minor classification
+P02 FilesystemTargetRef.kt and TerminalLifetimeContractTest.kt; P07 AgentHubModels.kt, AgentHubPorts.kt and AgentHubContractsTest.kt now Modify after P01 completed handoff. First-ownership ledger remains Create. No duplicate create/overwrite authority.
+
+Structural correction: original P08 Modify path docs/development-roadmap.md is absent; README and actual roadmap glob identify existing docs/project-roadmap.md. Corrected only future P08 action/allowlist/ledger. First structural Node check retained this sole failure; corrected final run passed. No product docs created/modified.
+
+## Structural receipt and limitations
+[Authoring validation](authoring-validation.md) records actual installed source.load/overlap, schema/markers/stable IDs/DAG, exhaustive case-insensitive unordered exact/ancestor pairs, action/ledger/link checks and revised semantic fingerprint without hydration. [Planner handoff](planner-handoff.md) carries final structural result and parent gates. Reports are not task execution evidence. Product code, installed helpers, evidence/review/triage reports, docs, other plans, Git and task state untouched by this authoring assignment. No Android/product build/test/lint/formatter/live/device execution.
+
+Baseline attribution unchanged: owned API4804 stopped and disposable fixture removed; Termius4803 preserved. Corrected WS read bytes/identity succeeded but close1006/cleanfalse failed; original plaintext-oracle failure separate. SDK ADB exists with zero ready devices. XDG_CONFIG_HOME did not isolate Windows OPAQUE known-folder setup; existing setup unchanged, no full crypto isolation/auth qualification claim.
+
+## Remaining risks / unresolved questions
+- Parent targeted F1/F2 follow-up pending; this authoring result does not assert findings cleared by reviewer.
+- Parent two product confirmations: direct-to-Hub/adaptive navigation; already-connected-profile breadth.
+- Implementation still must prove component/native/retained-root lifetime races and each required smoke/review gate. Ready hardware/device/API/ABI, human UX, authenticated/isolated crypto fixture and real WS retirement prerequisites remain explicit execution blockers when unavailable, never synthetic passes.

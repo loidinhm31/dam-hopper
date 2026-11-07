@@ -35,6 +35,10 @@ interface PreferencesStore {
 
     /** Non-null while stored bytes could not be decoded and were kept as-is for recovery. */
     fun loadRecoverableError(): String?
+
+    fun loadUncertainCreateRecords(): List<dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord> = emptyList()
+    fun saveUncertainCreateRecord(record: dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord) {}
+    fun removeUncertainCreateRecord(intentId: String) {}
 }
 
 class InMemoryPreferencesStore(
@@ -75,6 +79,20 @@ class InMemoryPreferencesStore(
     }
 
     override fun loadRecoverableError(): String? = recoverableError
+
+    private val uncertainCreates = mutableListOf<dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord>()
+
+    override fun loadUncertainCreateRecords(): List<dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord> =
+        uncertainCreates.toList()
+
+    override fun saveUncertainCreateRecord(record: dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord) {
+        uncertainCreates.removeAll { it.intentId == record.intentId }
+        uncertainCreates.add(record)
+    }
+
+    override fun removeUncertainCreateRecord(intentId: String) {
+        uncertainCreates.removeAll { it.intentId == intentId }
+    }
 }
 
 // ---- shared persistence codecs (no Android types; AndroidPreferencesStore delegates here) ----

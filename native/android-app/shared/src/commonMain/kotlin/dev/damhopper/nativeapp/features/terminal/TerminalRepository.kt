@@ -10,9 +10,13 @@ import io.ktor.http.encodeURLPathPart
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import dev.damhopper.nativeapp.features.settings.PreferencesStore
+import kotlinx.datetime.Clock
 
 /**
  * Repository coordinating REST and WebSocket operations for terminal sessions and agent status.
@@ -22,7 +26,12 @@ import kotlinx.serialization.json.put
 class TerminalRepository(
     val apiClient: ApiClient,
     val wsConnection: WsConnection? = null,
+    val preferencesStore: PreferencesStore? = null,
 ) {
+    companion object {
+        private val createAdmissionMutex = Mutex()
+    }
+
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
@@ -36,16 +45,20 @@ class TerminalRepository(
      * Lists active and dead session summaries from GET /api/terminal.
      */
     suspend fun listSessions(): List<TerminalSessionMeta> {
-        val response = apiClient.get("/api/terminal")
-        return json.decodeFromString(response)
+        val response = apiClient.getWithHeaders("/api/terminal")
+        val epoch = response.header(TERMINATION_HEADER_PTY_EPOCH)
+        val list: List<TerminalSessionMeta> = json.decodeFromString(response.body)
+        return if (epoch != null) list.map { it.copy(serverPtyEpoch = epoch) } else list
     }
 
     /**
      * Lists detailed sessions with buffer byte counts from GET /api/terminal/detailed.
      */
     suspend fun listDetailed(): List<TerminalSessionDetailed> {
-        val response = apiClient.get("/api/terminal/detailed")
-        return json.decodeFromString(response)
+        val response = apiClient.getWithHeaders("/api/terminal/detailed")
+        val epoch = response.header(TERMINATION_HEADER_PTY_EPOCH)
+        val list: List<TerminalSessionDetailed> = json.decodeFromString(response.body)
+        return if (epoch != null) list.map { it.copy(serverPtyEpoch = epoch) } else list
     }
 
     /**
@@ -61,9 +74,7 @@ class TerminalRepository(
             metadata = mapOf("project" to (request.project ?: "default"))
         )
         return try {
-            val body = json.encodeToString(CreateSessionRequest.serializer(), request)
-            val response = apiClient.postJson("/api/terminal", body)
-            json.decodeFromString(response)
+            executeGuardedCreate(request).meta
         } catch (t: Throwable) {
             AppLogger.recordDiagnostic(
                 type = "terminal",
@@ -74,6 +85,64 @@ class TerminalRepository(
                 metadata = mapOf("error" to (t.message ?: "unknown"))
             )
             throw t
+        }
+    }
+
+    /**
+     * Spawns a new PTY session via POST /api/terminal and returns the guarded creation outcome.
+     */
+    suspend fun createSessionGuarded(request: CreateSessionRequest): TerminalCreateOutcome {
+        val decoded = executeGuardedCreate(request)
+        return TerminalCreateOutcome(
+            id = decoded.meta.id,
+            incarnation = decoded.meta.incarnation,
+            ptyEpoch = decoded.ptyEpoch,
+            alive = decoded.meta.alive,
+        )
+    }
+
+    private data class DecodedCreateResponse(
+        val meta: TerminalSessionMeta,
+        val ptyEpoch: String,
+    )
+
+    private suspend fun executeGuardedCreate(request: CreateSessionRequest): DecodedCreateResponse {
+        val intentId = "create-${request.id}-${Clock.System.now().toEpochMilliseconds()}"
+        createAdmissionMutex.withLock {
+            val pending = preferencesStore?.loadUncertainCreateRecords()?.filter {
+                it.status == UncertainCreateStatus.PENDING &&
+                    it.profileId == apiClient.connection.profileId &&
+                    (it.terminalId == request.id ||
+                     (it.project != null && it.project == request.project && it.worktreePath == request.worktreePath))
+            }
+            if (!pending.isNullOrEmpty()) {
+                throw IllegalStateException("Unsettled pending terminal create intent '${pending.first().intentId}' exists for project '${request.project ?: request.id}'; replacement blocked")
+            }
+            preferencesStore?.saveUncertainCreateRecord(
+                UncertainCreateRecord(
+                    intentId = intentId,
+                    profileId = apiClient.connection.profileId,
+                    terminalId = request.id,
+                    project = request.project,
+                    worktreePath = request.worktreePath,
+                    createdAtEpochMs = Clock.System.now().toEpochMilliseconds(),
+                    status = UncertainCreateStatus.PENDING,
+                )
+            )
+        }
+        return try {
+            val body = json.encodeToString(CreateSessionRequest.serializer(), request)
+            val response = apiClient.postJsonWithHeaders("/api/terminal", body)
+            val meta = json.decodeFromString<TerminalSessionMeta>(response.body)
+            val ptyEpoch = response.header(TERMINATION_HEADER_PTY_EPOCH).orEmpty()
+            preferencesStore?.removeUncertainCreateRecord(intentId)
+            val metaWithEpoch = if (ptyEpoch.isNotBlank()) meta.copy(serverPtyEpoch = ptyEpoch) else meta
+            DecodedCreateResponse(metaWithEpoch, ptyEpoch)
+        } catch (e: dev.damhopper.nativeapp.core.transport.ApiRequestError) {
+            if (e.status in 400..499) {
+                preferencesStore?.removeUncertainCreateRecord(intentId)
+            }
+            throw e
         }
     }
     /**
@@ -95,17 +164,46 @@ class TerminalRepository(
     }
 
     /**
-     * Kills running process while keeping tombstone via DELETE /api/terminal/:id.
+     * Terminates a running session or cancels restart via guarded POST /api/terminal/:id/terminate.
+     * Request payload must be <= 512 bytes on the wire.
+     * Returns TerminalTerminationOutcome with exact status (202 for terminationRequested, 200 for restartCancelled).
      */
-    suspend fun killSession(id: String) {
-        apiClient.delete("/api/terminal/${id.encodeURLPathPart()}")
-    }
-
-    /**
-     * Kills and completely evicts session metadata via DELETE /api/terminal/:id/remove.
-     */
-    suspend fun removeSession(id: String) {
-        apiClient.delete("/api/terminal/${id.encodeURLPathPart()}/remove")
+    suspend fun terminateSession(
+        id: String,
+        expectedServerEpoch: String,
+        expectedIncarnation: String,
+    ): TerminalTerminationOutcome {
+        val request = TerminateSessionRequest(
+            version = 1,
+            expectedServerEpoch = expectedServerEpoch.lowercase(),
+            expectedIncarnation = expectedIncarnation,
+        )
+        val body = buildJsonObject {
+            put("version", 1)
+            put("expectedServerEpoch", request.expectedServerEpoch)
+            put("expectedIncarnation", request.expectedIncarnation)
+        }.toString()
+        require(body.encodeToByteArray().size <= 512) { "Terminate payload exceeds 512 bytes" }
+        return try {
+            val response = apiClient.postJsonWithHeaders(
+                "/api/terminal/${id.encodeURLPathPart()}/terminate",
+                body,
+            )
+            TerminalTerminationOutcome(
+                id = id,
+                requested = response.status == 202,
+                restartCancelled = response.status == 200,
+                statusCode = response.status,
+            )
+        } catch (e: dev.damhopper.nativeapp.core.transport.ApiRequestError) {
+            TerminalTerminationOutcome(
+                id = id,
+                requested = false,
+                restartCancelled = false,
+                statusCode = e.status,
+                message = e.message,
+            )
+        }
     }
 
     // ---------------------------------------------------------------------------

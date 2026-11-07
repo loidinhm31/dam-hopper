@@ -2,6 +2,7 @@ package dev.damhopper.nativeapp.features.files
 
 import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import dev.damhopper.nativeapp.core.model.ServerFsTarget
 import dev.damhopper.nativeapp.core.security.CryptoEnvelope
 import dev.damhopper.nativeapp.core.security.CryptoSession
 import dev.damhopper.nativeapp.core.transport.ClientMsg
@@ -67,8 +68,7 @@ class TransferCoordinator(
         val beginMsg = ClientMsg.FsUploadBegin(
             reqId = beginReqId,
             uploadId = uploadId,
-            project = target.project,
-            worktreePath = target.worktreePath,
+            target = ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath),
             dir = dir,
             filename = filename,
             len = totalBytes.toULong(),
@@ -257,8 +257,7 @@ class TransferCoordinator(
             reqId = beginReqId,
             uploadId = uploadId,
             sessionId = cryptoSession.sessionId,
-            project = target.project,
-            worktreePath = target.worktreePath,
+            target = ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath),
             dir = dir,
             filename = filename,
             len = envelopeBytes.size.toULong(),

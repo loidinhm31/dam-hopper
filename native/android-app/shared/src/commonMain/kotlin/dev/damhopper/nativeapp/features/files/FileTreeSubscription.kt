@@ -3,6 +3,7 @@ package dev.damhopper.nativeapp.features.files
 import dev.damhopper.nativeapp.core.model.ConnectionErrorReason
 import dev.damhopper.nativeapp.core.model.ConnectionOwnerError
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import dev.damhopper.nativeapp.core.model.ServerFsTarget
 import dev.damhopper.nativeapp.core.model.SocketInstanceRef
 import dev.damhopper.nativeapp.core.transport.ClientMsg
 import dev.damhopper.nativeapp.core.transport.FsEventDto
@@ -294,8 +295,7 @@ class TreeSubscriptionManager(
 
         val subMsg = ClientMsg.FsSubscribeTree(
             reqId = reqId,
-            project = target.project,
-            worktreePath = target.worktreePath,
+            target = ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath),
             path = normalizedDirPath,
             watchOnly = watchOnly,
         )

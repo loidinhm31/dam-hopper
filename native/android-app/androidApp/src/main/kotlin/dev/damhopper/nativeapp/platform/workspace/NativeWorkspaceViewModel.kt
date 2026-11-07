@@ -83,6 +83,7 @@ import dev.damhopper.nativeapp.platform.notifications.AndroidNotificationAudio
 import dev.damhopper.nativeapp.platform.notifications.AndroidNotificationPlatform
 import dev.damhopper.nativeapp.platform.notifications.AndroidNotificationSink
 import dev.damhopper.nativeapp.platform.storage.AndroidCommandHistoryStore
+import dev.damhopper.nativeapp.features.settings.PreferencesStore
 import dev.damhopper.nativeapp.platform.storage.AndroidPreferencesStore
 import dev.damhopper.nativeapp.platform.storage.AndroidProfileMetadataStore
 import dev.damhopper.nativeapp.platform.vault.AndroidCredentialVault
@@ -535,6 +536,7 @@ class AgentRuntimeHost(
     private val isEligible: () -> Boolean,
     private val onOwned: (ConnectionRef) -> Unit,
     private val inventory: TerminalAgentsInventoryCoordinator,
+    val preferencesStore: PreferencesStore? = null,
 ) {
     private val lock = Mutex()
 
@@ -559,9 +561,9 @@ class AgentRuntimeHost(
             if (existing != null) stopLocked(existing)
             if (!isEligible()) return@withLock false
             val runtimeScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
-            val terminalRepository = TerminalRepository(client, ws)
+            val terminalRepository = TerminalRepository(client, ws, preferencesStore)
             val reducer = AgentStatusReducer(terminalRepository)
-            val listing = TerminalRepository(client, null)
+            val listing = TerminalRepository(client, null, preferencesStore)
             val runtime = AgentRuntime(
                 owner = owner,
                 client = client,
@@ -716,7 +718,7 @@ class AgentRuntimeHost(
         val profileId = rt.owner.profileId
         val revision = provider.revisionOf(profileId) // captured before any suspension
         val integrationOwner = IntegrationOwner(rt.owner, socket, rt.endpoint, rt.accountId, revision)
-        val terminal = TerminalRepository(rt.client, null)
+        val terminal = TerminalRepository(rt.client, null, preferencesStore)
         var paths: AgentPathsVerification? = null
         var omp: ExtensionStatusReport? = null
         var claude: NativeIntegrationStatusReport? = null
@@ -1112,8 +1114,8 @@ class NativeWorkspaceViewModel(
         isEligible = { lifetime.eligible },
         onOwned = { lifetime.own(it) },
         inventory = agentsInventory,
+        preferencesStore = preferencesStore,
     )
-
     private val routeResolver: NotificationRouteResolver = NotificationRouteResolver(registry, runtimes, ProcessInstance.id)
 
     override val notificationFeed: StateFlow<NotificationFeedState> get() = coordinator.feed
@@ -1260,7 +1262,7 @@ class NativeWorkspaceViewModel(
             val authority = settingsRepository.targetAuthority()
             val workspace = WorkspaceRepository(client, targetStore)
             val integration = AgentIntegrationRepository(
-                terminal = TerminalRepository(client, null),
+                terminal = TerminalRepository(client, null, preferencesStore),
                 owner = owner,
                 authority = authority,
                 invalidateRuntime = { ref -> invalidateRuntimeWithMutationFence(ref) },
@@ -1357,7 +1359,7 @@ class NativeWorkspaceViewModel(
                     connectionGetter = { apiClient.connection },
                     fileRepositoryGetter = { existing.fileRepository },
                     editorRepositoryGetter = { existing.editorRepository },
-                    terminalRepositoryGetter = { TerminalRepository(apiClient, wsConnection) },
+                    terminalRepositoryGetter = { TerminalRepository(apiClient, wsConnection, preferencesStore) },
                     workspaceStateGetter = { existing },
                     retainedDirtyDocsProvider = ::retainedDirtyDocuments,
                     targetStore = targetStore,
@@ -1397,13 +1399,14 @@ class NativeWorkspaceViewModel(
             preferenceAccess = access,
             commandHistory = commandHistory,
             historyOwner = historyOwner,
+            preferencesStore = preferencesStore,
         )
         val gitSafety = WorkspaceGitSafety(
             boundOwner = owner,
             connectionGetter = { apiClient.connection },
             fileRepositoryGetter = { fileRepo },
             editorRepositoryGetter = { editorRepo },
-            terminalRepositoryGetter = { TerminalRepository(apiClient, wsConnection) },
+            terminalRepositoryGetter = { TerminalRepository(apiClient, wsConnection, preferencesStore) },
             workspaceStateGetter = { workspaceStates[owner] ?: newState },
             retainedDirtyDocsProvider = ::retainedDirtyDocuments,
             targetStore = targetStore,
@@ -1475,7 +1478,7 @@ class NativeWorkspaceViewModel(
             val profileId = scope.profileId
             val apiClient = profileRepository.getOrCreateApiClient(profileId)
             val ws = profileRepository.getOrCreateWsConnection(profileId)
-            val termRepo = TerminalRepository(apiClient, ws)
+            val termRepo = TerminalRepository(apiClient, ws, preferencesStore)
             termRepo.listDetailed()
         } catch (e: Exception) {
             blockers.add("Failed to inspect terminal sessions: ${e.message}")

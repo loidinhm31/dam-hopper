@@ -37,6 +37,7 @@ class EditorSession(
     var gutterDecorations: List<GutterDecoration> = emptyList(); private set
     var findReplaceState: FindReplaceState = FindReplaceState(); private set
 
+    var aliasLease: AliasLeaseToken? = null
     var isInputAllowed: () -> Boolean = { true }
     private var onContentChangeListener: ((text: String, modelVersion: Long, editEpoch: Long) -> Unit)? = null
 
@@ -309,7 +310,8 @@ class EditorSession(
     override fun close() {
         if (isDisposed) return
         isDisposed = true
-        document.close()
+        aliasLease?.let { document.releaseAliasLease(it) }
+        aliasLease = null
         gutterDecorations = emptyList()
         onContentChangeListener = null
     }

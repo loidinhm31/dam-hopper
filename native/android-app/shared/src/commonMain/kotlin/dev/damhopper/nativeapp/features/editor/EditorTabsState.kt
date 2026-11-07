@@ -24,7 +24,7 @@ class EditorTabsState(
     val jsonLanguageService: JsonLanguageService = JsonLanguageService(),
     val tsLanguageService: TsJsLanguageService = TsJsLanguageService("typescript"),
     val jsLanguageService: TsJsLanguageService = TsJsLanguageService("javascript"),
-) : EditorTabLifecyclePort, EditorDirtyGuardPort, EditorDocumentAccessPort, EditorCommandPort, EditorSaveOutcomePort {
+) : EditorTabLifecyclePort, EditorDirtyGuardPort, EditorDocumentAccessPort, EditorCommandPort, EditorSaveOutcomePort, EditorCanonicalDocumentPort {
 
     var editorRepository: EditorRepository = editorRepository
         private set
@@ -48,7 +48,7 @@ class EditorTabsState(
     private val sessions: MutableMap<String, EditorSession> = mutableMapOf()
     private val tabDocumentIds: MutableMap<String, DocumentId> = mutableMapOf()
     private var nextIncarnation: Long = 1L
-
+    private val canonicalDocuments: MutableMap<String, EditorDocument> = mutableMapOf()
     private val diagnosticsManager = EditorDiagnosticsManager(
         languageServiceCoordinator, jsonLanguageService, tsLanguageService, jsLanguageService
     )
@@ -97,16 +97,37 @@ class EditorTabsState(
         content: String,
         mtime: Long?,
         tier: FileTier,
+        fileIdentity: dev.damhopper.nativeapp.features.files.FileIdentityDto? = null,
+        canonicalPath: String? = null,
     ) {
         val factory = documentFactory ?: return
         sessions.remove(key)?.close()
-        val doc = factory.createDocument(
-            id = docId,
-            initialText = content,
-            initialMtime = mtime ?: 0L,
-            readOnly = tier.isReadOnly,
-            maxUndoStackSize = if (tier == FileTier.DEGRADED) 50 else 200,
-        )
+        val cKey = fileIdentity?.let {
+            dev.damhopper.nativeapp.features.files.CanonicalDocumentKey(
+                profileId = profileId,
+                normalizedEndpoint = editorRepository.fileRepository.owner.normalizedBaseUrl,
+                authenticatedAccount = editorRepository.fileRepository.owner.accountUser,
+                workspaceId = it.workspaceId ?: "workspace",
+                workspaceEpoch = it.workspaceEpoch ?: 0L,
+                canonicalPath = it.canonicalPath ?: path,
+            ).key
+        } ?: key
+
+        val existingDoc = canonicalDocuments[cKey]
+        val doc = if (existingDoc == null || tier.isReadOnly != existingDoc.isReadOnly.value || existingDoc.id != docId) {
+            val created = factory.createDocument(
+                id = docId,
+                initialText = content,
+                initialMtime = mtime ?: 0L,
+                readOnly = tier.isReadOnly,
+                maxUndoStackSize = if (tier == FileTier.DEGRADED) 50 else 200,
+            )
+            canonicalDocuments[cKey] = created
+            created
+        } else {
+            existingDoc
+        }
+        val lease = doc.acquireAliasLease(key)
         val session = EditorSession(
             document = doc,
             key = key,
@@ -117,6 +138,7 @@ class EditorTabsState(
             initialMtime = mtime,
             isReadOnly = tier.isReadOnly,
         )
+        session.aliasLease = lease
         session.isInputAllowed = { isInputAllowed() }
         sessions[key] = session
         attachSessionListeners(session)
@@ -150,6 +172,8 @@ class EditorTabsState(
                 isLoading = tab.isLoading,
                 error = tab.error,
                 rangeWindow = tab.rangeWindow,
+                fileIdentity = tab.fileIdentity,
+                canonicalKey = tab.canonicalPath,
             )
         }
         val currentKey = _activeTabKey.value
@@ -308,7 +332,10 @@ class EditorTabsState(
                     return
                 }
 
-                installSession(key, docId, target, path, incarnation, result.content, result.mtime, result.tier)
+                installSession(
+                    key, docId, target, path, incarnation, result.content, result.mtime, result.tier,
+                    result.fileIdentity, result.canonicalPath
+                )
 
                 _tabs.value = _tabs.value.map {
                     if (it.key == key) it.copy(
@@ -324,7 +351,9 @@ class EditorTabsState(
                         selection = selection,
                         cursorPosition = selection?.end ?: TextPosition(1, 1),
                         largeFileEof = result.isEof,
-                        rangeWindow = result.rangeWindow
+                        rangeWindow = result.rangeWindow,
+                        fileIdentity = result.fileIdentity,
+                        canonicalPath = result.canonicalPath,
                     ) else it
                 }
                 updateMetadataFlow()
@@ -396,8 +425,16 @@ class EditorTabsState(
     fun closeTab(key: String) {
         val remaining = _tabs.value.filter { it.key != key }
         _tabs.value = remaining
-        sessions.remove(key)?.close()
+        val session = sessions.remove(key)
+        val doc = session?.document
+        session?.close()
         tabDocumentIds.remove(key)
+        if (doc != null && doc.canDispose) {
+            canonicalDocuments.entries.find { it.value === doc }?.key?.let {
+                canonicalDocuments.remove(it)
+            }
+            doc.close()
+        }
         if (_activeTabKey.value == key) {
             val nextKey = remaining.lastOrNull()?.key
             _activeTabKey.value = nextKey
@@ -413,7 +450,20 @@ class EditorTabsState(
         tabDocumentIds.clear()
         sessions.values.forEach { it.close() }
         sessions.clear()
+        canonicalDocuments.values.forEach { doc ->
+            if (doc.canDispose) doc.close()
+        }
+        canonicalDocuments.clear()
         updateMetadataFlow()
+    }
+
+    override fun getCanonicalDocument(canonicalKey: String): EditorDocument? = canonicalDocuments[canonicalKey]
+
+    override fun acquireCanonicalLease(canonicalKey: String, aliasId: String): AliasLeaseToken? =
+        canonicalDocuments[canonicalKey]?.acquireAliasLease(aliasId)
+
+    override fun releaseCanonicalLease(canonicalKey: String, token: AliasLeaseToken) {
+        canonicalDocuments[canonicalKey]?.releaseAliasLease(token)
     }
 
     // --- EditorTabLifecyclePort Close & Conflict ---
@@ -787,7 +837,10 @@ class EditorTabsState(
                         val newIncarnation = nextIncarnation++
                         val newDocId = createDocumentId(currentTab.target, currentTab.path, newIncarnation)
                         tabDocumentIds[key] = newDocId
-                        installSession(key, newDocId, currentTab.target, currentTab.path, newIncarnation, res.content, res.mtime, res.tier)
+                        if (_activeTabKey.value == key) {
+                            _activeTabId.value = newDocId
+                        }
+                        installSession(key, newDocId, currentTab.target, currentTab.path, newIncarnation, res.content, res.mtime, res.tier, res.fileIdentity, res.canonicalPath)
                         _tabs.value = _tabs.value.map {
                             if (it.key == key) it.copy(
                                 content = res.content,

@@ -46,7 +46,9 @@ class RemoteConfigRepository(
     suspend fun getUiPreferences(guard: RequestAdmissionGuard? = null): UiPreferences {
         val global = getGlobalConfig(guard)
         val uiObj = global["ui"]?.jsonObject ?: return UiPreferences()
-        return ProtocolJson.decodeFromString(UiPreferences.serializer(), uiObj.toString())
+        val parsed = ProtocolJson.decodeFromString(UiPreferences.serializer(), uiObj.toString())
+        val unbounds = uiObj.entries.filter { it.value is kotlinx.serialization.json.JsonNull }.map { it.key }.toSet()
+        return parsed.copy(unboundFields = unbounds)
     }
 
     /**
@@ -56,6 +58,27 @@ class RemoteConfigRepository(
     suspend fun updateGlobalUi(preferences: UiPreferences, guard: RequestAdmissionGuard): Boolean {
         require(!preferences.isEmpty()) { "UI preference patch is empty" }
         val text = apiClient.postJson("/api/global-config/ui", preferences.toUiRequestBody(), guard)
+        return confirmedFlag(text, "updated")
+    }
+
+    /**
+     * Posts a sparse UI patch where null values explicitly unbind keys (POST /api/global-config/ui).
+     * Omitted keys remain unchanged; remote web-only keys are preserved untouched.
+     */
+    suspend fun updateGlobalUiSparse(patch: SparseUiConfigPatch, guard: RequestAdmissionGuard): Boolean {
+        require(patch.ui.isNotEmpty()) { "UI preference patch is empty" }
+        val body = buildJsonObject {
+            put("ui", buildJsonObject {
+                patch.ui.forEach { (k, v) ->
+                    if (v == null || v is kotlinx.serialization.json.JsonNull) {
+                        put(k, kotlinx.serialization.json.JsonNull)
+                    } else {
+                        put(k, v)
+                    }
+                }
+            })
+        }.toString()
+        val text = apiClient.postJson("/api/global-config/ui", body, guard)
         return confirmedFlag(text, "updated")
     }
     /**

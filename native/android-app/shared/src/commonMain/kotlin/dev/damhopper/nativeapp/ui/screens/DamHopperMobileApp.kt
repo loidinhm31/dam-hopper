@@ -273,7 +273,7 @@ private fun RootContent(
                 apiClient = client
                 wsConnection = ws
                 workspaceRepo = WorkspaceRepository(client, targetStore)
-                terminalRepo = TerminalRepository(client, ws)
+                terminalRepo = TerminalRepository(client, ws, services?.settingsRepository?.preferencesStore)
                 // When RetainedRootServices is available, connection lifecycle and recovery are managed
                 // by WsRecoverySupervisor in attachRuntime(). Only standalone preview/tests without services connect directly.
                 if (services == null && ws != null) {
@@ -368,13 +368,14 @@ private fun RootContent(
                     preferenceAccess = prefAccess,
                     commandHistory = services?.commandHistory,
                     historyOwner = SettingsOwner(client.connection, client.normalizedBaseUrl, accountUser),
+                    preferencesStore = services?.settingsRepository?.preferencesStore,
                 )
                 val safety = WorkspaceGitSafety(
                     boundOwner = owner,
                     connectionGetter = { client.connection },
                     fileRepositoryGetter = { fileRepo },
                     editorRepositoryGetter = { editorRepo },
-                    terminalRepositoryGetter = { dev.damhopper.nativeapp.features.terminal.TerminalRepository(client, ws) },
+                    terminalRepositoryGetter = { dev.damhopper.nativeapp.features.terminal.TerminalRepository(client, ws, services?.settingsRepository?.preferencesStore) },
                     workspaceStateGetter = { wsState },
                     retainedDirtyDocsProvider = { requestedOwner ->
                         if (requestedOwner == owner) {

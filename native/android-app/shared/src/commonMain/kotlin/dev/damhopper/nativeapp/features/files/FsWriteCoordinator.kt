@@ -5,6 +5,7 @@ package dev.damhopper.nativeapp.features.files
 import dev.damhopper.nativeapp.core.model.ConnectionErrorReason
 import dev.damhopper.nativeapp.core.model.ConnectionOwnerError
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
+import dev.damhopper.nativeapp.core.model.ServerFsTarget
 import dev.damhopper.nativeapp.core.transport.ClientMsg
 import dev.damhopper.nativeapp.core.transport.ServerMsg
 import dev.damhopper.nativeapp.core.transport.WsConnection
@@ -80,8 +81,7 @@ class FsWriteCoordinator(
 
         val beginMsg = ClientMsg.FsWriteBegin(
             reqId = reqId,
-            project = target.project,
-            worktreePath = target.worktreePath,
+            target = ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath),
             path = path,
             expectedMtime = expectedMtime,
             size = utf8Bytes.size.toULong(),

@@ -81,6 +81,28 @@ internal class SettingsTestServer {
         }
     }
 
+    fun routeWithHeaders(path: String, handler: (RecordedRequest) -> Triple<Int, Map<String, String>, String>) {
+        try {
+            server.removeContext(path)
+        } catch (_: IllegalArgumentException) {}
+        server.createContext(path) { exchange ->
+            val body = exchange.requestBody.readBytes().decodeToString()
+            val request = RecordedRequest(
+                method = exchange.requestMethod,
+                path = exchange.requestURI.path,
+                query = exchange.requestURI.rawQuery,
+                body = body,
+                contentType = exchange.requestHeaders.getFirst("Content-Type"),
+            )
+            requests += request
+            val (status, headers, text) = handler(request)
+            headers.forEach { (k, v) -> exchange.responseHeaders.set(k, v) }
+            val bytes = text.encodeToByteArray()
+            exchange.sendResponseHeaders(status, if (bytes.isEmpty()) -1L else bytes.size.toLong())
+            if (bytes.isNotEmpty()) exchange.responseBody.use { it.write(bytes) } else exchange.close()
+        }
+    }
+
     fun count(method: String? = null, path: String? = null): Int =
         requests.count { (method == null || it.method == method) && (path == null || it.path == path) }
 
@@ -278,6 +300,40 @@ class SettingsRepositoryTest {
         repository.updatePreferences { it.copy(terminalFontSize = 20) }
         awaitUiPosts(1)
         assertEquals("""{"ui":{"terminalFontSize":20}}""", server.posts("/api/global-config/ui").single().body)
+    }
+
+    @Test
+    fun explicitUnbindSendsJsonNullAndPreservesUnknownFields() = runBlocking {
+        resolver.connect("A")
+        remoteUi = """{"searchTextShortcut":"Ctrl+F","unknownWebDesktopWidget":"active"}"""
+        val repository = repo()
+        assertTrue(repository.switchPreferenceSource("A"))
+        assertEquals("Ctrl+F", repository.preferences.value.searchTextShortcut)
+
+        repository.updatePreferences { it.copy(searchTextShortcut = "") }
+        awaitUiPosts(1)
+        val body = server.posts("/api/global-config/ui").single().body
+        assertTrue(body.contains(""""searchTextShortcut":null"""), "Unbound shortcut must send explicit JSON null: $body")
+        assertFalse(body.contains("unknownWebDesktopWidget"), "Unknown web OS keys must not be overwritten or sent: $body")
+        assertFalse(body.contains("editorFontSize"), "Unchanged fields must be omitted from patch: $body")
+    }
+
+    @Test
+    fun getUiPreferencesDecodesExplicitNullIntoUnboundFieldsAndUnbindsShortcut() = runBlocking {
+        resolver.connect("A")
+        remoteUi = """{"searchTextShortcut":null,"editorFontSize":18,"unknownWebKey":"keepMe"}"""
+        val repo = RemoteConfigRepository(resolver.current("A")!!.client)
+        val uiPrefs = repo.getUiPreferences()
+
+        assertTrue(uiPrefs.unboundFields.contains("searchTextShortcut"), "searchTextShortcut must be in unboundFields: ${uiPrefs.unboundFields}")
+        assertNull(uiPrefs.searchTextShortcut)
+        assertEquals(18, uiPrefs.editorFontSize)
+
+        val base = WorkbenchPreferences(searchTextShortcut = "Ctrl+F", editorFontSize = 14)
+        val hydrated = uiPrefs.applyTo(base)
+
+        assertEquals("", hydrated.searchTextShortcut, "Inbound null must unbind shortcut")
+        assertEquals(18, hydrated.editorFontSize)
     }
 
     @Test
