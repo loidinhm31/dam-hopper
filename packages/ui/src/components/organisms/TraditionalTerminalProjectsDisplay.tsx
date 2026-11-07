@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -7,12 +8,13 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { Plus, BookOpen, Folder, X, GitBranch, RefreshCw } from "lucide-react";
+import { Plus, BookOpen, Folder, X, GitBranch, RefreshCw, GitCompare } from "lucide-react";
 import { useQueryClient, useIsFetching } from "@tanstack/react-query";
 import { normalizeProjectTarget } from "@/api/client.js";
 import { gitQueryKey } from "@/api/queries.js";
 import { TraditionalProjectWorkspaceTree } from "@/components/organisms/TraditionalProjectWorkspaceTree.js";
 import { TraditionalProjectFileChanges } from "@/components/organisms/TraditionalProjectFileChanges.js";
+import type { FileTreeRevealRequest } from "@/lib/file-tree-reveal.js";
 import {
   getConnectionSnapshot,
   subscribeConnections,
@@ -110,6 +112,8 @@ export interface TraditionalTerminalProjectsDisplayProps {
   onOpenFile?: (payload: IntentPayloadMap["file:open"]) => void;
   onOpenRecipes?: () => void;
   onOpenGit?: () => void;
+  onOpenChanges?: () => void;
+  revealRequest?: FileTreeRevealRequest | null;
   onSelectedGroupChange?: (group: TraditionalTerminalProjectGroup | null) => void;
   selectGroupRequest?: { groupId: string; nonce: number };
   hubAttach?: {
@@ -155,6 +159,8 @@ export function TraditionalTerminalProjectsDisplay({
   onOpenFile,
   onOpenRecipes,
   onOpenGit,
+  onOpenChanges,
+  revealRequest,
   onSelectedGroupChange,
   selectGroupRequest,
   hubAttach,
@@ -361,6 +367,32 @@ export function TraditionalTerminalProjectsDisplay({
       onSelectedGroupChange?.(selectedGroup ?? null);
     }
   }, [selectedGroup, onSelectedGroupChange]);
+  const [internalRevealRequest, setInternalRevealRequest] =
+    useState<FileTreeRevealRequest | null>(null);
+  const effectiveRevealRequest =
+    revealRequest && internalRevealRequest
+      ? (revealRequest.nonce >= internalRevealRequest.nonce ? revealRequest : internalRevealRequest)
+      : (revealRequest ?? internalRevealRequest);
+
+  useEffect(() => {
+    setInternalRevealRequest(null);
+  }, [selectedGroup?.id]);
+
+  const handleLocateFile = useCallback(
+    (filePath: string) => {
+      if (!selectedGroup?.projectName) return;
+      if (fileTreeHidden && onToggleFileTree) {
+        onToggleFileTree();
+      }
+      setInternalRevealRequest({
+        project: selectedGroup.projectName,
+        path: filePath,
+        nonce: Date.now(),
+      });
+    },
+    [selectedGroup?.projectName, fileTreeHidden, onToggleFileTree],
+  );
+
   // Status-bearing tabs or session renames rebuild groups/mountedSessions,
   // but unchanged PTY membership must not retrigger MultiTerminalDisplay's
   // prune/reparent/fit path and steal focus.
@@ -804,6 +836,7 @@ export function TraditionalTerminalProjectsDisplay({
                 projectRef={selectedGroup.projectRef}
                 regionId={`agent-hub-right-file-tree-${selectedGroup.id}`}
                 onOpenFile={onOpenFile}
+                revealRequest={effectiveRevealRequest}
                 className="h-full px-2 py-1"
               />
             </div>
@@ -811,19 +844,32 @@ export function TraditionalTerminalProjectsDisplay({
           <div className="flex min-h-0 flex-1 flex-col border-t border-[var(--color-border)]">
             <div className="flex h-7 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-2)]/50 px-3 text-2xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
               <span>file changes</span>
-              <button
-                type="button"
-                onClick={() => void handleRefreshFileChanges()}
-                disabled={isRefreshing}
-                aria-label="Refresh file changes"
-                title="Refresh file changes"
-                className="rounded p-0.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] disabled:opacity-50"
-              >
-                <RefreshCw
-                  className={cn("h-3 w-3", isRefreshing && "animate-spin")}
-                  aria-hidden="true"
-                />
-              </button>
+              <div className="flex items-center gap-1">
+                {onOpenChanges && (
+                  <button
+                    type="button"
+                    onClick={onOpenChanges}
+                    aria-label="Open Changes panel"
+                    title="Open Changes panel"
+                    className="rounded p-0.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                  >
+                    <GitCompare className="h-3 w-3" aria-hidden="true" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void handleRefreshFileChanges()}
+                  disabled={isRefreshing}
+                  aria-label="Refresh file changes"
+                  title="Refresh file changes"
+                  className="rounded p-0.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] disabled:opacity-50"
+                >
+                  <RefreshCw
+                    className={cn("h-3 w-3", isRefreshing && "animate-spin")}
+                    aria-hidden="true"
+                  />
+                </button>
+              </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               <TraditionalProjectFileChanges
@@ -831,6 +877,7 @@ export function TraditionalTerminalProjectsDisplay({
                 profileId={selectedGroup.profileId}
                 projectRef={selectedGroup.projectRef}
                 onOpenFile={onOpenFile}
+                onLocateFile={handleLocateFile}
                 className="px-2 py-1"
               />
             </div>

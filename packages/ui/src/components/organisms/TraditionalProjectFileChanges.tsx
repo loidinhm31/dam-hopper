@@ -8,6 +8,8 @@ import { useProjectTarget } from "@/hooks/use-project-target.js";
 import type { FsTargetRef, ProjectRef, ProjectTargetRef } from "@/api/ownership.js";
 import type { IntentPayloadMap } from "@/os/intents.js";
 import { cn } from "@/lib/utils.js";
+import { ContextMenu } from "@/components/ui/ContextMenu.js";
+import { projectPathForEntry } from "@/components/organisms/ChangedFilesList.js";
 
 export interface TraditionalProjectFileChangesProps {
   readonly projectName: string;
@@ -15,6 +17,7 @@ export interface TraditionalProjectFileChangesProps {
   readonly projectRef?: ProjectTargetRef | ProjectRef | string | null;
   readonly onOpenFile?: (payload: IntentPayloadMap["file:open"]) => void;
   readonly className?: string;
+  readonly onLocateFile?: (filePath: string) => void;
 }
 
 
@@ -39,6 +42,7 @@ export function TraditionalProjectFileChanges({
   profileId,
   projectRef,
   onOpenFile,
+  onLocateFile,
   className,
 }: TraditionalProjectFileChangesProps): ReactElement {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -94,7 +98,9 @@ export function TraditionalProjectFileChanges({
         projectId: projectName,
         worktreeId: worktreePath || undefined,
         target,
-        filePath: entry.path,
+        filePath: projectPathForEntry(entry),
+        diffPath: entry.path,
+        gitRootId: entry.rootId,
         isDiff: true,
         fileStatus: entry.status,
         ...((generation !== undefined || (effectiveProfileId ?? "default") === "default")
@@ -106,6 +112,39 @@ export function TraditionalProjectFileChanges({
     },
     [effectiveProfileId, generation, onOpenFile, projectName, projectRef, projectTarget],
   );
+  const handleOpenFileRegular = useCallback(
+    (entry: DiffFileEntry) => {
+      const worktreePath =
+        projectTarget?.worktreePath ??
+        (projectRef && typeof projectRef === "object" && "worktreePath" in projectRef
+          ? projectRef.worktreePath
+          : undefined) ??
+        null;
+      const target: FsTargetRef = {
+        kind: "project",
+        profileId: effectiveProfileId ?? "default",
+        project: projectName,
+        worktreePath: worktreePath || undefined,
+      };
+      const resolvedPath = projectPathForEntry(entry);
+      const payload: IntentPayloadMap["file:open"] = {
+        profileId: effectiveProfileId ?? "default",
+        projectId: projectName,
+        worktreeId: worktreePath || undefined,
+        target,
+        filePath: resolvedPath,
+        isDiff: false,
+        fileStatus: entry.status,
+        ...((generation !== undefined || (effectiveProfileId ?? "default") === "default")
+          ? { mode: "float" as const }
+          : {}),
+        ...(generation !== undefined ? { generation } : {}),
+      };
+      onOpenFile?.(payload);
+    },
+    [effectiveProfileId, generation, onOpenFile, projectName, projectRef, projectTarget],
+  );
+
 
   if (isLoading) {
     return (
@@ -157,56 +196,94 @@ export function TraditionalProjectFileChanges({
           ? entry.path.slice(0, entry.path.lastIndexOf("/"))
           : "";
 
+        const resolvedPath = projectPathForEntry(entry);
+        const isDeleted = entry.status === "deleted";
+
         return (
-          <div
-            key={entry.path}
-            role="listitem"
-            tabIndex={0}
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedPath(entry.path);
-            }}
-            onDoubleClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setSelectedPath(entry.path);
-              handleOpenFileDiff(entry);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                setSelectedPath(entry.path);
-                handleOpenFileDiff(entry);
-              }
-            }}
-            title={`${entry.path} (${entry.status})`}
-            className={cn(
-              "flex items-center gap-1.5 rounded px-2 py-1 text-left transition-colors cursor-pointer",
-              selectedPath === entry.path
-                ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-medium"
-                : "hover:bg-[var(--color-surface-2)]",
-              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]",
-            )}
-          >
-            <span
-              className={cn(
-                "flex h-4 w-4 shrink-0 items-center justify-center rounded border font-mono text-[9px] font-bold",
-                badge.colorClass,
-              )}
-              title={entry.status}
-              aria-label={entry.status}
-            >
-              {badge.label}
-            </span>
-            <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--color-text)]">
-              {fileName}
-              {dirPath && (
-                <span className="ml-1 text-[var(--color-text-muted)] text-[10px]">
-                  {dirPath}
+          <ContextMenu.Root key={entry.path}>
+            <ContextMenu.Trigger>
+              <div
+                role="listitem"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedPath(entry.path);
+                }}
+                onDoubleClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setSelectedPath(entry.path);
+                  handleOpenFileDiff(entry);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setSelectedPath(entry.path);
+                    handleOpenFileDiff(entry);
+                  }
+                }}
+                title={`${entry.path} (${entry.status})`}
+                className={cn(
+                  "flex items-center gap-1.5 rounded px-2 py-1 text-left transition-colors cursor-pointer",
+                  selectedPath === entry.path
+                    ? "bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-medium"
+                    : "hover:bg-[var(--color-surface-2)]",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]",
+                )}
+              >
+                <span
+                  className={cn(
+                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border font-mono text-[9px] font-bold",
+                    badge.colorClass,
+                  )}
+                  title={entry.status}
+                  aria-label={entry.status}
+                >
+                  {badge.label}
                 </span>
-              )}
-            </span>
-          </div>
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--color-text)]">
+                  {fileName}
+                  {dirPath && (
+                    <span className="ml-1 text-[var(--color-text-muted)] text-[10px]">
+                      {dirPath}
+                    </span>
+                  )}
+                </span>
+              </div>
+            </ContextMenu.Trigger>
+            <ContextMenu.Portal>
+              <ContextMenu.Content className="w-44">
+                <ContextMenu.Item
+                  disabled={isDeleted}
+                  title={isDeleted ? "Cannot locate deleted file in file tree" : undefined}
+                  onSelect={() => {
+                    setSelectedPath(entry.path);
+                    onLocateFile?.(resolvedPath);
+                  }}
+                >
+                  Locate in files
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  onSelect={() => {
+                    setSelectedPath(entry.path);
+                    handleOpenFileDiff(entry);
+                  }}
+                >
+                  Open diff
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  disabled={isDeleted}
+                  title={isDeleted ? "Cannot open deleted file" : undefined}
+                  onSelect={() => {
+                    setSelectedPath(entry.path);
+                    handleOpenFileRegular(entry);
+                  }}
+                >
+                  Open file
+                </ContextMenu.Item>
+              </ContextMenu.Content>
+            </ContextMenu.Portal>
+          </ContextMenu.Root>
         );
       })}
     </div>

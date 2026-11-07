@@ -21,6 +21,8 @@ import { gitQueryKey } from "@/api/queries.js";
 import { normalizeProjectTarget } from "@/api/client.js";
 
 let mockQueryFn: (target: unknown) => Promise<{ files: string[] }>;
+let mockTreeProps: { revealRequest?: unknown } | null = null;
+let mockFileChangesProps: { onLocateFile?: (filePath: string) => void } | null = null;
 
 interface TestProjectRefObject {
   readonly project?: string;
@@ -40,15 +42,19 @@ vi.mock("@/components/organisms/MultiTerminalDisplay.js", () => ({
 }));
 
 vi.mock("@/components/organisms/TraditionalProjectWorkspaceTree.js", () => ({
-  TraditionalProjectWorkspaceTree: () => <div data-testid="workspace-tree" />,
+  TraditionalProjectWorkspaceTree: (props: { revealRequest?: unknown }) => {
+    mockTreeProps = props;
+    return <div data-testid="workspace-tree" />;
+  },
 }));
-
 vi.mock("@/components/organisms/TraditionalProjectFileChanges.js", () => ({
   TraditionalProjectFileChanges: (props: {
     projectName: string;
     profileId?: string;
     projectRef?: unknown;
+    onLocateFile?: (filePath: string) => void;
   }) => {
+    mockFileChangesProps = props;
     const ref = getProjectRefObject(props.projectRef);
     const normalizedTarget = normalizeProjectTarget(
       ref
@@ -517,5 +523,39 @@ describe("TraditionalTerminalProjectsDisplay - File Changes Refresh", () => {
       'button[aria-label="Refresh file changes"]',
     );
     expect(refreshBtn).toBeNull();
+  });
+
+  it("renders Open Changes panel button and calls onOpenChanges on click", async () => {
+    const onOpenChanges = vi.fn();
+    await renderDisplay({ onOpenChanges });
+
+    const openChangesBtn = container.querySelector(
+      'button[aria-label="Open Changes panel"]',
+    ) as HTMLButtonElement;
+    expect(openChangesBtn).not.toBeNull();
+    expect(openChangesBtn.title).toBe("Open Changes panel");
+
+    await act(async () => {
+      openChangesBtn.click();
+    });
+    expect(onOpenChanges).toHaveBeenCalledOnce();
+  });
+
+  it("handles onLocateFile by forwarding revealRequest to workspace tree", async () => {
+    const onToggleFileTree = vi.fn();
+    await renderDisplay({ onToggleFileTree });
+
+    expect(mockFileChangesProps?.onLocateFile).toBeDefined();
+
+    await act(async () => {
+      mockFileChangesProps?.onLocateFile?.("src/target-file.ts");
+    });
+
+    expect(mockTreeProps?.revealRequest).toEqual(
+      expect.objectContaining({
+        project: "demo-project",
+        path: "src/target-file.ts",
+      }),
+    );
   });
 });

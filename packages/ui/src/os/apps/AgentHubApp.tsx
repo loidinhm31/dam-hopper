@@ -2,11 +2,13 @@ import {
   useState,
   useMemo,
   useCallback,
+  useEffect,
   type ReactElement,
 } from "react";
 import { X } from "lucide-react";
 import type { OsWindow } from "../types.js";
-import { dispatchIntent, createIntent } from "../intents.js";
+import { useWindowStore } from "../window-store.js";
+import { dispatchIntent, createIntent, registerIntentHandler } from "../intents.js";
 import { TraditionalTerminalProjectsDisplay } from "@/components/organisms/TraditionalTerminalProjectsDisplay.js";
 import { useAgentHubWorkspaces } from "../agent-hub/use-agent-hub-workspaces.js";
 import { useHubTerminalTabActions } from "../agent-hub/use-hub-terminal-tab-actions.js";
@@ -20,6 +22,7 @@ import {
 } from "@/stores/project-target.js";
 import type { IntentPayloadMap } from "../intents.js";
 import { terminalKey } from "@/api/ownership.js";
+import type { FileTreeRevealRequest } from "@/lib/file-tree-reveal.js";
 
 export interface AgentHubAppProps {
   window: OsWindow;
@@ -29,6 +32,8 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
   const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [fileTreeHidden, setFileTreeHidden] = useState(false);
+  const [externalRevealRequest, setExternalRevealRequest] =
+    useState<FileTreeRevealRequest | null>(null);
   const handleToggleFileTree = useCallback(() => {
     setFileTreeHidden((prev) => !prev);
   }, []);
@@ -112,6 +117,7 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
   const activeTargets = useProjectTargetStore((s) => s.activeTargetByProject) as Record<string, string | null>;
   const selectedWorktree = selectedProjectKey ? activeTargets[selectedProjectKey] ?? null : null;
 
+
   // R7: Relocated Review affordance with exact fences
   const handleOpenSessionChanges = useCallback(
     async (sessionId: string) => {
@@ -153,6 +159,55 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
   const handleOpenRecipes = useCallback(() => {
     dispatchIntent(createIntent("recipes:open", {}, window.id));
   }, [window.id]);
+  // Changes float intent
+  const handleOpenChanges = useCallback(() => {
+    if (!selectedGroup?.projectName || !selectedGroup.profileId) return;
+    dispatchIntent(
+      createIntent(
+        "changes:diff",
+        {
+          profileId: selectedGroup.profileId,
+          projectId: selectedGroup.projectName,
+          worktreeId: selectedWorktree ?? undefined,
+          mode: "float",
+        },
+        window.id,
+      ),
+    );
+  }, [selectedGroup, selectedWorktree, window.id]);
+
+  useEffect(() => {
+    return registerIntentHandler("file:reveal", (intent) => {
+      const targetProject =
+        intent.payload.projectId ??
+        (intent.payload.target?.kind === "project"
+          ? intent.payload.target.project
+          : undefined);
+      const normalizedCurrentWorktree = selectedWorktree || undefined;
+      const normalizedIntentWorktree = intent.payload.worktreeId || undefined;
+      if (
+        selectedGroup?.projectName &&
+        targetProject === selectedGroup.projectName &&
+        (!selectedGroup.profileId || intent.payload.profileId === selectedGroup.profileId) &&
+        normalizedCurrentWorktree === normalizedIntentWorktree
+      ) {
+        useWindowStore.getState().revealWindow(window.id);
+        useWindowStore.getState().focusWindow(window.id);
+        setFileTreeHidden(false);
+        setExternalRevealRequest({
+          project: selectedGroup.projectName,
+          path: intent.payload.filePath,
+          nonce: Date.now(),
+        });
+        return { status: "handled", targetWindowId: window.id };
+      }
+      return {
+        status: "unhandled",
+        reason: "Agent Hub workspace does not match target project",
+      };
+    });
+  }, [selectedGroup, selectedWorktree, window.id]);
+
 
   // Git float intent
   const handleOpenGit = useCallback(() => {
@@ -186,6 +241,7 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
         summary={summary}
         onOpenRecipes={handleOpenRecipes}
         onOpenGit={handleOpenGit}
+        onOpenChanges={handleOpenChanges}
       />
 
       {feedbackNotice && (
@@ -278,6 +334,8 @@ export function AgentHubApp({ window }: AgentHubAppProps): ReactElement {
           onOpenFile={handleOpenFile}
           onOpenRecipes={handleOpenRecipes}
           onOpenGit={handleOpenGit}
+          onOpenChanges={handleOpenChanges}
+          revealRequest={externalRevealRequest}
           onOpenSessionChanges={handleOpenSessionChanges}
           onSelectedGroupChange={workspaces.handleSelectedGroupChange}
           selectGroupRequest={workspaces.selectGroupRequest}

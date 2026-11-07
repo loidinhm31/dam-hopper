@@ -1,5 +1,6 @@
 import type { FsTargetRef } from "@/api/ownership.js";
 import type { TerminalPlacementIntent, ReviewTarget } from "../api/terminal-session-contract.js";
+import type { WindowMode } from "./types.js";
 /**
  * Typed OS Intent routing for DamHopper OS.
  *
@@ -81,6 +82,8 @@ export interface IntentPayloadMap {
     mode?: "float";
     isDiff?: boolean;
     fileStatus?: string;
+    diffPath?: string;
+    gitRootId?: string;
   };
   "file:edit": {
     profileId: string;
@@ -97,6 +100,7 @@ export interface IntentPayloadMap {
     projectId?: string;
     worktreeId?: string;
     filePath: string;
+    mode?: WindowMode;
   };
   "browser:preview": {
     profileId: string;
@@ -173,12 +177,14 @@ export interface IntentPayloadMap {
     profileId: string;
     projectId: string;
     worktreeId?: string;
-    filePath: string;
+    filePath?: string;
     status?: string;
     additions?: number;
     deletions?: number;
     gitRootId?: string;
     diffPath?: string;
+    activeTab?: "changes" | "commit" | "diff";
+    mode?: WindowMode;
   };
   "conflict:resolve": {
     profileId: string;

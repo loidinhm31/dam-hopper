@@ -298,4 +298,61 @@ describe("DiffViewer", () => {
     root.unmount();
     container.remove();
   });
+
+  it("renders locate button when onLocateFile is provided and invokes it on click", async () => {
+    const onLocateFile = vi.fn();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <DiffViewer
+          project="demo-project"
+          filePath="src/demo.ts"
+          fileStatus="modified"
+          onLocateFile={onLocateFile}
+        />,
+      );
+    });
+
+    const locateBtn = container.querySelector(
+      'button[aria-label="Locate file in file tree"]',
+    ) as HTMLButtonElement | null;
+    expect(locateBtn).not.toBeNull();
+    expect(locateBtn?.title).toBe("Locate file in file tree");
+
+    await act(async () => {
+      locateBtn?.click();
+    });
+
+    expect(onLocateFile).toHaveBeenCalledWith("src/demo.ts");
+
+    root.unmount();
+    container.remove();
+  });
+
+  it("does not render locate button when onLocateFile is not provided", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <DiffViewer
+          project="demo-project"
+          filePath="src/demo.ts"
+          fileStatus="modified"
+        />,
+      );
+    });
+
+    const locateBtn = container.querySelector(
+      'button[aria-label="Locate file in file tree"]',
+    );
+    expect(locateBtn).toBeNull();
+
+    root.unmount();
+    container.remove();
+  });
 });
