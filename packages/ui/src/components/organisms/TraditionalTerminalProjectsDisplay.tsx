@@ -7,7 +7,10 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { Plus, BookOpen, Folder, X, GitBranch } from "lucide-react";
+import { Plus, BookOpen, Folder, X, GitBranch, RefreshCw } from "lucide-react";
+import { useQueryClient, useIsFetching } from "@tanstack/react-query";
+import { normalizeProjectTarget } from "@/api/client.js";
+import { gitQueryKey } from "@/api/queries.js";
 import { TraditionalProjectWorkspaceTree } from "@/components/organisms/TraditionalProjectWorkspaceTree.js";
 import { TraditionalProjectFileChanges } from "@/components/organisms/TraditionalProjectFileChanges.js";
 import {
@@ -270,6 +273,39 @@ export function TraditionalTerminalProjectsDisplay({
     onSelectTab,
   });
   const { selectedGroup, activeSessionForGroup } = selection;
+  const targetRef = useMemo(() => {
+    const ref = selectedGroup?.projectRef;
+    return normalizeProjectTarget(
+      ref
+        ? { ...ref, profileId: ref.profileId ?? selectedGroup?.profileId }
+        : {
+            project: selectedGroup?.projectName ?? "",
+            profileId: selectedGroup?.profileId,
+          },
+    );
+  }, [
+    selectedGroup?.projectRef,
+    selectedGroup?.projectName,
+    selectedGroup?.profileId,
+  ]);
+
+  const queryClient = useQueryClient();
+  const diffQueryKey = gitQueryKey("git-diff", targetRef);
+  const fetchingCount = useIsFetching({ queryKey: diffQueryKey });
+  const isFetching = Boolean(targetRef.project) && fetchingCount > 0;
+  const [manualRefreshPending, setManualRefreshPending] = useState(false);
+  const isRefreshing = manualRefreshPending || isFetching;
+
+  async function handleRefreshFileChanges() {
+    if (!targetRef.project || isRefreshing) return;
+    const queryKey = diffQueryKey;
+    setManualRefreshPending(true);
+    try {
+      await queryClient.invalidateQueries({ queryKey });
+    } finally {
+      setManualRefreshPending(false);
+    }
+  }
 
   const selectedGroupSessionIdsKey = useMemo(() => {
     return selectedGroup
@@ -775,6 +811,19 @@ export function TraditionalTerminalProjectsDisplay({
           <div className="flex min-h-0 flex-1 flex-col border-t border-[var(--color-border)]">
             <div className="flex h-7 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-2)]/50 px-3 text-2xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
               <span>file changes</span>
+              <button
+                type="button"
+                onClick={() => void handleRefreshFileChanges()}
+                disabled={isRefreshing}
+                aria-label="Refresh file changes"
+                title="Refresh file changes"
+                className="rounded p-0.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={cn("h-3 w-3", isRefreshing && "animate-spin")}
+                  aria-hidden="true"
+                />
+              </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               <TraditionalProjectFileChanges
