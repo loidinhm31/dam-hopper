@@ -19,49 +19,51 @@ Body: `{ items: string[], projects: string[] }`
 ### Workspace Management
 
 **GET /api/workspace/status**
-Current workspace status. Returns `configPath` (authoritative registry file location) and `path` (legacy config directory).
+Current workspace status. Returns `path` (canonical workspace browse root directory), `configPath` (authoritative configuration file location), and `workspaceEpoch`.
 
 Response:
 
 ```json
 {
   "ready": true,
-  "path": "/home/user/.config/dam-hopper",
-  "configPath": "/home/user/.config/dam-hopper/dam-hopper.toml",
+  "path": "/home/user/workspace",
+  "configPath": "/home/user/.config/dam-hopper/config.toml",
   "name": "my-workspace",
-  "projectCount": 5
+  "projectCount": 5,
+  "workspaceEpoch": 1
 }
 ```
 
 **GET /api/workspace**
-Detailed workspace info. Returns both `root` (legacy display field) and `configPath` (authoritative registry location).
+Detailed workspace info. Returns `root` (canonical workspace browse root directory), `configPath` (authoritative configuration file location), and `workspaceEpoch`.
 
 Response:
 
 ```json
 {
   "name": "my-workspace",
-  "root": "/home/user/.config/dam-hopper",
-  "configPath": "/home/user/.config/dam-hopper/dam-hopper.toml",
-  "projectCount": 5
+  "root": "/home/user/workspace",
+  "configPath": "/home/user/.config/dam-hopper/config.toml",
+  "projectCount": 5,
+  "workspaceEpoch": 1
 }
 ```
 
 **POST /api/workspace/switch**
-Change active workspace. Accepts either a directory path or a direct path to a `dam-hopper.toml` file.
+Change active workspace browse root. Accepts either a directory path via `path` or `{ "root": "...", "name"?: "..." }`.
 
 Request body:
 
 ```json
-{ "path": "/path/to/workspace-dir-or-config.toml" }
+{ "path": "/home/user/projects/new-workspace" }
 ```
 
-On switch:
+Validation & execution contract:
 
-- Configuration is reloaded from the specified path
-- File API sandbox is reinitialized from project roots in the new config
-- All PTY sessions are disposed
-- Event: `workspace:changed` is broadcast to all clients
+- **Pre-validation**: Target directory is checked for existence, directory type, and exclusion from sensitive daemon configuration roots (`~/.config/dam-hopper`, `/etc/dam-hopper`, `/var/lib/dam-hopper`). Invalid paths reject with HTTP 400/403/404 without mutating configuration.
+- **Persistence**: The validated directory is saved to `[workspace].root` in the active `config.toml` file.
+- **Lifecycle reload**: Only after validation succeeds, filesystem sandboxes reinitialize with the new root, `workspaceEpoch` is incremented, and `workspace:changed` is broadcast to clients. Active remote PTY sessions are disposed to prevent process leakage across workspace roots; clients rebind their active workspace targets.
+- **Stale-Root Fence**: Dirty editor tabs and pending writes are fenced against saving stale relative paths into the newly active root, failing closed to prevent accidental data overwrites.
 
 Response: `{ "ok": true }`
 

@@ -15,7 +15,6 @@ const activityRegistrations = new Map<
   string,
   TerminalOutputActivityRegistration
 >();
-const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 const mockZoom = vi.hoisted(() => ({ level: 100 }));
 
 vi.mock("@/components/organisms/TerminalPanel.js", () => ({
@@ -36,11 +35,6 @@ vi.mock("@/components/organisms/TerminalPanel.js", () => ({
   },
 }));
 
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
-  }),
-}));
 
 vi.mock("@/contexts/AppZoomContext.js", () => ({
   useAppZoom: () => ({ level: mockZoom.level }),
@@ -57,35 +51,12 @@ afterEach(() => {
   }
   renderedPanelProps.length = 0;
   activityRegistrations.clear();
-  mockPolicy.enabled = false;
   mockZoom.level = 100;
   delete document.documentElement.dataset.appHost;
   delete document.documentElement.dataset.appPlatform;
 });
 
 describe("TerminalKeepAliveHost", () => {
-  it("overrides an explicit native-input opt-out when Android policy is active", () => {
-    renderedPanelProps.length = 0;
-    mockPolicy.enabled = true;
-
-    renderToStaticMarkup(
-      <TerminalKeepAliveHost
-        mountedSessions={[
-          { sessionId: "android", project: "web", command: "bash" },
-        ]}
-        suppressAutoFocus
-        suppressNativeKeyboard={false}
-      />,
-    );
-
-    expect(renderedPanelProps[0]).toEqual(
-      expect.objectContaining({
-        suppressAutoFocus: true,
-        suppressNativeKeyboard: true,
-      }),
-    );
-    mockPolicy.enabled = false;
-  });
 
   it("passes the current 1-based open-tab order to each terminal", () => {
     renderedPanelProps.length = 0;
@@ -182,26 +153,6 @@ describe("TerminalKeepAliveHost", () => {
     ]);
   });
 
-  it("disables WebGL for the native Windows WebView2 host", () => {
-    document.documentElement.dataset.appHost = "native";
-    document.documentElement.dataset.appPlatform = "windows";
-
-    renderToStaticMarkup(
-      <TerminalKeepAliveHost
-        mountedSessions={[
-          { sessionId: "visible", project: "web", command: "bash" },
-        ]}
-        webglEnabledSessionIds={new Set(["visible"])}
-      />,
-    );
-
-    expect(renderedPanelProps[0]).toEqual(
-      expect.objectContaining({
-        sessionId: "visible",
-        webglEnabled: false,
-      }),
-    );
-  });
 
   it("disables WebGL whenever app zoom is not 100%", () => {
     for (const level of [50, 80, 120]) {
@@ -273,5 +224,90 @@ describe("TerminalKeepAliveHost", () => {
       recentOutput: false,
       streamReady: false,
     });
+  });
+
+  it("propagates exact TerminalTarget and attachPolicy to TerminalPanel", () => {
+    renderedPanelProps.length = 0;
+    const target = {
+      profileId: "prof-1",
+      generation: 2,
+      serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+      terminalId: "term-exact-1",
+      incarnation: "18446744073709551615",
+    };
+
+    renderToStaticMarkup(
+      <TerminalKeepAliveHost
+        mountedSessions={[
+          {
+            sessionId: "term-exact-1",
+            project: "web",
+            command: "bash",
+            profileId: "prof-1",
+            terminalTarget: target,
+            attachPolicy: "existing-only",
+          },
+        ]}
+      />,
+    );
+
+    expect(renderedPanelProps).toContainEqual(
+      expect.objectContaining({
+        sessionId: "term-exact-1",
+        terminalTarget: target,
+        attachPolicy: "existing-only",
+      }),
+    );
+  });
+
+  it("maintains stable panel instance across target adoption (ZERO remount/dispose)", () => {
+    renderedPanelProps.length = 0;
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    const initialSession = {
+      sessionId: "term-1",
+      project: "web",
+      command: "bash",
+      profileId: "prof-1",
+      terminalRef: { profileId: "prof-1", id: "term-1" },
+    };
+
+    act(() => {
+      root?.render(
+        <TerminalKeepAliveHost mountedSessions={[initialSession]} />,
+      );
+    });
+
+    const initialRegistration = activityRegistrations.get("term-1");
+    expect(initialRegistration).toBeDefined();
+
+    const target = {
+      profileId: "prof-1",
+      generation: 2,
+      serverEpoch: "c18f1f50-3bf0-4566-b333-e18e8df52ea2",
+      terminalId: "term-1",
+      incarnation: "42",
+    };
+
+    // Re-render with target adopted (such as after Move beside)
+    act(() => {
+      root?.render(
+        <TerminalKeepAliveHost
+          mountedSessions={[
+            {
+              ...initialSession,
+              terminalTarget: target,
+              attachPolicy: "existing-only",
+            },
+          ]}
+        />,
+      );
+    });
+
+    // Activity registration must NOT have been disposed / recreated!
+    expect(activityRegistrations.get("term-1")).toBe(initialRegistration);
+    container.remove();
   });
 });

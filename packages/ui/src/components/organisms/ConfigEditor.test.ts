@@ -17,13 +17,6 @@ import {
   reconcileProjectRowIds,
 } from "./ConfigEditor.js";
 
-const mockPolicy = vi.hoisted(() => ({ enabled: false }));
-
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
-  }),
-}));
 
 const config: DamHopperConfig = {
   workspace: { name: "demo", root: "/tmp/demo" },
@@ -42,7 +35,6 @@ function triggerInputValue(input: HTMLInputElement, value: string) {
 
 describe("command row ids", () => {
   beforeEach(() => {
-    mockPolicy.enabled = false;
   });
 
   it("pre-populates row ids when initial commands are passed", () => {
@@ -202,7 +194,6 @@ describe("list row id helpers", () => {
 
 describe("CommandsForm focus retention across edits", () => {
   beforeEach(() => {
-    mockPolicy.enabled = false;
   });
 
   it("retains focus and DOM element across multiple keystrokes in command key input", async () => {
@@ -271,7 +262,6 @@ describe("CommandsForm focus retention across edits", () => {
 
 describe("ConfigEditor service name editing focus retention", () => {
   beforeEach(() => {
-    mockPolicy.enabled = false;
   });
 
   it("retains service name input focus and node identity across successive keystrokes", async () => {
@@ -409,7 +399,6 @@ describe("ConfigEditor service name editing focus retention", () => {
 
 describe("ConfigEditor terminal profiles and reset behavior", () => {
   beforeEach(() => {
-    mockPolicy.enabled = false;
   });
 
   it("renders terminal profile rows with proper styling classes", async () => {
@@ -754,26 +743,3 @@ describe("ConfigEditor terminal profiles and reset behavior", () => {
   });
 });
 
-describe("ConfigEditor Android Chrome policy", () => {
-  it("blocks configuration editing and saving", () => {
-    mockPolicy.enabled = true;
-    const markup = renderToStaticMarkup(
-      createElement(ConfigEditor, {
-        config,
-        onSave: vi.fn(async () => undefined),
-      }),
-    );
-
-    expect(markup).toContain('placeholder="my-workspace" disabled=""');
-    expect(markup).toContain(">Save changes</button>");
-    expect(markup).toContain(
-      "Unavailable on Android Chrome: configuration editing is disabled",
-    );
-    const typeSelect = markup.match(/<select[^>]*>/)?.[0];
-    expect(typeSelect).toBeDefined();
-    expect(typeSelect).not.toContain('disabled=""');
-    const removeButton = markup.match(/<button[^>]*>Remove<\/button>/)?.[0];
-    expect(removeButton).toBeDefined();
-    expect(removeButton).not.toContain('disabled=""');
-  });
-});

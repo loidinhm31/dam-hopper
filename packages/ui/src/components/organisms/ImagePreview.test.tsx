@@ -83,7 +83,7 @@ describe("ImagePreview", () => {
     expect(image?.getAttribute("crossorigin")).toBe("use-credentials");
     expect(document.body.textContent).not.toContain("Download");
     expect(issueImageTicket).toHaveBeenCalledWith(
-      "demo",
+      { kind: "project", project: "demo", profileId: "", worktreePath: null },
       "images/preview.webp",
       expect.any(AbortSignal),
     );

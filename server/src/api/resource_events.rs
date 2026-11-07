@@ -969,7 +969,6 @@ pub(crate) mod tests {
         use crate::pty::{BroadcastEventSink, PtySessionManager};
         use crate::state::AppState;
         use crate::system::resource_stream::qual_hook::{set_active_hook, QualHookState};
-        use crate::telemetry::TelemetryRuntime;
         use opaque_ke::ServerSetup;
         use rand::rngs::OsRng;
         use uuid::Uuid;
@@ -1094,7 +1093,7 @@ pub(crate) mod tests {
         let config_toml_path = if let Ok(cfg_env) = std::env::var("HOST_RESOURCE_QUAL_CONFIG") {
             PathBuf::from(cfg_env)
         } else {
-            let default_cfg = workspace_dir.join("dam-hopper.toml");
+            let default_cfg = workspace_dir.join("config.toml");
             if !default_cfg.exists() {
                 std::fs::write(
                     &default_cfg,
@@ -1119,6 +1118,8 @@ pub(crate) mod tests {
             agent_store: None,
             projects: vec![],
             features: FeaturesConfig::default(),
+            ui: None,
+            workspaces: None,
             config_path: config_toml_path.clone(),
         });
         dam_config.workspace.root = workspace_dir.display().to_string();
@@ -1145,7 +1146,6 @@ pub(crate) mod tests {
             None,
             ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
             diagnostics,
-            TelemetryRuntime::new(),
         )
         .expect("AppState creation failed");
 

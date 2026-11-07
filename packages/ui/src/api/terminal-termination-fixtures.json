@@ -1,0 +1,1467 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schemaVersion": 1,
+  "description": "Frozen test fixtures and executable specifications for DamHopper terminal session termination, observation, and numeric join contracts (C1–C5).",
+  "maxU64ExactEligibility": [
+    {
+      "id": "max_u64_exact_eligible_with_unsafe_legacy_number",
+      "input": {
+        "id": "term-max-u64",
+        "incarnationExact": "18446744073709551615",
+        "incarnation": 18446744073709551615
+      },
+      "expected": {
+        "eligible": true,
+        "isCanonicalPositiveU64": true,
+        "isLegacySafeInteger": false,
+        "reason": "Max u64 exact string is authoritative; legacy numeric wire literal deserializes as u64 in Rust and rounds to unsafe float in JS without invalidating exact eligibility."
+      }
+    },
+    {
+      "id": "u64_boundary_2_pow_53_eligible_with_unsafe_legacy_number",
+      "input": {
+        "id": "term-boundary-53",
+        "incarnationExact": "9007199254740993",
+        "incarnation": 9007199254740992
+      },
+      "expected": {
+        "eligible": true,
+        "isCanonicalPositiveU64": true,
+        "isLegacySafeInteger": false,
+        "reason": "2^53 + 1 is valid canonical positive u64; unsafe legacy numeric does not invalidate eligibility."
+      }
+    }
+  ],
+  "canonicalExactLegacySafeAgreementAndDisagreement": [
+    {
+      "id": "canonical_exact_with_safe_legacy_agreement",
+      "input": {
+        "id": "term-safe-agree",
+        "incarnationExact": "42",
+        "incarnation": 42
+      },
+      "expected": {
+        "eligible": true,
+        "isCanonicalPositiveU64": true,
+        "isLegacySafeInteger": true,
+        "legacySafeIntegerAgreeing": true,
+        "reason": "Positive safe integer agrees losslessly with exact string."
+      }
+    },
+    {
+      "id": "canonical_exact_with_safe_legacy_disagreement",
+      "input": {
+        "id": "term-safe-disagree",
+        "incarnationExact": "42",
+        "incarnation": 43
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": true,
+        "isLegacySafeInteger": true,
+        "legacySafeIntegerAgreeing": false,
+        "reason": "Safe integer 43 disagrees with exact string '42'; safe disagreement strictly rejects."
+      }
+    },
+    {
+      "id": "canonical_exact_with_nonpositive_zero_legacy_numeric",
+      "input": {
+        "id": "term-nonpositive-zero",
+        "incarnationExact": "42",
+        "incarnation": 0
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": true,
+        "isLegacySafeInteger": true,
+        "legacySafeIntegerAgreeing": false,
+        "reason": "Legacy numeric 0 is nonpositive; strictly rejects eligibility."
+      }
+    },
+    {
+      "id": "canonical_exact_with_negative_legacy_numeric",
+      "input": {
+        "id": "term-negative-legacy",
+        "incarnationExact": "42",
+        "incarnation": -42
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": true,
+        "isLegacySafeInteger": true,
+        "legacySafeIntegerAgreeing": false,
+        "reason": "Legacy numeric -42 is negative; strictly rejects eligibility."
+      }
+    }
+  ],
+  "malformedOrMissingExactNeverNumericFallback": [
+    {
+      "id": "missing_exact_never_numeric_fallback",
+      "input": {
+        "id": "term-missing-exact",
+        "incarnationExact": null,
+        "incarnation": 42
+      },
+      "expected": {
+        "eligible": false,
+        "reason": "Explicit null incarnationExact never falls back to legacy numeric, even when numeric is safe."
+      }
+    },
+    {
+      "id": "absent_exact_field_never_numeric_fallback",
+      "input": {
+        "id": "term-absent-exact",
+        "incarnation": 42
+      },
+      "expected": {
+        "eligible": false,
+        "reason": "Omitted incarnationExact field never falls back to legacy numeric, even when numeric is safe."
+      }
+    },
+    {
+      "id": "zero_exact_string_rejected",
+      "input": {
+        "id": "term-zero-exact",
+        "incarnationExact": "0",
+        "incarnation": 0
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": false,
+        "reason": "Exact string '0' is not positive; canonical range is 1..18446744073709551615."
+      }
+    },
+    {
+      "id": "empty_exact_string_rejected",
+      "input": {
+        "id": "term-empty-exact",
+        "incarnationExact": "",
+        "incarnation": 42
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": false,
+        "reason": "Empty string is not canonical positive u64."
+      }
+    },
+    {
+      "id": "leading_zero_exact_string_rejected",
+      "input": {
+        "id": "term-leading-zero",
+        "incarnationExact": "042",
+        "incarnation": 42
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": false,
+        "reason": "Leading zero violates canonical decimal spelling."
+      }
+    },
+    {
+      "id": "positive_sign_prefix_rejected",
+      "input": {
+        "id": "term-positive-sign",
+        "incarnationExact": "+42",
+        "incarnation": 42
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": false,
+        "reason": "Sign prefix '+' violates canonical decimal spelling."
+      }
+    },
+    {
+      "id": "negative_sign_prefix_rejected",
+      "input": {
+        "id": "term-negative-sign",
+        "incarnationExact": "-42",
+        "incarnation": 42
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": false,
+        "reason": "Sign prefix '-' violates canonical positive decimal spelling."
+      }
+    },
+    {
+      "id": "whitespace_padded_exact_rejected",
+      "input": {
+        "id": "term-whitespace",
+        "incarnationExact": " 42 ",
+        "incarnation": 42
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": false,
+        "reason": "Surrounding whitespace violates canonical decimal spelling."
+      }
+    },
+    {
+      "id": "trailing_newline_exact_rejected",
+      "input": {
+        "id": "term-trailing-newline",
+        "incarnationExact": "42\n",
+        "incarnation": 42
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": false,
+        "reason": "Trailing newline strictly violates canonical decimal spelling."
+      }
+    },
+    {
+      "id": "trailing_crlf_exact_rejected",
+      "input": {
+        "id": "term-trailing-crlf",
+        "incarnationExact": "42\r\n",
+        "incarnation": 42
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": false,
+        "reason": "Trailing CRLF strictly violates canonical decimal spelling."
+      }
+    },
+    {
+      "id": "overflow_u64_exact_rejected",
+      "input": {
+        "id": "term-overflow-u64",
+        "incarnationExact": "18446744073709551616",
+        "incarnation": 18446744073709551615
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": false,
+        "reason": "18446744073709551616 exceeds 2^64 - 1."
+      }
+    },
+    {
+      "id": "floating_point_exact_rejected",
+      "input": {
+        "id": "term-float",
+        "incarnationExact": "42.5",
+        "incarnation": 42
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": false,
+        "reason": "Decimals/fractions not allowed in u64."
+      }
+    },
+    {
+      "id": "scientific_notation_exact_rejected",
+      "input": {
+        "id": "term-exponent",
+        "incarnationExact": "1e5",
+        "incarnation": 100000
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": false,
+        "reason": "Scientific exponent notation not allowed."
+      }
+    },
+    {
+      "id": "non_numeric_exact_rejected",
+      "input": {
+        "id": "term-nan",
+        "incarnationExact": "not-a-number",
+        "incarnation": 42
+      },
+      "expected": {
+        "eligible": false,
+        "isCanonicalPositiveU64": false,
+        "reason": "Alphabetic string is not canonical positive u64."
+      }
+    }
+  ],
+  "headersValidation": [
+    {
+      "id": "valid_termination_headers",
+      "headers": {
+        "X-DamHopper-Termination-Version": "1",
+        "X-DamHopper-PTY-Epoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+      },
+      "expected": {
+        "valid": true,
+        "metadata": {
+          "version": 1,
+          "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+        }
+      }
+    },
+    {
+      "id": "missing_version_header",
+      "headers": {
+        "X-DamHopper-PTY-Epoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+      },
+      "expected": {
+        "valid": false,
+        "metadata": {
+          "version": null,
+          "serverEpoch": null,
+          "reason": "unsupported"
+        }
+      }
+    },
+    {
+      "id": "missing_epoch_header",
+      "headers": {
+        "X-DamHopper-Termination-Version": "1"
+      },
+      "expected": {
+        "valid": false,
+        "metadata": {
+          "version": null,
+          "serverEpoch": null,
+          "reason": "invalidMetadata"
+        }
+      }
+    },
+    {
+      "id": "unsupported_version_header",
+      "headers": {
+        "X-DamHopper-Termination-Version": "2",
+        "X-DamHopper-PTY-Epoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+      },
+      "expected": {
+        "valid": false,
+        "metadata": {
+          "version": null,
+          "serverEpoch": null,
+          "reason": "unsupported"
+        }
+      }
+    },
+    {
+      "id": "malformed_version_header_non_integer",
+      "headers": {
+        "X-DamHopper-Termination-Version": "1.0",
+        "X-DamHopper-PTY-Epoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+      },
+      "expected": {
+        "valid": false,
+        "metadata": {
+          "version": null,
+          "serverEpoch": null,
+          "reason": "unsupported"
+        }
+      }
+    },
+    {
+      "id": "malformed_version_header_negative",
+      "headers": {
+        "X-DamHopper-Termination-Version": "-1",
+        "X-DamHopper-PTY-Epoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+      },
+      "expected": {
+        "valid": false,
+        "metadata": {
+          "version": null,
+          "serverEpoch": null,
+          "reason": "unsupported"
+        }
+      }
+    },
+    {
+      "id": "malformed_version_header_alphabetic",
+      "headers": {
+        "X-DamHopper-Termination-Version": "abc",
+        "X-DamHopper-PTY-Epoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+      },
+      "expected": {
+        "valid": false,
+        "metadata": {
+          "version": null,
+          "serverEpoch": null,
+          "reason": "unsupported"
+        }
+      }
+    },
+    {
+      "id": "uppercase_epoch_header_rejected",
+      "headers": {
+        "X-DamHopper-Termination-Version": "1",
+        "X-DamHopper-PTY-Epoch": "E7B0C36B-67DF-4F0E-B7D5-866468453483"
+      },
+      "expected": {
+        "valid": false,
+        "metadata": {
+          "version": null,
+          "serverEpoch": null,
+          "reason": "invalidMetadata"
+        },
+        "reason": "PTY epoch must be strictly canonical lowercase hyphenated UUID."
+      }
+    },
+    {
+      "id": "epoch_header_trailing_newline_rejected",
+      "headers": {
+        "X-DamHopper-Termination-Version": "1",
+        "X-DamHopper-PTY-Epoch": "e7b0c36b-67df-4f0e-b7d5-866468453483\n"
+      },
+      "expected": {
+        "valid": false,
+        "metadata": {
+          "version": null,
+          "serverEpoch": null,
+          "reason": "invalidMetadata"
+        },
+        "reason": "PTY epoch with trailing newline strictly violates canonical UUID format."
+      }
+    }
+  ],
+  "sameIdsAcrossEpochs": [
+    {
+      "id": "same_id_different_epoch_target_mismatch",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "11111111-1111-1111-1111-111111111111",
+        "terminalId": "term-shared",
+        "incarnation": "100"
+      },
+      "incomingObservation": {
+        "serverEpoch": "22222222-2222-2222-2222-222222222222",
+        "terminalId": "term-shared",
+        "incarnationExact": "100"
+      },
+      "expected": {
+        "targetMatch": false,
+        "actionable": false,
+        "reason": "Epoch change invalidates target identity even if terminal ID and incarnation match."
+      }
+    }
+  ],
+  "sixFlatTerminationStates": [
+    {
+      "id": "state_live",
+      "input": {
+        "alive": true,
+        "willRestart": false,
+        "terminationState": "live"
+      },
+      "expected": {
+        "valid": true,
+        "state": "live"
+      }
+    },
+    {
+      "id": "state_termination_requested",
+      "input": {
+        "alive": true,
+        "terminationState": "terminationRequested"
+      },
+      "expected": {
+        "valid": true,
+        "state": "terminationRequested"
+      }
+    },
+    {
+      "id": "state_restart_pending",
+      "input": {
+        "alive": false,
+        "willRestart": true,
+        "terminationState": "restartPending"
+      },
+      "expected": {
+        "valid": true,
+        "state": "restartPending"
+      }
+    },
+    {
+      "id": "state_restart_cancelled",
+      "input": {
+        "alive": false,
+        "terminationState": "restartCancelled"
+      },
+      "expected": {
+        "valid": true,
+        "state": "restartCancelled"
+      }
+    },
+    {
+      "id": "state_exited",
+      "input": {
+        "alive": false,
+        "willRestart": false,
+        "terminationState": "exited"
+      },
+      "expected": {
+        "valid": true,
+        "state": "exited"
+      }
+    },
+    {
+      "id": "state_unavailable",
+      "input": {
+        "alive": false,
+        "targetUnavailable": true,
+        "terminationState": "unavailable"
+      },
+      "expected": {
+        "valid": true,
+        "state": "unavailable"
+      }
+    },
+    {
+      "id": "state_unrecognized_never_exited_fallback",
+      "input": {
+        "alive": false,
+        "terminationState": "some_random_state"
+      },
+      "expected": {
+        "valid": false,
+        "fallbackToExited": false,
+        "reason": "Unrecognized state must never be mapped or inferred as exited."
+      }
+    },
+    {
+      "id": "state_prototype_constructor_rejected",
+      "input": {
+        "alive": false,
+        "terminationState": "constructor"
+      },
+      "expected": {
+        "valid": false,
+        "fallbackToExited": false,
+        "reason": "Inherited prototype property 'constructor' must not match valid state."
+      }
+    },
+    {
+      "id": "state_prototype_toString_rejected",
+      "input": {
+        "alive": false,
+        "terminationState": "toString"
+      },
+      "expected": {
+        "valid": false,
+        "fallbackToExited": false,
+        "reason": "Inherited prototype property 'toString' must not match valid state."
+      }
+    },
+    {
+      "id": "state_prototype_proto_rejected",
+      "input": {
+        "alive": false,
+        "terminationState": "__proto__"
+      },
+      "expected": {
+        "valid": false,
+        "fallbackToExited": false,
+        "reason": "Inherited prototype property '__proto__' must not match valid state."
+      }
+    }
+  ],
+  "terminationEndpoints": [
+    {
+      "id": "live_termination_requested_success_202",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 202,
+      "body": {
+        "version": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100",
+        "outcome": "terminationRequested"
+      },
+      "expected": {
+        "valid": true,
+        "statusTransition": "terminationRequested"
+      }
+    },
+    {
+      "id": "pending_restart_cancelled_success_200",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-2",
+        "incarnation": "200"
+      },
+      "origin": "restartPending",
+      "status": 200,
+      "body": {
+        "version": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-2",
+        "incarnation": "200",
+        "outcome": "restartCancelled"
+      },
+      "expected": {
+        "valid": true,
+        "statusTransition": "restartCancelled"
+      }
+    },
+    {
+      "id": "wrong_status_outcome_pairing_200_with_termination_requested",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 200,
+      "body": {
+        "version": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100",
+        "outcome": "terminationRequested"
+      },
+      "expected": {
+        "valid": false,
+        "statusTransition": "outcomeUnknown",
+        "reason": "200 status with terminationRequested is illegal status/outcome pairing."
+      }
+    },
+    {
+      "id": "wrong_status_outcome_pairing_202_with_restart_cancelled",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-2",
+        "incarnation": "200"
+      },
+      "origin": "restartPending",
+      "status": 202,
+      "body": {
+        "version": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-2",
+        "incarnation": "200",
+        "outcome": "restartCancelled"
+      },
+      "expected": {
+        "valid": false,
+        "statusTransition": "outcomeUnknown",
+        "reason": "202 status with restartCancelled is illegal status/outcome pairing."
+      }
+    },
+    {
+      "id": "origin_incompatible_success_live_origin_receives_cancellation",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 200,
+      "body": {
+        "version": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100",
+        "outcome": "restartCancelled"
+      },
+      "expected": {
+        "valid": false,
+        "statusTransition": "outcomeUnknown",
+        "reason": "Live origin cannot complete on restartCancelled outcome."
+      }
+    },
+    {
+      "id": "origin_incompatible_success_pending_origin_receives_202",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-2",
+        "incarnation": "200"
+      },
+      "origin": "restartPending",
+      "status": 202,
+      "body": {
+        "version": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-2",
+        "incarnation": "200",
+        "outcome": "terminationRequested"
+      },
+      "expected": {
+        "valid": false,
+        "statusTransition": "outcomeUnknown",
+        "reason": "Pending origin cannot complete on 202 terminationRequested."
+      }
+    },
+    {
+      "id": "mismatched_echoed_terminal_id",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 202,
+      "body": {
+        "version": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-other",
+        "incarnation": "100",
+        "outcome": "terminationRequested"
+      },
+      "expected": {
+        "valid": false,
+        "statusTransition": "outcomeUnknown",
+        "reason": "Echoed terminalId mismatch strictly fails validation."
+      }
+    },
+    {
+      "id": "mismatched_echoed_incarnation",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 202,
+      "body": {
+        "version": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "101",
+        "outcome": "terminationRequested"
+      },
+      "expected": {
+        "valid": false,
+        "statusTransition": "outcomeUnknown",
+        "reason": "Echoed incarnation mismatch strictly fails validation."
+      }
+    },
+    {
+      "id": "mismatched_echoed_server_epoch",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 202,
+      "body": {
+        "version": 1,
+        "serverEpoch": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+        "terminalId": "term-1",
+        "incarnation": "100",
+        "outcome": "terminationRequested"
+      },
+      "expected": {
+        "valid": false,
+        "statusTransition": "outcomeUnknown",
+        "reason": "Echoed serverEpoch mismatch strictly fails validation."
+      }
+    },
+    {
+      "id": "refusal_400_invalid_request",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 400,
+      "body": {
+        "error": "Malformed termination request payload",
+        "code": "TERMINATION_INVALID_REQUEST"
+      },
+      "expected": {
+        "state": "refused",
+        "expectedMutation": false
+      }
+    },
+    {
+      "id": "refusal_400_unsupported_version",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 400,
+      "body": {
+        "error": "Unsupported protocol version",
+        "code": "TERMINATION_UNSUPPORTED_VERSION"
+      },
+      "expected": {
+        "state": "refused",
+        "expectedMutation": false
+      }
+    },
+    {
+      "id": "refusal_404_not_found",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-missing",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 404,
+      "body": {
+        "error": "Session not found",
+        "code": "TERMINATION_NOT_FOUND"
+      },
+      "expected": {
+        "state": "refused",
+        "expectedMutation": false
+      }
+    },
+    {
+      "id": "refusal_409_epoch_mismatch",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 409,
+      "body": {
+        "error": "PTY server epoch mismatch",
+        "code": "TERMINATION_EPOCH_MISMATCH"
+      },
+      "expected": {
+        "state": "refused",
+        "expectedMutation": false
+      }
+    },
+    {
+      "id": "refusal_409_incarnation_mismatch",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 409,
+      "body": {
+        "error": "Incarnation mismatch",
+        "code": "TERMINATION_INCARNATION_MISMATCH"
+      },
+      "expected": {
+        "state": "refused",
+        "expectedMutation": false
+      }
+    },
+    {
+      "id": "refusal_409_replacement_pending",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-2",
+        "incarnation": "200"
+      },
+      "origin": "restartPending",
+      "status": 409,
+      "body": {
+        "error": "Replacement session creation already admitted",
+        "code": "TERMINATION_REPLACEMENT_PENDING"
+      },
+      "expected": {
+        "state": "refused",
+        "expectedMutation": false
+      }
+    },
+    {
+      "id": "refusal_409_not_live",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 409,
+      "body": {
+        "error": "Session is not live or cancellable",
+        "code": "TERMINATION_NOT_LIVE"
+      },
+      "expected": {
+        "state": "refused",
+        "expectedMutation": false
+      }
+    },
+    {
+      "id": "refusal_409_manager_closing",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 409,
+      "body": {
+        "error": "PTY manager is shutting down",
+        "code": "TERMINATION_MANAGER_CLOSING"
+      },
+      "expected": {
+        "state": "refused",
+        "expectedMutation": false
+      }
+    },
+    {
+      "id": "refusal_409_already_requested",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 409,
+      "body": {
+        "error": "Termination already requested or cancelled",
+        "code": "TERMINATION_ALREADY_REQUESTED"
+      },
+      "expected": {
+        "state": "refused",
+        "expectedMutation": false
+      }
+    },
+    {
+      "id": "refusal_413_body_too_large",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 413,
+      "body": {
+        "error": "Request body exceeds 512 bytes limit",
+        "code": "TERMINATION_BODY_TOO_LARGE"
+      },
+      "expected": {
+        "state": "refused",
+        "expectedMutation": false
+      }
+    },
+    {
+      "id": "error_500_signal_failed",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "origin": "live",
+      "status": 500,
+      "body": {
+        "error": "OS process signal dispatch failed",
+        "code": "TERMINATION_SIGNAL_FAILED"
+      },
+      "expected": {
+        "state": "failed",
+        "expectedMutation": false
+      }
+    }
+  ],
+  "pendingReplacementPrecedence": [
+    {
+      "id": "cancellation_before_reservation_wins",
+      "description": "Cancellation arrives while session is in dead restart-pending state before supervisor reservation.",
+      "initialState": {
+        "sessionId": "term-c1",
+        "incarnation": "500",
+        "alive": false,
+        "willRestart": true,
+        "fleetPending": true,
+        "pendingReplacementAdmitted": false
+      },
+      "operations": [
+        "cancellation_received_under_inner_lock",
+        "fleet_pending_cleared",
+        "dead_tombstone_marked_restart_cancelled",
+        "supervisor_wakes_checks_admission_predicate"
+      ],
+      "cancellationResponse": {
+        "status": 200,
+        "outcome": "restartCancelled"
+      },
+      "expectedEffects": {
+        "cancellationSucceeds": true,
+        "fleetPendingActive": false,
+        "restartCancelledTombstoneRetained": true,
+        "reservationAdmitted": false,
+        "reason": "Cancellation before reservation clears fleet pending and marks tombstone; supervisor wakes and aborts admission."
+      }
+    },
+    {
+      "id": "reservation_before_cancellation_precedence",
+      "description": "Supervisor admits replacement under inner lock before cancellation arrives.",
+      "initialState": {
+        "sessionId": "term-c2",
+        "incarnation": "501",
+        "alive": false,
+        "willRestart": true,
+        "fleetPending": true,
+        "pendingReplacementAdmitted": false
+      },
+      "operations": [
+        "supervisor_wakes_and_admits_replacement_under_inner_lock",
+        "fleet_pending_consumed_at_reservation",
+        "pending_replacement_marked_admitted",
+        "cancellation_received_under_inner_lock",
+        "guard_detects_pending_replacement_and_refuses"
+      ],
+      "cancellationResponse": {
+        "status": 409,
+        "code": "TERMINATION_REPLACEMENT_PENDING"
+      },
+      "expectedEffects": {
+        "cancellationSucceeds": false,
+        "expectedMutation": false,
+        "replacementProtected": true,
+        "reason": "Admitted replacement has strict precedence; cancellation is refused with 409 without mutating state."
+      }
+    }
+  ],
+  "asyncValidationFencing": [
+    {
+      "id": "stale_async_validation_success_cancelled_during_await",
+      "scenario": "supervisor_loop awaits asynchronous target validation; cancellation occurs under inner lock during await.",
+      "sourceIncarnation": "502",
+      "validationStartSnapshot": {
+        "sessionId": "term-async-1",
+        "sourceCurrent": true,
+        "restartCancelled": false,
+        "validationPending": true
+      },
+      "cancellationOperation": "cancellation_received_under_inner_lock_and_marks_tombstone_restart_cancelled",
+      "validationCompletion": "asynchronous_target_validation_completes_successfully",
+      "transitionAttempted": "admit_replacement",
+      "expected": {
+        "authorized": false,
+        "mutatesTombstone": false,
+        "emitsFinalExit": false,
+        "reason": "Cancelled restart ownership drops async transition authority across await; cannot publish or admit replacement."
+      }
+    },
+    {
+      "id": "stale_async_validation_failure_cancelled_during_await",
+      "scenario": "supervisor_loop awaits asynchronous target validation and validation fails; cancellation occurred under inner lock during await.",
+      "sourceIncarnation": "503",
+      "validationStartSnapshot": {
+        "sessionId": "term-async-2",
+        "sourceCurrent": true,
+        "restartCancelled": false,
+        "validationPending": true
+      },
+      "cancellationOperation": "cancellation_received_under_inner_lock_and_marks_tombstone_restart_cancelled",
+      "validationCompletion": "asynchronous_target_validation_fails",
+      "transitionAttempted": "finish_respawn_source_failure",
+      "expected": {
+        "authorized": false,
+        "mutatesTombstone": false,
+        "emitsFinalExit": false,
+        "reason": "Cancelled restart ownership inhibits failure transition across await and strictly suppresses TerminalFinalExit."
+      }
+    },
+    {
+      "id": "normal_post_reservation_publication",
+      "scenario": "Target validation succeeds, reservation active and uncancelled; fleet pending was already consumed at reservation.",
+      "initialState": {
+        "sessionId": "term-async-3",
+        "sourceCurrent": true,
+        "restartCancelled": false,
+        "fleetPendingConsumedAtReservation": true
+      },
+      "transitionAttempted": "publish_respawn",
+      "expected": {
+        "authorized": true,
+        "fleetPendingRequiredForPublication": false,
+        "mutatesTombstone": true,
+        "newIncarnationPublished": true,
+        "reason": "Publication must NOT require fleet pending state consumed at reservation."
+      }
+    },
+    {
+      "id": "same_id_later_create_conflict",
+      "scenario": "Target was captured for incarnation 100. Later, an explicit create request creates a new session with identical terminal ID but incarnation 101.",
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-same-id",
+        "incarnation": "100"
+      },
+      "serverState": {
+        "terminalId": "term-same-id",
+        "currentIncarnation": "101"
+      },
+      "expected": {
+        "cancellationSucceeds": false,
+        "httpStatus": 409,
+        "errorCode": "TERMINATION_INCARNATION_MISMATCH",
+        "expectedMutation": false,
+        "reason": "Old target cannot mutate later session created with same terminal ID."
+      }
+    },
+    {
+      "id": "stale_queue_wake_after_cancellation",
+      "scenario": "Timer or supervisor loop queue fires a delayed respawn wake for a session that was already cancelled.",
+      "initialState": {
+        "sessionId": "term-stale-queue-1",
+        "incarnation": "504",
+        "restartCancelled": true
+      },
+      "event": "timer_wake_up",
+      "admissionPredicateCheck": "source_current && restart_enabled && matching_fleet_pending && !pending_replacement",
+      "expected": {
+        "admitted": false,
+        "mutatesState": false,
+        "isNoOp": true,
+        "reason": "Admission predicate fails because restart is cancelled; stale queue wake is an immediate no-op."
+      }
+    },
+    {
+      "id": "stale_queue_wake_after_same_id_later_create",
+      "scenario": "Supervisor queue wakes for old incarnation 100 after a new session was created with the same terminal ID and incarnation 102.",
+      "initialState": {
+        "sessionId": "term-same-id",
+        "wakeIncarnation": "100",
+        "currentLiveIncarnation": "102"
+      },
+      "event": "timer_wake_up",
+      "admissionPredicateCheck": "respawn_source_is_current",
+      "expected": {
+        "admitted": false,
+        "mutatesState": false,
+        "isNoOp": true,
+        "reason": "respawn_source_is_current fails because incarnation 100 is superseded by 102; wake is an immediate no-op."
+      }
+    }
+  ],
+  "signalAndLossReconciliation": [
+    {
+      "id": "signal_failure_500_session_remains_live",
+      "status": 500,
+      "code": "TERMINATION_SIGNAL_FAILED",
+      "expected": {
+        "state": "failed",
+        "sessionStillLive": true,
+        "noFabricatedTombstone": true
+      }
+    },
+    {
+      "id": "unresolved_wait_failure_live_session_unresolved",
+      "scenario": "Reader child.wait fails or times out; live session ownership retained without fabricated tombstone.",
+      "expected": {
+        "state": "failed",
+        "outcomeCompleted": false,
+        "isUnresolved": true,
+        "noFabricatedTombstone": true,
+        "reason": "Wait failure is an unresolved state, NOT a completed or proven-no-effect outcome; server retains ownership."
+      }
+    },
+    {
+      "id": "lost_202_reconciliation_exact_exited_completes_ended",
+      "origin": "live",
+      "lossScenario": "202 network response dropped; observation arrives.",
+      "authority": {
+        "owner": {
+          "profileId": "prof-1",
+          "generation": 1
+        },
+        "termination": {
+          "version": 1,
+          "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+        }
+      },
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "subsequentObservationRow": {
+        "id": "term-1",
+        "incarnationExact": "100",
+        "terminationState": "exited"
+      },
+      "expected": {
+        "completesEnd": true,
+        "finalStatus": "ended"
+      }
+    },
+    {
+      "id": "lost_200_reconciliation_exact_restart_cancelled_completes",
+      "origin": "restartPending",
+      "lossScenario": "200 network response dropped; observation arrives.",
+      "authority": {
+        "owner": {
+          "profileId": "prof-1",
+          "generation": 1
+        },
+        "termination": {
+          "version": 1,
+          "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+        }
+      },
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-2",
+        "incarnation": "200"
+      },
+      "subsequentObservationRow": {
+        "id": "term-2",
+        "incarnationExact": "200",
+        "terminationState": "restartCancelled"
+      },
+      "expected": {
+        "completesEnd": true,
+        "finalStatus": "restartCancelled"
+      }
+    },
+    {
+      "id": "ordinary_exited_observation_cannot_resolve_pending_origin_loss",
+      "origin": "restartPending",
+      "lossScenario": "200 network response dropped; observation sees ordinary exited (without restartCancelled marker).",
+      "authority": {
+        "owner": {
+          "profileId": "prof-1",
+          "generation": 1
+        },
+        "termination": {
+          "version": 1,
+          "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+        }
+      },
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-2",
+        "incarnation": "200"
+      },
+      "subsequentObservationRow": {
+        "id": "term-2",
+        "incarnationExact": "200",
+        "terminationState": "exited"
+      },
+      "expected": {
+        "completesEnd": false,
+        "finalStatus": "outcomeUnknown",
+        "reason": "Ordinary exited cannot resolve lost cancellation response for pending origin."
+      }
+    },
+    {
+      "id": "absence_from_inventory_cannot_resolve_pending_origin_loss",
+      "origin": "restartPending",
+      "lossScenario": "200 network response dropped; session is completely absent from observation rows.",
+      "authority": {
+        "owner": {
+          "profileId": "prof-1",
+          "generation": 1
+        },
+        "termination": {
+          "version": 1,
+          "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+        }
+      },
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-2",
+        "incarnation": "200"
+      },
+      "subsequentObservationRows": [],
+      "expected": {
+        "completesEnd": false,
+        "finalStatus": "outcomeUnknown",
+        "reason": "Absence from inventory cannot resolve lost cancellation response for pending origin."
+      }
+    },
+    {
+      "id": "absence_from_inventory_cannot_resolve_live_origin_loss",
+      "origin": "live",
+      "lossScenario": "202 network response dropped; session is completely absent from observation rows.",
+      "authority": {
+        "owner": {
+          "profileId": "prof-1",
+          "generation": 1
+        },
+        "termination": {
+          "version": 1,
+          "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+        }
+      },
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "subsequentObservationRows": [],
+      "expected": {
+        "completesEnd": false,
+        "finalStatus": "outcomeUnknown",
+        "reason": "Absence from inventory cannot resolve lost 202 response for live origin; requires exact exited observation."
+      }
+    },
+    {
+      "id": "raw_alive_false_cannot_resolve_loss",
+      "origin": "live",
+      "lossScenario": "202 network response dropped; row has alive: false but missing terminationState.",
+      "authority": {
+        "owner": {
+          "profileId": "prof-1",
+          "generation": 1
+        },
+        "termination": {
+          "version": 1,
+          "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+        }
+      },
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "subsequentObservationRow": {
+        "id": "term-1",
+        "incarnationExact": "100",
+        "alive": false
+      },
+      "expected": {
+        "completesEnd": false,
+        "finalStatus": "outcomeUnknown",
+        "reason": "Raw alive: false without authoritative exited state does not complete End."
+      }
+    },
+    {
+      "id": "cancellation_marker_cannot_resolve_live_origin_loss",
+      "origin": "live",
+      "lossScenario": "202 network response dropped; observation sees restartCancelled.",
+      "authority": {
+        "owner": {
+          "profileId": "prof-1",
+          "generation": 1
+        },
+        "termination": {
+          "version": 1,
+          "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483"
+        }
+      },
+      "target": {
+        "profileId": "prof-1",
+        "generation": 1,
+        "serverEpoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+        "terminalId": "term-1",
+        "incarnation": "100"
+      },
+      "subsequentObservationRow": {
+        "id": "term-1",
+        "incarnationExact": "100",
+        "terminationState": "restartCancelled"
+      },
+      "expected": {
+        "completesEnd": false,
+        "finalStatus": "outcomeUnknown",
+        "reason": "Cancellation marker cannot complete live-origin termination."
+      }
+    }
+  ],
+  "downstreamNumericJoinRefusal": [
+    {
+      "id": "agent_safe_numeric_join_permitted",
+      "targetIncarnationExact": "42",
+      "producer": "agent",
+      "numericEvidence": 42,
+      "expected": {
+        "joinPermitted": true,
+        "reason": "Lossless positive safe integer matches exact target."
+      }
+    },
+    {
+      "id": "agent_unsafe_numeric_join_refused",
+      "targetIncarnationExact": "9007199254740993",
+      "producer": "agent",
+      "numericEvidence": 9007199254740992,
+      "expected": {
+        "joinPermitted": false,
+        "reviewAvailable": false,
+        "inventoryEligible": true,
+        "reason": "Unsafe agent numeric evidence cannot prove identity; join refused while inventory remains End-eligible."
+      }
+    },
+    {
+      "id": "port_safe_numeric_join_permitted",
+      "targetIncarnationExact": "105",
+      "producer": "port",
+      "numericEvidence": 105,
+      "expected": {
+        "joinPermitted": true
+      }
+    },
+    {
+      "id": "port_unsafe_numeric_join_refused",
+      "targetIncarnationExact": "18446744073709551615",
+      "producer": "port",
+      "numericEvidence": 18446744073709551615,
+      "expected": {
+        "joinPermitted": false,
+        "reason": "Port numeric evidence > MAX_SAFE_INTEGER; join strictly refused."
+      }
+    },
+    {
+      "id": "replay_safe_numeric_join_permitted",
+      "targetIncarnationExact": "888",
+      "producer": "replay",
+      "numericEvidence": 888,
+      "expected": {
+        "joinPermitted": true
+      }
+    },
+    {
+      "id": "replay_unsafe_numeric_join_refused",
+      "targetIncarnationExact": "9007199254740993",
+      "producer": "replay",
+      "numericEvidence": 9007199254740993,
+      "expected": {
+        "joinPermitted": false,
+        "reason": "Replay numeric evidence > MAX_SAFE_INTEGER; join strictly refused."
+      }
+    }
+  ]
+}

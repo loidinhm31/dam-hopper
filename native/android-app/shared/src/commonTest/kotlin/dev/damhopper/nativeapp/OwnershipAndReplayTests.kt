@@ -14,7 +14,6 @@ import dev.damhopper.nativeapp.core.transport.HostResourceSseFrame
 import dev.damhopper.nativeapp.features.host.HostResourceController
 import dev.damhopper.nativeapp.features.host.ResourceSourceMode
 import dev.damhopper.nativeapp.features.host.ResourceStreamCoordinator
-import dev.damhopper.nativeapp.features.host.UsageBoundsHelper
 import dev.damhopper.nativeapp.features.terminal.ReconcileOutputResult
 import dev.damhopper.nativeapp.features.terminal.TerminalReplayGate
 import dev.damhopper.nativeapp.features.terminal.reconcileTerminalOutput
@@ -168,22 +167,6 @@ class OwnershipAndReplayTests {
         )
     }
 
-    @Test
-    fun testUsageBoundsHelperUtcIntervalCalculationsAndFormatting() {
-        val nowMs = 1776435600000L // 2026-04-17T14:20:00Z
-        val (fromUtc, todayUtc) = UsageBoundsHelper.calculateUtcDayRange(nowMs, 7L)
-
-        // todayUtc must be floored to midnight UTC
-        assertEquals(0L, todayUtc % UsageBoundsHelper.DAY_MS)
-        assertEquals(7L * UsageBoundsHelper.DAY_MS, todayUtc - fromUtc)
-
-        val formattedFrom = UsageBoundsHelper.formatUtcDate(fromUtc)
-        val formattedTo = UsageBoundsHelper.formatUtcDate(todayUtc)
-
-        assertTrue(formattedFrom.endsWith(" UTC"))
-        assertTrue(formattedTo.endsWith(" UTC"))
-        assertTrue(formattedFrom.length >= 14) // "YYYY-MM-DD UTC"
-    }
 
     @Test
     fun testCryptoEnvelopeTamperRejectionFailsClosed() {

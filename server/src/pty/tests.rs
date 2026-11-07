@@ -17,7 +17,7 @@ mod pty_tests {
 
     use std::sync::OnceLock;
 
-    use crate::config::schema::{RestartPolicy, TelemetryConfig, DEFAULT_RESTART_MAX_RETRIES};
+    use crate::config::schema::{RestartPolicy, DEFAULT_RESTART_MAX_RETRIES};
     use crate::diagnostics::DiagnosticStore;
     use crate::fs::FsSubsystem;
     use crate::persistence::{PersistCmd, PersistWorker, SessionStore};
@@ -25,7 +25,8 @@ mod pty_tests {
         event_sink::{EventSink, NoopEventSink},
         manager::{
             build_child_env_from_parent_snapshot, send_visible_output_then_lifecycle,
-            PtyCreateOpts, PtySessionManager, PtyTargetContext,
+            GuardedTerminationError, GuardedTerminationOutcome, PtyCreateOpts,
+            PtySessionManager, PtyTargetContext, TerminalInventoryState,
         },
         shell_lifecycle::{LifecycleEvent, LifecycleState},
         SessionMeta,
@@ -132,93 +133,6 @@ mod pty_tests {
         git(&["commit", "-m", "init"], path);
     }
 
-    #[derive(Debug)]
-    struct PtyBenchmarkSummary {
-        p95_latency_us: u128,
-        throughput_bytes_per_sec: u128,
-    }
-
-    fn benchmark_pty_configuration(usage_enabled: bool) -> PtyBenchmarkSummary {
-        let temp = tempfile::tempdir().unwrap();
-        let runtime = crate::telemetry::TelemetryRuntime::with_paths(
-            temp.path().join("telemetry.key"),
-            temp.path().join("collector.token"),
-        );
-        let mut telemetry_config = TelemetryConfig::default();
-        telemetry_config.enabled = usage_enabled;
-        telemetry_config.db_path = temp.path().join("telemetry.db").display().to_string();
-        test_rt().block_on(async {
-            runtime
-                .apply_config(&TelemetryConfig::default(), &telemetry_config)
-                .await
-                .unwrap();
-        });
-
-        // The manager is deliberately constructed without the runtime in both
-        // cases. This is the benchmark's regression guard: enabling Codex
-        // Usage must not alter the PTY construction or reader path.
-        let manager = make_manager();
-        let id = if usage_enabled {
-            "benchmark:usage-enabled"
-        } else {
-            "benchmark:usage-disabled"
-        };
-        manager.create(opts(id, "bash")).unwrap();
-        manager.write(id, b"printf 'warmup\\n'\n").unwrap();
-        assert!(wait_for(Duration::from_secs(2), || {
-            manager
-                .get_buffer(id)
-                .is_ok_and(|buffer| buffer.contains("warmup"))
-        }));
-
-        let samples = 24;
-        let payload_bytes = 1024;
-        let mut latencies = Vec::with_capacity(samples);
-        let started = Instant::now();
-        for index in 0..samples {
-            let marker = format!("pty-benchmark-{index:02}");
-            let mut payload = marker.clone();
-            payload.push_str(&"x".repeat(payload_bytes - marker.len()));
-            let command = format!("printf '%s\\n' '{payload}'\n");
-            let sample_started = Instant::now();
-            manager.write(id, command.as_bytes()).unwrap();
-            assert!(wait_for(Duration::from_secs(2), || {
-                manager
-                    .get_buffer(id)
-                    .is_ok_and(|buffer| buffer.contains(&marker))
-            }));
-            latencies.push(sample_started.elapsed().as_micros());
-        }
-        let elapsed_us = started.elapsed().as_micros().max(1);
-        manager.remove(id).unwrap();
-        test_rt().block_on(async { runtime.shutdown().await });
-
-        latencies.sort_unstable();
-        let p95_index = ((latencies.len() * 95).div_ceil(100)).saturating_sub(1);
-        PtyBenchmarkSummary {
-            p95_latency_us: latencies[p95_index],
-            throughput_bytes_per_sec: (samples as u128 * payload_bytes as u128 * 1_000_000)
-                / elapsed_us,
-        }
-    }
-
-    #[test]
-    #[ignore = "manual PTY performance gate"]
-    fn codex_usage_enabled_and_disabled_pty_performance_is_equivalent() {
-        let disabled = benchmark_pty_configuration(false);
-        let enabled = benchmark_pty_configuration(true);
-        println!("PTY benchmark disabled: {disabled:?}");
-        println!("PTY benchmark enabled: {enabled:?}");
-
-        assert!(
-            enabled.p95_latency_us <= disabled.p95_latency_us.saturating_mul(3),
-            "enabled p95 latency regressed: disabled={disabled:?}, enabled={enabled:?}"
-        );
-        assert!(
-            enabled.throughput_bytes_per_sec.saturating_mul(4) >= disabled.throughput_bytes_per_sec,
-            "enabled throughput regressed: disabled={disabled:?}, enabled={enabled:?}"
-        );
-    }
 
     // -----------------------------------------------------------------------
     // Session ID validation
@@ -3710,5 +3624,333 @@ mod agent_status_lifecycle_tests {
             snap.terminals.is_empty(),
             "terminal removed from status runtime on kill"
         );
+    }
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod guarded_termination_tests {
+    use std::{
+        collections::HashMap,
+        sync::Arc,
+        time::Duration,
+    };
+    use crate::config::schema::RestartPolicy;
+    use crate::pty::{
+        event_sink::NoopEventSink,
+        manager::{
+            GuardedTerminationError, GuardedTerminationOutcome, PtyCreateOpts,
+            PtySessionManager, TerminalInventoryState,
+        },
+    };
+
+    fn make_manager() -> PtySessionManager {
+        PtySessionManager::new(Arc::new(NoopEventSink))
+    }
+
+    fn hold_cmd(sec: u64) -> String {
+        format!("sh -c 'sleep {sec}'")
+    }
+
+    #[tokio::test]
+    async fn test_epoch_mismatch_refused() {
+        let manager = make_manager();
+        let meta = manager
+            .create(PtyCreateOpts {
+                id: "term-epoch-test".to_string(),
+                command: hold_cmd(30),
+                cwd: "/tmp".to_string(),
+                env: HashMap::new(),
+                cols: 80,
+                rows: 24,
+                project: None,
+                worktree_path: None,
+                name: None,
+                restart_policy: RestartPolicy::Never,
+                restart_max_retries: 0,
+            })
+            .expect("create");
+
+        let wrong_epoch = uuid::Uuid::new_v4();
+        let res = manager.request_termination("term-epoch-test", &wrong_epoch, meta.incarnation);
+        assert_eq!(res, Err(GuardedTerminationError::EpochMismatch));
+        assert!(manager.is_alive("term-epoch-test"));
+        let _ = manager.kill("term-epoch-test");
+    }
+
+    #[tokio::test]
+    async fn test_manager_closing_refused() {
+        let manager = make_manager();
+        let epoch = manager.termination_epoch();
+        let meta = manager
+            .create(PtyCreateOpts {
+                id: "term-closing-test".to_string(),
+                command: hold_cmd(30),
+                cwd: "/tmp".to_string(),
+                env: HashMap::new(),
+                cols: 80,
+                rows: 24,
+                project: None,
+                worktree_path: None,
+                name: None,
+                restart_policy: RestartPolicy::Never,
+                restart_max_retries: 0,
+            })
+            .expect("create");
+
+        manager.shutdown();
+        let res = manager.request_termination("term-closing-test", &epoch, meta.incarnation);
+        assert_eq!(res, Err(GuardedTerminationError::ManagerClosing));
+    }
+
+    #[tokio::test]
+    async fn test_not_found_and_incarnation_mismatch_refused() {
+        let manager = make_manager();
+        let epoch = manager.termination_epoch();
+
+        // 404 Not Found
+        let res = manager.request_termination("term-absent", &epoch, 100);
+        assert_eq!(res, Err(GuardedTerminationError::NotFound));
+
+        // Create live
+        let meta = manager
+            .create(PtyCreateOpts {
+                id: "term-inc-mismatch".to_string(),
+                command: hold_cmd(30),
+                cwd: "/tmp".to_string(),
+                env: HashMap::new(),
+                cols: 80,
+                rows: 24,
+                project: None,
+                worktree_path: None,
+                name: None,
+                restart_policy: RestartPolicy::Never,
+                restart_max_retries: 0,
+            })
+            .expect("create");
+
+        // 409 Incarnation Mismatch
+        let res = manager.request_termination("term-inc-mismatch", &epoch, meta.incarnation + 999);
+        assert_eq!(res, Err(GuardedTerminationError::IncarnationMismatch));
+        assert!(manager.is_alive("term-inc-mismatch"));
+        let _ = manager.kill("term-inc-mismatch");
+    }
+
+    #[tokio::test]
+    async fn test_live_termination_request_and_wait_exit() {
+        let manager = make_manager();
+        let epoch = manager.termination_epoch();
+        let meta = manager
+            .create(PtyCreateOpts {
+                id: "term-live-term".to_string(),
+                command: hold_cmd(30),
+                cwd: "/tmp".to_string(),
+                env: HashMap::new(),
+                cols: 80,
+                rows: 24,
+                project: None,
+                worktree_path: None,
+                name: None,
+                restart_policy: RestartPolicy::Always,
+                restart_max_retries: 3,
+            })
+            .expect("create");
+
+        // First request => TerminationRequested
+        let res = manager.request_termination("term-live-term", &epoch, meta.incarnation);
+        assert_eq!(res, Ok(GuardedTerminationOutcome::TerminationRequested));
+
+        // Duplicate request => AlreadyRequested
+        let dup = manager.request_termination("term-live-term", &epoch, meta.incarnation);
+        assert_eq!(dup, Err(GuardedTerminationError::AlreadyRequested));
+
+        // Snapshot while still live should show terminationRequested
+        let snap = manager.termination_inventory_snapshot(false);
+        let row = snap.rows.iter().find(|r| r.meta.id == "term-live-term").unwrap();
+        assert_eq!(row.termination_state, TerminalInventoryState::TerminationRequested);
+
+        // Wait for child process to authoritatively exit
+        let mut exited = false;
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            if !manager.is_alive("term-live-term") {
+                exited = true;
+                break;
+            }
+        }
+        assert!(exited, "process must authoritatively exit");
+
+        // After exit, restart was suppressed, session is in dead with exited state
+        let snap_after = manager.termination_inventory_snapshot(false);
+        let row_after = snap_after.rows.iter().find(|r| r.meta.id == "term-live-term").unwrap();
+        assert_eq!(row_after.termination_state, TerminalInventoryState::Exited);
+        assert!(!row_after.meta.alive);
+    }
+
+    #[tokio::test]
+    async fn test_dead_restart_cancellation_wins_before_reservation() {
+        let manager = make_manager();
+        let epoch = manager.termination_epoch();
+
+        manager.test_respawn_hook().pause_next();
+        let meta = manager
+            .create(PtyCreateOpts {
+                id: "term-restart-cancel".to_string(),
+                command: "sh -c 'exit 1'".to_string(),
+                cwd: "/tmp".to_string(),
+                env: HashMap::new(),
+                cols: 80,
+                rows: 24,
+                project: None,
+                worktree_path: None,
+                name: None,
+                restart_policy: RestartPolicy::Always,
+                restart_max_retries: 5,
+            })
+            .expect("create");
+
+        // Wait until it exits and enters restart_pending
+        let mut entered_pending = false;
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let snap = manager.termination_inventory_snapshot(false);
+            if let Some(r) = snap.rows.iter().find(|r| r.meta.id == "term-restart-cancel") {
+                if r.termination_state == TerminalInventoryState::RestartPending {
+                    entered_pending = true;
+                    break;
+                }
+            }
+        }
+        assert!(entered_pending, "session must enter restartPending");
+
+        // Cancel before reservation
+        let res = manager.request_termination("term-restart-cancel", &epoch, meta.incarnation);
+        assert_eq!(res, Ok(GuardedTerminationOutcome::RestartCancelled));
+
+        // Duplicate call refuses with AlreadyRequested
+        let dup = manager.request_termination("term-restart-cancel", &epoch, meta.incarnation);
+        assert_eq!(dup, Err(GuardedTerminationError::AlreadyRequested));
+
+        // Snapshot retains restartCancelled
+        let snap = manager.termination_inventory_snapshot(false);
+        let row = snap.rows.iter().find(|r| r.meta.id == "term-restart-cancel").unwrap();
+        assert_eq!(row.termination_state, TerminalInventoryState::RestartCancelled);
+
+        // Release respawn hook — supervisor will wake up, evaluate respawn_admission_is_current,
+        // see restart_cancelled is true, and skip restart as a no-op!
+        manager.test_respawn_hook().release();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Session must NOT have been restarted
+        assert!(!manager.is_alive("term-restart-cancel"));
+        let final_snap = manager.termination_inventory_snapshot(false);
+        let final_row = final_snap.rows.iter().find(|r| r.meta.id == "term-restart-cancel").unwrap();
+        assert_eq!(final_row.termination_state, TerminalInventoryState::RestartCancelled);
+    }
+
+    #[tokio::test]
+    async fn test_same_id_later_create_survives_after_cancellation() {
+        let manager = make_manager();
+        let epoch = manager.termination_epoch();
+
+        manager.test_respawn_hook().pause_next();
+        let meta1 = manager
+            .create(PtyCreateOpts {
+                id: "term-reuse-id".to_string(),
+                command: "sh -c 'exit 1'".to_string(),
+                cwd: "/tmp".to_string(),
+                env: HashMap::new(),
+                cols: 80,
+                rows: 24,
+                project: None,
+                worktree_path: None,
+                name: None,
+                restart_policy: RestartPolicy::Always,
+                restart_max_retries: 5,
+            })
+            .expect("create");
+
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let snap = manager.termination_inventory_snapshot(false);
+            if let Some(r) = snap.rows.iter().find(|r| r.meta.id == "term-reuse-id") {
+                if r.termination_state == TerminalInventoryState::RestartPending {
+                    break;
+                }
+            }
+        }
+
+        let res = manager.request_termination("term-reuse-id", &epoch, meta1.incarnation);
+        assert_eq!(res, Ok(GuardedTerminationOutcome::RestartCancelled));
+        manager.test_respawn_hook().release();
+
+        // Explicit new same-ID create must succeed
+        let meta2 = manager
+            .create(PtyCreateOpts {
+                id: "term-reuse-id".to_string(),
+                command: hold_cmd(30),
+                cwd: "/tmp".to_string(),
+                env: HashMap::new(),
+                cols: 80,
+                rows: 24,
+                project: None,
+                worktree_path: None,
+                name: None,
+                restart_policy: RestartPolicy::Never,
+                restart_max_retries: 0,
+            })
+            .expect("new create must succeed");
+
+        assert!(meta2.incarnation > meta1.incarnation);
+        assert!(manager.is_alive("term-reuse-id"));
+
+        let snap = manager.termination_inventory_snapshot(false);
+        let row = snap.rows.iter().find(|r| r.meta.id == "term-reuse-id").unwrap();
+        assert_eq!(row.termination_state, TerminalInventoryState::Live);
+        assert_eq!(row.incarnation, meta2.incarnation);
+
+        let _ = manager.kill("term-reuse-id");
+    }
+
+    #[tokio::test]
+    async fn test_async_target_validation_failure_fenced_after_cancellation() {
+        let manager = make_manager();
+        let epoch = manager.termination_epoch();
+
+        // Pause validation before reservation
+        manager.test_respawn_hook().pause_validation_next();
+
+        let meta = manager
+            .create(PtyCreateOpts {
+                id: "term-async-fence".to_string(),
+                command: "sh -c 'exit 1'".to_string(),
+                cwd: "/tmp".to_string(),
+                env: HashMap::new(),
+                cols: 80,
+                rows: 24,
+                project: None,
+                worktree_path: None,
+                name: None,
+                restart_policy: RestartPolicy::Always,
+                restart_max_retries: 5,
+            })
+            .expect("create");
+
+        // Wait until it enters restart pending and hits validation pause hook
+        manager.test_respawn_hook().wait_until_validation_paused().await;
+
+        // Cancel while validation was paused
+        let res = manager.request_termination("term-async-fence", &epoch, meta.incarnation);
+        assert_eq!(res, Ok(GuardedTerminationOutcome::RestartCancelled));
+
+        // Release validation hook
+        manager.test_respawn_hook().release_validation();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Verify tombstone retained restart_cancelled and was NOT rewritten to target_unavailable
+        let snap = manager.termination_inventory_snapshot(false);
+        let row = snap.rows.iter().find(|r| r.meta.id == "term-async-fence").unwrap();
+        assert_eq!(row.termination_state, TerminalInventoryState::RestartCancelled);
+        assert!(!row.meta.target_unavailable);
     }
 }

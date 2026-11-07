@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 310"  role="img" aria-labelledby="chrome-states-title" font-family="JetBrains Mono, ui-monospace, monospace" font-size="10" fill="none">
+  <rect width="100%" height="100%" fill="#070B13"/>
+  <title id="chrome-states-title">Seven Canonical Window Chrome States in DamHopper OS</title>
+  <rect x="10" y="10" width="380" height="82" rx="3" stroke="#2A3746" stroke-width="1"/>
+  <rect x="10" y="10" width="380" height="26" fill="#131B25" stroke="#2A3746"/>
+  <text x="20" y="27" fill="#7689A2">DIR Files</text>
+  <rect x="92" y="14" width="168" height="17" rx="2" stroke="#2A3746"/>
+  <text x="98" y="26" fill="#7689A2" font-size="9">● prod-eu · dam-hopper:main</text>
+  <text x="286" y="27" fill="#7689A2">[↗] [—] [□] [×]</text>
+  <text x="20" y="56" fill="#7689A2">1. Tiled (Unfocused): 1px --border, muted title</text>
+  <rect x="410" y="10" width="380" height="82" rx="3" stroke="#3B82F6" stroke-width="1.5"/>
+  <rect x="410" y="10" width="380" height="26" fill="#131B25" stroke="#3B82F6"/>
+  <line x1="410" y1="36" x2="510" y2="36" stroke="#3B82F6" stroke-width="2"/>
+  <text x="420" y="27" fill="#F8FAFC" font-weight="700">&gt;_ Terminals*</text>
+  <rect x="512" y="14" width="168" height="17" rx="2" stroke="#3B82F6"/>
+  <text x="518" y="26" fill="#3B82F6" font-size="9">● prod-eu · dam-hopper:main</text>
+  <text x="686" y="27" fill="#F8FAFC">[↗] [—] [□] [×]</text>
+  <text x="420" y="56" fill="#F8FAFC">2. Focused: 1.5px --accent (.border-glow), bold --fg</text>
+  <rect x="814" y="14" width="376" height="82" rx="8" stroke="#2A3746" stroke-dasharray="2 2"/>
+  <rect x="810" y="10" width="376" height="82" rx="8" fill="#131B25" stroke="#3B82F6" stroke-width="1.5"/>
+  <text x="824" y="27" fill="#F8FAFC" font-weight="700">EDT Editor (Float)</text>
+  <text x="1062" y="27" fill="#3B82F6">[↙ Snap] [—] [□] [×]</text>
+  <text x="824" y="56" fill="#F8FAFC">3. Floating: 8px radius, .glass-card-blur, 8-way resize</text>
+  <text x="824" y="74" fill="#7689A2">Clamped to viewport bounds on resize/zoom</text>
+  <rect x="10" y="112" width="380" height="82" rx="0" stroke="#3B82F6" stroke-width="1.5"/>
+  <rect x="10" y="112" width="380" height="26" fill="#131B25" stroke="#3B82F6"/>
+  <text x="20" y="129" fill="#F8FAFC" font-weight="700">Δ Session Changes [MAXIMIZED]</text>
+  <text x="266" y="129" fill="#3B82F6">[↙ Restore ^⌥M] [×]</text>
+  <text x="20" y="158" fill="#F8FAFC">4. Maximized: Fills 1392x860 canvas; hides split gaps</text>
+  <text x="20" y="176" fill="#7689A2">Underlying tile tree preserved in memory</text>
+  <rect x="410" y="112" width="380" height="82" rx="3" stroke="#2A3746" stroke-dasharray="4 2"/>
+  <text x="424" y="138" fill="#7689A2">5. Minimized to Left Dock:</text>
+  <rect x="424" y="148" width="44" height="32" rx="4" stroke="#3B82F6"/>
+  <text x="434" y="168" fill="#F8FAFC">[WEB]</text>
+  <rect x="476" y="146" width="300" height="36" rx="3" fill="#131B25" stroke="#2A3746"/>
+  <text x="484" y="168" fill="#F8FAFC">↳ Minimized: Browser (localhost:5173) [Restore]</text>
+  <rect x="810" y="112" width="380" height="82" rx="3" stroke="#FACC15" stroke-width="2"/>
+  <rect x="810" y="112" width="380" height="26" fill="#131B25" stroke="#FACC15"/>
+  <text x="820" y="129" fill="#FACC15" font-weight="700">! &gt;_ Terminals — Needs Attention</text>
+  <rect x="1038" y="116" width="142" height="17" rx="2" stroke="#FACC15"/>
+  <text x="1044" y="128" fill="#FACC15" font-size="9">Claude · ! Attention</text>
+  <text x="820" y="158" fill="#FACC15">6. Attention: 2px --warning border (.status-glow-orange)</text>
+  <text x="820" y="176" fill="#7689A2">Clears immediately when terminal receives focus or input</text>
+  <rect x="10" y="214" width="1180" height="86" rx="3" stroke="#EF4444" stroke-width="1.5" stroke-dasharray="5 3"/>
+  <rect x="10" y="214" width="1180" height="26" fill="#131B25" stroke="#EF4444"/>
+  <text x="20" y="231" fill="#F8FAFC" font-weight="700">GIT Git — dam-hopper</text>
+  <rect x="176" y="218" width="250" height="17" rx="2" stroke="#EF4444"/>
+  <circle cx="186" cy="226.5" r="3.5" fill="#EF4444"/>
+  <text x="194" y="230" fill="#EF4444" font-size="9">staging · OFFLINE (gen #4 disconnected)</text>
+  <text x="20" y="262" fill="#EF4444" font-weight="600">7. Disconnected-Profile Banner: Profile "staging" is offline. Mutations &amp; encrypted/diff actions disabled (fail-closed).</text>
+  <text x="20" y="282" fill="#7689A2">Terminal scrollback remains read-only. Never auto-reroutes to another profile.   [↻ Reconnect staging]  [⚙ Connection Diagnostics]</text>
+</svg>

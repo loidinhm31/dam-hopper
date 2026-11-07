@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 620" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11" fill="none">
+  <rect width="100%" height="100%" fill="#070B13"/>
+<title>Launch Recipe editor</title>
+<rect x="10" y="10" width="1180" height="600" rx="3" fill="none" stroke="#3B82F6" stroke-width="1.5"/>
+<rect x="10" y="10" width="1180" height="30" rx="3" fill="#131B25" stroke="#3B82F6" stroke-width="1"/>
+<text x="22" y="30" fill="#F8FAFC" font-size="12" font-weight="700">RCP Launch Recipes</text>
+<text x="1080" y="30" fill="#7689A2" font-size="10">[↗] [—] [□] [×]</text>
+<rect x="22" y="52" width="300" height="546" rx="3" fill="none" stroke="#2A3746" stroke-width="1"/>
+<text x="34" y="76" fill="#7689A2" font-size="11" font-weight="700">SAVED RECIPES</text>
+<rect x="34" y="88" width="276" height="44" rx="3" fill="none" stroke="#3B82F6" stroke-width="1"/>
+<text x="44" y="106" fill="#F8FAFC" font-size="11" font-weight="600">★ Full-Stack Feature Sprint</text>
+<text x="44" y="123" fill="#7689A2" font-size="10">3 terminals · 4 apps</text>
+<rect x="34" y="140" width="276" height="44" rx="3" fill="none" stroke="#2A3746" stroke-width="1"/>
+<text x="44" y="158" fill="#F8FAFC" font-size="11" font-weight="600">◆ Multi-Repo Agent Review</text>
+<text x="44" y="175" fill="#7689A2" font-size="10">1 server · 4 agents</text>
+<rect x="34" y="192" width="276" height="44" rx="3" fill="none" stroke="#2A3746" stroke-width="1"/>
+<text x="44" y="210" fill="#F8FAFC" font-size="11" font-weight="600">⚡ Triage &amp; Conflict Fix</text>
+<text x="44" y="227" fill="#7689A2" font-size="10">1 agent · Git + Changes</text>
+<text x="34" y="268" fill="#3B82F6" font-size="10">[+ New]  [📸 Capture desktop]</text>
+<text x="34" y="290" fill="#3B82F6" font-size="10">[📥 Import / Export JSON]</text>
+<text x="34" y="330" fill="#7689A2" font-size="11" font-weight="700">PRE-FLIGHT</text>
+<text x="34" y="354" fill="#22C55E" font-size="11">✓ prod-eu online</text>
+<text x="34" y="376" fill="#22C55E" font-size="11">✓ project dam-hopper exists</text>
+<text x="34" y="398" fill="#FACC15" font-size="11">! wt:feat-os missing → prompt</text>
+<text x="34" y="438" fill="#7689A2" font-size="11" font-weight="700">LAST LAUNCH</text>
+<text x="34" y="462" fill="#FACC15" font-size="11">2/3 steps ok · #3 failed</text>
+<text x="34" y="484" fill="#3B82F6" font-size="10">[Retry failed only]</text>
+<rect x="334" y="52" width="844" height="546" rx="3" fill="none" stroke="#2A3746" stroke-width="1"/>
+<text x="346" y="76" fill="#F8FAFC" font-size="12" font-weight="700">RECIPE: Full-Stack Feature Sprint</text>
+<text x="346" y="100" fill="#7689A2" font-size="11">Server [prod-eu ▾]   Project [dam-hopper ▾]</text>
+<text x="346" y="134" fill="#7689A2" font-size="11" font-weight="700">TERMINALS</text>
+<rect x="346" y="146" width="820" height="28" rx="3" fill="none" stroke="#2A3746" stroke-width="1"/>
+<text x="358" y="164" fill="#F8FAFC" font-size="10">#1   wt:[feat-os]   agent:[OMP]   cmd: omp</text>
+<rect x="346" y="180" width="820" height="28" rx="3" fill="none" stroke="#2A3746" stroke-width="1"/>
+<text x="358" y="198" fill="#F8FAFC" font-size="10">#2   wt:[feat-os]   agent:[Claude]   cmd: claude</text>
+<rect x="346" y="214" width="820" height="28" rx="3" fill="none" stroke="#2A3746" stroke-width="1"/>
+<text x="358" y="232" fill="#F8FAFC" font-size="10">#3   wt:[feat-os]   agent:[shell]   cmd: pnpm dev</text>
+<text x="346" y="272" fill="#7689A2" font-size="11" font-weight="700">LAYOUT (tile tree + floating)</text>
+<rect x="346" y="284" width="820" height="220" rx="3" fill="none" stroke="#2A3746" stroke-width="1"/>
+<rect x="352" y="290" width="486" height="208" rx="3" fill="none" stroke="#3B82F6" stroke-width="1"/>
+<text x="362" y="312" fill="#3B82F6" font-size="11">Terminals  (#1 #2 #3)  60%</text>
+<rect x="844" y="290" width="316" height="92" rx="3" fill="none" stroke="#2A3746" stroke-width="1"/>
+<text x="854" y="312" fill="#F8FAFC" font-size="11">[Files*, Search]</text>
+<rect x="844" y="388" width="316" height="110" rx="3" fill="none" stroke="#2A3746" stroke-width="1"/>
+<text x="854" y="410" fill="#F8FAFC" font-size="11">[Git*, Changes]</text>
+<rect x="600" y="420" width="220" height="64" rx="3" fill="none" stroke="#F97316" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="610" y="444" fill="#F97316" font-size="11">Editor (floating)</text>
+<text x="346" y="536" fill="#7689A2" font-size="10">No env / secrets stored · imported recipes are inert until reviewed</text>
+<rect x="346" y="552" width="110" height="30" rx="3" fill="none" stroke="#2A3746" stroke-width="1"/>
+<text x="360" y="572" fill="#F8FAFC" font-size="11">💾 Save</text>
+<rect x="466" y="552" width="240" height="30" rx="3" fill="#131B25" stroke="#3B82F6" stroke-width="1"/>
+<text x="478" y="572" fill="#3B82F6" font-size="11" font-weight="700">🚀 Launch → new desktop</text>
+</svg>

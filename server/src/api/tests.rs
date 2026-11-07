@@ -22,12 +22,6 @@ use crate::{
         AlertSeverity, ResourceAlertEvidence, ResourceAlertIncident, ResourceAlertKind,
         ResourceAlertState, ResourceAlertSummary,
     },
-    telemetry::{
-        worker::{TelemetryControl, TelemetryHandle},
-        CodexModel, CodexUsageEvent, CodexVersion, SafeIdentifier, SourceQuality, TelemetryCmd,
-        TelemetryKeyRing, TelemetryStore, TokenCounterSemantic, TokenQuality,
-        TELEMETRY_SCHEMA_VERSION,
-    },
     tunnel::{CloudflaredDriver, TunnelSessionManager},
     workspace_target::ProjectTargetRef,
 };
@@ -116,28 +110,29 @@ fn normalize_terminal_output(output: &str) -> String {
     output.replace("\r\n", "\n")
 }
 
-fn make_state(tmp: &TempDir) -> AppState {
+pub(crate) fn make_state(tmp: &TempDir) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
 
     // Create a minimal config file so config_path.exists() returns true (required by
     // /api/workspace/status `ready` field).
-    let config_file = workspace_dir.join("dam-hopper.toml");
-    std::fs::write(&config_file, "[workspace]\nname = \"test-workspace\"\n").ok();
+    let config_file = workspace_dir.join("config.toml");
+    std::fs::write(&config_file, format!("[workspace]\nname = \"test-workspace\"\nroot = \"{}\"\n", workspace_dir.display())).ok();
 
     let mut config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
-            root: ".".into(),
+            root: workspace_dir.to_string_lossy().into_owned(),
         },
         agent_store: None,
         server: crate::config::ServerConfig::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dam-hopper.toml"),
+        ui: None,
+        workspaces: None,
+        config_path: config_file.clone(),
     };
     // Runtime-enable tests must not race through the user's default telemetry
     // database when lib tests run concurrently.
-    config.server.telemetry.db_path = tmp.path().join("telemetry.db").display().to_string();
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
@@ -160,41 +155,32 @@ fn make_state(tmp: &TempDir) -> AppState {
         None,
         test_opaque_setup(),
         DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
-        crate::telemetry::TelemetryRuntime::with_paths(
-            tmp.path().join("telemetry-key"),
-            tmp.path().join("collector-token"),
-        ),
     )
     .expect("make_state failed")
     .with_auth_service(Arc::new(crate::auth::AuthService::new_mock_default().0))
-    .with_codex_exporter(
-        crate::telemetry::codex_otlp::CodexExporterManager::with_paths(
-            tmp.path().join(".codex/config.toml"),
-            tmp.path().join("collector-token"),
-        ),
-    )
 }
 fn make_state_with_idle_suspend_config(
     tmp: &TempDir,
     idle_suspend: crate::config::IdleSuspendConfig,
 ) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
-    let config_file = workspace_dir.join("dam-hopper.toml");
-    std::fs::write(&config_file, "[workspace]\nname = \"test-workspace\"\n").ok();
+    let config_file = workspace_dir.join("config.toml");
+    std::fs::write(&config_file, format!("[workspace]\nname = \"test-workspace\"\nroot = \"{}\"\n", workspace_dir.display())).ok();
 
     let mut config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
-            root: ".".into(),
+            root: workspace_dir.to_string_lossy().into_owned(),
         },
         agent_store: None,
         server: crate::config::ServerConfig::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dam-hopper.toml"),
+        ui: None,
+        workspaces: None,
+        config_path: config_file.clone(),
     };
     config.server.idle_suspend = idle_suspend;
-    config.server.telemetry.db_path = tmp.path().join("telemetry.db").display().to_string();
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
@@ -217,19 +203,9 @@ fn make_state_with_idle_suspend_config(
         None,
         test_opaque_setup(),
         DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
-        crate::telemetry::TelemetryRuntime::with_paths(
-            tmp.path().join("telemetry-key"),
-            tmp.path().join("collector-token"),
-        ),
     )
     .expect("make_state_with_idle_suspend_config failed")
     .with_auth_service(Arc::new(crate::auth::AuthService::new_mock_default().0))
-    .with_codex_exporter(
-        crate::telemetry::codex_otlp::CodexExporterManager::with_paths(
-            tmp.path().join(".codex/config.toml"),
-            tmp.path().join("collector-token"),
-        ),
-    )
 }
 
 fn resource_disk_alert(incident_id: &str) -> ResourceAlertSummary {
@@ -1374,7 +1350,7 @@ async fn workspace_status_returns_loaded_true() {
     assert_eq!(
         json["configPath"],
         tmp.path()
-            .join("dam-hopper.toml")
+            .join("config.toml")
             .to_string_lossy()
             .to_string()
     );
@@ -1395,33 +1371,25 @@ async fn workspace_get_includes_config_path_and_legacy_root() {
     assert_eq!(
         json["configPath"],
         tmp.path()
-            .join("dam-hopper.toml")
+            .join("config.toml")
             .to_string_lossy()
             .to_string()
     );
+    assert!(json["workspaceEpoch"].is_number());
 }
 
 #[tokio::test]
-async fn workspace_switch_accepts_direct_config_file_path() {
+async fn workspace_switch_updates_root_in_single_config() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
 
     let switched = tempfile::tempdir().unwrap();
-    let switched_cfg = switched.path().join("dam-hopper.toml");
-    std::fs::write(
-        &switched_cfg,
-        r#"
-[workspace]
-name = "switched"
-root = "."
-"#,
-    )
-    .unwrap();
+    let canonical_switched = dunce::canonicalize(switched.path()).unwrap();
 
     let resp = post_json(
         state.clone(),
         "/api/workspace/switch",
-        serde_json::json!({ "path": switched_cfg.to_string_lossy().to_string() }),
+        serde_json::json!({ "path": canonical_switched.to_string_lossy().to_string(), "name": "switched" }),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -1433,20 +1401,38 @@ root = "."
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["name"], "switched");
-    assert_eq!(
-        crate::workspace_target::target_path_identity(Path::new(
-            json["configPath"].as_str().unwrap()
-        )),
-        crate::workspace_target::target_path_identity(&switched_cfg)
-    );
+    assert_eq!(json["path"], canonical_switched.to_string_lossy().to_string());
+    assert!(json["workspaceEpoch"].is_number());
 
-    let resp = get(state, "/api/workspace").await;
+    let resp = get(state.clone(), "/api/workspace").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["root"], switched.path().to_string_lossy().to_string());
+    assert_eq!(json["root"], canonical_switched.to_string_lossy().to_string());
+
+    let on_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+    assert!(on_disk.contains("switched"));
+}
+
+#[tokio::test]
+async fn workspace_switch_invalid_root_fails_closed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let initial_epoch = state.workspace_epoch();
+
+    let resp = post_json(
+        state.clone(),
+        "/api/workspace/switch",
+        serde_json::json!({ "path": "/nonexistent/directory/that/cannot/exist/12345" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    assert_eq!(state.workspace_epoch(), initial_epoch);
+    let current_cfg = state.config.read().await;
+    assert_eq!(current_cfg.workspace.name, "test-workspace");
 }
 
 #[tokio::test]
@@ -1507,7 +1493,7 @@ async fn config_update_persists_camel_case_project_fields_as_toml_schema() {
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let written = std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
+    let written = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
     assert!(written.contains("env_file = \".env\""));
     assert!(written.contains("build_command = \"cargo build\""));
     assert!(written.contains("run_command = \"cargo run\""));
@@ -1617,7 +1603,7 @@ async fn config_update_formats_mixed_absolute_project_paths_for_toml() {
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let written = std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
+    let written = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
     let parsed: toml::Value = toml::from_str(&written).unwrap();
     let projects = parsed["projects"].as_array().unwrap();
     let inside_path = projects[0]["path"].as_str().unwrap();
@@ -1649,7 +1635,7 @@ async fn config_patch_project_persists_camel_case_project_fields_as_toml_schema(
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(&tmp);
     std::fs::write(
-        tmp.path().join("dam-hopper.toml"),
+        tmp.path().join("config.toml"),
         r#"
 [workspace]
 name = "test-workspace"
@@ -1679,7 +1665,7 @@ restartPolicy = "never"
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let written = std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
+    let written = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
     assert!(written.contains("env_file = \".env\""));
     assert!(written.contains("run_command = \"cargo run\""));
     assert!(written.contains("restart = \"always\""));
@@ -1825,7 +1811,7 @@ async fn settings_export_returns_raw_toml() {
     );
     assert_eq!(
         resp.headers().get("content-disposition").unwrap(),
-        "attachment; filename=\"dam-hopper.toml\""
+        "attachment; filename=\"config.toml\""
     );
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
@@ -1842,17 +1828,28 @@ async fn settings_export_returns_raw_toml() {
 /// need project resolution (ship/unship, git API endpoints, etc.).
 fn make_state_with_project(tmp: &TempDir) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
+    let config_file = workspace_dir.join("config.toml");
+    std::fs::write(
+        &config_file,
+        format!(
+            "[workspace]\nname = \"test-workspace\"\nroot = \"{}\"\n\n[[projects]]\nname = \"test-project\"\npath = \".\"\ntype = \"cargo\"\n",
+            workspace_dir.display()
+        ),
+    )
+    .ok();
 
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
-            root: ".".into(),
+            root: workspace_dir.display().to_string(),
         },
         agent_store: None,
         server: crate::config::ServerConfig::default(),
         projects: vec![test_project_config(&workspace_dir)],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dam-hopper.toml"),
+        ui: None,
+        workspaces: None,
+        config_path: config_file,
     };
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
@@ -1876,7 +1873,6 @@ fn make_state_with_project(tmp: &TempDir) -> AppState {
         None,
         test_opaque_setup(),
         DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
-        crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project failed")
     .with_auth_service(std::sync::Arc::new(
@@ -1912,17 +1908,31 @@ fn make_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) -> Ap
             )
         })
         .collect();
+    let config_file = workspace_dir.join("config.toml");
+    let mut toml_str = format!(
+        "[workspace]\nname = \"test-workspace\"\nroot = \"{}\"\n\n",
+        workspace_dir.display()
+    );
+    for p in &projects {
+        toml_str.push_str(&format!(
+            "[[projects]]\nname = \"{}\"\npath = \"{}\"\ntype = \"cargo\"\n\n",
+            p.name, p.path
+        ));
+    }
+    std::fs::write(&config_file, &toml_str).ok();
 
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
-            root: ".".into(),
+            root: workspace_dir.display().to_string(),
         },
         agent_store: None,
         server: crate::config::ServerConfig::default(),
         projects,
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dam-hopper.toml"),
+        ui: None,
+        workspaces: None,
+        config_path: config_file,
     };
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
@@ -1946,7 +1956,6 @@ fn make_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) -> Ap
         None,
         test_opaque_setup(),
         DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
-        crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project_roots failed")
     .with_auth_service(std::sync::Arc::new(
@@ -2050,17 +2059,28 @@ fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> Ap
     let workspace_dir = tmp.path().to_path_buf();
     let mut project = test_project_config(&workspace_dir);
     project.env_file = env_file.map(str::to_string);
+    let config_file = workspace_dir.join("config.toml");
+    std::fs::write(
+        &config_file,
+        format!(
+            "[workspace]\nname = \"test-workspace\"\nroot = \"{}\"\n\n[[projects]]\nname = \"test-project\"\npath = \".\"\ntype = \"cargo\"\n",
+            workspace_dir.display()
+        ),
+    )
+    .ok();
 
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
-            root: ".".into(),
+            root: workspace_dir.display().to_string(),
         },
         agent_store: None,
         server: crate::config::ServerConfig::default(),
         projects: vec![project],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dam-hopper.toml"),
+        ui: None,
+        workspaces: None,
+        config_path: config_file,
     };
 
     let (event_sink, _rx) = BroadcastEventSink::new(64);
@@ -2084,7 +2104,6 @@ fn make_state_with_project_env_file(tmp: &TempDir, env_file: Option<&str>) -> Ap
         None,
         test_opaque_setup(),
         DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
-        crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project_env_file failed")
     .with_auth_service(std::sync::Arc::new(
@@ -2100,16 +2119,28 @@ fn make_state_with_project_root_env_file(
     let workspace_dir = workspace.path().to_path_buf();
     let mut project = test_project_config(project_root);
     project.env_file = env_file.map(str::to_string);
+    let config_file = workspace_dir.join("config.toml");
+    std::fs::write(
+        &config_file,
+        format!(
+            "[workspace]\nname = \"test-workspace\"\nroot = \"{}\"\n\n[[projects]]\nname = \"test-project\"\npath = \"{}\"\ntype = \"cargo\"\n",
+            workspace_dir.display(),
+            project_root.display()
+        ),
+    )
+    .ok();
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
-            root: ".".into(),
+            root: workspace_dir.display().to_string(),
         },
         agent_store: None,
         server: crate::config::ServerConfig::default(),
         projects: vec![project],
         features: FeaturesConfig::default(),
-        config_path: workspace_dir.join("dam-hopper.toml"),
+        ui: None,
+        workspaces: None,
+        config_path: config_file,
     };
     let (event_sink, _rx) = BroadcastEventSink::new(64);
     let pty_manager = PtySessionManager::new(Arc::new(NoopEventSink::default()));
@@ -2131,7 +2162,6 @@ fn make_state_with_project_root_env_file(
         None,
         test_opaque_setup(),
         DiagnosticStore::new(workspace.path().join("diagnostics.jsonl")),
-        crate::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state_with_project_root_env_file failed")
     .with_auth_service(std::sync::Arc::new(
@@ -2148,1160 +2178,6 @@ fn merge_global_ui_config_rejects_non_object_payloads() {
     .unwrap_err();
 
     assert!(matches!(err, crate::error::AppError::InvalidInput(_)));
-}
-
-// ---------------------------------------------------------------------------
-// Usage analytics (aggregate-only)
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn usage_summary_requires_auth_and_never_exposes_event_fields() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-
-    let unauthorized = get_without_auth(state.clone(), "/api/usage/summary").await;
-    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-
-    let response = get(state, "/api/usage/summary?window=24h").await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(value["codex"].is_null());
-    assert!(!value.as_object().unwrap().contains_key("terminal"));
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    for forbidden in [
-        "fingerprint",
-        "command_events",
-        "conversation",
-        "cwd",
-        "path",
-        "modelEvent",
-    ] {
-        assert!(!text.contains(forbidden), "response leaked {forbidden}");
-    }
-}
-
-#[tokio::test]
-async fn usage_summary_rejects_removed_filters_and_injection_like_keys() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-
-    let unknown = get(state.clone(), "/api/usage/summary?project=missing").await;
-    assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
-    let injection = get(state, "/api/usage/summary?category=x%27%20OR%201%3D1").await;
-    assert_eq!(injection.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn usage_summary_rejects_ranges_that_fill_over_1000_buckets() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-
-    let response = get(state, "/api/usage/summary?from=0&to=86400000001&bucket=day").await;
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn usage_summary_returns_filled_codex_series_without_event_fields() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-    let timestamp = i64::try_from(now_ms())
-        .unwrap()
-        .saturating_sub(30 * 60 * 1_000);
-    write_usage_command(&state, &tmp, timestamp, 1, "git status", 100);
-    write_usage_command(&state, &tmp, timestamp + 1_000, 2, "git status", 300);
-
-    let response = get(state, "/api/usage/summary?window=24h&bucket=hour").await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let series = value["timeSeries"].as_array().unwrap();
-    assert_eq!(
-        series.len(),
-        25,
-        "24h window includes its current UTC bucket"
-    );
-    assert_eq!(
-        series
-            .iter()
-            .filter_map(|bucket| bucket["codex"]["responseCount"].as_u64())
-            .sum::<u64>(),
-        2
-    );
-    assert!(!value.as_object().unwrap().contains_key("terminal"));
-    assert!(!value.as_object().unwrap().contains_key("detailMetrics"));
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(!text.contains("fingerprint"));
-    assert!(!text.contains("git status"));
-}
-
-#[tokio::test]
-async fn usage_sessions_are_protected_reconcile_and_exclude_private_fields() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-    let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(1_000);
-    let session_id = write_usage_session(
-        &state,
-        b"raw-provider-session",
-        Some("test-project"),
-        timestamp,
-        [Some(11), Some(13), Some(17), Some(19)],
-    );
-
-    let unauthorized = get_without_auth(state.clone(), "/api/usage/sessions").await;
-    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-
-    state.telemetry.read().unwrap().control.set_enabled(false);
-    let list = get(
-        state.clone(),
-        &format!(
-            "/api/usage/sessions?from={}&to={}",
-            timestamp - 1,
-            timestamp + 1
-        ),
-    )
-    .await;
-    assert_eq!(list.status(), StatusCode::OK);
-    let list_body = axum::body::to_bytes(list.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let list_value: serde_json::Value = serde_json::from_slice(&list_body).unwrap();
-    assert_eq!(list_value["paused"], true);
-    assert_eq!(list_value["sessions"][0]["id"], session_id);
-    assert_eq!(list_value["sessions"][0]["model"], "gpt-5.6-sol");
-    assert_eq!(list_value["sessions"][0]["tokens"]["responseCount"], 1);
-    assert_eq!(
-        list_value["sessions"][0]["models"][0]["model"],
-        "gpt-5.6-sol"
-    );
-    assert_eq!(list_value["sessions"][0]["models"][0]["responseCount"], 1);
-    assert!(!list_value["sessions"][0]
-        .as_object()
-        .unwrap()
-        .contains_key("terminals"));
-    assert!(!list_value["sessions"][0]
-        .as_object()
-        .unwrap()
-        .contains_key("lineage"));
-    let serialized = String::from_utf8(list_body.to_vec()).unwrap();
-    for forbidden in [
-        "raw-provider-session",
-        "provider",
-        "sourceVersion",
-        "fingerprint",
-        "counterSemantic",
-        "status",
-        "command",
-        "prompt",
-    ] {
-        assert!(
-            !serialized.contains(forbidden),
-            "response leaked {forbidden}"
-        );
-    }
-
-    let detail = get(state.clone(), &format!("/api/usage/sessions/{session_id}")).await;
-    assert_eq!(detail.status(), StatusCode::OK);
-    let detail_body = axum::body::to_bytes(detail.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let detail_value: serde_json::Value = serde_json::from_slice(&detail_body).unwrap();
-    assert_eq!(detail_value["session"]["id"], session_id);
-    assert_eq!(detail_value["session"]["model"], "gpt-5.6-sol");
-    assert!(!detail_value.as_object().unwrap().contains_key("nodes"));
-    let detail_serialized = String::from_utf8(detail_body.to_vec()).unwrap();
-    for forbidden in [
-        "provider",
-        "sourceVersion",
-        "fingerprint",
-        "command",
-        "prompt",
-    ] {
-        assert!(
-            !detail_serialized.contains(forbidden),
-            "detail response leaked {forbidden}"
-        );
-    }
-
-    let summary = get(state, "/api/usage/summary?window=24h").await;
-    assert_eq!(summary.status(), StatusCode::OK);
-    let summary_body = axum::body::to_bytes(summary.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let summary_value: serde_json::Value = serde_json::from_slice(&summary_body).unwrap();
-    assert_eq!(list_value["sessions"][0]["tokens"], summary_value["codex"]);
-}
-
-#[tokio::test]
-async fn usage_session_cursor_preserves_active_null_end() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-    let store = state
-        .telemetry
-        .read()
-        .unwrap()
-        .store
-        .as_ref()
-        .unwrap()
-        .clone();
-    let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(1_000);
-    let mut connection = rusqlite::Connection::open(store.path_for_tests()).unwrap();
-    let transaction = connection.transaction().unwrap();
-    for (id, started_at, ended_at) in [
-        ("c".repeat(64), timestamp + 2, Some(timestamp + 2)),
-        ("b".repeat(64), timestamp + 1, None),
-        ("a".repeat(64), timestamp, Some(timestamp)),
-    ] {
-        transaction
-            .execute(
-                "INSERT INTO codex_sessions(session_fingerprint, model, source_version, source_quality, started_at_utc_ms, ended_at_utc_ms, status, counter_semantic, token_quality, response_count, duration_ms_sum, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, 'gpt-5.6-sol', '0.146.0', 'verified', ?2, ?3, 'completed', 'delta', 'exact', 0, NULL, NULL, NULL, NULL, NULL, ?2)",
-                rusqlite::params![id, started_at, ended_at],
-            )
-            .unwrap();
-    }
-    transaction.commit().unwrap();
-
-    let first = get(
-        state.clone(),
-        &format!(
-            "/api/usage/sessions?from={}&to={}&limit=2",
-            timestamp - 1,
-            timestamp + 3
-        ),
-    )
-    .await;
-    assert_eq!(first.status(), StatusCode::OK);
-    let first_body = axum::body::to_bytes(first.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let first_value: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
-    let first_sessions = first_value["sessions"].as_array().unwrap();
-    assert_eq!(first_sessions.len(), 2);
-    assert_eq!(first_sessions[1]["id"], "b".repeat(64));
-    assert!(first_sessions[1]
-        .as_object()
-        .unwrap()
-        .contains_key("endedAtUtcMs"));
-    assert!(first_sessions[1]["endedAtUtcMs"].is_null());
-    let cursor = first_value["nextCursor"].as_str().unwrap();
-
-    let second = get(
-        state,
-        &format!(
-            "/api/usage/sessions?from={}&to={}&limit=2&cursor={cursor}",
-            timestamp - 1,
-            timestamp + 3
-        ),
-    )
-    .await;
-    assert_eq!(second.status(), StatusCode::OK);
-    let second_body = axum::body::to_bytes(second.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let second_value: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
-    assert_eq!(second_value["sessions"].as_array().unwrap().len(), 1);
-    assert_eq!(second_value["sessions"][0]["id"], "a".repeat(64));
-    assert!(second_value["nextCursor"].is_null());
-}
-
-#[tokio::test]
-async fn usage_session_cursor_bounds_and_ids_are_strict() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-    let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(10_000);
-    for (offset, conversation) in [b"session-a", b"session-b", b"session-c"]
-        .into_iter()
-        .enumerate()
-    {
-        write_usage_session(
-            &state,
-            conversation,
-            None,
-            timestamp + offset as i64,
-            [Some(1), Some(2), Some(3), Some(4)],
-        );
-    }
-
-    let first = get(
-        state.clone(),
-        &format!(
-            "/api/usage/sessions?from={}&to={}&limit=2",
-            timestamp - 1,
-            timestamp + 10
-        ),
-    )
-    .await;
-    assert_eq!(first.status(), StatusCode::OK);
-    let first_body = axum::body::to_bytes(first.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let first_value: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
-    let first_ids = first_value["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|session| session["id"].as_str().unwrap().to_string())
-        .collect::<Vec<_>>();
-    let cursor = first_value["nextCursor"].as_str().unwrap();
-    let second = get(
-        state.clone(),
-        &format!(
-            "/api/usage/sessions?from={}&to={}&limit=2&cursor={cursor}",
-            timestamp - 1,
-            timestamp + 10
-        ),
-    )
-    .await;
-    assert_eq!(second.status(), StatusCode::OK);
-    let second_body = axum::body::to_bytes(second.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let second_value: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
-    assert_eq!(second_value["sessions"].as_array().unwrap().len(), 1);
-    assert!(!first_ids.contains(
-        &second_value["sessions"][0]["id"]
-            .as_str()
-            .unwrap()
-            .to_string()
-    ));
-    let changed_scope = get(
-        state.clone(),
-        &format!(
-            "/api/usage/sessions?from={}&to={}&limit=2&cursor={cursor}",
-            timestamp,
-            timestamp + 10
-        ),
-    )
-    .await;
-    assert_eq!(changed_scope.status(), StatusCode::BAD_REQUEST);
-
-    let default_first = get(state.clone(), "/api/usage/sessions?limit=2").await;
-    assert_eq!(default_first.status(), StatusCode::OK);
-    let default_first_body = axum::body::to_bytes(default_first.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let default_first_value: serde_json::Value =
-        serde_json::from_slice(&default_first_body).unwrap();
-    let default_cursor = default_first_value["nextCursor"].as_str().unwrap();
-    tokio::time::sleep(Duration::from_millis(2)).await;
-    let default_second = get(
-        state.clone(),
-        &format!("/api/usage/sessions?limit=2&cursor={default_cursor}"),
-    )
-    .await;
-    assert_eq!(default_second.status(), StatusCode::OK);
-    let default_second_body = axum::body::to_bytes(default_second.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let default_second_value: serde_json::Value =
-        serde_json::from_slice(&default_second_body).unwrap();
-    assert_eq!(default_second_value["range"], default_first_value["range"]);
-
-    for path in [
-        "/api/usage/sessions?limit=0",
-        "/api/usage/sessions?limit=101",
-        "/api/usage/sessions?cursor=not-base64!",
-        "/api/usage/sessions?model=https%3A%2F%2Fsecret",
-        "/api/usage/sessions?terminal=short",
-        "/api/usage/sessions?from=20&to=10",
-        "/api/usage/sessions/not-a-derived-id",
-    ] {
-        assert_eq!(
-            get(state.clone(), path).await.status(),
-            StatusCode::BAD_REQUEST
-        );
-    }
-    let missing_id = "0".repeat(64);
-    assert_eq!(
-        get(state, &format!("/api/usage/sessions/{missing_id}"))
-            .await
-            .status(),
-        StatusCode::NOT_FOUND
-    );
-}
-
-#[tokio::test]
-async fn usage_session_detail_stays_bounded_for_large_codex_store() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-    let store = state
-        .telemetry
-        .read()
-        .unwrap()
-        .store
-        .as_ref()
-        .unwrap()
-        .clone();
-    let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(1_000);
-    let root_id = "c".repeat(64);
-    let mut connection = rusqlite::Connection::open(store.path_for_tests()).unwrap();
-    let transaction = connection.transaction().unwrap();
-    transaction
-        .execute(
-            "INSERT INTO codex_sessions(session_fingerprint, model, source_version, source_quality, started_at_utc_ms, ended_at_utc_ms, status, counter_semantic, token_quality, response_count, duration_ms_sum, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, 'gpt-5.6-sol', '0.146.0', 'verified', ?2, ?2, 'completed', 'delta', 'exact', 1, 1, 1, 1, 1, 1, ?2)",
-            rusqlite::params![root_id, timestamp],
-        )
-        .unwrap();
-    {
-        let mut insert = transaction
-            .prepare("INSERT INTO codex_sessions(session_fingerprint, model, source_version, source_quality, started_at_utc_ms, ended_at_utc_ms, status, counter_semantic, token_quality, response_count, duration_ms_sum, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, 'gpt-5.6-terra', '0.146.0', 'verified', ?2, ?2, 'completed', 'delta', 'exact', 1, 1, 1, 1, 1, 1, ?2)")
-            .unwrap();
-        // Codex sessions are flat. A large unrelated store proves detail lookup
-        // remains bounded without reconstructing a terminal or agent tree.
-        for index in 1..=100_000_u64 {
-            insert
-                .execute(rusqlite::params![
-                    format!("d{index:063x}"),
-                    timestamp + index as i64
-                ])
-                .unwrap();
-        }
-    }
-    transaction.commit().unwrap();
-
-    let plan = connection
-        .prepare(
-            "EXPLAIN QUERY PLAN SELECT session_fingerprint FROM codex_sessions WHERE session_fingerprint = ?1",
-        )
-        .unwrap()
-        .query_map(rusqlite::params![root_id], |row| row.get::<_, String>(3))
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap()
-        .join(" ");
-    assert!(
-        plan.contains("codex_sessions") && plan.contains("INDEX"),
-        "query plan: {plan}"
-    );
-
-    let root_digest: crate::telemetry::privacy::HmacDigest = root_id.clone().try_into().unwrap();
-    let request = format!("/api/usage/sessions/{}", String::from(root_digest));
-    const SAMPLE_COUNT: usize = 5;
-    let mut durations = Vec::with_capacity(SAMPLE_COUNT);
-    let mut response_body = None;
-    for _ in 0..SAMPLE_COUNT {
-        let started = Instant::now();
-        let response = get(state.clone(), &request).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        response_body = Some(
-            axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        );
-        durations.push(started.elapsed());
-    }
-    durations.sort_unstable();
-    eprintln!(
-        "large Codex-store detail API max: {:?}",
-        durations[SAMPLE_COUNT - 1]
-    );
-    assert!(
-        durations[SAMPLE_COUNT - 1] < Duration::from_millis(200),
-        "large Codex-store detail API exceeded its work budget: {durations:?}"
-    );
-    let response: serde_json::Value = serde_json::from_slice(&response_body.unwrap()).unwrap();
-    assert_eq!(response["session"]["id"], root_id);
-    assert_eq!(response["session"]["model"], "gpt-5.6-sol");
-    assert!(!response.as_object().unwrap().contains_key("nodes"));
-    assert!(!response.as_object().unwrap().contains_key("truncated"));
-}
-
-#[tokio::test]
-async fn usage_session_detail_is_flat_and_caps_model_summaries() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-    let store = state
-        .telemetry
-        .read()
-        .unwrap()
-        .store
-        .as_ref()
-        .unwrap()
-        .clone();
-    let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(1_000);
-    let root_id = "a".repeat(64);
-    let telemetry = state.telemetry.read().unwrap().clone();
-    let keys = telemetry.hmac_keys.as_ref().unwrap();
-    let session_id: crate::telemetry::privacy::HmacDigest = root_id.clone().try_into().unwrap();
-    let mut events = Vec::with_capacity(301);
-    for index in 0..301_u64 {
-        let index_bytes = index.to_be_bytes();
-        events.push(TelemetryCmd::CodexUsage(CodexUsageEvent {
-            schema_version: TELEMETRY_SCHEMA_VERSION,
-            id: keys.digest(b"codex-detail-event", &[&index_bytes]),
-            occurred_at_utc_ms: timestamp + index as i64,
-            session_fingerprint: Some(session_id.clone()),
-            model: Some(CodexModel::new(format!("model-{index}")).unwrap()),
-            source_version: CodexVersion::new("0.146.0").unwrap(),
-            source_quality: SourceQuality::Verified,
-            status: SafeIdentifier::new("completed").unwrap(),
-            counter_semantic: TokenCounterSemantic::Delta,
-            duration_ms: Some(1),
-            token_quality: TokenQuality::Exact,
-            input_tokens: Some(1),
-            cached_input_tokens: Some(1),
-            output_tokens: Some(1),
-            reasoning_tokens: Some(1),
-        }));
-    }
-    store.write_batch(events).unwrap();
-
-    let response = get(state.clone(), &format!("/api/usage/sessions/{root_id}")).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(!value.as_object().unwrap().contains_key("nodes"));
-    assert!(!value.as_object().unwrap().contains_key("truncated"));
-    assert_eq!(value["session"]["tokens"]["inputTokens"], 301);
-    assert_eq!(value["session"]["tokens"]["responseCount"], 301);
-    let models = value["session"]["models"].as_array().unwrap();
-    assert_eq!(models.len(), 32);
-    assert_eq!(models[0]["model"], "model-0");
-    assert_eq!(models[31]["model"], "model-126");
-    let filtered = get(
-        state,
-        &format!(
-            "/api/usage/sessions?from={}&to={}",
-            timestamp - 1,
-            timestamp + 400
-        ),
-    )
-    .await;
-    assert_eq!(filtered.status(), StatusCode::OK);
-    let filtered_body = axum::body::to_bytes(filtered.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let filtered_value: serde_json::Value = serde_json::from_slice(&filtered_body).unwrap();
-    assert_eq!(filtered_value["sessions"].as_array().unwrap().len(), 1);
-    assert!(!filtered_value["sessions"][0]
-        .as_object()
-        .unwrap()
-        .contains_key("terminals"));
-}
-
-#[tokio::test]
-async fn usage_session_api_lists_100k_codex_sessions_under_200ms() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-    let store = state
-        .telemetry
-        .read()
-        .unwrap()
-        .store
-        .as_ref()
-        .unwrap()
-        .clone();
-    let timestamp = i64::try_from(now_ms()).unwrap().saturating_sub(1_000);
-    let mut connection = rusqlite::Connection::open(store.path_for_tests()).unwrap();
-    let transaction = connection.transaction().unwrap();
-    {
-        let mut insert = transaction
-            .prepare("INSERT INTO codex_sessions(session_fingerprint, model, source_version, source_quality, started_at_utc_ms, ended_at_utc_ms, status, counter_semantic, token_quality, response_count, duration_ms_sum, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, updated_at_utc_ms) VALUES (?1, 'gpt-5.6-sol', '0.146.0', 'verified', ?2, ?2, 'completed', 'delta', 'exact', 1, 4, 1, 2, 3, 4, ?2)")
-            .unwrap();
-        for index in 0..100_000_u64 {
-            insert
-                .execute(rusqlite::params![format!("{index:064x}"), timestamp])
-                .unwrap();
-        }
-    }
-    transaction.commit().unwrap();
-
-    let request = format!(
-        "/api/usage/sessions?from={}&to={}&limit=100",
-        timestamp - 1,
-        timestamp + 1
-    );
-    let mut durations = Vec::new();
-    for _ in 0..5 {
-        let started = std::time::Instant::now();
-        let response = get(state.clone(), &request).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        durations.push(started.elapsed());
-    }
-    durations.sort_unstable();
-    eprintln!("100k root-list API p95: {:?}", durations[4]);
-    assert!(
-        durations[4] < Duration::from_millis(200),
-        "100k root-list API p95 took {:?}; durations: {durations:?}",
-        durations[4]
-    );
-}
-
-#[tokio::test]
-async fn usage_settings_apply_pause_atomically_and_delete_requires_confirmation() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-
-    let updated = patch_json(
-        state.clone(),
-        "/api/usage/settings",
-        serde_json::json!({
-            "paused": true
-        }),
-    )
-    .await;
-    assert_eq!(updated.status(), StatusCode::OK);
-    let telemetry = state.telemetry.read().unwrap().clone();
-    assert!(!telemetry.control.is_enabled());
-    assert!(std::fs::read_to_string(tmp.path().join("dam-hopper.toml"))
-        .unwrap()
-        .contains("paused = true"));
-
-    let rejected = delete_json(
-        state.clone(),
-        "/api/usage",
-        serde_json::json!({"confirmation": "no"}),
-    )
-    .await;
-    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
-    let deleted = delete_json(
-        state,
-        "/api/usage",
-        serde_json::json!({"confirmation": "delete-usage-data"}),
-    )
-    .await;
-    assert_eq!(deleted.status(), StatusCode::OK);
-}
-
-#[tokio::test]
-async fn usage_delete_all_removes_summaries_before_rotating_hmac_key() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-    let telemetry = state.telemetry.read().unwrap().clone();
-    let keys = telemetry.hmac_keys.as_ref().unwrap();
-    let before = keys.digest(b"rotation-proof", &[b"stable"]);
-    let event = CodexUsageEvent {
-        schema_version: TELEMETRY_SCHEMA_VERSION,
-        id: keys.digest(b"event", &[b"delete-all"]),
-        occurred_at_utc_ms: 10,
-        session_fingerprint: Some(keys.digest(b"codex-conversation:v1", &[b"delete-all"])),
-        model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
-        source_version: CodexVersion::new("0.146.0").unwrap(),
-        source_quality: SourceQuality::Verified,
-        status: SafeIdentifier::new("completed").unwrap(),
-        counter_semantic: TokenCounterSemantic::Delta,
-        duration_ms: None,
-        token_quality: TokenQuality::Exact,
-        input_tokens: Some(2),
-        cached_input_tokens: Some(3),
-        output_tokens: Some(5),
-        reasoning_tokens: Some(7),
-    };
-    let store = telemetry.store.as_ref().unwrap();
-    store
-        .write_batch(vec![TelemetryCmd::CodexUsage(event)])
-        .unwrap();
-    assert_eq!(
-        store
-            .open_read()
-            .unwrap()
-            .query_row("SELECT count(*) FROM codex_usage_events", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
-
-    let deleted = delete_json(
-        state,
-        "/api/usage",
-        serde_json::json!({"confirmation": "delete-usage-data"}),
-    )
-    .await;
-    assert_eq!(deleted.status(), StatusCode::OK);
-    let connection = store.open_read().unwrap();
-    for table in [
-        "codex_usage_events",
-        "codex_sessions",
-        "codex_daily_rollups",
-        "telemetry_health",
-    ] {
-        let count = connection
-            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .unwrap();
-        assert_eq!(count, 0, "{table} must be empty before successful response");
-    }
-    assert_ne!(keys.digest(b"rotation-proof", &[b"stable"]), before);
-}
-
-#[tokio::test]
-async fn usage_delete_all_restores_capture_when_hmac_rotation_fails() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-    let telemetry = state.telemetry.read().unwrap().clone();
-    let store = telemetry.store.as_ref().unwrap();
-    store.increment_health("delete-proof", 1, 10).unwrap();
-
-    let key_path = tmp.path().join("telemetry-key");
-    std::fs::remove_file(&key_path).unwrap();
-    std::fs::create_dir(&key_path).unwrap();
-    let response = delete_json(
-        state,
-        "/api/usage",
-        serde_json::json!({"confirmation": "delete-usage-data"}),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert!(telemetry.control.is_enabled());
-    assert_eq!(
-        store
-            .open_read()
-            .unwrap()
-            .query_row("SELECT count(*) FROM telemetry_health", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        0,
-        "deletion must commit before the forced rotation failure"
-    );
-}
-
-#[tokio::test]
-async fn usage_delete_all_preserves_disabled_unpaused_admission_state() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    activate_telemetry(&state, &tmp);
-    let telemetry = state.telemetry.read().unwrap().clone();
-    telemetry.control.set_enabled(false);
-    assert!(!state.config.read().await.server.telemetry.paused);
-
-    let response = delete_json(
-        state,
-        "/api/usage",
-        serde_json::json!({"confirmation": "delete-usage-data"}),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(!telemetry.control.is_enabled());
-}
-
-#[tokio::test]
-async fn usage_delete_rejects_unknown_fields() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    let response = delete_json(
-        state,
-        "/api/usage",
-        serde_json::json!({
-            "confirmation": "delete-usage-data",
-            "terminal": "legacy"
-        }),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-}
-
-#[tokio::test]
-async fn usage_settings_reject_removed_fields() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-
-    let correlation = patch_json(
-        state.clone(),
-        "/api/usage/settings",
-        serde_json::json!({"terminalCorrelationEnabled": true}),
-    )
-    .await;
-    assert_eq!(correlation.status(), StatusCode::UNPROCESSABLE_ENTITY);
-
-    let projects = patch_json(
-        state,
-        "/api/usage/settings",
-        serde_json::json!({"excludedProjects": ["private"]}),
-    )
-    .await;
-    assert_eq!(projects.status(), StatusCode::UNPROCESSABLE_ENTITY);
-}
-
-#[tokio::test]
-async fn usage_setup_status_is_opaque_to_the_browser() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-
-    let response = get(state, "/api/usage/setup").await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(text.contains("collectorEnabled"));
-    assert!(text.contains("codexExporter"));
-    assert!(!text.contains("127.0.0.1"));
-    assert!(!text.contains("endpoint"));
-    assert!(!text.contains("config.toml"));
-}
-
-#[tokio::test]
-async fn usage_health_requires_auth_and_exposes_only_numeric_drop_counters() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-
-    let unauthorized = get_without_auth(state.clone(), "/api/usage/health").await;
-    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let enabled = patch_json(
-        state.clone(),
-        "/api/usage/settings",
-        serde_json::json!({
-            "enabled": true,
-            "collector": {"enabled": true, "host": "127.0.0.1", "port": port}
-        }),
-    )
-    .await;
-    assert_eq!(enabled.status(), StatusCode::OK);
-    let token = std::fs::read_to_string(tmp.path().join("collector-token")).unwrap();
-    let ingest = reqwest::Client::new()
-        .post(format!("http://127.0.0.1:{port}/v1/logs"))
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Content-Type", "application/x-protobuf")
-        .body(
-            include_bytes!(
-                "../telemetry/codex_otlp/fixtures/codex-cli-0.146.1-response-completed.bin"
-            )
-            .to_vec(),
-        )
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(ingest.status(), reqwest::StatusCode::ACCEPTED);
-
-    let response = get(state.clone(), "/api/usage/health").await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let text = String::from_utf8(body.to_vec()).unwrap();
-    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let collector = &value["collector"];
-    for field in [
-        "droppedMissingIdentity",
-        "droppedInvalidTimestamp",
-        "droppedPaused",
-        "droppedQueueFull",
-        "droppedWorkerUnavailable",
-    ] {
-        assert!(collector[field].is_u64(), "{field} must be numeric");
-    }
-    assert_eq!(collector["queued"], 1);
-    assert_eq!(collector["unverifiedVersion"], 1);
-    assert_eq!(collector["dropped"], 0);
-    assert_eq!(collector["droppedMissingIdentity"], 0);
-    assert_eq!(collector["droppedInvalidTimestamp"], 0);
-    assert_eq!(collector["droppedPaused"], 0);
-    assert_eq!(collector["droppedQueueFull"], 0);
-    assert_eq!(collector["droppedWorkerUnavailable"], 0);
-    for forbidden in [
-        "authorization",
-        "Bearer",
-        "prompt",
-        "response",
-        "tool.content",
-        "0.146.1",
-        "\"version\"",
-        "\"identity\"",
-    ] {
-        assert!(!text.contains(forbidden), "health leaked {forbidden}");
-    }
-    assert!(!text.contains(&token));
-    state.telemetry_runtime.shutdown().await;
-}
-
-#[tokio::test]
-async fn usage_settings_enable_and_disable_apply_the_runtime_without_a_server_restart() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-
-    let enabled = patch_json(
-        state.clone(),
-        "/api/usage/settings",
-        serde_json::json!({"enabled": true}),
-    )
-    .await;
-    assert_eq!(enabled.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(enabled.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(value["runtime"]["active"], true);
-    assert_eq!(value["runtime"]["collectorError"], serde_json::Value::Null);
-    assert!(state.telemetry.read().unwrap().store.is_some());
-
-    let disabled = post_json(
-        state.clone(),
-        "/api/usage/settings",
-        serde_json::json!({"enabled": false}),
-    )
-    .await;
-    assert_eq!(disabled.status(), StatusCode::OK);
-    assert!(state.telemetry.read().unwrap().store.is_none());
-    assert!(!state.config.read().await.server.telemetry.enabled);
-}
-
-#[tokio::test]
-async fn usage_settings_manages_codex_exporter_without_returning_its_bearer_secret() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-
-    let enabled = patch_json(
-        state.clone(),
-        "/api/usage/settings",
-        serde_json::json!({
-            "enabled": true,
-            "collector": {"enabled": true, "host": "127.0.0.1", "port": port},
-            "codexExporter": true
-        }),
-    )
-    .await;
-    assert_eq!(enabled.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(enabled.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let response = String::from_utf8(body.to_vec()).unwrap();
-    assert!(response.contains("\"codexExporter\":\"managed\""));
-    assert!(!response.contains("authorization"));
-    let token = std::fs::read_to_string(tmp.path().join("collector-token")).unwrap();
-    assert!(!response.contains(&token));
-
-    let codex_config = std::fs::read_to_string(tmp.path().join(".codex/config.toml")).unwrap();
-    assert!(codex_config.contains("log_user_prompt = false"));
-    assert!(codex_config.contains(&format!("http://127.0.0.1:{port}/v1/logs")));
-
-    let disabled = patch_json(
-        state.clone(),
-        "/api/usage/settings",
-        serde_json::json!({"enabled": false}),
-    )
-    .await;
-    assert_eq!(disabled.status(), StatusCode::OK);
-    assert!(
-        std::fs::read_to_string(tmp.path().join(".codex/config.toml"))
-            .unwrap()
-            .contains("exporter = \"none\"")
-    );
-    state.telemetry_runtime.shutdown().await;
-}
-
-#[tokio::test]
-async fn usage_settings_restores_codex_config_when_dam_hopper_config_persist_fails() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    let blocker = tmp.path().join("not-a-directory");
-    std::fs::write(&blocker, "blocker").unwrap();
-    state.config.write().await.config_path = blocker.join("dam-hopper.toml");
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-
-    let response = patch_json(
-        state.clone(),
-        "/api/usage/settings",
-        serde_json::json!({
-            "enabled": true,
-            "collector": {"enabled": true, "host": "127.0.0.1", "port": port},
-            "codexExporter": true
-        }),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert!(!tmp.path().join(".codex/config.toml").exists());
-    assert!(!state.telemetry_runtime.status().active);
-}
-
-#[tokio::test]
-async fn usage_settings_retry_collector_failure_restores_previous_runtime_and_config_state() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-
-    let enabled = patch_json(
-        state.clone(),
-        "/api/usage/settings",
-        serde_json::json!({
-            "enabled": true,
-            "collector": {"enabled": true, "host": "127.0.0.1", "port": port}
-        }),
-    )
-    .await;
-    assert_eq!(enabled.status(), StatusCode::OK);
-
-    let previous_config = state.config.read().await.server.telemetry.clone();
-    let previous_file = std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
-    let previous_runtime = state.telemetry_runtime.status();
-    assert!(previous_runtime.active);
-    assert!(!previous_runtime.collector.running);
-    assert!(state.telemetry.read().unwrap().control.is_enabled());
-
-    let retry = patch_json(
-        state.clone(),
-        "/api/usage/settings",
-        serde_json::json!({"paused": true, "retryCollector": true}),
-    )
-    .await;
-    assert_eq!(retry.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(state.config.read().await.server.telemetry, previous_config);
-    assert_eq!(
-        std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap(),
-        previous_file
-    );
-    let restored_runtime = state.telemetry_runtime.status();
-    assert!(restored_runtime.active);
-    assert!(!restored_runtime.collector.running);
-    assert_eq!(
-        restored_runtime.collector_error,
-        previous_runtime.collector_error
-    );
-    assert!(state.telemetry.read().unwrap().control.is_enabled());
-
-    drop(listener);
-    state.telemetry_runtime.shutdown().await;
-}
-
-#[tokio::test]
-async fn usage_retention_update_and_delete_are_serialized_while_runtime_is_live() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = make_state(&tmp);
-    let enabled = patch_json(
-        state.clone(),
-        "/api/usage/settings",
-        serde_json::json!({"enabled": true}),
-    )
-    .await;
-    assert_eq!(enabled.status(), StatusCode::OK);
-
-    let (retention, deletion) = tokio::join!(
-        patch_json(
-            state.clone(),
-            "/api/usage/settings",
-            serde_json::json!({"detailRetentionDays": 30}),
-        ),
-        delete_json(
-            state.clone(),
-            "/api/usage",
-            serde_json::json!({"confirmation": "delete-usage-data"}),
-        )
-    );
-    assert_eq!(retention.status(), StatusCode::OK);
-    assert_eq!(deletion.status(), StatusCode::OK);
-    state.telemetry_runtime.shutdown().await;
-}
-
-fn activate_telemetry(state: &AppState, tmp: &TempDir) {
-    let store = Arc::new(TelemetryStore::open(&tmp.path().join("telemetry.db")).unwrap());
-    let control = Arc::new(TelemetryControl::new(true));
-    let keys =
-        Arc::new(TelemetryKeyRing::load_or_create(tmp.path().join("telemetry-key")).unwrap());
-    state.set_telemetry(TelemetryHandle::active(control, store, None).with_hmac_keys(keys));
-}
-
-fn write_usage_session(
-    state: &AppState,
-    conversation: &[u8],
-    _project: Option<&str>,
-    timestamp: i64,
-    tokens: [Option<u64>; 4],
-) -> String {
-    let telemetry = state.telemetry.read().unwrap().clone();
-    let keys = telemetry.hmac_keys.as_ref().unwrap();
-    let session_id = keys.digest(b"codex-conversation:v1", &[conversation]);
-    let timestamp_bytes = timestamp.to_be_bytes();
-    let event_id = keys.digest(b"codex-usage:v1", &[conversation, &timestamp_bytes]);
-    let token_quality = match tokens.iter().filter(|value| value.is_some()).count() {
-        0 => TokenQuality::Unavailable,
-        4 => TokenQuality::Exact,
-        _ => TokenQuality::Partial,
-    };
-    telemetry
-        .store
-        .as_ref()
-        .unwrap()
-        .write_batch(vec![TelemetryCmd::CodexUsage(CodexUsageEvent {
-            schema_version: TELEMETRY_SCHEMA_VERSION,
-            id: event_id,
-            occurred_at_utc_ms: timestamp,
-            session_fingerprint: Some(session_id.clone()),
-            model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
-            source_version: CodexVersion::new("0.146.0").unwrap(),
-            source_quality: SourceQuality::Verified,
-            status: SafeIdentifier::new("completed").unwrap(),
-            counter_semantic: TokenCounterSemantic::Delta,
-            duration_ms: None,
-            token_quality,
-            input_tokens: tokens[0],
-            cached_input_tokens: tokens[1],
-            output_tokens: tokens[2],
-            reasoning_tokens: tokens[3],
-        })])
-        .unwrap();
-    String::from(session_id)
-}
-
-fn write_usage_command(
-    state: &AppState,
-    _tmp: &TempDir,
-    timestamp: i64,
-    sequence: u64,
-    _command: &str,
-    duration_ms: u64,
-) {
-    let telemetry = state.telemetry.read().unwrap().clone();
-    let keys = telemetry.hmac_keys.as_ref().unwrap();
-    let timestamp_bytes = timestamp.to_be_bytes();
-    let sequence_bytes = sequence.to_be_bytes();
-    telemetry
-        .store
-        .as_ref()
-        .unwrap()
-        .write_batch(vec![TelemetryCmd::CodexUsage(CodexUsageEvent {
-            schema_version: TELEMETRY_SCHEMA_VERSION,
-            id: keys.digest(b"codex-usage:v1", &[&timestamp_bytes, &sequence_bytes]),
-            occurred_at_utc_ms: timestamp,
-            session_fingerprint: None,
-            model: Some(CodexModel::new("gpt-5.6-sol").unwrap()),
-            source_version: CodexVersion::new("0.146.0").unwrap(),
-            source_quality: SourceQuality::Verified,
-            status: SafeIdentifier::new("completed").unwrap(),
-            counter_semantic: TokenCounterSemantic::Delta,
-            duration_ms: Some(duration_ms),
-            token_quality: TokenQuality::Exact,
-            input_tokens: Some(1),
-            cached_input_tokens: Some(1),
-            output_tokens: Some(1),
-            reasoning_tokens: Some(1),
-        })])
-        .unwrap();
 }
 
 #[test]
@@ -3734,9 +2610,140 @@ async fn update_global_ui_at_path_persists_project_panel_shortcut_in_snake_case(
     assert!(!written.contains("projectPanelShortcut"));
 
     let ui = state.global_config.read().await.ui.clone().unwrap();
-    assert_eq!(ui.project_panel_shortcut, "Mod+Shift+KeyZ");
+    assert_eq!(ui.project_panel_shortcut.as_deref(), Some("Mod+Shift+KeyZ"));
+
+    // Patch to null unbinds: writes "" to TOML and deserializes as None
+    crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "projectPanelShortcut": null,
+        })),
+    )
+    .await
+    .unwrap();
+
+    let written_null = std::fs::read_to_string(&gc_path).unwrap();
+    assert!(written_null.contains("project_panel_shortcut = \"\""));
+
+    let ui_null = state.global_config.read().await.ui.clone().unwrap();
+    assert_eq!(ui_null.project_panel_shortcut, None);
 }
 
+#[tokio::test]
+async fn update_global_ui_app_shortcuts_merge_and_validation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let gc_path = tmp.path().join("dam-hopper").join("config.toml");
+
+    // 1. Initial patch with valid extra action ID
+    crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "appShortcuts": {
+                "app.editor.open": "Mod+KeyE",
+            },
+        })),
+    )
+    .await
+    .unwrap();
+
+    let ui = state.global_config.read().await.ui.clone().unwrap();
+    assert_eq!(
+        ui.app_shortcuts.get("app.editor.open").and_then(|v| v.as_deref()),
+        Some("Mod+KeyE")
+    );
+
+    // 2. Second patch merges per-entry (does not drop app.editor.open)
+    crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "appShortcuts": {
+                "app.browser.open": "Mod+KeyB",
+            },
+        })),
+    )
+    .await
+    .unwrap();
+
+    let ui2 = state.global_config.read().await.ui.clone().unwrap();
+    assert_eq!(
+        ui2.app_shortcuts.get("app.editor.open").and_then(|v| v.as_deref()),
+        Some("Mod+KeyE")
+    );
+    assert_eq!(
+        ui2.app_shortcuts.get("app.browser.open").and_then(|v| v.as_deref()),
+        Some("Mod+KeyB")
+    );
+
+    // 3. Unbind with null writes "" in TOML
+    crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "appShortcuts": {
+                "app.editor.open": null,
+            },
+        })),
+    )
+    .await
+    .unwrap();
+
+    let written = std::fs::read_to_string(&gc_path).unwrap();
+    assert!(written.contains("\"app.editor.open\" = \"\""));
+
+    // 4. Reject scalar-owned ID in appShortcuts
+    let err_scalar = crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "appShortcuts": {
+                "app.terminals.open": "Ctrl+KeyT",
+            },
+        })),
+    )
+    .await;
+    assert!(err_scalar.is_err());
+
+    // 5. Reject unknown action ID in appShortcuts
+    let err_unknown = crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "appShortcuts": {
+                "totally.fake.action": "Ctrl+KeyK",
+            },
+        })),
+    )
+    .await;
+    assert!(err_unknown.is_err());
+
+    // 6. Reject non-string non-null value in appShortcuts
+    let err_type = crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "appShortcuts": {
+                "app.browser.open": 12345,
+            },
+        })),
+    )
+    .await;
+    assert!(err_type.is_err());
+
+    // 7. Appearance bounds validation
+    let err_bounds = crate::api::config::update_global_ui_at_path(
+        &state,
+        &gc_path,
+        Some(&serde_json::json!({
+            "dockPadding": 99.0,
+        })),
+    )
+    .await;
+    assert!(err_bounds.is_err());
+}
 #[tokio::test]
 async fn update_global_ui_at_path_persists_and_clears_host_resource_pinned_mount() {
     let tmp = tempfile::tempdir().unwrap();
@@ -5837,7 +4844,7 @@ async fn video_ticket_issuance_is_not_limited_by_live_ticket_count() {
     for _ in 0..=FORMER_GLOBAL_TICKET_LIMIT {
         let record = crate::fs::VideoTicketRecord {
             purpose: crate::fs::VideoTicketPurpose::Playback,
-            target: target.clone(),
+            target: crate::workspace_target::ResolvedFilesystemTarget::Project(target.clone()),
             project_relative_path: "clip.webm".into(),
             file: crate::fs::VideoFileVersion::from_metadata(canonical.clone(), &metadata).unwrap(),
             mime: "video/webm".into(),
@@ -6437,7 +5444,7 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
         assert!(!text.contains(path));
     }
     let traversal = post_json(
-        state,
+        state.clone(),
         "/api/fs/image/tickets",
         serde_json::json!({
             "project": "test-project",
@@ -6453,6 +5460,19 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
             .unwrap()
     )
     .contains("outside.png"));
+
+    let ambiguous = post_json(
+        state,
+        "/api/fs/image/tickets",
+        serde_json::json!({
+            "target": { "type": "workspace" },
+            "targetType": "project",
+            "path": "real.png",
+            "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+        }),
+    )
+    .await;
+    assert_eq!(ambiguous.status(), StatusCode::BAD_REQUEST);
 }
 
 #[cfg(unix)]
@@ -7231,26 +6251,12 @@ async fn workspace_switch_preserves_startup_idle_suspend_policy() {
     let state = make_state_with_project(&tmp);
 
     let switched_dir = tempfile::tempdir().unwrap();
-    let switched_cfg = switched_dir.path().join("dam-hopper.toml");
-    std::fs::write(
-        &switched_cfg,
-        r#"
-[workspace]
-name = "switched-ws"
-
-[server.idle_suspend]
-enabled = true
-quiet_period_seconds = 3600
-wake_after_seconds = 1800
-enrollment_reference = "systemd:fake"
-"#,
-    )
-    .unwrap();
+    let canonical_switched = dunce::canonicalize(switched_dir.path()).unwrap();
 
     let resp = post_json(
         state.clone(),
         "/api/workspace/switch",
-        serde_json::json!({ "path": switched_cfg.to_string_lossy().to_string() }),
+        serde_json::json!({ "path": canonical_switched.to_string_lossy().to_string(), "name": "switched-ws" }),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -8581,4 +7587,318 @@ async fn test_idle_suspend_consent_decision_endpoint_guards_and_capabilities() {
     }
 
     client_guard.retire();
+}
+
+#[tokio::test]
+async fn test_terminal_inventory_headers_and_row_projection() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+
+    // Call GET /api/terminal
+    let resp = get(state.clone(), "/api/terminal").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("X-DamHopper-Termination-Version").unwrap(),
+        "1"
+    );
+    let epoch_header = resp
+        .headers()
+        .get("X-DamHopper-PTY-Epoch")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert_eq!(epoch_header, state.pty_manager.termination_epoch().to_string());
+    assert_eq!(
+        resp.headers().get("Cache-Control").unwrap(),
+        "no-store"
+    );
+
+    // Create session
+    let create_body = serde_json::json!({
+        "id": "term-inv-test",
+        "command": "sh -c 'sleep 30'",
+        "cwd": tmp.path().to_str().unwrap(),
+    });
+    let c_resp = post_json(state.clone(), "/api/terminal", create_body).await;
+    assert_eq!(c_resp.status(), StatusCode::OK);
+
+    // Check list
+    let list_resp = get(state.clone(), "/api/terminal").await;
+    let body = axum::body::to_bytes(list_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json.as_array().unwrap();
+    let row = rows.iter().find(|r| r["id"] == "term-inv-test").unwrap();
+    assert_eq!(row["terminationState"], "live");
+    assert_eq!(row["incarnationExact"], row["incarnation"].as_u64().unwrap().to_string());
+    assert!(row.get("buffer_bytes").is_none());
+
+    // Check detailed
+    let det_resp = get(state.clone(), "/api/terminal/detailed").await;
+    let det_body = axum::body::to_bytes(det_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let det_json: serde_json::Value = serde_json::from_slice(&det_body).unwrap();
+    let det_rows = det_json.as_array().unwrap();
+    let det_row = det_rows.iter().find(|r| r["id"] == "term-inv-test").unwrap();
+    assert_eq!(det_row["terminationState"], "live");
+    assert_eq!(det_row["incarnationExact"], det_row["incarnation"].as_u64().unwrap().to_string());
+    assert!(det_row.get("buffer_bytes").is_some());
+
+    let _ = state.pty_manager.kill("term-inv-test");
+}
+
+#[tokio::test]
+async fn test_terminal_cors_exposes_termination_headers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let allowed_origin = "http://127.0.0.1:4801";
+    let router = crate::api::router::build_router_with_origins(
+        state,
+        vec![axum::http::HeaderValue::from_static(allowed_origin)],
+    );
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/terminal")
+        .header("Origin", allowed_origin)
+        .header("Cookie", auth_cookie())
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let exposed = resp
+        .headers()
+        .get("Access-Control-Expose-Headers")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(exposed.contains("x-damhopper-termination-version"));
+    assert!(exposed.contains("x-damhopper-pty-epoch"));
+}
+
+#[tokio::test]
+async fn test_terminal_terminate_body_limit_and_rejections() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let epoch = state.pty_manager.termination_epoch().to_string();
+
+    // Create session
+    let create_body = serde_json::json!({
+        "id": "term-rej-test",
+        "command": "sh -c 'sleep 30'",
+        "cwd": tmp.path().to_str().unwrap(),
+    });
+    let c_resp = post_json(state.clone(), "/api/terminal", create_body).await;
+    assert_eq!(c_resp.status(), StatusCode::OK);
+
+    // 1. Body > 512 bytes => 413 TERMINATION_BODY_TOO_LARGE
+    let big_padding = "x".repeat(600);
+    let big_body = format!("{{\"version\":1,\"expectedServerEpoch\":\"{epoch}\",\"expectedIncarnation\":\"1\",\"pad\":\"{big_padding}\"}}");
+    let router = build_router(state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/terminal/term-rej-test/terminate")
+        .header("Content-Type", "application/json")
+        .header("Cookie", auth_cookie())
+        .body(Body::from(big_body))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_BODY_TOO_LARGE");
+
+    // 2. Unknown fields => 400 TERMINATION_INVALID_REQUEST
+    let unknown_field_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": "1",
+        "profileId": "prof-1"
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-rej-test/terminate", unknown_field_body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_INVALID_REQUEST");
+
+    // 3. Unsupported version => 400 TERMINATION_UNSUPPORTED_VERSION
+    let unsupp_ver_body = serde_json::json!({
+        "version": 2,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": "1"
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-rej-test/terminate", unsupp_ver_body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_UNSUPPORTED_VERSION");
+
+    // 4. Numeric incarnation => 400 TERMINATION_INVALID_REQUEST
+    let numeric_inc_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": 1
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-rej-test/terminate", numeric_inc_body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_INVALID_REQUEST");
+
+    // 5. Noncanonical positive u64 (leading zero "01", negative "-1", float "1.0", zero "0") => 400 TERMINATION_INVALID_REQUEST
+    for bad_inc in ["0", "01", "-1", "+1", "1.0", "1e5", "18446744073709551616"] {
+        let bad_inc_body = serde_json::json!({
+            "version": 1,
+            "expectedServerEpoch": epoch,
+            "expectedIncarnation": bad_inc
+        });
+        let resp = post_json(state.clone(), "/api/terminal/term-rej-test/terminate", bad_inc_body).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "TERMINATION_INVALID_REQUEST");
+    }
+
+    // 6. Noncanonical UUID (uppercase, wrong format) => 400 TERMINATION_INVALID_REQUEST
+    let bad_uuid_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch.to_uppercase(),
+        "expectedIncarnation": "1"
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-rej-test/terminate", bad_uuid_body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_INVALID_REQUEST");
+
+    let _ = state.pty_manager.kill("term-rej-test");
+}
+
+#[tokio::test]
+async fn test_terminal_terminate_success_outcomes_and_domain_refusals() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(&tmp);
+    let epoch = state.pty_manager.termination_epoch().to_string();
+
+    // 1. 404 NOT FOUND for absent session
+    let not_found_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": "100"
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-absent/terminate", not_found_body).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_NOT_FOUND");
+
+    // Create live session
+    let create_body = serde_json::json!({
+        "id": "term-live-route",
+        "command": "sh -c 'sleep 30'",
+        "cwd": tmp.path().to_str().unwrap(),
+    });
+    let c_resp = post_json(state.clone(), "/api/terminal", create_body).await;
+    assert_eq!(c_resp.status(), StatusCode::OK);
+    let c_raw = axum::body::to_bytes(c_resp.into_body(), usize::MAX).await.unwrap();
+    let c_json: serde_json::Value = serde_json::from_slice(&c_raw).unwrap();
+    let inc = c_json["incarnation"].as_u64().unwrap();
+    let inc_str = inc.to_string();
+
+    // 2. 409 EPOCH MISMATCH
+    let wrong_epoch = uuid::Uuid::new_v4().to_string();
+    let epoch_mismatch_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": wrong_epoch,
+        "expectedIncarnation": inc_str
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-live-route/terminate", epoch_mismatch_body).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_EPOCH_MISMATCH");
+
+    // 3. 409 INCARNATION MISMATCH
+    let inc_mismatch_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": (inc + 1).to_string()
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-live-route/terminate", inc_mismatch_body).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "TERMINATION_INCARNATION_MISMATCH");
+
+    // 4. 202 TERMINATION REQUESTED
+    let term_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": inc_str
+    });
+    let resp = post_json(state.clone(), "/api/terminal/term-live-route/terminate", term_body.clone()).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["version"], 1);
+    assert_eq!(json["serverEpoch"], epoch);
+    assert_eq!(json["terminalId"], "term-live-route");
+    assert_eq!(json["incarnation"], inc_str);
+    assert_eq!(json["outcome"], "terminationRequested");
+
+    // 5. Duplicate request => 409 ALREADY REQUESTED
+    let dup_resp = post_json(state.clone(), "/api/terminal/term-live-route/terminate", term_body).await;
+    assert_eq!(dup_resp.status(), StatusCode::CONFLICT);
+    let dup_body = axum::body::to_bytes(dup_resp.into_body(), usize::MAX).await.unwrap();
+    let dup_json: serde_json::Value = serde_json::from_slice(&dup_body).unwrap();
+    assert_eq!(dup_json["code"], "TERMINATION_ALREADY_REQUESTED");
+
+    // 6. 200 RESTART CANCELLED for pending restart
+    state.pty_manager.test_respawn_hook().pause_next();
+    let r_meta = state
+        .pty_manager
+        .create(crate::pty::manager::PtyCreateOpts {
+            id: "term-restart-route".to_string(),
+            command: "sh -c 'exit 1'".to_string(),
+            cwd: tmp.path().to_str().unwrap().to_string(),
+            env: std::collections::HashMap::new(),
+            cols: 80,
+            rows: 24,
+            project: None,
+            worktree_path: None,
+            name: None,
+            restart_policy: crate::config::schema::RestartPolicy::Always,
+            restart_max_retries: 5,
+        })
+        .expect("create restart terminal");
+    let r_inc_str = r_meta.incarnation.to_string();
+    // Wait until enters restartPending
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let snap = state.pty_manager.termination_inventory_snapshot(false);
+        if let Some(r) = snap.rows.iter().find(|r| r.meta.id == "term-restart-route") {
+            if r.termination_state == crate::pty::manager::TerminalInventoryState::RestartPending {
+                break;
+            }
+        }
+    }
+
+    let cancel_body = serde_json::json!({
+        "version": 1,
+        "expectedServerEpoch": epoch,
+        "expectedIncarnation": r_inc_str
+    });
+    let cancel_resp = post_json(state.clone(), "/api/terminal/term-restart-route/terminate", cancel_body.clone()).await;
+    assert_eq!(cancel_resp.status(), StatusCode::OK);
+    let c_body = axum::body::to_bytes(cancel_resp.into_body(), usize::MAX).await.unwrap();
+    let c_res: serde_json::Value = serde_json::from_slice(&c_body).unwrap();
+    assert_eq!(c_res["version"], 1);
+    assert_eq!(c_res["serverEpoch"], epoch);
+    assert_eq!(c_res["terminalId"], "term-restart-route");
+    assert_eq!(c_res["incarnation"], r_inc_str);
+    assert_eq!(c_res["outcome"], "restartCancelled");
+
+    state.pty_manager.test_respawn_hook().release();
 }

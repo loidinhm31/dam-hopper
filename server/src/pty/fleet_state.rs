@@ -308,6 +308,16 @@ impl PtyFleetState {
         }
     }
 
+    /// Check whether the exact session incarnation is currently registered as `restart_pending`.
+    pub fn is_restart_pending(&self, id: &str, incarnation: u64) -> bool {
+        self.restart_pending.get(id).copied() == Some(incarnation)
+    }
+
+    /// Check whether the exact session incarnation is currently registered as `creating`.
+    pub fn is_creating(&self, id: &str, incarnation: u64) -> bool {
+        self.creating.get(id).copied() == Some(incarnation)
+    }
+
     /// Remove any reservation or live entry for the given ID (on manual kill or remove).
     pub fn remove_all_for_id(&mut self, id: &str) {
         let had_live = self.live.remove(id).is_some();

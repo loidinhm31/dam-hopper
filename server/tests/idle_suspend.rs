@@ -36,7 +36,6 @@ use dam_hopper_server::{
     },
     pty::{BroadcastEventSink, PtyCreateOpts, PtySessionManager},
     state::AppState,
-    telemetry::TelemetryRuntime,
 };
 
 mod common;
@@ -149,9 +148,10 @@ wake_after_seconds = {}
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
-    config.server.telemetry.db_path = tmp.path().join("telemetry.db").display().to_string();
 
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(vec![]);
@@ -173,7 +173,6 @@ wake_after_seconds = {}
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        TelemetryRuntime::new(),
     )
     .expect("AppState::new")
     .with_auth_service(std::sync::Arc::new(
@@ -269,9 +268,10 @@ agent_executables = [{}]
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
-    config.server.telemetry.db_path = tmp.path().join("telemetry.db").display().to_string();
 
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(vec![]);
@@ -293,7 +293,6 @@ agent_executables = [{}]
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        TelemetryRuntime::new(),
     )
     .expect("AppState::new")
     .with_auth_service(std::sync::Arc::new(
@@ -375,9 +374,10 @@ automatic_policy = "agent-free"
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
-    config.server.telemetry.db_path = tmp.path().join("telemetry.db").display().to_string();
 
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(vec![]);
@@ -399,7 +399,6 @@ automatic_policy = "agent-free"
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        TelemetryRuntime::new(),
     )
     .expect("AppState::new")
     .with_auth_service(std::sync::Arc::new(

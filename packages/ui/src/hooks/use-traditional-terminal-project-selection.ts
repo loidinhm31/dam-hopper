@@ -1,18 +1,25 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TraditionalTerminalProjectGroup } from "@/lib/traditional-terminal-projects.js";
 import type { TabEntry } from "@/components/organisms/TerminalTabBar.js";
 
-interface Options<T extends TabEntry> {
+export interface UseTraditionalTerminalProjectSelectionOptions<T extends TabEntry> {
   groups: readonly TraditionalTerminalProjectGroup<T>[];
   activeSessionId: string | null;
   onSelectTab?: (sessionId: string) => void;
+}
+
+export interface UseTraditionalTerminalProjectSelectionResult<T extends TabEntry> {
+  selectedGroup: TraditionalTerminalProjectGroup<T> | undefined;
+  activeSessionForGroup: string | null;
+  handleSelectGroup: (groupId: string) => void;
+  handleSelectTab: (sessionId: string) => void;
 }
 
 export function useTraditionalTerminalProjectSelection<T extends TabEntry>({
   groups,
   activeSessionId,
   onSelectTab,
-}: Options<T>) {
+}: UseTraditionalTerminalProjectSelectionOptions<T>): UseTraditionalTerminalProjectSelectionResult<T> {
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const [lastSelectedSessionByGroup, setLastSelectedSessionByGroup] = useState(
     () => new Map<string, string>(),
@@ -52,19 +59,38 @@ export function useTraditionalTerminalProjectSelection<T extends TabEntry>({
   const activeGroup = groups.find((group) => group.id === activeGroupId);
   const selectedGroup = activeGroup ?? groups[0];
 
+  const lastActiveSessionIdRef = useRef<string | null>(activeSessionId);
+  const isFirstRenderRef = useRef(true);
+
   useEffect(() => {
-    const selectedSessionId = activeSessionId;
-    const sessionGroupId = selectedSessionId
-      ? groupForSession.get(selectedSessionId)
+    const isFirstRender = isFirstRenderRef.current;
+    isFirstRenderRef.current = false;
+
+    const activeSessionChanged =
+      lastActiveSessionIdRef.current !== activeSessionId;
+    lastActiveSessionIdRef.current = activeSessionId;
+
+    const sessionGroupId = activeSessionId
+      ? groupForSession.get(activeSessionId)
       : undefined;
-    if (sessionGroupId && selectedSessionId) {
-      rememberSelectedSession(sessionGroupId, selectedSessionId);
-      setActiveGroupId(sessionGroupId);
-      return;
+
+    if (activeSessionChanged || isFirstRender) {
+      if (sessionGroupId && activeSessionId) {
+        rememberSelectedSession(sessionGroupId, activeSessionId);
+        setActiveGroupId(sessionGroupId);
+        return;
+      }
     }
-    setActiveGroupId((current) =>
-      current && groupIds.has(current) ? current : firstGroupId,
-    );
+
+    setActiveGroupId((current) => {
+      if (current && groupIds.has(current)) {
+        return current;
+      }
+      if (sessionGroupId) {
+        return sessionGroupId;
+      }
+      return firstGroupId;
+    });
   }, [
     activeSessionId,
     firstGroupId,

@@ -178,3 +178,99 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## 2026-08-18
 
 - **Project worktree target lifecycle.** Added exact-target removal blockers for dirty editor tabs and live terminal sessions, fresh discovery before Git removal, unavailable-target root fallback, preserved editor state, and orphaned terminal labels for sessions whose project/cwd still points at a disappeared worktree. Added real-repository lifecycle coverage and Chromium coverage through `WorkspacePage` surface wiring for the selected-target request boundary; broader Explorer, search, replace, Git, editor/diff, media, and terminal routing uses the shared target context. Terminal creation now carries the selected target through `terminal:create`; the server validates and persists canonical `worktreePath` metadata, loads the configured environment file relative to that target, and coordinates creation/removal ownership checks. Stable opaque target-scoped command/profile IDs prevent root/worktree collisions. Legacy sessions still reconcile through project/cwd metadata, while target-scoped sessions use their immutable server-validated marker. Target-loss create and respawn failures emit reconciliation events only after fresh validation confirms disappearance; unavailable sessions retain their identity and scrollback for close/retry while new work falls back to root.
+
+# 2026-08-15
+
+- **Native SSH port-forwarding Windows gate (complete for Windows-only scope).** Added Windows CI and release pre-bundle checks for Rust formatting/lint/unit coverage, the real temporary OpenSSH remote-loopback forwarding gate, deterministic smoke/evidence validation, WebView2/OpenSSH preflight, no-bundle Tauri compilation, protected same-commit evidence binding, and the unsigned NSIS package profile. Protected packaged-runtime evidence remains a production-release prerequisite; cross-platform support and signed updater artifacts are deferred to a separate scope.
+
+## 2026-08-11
+
+- **Host-resource restoration alerts.** Added additive snapshot
+  `currentAlerts` for concurrent thermal/disk incidents without changing the
+  legacy memory alert, newest-first mixed incident history, and compatible
+  `host:alertChanged` resource payloads. The client validates event shape and
+  nested evidence before cache updates, preserves active incidents if an older
+  server omits the additive field, and removes only the recovered target. Known
+  accepted UI caveat: after acknowledgement, a resource-only critical badge can
+  render info-colored while its active count and incident state remain correct.
+
+## 2026-07-30
+
+- **Native embedded browser controller.** Added the Tauri desktop child-WebView controller, build-time bridge injection, loopback/HTTPS tunnel navigation policy, bounded native relay validation, profile-isolated browser storage, lifecycle/geometry commands, and fail-closed popup, download, redirect, external-scheme, and permission handling. Windows WebView2 is the verified implementation target; Linux now has a WebKitGTK relay implementation but remains runtime-unverified, and macOS is deferred (former native desktop support retired in Phase 02).
+
+## 2026-08-01
+
+- **Stale lazy-chunk recovery.** The shared `ErrorBoundary` now
+  recognizes only known browser module-load signatures (`ChunkLoadError`, failed
+  Vite chunk loads, and dynamic-import/module-script fetch failures). It writes
+  the namespaced `dam-hopper:stale-chunk-reload-attempted` key to
+  `sessionStorage` before one reload per tab session. Storage read/write errors
+  fail closed and retain the existing fallback; second stale failures and
+  unrelated render errors also retain the existing fallback and diagnostics.
+  Focused `ErrorBoundary` tests cover classifier boundaries, first/second
+  failures, unrelated errors, and unavailable storage.
+
+## 2026-07-25
+
+- **Controlled browser debug preview and terminal handoff.** Added an
+  extension-assisted iframe Browser tool with bundled client extension setup,
+  bounded DOM/ARIA
+  selection, optional user-mediated tab capture, manual-image fallback, and
+  short-lived authenticated JSON/PNG artifacts. Explicit confirmation inserts
+  only generated artifact paths into a selected live terminal, without page
+  text, terminal controls, or auto-submit. Target reloads invalidate prior
+  selection state; CSP/framing failures, capture denial, stale tunnels, and
+  closed terminals fail closed.
+  Automated hardening covers malformed/nested bridge messages,
+  capture cleanup and JPEG conversion, tunnel invalidation, private artifact
+  boundaries, and the no-read artifact contract. Chromium permission chooser,
+  HiDPI crop, live tunnel, and real-xterm checks remain manual release gates.
+
+## 2026-07-16
+
+- **Configurable terminal panel shortcuts.** Added settings-backed shortcuts for
+  Git (`Ctrl+Shift+G`), Ports (`Ctrl+Shift+P`), and Fleet Terminal
+  (`Ctrl+Shift+M`). Each shortcut toggles its target and closes the other two;
+  xterm input suppresses the bindings so they never reach the PTY.
+
+## 2026-07-14
+
+- **Explorer: Copy Path context menu.** Complete ✓ 2026-07-14. Added "Copy Absolute Path" and "Copy Relative Path" items to the Explorer (file-tree) right-click menu for both files and folders. Absolute path joins the server-resolved absolute project root (`useProject(name).data.path`) with the node's project-relative path using the native separator (backslash on Windows, forward slash elsewhere); relative path is always forward-slash POSIX. Path computation and the menu item list are extracted into pure `buildTreeCopyPaths` / `getTreeContextMenuItems` helpers for SSR unit testing, mirroring the `getEditorTabContextMenuItems` pattern. The absolute item disables when the project root is unknown; a transient "Copied to clipboard" toast reuses the existing `useCopyToClipboard` hook. Frontend-only; no backend/API changes. Validation: `pnpm --filter @dam-hopper/ui build`, `pnpm --filter @dam-hopper/ui test` (422 passing), changed files lint-clean.
+
+## 2026-07-08
+
+- **Bottom Panel Maximize Toggle.** Complete ✓ 2026-07-08. Added an IntelliJ-style maximize/restore toggle to the IDE bottom tool panel header. Maximizing hides the top area (explorer/editor/right panels) and expands the bottom panel to fill the workspace body; activity bars stay visible so tools remain switchable. State is session-only (not persisted), closing the maximized bottom tool resets it, and the terminal keep-alive element stays in the same React tree position so no PTY is remounted or duplicated on toggle. Layout decisions were extracted into a pure `resolveBottomPanelLayout` helper for SSR unit testing (toggle/restore/reset-on-close), plus an `IdeShell` SSR contract test for button presence/absence. ESLint config now ignores Rust/Tauri `target/` build artifacts that previously produced ~200 false parsing errors.
+
+- **Bottom panel maximize: auto-restore on top tool selection.** Enhanced the maximize toggle so clicking maximize also unselects any active top tools on both sides (the activity bar no longer highlights them while the bottom panel covers the top area). Selecting a top tool from the activity bar again — or triggering a reveal-active-file request — automatically restores the normal (non-maximized) layout. Maximize/top-tool state transitions are extracted into pure `resolveMaximizeToggle` / `resolveTopToolToggle` helpers for SSR unit testing.
+
+## 2026-05-31
+
+- **Diagnostic Log Capture.** Complete ✓ 2026-07-07. Added Settings > Maintenance `Export Diagnostics` in the UI and a protected `POST /api/diagnostics/export` flow that sends the canonical `frontend` snapshot payload plus default 60-minute and terminal-tail settings. Downloads use `dam-hopper-diagnostics-{timestamp}.json`. Exported terminal tails are included by default and should be reviewed before sharing because they can still contain sensitive local/dev output.
+
+- **PTY And WebSocket Instrumentation.** Complete ✓ 2026-07-07. Added backend terminal diagnostics events for PTY create/spawn failure/EOF/read error/exit/kill/remove/restart decisions, WS terminal control tracing, frontend transport lifecycle tracing, TerminalPanel attach/create/replay diagnostics, renderer-mode instrumentation, and capped terminal-tail export. Export scopes `terminals.sessions` and `terminals.tails` to requested terminal ids and keeps input data redacted as byte counts only.
+
+- **Shared terminal rendering and resize smoothing.** Added WebGL2-backed xterm rendering across browser, desktop Tauri, and Android WebView hosts with quiet DOM-renderer fallback when unsupported, initialization fails, or the WebGL context is lost. Centralized animation-frame terminal fitting and host attachment to coalesce live-resize work while preserving split-pane docking, tab keep-alive behavior, and mobile native-keyboard focus suppression.
+
+- **Terminal mode switching buffer readability fix.** Kept xterm instances mounted across Traditional ↔ Runtime terminal view switches so historical output is not replayed and rewrapped at a different width during Runtime navigator resizing.
+
+## 2026-05-25
+
+- **Responsive Companion Layout.** Complete ✓ 2026-05-25. Added the compact responsive workspace shell with shared media-query helpers, safe-area/dynamic-height CSS primitives, mobile/tablet surface switching, and terminal refit handling for hidden-panel transitions. Reused the existing editor, terminal, fleet, ports, Git, and project surfaces without duplicating business logic. Hardened `MobileWorkspaceShell` for empty-surface fallback, improved TopNav selector layering and compact/tablet behavior, and aligned compact navigation behavior with zoomed and iPad-sized layouts. Validation passed for `pnpm --filter @dam-hopper/ui test`, `pnpm --filter @dam-hopper/ui build`, `pnpm build`, and `pnpm dev` startup verification.
+
+- **Tauri Native Shell.** Implemented 2026-05-25. Added `@dam-hopper/native` as a thin Tauri v2 host that mounts the shared `@dam-hopper/ui` app, configures the shared logger and TanStack Query, uses an idle transport until a server profile exists, and keeps the native shell remote-client-only with `core:default` permission. Added native Vite config on port 1420 with HMR port 1421, minimal `src-tauri` Rust entrypoint/config/capability, restrictive CSP, root native scripts, native build coverage in `pnpm check`, CORS documentation for Tauri origins, and a committed native Cargo lockfile. Validation passed for native TypeScript and Vite build; full desktop Tauri runtime validation is blocked locally by missing Linux prerequisites (`webkit2gtk-4.1`, `rsvg2`, `dbus-1.pc` / `libdbus-1-dev`, `pkg-config`).
+
+- **Shared Logger And Runtime Utilities.** Complete ✓ 2026-05-25. Added the dependency-free `@dam-hopper/shared` logger API (`configureLogger`, `getLoggerConfig`, `resolveLogLevel`, and `logger.debug/info/warn/error`) with recursive sensitive-metadata redaction before the sink, wired web bootstrap log level selection to Vite env with dev-debug / prod-warn fallback, and replaced direct `console` usage in high-value transport/auth/terminal/dashboard/error-boundary/fs paths. `packages/ui` keeps `cn` as-is. Verification passed for shared tests/build, ui tests/build, and web build.
+
+## 2026-05-23
+
+- **Root-Aware Git Push and SSH Retry Flow.** Complete ✓ 2026-05-23. Rebuilt push on top of libgit2 so `POST /api/git/push` keeps the root-aware UI/API contract while the backend now uses `Remote::push(..)` with the same credential callback order as fetch/pull: loaded key, SSH agent, credential helper, then default credentials. `ProjectInfoPanel`, `WorkspaceGitPanel`, and `GitPage` all preserve the selected VCS root in the push payload, the shared SSH retry hook still normalizes single-result versus array Git responses before auth detection, and successful pushes still invalidate the broader Git cache set. Focused Rust coverage now includes successful local bare-remote push, missing-upstream failure, nested-root isolation, and callback-level remote rejection reporting.
+
+## 2026-05-20
+
+- **Backend VCS Root Discovery.** Complete ✓ 2026-05-20. Added backend discovery for git roots under a project: the server now resolves the primary repo, nested repos, and submodule gitlinks, exposes them through `GET /api/git/{project}/roots`, and reports mapping state plus submodule metadata for client-side root selection. Invalid `.gitmodules` files are tolerated with warnings on the primary root. Tests cover mapped, unmapped, missing, uninitialized, and traversal-blocked roots.
+
+- **Tests Docs Validation.** Complete ✓ 2026-05-20. Validated the multi-root Git work with real repo tests and web Vitest coverage, then updated the API, system architecture, and frontend component docs for root discovery and root-scoped Git behavior. Full Rust and web suites passed; no critical review issues remained.
+
+- **Terminal Workspace Verification and Docs.** Complete ✓ 2026-05-20. Verified terminal workspace behavior through web tests, web build, focused Rust `ui_config` tests, and real-browser checks. Real-browser verification exposed a swapped split-action mapping in the terminal tab bar; `Split Right` and `Split Down` are now wired to the correct pane directions, and the UI mapping is covered by a focused regression test. Terminal mode now keeps the existing Ports panel in the right rail below Fleet Terminal for development port and tunnel access. Frontend docs now also record the terminal workspace persistence keys and runtime verification boundaries.
+- **Terminal Workspace Advanced Docking.** Complete ✓ 2026-05-20. Terminal workspace drag and drop now uses explicit docking intents: pane center moves, edge splits, tab insertion targets, same-pane tab reorder, empty-pane insertion, labeled docking previews, and a richer drag overlay. The layout state was refactored into pure tree/docking helpers so docking updates are atomic and persisted without touching PTY lifecycle. Focused docking tests and `pnpm --filter @dam-hopper/web build` passed.
+- **Terminal Workspace Layout.** Complete ✓ 2026-05-20. Workspace Terminal now renders a full-height shell below the top nav, Fleet Terminal stays available as a persisted right rail in terminal mode, the existing terminal manager state is reused across mode switches, and terminal panes refit when mode or rail layout changes.

@@ -48,7 +48,14 @@ function resetSettingsStore() {
     revealActiveFileShortcut: "Alt+F1",
     gitPanelShortcut: "Mod+Shift+KeyG",
     portsPanelShortcut: "Mod+Shift+KeyP",
-    fleetTerminalShortcut: "Mod+Shift+KeyM",
+    osPaletteShortcut: "Ctrl+Alt+KeyK",
+    osCycleFocusShortcut: "Ctrl+Alt+Escape",
+    dockPadding: 8,
+    dockItemSpacing: 6,
+    dockOuterSpacing: 12,
+    dockRadius: 18,
+    cursorTheme: "system",
+    appShortcuts: {},
     terminalFontSizeIncreaseShortcut: "Ctrl+Alt+Shift+Equal",
     terminalFontSizeDecreaseShortcut: "Ctrl+Alt+Minus",
     terminalSuggestionsEnabled: true,
@@ -847,5 +854,65 @@ describe("settings store terminal agent notification fields", () => {
 
     expect(useSettingsStore.getState().cognitoModeShortcut).toBe("Mod+Alt+KeyB");
     expect(useSettingsStore.getState().cognitoModeStyle).toBe("heavy-blur");
+  });
+});
+
+describe("settings store appShortcuts and appearance preferences (C4 Contract)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    getGlobalConfig.mockReset();
+    updateUi.mockReset();
+    recordClientDiagnostic.mockReset();
+    resetSettingsStore();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    resetSettingsStore();
+  });
+
+  it("merges appShortcuts entries across debounced calls without dropping keys", async () => {
+    updateUi.mockResolvedValueOnce({ ok: true });
+
+    useSettingsStore.getState().saveDebounced({
+      appShortcuts: { "app.editor.open": "Mod+KeyE" },
+    });
+
+    useSettingsStore.getState().saveDebounced({
+      appShortcuts: { "app.browser.open": "Mod+KeyB" },
+    });
+
+    expect(updateUi).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(500);
+    await flushMicrotasks();
+
+    expect(updateUi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appShortcuts: {
+          "app.editor.open": "Mod+KeyE",
+          "app.browser.open": "Mod+KeyB",
+        },
+      }),
+    );
+  });
+
+  it("allows setting scalar shortcut to null (unbound)", async () => {
+    updateUi.mockResolvedValueOnce({ ok: true });
+
+    useSettingsStore.getState().saveDebounced({
+      searchTextShortcut: null,
+    });
+
+    expect(useSettingsStore.getState().searchTextShortcut).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(500);
+    await flushMicrotasks();
+
+    expect(updateUi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        searchTextShortcut: null,
+      }),
+    );
   });
 });

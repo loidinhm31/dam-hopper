@@ -65,7 +65,6 @@ vi.mock("./server-config.js", () => ({
   }),
   getServerUrl: vi.fn(() => "http://localhost:4801"),
   getActiveProfileId: vi.fn(() => "prof-valid"),
-  isSameOriginProfile: vi.fn(() => true),
   normalizeServerUrl: vi.fn((u: string) => u),
   subscribeToProfileChanges: vi.fn(() => () => {}),
 }));

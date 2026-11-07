@@ -20,6 +20,7 @@ import {
   type ConnectionRef,
   type ProjectTargetInput,
 } from "./client.js";
+import type { FsTargetRef } from "./ownership.js";
 import {
   captureConnection,
   getConnectionSnapshot,
@@ -70,17 +71,48 @@ function throwIfAborted(
   throw ticketError(callerSignal?.aborted ? "ABORTED" : "TIMEOUT");
 }
 
+function extractTargetProfileId(
+  target: FsTargetRef | ProjectTargetInput,
+): string | undefined {
+  if (typeof target === "object" && target !== null) {
+    if ("profileId" in target && typeof target.profileId === "string") {
+      return target.profileId;
+    }
+  }
+  return undefined;
+}
+
+function toServerMediaTarget(
+  target: FsTargetRef | ProjectTargetInput,
+): Record<string, unknown> {
+  if (typeof target === "object" && target !== null && "kind" in target) {
+    const fsTarget = target as FsTargetRef;
+    if (fsTarget.kind === "workspace") {
+      return { target: { kind: "workspace" } };
+    }
+    return {
+      target: {
+        kind: "project",
+        project: fsTarget.project,
+        ...(fsTarget.worktreePath ? { worktreePath: fsTarget.worktreePath } : {}),
+      },
+    };
+  }
+  const projectRef = normalizeProjectTarget(target as ProjectTargetInput);
+  return { ...toServerProjectTarget(projectRef) };
+}
+
 function resolveOwnerAndSnapshot(
-  target: ProjectTargetInput,
+  target: FsTargetRef | ProjectTargetInput,
   explicitOwner?: ConnectionRef,
 ): RequestSnapshot {
-  const targetRef = normalizeProjectTarget(target);
+  const targetProfileId = extractTargetProfileId(target);
   let owner: ConnectionRef | undefined = explicitOwner;
-  if (!owner && targetRef.profileId) {
+  if (!owner && targetProfileId) {
     try {
-      owner = captureConnection(targetRef.profileId);
+      owner = captureConnection(targetProfileId);
     } catch {
-      const snap = getConnectionSnapshot(targetRef.profileId);
+      const snap = getConnectionSnapshot(targetProfileId);
       owner = snap?.owner;
     }
   }
@@ -186,13 +218,12 @@ async function revokeTicket(
 
 /** Issues the fixed-purpose, in-memory browser image capability. */
 export async function issueImageTicket(
-  target: ProjectTargetInput,
+  target: FsTargetRef | ProjectTargetInput,
   path: string,
   signal?: AbortSignal,
   owner?: ConnectionRef,
 ): Promise<ImagePreviewTicket> {
   const snapshot = resolveOwnerAndSnapshot(target, owner);
-  const targetRef = normalizeProjectTarget(target);
   const timeout = createTimeoutSignal(signal);
   let issuedTicket: string | null = null;
   try {
@@ -204,7 +235,7 @@ export async function issueImageTicket(
         headers: requestHeaders(snapshot.authToken),
         signal: timeout.signal,
         body: JSON.stringify({
-          ...toServerProjectTarget(targetRef),
+          ...toServerMediaTarget(target),
           path,
           mediaClientId: snapshot.mediaClientId,
         }),

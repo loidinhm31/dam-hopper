@@ -11,6 +11,28 @@ const mocks = vi.hoisted(() => ({
   markTargetUnavailableIfNeeded: vi.fn(),
 }));
 
+const mockSnap = vi.hoisted(() => ({
+  owner: { profileId: "remote-1", generation: 2 },
+  status: "connected",
+}));
+
+vi.mock("@/api/connections.js", () => ({
+  captureConnection: (profileId: string) => ({
+    profileId,
+    generation: mockSnap.owner.generation,
+  }),
+  isCurrentConnection: (conn: { generation: number }) =>
+    conn.generation === mockSnap.owner.generation,
+  getConnectionSnapshot: (profileId: string) => ({
+    owner: { profileId, generation: mockSnap.owner.generation },
+    status: mockSnap.status,
+  }),
+  getTransport: () => ({
+    fsRead: mocks.fsRead,
+    fsWriteFile: mocks.fsWriteFile,
+  }),
+}));
+
 vi.mock("@/api/transport.js", () => ({
   getTransport: () => ({
     fsRead: mocks.fsRead,
@@ -20,10 +42,14 @@ vi.mock("@/api/transport.js", () => ({
 vi.mock("@/api/queries.js", () => ({
   markTargetUnavailableIfNeeded: mocks.markTargetUnavailableIfNeeded,
 }));
-
-import { useSearchPanelReplace } from "./use-search-panel-replace.js";
-
-const target = { project: "demo", worktreePath: "/tmp/demo-worktree" };
+import type { SearchMatch } from "@/api/fs-types.js";
+import { useEditorStore } from "@/stores/editor.js";
+import {
+  useSearchPanelReplace,
+  type UseSearchPanelReplaceResult,
+} from "./use-search-panel-replace.js";
+import type { ProjectTargetInput } from "@/api/client.js";
+const target: ProjectTargetInput = { project: "demo", worktreePath: "/tmp/demo-worktree" };
 const matches = [
   {
     path: "src/demo.ts",
@@ -38,13 +64,17 @@ let onReady = vi.fn();
 
 function Harness({
   onReady,
+  testMatches,
+  testTarget,
 }: {
-  onReady: (value: ReturnType<typeof useSearchPanelReplace>) => void;
+  onReady: (value: UseSearchPanelReplaceResult) => void;
+  testMatches?: SearchMatch[];
+  testTarget?: ProjectTargetInput;
 }) {
   const replace = useSearchPanelReplace({
-    target,
+    target: testTarget ?? target,
     scope: "project",
-    matches,
+    matches: testMatches ?? matches,
     searchQuery: "needle",
     replaceQuery: "token",
     caseSensitive: true,
@@ -55,8 +85,8 @@ function Harness({
   return null;
 }
 
-function latestReplace(): ReturnType<typeof useSearchPanelReplace> {
-  return onReady.mock.lastCall?.[0] as ReturnType<typeof useSearchPanelReplace>;
+function latestReplace(): UseSearchPanelReplaceResult {
+  return onReady.mock.lastCall?.[0] as UseSearchPanelReplaceResult;
 }
 
 (
@@ -129,5 +159,198 @@ describe("useSearchPanelReplace target recovery", () => {
       writeResult,
     );
     expect(mocks.markTargetUnavailableIfNeeded).toHaveBeenCalledTimes(1);
+  });
+
+  describe("replaceAll generation validation", () => {
+    it("rejects replaceAll when matches have stale generation", async () => {
+      const staleMatches: SearchMatch[] = [
+        {
+          path: "src/remote.ts",
+          line: 1,
+          col: 1,
+          text: "needle remote",
+          profileId: "remote-1",
+          project: "demo",
+          generation: 1, // Stale! Current is 2
+        },
+      ];
+
+      await act(async () =>
+        root?.render(
+          <Harness
+            onReady={onReady}
+            testMatches={staleMatches}
+            testTarget={{ profileId: "remote-1", project: "demo" }}
+          />,
+        ),
+      );
+
+      await act(async () => {
+        await latestReplace().replaceAll();
+      });
+
+      expect(mocks.fsRead).not.toHaveBeenCalled();
+      expect(mocks.fsWriteFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects replaceAll when a file group has mixed generations", async () => {
+      const mixedMatches: SearchMatch[] = [
+        {
+          path: "src/remote.ts",
+          line: 1,
+          col: 1,
+          text: "needle 1",
+          profileId: "remote-1",
+          project: "demo",
+          generation: 2,
+        },
+        {
+          path: "src/remote.ts",
+          line: 2,
+          col: 1,
+          text: "needle 2",
+          profileId: "remote-1",
+          project: "demo",
+          generation: 1, // Mixed!
+        },
+      ];
+
+      await act(async () =>
+        root?.render(
+          <Harness
+            onReady={onReady}
+            testMatches={mixedMatches}
+            testTarget={{ profileId: "remote-1", project: "demo" }}
+          />,
+        ),
+      );
+
+      await act(async () => {
+        await latestReplace().replaceAll();
+      });
+
+      expect(mocks.fsRead).not.toHaveBeenCalled();
+      expect(mocks.fsWriteFile).not.toHaveBeenCalled();
+    });
+
+    it("executes replaceAll when all matches match current connection generation", async () => {
+      const validMatches: SearchMatch[] = [
+        {
+          path: "src/remote.ts",
+          line: 1,
+          col: 1,
+          text: "needle 1",
+          profileId: "remote-1",
+          project: "demo",
+          generation: 2,
+        },
+      ];
+
+      mocks.fsRead.mockResolvedValue({
+        ok: true,
+        binary: false,
+        content: btoa("needle 1\n"),
+        mtime: 42,
+      });
+      mocks.fsWriteFile.mockResolvedValue({ ok: true });
+
+      await act(async () =>
+        root?.render(
+          <Harness
+            onReady={onReady}
+            testMatches={validMatches}
+            testTarget={{ profileId: "remote-1", project: "demo" }}
+          />,
+        ),
+      );
+
+      await act(async () => {
+        await latestReplace().replaceAll();
+      });
+
+      expect(mocks.fsRead).toHaveBeenCalled();
+      expect(mocks.fsWriteFile).toHaveBeenCalled();
+    });
+
+    it("aborts write when an open tab is dirtied while fsRead is in flight", async () => {
+      const readGate = Promise.withResolvers<{
+        ok: boolean;
+        binary: boolean;
+        content: string;
+        mtime: number;
+      }>();
+      mocks.fsRead.mockReturnValue(readGate.promise);
+
+      const validMatches: SearchMatch[] = [
+        {
+          path: "src/remote.ts",
+          line: 1,
+          col: 1,
+          text: "needle 1",
+          profileId: "remote-1",
+          project: "demo",
+          generation: 2,
+        },
+      ];
+
+      await act(async () =>
+        root?.render(
+          <Harness
+            onReady={onReady}
+            testMatches={validMatches}
+            testTarget={{ profileId: "remote-1", project: "demo" }}
+          />,
+        ),
+      );
+
+      let replaceSettled = false;
+      const replacePromise = latestReplace()
+        .replaceAll()
+        .then(() => {
+          replaceSettled = true;
+        });
+
+      // Mark tab dirty while read is in flight:
+      useEditorStore.setState({
+        tabs: [
+          {
+            key: "tab-1",
+            project: "demo",
+            path: "src/remote.ts",
+            dirty: true,
+            target: { profileId: "remote-1", project: "demo" },
+            tier: "file",
+            file: {
+              id: "src/remote.ts",
+              name: "remote.ts",
+              kind: "file",
+              size: 10,
+              mtime: 10,
+              isSymlink: false,
+              children: null,
+            },
+          } as unknown as (typeof useEditorStore extends { getState: () => { tabs: (infer T)[] } } ? T : never),
+        ],
+      });
+
+      // Resolve fsRead:
+      readGate.resolve({
+        ok: true,
+        binary: false,
+        content: btoa("needle 1\n"),
+        mtime: 42,
+      });
+
+      await act(async () => {
+        await replacePromise;
+      });
+
+      expect(replaceSettled).toBe(true);
+      expect(mocks.fsRead).toHaveBeenCalled();
+      expect(mocks.fsWriteFile).not.toHaveBeenCalled();
+
+      // Reset tabs
+      useEditorStore.setState({ tabs: [] });
+    });
   });
 });

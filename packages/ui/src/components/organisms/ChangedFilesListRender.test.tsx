@@ -8,7 +8,6 @@ const queryState: {
   isLoading: boolean;
   isError: boolean;
 } = { isLoading: false, isError: false };
-const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
@@ -27,11 +26,6 @@ vi.mock("@/api/client.js", () => ({
   projectTargetCacheKey: (target: { project: string }) => target.project,
 }));
 
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
-  }),
-}));
 
 import { ChangedFilesList } from "./ChangedFilesList.js";
 
@@ -49,7 +43,6 @@ beforeEach(() => {
   queryState.data = undefined;
   queryState.isLoading = false;
   queryState.isError = false;
-  mockPolicy.enabled = false;
 });
 
 describe("ChangedFilesList query states", () => {
@@ -95,28 +88,4 @@ describe("ChangedFilesList query states", () => {
     expect(markup).not.toContain("Git is not initialized");
   });
 
-  it("blocks commit text entry on Android Chrome", () => {
-    mockPolicy.enabled = true;
-    queryState.data = {
-      gitAvailable: true,
-      entries: [
-        {
-          path: "README.md",
-          status: "modified",
-          staged: true,
-          additions: 1,
-          deletions: 0,
-        },
-      ],
-      untrackedTruncated: false,
-      untrackedTotal: 0,
-    };
-
-    const markup = renderList();
-
-    expect(markup).toContain('placeholder="Commit message…" disabled=""');
-    expect(markup).toContain(
-      'title="Unavailable on Android Chrome: text entry is disabled"',
-    );
-  });
 });

@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { api } from "@/api/client.js";
-import WorkspacePage from "@/components/pages/WorkspacePage.js";
+import { OsShell as WorkspacePage } from "@/os/OsShell.js";
 import { AppZoomProvider } from "@/contexts/AppZoomContext.js";
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import { initTransport, resetTransport } from "@/api/transport.js";
@@ -128,7 +128,7 @@ describe.skipIf(!serverAvailable)("WorkspacePage workflow terminal continuity ag
       ),
       { timeout: 10_000, interval: 100 },
     ).toBe(true);
-    await expect.element(page.getByTestId("terminal-pane-output-host")).toBeVisible();
+    await expect.element(page.locator(".xterm, [data-terminal-container], [data-testid='terminal-pane-output-host']").first()).toBeVisible();
     await waitForBuffer(sessionId, marker);
     const xtermEntry = terminalRegistry.get(sessionId);
     expect(xtermEntry).toBeDefined();
@@ -168,14 +168,6 @@ describe.skipIf(!serverAvailable)("WorkspacePage workflow terminal continuity ag
     expect(document.activeElement).toBe(ribbon);
     const sameTerminal = terminalRegistry.get(sessionId)?.terminal;
     expect(sameTerminal).toBe(xtermEntry!.terminal);
-
-    const modeSwitch = page.getByTestId("top-nav-workspace-mode-switch");
-    await userEvent.click(modeSwitch.getByRole("button", { name: "Terminal", exact: true }));
-    await expect.element(modeSwitch.getByRole("button", { name: "Terminal", exact: true })).toHaveAttribute("aria-pressed", "true");
-    await expect.element(page.getByTestId("terminal-pane-output-host")).toBeVisible();
-    await userEvent.click(modeSwitch.getByRole("button", { name: "IDE", exact: true }));
-    await expect.element(modeSwitch.getByRole("button", { name: "IDE", exact: true })).toHaveAttribute("aria-pressed", "true");
-    await expect.element(page.getByRole("button", { name: "Expand workflow deck" })).toBeVisible();
 
     await page.viewport(390, 844);
     document.documentElement.style.setProperty("--safe-area-bottom", "24px");

@@ -42,7 +42,7 @@ The following constraints describe the separate `WorkbenchScreen` subsystem and 
 - Terminal presentation is **Traditional only** (`terminalUsageMode = "traditional"`); no Runtime terminal presentation or usage-mode switcher.
 - Exactly one in-layout button row provides access to every included panel. On narrow screens it scrolls horizontally; it never wraps into multiple navigation rows or hides panels behind a navigation overflow menu.
 - No floating navigation buttons, FABs, draggable launchers, floating panel-toggle buttons, or second navigation rail/drawer/bar. Panel actions remain inline in the row or the active panel.
-- Files/editor/Git, projects/agents, workflows/plans, Agent Store, host/fleet/usage, ports/tunnels and settings remain available as panel destinations inside this shell; removing IDE/Runtime layouts does not remove their included functions.
+- Files/editor/Git, projects/agents, workflows/plans, Agent Store, host/fleet, ports/tunnels and settings remain available as panel destinations inside this shell; removing IDE/Runtime layouts does not remove their included functions.
 - Panel transitions retain qualified terminal/editor controllers and return focus safely; no PTY restart or duplicate attachment.
 - Validated row placement: top, directly below server/project header; icon + short text buttons; horizontal scrolling with selected-button reveal. The row remains visible while the software keyboard is open.
 - Validated panel body: one content area on every phone/tablet/foldable size. Selecting a panel replaces the terminal visually, not its controllers/sessions; no wide-screen dock beside the terminal. Internal diff/merge panes remain content of their selected panel.
@@ -409,28 +409,19 @@ The focused Git view is implemented and landed in the codebase on `feat/android-
 - **Unused Repository Methods:** `getItem` and `listProjectMemory` lack UI callers.
 - **Live Qualification (L1/L2):** Physical Android device execution, symlink traversal across filesystems, and live temp dir deletion deferred to Phase 18.
 
-## Host resources fleet and usage (Phase 15)
+## Host resources fleet (Phase 15)
 
-- **Domain Models & DTOs (H01, U01):**
+- **Domain Models & DTOs (H01):**
   - Host resources & alerts: `HostResourceSnapshotV1`, `HostIdentity`, `Availability`, `MemorySnapshot`, `PressureInfo`, `MemoryPressure`, `CgroupMemory`, `ProcessMemory`, `ProcessInventory`, `MountContext`, `BatterySnapshot`, `HostMetrics`, `CpuMetrics`, `MemoryMetrics`, `DiskMetrics`, `AlertSummary`, `AlertIncident`.
-  - Usage & sessions: `UsageRange`, `TokenAggregate`, `UsageTimeBucket`, `CollectorHealthSnapshot`, `UsageHealth`, `UsageSummaryResponse`, `SessionRange`, `SessionTokens`, `SessionSummaryDto`, `SessionListResponse`, `SessionDetailResponse`, `DeleteUsageRequest` (default confirmation `"delete-usage-data"`), `CodexExporterStatus`, `UsageSettingsResponse`, `SettingsPatchRequest`, `UsageSetupStatusResponse`.
 - **Resource Streaming, Coordination & Pairing (H01):**
   - Authenticated SSE: `HostResourceSseClient` (`Accept: text/event-stream`, `Cache-Control: private, no-store, no-transform`, bearer token) with bounded control reads (< 4 KiB), 256 KiB data event limit (`MAX_DATA_EVENT_BYTES`), and progress callbacks (`onByteProgress`).
   - Owner-scoped coordinator: `ResourceStreamCoordinator` manages active interest registration (`registerInterest`), visibility and lifecycle (`setForeground`), 5s REST fallback cadence (`canUseResourceRest()`), and error latching (`AUTH_UNAVAILABLE` to AuthBlocked, `FRAME_TOO_LARGE` to RestOnly via `ResourceFailureHandler`).
   - Monotonic revision & epoch pairing: `ResourceFrameCommitter` verifies monotonic decimal-string revisions (`newRev <= currentRev`), tracks server epoch restart (`currentEpoch == data.serverEpoch`), and commits paired snapshot/metrics atomically.
   - Stream timers: `ResourceStreamTimers` enforces 10s initial data deadline, 45s byte idle timeout, 5-attempt retry limit with exponential backoff, and 60s stable live window.
-- **Aggregate Usage Analytics & Safe Deletion (U01):**
-  - Aggregate isolation: Server telemetry is aggregate-only; `UsageRepository` queries summaries, health, setup, settings, session pagination, and deletion without exposing raw prompts or commands.
-  - Controller & safe pagination: `UsageController` implements cursor-based session pagination, omitting `from`/`to` on continuation pages when `cursor != null`; floors deletion bounds to UTC midnight (`calculateUtcDayRange`); protects against race conditions with re-entrancy and disposed guards; and increments `summaryGeneration` and `sessionsGeneration` on deletion to fence stale loads.
 - **Unified UI Architecture & Shell Invariants (NAV01, B01, B02):**
   - Panel host: Single content area `ResourcesUnifiedPanelScreen` docked under `WorkbenchPanel.RESOURCES` in `WorkbenchScreen.kt`.
-  - Segmented switcher: Top switcher between `ResourcesSubProduct.FLEET` (`FleetScreens`, `FleetDetailComponents`) and `ResourcesSubProduct.USAGE` (`UsageScreens`, `UsageDialogs`, `UsageSettingsSection`).
   - Invariants: Zero FABs (`FloatingActionButton`), zero WebViews (`WebView`), honest null indicators (`--`) without fabricating zero metrics.
 - **Documented Open Limitations & Review Findings (Cycle 3 Review 7/10):**
-  - Range-delete today exclusion: Range deletion floors to UTC midnight with `to = todayUtc`, excluding today's events from day-count deletion (deferred semantics clarification/relabeling).
-  - Dialog epoch-ms display: Range delete dialog displays raw epoch-ms bounds instead of formatted UTC date strings.
-  - Incomplete settings controls: Only pause/resume is wired; enable, exporter, retention, and retry controls remain read-only.
-  - Hardcoded model filter chip: Hardcoded `"gpt-4"` filter chip instead of deriving model options dynamically from session summaries.
   - Live qualification: Physical Android device execution, real SSE proxy buffering, and 32 global / 4 per-subject server admission limit qualification deferred to Phase 18.
 
 ## Ports, tunnels, idle consent, and host controls (Phase 16)
@@ -476,7 +467,7 @@ The focused Git view is implemented and landed in the codebase on `feat/android-
   - Profile Retirement: `cancelNotificationsForProfile(profileId)` clears notifications registered for a retired profile.
 - **Lifecycle Coordination & Demand-Pausing (V01):**
   - State Machine & Adapter: `LifecycleCoordinator` (`LifecycleState`: `INITIALIZED`, `FOREGROUND`, `BACKGROUND`, `DESTROYED`) mapped via `AndroidLifecycleCoordinator` (`DefaultLifecycleObserver`).
-  - Demand-Driven Stream Pausing: Backgrounding pauses host resource streaming (`hostResourceController?.coordinator?.setForeground(false)`) and resets ephemeral privacy state (`privacyController.reset()`); foregrounding re-evaluates visible streaming demand (`setForeground(true)`). This broader lifecycle implementation still lacks full `LifecycleAware` coverage for SSE, usage polling, and media. Phase 07 separately coordinates pause/resume of the focused workspace's file watches.
+  - Demand-Driven Stream Pausing: Backgrounding pauses host resource streaming (`hostResourceController?.coordinator?.setForeground(false)`) and resets ephemeral privacy state (`privacyController.reset()`); foregrounding re-evaluates visible streaming demand (`setForeground(true)`). This broader lifecycle implementation still lacks full `LifecycleAware` coverage for SSE and media. Phase 07 separately coordinates pause/resume of the focused workspace's file watches.
   - Profile Retirement Teardown: `onProfileRetired(profileId)` cleans up profile-scoped notifications, resets settings source/target states, and closes profile-bound terminal session controllers.
 - **Settings Screen Presentation & UI Invariants (NAV01, B01, B02):**
   - Panel Host: Authoritative screen host `SettingsScreens` docked under `WorkbenchPanel.SETTINGS` in `PanelHost`.
@@ -485,7 +476,7 @@ The focused Git view is implemented and landed in the codebase on `feat/android-
 - **Documented Open Limitations & Review Findings (Cycle 2 Review 6/10):**
   - Inert Preferences: Theme, font sizes (system, editor, terminal), sound, haptics, and explorer filters persist and sync with remote server, but downstream native rendering components (editor, terminal surface, file tree) have not yet wired reactive consumers.
   - Test-Only Notification Producer: Notifications are only posted via manual test alert button; background agents, transfers, and idle suspend do not post notifications; runtime `POST_NOTIFICATIONS` permission launcher is not wired in UI.
-  - Partial Lifecycle Demand-Pausing: Outside the Phase 07 focused workspace's file-watch coordination, only `HostResourceController` implements demand pause on background; SSE, usage polling, and media remain active or unwired; endpoint change does not trigger full owner retirement.
+  - Partial Lifecycle Demand-Pausing: Outside the Phase 07 focused workspace's file-watch coordination, only `HostResourceController` implements demand pause on background; SSE and media remain active or unwired; endpoint change does not trigger full owner retirement.
   - Storage & Deep Linking: TOML import/export uses clipboard/paste instead of Android SAF file picker; deep link extras are not consumed once and lack server-side target terminal validation.
   - Live Qualification: Physical Android hardware, native IME suppression, lockscreen notification redaction, and process death recovery deferred to Phase 18.
 
@@ -501,7 +492,7 @@ The focused Git view is implemented and landed in the codebase on `feat/android-
 - `audit-apk-security.sh`: Unpacks `androidApp-debug.apk` to inspect manifest backup exclusions, `adjustResize`, release TLS-only policy, debug network configuration, secret leaks, ABI filters, and packaged-library ELF alignment. Its debug check verifies common development-domain entries are present; it does not assert that cleartext is limited to those domains. The current debug base config permits cleartext to any host.
 
 ### Cross-Phase Remediations Delivered
-- Phase 15: Clean EOF handling in `ResourceStreamCoordinator`; 5s REST fallback and `LifecycleAware` in `HostResourceController` registered in `WorkbenchScreen`; dynamic model filter derivation with `knownModels` accumulation in `UsageController`/`UsageScreens`; explicit UTC date bounds and completed-days interval labeling in `UsageDialogs`.
+- Phase 15: Clean EOF handling in `ResourceStreamCoordinator`; 5s REST fallback and `LifecycleAware` in `HostResourceController` registered in `WorkbenchScreen`.
 - Phase 16: Action error preservation across refresh in `IdleConsentController`; explicit failure validation on SSH credential forget in `SshRepository`.
 - Phase 17: Runtime `WorkbenchTheme` application in `NativeTheme`; font sizes wired into `TerminalPanelScreen` (header label), `EditorPanelScreen`, and `NativeTextEditorView`.
 
@@ -515,7 +506,7 @@ The focused Git view is implemented and landed in the codebase on `feat/android-
 
 - Workflow uses server CAS/request identities; manual tracking stays distinct from read-only project plan documents and administrative reported status.
 - Agent Store/import/memory operations are server-local and owner-bound; never ship between different profiles accidentally.
-- Host resources/usage dashboards retain source freshness, unsupported/degraded/unknown states and stream limits. No raw prompt/command telemetry.
+- Host resources dashboards retain source freshness, unsupported/degraded/unknown states and stream limits.
 - Ports and Cloudflared forwards run on the server, not Android. Explicit tunnels survive PTY/origin loss; a reminder is not expiry.
 - Remote settings/configuration, SSH key loading, maintenance and idle-suspend controls follow currently routed APIs and server capabilities. No invented updater/restart/account-promotion endpoints.
 - Host-action routes may be unavailable by server design; show capability denial rather than implementing a privileged fallback.
@@ -530,7 +521,7 @@ The [Android notifications and Settings plan](../../plans/261024-2042-android-no
 
 `DamHopperMobileApp` exposes Settings and the notification feed through inline entries in the existing login, project-list and workspace headers. Settings is a retained overlay with a captured origin, not a second navigation stack: Back returns to the same panel/document/session. The retained workspace, dirty editor/undo state, file sidebar and remote PTY survive while hidden-surface input is suspended. Settings services and preference state live above Compose screen lifetime.
 
-Settings covers Android-applicable preferences, profile/source and independent administrative-target selection, supported shortcut capture, native accessory keyboard and opt-in command history, agent integration/path configuration, usage and idle controls, global defaults/known workspaces, structured workspace/project configuration, maintenance/local diagnostics, and bounded SAF TOML import/export. Only Git, Ports, Fleet and IDE-layout shortcut destinations are unavailable in this focused root. All remote writes use exact owner/selection-bound request-local admission; before-admission stale work is not submitted, while post-admission cancellation, malformed success or lost response can be `Unknown`, never automatically retried or represented as socket/server cancellation. Defaults Set sends `{"defaults":{"workspace":path}}`; Clear sends `{"defaults":{}}`. TOML import is confirmed only by a valid response with `imported == true` and required `fileName` / `backupFileName`. Nuclear Reset destroys PTYs and runtime workspace state, not saved preferences. LOCAL diagnostics use an allowlist and omit credentials, paths, history, commands and terminal output.
+Settings covers Android-applicable preferences, profile/source and independent administrative-target selection, supported shortcut capture, native accessory keyboard and opt-in command history, agent integration/path configuration, idle controls, global defaults/known workspaces, structured workspace/project configuration, maintenance/local diagnostics, and bounded SAF TOML import/export. Only Git, Ports, Fleet and IDE-layout shortcut destinations are unavailable in this focused root. All remote writes use exact owner/selection-bound request-local admission; before-admission stale work is not submitted, while post-admission cancellation, malformed success or lost response can be `Unknown`, never automatically retried or represented as socket/server cancellation. Defaults Set sends `{"defaults":{"workspace":path}}`; Clear sends `{"defaults":{}}`. TOML import is confirmed only by a valid response with `imported == true` and required `fileName` / `backupFileName`. Nuclear Reset destroys PTYs and runtime workspace state, not saved preferences. LOCAL diagnostics use an allowlist and omit credentials, paths, history, commands and terminal output.
 
 `SettingsRepository.preferences` is the active root's single reactive preference source. Theme/system text size, editor and terminal fonts/zoom, Files and sidebar hidden-file/language-family filters, terminal scroll controls/accessory keyboard, project auto-switch, supported shortcuts and app-local command suggestions/history consume its current values without replacing retained workspace ownership. Terminal scroll steps clamp to `1..50` lines (default `5`). Explorer wire filters are `all`, `rust`, `javascript-typescript`, and `java`; legacy `known`/`code`/`text` values migrate to a visible, non-equivalent local `all` fallback that is not dirty or automatically synchronized.
 

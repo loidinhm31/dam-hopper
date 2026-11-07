@@ -8,15 +8,15 @@ Server launch modes, deployment, browser origin/CORS, media compatibility, and h
 
 ```bash
 cd server
-cargo run -- --config /path/to/dam-hopper.toml --port 4800 \
+cargo run -- --config /path/to/config.toml --port 4800 \
   --host 127.0.0.1
-# Or omit --config to use ~/.config/dam-hopper/dam-hopper.toml
+# Or omit --config to use ~/.config/dam-hopper/config.toml
 ```
 
 ### With Logging
 
 ```bash
-RUST_LOG=dam_hopper=debug cargo run -- --config /path/to/dam-hopper.toml \
+RUST_LOG=dam_hopper=debug cargo run -- --config /path/to/config.toml \
   --host 127.0.0.1
 ```
 
@@ -24,7 +24,7 @@ RUST_LOG=dam_hopper=debug cargo run -- --config /path/to/dam-hopper.toml \
 
 ```bash
 cargo build --release
-./target/release/dam-hopper-server --config /path/to/dam-hopper.toml --port 4800 \
+./target/release/dam-hopper-server --config /path/to/config.toml --port 4800 \
   --host 127.0.0.1
 ```
 
@@ -36,7 +36,7 @@ To run without a MongoDB service, opt into SQLite lite mode via environment vari
 DAM_HOPPER_LITE_MODE=true \
 DAM_HOPPER_AUTH_SQLITE_PATH=/var/lib/dam-hopper/auth.db \
 DAM_HOPPER_MFA_KEY_FILE=/etc/dam-hopper/mfa-encryption.key \
-./target/release/dam-hopper-server --config /path/to/dam-hopper.toml --port 4801 \
+./target/release/dam-hopper-server --config /path/to/config.toml --port 4801 \
   --host 127.0.0.1
 ```
 

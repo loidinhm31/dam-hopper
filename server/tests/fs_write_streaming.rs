@@ -62,6 +62,8 @@ fn make_state(tmp: &TempDir) -> AppState {
             health_check_url: None,
         }],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_dir.join("dam-hopper.toml"),
     };
     let (event_sink, _) = BroadcastEventSink::new(64);
@@ -85,7 +87,6 @@ fn make_state(tmp: &TempDir) -> AppState {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut rand::rngs::OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_state failed")
     .with_auth_service(std::sync::Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0))

@@ -139,11 +139,11 @@ or real RTC hardware; qualify a real host separately.
 To disenroll the helper and disable idle suspend, verify no active/in-flight handoff, then run:
 
 ```bash
-./deploy/reset-linux-production.sh --dry-run --config /var/lib/dam-hopper/dam-hopper.toml
-sudo ./deploy/reset-linux-production.sh --config /var/lib/dam-hopper/dam-hopper.toml
+./deploy/reset-linux-production.sh --dry-run --config /var/lib/dam-hopper/config.toml
+sudo ./deploy/reset-linux-production.sh --config /var/lib/dam-hopper/config.toml
 ```
 
-The default is `/var/lib/dam-hopper/dam-hopper.toml`; normal changes use authenticated API writes, not root file replacement. The live reset parses the installed API unit's exact non-root `User=`/`Group=`, refuses missing/link/non-regular or wrong-owner/group/mode (`0600`) files, and never repairs unsafe metadata. It drops to that API identity, writes a mode-`0600` same-directory temporary, `fsync`s, atomically renames, syncs the parent, and verifies parseable TOML with `[server.idle_suspend] enabled = false`.
+The default is `/var/lib/dam-hopper/config.toml`; normal changes use authenticated API writes, not root file replacement. The live reset parses the installed API unit's exact non-root `User=`/`Group=`, refuses missing/link/non-regular or wrong-owner/group/mode (`0600`) files, and never repairs unsafe metadata. It drops to that API identity, writes a mode-`0600` same-directory temporary, `fsync`s, atomically renames, syncs the parent, and verifies parseable TOML with `[server.idle_suspend] enabled = false`.
 If dry-run refuses, inspect `systemctl cat dam-hopper-api.service` and `stat`, restore trusted content/metadata through a controlled API-identity repair procedure, rerun dry-run, then run live reset. Preserve canonical/legacy config evidence, `/var/lib/dam-hopper/idle-suspend-audit.jsonl`, helper audit, and foreign RTC alarms.
 
 Rollback guarantees:
@@ -243,7 +243,7 @@ The protected status endpoint (`GET /api/system/idle-suspend/v1/status`) reports
 
 To validate activity observation on a candidate host without risking unexpected automatic sleep:
 
-1. In `/var/lib/dam-hopper/dam-hopper.toml`, set:
+1. In `/var/lib/dam-hopper/config.toml`, set:
    ```toml
    [server.idle_suspend]
    enabled = false
@@ -289,7 +289,7 @@ Executing a real automatic host suspend canary is an explicit Operations procedu
      a clean status with no active or in-flight handoff.
 
 2. **Enablement**:
-   In `/var/lib/dam-hopper/dam-hopper.toml`, set:
+   In `/var/lib/dam-hopper/config.toml`, set:
 
    ```toml
    [server.idle_suspend]
@@ -337,7 +337,7 @@ Restores legacy zero-active-fleet behavior without disturbing helper enrollment 
 1. Refetch protected status and ensure there is no `finalCheck`, `handedOff`, or
    active handoff. Reconcile an accepted handoff before restarting; a config edit
    is not cancellation.
-2. Back up `/var/lib/dam-hopper/dam-hopper.toml` while preserving owner and mode.
+2. Back up `/var/lib/dam-hopper/config.toml` while preserving owner and mode.
 3. Edit the active registry:
    ```toml
    [server.idle_suspend]
@@ -359,7 +359,7 @@ Restores legacy zero-active-fleet behavior without disturbing helper enrollment 
 Immediately disables all automatic idle-suspend scheduling:
 
 1. Refetch protected status and resolve any accepted handoff before restarting.
-2. In `/var/lib/dam-hopper/dam-hopper.toml`, set `enabled = false` and `automatic_policy = "empty-fleet"`.
+2. In `/var/lib/dam-hopper/config.toml`, set `enabled = false` and `automatic_policy = "empty-fleet"`.
 3. Restart the API: `sudo systemctl restart dam-hopper-api.service`.
 4. Verify `state: "disabled"` and `activity: null`.
 
@@ -395,7 +395,7 @@ Ensure all 5 core loopback scenarios pass (`PASS (recorded 1 suspend request, wa
 
 #### 3. Enabling Agent-Free Policy in Production
 
-1. Edit `/var/lib/dam-hopper/dam-hopper.toml`:
+1. Edit `/var/lib/dam-hopper/config.toml`:
    ```toml
    [server.idle_suspend]
    enabled = true
@@ -423,7 +423,7 @@ Ensure all 5 core loopback scenarios pass (`PASS (recorded 1 suspend request, wa
 
 If unexpected sleep behavior, unrefreshed native agent blockers, or client connectivity issues arise:
 
-1. Edit `/var/lib/dam-hopper/dam-hopper.toml`:
+1. Edit `/var/lib/dam-hopper/config.toml`:
    ```toml
    [server.idle_suspend]
    enabled = false

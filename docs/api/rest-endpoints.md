@@ -57,22 +57,48 @@ underlying content.
 ### Projects
 
 **GET /api/projects**
-List all projects in workspace.
+List all projects configured on the server.
+Response: `[ { name, path, type, ... } ]`
 
-Response: `{ projects: [ { name, path, type } ] }`
+**POST /api/config/projects**
+Mark a folder as a project. Re-resolves target folder, enforces name and canonical root uniqueness (nested roots allowed), atomically updates `config.toml`, and publishes config changes.
+Body:
+```json
+{
+  "name": "services-api",
+  "target": { "type": "workspace" },
+  "path": "services/api",
+  "projectType": "custom",
+  "tags": ["backend"]
+}
+```
+Response:
+```json
+{
+  "ok": true,
+  "name": "services-api",
+  "path": "services/api"
+}
+```
 
+**DELETE /api/config/projects/{name}**
+Unmark a project. Removes project configuration from `config.toml` without deleting disk files or terminating running terminals.
+Response:
+```json
+{
+  "ok": true,
+  "name": "services-api"
+}
+```
 ### Terminals
 
 **POST /api/terminal** (transport channel: `terminal:create`)
 Create a new PTY session (idempotent).
 
-Body: `{ id, project?, cwd?, worktreePath?, command, cols, rows, env? }`
+Body: `{ id, target?, project?, cwd?, worktreePath?, command, cols, rows, env? }`
 
-When `worktreePath` is present, the server resolves it as a registered,
-available worktree for `project`, resolves relative `cwd` values beneath that
-target, rejects cwd values outside it, and persists the canonical target in
-session metadata. `worktreePath` requires `project`; omitting it preserves
-configured-root or legacy project behavior.
+- When `target: { "type": "workspace" }` is present, `cwd` is required and must be canonically contained within the authorized workspace root. Traversal escapes or directories outside the workspace are rejected with 400 `INVALID_FS_TARGET` without `$HOME` fallback.
+- When `worktreePath` is present, the server resolves it as a registered, available worktree for `project`, resolves relative `cwd` values beneath that target, rejects cwd values outside it, and persists the canonical target in session metadata. `worktreePath` requires `project`; omitting it preserves configured-root or legacy project behavior.
 
 Platform behavior for free terminals differs only where the request omits `cwd`: Windows uses an existing user home directory, then the server's existing current directory; Unix retains the `HOME`-then-`/tmp` fallback. On Windows, an empty command or the exact `bash` selector starts the native interactive `cmd.exe` with no arguments. Other command strings run as `cmd.exe /C <command>`.
 
@@ -532,7 +558,7 @@ Pre-allocation bounds, classification, and failure semantics:
 **POST /api/git/{project}/resolve**
 Safe conflict resolution and staging endpoint with strict precondition verification, process-local mutation coordination, atomic file publication, and post-staging oracle verification.
 
-_Implementation status:_ Backend mutation contract, Phase 05 frontend client DTO cutover, and Phase 08 workspace cutover implemented (`client.ts`, `ws-transport.ts`, `queries.ts`, `ChangedFilesList.tsx`, `WorkspacePage.tsx`, `use-conflict-resolver.ts`). Requests missing `conflictId` or `snapshotVersion` strings, or containing legacy `content`, are rejected fail-closed with HTTP 400 (`LEGACY_PAYLOAD_REJECTED`). Unrecognized fields or malformed action payloads are rejected (`deny_unknown_fields`) with HTTP 400 (`INVALID_INPUT`). Client mutations are preconditioned on `fullIndexFingerprint` and `snapshotVersion`; blind retries on timeouts, disconnects, or `outcomeUnknown` / `worktreeChangedStageFailed` are strictly prohibited. Staging bypasses are closed across UI and backend preflight (`stage_files`), and legacy `conflict-parser.ts` is retired.
+_Implementation status:_ Backend mutation contract, Phase 05 frontend client DTO cutover, and Phase 08 workspace cutover implemented (`client.ts`, `ws-transport.ts`, `queries.ts`, `ChangedFilesList.tsx`, `ConflictResolverApp.tsx`, `use-conflict-resolver.ts`). Requests missing `conflictId` or `snapshotVersion` strings, or containing legacy `content`, are rejected fail-closed with HTTP 400 (`LEGACY_PAYLOAD_REJECTED`). Unrecognized fields or malformed action payloads are rejected (`deny_unknown_fields`) with HTTP 400 (`INVALID_INPUT`). Client mutations are preconditioned on `fullIndexFingerprint` and `snapshotVersion`; blind retries on timeouts, disconnects, or `outcomeUnknown` / `worktreeChangedStageFailed` are strictly prohibited. Staging bypasses are closed across UI and backend preflight (`stage_files`), and legacy `conflict-parser.ts` is retired.
 
 **Request body (`ResolveRequest`):**
 
@@ -723,6 +749,43 @@ Notes:
 - Publication requires a separate user-confirmed leased push (`/push/prepare` and `/push/publish`).
 - UI usage: Consumed by `WorkspaceGitPanel` and `GitPage` squash workflows when `isViewingLocalBranch` is true. Verified pre-flight messages validate identical `headOid` and `branch`. On success, generates a receipt (`receipt.branch`, `receipt.sourceOid`) driving the leased push confirmation flow.
 - Response follows `GitActionResult`.
+
+### Agent Status API
+
+**GET /api/agent-status/v1/snapshot**
+Returns the current active agent status snapshot across all live managed terminals.
+
+Response:
+```json
+{
+  "version": 1,
+  "serverEpoch": 4305114706658182,
+  "revision": 1,
+  "availability": "ready",
+  "terminals": [
+    {
+      "id": "term-1",
+      "incarnation": 1833568411063296,
+      "agentKind": "omp",
+      "agentSessionId": "sess-1",
+      "reporterEpoch": 1,
+      "state": "working",
+      "turnId": "turn-100",
+      "attentionRevision": 0
+    }
+  ]
+}
+```
+
+- `version`: Protocol version (`1`).
+- `serverEpoch`: Random epoch generated per server process start.
+- `revision`: Monotonically increasing state sequence.
+- `availability`: `"ready" | "unavailable" | "platform-unqualified"`.
+- `terminals`: Array of active agent status rows.
+
+### Session Persistence
+
+Terminal session buffers and metadata are persisted to SQLite when `session_db_path` can be opened. Buffer snapshots are sent every 16 KB and on session exit/graceful shutdown. Up to 1 MB of scrollback is replayed on attach, and sessions alive before shutdown are relaunched on restart.
 
 ## Client-Side Profile Management
 

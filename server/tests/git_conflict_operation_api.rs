@@ -108,6 +108,8 @@ fn setup_test_app() -> TestApp {
             health_check_url: None,
         }],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: root_path.join("dam-hopper.toml"),
     };
 
@@ -133,7 +135,6 @@ fn setup_test_app() -> TestApp {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("Failed to create AppState");
 

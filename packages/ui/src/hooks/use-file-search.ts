@@ -9,7 +9,14 @@ import {
   type ConnectionStatus,
 } from "@/api/connections.js";
 import { getProfiles } from "@/api/server-config.js";
-import { toServerProjectTarget, type ConnectionRef } from "@/api/ownership.js";
+import {
+  toServerProjectTarget,
+  normalizeFsTarget,
+  toServerFsTarget,
+  fsTargetKey,
+  type ConnectionRef,
+  type FsTargetRef,
+} from "@/api/ownership.js";
 import type {
   PathSearchResponse,
   SearchResponse,
@@ -55,14 +62,14 @@ export interface FileSearchResultData {
 }
 
 export function useFileSearch(
-  target: ProjectTargetInput | null,
+  target: FsTargetRef | ProjectTargetInput | null,
   scope: SearchScope = "project",
   mode: SearchMode = "content",
   query = "",
 ) {
-  const targetRef = target == null ? null : normalizeProjectTarget(target);
-  const project = targetRef?.project ?? null;
-  const targetKey = targetRef == null ? null : projectTargetCacheKey(targetRef);
+  const targetRef = target == null ? null : normalizeFsTarget(target);
+  const project = targetRef?.kind === "project" ? targetRef.project : null;
+  const targetKey = targetRef == null ? null : fsTargetKey(targetRef);
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState("");
 
@@ -103,6 +110,9 @@ export function useFileSearch(
     : [
         mode === "filename" ? "fs-path-search" : "fs-search",
         targetRef?.profileId ?? "__local__",
+        targetRef?.profileId
+          ? (getConnectionSnapshot(targetRef.profileId)?.owner.generation ?? 0)
+          : ((targetRef as { generation?: number })?.generation ?? 0),
         project,
         targetKey,
         trimmedQuery,
@@ -117,27 +127,29 @@ export function useFileSearch(
         let t: WsTransport;
         let conn: ConnectionRef | undefined;
         if (targetRef?.profileId) {
-          try {
-            conn = captureConnection(targetRef.profileId);
-            t = getConnectionsTransport(conn) as WsTransport;
-          } catch {
-            t = getTransport() as WsTransport;
-          }
+          conn = captureConnection(targetRef.profileId);
+          t = getConnectionsTransport(conn) as WsTransport;
         } else {
           t = getTransport() as WsTransport;
         }
         const channel = mode === "filename" ? "fs:searchPaths" : "fs:search";
-        const wire = targetRef ? toServerProjectTarget(targetRef) : {};
+        const wire = targetRef ? toServerFsTarget(targetRef) : undefined;
         const resp = (await t.invoke(channel, {
-          ...wire,
+          ...(wire ? { target: wire } : {}),
           q: trimmedQuery,
           case: caseSensitive || undefined,
+          scope,
         })) as SearchResponse | PathSearchResponse;
 
+        if (conn && !isCurrentConnection(conn)) {
+          throw new Error("Connection changed during project search");
+        }
         const matches = (resp.matches ?? []).map((m) => ({
           ...m,
           profileId: targetRef?.profileId,
-          generation: conn?.generation,
+          generation:
+            conn?.generation ??
+            (targetRef as { generation?: number })?.generation,
           targetRef: targetRef ?? undefined,
         }));
 
@@ -150,18 +162,10 @@ export function useFileSearch(
 
       // Federated search across up to 4 eligible connected profiles
       if (eligibleProfiles.length === 0) {
-        // Fallback for single server / unconfigured profile
-        const t = getTransport() as WsTransport;
-        const channel = mode === "filename" ? "fs:searchPaths" : "fs:search";
-        const resp = (await t.invoke(channel, {
-          q: trimmedQuery,
-          case: caseSensitive || undefined,
-          scope: "workspace",
-        })) as SearchResponse | PathSearchResponse;
         return {
-          query: resp.query,
-          matches: resp.matches ?? [],
-          truncated: Boolean(resp.truncated),
+          query: trimmedQuery,
+          matches: [],
+          truncated: false,
         };
       }
 

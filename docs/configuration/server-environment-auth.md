@@ -29,8 +29,8 @@ path = "/tmp/test-workspace"
 
 | Var                                        | Type    | Purpose                                                                                                                                                                                                                                                                                             |
 | ------------------------------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DAM_HOPPER_CONFIG`                        | path    | Load an exact `dam-hopper.toml` registry file                                                                                                                                                                                                                                                       |
-| `DAM_HOPPER_WORKSPACE`                     | path    | Legacy workspace path/discovery fallback                                                                                                                                                                                                                                                            |
+| `DAM_HOPPER_CONFIG`                        | path    | Load an exact `config.toml` configuration file                                                                                                                                                                                                                                                      |
+| `DAM_HOPPER_WORKSPACE`                     | path    | Legacy environment override (superseded by `[workspace].root` in `config.toml`)                                                                                                                                                                                                                    |
 | `DAM_HOPPER_PORT`                          | number  | API listen port (direct/Docker default 4800; systemd sets 4801)                                                                                                                                                                                                                                     |
 | `DAM_HOPPER_HOST`                          | string  | API bind address (default `0.0.0.0`)                                                                                                                                                                                                                                                                |
 | `DAM_HOPPER_CORS_ORIGINS`                  | string  | Comma-separated exact HTTP(S) origins for credentialed API/WS CORS                                                                                                                                                                                                                                  |
@@ -89,7 +89,7 @@ DamHopper supports two production-grade authenticated storage backends within th
 - **Dotenv Precedence**: `dotenv::dotenv()` only populates variables not already present in the process environment. Pre-existing system environment variables (such as those supplied by systemd `EnvironmentFile=/etc/dam-hopper/server.env` or exported in the host shell) take precedence over values in working directory `.env` files.
 - **Path Resolution (`DAM_HOPPER_AUTH_SQLITE_PATH`)**: Applies when SQLite is selected. Relative paths resolve relative to the server process current working directory (CWD) at startup. In production or daemon deployments, always specify an absolute path on local persistent storage (e.g. `/var/lib/dam-hopper/auth.db`).
 - **Default SQLite Storage**: When `DAM_HOPPER_AUTH_SQLITE_PATH` is omitted or empty, the server defaults to `auth.db` in the global DamHopper configuration directory (`~/.config/dam-hopper/auth.db` on Linux/macOS, or `%USERPROFILE%\.config\dam-hopper\auth.db` on Windows; overridable via `XDG_CONFIG_HOME`).
-  - **Subsystem Isolation**: `auth.db` is strictly dedicated to authentication, credentials, and session state. It is completely isolated from PTY/IDE session state (`~/.config/dam-hopper/sessions.db`) and telemetry state (`~/.config/dam-hopper/telemetry.db`).
+  - **Subsystem Isolation**: `auth.db` is strictly dedicated to authentication, credentials, and session state. It is completely isolated from PTY/IDE session state (`~/.config/dam-hopper/sessions.db`).
 
 ### Production Safety Guards
 
@@ -279,7 +279,7 @@ used only as the server's JWT signing secret. On Unix it is created with mode
 sessions:
 
 ```bash
-cd server && cargo run -- --config /path/to/dam-hopper.toml --new-token
+cd server && cargo run -- --config /path/to/config.toml --new-token
 ```
 
 Normal login returns an MFA challenge, not a bearer token. Use the `token`

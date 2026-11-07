@@ -5,8 +5,12 @@ import {
   projectTargetCacheKey,
   type ProjectTargetInput,
 } from "@/api/client.js";
+import { fsTargetKey, type FsTargetRef } from "@/api/ownership.js";
 
-export function explorerTreeScopeKey(target: ProjectTargetInput): string {
+export function explorerTreeScopeKey(target: FsTargetRef | ProjectTargetInput): string {
+  if (typeof target === "object" && target !== null && "kind" in target) {
+    return fsTargetKey(target);
+  }
   const normalized = normalizeProjectTarget(target);
   const prefix = normalized.profileId
     ? `${normalized.profileId}::${normalized.project}`

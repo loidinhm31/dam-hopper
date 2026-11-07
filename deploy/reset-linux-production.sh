@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # restores manifest integrity, preserves audit logs, and validates clean shutdown.
 
 DRY_RUN=0
-CONFIG_FILE="/var/lib/dam-hopper/dam-hopper.toml"
+CONFIG_FILE="/var/lib/dam-hopper/config.toml"
 HELPER_BIN="/opt/dam-hopper/current/bin/dam-hopper-idle-suspend-helper"
 SYSTEMD_DIR="/etc/systemd/system"
 AUDIT_HELPER="/var/log/dam-hopper/idle-suspend-helper.jsonl"
@@ -20,7 +20,7 @@ Usage: $0 [options]
 
 Options:
   --dry-run               Simulate rollback actions without modifying the host
-  --config <path>         Override path to canonical dam-hopper.toml (default: /var/lib/dam-hopper/dam-hopper.toml)
+  --config <path>         Override path to canonical config.toml (default: /var/lib/dam-hopper/config.toml)
   --api-unit <path>       Override path to installed API unit (default: /etc/systemd/system/dam-hopper-api.service)
   -h, --help              Show this help message
 EOF
@@ -215,7 +215,7 @@ if os.getuid() != expected_uid or os.getgid() != expected_gid:
 config_dir = os.path.dirname(config_path)
 dir_fd = os.open(config_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
 
-temp_fd, temp_path = tempfile.mkstemp(prefix=".dam-hopper.toml.reset.", dir=config_dir)
+temp_fd, temp_path = tempfile.mkstemp(prefix=".config.toml.reset.", dir=config_dir)
 try:
     os.fchmod(temp_fd, 0o600)
     with open(temp_fd, "wb", closefd=False) as f:

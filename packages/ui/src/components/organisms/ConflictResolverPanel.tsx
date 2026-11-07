@@ -3,11 +3,13 @@ import {
   useRef,
   useState,
 } from "react";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 import { AlertTriangle, CheckCircle2, Grip, Loader2, X } from "lucide-react";
 import type { ProjectTargetInput } from "@/api/client.js";
 import { useConflictResolver } from "@/hooks/use-conflict-resolver.js";
 import { useFloatingPanelGeometry } from "@/hooks/use-floating-panel-geometry.js";
-import { TERMINAL_FLOATING_PANEL_TOPMOST_Z_INDEX } from "@/lib/terminal-workspace-panel.js";
+/** OS frame topmost z-index authority for floating conflict resolver */
+export const OS_RESOLVER_PANEL_TOPMOST_Z_INDEX = 30;
 import {
   clampResolverPanelLayout,
   handleResolverPanelKeyDown,
@@ -21,6 +23,17 @@ export interface ConflictRevealIntent {
   nonce: number;
   filePath?: string;
   root?: string;
+}
+
+export function buildConflictRevealIntent(
+  selection?: { path?: string; diffPath?: string; root?: string; gitRootId?: string } | null,
+): ConflictRevealIntent {
+  const rawRoot = selection?.root ?? selection?.gitRootId;
+  return {
+    nonce: Date.now(),
+    filePath: selection?.diffPath ?? selection?.path,
+    root: rawRoot && rawRoot !== "." ? rawRoot : undefined,
+  };
 }
 
 interface ConflictResolverPanelProps {
@@ -45,7 +58,7 @@ export function ConflictResolverPanel({
   root: propRoot,
   initialFilePath,
   revealIntent,
-  zIndex = TERMINAL_FLOATING_PANEL_TOPMOST_Z_INDEX,
+  zIndex = OS_RESOLVER_PANEL_TOPMOST_Z_INDEX,
   isTopmost = true,
   onActivate,
   onHide,
@@ -73,6 +86,7 @@ export function ConflictResolverPanel({
     clampLayout: clampResolverPanelLayout,
   });
   const lastConsumedNonceRef = useRef<number | null>(null);
+  const [confirmAbortOp, setConfirmAbortOp] = useState<string | null>(null);
 
   useEffect(() => {
     if (revealIntent && lastConsumedNonceRef.current !== revealIntent.nonce) {
@@ -114,13 +128,19 @@ export function ConflictResolverPanel({
     }
   };
 
-  const handleAbort = async () => {
-    const op = resolver.operation?.operation ?? "operation";
-    if (
-      !window.confirm(
-        `Abort ${op.toUpperCase()}? This will discard uncommitted merge resolutions and clean the worktree.`,
-      )
-    ) {
+  const handleAbort = () => {
+    const op = resolver.operation?.operation;
+    if (!op || op === "none") return;
+    setConfirmAbortOp(op);
+  };
+
+  const executeAbort = async () => {
+    const expectedOp = confirmAbortOp;
+    setConfirmAbortOp(null);
+    if (!expectedOp) return;
+    const currentOp = resolver.operation?.operation;
+    if (currentOp !== expectedOp) {
+      setOperationError("Conflict operation changed while confirmation was pending; abort cancelled.");
       return;
     }
     setIsAborting(true);
@@ -170,7 +190,8 @@ export function ConflictResolverPanel({
   if (!open) return null;
 
   return (
-    <div
+    <>
+      <div
       ref={boundsRef}
       className="pointer-events-none fixed inset-0 z-40"
       style={{ zIndex }}
@@ -404,6 +425,17 @@ export function ConflictResolverPanel({
           </>
         )}
       </section>
-    </div>
+      </div>
+      <ConfirmDialog
+        open={Boolean(confirmAbortOp)}
+        onClose={() => setConfirmAbortOp(null)}
+        onConfirm={executeAbort}
+        title="Abort Conflict Resolution?"
+        description={`Abort ${(confirmAbortOp ?? "operation").toUpperCase()}? This will discard uncommitted merge resolutions and clean the worktree.`}
+        confirmText="Abort and Discard"
+        cancelText="Cancel"
+        variant="danger"
+      />
+    </>
   );
 }

@@ -10,7 +10,6 @@ import {
   initTransportListeners,
   resetTransportListeners,
 } from "@/hooks/use-sse.js";
-import { isNativeWindowsHost } from "./server-config.js";
 /**
  * Reinitialize the transport with a new server URL.
  * Destroys the old WebSocket connection, creates a new one, and resets event listeners.
@@ -24,7 +23,7 @@ export function reinitializeTransport(
   if (profileId) {
     void connectProfile(profileId).catch(() => {});
   }
-  const transportUrl = resolveTransportUrl(newServerUrl);
+  const transportUrl = newServerUrl;
 
   // 1. Get the current transport and destroy it (closes WebSocket, cleans up listeners)
   const oldTransport = getTransport();
@@ -50,24 +49,3 @@ export function reinitializeTransport(
   initTransportListeners();
 }
 
-function resolveTransportUrl(newServerUrl?: string): string | undefined {
-  if (typeof document === "undefined" || typeof window === "undefined") {
-    return newServerUrl;
-  }
-  if (
-    document.documentElement.dataset.appHost !== "native" ||
-    isNativeWindowsHost()
-  ) {
-    return newServerUrl;
-  }
-  if (!newServerUrl) return undefined;
-
-  try {
-    return new URL(newServerUrl, window.location.href).origin ===
-      window.location.origin
-      ? newServerUrl
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}

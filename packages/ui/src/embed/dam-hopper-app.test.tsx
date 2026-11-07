@@ -20,47 +20,34 @@ vi.mock("@/api/connections.js", async (importOriginal) => {
 });
 
 const mockProfiles: never[] = [];
+let mockActiveProfile: { id: string; authType?: string; url?: string } | null = null;
+let mockAuthToken: string | null = null;
 vi.mock("@/api/server-config.js", () => ({
   getServerUrl: () => "http://localhost:4801",
   buildAuthHeaders: () => ({}),
-  getActiveProfile: () => null,
+  getActiveProfile: () => mockActiveProfile,
   getProfiles: () => mockProfiles,
   migrateToProfiles: vi.fn(),
   normalizeServerUrl: (url: string) => url,
-  getAuthToken: () => null,
+  getAuthToken: () => mockAuthToken,
   setAuthToken: vi.fn(),
   readServerProfiles: () => ({ status: "available", profiles: [] }),
-  isSameOriginProfile: () => false,
   subscribeToProfileChanges: vi.fn(() => () => {}),
 }));
 
 vi.mock("@/hooks/use-server-profile.js", () => ({
-  useServerProfile: () => null,
+  useServerProfile: () => mockActiveProfile,
 }));
 
-vi.mock("@/contexts/SshForwardHostContext.js", () => ({
-  SshForwardHostProvider: ({ children }: { children: React.ReactNode }) => children,
-  SshForwardScopeBridge: () => null,
-  useSshForwardHost: () => ({ host: null, environment: { kind: "web" } }),
-}));
 
-vi.mock("@/contexts/BrowserDebugHostContext.js", () => ({
-  BrowserDebugHostProvider: ({ children }: { children: React.ReactNode }) => children,
-  useBrowserDebugHost: () => null,
-}));
-
-vi.mock("@/components/pages/DashboardPage.js", () => ({
-  DashboardPage: () => <div data-testid="dashboard-page">Dashboard</div>,
-}));
-
-vi.mock("@/components/pages/WorkspacePage.js", () => ({
-  default: () => <div data-testid="workspace-page">Workspace</div>,
-}));
 
 vi.mock("@/components/organisms/TerminalNotificationToastViewport.js", () => ({
   TerminalNotificationToastViewport: () => (
     <div data-testid="toast-viewport">Toast Viewport</div>
   ),
+}));
+vi.mock("@/os/OsShell.js", () => ({
+  OsShell: () => <div data-testid="os-shell">DamHopper OS Shell</div>,
 }));
 
 describe("DamHopperApp Cognito Mode root boundary", () => {
@@ -69,6 +56,8 @@ describe("DamHopperApp Cognito Mode root boundary", () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
+    mockActiveProfile = null;
+    mockAuthToken = null;
     useCognitoModeStore.getState().reset();
     useSettingsStore.setState({
       cognitoModeShortcut: "Mod+Alt+KeyB",
@@ -91,6 +80,7 @@ describe("DamHopperApp Cognito Mode root boundary", () => {
     container = null;
     useCognitoModeStore.getState().reset();
     document.querySelectorAll("[data-cognito-mode-overlay]").forEach((el) => el.remove());
+    window.history.pushState({}, "", "/");
   });
 
   it("mounts data-cognito-mode-content boundary and toggles inert when cognito active", async () => {
@@ -145,5 +135,230 @@ describe("DamHopperApp Cognito Mode root boundary", () => {
     expect(contentDiv?.hasAttribute("inert")).toBe(false);
     expect(contentDiv?.getAttribute("aria-hidden")).toBeNull();
     expect(document.querySelector("[data-cognito-mode-overlay]")).toBeNull();
+  });
+
+  it("renders retirement notice for /ssh-forwarding deep link", async () => {
+    window.history.pushState({}, "", "/ssh-forwarding");
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(container.textContent).toContain("SSH Port Forwarding Retired");
+    expect(container.textContent).toContain(
+      "Native desktop SSH port forwarding has been removed",
+    );
+
+    await act(async () => root.unmount());
+    container.remove();
+    window.history.pushState({}, "", "/");
+  });
+  it("renders unauthenticated notice on /os without token and does not mount OsShell", async () => {
+    window.history.pushState({}, "", "/os");
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(container?.querySelector("[data-testid='os-unauthenticated']")).not.toBeNull();
+    expect(container?.textContent).toContain("Authentication Required");
+    expect(container?.querySelector("[data-testid='os-shell']")).toBeNull();
+  });
+  it("renders unauthenticated notice on /os when profile has authType: 'basic' but token is missing", async () => {
+    mockActiveProfile = { id: "profile-token-required", authType: "basic" };
+    mockAuthToken = null;
+    window.history.pushState({}, "", "/os");
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(container?.querySelector("[data-testid='os-unauthenticated']")).not.toBeNull();
+    expect(container?.textContent).toContain("Authentication Required");
+    expect(container?.querySelector("[data-testid='os-shell']")).toBeNull();
+  });
+
+  it("renders OsShell on default root / when authenticated", async () => {
+    mockActiveProfile = { id: "profile-1", authType: "token" };
+    mockAuthToken = "valid-token";
+    window.history.pushState({}, "", "/");
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+    expect(container?.querySelector("[data-testid='os-shell']")).not.toBeNull();
+    expect(container?.querySelector("[data-testid='os-unauthenticated']")).toBeNull();
+  });
+
+  it("renders OsShell on /os when profile is authenticated", async () => {
+    mockActiveProfile = { id: "profile-1", authType: "basic" };
+    mockAuthToken = "token-xyz";
+    window.history.pushState({}, "", "/os");
+
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(container?.querySelector("[data-testid='os-shell']")).not.toBeNull();
+    expect(container?.querySelector("[data-testid='os-unauthenticated']")).toBeNull();
+    expect(container?.textContent).toContain("DamHopper OS Shell");
+  });
+
+  it("renders OsShell on /os when profile has authType: 'none' without token", async () => {
+    mockActiveProfile = { id: "profile-dev", authType: "none" };
+    mockAuthToken = null;
+    window.history.pushState({}, "", "/os");
+
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(container?.querySelector("[data-testid='os-shell']")).not.toBeNull();
+    expect(container?.querySelector("[data-testid='os-unauthenticated']")).toBeNull();
+  });
+
+  it("renders same OsShell when navigating between / and /os", async () => {
+    mockActiveProfile = { id: "profile-1", authType: "none" };
+    window.history.pushState({}, "", "/");
+
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(container?.querySelector("[data-testid='os-shell']")).not.toBeNull();
+
+    window.history.pushState({}, "", "/os");
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(container?.querySelector("[data-testid='os-shell']")).not.toBeNull();
+  });
+
+  it("reactively unmounts OsShell when profile authentication is revoked", async () => {
+    mockActiveProfile = { id: "profile-1", authType: "basic" };
+    mockAuthToken = "valid-token";
+    window.history.pushState({}, "", "/os");
+
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+    expect(container?.querySelector("[data-testid='os-shell']")).not.toBeNull();
+
+    // Revoke token and re-render
+    mockAuthToken = null;
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(container?.querySelector("[data-testid='os-shell']")).toBeNull();
+    expect(container?.querySelector("[data-testid='os-unauthenticated']")).not.toBeNull();
+  });
+
+  it("redirects qualified legacy /workspace to OS deep link", async () => {
+    mockActiveProfile = { id: "prof-1", authType: "none" };
+    window.history.pushState({}, "", "/workspace?profileId=prof-1&project=dam-hopper");
+
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(window.location.search).toContain("open=terminals");
+    expect(window.location.search).toContain("profile=prof-1");
+    expect(window.location.search).toContain("project=dam-hopper");
+    expect(container?.querySelector("[data-testid='os-shell']")).not.toBeNull();
+  });
+
+  it("renders guidance notice for unqualified legacy /workspace without profileId", async () => {
+    mockActiveProfile = { id: "prof-1", authType: "none" };
+    window.history.pushState({}, "", "/workspace?project=dam-hopper");
+
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+
+    const notice = container?.querySelector("[data-testid='legacy-unqualified-notice']");
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain("Legacy unqualified link detected without profileId");
+  });
+
+  it("renders removed notices for /usage and /ssh-forwarding without network bootstrap", async () => {
+    window.history.pushState({}, "", "/usage");
+
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(container?.querySelector("[data-testid='removed-route-usage-telemetry-retired']")).not.toBeNull();
+    expect(container?.textContent).toContain("Usage & Telemetry Retired");
+
+    await act(async () => {
+      root?.unmount();
+      root = createRoot(container!);
+    });
+
+    window.history.pushState({}, "", "/ssh-forwarding");
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <DamHopperApp />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(container?.querySelector("[data-testid='removed-route-ssh-port-forwarding-retired']")).not.toBeNull();
+    expect(container?.textContent).toContain("SSH Port Forwarding Retired");
   });
 });

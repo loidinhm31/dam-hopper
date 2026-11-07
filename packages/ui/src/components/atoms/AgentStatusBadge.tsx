@@ -82,7 +82,7 @@ export function AgentStatusBadge({ terminalRef, incarnation }: Props) {
 
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-sm border border-[var(--color-border)] px-1 py-0.5 font-mono text-[10px] leading-none ${presentation.className}`}
+      className={`inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-sm border border-[var(--color-border)] px-1.5 py-0.5 font-mono text-xs leading-none ${presentation.className}`}
       role="img"
       title={tooltip}
       aria-label={ariaLabel}

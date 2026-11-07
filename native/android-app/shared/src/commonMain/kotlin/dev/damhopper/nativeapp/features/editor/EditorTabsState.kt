@@ -157,12 +157,15 @@ class EditorTabsState(
     }
 
     private fun createDocumentId(target: ProjectTargetRef, path: String, incarnation: Long): DocumentId {
+        val repoOwner = editorRepository.fileRepository.owner
         val owner = WorkspaceFileOwner(
             profileId = profileId,
-            baseUrl = editorRepository.fileRepository.owner.baseUrl,
-            accountUser = editorRepository.fileRepository.owner.accountUser,
+            baseUrl = repoOwner.baseUrl,
+            accountUser = repoOwner.accountUser,
             project = target.project,
-            worktreePath = target.worktreePath
+            worktreePath = target.worktreePath,
+            workspaceRoot = repoOwner.workspaceRoot,
+            workspaceEpoch = repoOwner.workspaceEpoch ?: editorRepository.fileRepository.currentWorkspaceEpoch,
         )
         return DocumentId(owner = owner, relativePath = path, tabIncarnation = incarnation)
     }

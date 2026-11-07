@@ -196,33 +196,6 @@ describe("WsTransport terminal rename", () => {
   });
 });
 
-describe("WsTransport usage setup endpoints", () => {
-  it("maps setup status and configuration to protected usage routes", async () => {
-    installMockWebSocket();
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ enabled: false }), { status: 200 }),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ enabled: true }), { status: 200 }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
-    const transport = new WsTransport("http://localhost:4800");
-
-    await transport.invoke("usage:setupStatus");
-    await transport.invoke("usage:configure", { enabled: true });
-
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      "http://localhost:4800/api/usage/setup",
-    );
-    expect(fetchMock.mock.calls[1][1]).toMatchObject({
-      method: "PATCH",
-      body: JSON.stringify({ enabled: true }),
-    });
-    transport.destroy();
-  });
-});
 
 describe("WsTransport bulk Git targets", () => {
   it("serializes selected worktrees separately from project names", async () => {
@@ -283,9 +256,8 @@ describe("WsTransport explorer language scan endpoint", () => {
 
     await transport.invoke("fs:languageFiles", { project: "demo project" });
 
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      "http://localhost:4800/api/fs/language-files?project=demo+project",
-    );
+    expect(fetchMock.mock.calls[0][0]).toContain("project=demo+project");
+    expect(fetchMock.mock.calls[0][0]).toContain("targetType=project");
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "GET" });
     transport.destroy();
   });
@@ -308,9 +280,9 @@ describe("WsTransport explorer language scan endpoint", () => {
       worktreePath: "/tmp/demo-worktree",
     });
 
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      "http://localhost:4800/api/fs/language-files?project=demo&worktreePath=%2Ftmp%2Fdemo-worktree",
-    );
+    expect(fetchMock.mock.calls[0][0]).toContain("project=demo");
+    expect(fetchMock.mock.calls[0][0]).toContain("worktreePath=%2Ftmp%2Fdemo-worktree");
+    expect(fetchMock.mock.calls[0][0]).toContain("targetType=project");
     transport.destroy();
   });
 });
@@ -328,8 +300,11 @@ describe("WsTransport filesystem targets", () => {
     const targetedMessage = JSON.parse(socket.sent[0]);
     expect(targetedMessage).toMatchObject({
       kind: "fs:subscribe_tree",
-      project: "demo",
-      worktree_path: "/tmp/demo-worktree",
+      target: {
+        type: "project",
+        project: "demo",
+        worktreePath: "/tmp/demo-worktree",
+      },
       path: "src",
     });
     socket.onmessage?.({
@@ -674,22 +649,38 @@ describe("WsTransport typed API errors", () => {
     } satisfies Partial<ApiRequestError>);
     transport.destroy();
   });
+});
 
-  it("does not send removed terminal-shaped setup fields", async () => {
+describe("WsTransport fsOp with workspace mutation authority", () => {
+  it("attaches cached workspaceEpoch to wire target and message payload", async () => {
     installMockWebSocket();
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
     const transport = new WsTransport("http://localhost:4800");
+    transport.cachedWorkspaceEpoch = 42;
 
-    await expect(
-      transport.invoke("usage:configure", {
-        enabled: true,
-        terminalCorrelationEnabled: true,
+    const socket = sockets[0];
+    socket.readyState = 1;
+
+    const opPromise = transport.fsOp("delete", {
+      target: { kind: "workspace", profileId: "default" },
+      path: "test-file.txt",
+    });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    const sentStr = socket.sent.find((s) => s.includes('"kind":"fs:op"'));
+    expect(sentStr).toBeDefined();
+    const sent = JSON.parse(sentStr!);
+    expect(sent.target).toEqual({ type: "workspace", workspaceEpoch: 42 });
+    expect(sent.workspaceEpoch).toBe(42);
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        kind: "fs:op_result",
+        req_id: sent.req_id,
+        ok: true,
       }),
-    ).rejects.toThrow(
-      "Unsupported usage setup field: terminalCorrelationEnabled",
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
+    } as MessageEvent);
+
+    const result = await opPromise;
+    expect(result.ok).toBe(true);
     transport.destroy();
   });
 });
@@ -736,72 +727,6 @@ describe("WsTransport profile credentials", () => {
   });
 });
 
-describe("WsTransport usage session endpoints", () => {
-  it("maps list filters and encoded detail IDs to protected usage routes", async () => {
-    installMockWebSocket();
-    const fetchMock = vi.fn().mockImplementation(() =>
-      Promise.resolve(
-        new Response(JSON.stringify({ sessions: [], nodes: [] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const transport = new WsTransport("http://localhost:4800");
-
-    await transport.invoke("usage:sessions", {
-      from: 10,
-      to: 20,
-      model: "gpt-5.6-sol",
-      limit: 50,
-    });
-    await transport.invoke("usage:session", { id: "session/id" });
-
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      "http://localhost:4800/api/usage/sessions?from=10&to=20&model=gpt-5.6-sol&limit=50",
-    );
-    expect(fetchMock.mock.calls[1][0]).toBe(
-      "http://localhost:4800/api/usage/sessions/session%2Fid",
-    );
-    transport.destroy();
-  });
-
-  it("rejects removed session filters before making a request", async () => {
-    installMockWebSocket();
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const transport = new WsTransport("http://localhost:4800");
-
-    await expect(
-      transport.invoke("usage:sessions", { terminal: "legacy" }),
-    ).rejects.toThrow("Unsupported usage session field: terminal");
-    expect(fetchMock).not.toHaveBeenCalled();
-    transport.destroy();
-  });
-
-  it("rejects stale detail and deletion fields before making a request", async () => {
-    installMockWebSocket();
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const transport = new WsTransport("http://localhost:4800");
-
-    await expect(
-      transport.invoke("usage:session", {
-        id: "session-id",
-        terminal: "legacy",
-      } as never),
-    ).rejects.toThrow("Unsupported usage session detail field: terminal");
-    await expect(
-      transport.invoke("usage:deleteAll", {
-        confirmation: "delete-usage-data",
-        project: "legacy",
-      } as never),
-    ).rejects.toThrow("Unsupported usage deletion field: project");
-    expect(fetchMock).not.toHaveBeenCalled();
-    transport.destroy();
-  });
-});
 
 describe("WsTransport diagnostics export endpoint", () => {
   it("posts the diagnostics export request to the protected API route", async () => {
@@ -1630,7 +1555,7 @@ describe("WsTransport settings export/import", () => {
         status: 200,
         headers: {
           "content-type": "application/toml; charset=utf-8",
-          "content-disposition": 'attachment; filename="dam-hopper.toml"',
+          "content-disposition": 'attachment; filename="config.toml"',
         },
       }),
     );
@@ -1653,8 +1578,8 @@ describe("WsTransport settings export/import", () => {
       new Response(
         JSON.stringify({
           imported: true,
-          fileName: "dam-hopper.toml",
-          backupFileName: "dam-hopper.toml.bak.123",
+          fileName: "config.toml",
+          backupFileName: "config.toml.bak.123",
           workspaceName: "ws",
         }),
         {
@@ -1671,8 +1596,8 @@ describe("WsTransport settings export/import", () => {
     );
     expect(result).toEqual({
       imported: true,
-      fileName: "dam-hopper.toml",
-      backupFileName: "dam-hopper.toml.bak.123",
+      fileName: "config.toml",
+      backupFileName: "config.toml.bak.123",
       workspaceName: "ws",
     });
     expect(fetchMock).toHaveBeenCalledWith(
@@ -2384,6 +2309,171 @@ describe("Session changes REST channels", () => {
       "http://localhost:4800/api/terminal/term-1/session-changes/v1/files/fid-9?terminalIncarnation=1&ompSessionId=omp-session-1&rootId=src&serverEpoch=epoch-1&baselineId=base-1&comparisonRevision=2",
     );
 
+    transport.destroy();
+  });
+});
+describe("Terminal observation and guarded termination channels", () => {
+  it("decodes headers and rows atomically for terminal:listObservation", async () => {
+    const transport = new WsTransport("http://localhost:4800");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: "term-1",
+            command: "bash",
+            cwd: "/home",
+            type: "terminal",
+            startedAt: 100,
+            alive: true,
+            incarnation: 42,
+            incarnationExact: "42",
+            terminationState: "live",
+          },
+        ]),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "X-DamHopper-Termination-Version": "1",
+            "X-DamHopper-PTY-Epoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+          },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const observation = await transport.invoke<{
+      sessions: readonly { id: string; incarnationExact?: string }[];
+      termination: { version: number | null; serverEpoch: string | null };
+    }>("terminal:listObservation");
+
+    expect(observation.termination).toEqual({
+      version: 1,
+      serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+    });
+    expect(observation.sessions).toHaveLength(1);
+    expect(observation.sessions[0].id).toBe("term-1");
+    expect(observation.sessions[0].incarnationExact).toBe("42");
+    transport.destroy();
+  });
+  it("decodes serverEpoch header from terminal:create response", async () => {
+    const transport = new WsTransport("http://localhost:4800");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "term-1",
+          incarnation: 1,
+          command: "bash",
+          cwd: "/home",
+          type: "terminal",
+          alive: true,
+          startedAt: 100,
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "X-DamHopper-Termination-Version": "1",
+            "X-DamHopper-PTY-Epoch": "e7b0c36b-67df-4f0e-b7d5-866468453483",
+          },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await transport.invoke<{
+      id: string;
+      incarnation: number;
+      serverEpoch?: string;
+    }>("terminal:create", { id: "term-1", command: "", cols: 80, rows: 24 });
+
+    expect(res.id).toBe("term-1");
+    expect(res.incarnation).toBe(1);
+    expect(res.serverEpoch).toBe("e7b0c36b-67df-4f0e-b7d5-866468453483");
+    transport.destroy();
+  });
+
+  it("dispatches POST to /api/terminal/:id/terminate with exact wire body", async () => {
+    const transport = new WsTransport("http://localhost:4800");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          version: 1,
+          serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+          terminalId: "term-1",
+          incarnation: "42",
+          outcome: "terminationRequested",
+        }),
+        {
+          status: 202,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const target = {
+      profileId: "prof-1",
+      generation: 1,
+      serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+      terminalId: "term-1",
+      incarnation: "42",
+    };
+
+    const result = await transport.invoke<{ outcome: string }>(
+      "terminal:terminate",
+      { target, origin: "live" },
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:4800/api/terminal/term-1/terminate",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          version: 1,
+          expectedServerEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+          expectedIncarnation: "42",
+        }),
+      }),
+    );
+    expect(result.outcome).toBe("terminationRequested");
+    transport.destroy();
+  });
+
+  it("throws ApiRequestError when termination response mismatches status/outcome", async () => {
+    const transport = new WsTransport("http://localhost:4800");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          version: 1,
+          serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+          terminalId: "term-1",
+          incarnation: "42",
+          outcome: "restartCancelled", // Mismatch for live origin
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const target = {
+      profileId: "prof-1",
+      generation: 1,
+      serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483",
+      terminalId: "term-1",
+      incarnation: "42",
+    };
+
+    await expect(
+      transport.invoke("terminal:terminate", { target, origin: "live" }),
+    ).rejects.toThrow(ApiRequestError);
     transport.destroy();
   });
 });

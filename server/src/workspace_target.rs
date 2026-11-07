@@ -34,6 +34,150 @@ pub struct ProjectTargetRef {
     pub worktree_path: Option<String>,
 }
 
+/// Explicit payload for workspace target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceTargetPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "workspace_epoch")]
+    pub workspace_epoch: Option<u64>,
+}
+/// Discriminates between a whole-workspace filesystem target and a project-scoped target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum FilesystemTargetRef {
+    #[serde(rename = "workspace")]
+    Workspace(#[serde(default)] WorkspaceTargetPayload),
+    #[serde(rename = "project")]
+    Project(ProjectTargetRef),
+}
+
+impl FilesystemTargetRef {
+    pub fn workspace() -> Self {
+        Self::Workspace(WorkspaceTargetPayload {
+            workspace_epoch: None,
+        })
+    }
+
+    pub fn project(project: impl Into<String>, worktree_path: Option<String>) -> Self {
+        Self::Project(ProjectTargetRef {
+            project: project.into(),
+            worktree_path,
+        })
+    }
+
+    pub fn is_workspace(&self) -> bool {
+        matches!(self, Self::Workspace(_))
+    }
+
+    pub fn as_project(&self) -> Option<&ProjectTargetRef> {
+        match self {
+            Self::Workspace(_) => None,
+            Self::Project(p) => Some(p),
+        }
+    }
+}
+
+/// Authoritative resolved target representing either a validated workspace root
+/// or a resolved project target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ResolvedFilesystemTarget {
+    #[serde(rename = "workspace")]
+    Workspace {
+        root: PathBuf,
+    },
+    #[serde(rename = "project")]
+    Project(ResolvedProjectTarget),
+}
+
+impl ResolvedFilesystemTarget {
+    pub fn from_workspace(root: PathBuf) -> Self {
+        Self::Workspace { root }
+    }
+
+    pub fn from_project(target: ResolvedProjectTarget) -> Self {
+        Self::Project(target)
+    }
+
+    pub fn root_path(&self) -> &Path {
+        match self {
+            Self::Workspace { root } => root,
+            Self::Project(p) => p.target_path(),
+        }
+    }
+
+    pub fn target_key(&self) -> &str {
+        match self {
+            Self::Workspace { .. } => "workspace",
+            Self::Project(p) => p.target_key(),
+        }
+    }
+
+    pub fn is_workspace(&self) -> bool {
+        matches!(self, Self::Workspace { .. })
+    }
+
+    pub fn project(&self) -> Option<&str> {
+        match self {
+            Self::Workspace { .. } => None,
+            Self::Project(p) => Some(p.project()),
+        }
+    }
+
+    pub fn as_project(&self) -> Option<&ResolvedProjectTarget> {
+        match self {
+            Self::Workspace { .. } => None,
+            Self::Project(p) => Some(p),
+        }
+    }
+
+    pub fn is_root(&self) -> bool {
+        match self {
+            Self::Workspace { .. } => true,
+            Self::Project(p) => p.is_root(),
+        }
+    }
+
+    pub fn available(&self) -> bool {
+        match self {
+            Self::Workspace { .. } => true,
+            Self::Project(p) => p.available(),
+        }
+    }
+}
+
+/// Cross-layer canonical file identity DTO for stat, read, and editor tab tracking.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileIdentity {
+    pub workspace_id: String,
+    pub workspace_epoch: u64,
+    pub canonical_path: String,
+}
+
+impl FileIdentity {
+    pub fn new(
+        workspace_id: impl Into<String>,
+        workspace_epoch: u64,
+        canonical_path: impl Into<String>,
+    ) -> Self {
+        Self {
+            workspace_id: workspace_id.into(),
+            workspace_epoch,
+            canonical_path: canonical_path.into(),
+        }
+    }
+}
+
+/// Terminal folder launch request payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFolderTerminalRequest {
+    pub target: FilesystemTargetRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedProjectTarget {
@@ -437,6 +581,35 @@ impl WorkspaceTargetResolver {
             is_root: true,
             available: true,
             worktree: None,
+        }
+    }
+}
+
+/// Helper to resolve a `FilesystemTargetRef` given an optional validated workspace root,
+/// project target resolver, and list of configured projects.
+pub async fn resolve_filesystem_target_parts(
+    target_ref: &FilesystemTargetRef,
+    workspace_root: Option<&Path>,
+    resolver: &WorkspaceTargetResolver,
+    projects: &[(String, PathBuf)],
+) -> Result<ResolvedFilesystemTarget, AppError> {
+    match target_ref {
+        FilesystemTargetRef::Workspace(_) => {
+            let root = workspace_root
+                .ok_or_else(|| AppError::Unavailable("Workspace root is not configured or unavailable".into()))?;
+            let canonical = canonicalize_path(root.to_path_buf())
+                .await
+                .ok_or_else(|| AppError::Unavailable("Workspace root does not exist".into()))?;
+            Ok(ResolvedFilesystemTarget::Workspace { root: canonical })
+        }
+        FilesystemTargetRef::Project(project_ref) => {
+            let configured_root = projects
+                .iter()
+                .find(|(name, _)| name == &project_ref.project)
+                .map(|(_, path)| path)
+                .ok_or(WorkspaceTargetError::UnknownProject)?;
+            let resolved = resolver.resolve(project_ref, configured_root).await?;
+            Ok(ResolvedFilesystemTarget::Project(resolved))
         }
     }
 }

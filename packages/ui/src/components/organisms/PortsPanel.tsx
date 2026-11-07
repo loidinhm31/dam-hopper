@@ -31,7 +31,19 @@ import {
 } from "@/hooks/use-ports.js";
 import { useCopyToClipboard } from "@/hooks/use-clipboard.js";
 import { isLocalServer } from "@/api/server-config.js";
+import {
+  terminalTargetKey,
+  type TerminalTarget,
+  type TerminationOrigin,
+  type TerminationState,
+  type TerminalInventoryDetailedObservation,
+} from "@/api/terminal-session-contract.js";
+import { useAggregatedTerminalSessions } from "@/hooks/use-aggregated-terminal-sessions.js";
 import type { TunnelInfo } from "@/api/client.js";
+import {
+  terminalActionCoordinator,
+  useAllTerminalActions,
+} from "@/lib/terminal-session-action-coordinator.js";
 
 // ── Warning banner ────────────────────────────────────────────────────────────
 
@@ -164,15 +176,28 @@ function PortRow({
   onStartTunnel,
   onStopTunnel,
   onOpenTunnelInBrowser,
-  onKillSession,
+  onEndSession,
+  retainedActions: propRetainedActions,
 }: {
   entry: PortEntry;
   isLocal: boolean;
   onStartTunnel: (port: number, label: string) => Promise<void>;
   onStopTunnel: (id: string) => Promise<void>;
-  onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
-  onKillSession: (sessionId: string) => Promise<void>;
+  onOpenTunnelInBrowser?: (
+    url: string,
+    tunnel: TunnelInfo,
+    profileId?: string,
+  ) => void;
+  onEndSession?: (
+    target: TerminalTarget,
+    origin: TerminationOrigin,
+  ) => Promise<TerminationState | void>;
+  retainedActions?: ReadonlyMap<string, TerminationState>;
+  setRetainedActions?: unknown;
+  inFlightTargetsRef?: unknown;
 }) {
+  const allActions = useAllTerminalActions();
+  const retainedActions = propRetainedActions ?? allActions;
   const [showQr, setShowQr] = useState(false);
   const { copied, copy } = useCopyToClipboard();
   const qrRef = useRef<HTMLDivElement>(null);
@@ -180,13 +205,31 @@ function PortRow({
   const [isKilling, setIsKilling] = useState(false);
   const [killError, setKillError] = useState<string | null>(null);
   const [killConfirmOpen, setKillConfirmOpen] = useState(false);
-
+  const [endTargetState, setEndTargetState] = useState<{
+    target: TerminalTarget;
+    origin: TerminationOrigin;
+  } | null>(null);
+  const [terminationOutcome, setTerminationOutcome] =
+    useState<TerminationState | null>(null);
+  const promptTokenRef = useRef(0);
+  const targetKey = terminalTargetKey;
+  const currentActionState = entry.terminationTarget
+    ? retainedActions.get(targetKey(entry.terminationTarget))
+    : null;
+  const isUnresolved = Boolean(
+    currentActionState &&
+      (currentActionState.status === "dispatching" ||
+        currentActionState.status === "terminationRequested" ||
+        currentActionState.status === "outcomeUnknown"),
+  );
   const tunnelStatus = entry.tunnel?.status ?? null;
   const isStarting = tunnelStatus === "starting";
   const isReady = tunnelStatus === "ready";
   const isFailed = tunnelStatus === "failed";
-  const canKillSession = entry.sessionId !== null && entry.state !== "lost";
-
+  const canEndSession =
+    entry.terminationTarget !== null &&
+    entry.terminationTarget !== undefined &&
+    entry.origin !== undefined;
   // Close QR popover on outside click
   useEffect(() => {
     if (!showQr) return;
@@ -220,18 +263,88 @@ function PortRow({
     }
   }
 
-  async function handleKillSession() {
-    if (!entry.sessionId) return;
+  async function handleEndSession() {
+    if (!endTargetState || !onEndSession) return;
+    const reservation = terminalActionCoordinator.reserveDispatch(
+      endTargetState.target,
+      endTargetState.origin,
+    );
+    if (!reservation.allowed) return;
+    const attemptToken = reservation.attemptToken;
+    const presentationToken = promptTokenRef.current;
     setIsKilling(true);
+    setKillError(null);
+
     try {
-      await onKillSession(entry.sessionId);
-      setKillConfirmOpen(false);
-    } catch (err) {
-      setKillError(
-        err instanceof Error ? err.message : "Failed to kill terminal session",
+      const outcome = await onEndSession(
+        endTargetState.target,
+        endTargetState.origin,
       );
+      if (outcome && typeof outcome === "object" && "status" in outcome) {
+        terminalActionCoordinator.recordOutcome(
+          endTargetState.target,
+          outcome,
+          attemptToken,
+        );
+        if (presentationToken === promptTokenRef.current) {
+          setTerminationOutcome(outcome);
+          if (outcome.status === "refused") {
+            setKillError(outcome.error.error);
+          } else if (outcome.status === "outcomeUnknown") {
+            setKillError(
+              `Termination outcome unknown (${outcome.error?.category ?? "network"}). Retained pending observation.`,
+            );
+          } else if (outcome.status === "failed") {
+            setKillError(
+              `Termination failed (${outcome.error.category}): ${outcome.error.message}`,
+            );
+          } else {
+            setKillConfirmOpen(false);
+          }
+        }
+      } else {
+        const unknownState: TerminationState = Object.freeze({
+          status: "outcomeUnknown",
+          target: endTargetState.target,
+          origin: endTargetState.origin,
+          error: {
+            category: "malformed_response" as const,
+            message: "Termination dispatched but returned empty outcome",
+          },
+        });
+        terminalActionCoordinator.recordOutcome(
+          endTargetState.target,
+          unknownState,
+          attemptToken,
+        );
+        if (presentationToken === promptTokenRef.current) {
+          setTerminationOutcome(unknownState);
+          setKillError(unknownState.error?.message ?? "Empty outcome returned");
+        }
+      }
+    } catch (err) {
+      const errorState: TerminationState = Object.freeze({
+        status: "failed",
+        target: endTargetState.target,
+        origin: endTargetState.origin,
+        error: {
+          category: "network_error" as const,
+          message: err instanceof Error ? err.message : "Failed to end terminal session",
+        },
+      });
+      terminalActionCoordinator.recordOutcome(
+        endTargetState.target,
+        errorState,
+        attemptToken,
+      );
+        if (presentationToken === promptTokenRef.current) {
+          setTerminationOutcome(errorState);
+        setKillError(errorState.error.message);
+      }
     } finally {
-      setIsKilling(false);
+      if (presentationToken === promptTokenRef.current) {
+        setIsKilling(false);
+      }
     }
   }
 
@@ -391,9 +504,12 @@ function PortRow({
                     <button
                       type="button"
                       onClick={() =>
-                        onOpenTunnelInBrowser(entry.tunnel!.url!, entry.tunnel!)
+                        onOpenTunnelInBrowser(
+                          entry.tunnel!.url!,
+                          entry.tunnel!,
+                          entry.profileId,
+                        )
                       }
-                      title={`Open ${entry.tunnel.url} in embedded Browser`}
                       aria-label={`Open ${entry.tunnel.url} in embedded Browser`}
                       className="rounded p-1 hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
                     >
@@ -460,18 +576,41 @@ function PortRow({
             </>
           )}
 
-          {canKillSession && (
+          {canEndSession && (
             <button
               onClick={() => {
-                setKillError(null);
+                promptTokenRef.current++;
+                if (entry.terminationTarget && entry.origin) {
+                  setEndTargetState({
+                    target: entry.terminationTarget,
+                    origin: entry.origin,
+                  });
+                  const existingAction = retainedActions.get(terminalTargetKey(entry.terminationTarget));
+                  setTerminationOutcome(existingAction ?? null);
+                  if (existingAction?.status === "refused") {
+                    setKillError(existingAction.error.error);
+                  } else if (existingAction?.status === "failed") {
+                    setKillError(`Termination failed (${existingAction.error.category}): ${existingAction.error.message}`);
+                  } else if (existingAction?.status === "outcomeUnknown") {
+                    setKillError(
+                      `Termination outcome unknown (${existingAction.error?.category ?? "network"}). Retained pending observation.`,
+                    );
+                  } else {
+                    setKillError(null);
+                  }
+                } else {
+                  setEndTargetState(null);
+                  setTerminationOutcome(null);
+                  setKillError(null);
+                }
                 setKillConfirmOpen(true);
               }}
-              disabled={isKilling}
-              title={`Kill terminal session for :${entry.port}`}
-              aria-label={`Kill terminal session for :${entry.port}`}
-              className="rounded p-0.5 text-[var(--color-text-muted)] transition-colors hover:bg-red-500/20 hover:text-red-500 disabled:cursor-wait disabled:opacity-60"
+              disabled={isKilling || isUnresolved}
+              title={`End terminal session for :${entry.port}`}
+              aria-label={`End terminal session for :${entry.port}`}
+              className="rounded p-0.5 text-[var(--color-text-muted)] transition-colors hover:bg-red-500/20 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {isKilling ? (
+              {isKilling || isUnresolved ? (
                 <Loader2 size={11} className="animate-spin" />
               ) : (
                 <CircleStop size={11} />
@@ -489,14 +628,40 @@ function PortRow({
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Kill terminal session</DialogTitle>
+            <DialogTitle>
+              {endTargetState?.origin === "restartPending"
+                ? "Cancel scheduled restart"
+                : "End terminal session"}
+            </DialogTitle>
             <DialogDescription>
-              Stop the terminal session for port{" "}
-              <span className="font-mono text-[var(--color-text)]">
-                :{entry.port}
-              </span>
-              {entry.project ? ` in ${entry.project}` : ""}. This stops the
-              terminal and its running process.
+              {endTargetState?.origin === "restartPending" ? (
+                <>
+                  Cancel the scheduled restart for port{" "}
+                  <span className="font-mono text-[var(--color-text)]">
+                    :{entry.port}
+                  </span>
+                  {entry.project ? ` in ${entry.project}` : ""}.
+                </>
+              ) : (
+                <>
+                  Request termination for port{" "}
+                  <span className="font-mono text-[var(--color-text)]">
+                    :{entry.port}
+                  </span>
+                  {entry.project ? ` in ${entry.project}` : ""}. This signals
+                  the live terminal session.
+                </>
+              )}
+              {terminationOutcome && (
+                <span className="block mt-2 text-xs text-[var(--color-text-muted)]">
+                  Outcome: {terminationOutcome.status}
+                </span>
+              )}
+              {killError && (
+                <span className="block mt-2 text-xs text-red-500">
+                  {killError}
+                </span>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -514,9 +679,12 @@ function PortRow({
               variant="danger"
               size="sm"
               loading={isKilling}
-              onClick={() => void handleKillSession()}
+              disabled={isKilling || isUnresolved}
+              onClick={() => void handleEndSession()}
             >
-              Kill session
+              {endTargetState?.origin === "restartPending"
+                ? "Cancel restart"
+                : "End session"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -594,8 +762,14 @@ function AddPortForm({
 
 export function PortsPanel({
   onOpenTunnelInBrowser,
+  profileId,
 }: {
-  onOpenTunnelInBrowser?: (url: string, tunnel: TunnelInfo) => void;
+  onOpenTunnelInBrowser?: (
+    url: string,
+    tunnel: TunnelInfo,
+    profileId?: string,
+  ) => void;
+  profileId?: string;
 } = {}) {
   const {
     ports,
@@ -603,10 +777,15 @@ export function PortsPanel({
     isError,
     createTunnel,
     stopTunnel,
-    killPortSession,
+    endPortSession,
     installCloudflared,
     installState,
-  } = usePorts();
+  } = usePorts(profileId ? { profileId } : undefined);
+  const { observations } = useAggregatedTerminalSessions();
+  const retainedActions = useAllTerminalActions();
+  useEffect(() => {
+    terminalActionCoordinator.reconcileWithObservations(observations);
+  }, [observations]);
   const [binaryMissing, setBinaryMissing] = useState(false);
   const [warned, setWarned] = useState(
     () => !!localStorage.getItem(WARNED_KEY),
@@ -679,9 +858,10 @@ export function PortsPanel({
                 }
                 onStopTunnel={(id) => stopTunnel(id, entry.profileId)}
                 onOpenTunnelInBrowser={onOpenTunnelInBrowser}
-                onKillSession={(sessionId) =>
-                  killPortSession(sessionId, entry.profileId)
+                onEndSession={(target, origin) =>
+                  endPortSession(target, origin)
                 }
+                retainedActions={retainedActions}
               />
             ))}
             {ports.length === 0 && (

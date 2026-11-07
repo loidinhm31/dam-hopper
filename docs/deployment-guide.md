@@ -187,26 +187,24 @@ Invoke-WebRequest -Uri "https://github.com/loidinhm31/dam-hopper/releases/latest
 
 - **No elevation required:** Installs to `%LOCALAPPDATA%\Programs\dam-hopper` and registers `<InstallDir>\bin` in the current **User PATH** only (never modifies Machine PATH).
 - **No background daemons:** The installer does not start background processes or install Windows Services.
-- **Config preservation:** Pre-existing `dam-hopper.toml` configuration files are never overwritten.
-
+- **Config preservation:** Pre-existing `config.toml` configuration files are never overwritten.
 ### Launching the Server
 
 Open a fresh PowerShell or Command Prompt terminal for User PATH updates to take effect:
 
 ```powershell
 # Launch with default configuration
-dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\dam-hopper.toml"
+dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\config.toml"
 
 # Run on isolated loopback interface for local development
-dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\dam-hopper.toml" --host 127.0.0.1 --port 4801
+dam-hopper-server.exe --config "$env:LOCALAPPDATA\Programs\dam-hopper\config.toml" --host 127.0.0.1 --port 4801
 ```
 
 For authenticated SQLite mode on Windows (defaulting to `%USERPROFILE%\.config\dam-hopper\auth.db` when `DAM_HOPPER_AUTH_SQLITE_PATH` is unset; one server process per local auth file), provision your initial administrator account offline using the self-contained CLI command: `& "$installDir\bin\dam-hopper-server.exe" create-admin --username <target-username>`. See the canonical [Offline Administrator Provisioning Runbook](./configuration/server-environment-auth.md#offline-administrator-provisioning-runbook).
 
 ### Upgrading on Windows
 
-Re-running the installer with `-Latest` or a newer `-Version` safely stages and replaces the server executable while preserving your existing `dam-hopper.toml`:
-
+Re-running the installer with `-Latest` or a newer `-Version` safely stages and replaces the server executable while preserving your existing `config.toml`:
 ```powershell
 .\dam-hopper-install.ps1 -Latest
 ```
@@ -224,9 +222,6 @@ Contributors and source packagers can build the backend and web frontend directl
 - Git
 - Node.js 20+ and pnpm 10+
 - Current stable Rust toolchain (container builder pinned to 1.97.1; locked dependency MSRV 1.95)
-- For native desktop host builds (`apps/native`):
-  - **Browser Bridge Bundle:** Must run `pnpm --filter @dam-hopper/browser-bridge build` prior to building `apps/native` (required by `apps/native/src-tauri/build.rs`).
-  - **Linux Platform Headers:** `webkit2gtk-4.1` development headers (`libwebkit2gtk-4.1-dev` on Debian/Ubuntu, `webkit2gtk4.1-devel` on Fedora).
 
 ### Build Steps
 
@@ -244,7 +239,7 @@ pnpm build
 pnpm build:server
 
 # 4. Run the release binary directly (default host 0.0.0.0:4800)
-./server/target/release/dam-hopper-server --config ~/.config/dam-hopper/dam-hopper.toml
+./server/target/release/dam-hopper-server --config ~/.config/dam-hopper/config.toml
 ```
 
 ---

@@ -4,8 +4,11 @@ import {
   Download,
   Eye,
   FilePlus,
+  FolderCheck,
   FolderPlus,
+  FolderX,
   Pencil,
+  Terminal,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -30,16 +33,20 @@ export interface TreeContextMenuHandlers {
   onDelete: () => void;
   onDownload: () => void;
   onUpload: () => void;
+  onOpenTerminalHere?: () => void;
+  onMarkProject?: () => void;
+  onUnmarkProject?: () => void;
 }
 
-interface BuildItemsArgs extends TreeContextMenuHandlers {
+export interface BuildItemsArgs extends TreeContextMenuHandlers {
   isDir: boolean;
   /** When true (e.g. project root unknown), disable the absolute-path copy. */
   absolutePathDisabled?: boolean;
   /** When true (e.g. HTML file), render preview action. */
   isHtml?: boolean;
+  /** Whether this directory is a recognized marked project root. */
+  isMarkedProject?: boolean;
 }
-
 /**
  * Build the ordered list of context-menu actions. Extracted as a pure helper
  * so it can be unit-tested without rendering (mirrors `getEditorTabContextMenuItems`).
@@ -57,6 +64,10 @@ export function getTreeContextMenuItems({
   onDelete,
   onDownload,
   onUpload,
+  onOpenTerminalHere,
+  onMarkProject,
+  onUnmarkProject,
+  isMarkedProject = false,
 }: BuildItemsArgs): ContextMenuAction[] {
   return [
     {
@@ -96,6 +107,33 @@ export function getTreeContextMenuItems({
             icon: <Upload className="h-3.5 w-3.5" />,
             onClick: onUpload,
           },
+          ...(onOpenTerminalHere
+            ? [
+                {
+                  label: "Open Terminal Here",
+                  icon: <Terminal className="h-3.5 w-3.5" />,
+                  onClick: onOpenTerminalHere,
+                },
+              ]
+            : []),
+          ...(isMarkedProject && onUnmarkProject
+            ? [
+                {
+                  label: "Unmark Project…",
+                  icon: <FolderX className="h-3.5 w-3.5" />,
+                  onClick: onUnmarkProject,
+                  danger: true,
+                },
+              ]
+            : !isMarkedProject && onMarkProject
+              ? [
+                  {
+                    label: "Mark as Project…",
+                    icon: <FolderCheck className="h-3.5 w-3.5" />,
+                    onClick: onMarkProject,
+                  },
+                ]
+              : []),
         ]
       : []),
     {

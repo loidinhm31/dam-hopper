@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
-import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTerminalAccessoryBar.js";
 import { TerminalKeepAliveHost } from "@/components/organisms/TerminalKeepAliveHost.js";
 import { TerminalScrollButtons } from "@/components/organisms/TerminalScrollButtons.js";
-import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
-import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { attachTerminalsToHost } from "@/lib/terminal-host-attachment.js";
 import {
@@ -15,9 +12,8 @@ import {
   getTerminal,
   subscribeToRegistry,
 } from "@/lib/terminal-registry.js";
-import { syncNativeKeyboardSuppression } from "@/lib/terminal-native-input-policy.js";
+import { syncTerminalInputSuppression } from "@/lib/terminal-input-policy.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
 interface TerminalRuntimeOutputProps {
   activeSessionId: string | null;
@@ -41,61 +37,25 @@ export function TerminalRuntimeOutput({
   onOpenSessionChanges,
 }: TerminalRuntimeOutputProps) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const [accessoryPanelState, setAccessoryPanelState] = useState<{
-    sessionId: string | null;
-    isOpen: boolean;
-  }>({ sessionId: null, isOpen: false });
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
-  const isCompactWorkspace = useCompactWorkspace();
-  const isCoarsePointer = useCoarsePointer();
-  const { mobileCustomKeyboardEnabled, terminalScrollButtonsEnabled } =
-    useSettingsStore();
-  const mobileInputPolicyApplies =
-    !!activeSessionId &&
-    (isAndroidChromeNativeInputSuppressed ||
-      (isCompactWorkspace && isCoarsePointer));
-  const isAccessoryPanelOpen =
-    activeSessionId !== null &&
-    accessoryPanelState.sessionId === activeSessionId &&
-    accessoryPanelState.isOpen;
-  const handleAccessoryPanelOpenChange = useCallback(
-    (isOpen: boolean) => {
-      if (!activeSessionId) return;
-      setAccessoryPanelState((current) =>
-        current.sessionId === activeSessionId && current.isOpen === isOpen
-          ? current
-          : { sessionId: activeSessionId, isOpen },
-      );
-    },
-    [activeSessionId],
-  );
-  const suppressTerminalNativeInput =
-    isAndroidChromeNativeInputSuppressed ||
-    (mobileInputPolicyApplies && mobileCustomKeyboardEnabled);
+  const { terminalScrollButtonsEnabled } = useSettingsStore();
 
   const reparentActiveTerminal = useCallback(() => {
     const host = hostRef.current;
     if (!host) return;
 
-    if (suppressTerminalNativeInput) {
-      for (const session of mountedSessions) {
-        cancelScheduledTerminalFit(getTerminal(session.sessionId));
-      }
-    }
     attachTerminalsToHost({
       host,
       sessionIds: mountedSessions.map((session) => session.sessionId),
       activeSessionId,
-      suppressTerminalFocus: suppressTerminalNativeInput,
+      suppressTerminalFocus: false,
     });
     for (const session of mountedSessions) {
-      syncNativeKeyboardSuppression(
+      syncTerminalInputSuppression(
         getTerminal(session.sessionId)?.terminal ?? null,
-        suppressTerminalNativeInput,
+        false,
       );
     }
-  }, [activeSessionId, mountedSessions, suppressTerminalNativeInput]);
+  }, [activeSessionId, mountedSessions]);
 
   useEffect(() => {
     reparentActiveTerminal();
@@ -117,9 +77,9 @@ export function TerminalRuntimeOutput({
   useEffect(() => {
     if (!activeSessionId) return;
     scheduleTerminalFit(getTerminal(activeSessionId), {
-      focus: !suppressTerminalNativeInput,
+      focus: true,
     });
-  }, [activeSessionId, layoutRevision, suppressTerminalNativeInput]);
+  }, [activeSessionId, layoutRevision]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -144,8 +104,8 @@ export function TerminalRuntimeOutput({
           onSessionExit={onSessionExit}
           onNewTerminal={onNewTerminal}
           onTerminalReady={handleTerminalReady}
-          suppressAutoFocus={suppressTerminalNativeInput}
-          suppressNativeKeyboard={suppressTerminalNativeInput}
+          suppressAutoFocus={false}
+          suppressNativeKeyboard={false}
         />
       )}
 
@@ -156,9 +116,7 @@ export function TerminalRuntimeOutput({
         onClick={() => {
           if (!activeSessionId) return;
           onSelectActive?.(activeSessionId);
-          if (!suppressTerminalNativeInput) {
-            getTerminal(activeSessionId)?.terminal.focus();
-          }
+          getTerminal(activeSessionId)?.terminal.focus();
         }}
       >
         {!activeSessionId && (
@@ -168,34 +126,14 @@ export function TerminalRuntimeOutput({
           </div>
         )}
       </div>
-      <div
-        className={
-          isAccessoryPanelOpen ? "relative w-full shrink-0" : "w-full shrink-0"
-        }
-      >
+      <div className="w-full shrink-0">
         {activeSessionId && terminalScrollButtonsEnabled && (
           <TerminalScrollButtons
             sessionId={activeSessionId}
-            reserveAccessoryRail={Boolean(activeSessionId)}
-            accessoryPanelOpen={isAccessoryPanelOpen}
+            reserveAccessoryRail={false}
+            accessoryPanelOpen={false}
           />
         )}
-        {activeSessionId ? (
-          <MobileTerminalAccessoryBar
-            key={activeSessionId}
-            sessionId={activeSessionId}
-            profileId={
-              mountedSessions.find((s) => s.sessionId === activeSessionId)
-                ?.profileId
-            }
-            terminalRef={
-              mountedSessions.find((s) => s.sessionId === activeSessionId)
-                ?.terminalRef
-            }
-            onPanelOpenChange={handleAccessoryPanelOpenChange}
-            onOpenSessionChanges={onOpenSessionChanges}
-          />
-        ) : null}
       </div>
     </div>
   );

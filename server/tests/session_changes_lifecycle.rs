@@ -291,7 +291,6 @@ fn create_test_state_with_config(workspace_root: PathBuf, config: DamHopperConfi
         None,
         opaque_server_setup,
         dam_hopper_server::diagnostics::DiagnosticStore::new(workspace_root.join("diagnostics.log")),
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .unwrap()
 }
@@ -330,6 +329,8 @@ session_changes_enabled = false
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
 
@@ -383,6 +384,8 @@ async fn test_modified_extension_conflict_preserves_file_and_stays_off() {
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
 
@@ -443,6 +446,8 @@ async fn test_workspace_switch_reconciles_session_changes() {
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: ws_a.join("dam-hopper.toml"),
     };
 
@@ -459,6 +464,8 @@ async fn test_workspace_switch_reconciles_session_changes() {
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: ws_b.join("dam-hopper.toml"),
     };
 

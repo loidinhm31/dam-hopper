@@ -256,8 +256,20 @@ const projectStatusTransport = {
   terminalResize: () => {},
 } as unknown as Transport;
 
-vi.mock("@/hooks/use-compact-workspace.js", () => ({
-  useCompactWorkspace: () => compactState.value,
+vi.mock("@/os/use-os-viewport.js", () => ({
+  useOsViewport: () => ({
+    width: compactState.value ? 375 : 1440,
+    height: 700,
+    isStandard: !compactState.value,
+    isCompact: compactState.value,
+    isNarrowHeight: false,
+    isUnsupported: false,
+  }),
+  useContainerQuery: () => ({
+    width: compactState.value ? 375 : 1440,
+    height: 700,
+    isCompact: compactState.value,
+  }),
 }));
 
 vi.mock("@/hooks/use-coarse-pointer.js", () => ({
@@ -438,43 +450,27 @@ describe("Traditional terminal projects in Chromium", () => {
   it("shows scoped project status, preserves each selection, and restores split layouts", async () => {
     await page.viewport(1280, 700);
     await expect
-      .element(page.getByRole("heading", { name: "projects" }))
+      .element(page.getByRole("heading", { name: /^projects/ }))
+      .toBeVisible();
+    await expect
+      .element(page.getByRole("combobox", { name: /Worktree for alpha:/ }))
       .toBeVisible();
     await act(async () => {
       await vi.waitFor(() =>
         expect(
           document.querySelector(
-            '[role="status"][aria-label^="Branch alpha/main"]',
+            '[aria-label*="Commit "]',
           ),
         ).not.toBeNull(),
       );
     });
-    const alphaMetadata = document.querySelector<HTMLElement>(
-      '[role="status"][aria-label^="Branch alpha/main"]',
+    const commitChip = document.querySelector<HTMLElement>(
+      '[aria-label*="Commit "]',
     );
-    expect(alphaMetadata?.children).toHaveLength(3);
-    expect(alphaMetadata?.children[0]?.querySelector("svg")).not.toBeNull();
-    expect(alphaMetadata?.children[1]?.querySelector("svg")).not.toBeNull();
-    expect(alphaMetadata?.children[2]?.querySelector("svg")).not.toBeNull();
-    expect(alphaMetadata?.children[0]?.className).toContain(
-      "text-[var(--color-info)]",
-    );
-    expect(alphaMetadata?.children[1]?.className).toContain(
-      "text-[var(--color-text-muted)]",
-    );
-    expect(alphaMetadata?.children[2]?.className).toContain(
-      "text-[var(--color-primary)]",
-    );
-    expect(alphaMetadata?.children[1]?.textContent).toContain(
-      "/workspace/alpha",
-    );
-    expect(alphaMetadata?.children[2]?.textContent).toContain(
+    expect(commitChip?.querySelector("svg")).not.toBeNull();
+    expect(commitChip?.getAttribute("aria-label")).toContain(
       LONG_COMMIT_MESSAGE,
     );
-    expect(
-      alphaMetadata?.children[2]?.querySelector(".break-words"),
-    ).not.toBeNull();
-    expect(alphaMetadata?.children[2]?.querySelector(".truncate")).toBeNull();
     const projectsNavigator = document.querySelector<HTMLElement>(
       'nav[aria-label="Terminal projects and agents"]',
     );
@@ -1779,7 +1775,7 @@ describe("Traditional terminal projects in Chromium", () => {
     await userEvent.keyboard("{Enter}");
     const dialog = page.getByRole("dialog", { name: "Projects + Agents" });
     await expect.element(dialog).toBeVisible();
-    await expect.element(dialog.getByRole("heading", { name: "projects", exact: true }))
+    await expect.element(dialog.getByRole("heading", { name: /^projects/ }))
       .toBeVisible();
     await expect.element(dialog.getByRole("heading", { name: "agents", exact: true }))
       .toBeVisible();
@@ -2066,11 +2062,6 @@ describe("Traditional terminal projects in Chromium", () => {
       useProjectTargetStore.getState().activeTargetByProject["alpha"],
     ).toBe("/workspace/alpha-feat");
 
-    await expect
-      .element(
-        page.getByRole("combobox", { name: "Worktree for beta: root" }),
-      )
-      .toBeVisible();
     expect(
       useProjectTargetStore.getState().activeTargetByProject["beta"],
     ).toBeUndefined();

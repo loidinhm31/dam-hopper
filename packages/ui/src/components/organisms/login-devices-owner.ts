@@ -1,6 +1,6 @@
 import { useMemo, useSyncExternalStore } from "react";
 import {
-  getAuthToken, getProfileChangeVersion, getProfiles, isSameOriginProfile,
+  getAuthToken, getProfileChangeVersion, getProfiles,
   normalizeServerUrl, subscribeToProfileChanges,
 } from "@/api/server-config.js";
 import {
@@ -25,10 +25,9 @@ export function useLoginDevicesOwner(profileId: string | null): LoginDevicesOwne
   const token = profile ? getAuthToken(profile.id) : null;
   const generation = snapshot?.owner.generation ?? null;
   const authType = profile?.authType;
-  const supported = profile ? isSameOriginProfile(profile) : false;
-  return useMemo(() => profileId && serverUrl && authType && supported
+  return useMemo(() => profileId && serverUrl && authType
     ? { profileId, serverUrl, token, generation, authType } : null,
-  [profileId, serverUrl, token, generation, authType, supported]);
+  [profileId, serverUrl, token, generation, authType]);
 }
 
 /** Saved target identity, without granting credential/runtime cleanup authority. */

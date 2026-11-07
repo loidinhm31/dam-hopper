@@ -16,7 +16,6 @@ use dam_hopper_server::{
     fs::FsSubsystem,
     pty::{BroadcastEventSink, NoopEventSink, PtySessionManager},
     state::AppState,
-    telemetry::TelemetryRuntime,
 };
 mod common;
 
@@ -43,7 +42,7 @@ fn auth_cookie() -> String {
 
 fn make_test_state(tmp: &TempDir, initial_toml: &str) -> AppState {
     let workspace_dir = tmp.path().to_path_buf();
-    let config_file = workspace_dir.join("dam-hopper.toml");
+    let config_file = workspace_dir.join("config.toml");
     std::fs::write(&config_file, initial_toml).expect("write initial toml");
     let config = dam_hopper_server::config::read_config(&config_file)
         .expect("read initial config");
@@ -68,7 +67,6 @@ fn make_test_state(tmp: &TempDir, initial_toml: &str) -> AppState {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut rand::rngs::OsRng),
         DiagnosticStore::new(tmp.path().join("diagnostics.jsonl")),
-        TelemetryRuntime::new(),
     )
     .expect("make_test_state failed")
     .with_auth_service(std::sync::Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0))
@@ -102,7 +100,7 @@ projects = []
     );
     assert_eq!(
         resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
-        "attachment; filename=\"dam-hopper.toml\""
+        "attachment; filename=\"config.toml\""
     );
     assert_eq!(
         resp.headers().get(header::CACHE_CONTROL).unwrap(),
@@ -150,17 +148,19 @@ projects = []
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["imported"], true);
-    assert_eq!(json["fileName"], "dam-hopper.toml");
+    assert_eq!(json["fileName"], "config.toml");
     assert_eq!(json["workspaceName"], "imported-workspace");
 
     let backup_file_name = json["backupFileName"].as_str().unwrap();
-    assert!(backup_file_name.starts_with("dam-hopper.toml.bak."));
+    assert!(backup_file_name.starts_with("config.toml.bak."));
 
-    // Check disk content was updated byte-for-byte
-    let config_file = tmp.path().join("dam-hopper.toml");
+    // Check disk content was updated
+    let config_file = tmp.path().join("config.toml");
     let current_disk = std::fs::read_to_string(&config_file).unwrap();
-    assert_eq!(current_disk, candidate_toml);
-
+    assert_eq!(
+        current_disk,
+        "[workspace]\nname = \"imported-workspace\"\nprojects = []\nroot = \".\"\n"
+    );
     // Check backup contains exact previous bytes
     let backup_path = tmp.path().join(backup_file_name);
     assert!(backup_path.exists());
@@ -210,7 +210,7 @@ async fn test_import_rejects_malformed_toml() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     // Ensure disk and state untouched
-    let current_disk = std::fs::read_to_string(tmp.path().join("dam-hopper.toml")).unwrap();
+    let current_disk = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
     assert_eq!(current_disk, initial_toml);
 }
 
@@ -221,7 +221,7 @@ async fn test_import_prunes_backups_retaining_five() {
     let state = make_test_state(&tmp, initial_toml);
 
     // Create a manual user backup that must NOT be pruned
-    let manual_backup = tmp.path().join("dam-hopper.toml.bak.manual_backup_by_user");
+    let manual_backup = tmp.path().join("config.toml.bak.manual_backup_by_user");
     std::fs::write(&manual_backup, "custom backup").unwrap();
 
     for i in 1..=7 {
@@ -244,7 +244,7 @@ async fn test_import_prunes_backups_retaining_five() {
     // Count backups in directory
     let mut backup_count = 0;
     for entry in std::fs::read_dir(tmp.path()).unwrap().flatten() {
-        if entry.file_name().to_string_lossy().starts_with("dam-hopper.toml.bak.") {
+        if entry.file_name().to_string_lossy().starts_with("config.toml.bak.") {
             backup_count += 1;
         }
     }

@@ -12,6 +12,97 @@
  */
 
 import type { Transport, TransportInvokeOptions } from "./transport.js";
+import type { SessionInfo } from "./client.js";
+import {
+  X_DAM_HOPPER_TERMINATION_VERSION,
+  X_DAM_HOPPER_PTY_EPOCH,
+  isCanonicalUuid,
+  isCanonicalPositiveU64,
+  isTerminalInventoryTerminationState,
+  isTerminationResultValid,
+  type TerminationMetadata,
+  type TerminalInventoryPayload,
+  type TerminalInventoryDetailedPayload,
+  type TerminalInventoryRow,
+  type TerminalInventoryDetailedRow,
+  type TerminalTarget,
+  type TerminationOrigin,
+  type TerminationResult,
+} from "./terminal-session-contract.js";
+
+export interface WsTransportInvokeOptions extends TransportInvokeOptions {
+  responseDecoder?: (
+    response: Response,
+    json: unknown,
+  ) => Promise<unknown> | unknown;
+}
+
+export function decodeTerminationHeaders(
+  headers: Headers | Record<string, string | null | undefined>,
+): TerminationMetadata {
+  const getHeader = (name: string): string | null => {
+    if (typeof (headers as Headers).get === "function") {
+      return (headers as Headers).get(name);
+    }
+    const record = headers as Record<string, string | null | undefined>;
+    const target = name.toLowerCase();
+    for (const key of Object.keys(record)) {
+      if (key.toLowerCase() === target) {
+        return record[key] ?? null;
+      }
+    }
+    return null;
+  };
+
+  const versionHeader =
+    getHeader(X_DAM_HOPPER_TERMINATION_VERSION) ??
+    getHeader("x-damhopper-termination-version") ??
+    getHeader("x-dam-hopper-termination-version");
+  const epochHeader =
+    getHeader(X_DAM_HOPPER_PTY_EPOCH) ??
+    getHeader("x-damhopper-pty-epoch") ??
+    getHeader("x-dam-hopper-pty-epoch");
+  if (versionHeader !== "1") {
+    return Object.freeze({
+      version: null,
+      serverEpoch: null,
+      reason: "unsupported",
+    });
+  }
+
+  if (!epochHeader || !isCanonicalUuid(epochHeader)) {
+    return Object.freeze({
+      version: null,
+      serverEpoch: null,
+      reason: "invalidMetadata",
+    });
+  }
+
+  return Object.freeze({
+    version: 1,
+    serverEpoch: epochHeader,
+  });
+}
+
+export function decodeTerminalInventoryRows<T extends SessionInfo>(
+  rows: unknown,
+): readonly T[] {
+  if (!Array.isArray(rows)) return Object.freeze([]);
+  return Object.freeze(
+    rows.map((row) => {
+      const r: Record<string, unknown> = {
+        ...(row as Record<string, unknown>),
+      };
+      if (!isCanonicalPositiveU64(r.incarnationExact)) {
+        delete r.incarnationExact;
+      }
+      if (!isTerminalInventoryTerminationState(r.terminationState)) {
+        delete r.terminationState;
+      }
+      return Object.freeze(r as unknown as T);
+    }),
+  );
+}
 
 export interface WsTransportCloseInfo {
   code?: number;
@@ -55,7 +146,14 @@ import {
   type TerminalLifecycle,
   type TerminalLifecycleEvent,
   type UiConnectionFrame,
+  type WorkspaceStatus,
 } from "./client.js";
+import {
+  normalizeFsTarget,
+  toServerFsTarget,
+  type FsTargetRef,
+  type ServerFsTarget,
+} from "./ownership.js";
 import { logger } from "@dam-hopper/shared/logger";
 import {
   getActiveProfileId,
@@ -67,6 +165,7 @@ import type {
   FsUploadResult,
   ServerTreeNode,
   FsEventDto,
+  FileIdentity,
 } from "./fs-types.js";
 import { recordClientDiagnostic } from "@/lib/diagnostics-client.js";
 type Callback = (...args: unknown[]) => void;
@@ -83,6 +182,85 @@ function wsTargetFields(target: ProjectTargetInput): {
         worktree_path: normalized.worktreePath,
       };
 }
+
+export function toWireFsTarget(
+  target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
+): ServerFsTarget {
+  if (typeof target === "object" && target !== null && "type" in target) {
+    return target as ServerFsTarget;
+  }
+  return toServerFsTarget(normalizeFsTarget(target as FsTargetRef));
+}
+
+export function appendRestFsTarget(params: URLSearchParams, data: unknown): void {
+  if (typeof data !== "object" || data === null) {
+    if (typeof data === "string" && data.trim() !== "") {
+      params.set("targetType", "project");
+      params.set("project", data.trim());
+      return;
+    }
+    throw new Error("Missing filesystem target for REST request");
+  }
+
+  const d = data as Record<string, unknown>;
+  const explicitTarget = d.target;
+  if (explicitTarget && typeof explicitTarget === "object") {
+    const wire = toWireFsTarget(explicitTarget as FsTargetRef | ServerFsTarget);
+    params.set("targetType", wire.type);
+    if (wire.type === "project") {
+      params.set("project", wire.project);
+      if (wire.worktreePath) params.set("worktreePath", wire.worktreePath);
+    }
+    return;
+  }
+
+  if (d.targetType === "workspace" || d.kind === "workspace") {
+    params.set("targetType", "workspace");
+    return;
+  }
+
+  if (typeof d.project === "string" && d.project.trim() !== "") {
+    params.set("targetType", "project");
+    params.set("project", d.project.trim());
+    if (typeof d.worktreePath === "string" && d.worktreePath.trim() !== "") {
+      params.set("worktreePath", d.worktreePath.trim());
+    }
+    return;
+  }
+
+  throw new Error("Invalid or missing filesystem target for REST request");
+}
+export function parseFileIdentityFromMsg(msg: unknown): FileIdentity | undefined {
+  if (typeof msg !== "object" || msg === null) return undefined;
+  const raw = msg as Record<string, unknown>;
+  const rawFi =
+    raw.fileIdentity && typeof raw.fileIdentity === "object"
+      ? (raw.fileIdentity as Record<string, unknown>)
+      : raw.file_identity && typeof raw.file_identity === "object"
+        ? (raw.file_identity as Record<string, unknown>)
+        : null;
+  if (!rawFi) return undefined;
+  const workspaceId =
+    typeof rawFi.workspaceId === "string"
+      ? rawFi.workspaceId
+      : typeof rawFi.workspace_id === "string"
+        ? rawFi.workspace_id
+        : "";
+  const workspaceEpoch =
+    typeof rawFi.workspaceEpoch === "number"
+      ? rawFi.workspaceEpoch
+      : typeof rawFi.workspace_epoch === "number"
+        ? rawFi.workspace_epoch
+        : 0;
+  const canonicalPath =
+    typeof rawFi.canonicalPath === "string"
+      ? rawFi.canonicalPath
+      : typeof rawFi.canonical_path === "string"
+        ? rawFi.canonical_path
+        : "";
+  return { workspaceId, workspaceEpoch, canonicalPath };
+}
+
 
 function restTargetFields(data: unknown): {
   project: string;
@@ -181,6 +359,7 @@ export interface FsReadResult {
   mime?: string;
   mtime: number;
   size: number;
+  fileIdentity?: FileIdentity;
 }
 
 export interface FsReadTooLarge {
@@ -190,6 +369,7 @@ export interface FsReadTooLarge {
   mime?: string;
   mtime: number;
   size: number;
+  fileIdentity?: FileIdentity;
 }
 
 export interface FsReadError {
@@ -203,6 +383,7 @@ export type FsReadResponse = FsReadResult | FsReadTooLarge | FsReadError;
 export interface FsWriteResult {
   ok: true;
   newMtime: number;
+  fileIdentity?: FileIdentity;
 }
 
 export interface FsWriteConflict {
@@ -225,37 +406,6 @@ export interface FsPutResult {
   error?: string;
 }
 
-function usageRequestData(
-  data: unknown,
-  allowedKeys: ReadonlySet<string>,
-  label: string,
-): Record<string, unknown> {
-  if (data === undefined || data === null) return {};
-  if (typeof data !== "object" || Array.isArray(data)) {
-    throw new Error(`Invalid ${label} payload`);
-  }
-  const record = data as Record<string, unknown>;
-  for (const key of Object.keys(record)) {
-    if (record[key] !== undefined && !allowedKeys.has(key)) {
-      throw new Error(`Unsupported ${label} field: ${key}`);
-    }
-  }
-  return record;
-}
-
-const USAGE_SUMMARY_KEYS = new Set(["from", "to", "window", "bucket", "model"]);
-const USAGE_SESSION_KEYS = new Set(["from", "to", "model", "limit", "cursor"]);
-const USAGE_SETTINGS_KEYS = new Set([
-  "enabled",
-  "paused",
-  "detailRetentionDays",
-  "aggregateRetentionDays",
-  "collector",
-  "codexExporter",
-  "retryCollector",
-]);
-const USAGE_DETAIL_KEYS = new Set(["id"]);
-const USAGE_DELETE_KEYS = new Set(["confirmation", "from", "to"]);
 
 /** IPC channel → REST endpoint mapping. */
 function channelToEndpoint(
@@ -549,6 +699,34 @@ function channelToEndpoint(
         body: d.patch,
       };
     }
+    case "config:markProject": {
+      const d = data as {
+        name: string;
+        target: ServerFsTarget | FsTargetRef;
+        path: string;
+        projectType?: string;
+        tags?: string[];
+      };
+      return {
+        method: "POST",
+        url: "/api/config/projects",
+        body: {
+          name: d.name,
+          target: toWireFsTarget(d.target),
+          path: d.path,
+          ...(d.projectType ? { projectType: d.projectType } : {}),
+          ...(d.tags ? { tags: d.tags } : {}),
+        },
+      };
+    }
+    case "config:unmarkProject": {
+      const d =
+        typeof data === "string" ? { name: data } : (data as { name: string });
+      return {
+        method: "DELETE",
+        url: `/api/config/projects/${encodeURIComponent(d.name)}`,
+      };
+    }
 
     // Settings
     case "cache:clear":
@@ -590,6 +768,32 @@ function channelToEndpoint(
       return { method: "GET", url: "/api/terminal" };
     case "terminal:listDetailed":
       return { method: "GET", url: "/api/terminal/detailed" };
+    case "terminal:listObservation":
+      return { method: "GET", url: "/api/terminal" };
+    case "terminal:listDetailedObservation":
+      return { method: "GET", url: "/api/terminal/detailed" };
+    case "terminal:terminate": {
+      const d = data as { target: TerminalTarget; origin: TerminationOrigin };
+      return {
+        method: "POST",
+        url: `/api/terminal/${encodeURIComponent(d.target.terminalId)}/terminate`,
+        body: {
+          version: 1,
+          expectedServerEpoch: d.target.serverEpoch,
+          expectedIncarnation: d.target.incarnation,
+        },
+      };
+    }
+    case "terminal:remove":
+      return {
+        method: "DELETE",
+        url: `/api/terminal/${encodeURIComponent(data as string)}/remove`,
+      };
+    case "terminal:kill":
+      return {
+        method: "DELETE",
+        url: `/api/terminal/${encodeURIComponent(data as string)}`,
+      };
     case "terminal:agentStatusSnapshot":
       return { method: "GET", url: "/api/agent-status/v1/snapshot" };
     case "agentStatus:getOmpExtensionStatus": {
@@ -658,16 +862,6 @@ function channelToEndpoint(
         method: "GET",
         url: `/api/terminal/${encodeURIComponent(data as string)}/buffer`,
       };
-    case "terminal:kill":
-      return {
-        method: "DELETE",
-        url: `/api/terminal/${encodeURIComponent(data as string)}`,
-      };
-    case "terminal:remove":
-      return {
-        method: "DELETE",
-        url: `/api/terminal/${encodeURIComponent(data as string)}/remove`,
-      };
     case "terminal:rename": {
       const d = data as { id: string; name: string | null };
       return {
@@ -683,67 +877,53 @@ function channelToEndpoint(
 
     // FS (REST for list/stat; subscribe/unsubscribe go over WS)
     case "fs:list": {
-      const d = data as {
-        project: string;
-        worktreePath?: string | null;
-        path: string;
-      };
-      const params = new URLSearchParams({ project: d.project, path: d.path });
-      if (d.worktreePath != null) params.set("worktreePath", d.worktreePath);
-      return { method: "GET", url: `/api/fs/list?${params}` };
+      const d = data as { path: string };
+      const params = new URLSearchParams({ path: d.path });
+      appendRestFsTarget(params, data);
+      return { method: "GET", url: `/api/fs/list?${params.toString()}` };
     }
     case "fs:languageFiles": {
-      const d = data as { project: string; worktreePath?: string | null };
-      const params = new URLSearchParams({ project: d.project });
-      if (d.worktreePath != null) params.set("worktreePath", d.worktreePath);
-      return { method: "GET", url: `/api/fs/language-files?${params}` };
+      const params = new URLSearchParams();
+      appendRestFsTarget(params, data);
+      return { method: "GET", url: `/api/fs/language-files?${params.toString()}` };
     }
     case "fs:search": {
       const d = data as {
-        project?: string;
-        worktreePath?: string | null;
         q: string;
         case?: boolean;
         max?: number;
         scope?: "project" | "workspace";
       };
       const params = new URLSearchParams({ q: d.q });
-      if (d.project) params.set("project", d.project);
-      if (d.worktreePath != null) params.set("worktreePath", d.worktreePath);
+      appendRestFsTarget(params, data);
       if (d.case) params.set("case", "true");
       if (d.max) params.set("max", String(d.max));
       if (d.scope === "workspace") params.set("scope", "workspace");
-      return { method: "GET", url: `/api/fs/search?${params}` };
+      return { method: "GET", url: `/api/fs/search?${params.toString()}` };
     }
     case "fs:searchPaths": {
       const d = data as {
-        project?: string;
-        worktreePath?: string | null;
         q: string;
         case?: boolean;
         max?: number;
         scope?: "project" | "workspace";
       };
       const params = new URLSearchParams({ q: d.q });
-      if (d.project) params.set("project", d.project);
-      if (d.worktreePath != null) params.set("worktreePath", d.worktreePath);
+      appendRestFsTarget(params, data);
       if (d.case) params.set("case", "true");
       if (d.max) params.set("max", String(d.max));
       if (d.scope === "workspace") params.set("scope", "workspace");
-      return { method: "GET", url: `/api/fs/search-paths?${params}` };
+      return { method: "GET", url: `/api/fs/search-paths?${params.toString()}` };
     }
     case "fs:read": {
       const d = data as {
-        project?: string;
-        worktreePath?: string | null;
         path: string;
         offset?: number;
         len?: number;
         mode?: string;
       };
       const params = new URLSearchParams({ path: d.path });
-      if (d.project != null) params.set("project", d.project);
-      if (d.worktreePath != null) params.set("worktreePath", d.worktreePath);
+      appendRestFsTarget(params, data);
       if (d.offset != null) params.set("offset", String(d.offset));
       if (d.len != null) params.set("len", String(d.len));
       if (d.mode != null) params.set("mode", d.mode);
@@ -1452,72 +1632,6 @@ function channelToEndpoint(
         body: data,
       };
 
-    // Usage analytics (REST only; never sent to the terminal WebSocket).
-    case "usage:summary": {
-      const params = new URLSearchParams();
-      for (const [key, value] of Object.entries(
-        usageRequestData(data, USAGE_SUMMARY_KEYS, "usage summary"),
-      )) {
-        if (value !== undefined) params.set(key, String(value));
-      }
-      const query = params.toString();
-      return {
-        method: "GET",
-        url: `/api/usage/summary${query ? `?${query}` : ""}`,
-      };
-    }
-    case "usage:sessions": {
-      const params = new URLSearchParams();
-      for (const [key, value] of Object.entries(
-        usageRequestData(data, USAGE_SESSION_KEYS, "usage session"),
-      )) {
-        if (value !== undefined) params.set(key, String(value));
-      }
-      const query = params.toString();
-      return {
-        method: "GET",
-        url: `/api/usage/sessions${query ? `?${query}` : ""}`,
-      };
-    }
-    case "usage:session": {
-      const d = usageRequestData(
-        data,
-        USAGE_DETAIL_KEYS,
-        "usage session detail",
-      );
-      if (typeof d.id !== "string" || d.id.length === 0) {
-        throw new Error("Invalid usage session detail payload");
-      }
-      return {
-        method: "GET",
-        url: `/api/usage/sessions/${encodeURIComponent(d.id)}`,
-      };
-    }
-    case "usage:health":
-      return { method: "GET", url: "/api/usage/health" };
-    case "usage:settings":
-      return { method: "GET", url: "/api/usage/settings" };
-    case "usage:setupStatus":
-      return { method: "GET", url: "/api/usage/setup" };
-    case "usage:updateSettings":
-      return {
-        method: "PATCH",
-        url: "/api/usage/settings",
-        body: usageRequestData(data, USAGE_SETTINGS_KEYS, "usage settings"),
-      };
-    case "usage:configure":
-      return {
-        method: "PATCH",
-        url: "/api/usage/setup",
-        body: usageRequestData(data, USAGE_SETTINGS_KEYS, "usage setup"),
-      };
-    case "usage:deleteAll":
-      return {
-        method: "DELETE",
-        url: "/api/usage",
-        body: usageRequestData(data, USAGE_DELETE_KEYS, "usage deletion"),
-      };
-
     // Tunnels
     case "tunnel:install:status":
       return { method: "GET", url: "/api/tunnels/install" };
@@ -2004,6 +2118,7 @@ export class WsTransport implements Transport {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  cachedWorkspaceEpoch: number | null = null;
 
   constructor(
     baseUrlOrOptions: string | WsTransportOptions = getServerUrl(),
@@ -2700,7 +2815,10 @@ export class WsTransport implements Transport {
             if (!p) break;
             clearTimeout(p.timer);
             this.pendingFsReads.delete(reqId);
-
+            const fileIdentity = parseFileIdentityFromMsg(msg);
+            if (fileIdentity?.workspaceEpoch) {
+              this.cachedWorkspaceEpoch = fileIdentity.workspaceEpoch;
+            }
             if (msg.ok) {
               p.resolve({
                 ok: true,
@@ -2709,6 +2827,7 @@ export class WsTransport implements Transport {
                 mime: msg.mime,
                 mtime: msg.mtime ?? 0,
                 size: msg.size ?? 0,
+                fileIdentity,
               });
             } else if (msg.code === "TOO_LARGE") {
               p.resolve({
@@ -2718,6 +2837,7 @@ export class WsTransport implements Transport {
                 mime: msg.mime,
                 mtime: msg.mtime ?? 0,
                 size: msg.size ?? 0,
+                fileIdentity,
               });
             } else {
               p.resolve({
@@ -2757,10 +2877,13 @@ export class WsTransport implements Transport {
             clearTimeout(p.timer);
             this.pendingWriteCommit.delete(writeId);
 
+            const fileIdentity = parseFileIdentityFromMsg(msg);
+            if (fileIdentity?.workspaceEpoch) {
+              this.cachedWorkspaceEpoch = fileIdentity.workspaceEpoch;
+            }
             if (msg.ok) {
-              p.resolve({ ok: true, newMtime: msg.new_mtime! });
+              p.resolve({ ok: true, newMtime: msg.new_mtime!, fileIdentity });
             } else if (msg.conflict) {
-              p.resolve({ ok: false, conflict: true });
             } else {
               p.resolve({
                 ok: false,
@@ -2961,6 +3084,9 @@ export class WsTransport implements Transport {
           }
 
           default: {
+            if (msg.kind === "workspace:changed") {
+              this.cachedWorkspaceEpoch = null;
+            }
             const payload = msg.payload ?? msg;
             this.eventListeners.get(msg.kind)?.forEach((cb) => cb(payload));
           }
@@ -2992,6 +3118,7 @@ export class WsTransport implements Transport {
       });
       this.failAllPending("WebSocket disconnected");
       this.currentUiConnection = null;
+      this.cachedWorkspaceEpoch = null;
       this.uiConnectionListeners.forEach((cb) => {
         try {
           cb(null);
@@ -3061,8 +3188,12 @@ export class WsTransport implements Transport {
   async invoke<T>(
     channel: string,
     data?: unknown,
-    options?: TransportInvokeOptions | number,
+    options?: TransportInvokeOptions | WsTransportInvokeOptions | number,
   ): Promise<T> {
+    const invokeOptions =
+      typeof options === "object" && options !== null
+        ? (options as WsTransportInvokeOptions)
+        : undefined;
     const timeoutMs =
       typeof options === "number" ? options : (options?.timeoutMs ?? 30000);
     const externalSignal =
@@ -3171,7 +3302,84 @@ export class WsTransport implements Transport {
       }
       const ct = response.headers.get("content-type") ?? "";
       if (ct.includes("application/json")) {
-        return (await response.json()) as T;
+        const json: unknown = await response.json();
+        if (
+          json &&
+          typeof json === "object" &&
+          "workspaceEpoch" in json &&
+          typeof json.workspaceEpoch === "number"
+        ) {
+          this.cachedWorkspaceEpoch = json.workspaceEpoch;
+        }
+        if (invokeOptions?.responseDecoder) {
+          return (await invokeOptions.responseDecoder(response, json)) as T;
+        }
+        if (channel === "terminal:create") {
+          const termination = decodeTerminationHeaders(response.headers);
+          if (termination.version === 1 && termination.serverEpoch) {
+            const rawInc =
+              json && typeof json === "object" && "incarnation" in json
+                ? json.incarnation
+                : undefined;
+            const incExact =
+              json &&
+              typeof json === "object" &&
+              "incarnationExact" in json &&
+              typeof json.incarnationExact === "string"
+                ? json.incarnationExact
+                : typeof rawInc === "number" &&
+                    Number.isSafeInteger(rawInc) &&
+                    rawInc > 0
+                  ? String(rawInc)
+                  : undefined;
+            return Object.freeze({
+              ...(typeof json === "object" && json !== null ? json : {}),
+              serverEpoch: termination.serverEpoch,
+              ...(incExact ? { incarnationExact: incExact } : {}),
+            }) as T;
+          }
+        }
+        if (channel === "terminal:listObservation") {
+          const termination = decodeTerminationHeaders(response.headers);
+          const sessions =
+            decodeTerminalInventoryRows<TerminalInventoryRow>(json);
+          return Object.freeze({
+            sessions,
+            termination,
+          }) as T;
+        }
+        if (channel === "terminal:listDetailedObservation") {
+          const termination = decodeTerminationHeaders(response.headers);
+          const sessions =
+            decodeTerminalInventoryRows<TerminalInventoryDetailedRow>(json);
+          return Object.freeze({
+            sessions,
+            termination,
+          }) as T;
+        }
+        if (channel === "terminal:terminate") {
+          const d = data as {
+            target: TerminalTarget;
+            origin: TerminationOrigin;
+          };
+          if (
+            !isTerminationResultValid(
+              response.status,
+              json,
+              d.target,
+              d.origin,
+            )
+          ) {
+            throw new ApiRequestError(
+              `Termination response invalid or status/outcome/origin mismatch (status ${response.status})`,
+              response.status,
+              "status_outcome_mismatch",
+              json,
+            );
+          }
+          return json as T;
+        }
+        return json as T;
       }
       return (await response.text()) as unknown as T;
     } catch (error) {
@@ -3372,7 +3580,7 @@ export class WsTransport implements Transport {
   // ── FS subscription methods ───────────────────────────────────────────────
 
   fsSubscribeTree(
-    target: ProjectTargetInput,
+    target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
     path: string,
     opts?: { watchOnly?: boolean },
   ): Promise<{ sub_id: number; nodes: ServerTreeNode[] }> {
@@ -3388,7 +3596,7 @@ export class WsTransport implements Transport {
           JSON.stringify({
             kind: "fs:subscribe_tree",
             req_id,
-            ...wsTargetFields(target),
+            target: toWireFsTarget(target),
             path,
             ...(opts?.watchOnly ? { watchOnly: true } : {}),
           }),
@@ -3418,7 +3626,7 @@ export class WsTransport implements Transport {
   // ── FS read ───────────────────────────────────────────────────────────────
 
   fsRead(
-    target: ProjectTargetInput,
+    target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
     path: string,
     opts?: { offset?: number; len?: number; mode?: "plan-document" },
   ): Promise<FsReadResponse> {
@@ -3434,7 +3642,7 @@ export class WsTransport implements Transport {
           JSON.stringify({
             kind: "fs:read",
             req_id,
-            ...wsTargetFields(target),
+            target: toWireFsTarget(target),
             path,
             offset: opts?.offset,
             len: opts?.len,
@@ -3449,7 +3657,39 @@ export class WsTransport implements Transport {
     });
   }
 
-  // ── FS write ──────────────────────────────────────────────────────────────
+  async getOrFetchWorkspaceEpoch(): Promise<number | undefined> {
+    if (this.cachedWorkspaceEpoch !== null && this.cachedWorkspaceEpoch !== undefined) {
+      return this.cachedWorkspaceEpoch;
+    }
+    try {
+      const status = await this.invoke<WorkspaceStatus>("workspace:status");
+      if (typeof status?.workspaceEpoch === "number") {
+        this.cachedWorkspaceEpoch = status.workspaceEpoch;
+        return status.workspaceEpoch;
+      }
+    } catch {
+      // Offline, error, or server without workspace
+    }
+    return undefined;
+  }
+
+  private async resolveMutationWireTarget(
+    rawTarget: FsTargetRef | ServerFsTarget | ProjectTargetInput,
+  ): Promise<{ wireTarget: ServerFsTarget; epoch?: number }> {
+    let wireTarget = toWireFsTarget(rawTarget);
+    let epoch: number | undefined = undefined;
+    if (wireTarget.type === "workspace") {
+      epoch =
+        typeof wireTarget.workspaceEpoch === "number"
+          ? wireTarget.workspaceEpoch
+          : await this.getOrFetchWorkspaceEpoch();
+      if (epoch !== undefined) {
+        wireTarget = { ...wireTarget, workspaceEpoch: epoch };
+      }
+    }
+    return { wireTarget, epoch };
+  }
+
 
   /**
    * Write a file atomically via the WS write protocol:
@@ -3459,7 +3699,7 @@ export class WsTransport implements Transport {
    * the client last observed (Unix seconds); the server rejects if stale.
    */
   async fsWriteFile(
-    target: ProjectTargetInput,
+    target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
     path: string,
     content: string,
     expectedMtime: number,
@@ -3507,13 +3747,14 @@ export class WsTransport implements Transport {
     return this.sendWriteCommit(writeId);
   }
 
-  private sendWriteBegin(
-    target: ProjectTargetInput,
+  private async sendWriteBegin(
+    target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
     path: string,
     expectedMtime: number,
     size: number,
     encoding?: "base64" | "binary",
   ): Promise<number> {
+    const { wireTarget, epoch } = await this.resolveMutationWireTarget(target);
     return new Promise((resolve, reject) => {
       const req_id = this.nextReqId++;
       const timer = setTimeout(() => {
@@ -3526,11 +3767,12 @@ export class WsTransport implements Transport {
           JSON.stringify({
             kind: "fs:write_begin",
             req_id,
-            ...wsTargetFields(target),
+            target: wireTarget,
             path,
             expected_mtime: expectedMtime,
             size,
             encoding,
+            ...(epoch !== undefined ? { workspaceEpoch: epoch } : {}),
           }),
         );
       } else {
@@ -3647,16 +3889,26 @@ export class WsTransport implements Transport {
 
   // ── FS op ─────────────────────────────────────────────────────────────────
 
-  fsOp(
+  async fsOp(
     op: "create_file" | "create_dir" | "rename" | "delete" | "move",
     params: {
-      project: string;
+      target?: FsTargetRef | ServerFsTarget | ProjectTargetInput;
+      project?: string;
       worktreePath?: string | null;
       path: string;
       newPath?: string;
       forceGit?: boolean;
     },
   ): Promise<FsOpResult> {
+    const rawTarget =
+      params.target ??
+      (params.project
+        ? { project: params.project, worktreePath: params.worktreePath }
+        : undefined);
+    if (!rawTarget) {
+      throw new Error("Missing target for fs:op");
+    }
+    const { wireTarget, epoch } = await this.resolveMutationWireTarget(rawTarget);
     return new Promise((resolve, reject) => {
       const req_id = this.nextReqId++;
       const timer = setTimeout(() => {
@@ -3670,13 +3922,11 @@ export class WsTransport implements Transport {
             kind: "fs:op",
             req_id,
             op,
-            project: params.project,
-            ...(params.worktreePath == null
-              ? {}
-              : { worktree_path: params.worktreePath }),
+            target: wireTarget,
             path: params.path,
             new_path: params.newPath,
             force_git: params.forceGit ?? false,
+            ...(epoch !== undefined ? { workspaceEpoch: epoch } : {}),
           }),
         );
       } else {
@@ -3696,7 +3946,7 @@ export class WsTransport implements Transport {
    * In-flight window of 4: up to 4 chunk acks can be outstanding simultaneously.
    */
   async fsUploadFile(
-    target: ProjectTargetInput,
+    target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
     dir: string,
     file: File,
     onProgress?: (pct: number) => void,
@@ -3749,13 +3999,14 @@ export class WsTransport implements Transport {
     return result;
   }
 
-  private sendUploadBegin(
+  private async sendUploadBegin(
     uploadId: string,
-    target: ProjectTargetInput,
+    target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
     dir: string,
     filename: string,
     len: number,
   ): Promise<void> {
+    const { wireTarget, epoch } = await this.resolveMutationWireTarget(target);
     return new Promise((resolve, reject) => {
       const req_id = this.nextReqId++;
       const timer = setTimeout(() => {
@@ -3769,10 +4020,11 @@ export class WsTransport implements Transport {
             kind: "fs:upload_begin",
             req_id,
             upload_id: uploadId,
-            ...wsTargetFields(target),
+            target: wireTarget,
             dir,
             filename,
             len,
+            ...(epoch !== undefined ? { workspaceEpoch: epoch } : {}),
           }),
         );
       } else {
@@ -3983,7 +4235,7 @@ export class WsTransport implements Transport {
    * @param onProgress  Optional progress callback (0–100)
    */
   async fsPutFile(
-    target: ProjectTargetInput,
+    target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
     dir: string,
     file: File,
     sessionId: string,
@@ -4048,17 +4300,18 @@ export class WsTransport implements Transport {
    *
    * Protocol: fs:put_save (JSON) → Binary frame → fs:put_save_result
    *
-   * @param project    Project name
-   * @param path       File path relative to project root
+   * @param target     Target reference
+   * @param path       File path relative to target root
    * @param blob       Encrypted blob from encryptText()
    * @param sessionId  OPAQUE session_id from login flow
    */
   async fsPutSave(
-    target: ProjectTargetInput,
+    target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
     path: string,
     blob: Blob,
     sessionId: string,
   ): Promise<FsPutResult> {
+    const { wireTarget, epoch } = await this.resolveMutationWireTarget(target);
     const req_id = this.nextReqId++;
     const data = new Uint8Array(await blob.arrayBuffer());
 
@@ -4075,8 +4328,9 @@ export class WsTransport implements Transport {
             kind: "fs:put_save",
             req_id,
             session_id: sessionId,
-            ...wsTargetFields(target),
+            target: wireTarget,
             path,
+            ...(epoch !== undefined ? { workspaceEpoch: epoch } : {}),
           }),
         );
         this.ws.send(data.buffer);
@@ -4088,14 +4342,15 @@ export class WsTransport implements Transport {
     });
   }
 
-  private sendPutBegin(
+  private async sendPutBegin(
     uploadId: string,
     sessionId: string,
-    target: ProjectTargetInput,
+    target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
     dir: string,
     filename: string,
     len: number,
   ): Promise<void> {
+    const { wireTarget, epoch } = await this.resolveMutationWireTarget(target);
     return new Promise((resolve, reject) => {
       const req_id = this.nextReqId++;
       const timer = setTimeout(() => {
@@ -4110,10 +4365,11 @@ export class WsTransport implements Transport {
             req_id,
             upload_id: uploadId,
             session_id: sessionId,
-            ...wsTargetFields(target),
+            target: wireTarget,
             dir,
             filename,
             len,
+            ...(epoch !== undefined ? { workspaceEpoch: epoch } : {}),
           }),
         );
       } else {

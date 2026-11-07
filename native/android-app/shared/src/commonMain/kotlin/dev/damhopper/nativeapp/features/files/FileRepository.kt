@@ -21,6 +21,7 @@ class FileRepository(
     val wsConnection: WsConnection,
     coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default),
     val arbiter: FileOperationArbiter = FileOperationArbiter(),
+    var currentWorkspaceEpoch: Long? = owner.workspaceEpoch,
 ) {
     constructor(
         apiClient: ApiClient,
@@ -148,6 +149,10 @@ class FileRepository(
                             null
                         }
                     } else null
+                    val idDto = (response.fileIdentity ?: response.fileIdentityCamel)?.let {
+                        FileIdentityDto(it.workspaceId, it.workspaceEpoch, it.canonicalPath)
+                    }
+                    val epoch = response.workspaceEpoch ?: idDto?.workspaceEpoch
                     FsFileReadResult(
                         ok = response.ok,
                         mime = response.mime,
@@ -157,6 +162,8 @@ class FileRepository(
                         textContent = text,
                         binaryData = binaryBytes,
                         errorCode = response.code,
+                        workspaceEpoch = epoch,
+                        fileIdentity = idDto,
                     )
                 }
                 is ServerMsg.FsError -> FsFileReadResult(ok = false, errorCode = response.code)
@@ -190,10 +197,13 @@ class FileRepository(
         len?.let { queryParams["len"] = it.toString() }
 
         return try {
+            val statResult = try { stat(target, cleanPath) } catch (_: Throwable) { null }
+            val epoch = statResult?.effectiveEpoch
+            val idDto = statResult?.fileIdentity ?: statResult?.fileIdentitySnake
             val rawBytes = apiClient.getBytesBounded("/api/fs/read", queryParams, maxBytes = maxBytes)
             val rawString = rawBytes.decodeToString()
             if (rawString.contains("\"binary\":true") || rawString.contains("\"binary\": true")) {
-                FsFileReadResult(ok = true, isBinary = true, textContent = null)
+                FsFileReadResult(ok = true, isBinary = true, textContent = null, workspaceEpoch = epoch, fileIdentity = idDto)
             } else {
                 val text = try {
                     rawBytes.decodeToString(throwOnInvalidSequence = true)
@@ -207,6 +217,8 @@ class FileRepository(
                         textContent = text,
                         size = rawBytes.size.toULong(),
                         binaryData = rawBytes,
+                        workspaceEpoch = epoch,
+                        fileIdentity = idDto,
                     )
                 } else {
                     FsFileReadResult(
@@ -215,6 +227,8 @@ class FileRepository(
                         textContent = null,
                         size = rawBytes.size.toULong(),
                         binaryData = rawBytes,
+                        workspaceEpoch = epoch,
+                        fileIdentity = idDto,
                     )
                 }
             }
@@ -315,6 +329,7 @@ class FileRepository(
             path = cleanPath,
             newPath = cleanNewPath,
             forceGit = forceGit,
+            workspaceEpoch = effectiveOwner.workspaceEpoch,
         )
 
         val quarantinedOp = QuarantinedOperation(

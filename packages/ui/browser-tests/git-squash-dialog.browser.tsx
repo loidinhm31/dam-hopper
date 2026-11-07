@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import type { CommitMessageResponse, GitActionResult } from "@/api/client.js";
 import { WorkspaceGitPanel } from "@/components/organisms/WorkspaceGitPanel.js";
-import { TerminalFloatingToolPanel } from "@/components/organisms/TerminalFloatingToolPanel.js";
 import { resetGitHistoryStore } from "@/stores/git-history.js";
 import {
   deferred,
@@ -31,18 +30,16 @@ function Harness() {
       </button>
       <output aria-label="IDE activations">{clicks}</output>
       <input aria-label="Terminal input" />
-      <div className="relative h-[700px]">
-        <TerminalFloatingToolPanel
-          open
-          title="Git"
-          onClose={() => {}}
-          content={
-            <WorkspaceGitPanel
-              project={fixture.target.project}
-              target={fixture.target}
-            />
-          }
-        />
+      <div className="relative h-[700px] border border-border bg-background" data-testid="git-tool-panel">
+        <div className="flex items-center justify-between p-2 border-b border-border">
+          <span>Git</span>
+        </div>
+        <div className="flex-1 overflow-auto p-2">
+          <WorkspaceGitPanel
+            project={fixture.target.project}
+            target={fixture.target}
+          />
+        </div>
       </div>
     </QueryClientProvider>
   );

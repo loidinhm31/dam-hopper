@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getTransport } from "@/api/transport.js";
 import {
   captureConnection,
+  getConnectionSnapshot,
   getTransport as getConnectionsTransport,
   isCurrentConnection,
 } from "@/api/connections.js";
@@ -17,6 +18,7 @@ import {
   resolveSearchMatchTarget,
   runReplaceNext,
 } from "@/lib/search-replace-next.js";
+import type { FsTargetRef } from "@/api/ownership.js";
 import {
   normalizeProjectTarget,
   projectTargetCacheKey,
@@ -32,33 +34,52 @@ interface UseSearchPanelReplaceOptions {
   searchQuery: string;
   replaceQuery: string;
   caseSensitive: boolean;
+  replaceDisabled?: boolean;
   refreshMatches: () => Promise<SearchMatch[]>;
   openMatch: (match: SearchMatch, options?: { closeSearch?: boolean }) => void;
 }
+export interface UseSearchPanelReplaceResult {
+  selectedMatchKey: string | null;
+  isReplacing: boolean;
+  warning: string | null;
+  error: string | null;
+  replaceDisabled: boolean;
+  selectMatch: (match: SearchMatch | null) => void;
+  replaceNext: () => Promise<void>;
+  replaceAll: () => Promise<void>;
+}
 
-function targetScopeKey(target: ProjectTargetInput): string {
-  const normalized = normalizeProjectTarget(target);
+function targetScopeKey(target: ProjectTargetInput | FsTargetRef | string | undefined): string {
+  if (!target) return "";
+  if (typeof target === "object" && "kind" in target && target.kind === "workspace") {
+    return `workspace::${target.profileId}`;
+  }
+  const normalized = normalizeProjectTarget(target as ProjectTargetInput);
   const prefix = normalized.profileId
     ? `${normalized.profileId}::${normalized.project}`
     : normalized.project;
   return `${prefix}::${projectTargetCacheKey(normalized)}`;
 }
 
-export function useSearchPanelReplace({
-  target,
-  scope,
-  matches,
-  searchQuery,
-  replaceQuery,
-  caseSensitive,
-  refreshMatches,
-  openMatch,
-}: UseSearchPanelReplaceOptions) {
+export function useSearchPanelReplace(
+  options: UseSearchPanelReplaceOptions,
+) {
+  const {
+    target,
+    scope,
+    matches,
+    searchQuery,
+    replaceQuery,
+    caseSensitive,
+    refreshMatches,
+    openMatch,
+  } = options;
   const targetRef = normalizeProjectTarget(target);
   const project = targetRef.project;
   const tabs = useEditorStore((state) => state.tabs);
   const [selectedMatchKey, setSelectedMatchKey] = useState<string | null>(null);
   const [isReplacing, setIsReplacing] = useState(false);
+  const replaceOperationConnectionRef = useRef<ConnectionRef | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -94,7 +115,10 @@ export function useSearchPanelReplace({
   }, []);
 
   const replaceDisabled =
-    searchQuery.length < 2 || matches.length === 0 || isReplacing;
+    Boolean(options.replaceDisabled) ||
+    searchQuery.length < 2 ||
+    matches.length === 0 ||
+    isReplacing;
 
   const replaceNext = useCallback(async () => {
     if (replaceDisabled) return;
@@ -102,7 +126,7 @@ export function useSearchPanelReplace({
     setIsReplacing(true);
     setWarning(null);
     setError(null);
-
+    replaceOperationConnectionRef.current = null;
     try {
       const result = await runReplaceNext({
         currentProject: project,
@@ -143,17 +167,27 @@ export function useSearchPanelReplace({
             nextMatch?.profileId,
           );
           const normalizedMatchTarget = normalizeProjectTarget(matchTarget);
+          if (
+            nextMatch?.generation !== undefined &&
+            normalizedMatchTarget.profileId
+          ) {
+            const snap = getConnectionSnapshot(
+              normalizedMatchTarget.profileId,
+            );
+            if (!snap || snap.owner.generation !== nextMatch.generation) {
+              throw new Error(
+                "Search match is from an earlier connection generation",
+              );
+            }
+          }
           let t: WsTransport;
           let connectionRef: ConnectionRef | undefined;
           if (normalizedMatchTarget.profileId) {
-            try {
-              connectionRef = captureConnection(
-                normalizedMatchTarget.profileId,
-              );
-              t = getConnectionsTransport(connectionRef) as WsTransport;
-            } catch {
-              t = getTransport() as WsTransport;
-            }
+            connectionRef = captureConnection(
+              normalizedMatchTarget.profileId,
+            );
+            replaceOperationConnectionRef.current = connectionRef;
+            t = getConnectionsTransport(connectionRef) as WsTransport;
           } else {
             t = getTransport() as WsTransport;
           }
@@ -180,16 +214,18 @@ export function useSearchPanelReplace({
           );
           const normalizedMatchTarget = normalizeProjectTarget(matchTarget);
           let t: WsTransport;
-          let connectionRef: ConnectionRef | undefined;
-          if (normalizedMatchTarget.profileId) {
-            try {
-              connectionRef = captureConnection(
-                normalizedMatchTarget.profileId,
-              );
-              t = getConnectionsTransport(connectionRef) as WsTransport;
-            } catch {
-              t = getTransport() as WsTransport;
+          let connectionRef: ConnectionRef | undefined =
+            replaceOperationConnectionRef.current ?? undefined;
+          if (connectionRef) {
+            if (!isCurrentConnection(connectionRef)) {
+              throw new Error("Connection changed during replace");
             }
+            t = getConnectionsTransport(connectionRef) as WsTransport;
+          } else if (normalizedMatchTarget.profileId) {
+            connectionRef = captureConnection(
+              normalizedMatchTarget.profileId,
+            );
+            t = getConnectionsTransport(connectionRef) as WsTransport;
           } else {
             t = getTransport() as WsTransport;
           }
@@ -268,6 +304,7 @@ export function useSearchPanelReplace({
         caught instanceof Error ? caught.message : "Replace Next failed.",
       );
     } finally {
+      replaceOperationConnectionRef.current = null;
       setIsReplacing(false);
     }
   }, [
@@ -333,17 +370,20 @@ export function useSearchPanelReplace({
         );
         const normalizedMatchTarget = normalizeProjectTarget(matchTarget);
 
-        const isBlockedDirty = tabs.some(
-          (tab) =>
-            tab.project === group.project &&
-            (tab.target.profileId ?? undefined) ===
-              (normalizedMatchTarget.profileId ?? undefined) &&
-            tab.path === group.path &&
-            tab.dirty &&
-            targetScopeKey(tab.target ?? tab.project) ===
-              targetScopeKey(matchTarget),
-        );
-        if (isBlockedDirty) {
+        const checkDirtyTab = () =>
+          useEditorStore
+            .getState()
+            .tabs.some(
+              (tab) =>
+                tab.project === group.project &&
+                (tab.target.profileId ?? undefined) ===
+                  (normalizedMatchTarget.profileId ?? undefined) &&
+                tab.path === group.path &&
+                tab.dirty &&
+                targetScopeKey(tab.target ?? tab.project) ===
+                  targetScopeKey(matchTarget),
+            );
+        if (checkDirtyTab()) {
           blockedDirtyFiles++;
           continue;
         }
@@ -360,8 +400,25 @@ export function useSearchPanelReplace({
             failedFiles++;
             continue;
           }
+
+          const allMatchesValid = group.matches.every(
+            (m) =>
+              (m.profileId ?? undefined) ===
+                (normalizedMatchTarget.profileId ?? undefined) &&
+              m.generation !== undefined &&
+              m.generation === connectionRef?.generation,
+          );
+          if (!allMatchesValid || !isCurrentConnection(connectionRef)) {
+            failedFiles++;
+            continue;
+          }
         } else {
           t = getTransport() as WsTransport;
+          const allMatchesValid = group.matches.every((m) => !m.profileId);
+          if (!allMatchesValid) {
+            failedFiles++;
+            continue;
+          }
         }
 
         try {
@@ -372,6 +429,10 @@ export function useSearchPanelReplace({
           }
           if (!readResult.ok || readResult.binary) {
             failedFiles++;
+            continue;
+          }
+          if (checkDirtyTab()) {
+            blockedDirtyFiles++;
             continue;
           }
 

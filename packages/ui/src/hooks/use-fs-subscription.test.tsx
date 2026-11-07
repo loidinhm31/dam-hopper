@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FsEventDto, FsTreeData } from "@/api/fs-types.js";
 import type { ExplorerLanguageScanCache } from "@/lib/explorer-language-scan.js";
 import { GIT_FS_INVALIDATION_DEBOUNCE_MS } from "@/lib/git-fs-invalidation.js";
+import { fsTreeQueryKey } from "@/api/queries.js";
 import { useFsSubscription } from "./use-fs-subscription.js";
 import { handleWorkspaceChanged } from "./use-sse.js";
 
@@ -332,5 +333,33 @@ describe("useFsSubscription Git refresh", () => {
       queryKey: ["fs-tree", "alpha", "root", ""],
       exact: true,
     });
+  });
+  it("generates identical fsTreeQueryKey across subscription and invalidation", () => {
+    // Workspace target
+    expect(fsTreeQueryKey({ kind: "workspace", profileId: "p1" }, "sub/dir")).toEqual([
+      "fs-tree",
+      "p1",
+      "root",
+      "sub/dir",
+    ]);
+    expect(fsTreeQueryKey({ kind: "workspace" }, "")).toEqual([
+      "fs-tree",
+      "workspace",
+      "root",
+      "",
+    ]);
+    // Project target
+    expect(fsTreeQueryKey({ kind: "project", project: "demo" }, "")).toEqual([
+      "fs-tree",
+      "demo",
+      "root",
+      "",
+    ]);
+    expect(
+      fsTreeQueryKey(
+        { kind: "project", profileId: "p1", project: "demo", worktreePath: "/wt" },
+        "src",
+      ),
+    ).toEqual(["fs-tree", "p1", "demo", "/wt", "src"]);
   });
 });

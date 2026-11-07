@@ -19,12 +19,13 @@ import {
   getConnectionSnapshot,
   subscribeConnections,
 } from "@/api/connections.js";
+import { normalizeFsTarget, type FsTargetRef } from "@/api/ownership.js";
 type MediaState = "loading" | "ready" | "buffering" | "seeking" | "error";
 type MediaTicketErrorCode = "MEDIA_SESSION_UNSUPPORTED";
 
 interface VideoPreviewProps {
   project: string;
-  target?: ProjectTargetRef;
+  target?: FsTargetRef | ProjectTargetRef;
   path: string;
   fileName: string;
   mime?: string;
@@ -97,18 +98,21 @@ export function VideoPreview({
   mime,
   onTargetUnavailable,
 }: VideoPreviewProps) {
-  const worktreePath = target?.worktreePath;
-  const targetProject = target?.project ?? project;
-  const requestTarget = useMemo(
+  const worktreePath = target && "worktreePath" in target ? target.worktreePath : undefined;
+  const targetProject = target && "project" in target ? target.project : project;
+  const requestTarget: FsTargetRef = useMemo(
     () =>
-      worktreePath == null && !target?.profileId
-        ? targetProject
-        : {
-            project: targetProject,
-            ...(worktreePath != null ? { worktreePath } : {}),
-            ...(target?.profileId ? { profileId: target.profileId } : {}),
-          },
-    [targetProject, worktreePath, target?.profileId],
+      target && "kind" in target
+        ? normalizeFsTarget(target, target.profileId)
+        : targetProject
+          ? {
+              kind: "project",
+              project: targetProject,
+              profileId: target?.profileId ?? "",
+              worktreePath: worktreePath ?? null,
+            }
+          : { kind: "workspace", profileId: target?.profileId ?? "" },
+    [target, targetProject, worktreePath],
   );
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const issueControllerRef = useRef<AbortController | null>(null);

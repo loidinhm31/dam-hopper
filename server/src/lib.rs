@@ -26,7 +26,6 @@ pub mod session_changes;
 pub mod ssh;
 pub mod state;
 pub mod system;
-pub mod telemetry;
 pub mod tunnel;
 pub mod utils;
 pub mod web_host;

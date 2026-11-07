@@ -7,10 +7,10 @@ import {
 } from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
-import { getTransport, getTransportGeneration } from "../api/transport.js";
+import { getTransport, getTransportGeneration, type Transport } from "../api/transport.js";
 import { getActiveProfileId, getProfiles, subscribeToProfileChanges, type ServerProfile } from "../api/server-config.js";
-import { getTransport as getBoundTransport, getConnectionSnapshot, isCurrentConnection, subscribeConnections } from "../api/connections.js";
-import { profilePortsQueryKey, profileTunnelsQueryKey } from "../api/query-client.js";
+import { getTransport as getBoundTransport, getApi as getBoundApiClient, getConnectionSnapshot, isCurrentConnection, subscribeConnections } from "../api/connections.js";
+import { profilePortsQueryKey, profileTunnelsQueryKey, profileQueryKey } from "../api/query-client.js";
 import type { ConnectionRef, ProfileId } from "../api/ownership.js";
 import { subscribeIpc, hasWsStatus } from "./use-sse.js";
 import { useTransportGeneration } from "./use-transport-generation.js";
@@ -21,6 +21,16 @@ import {
   confirmTerminalPortIncarnation,
   retireTerminalPortIncarnation,
 } from "@/lib/terminal-incarnation-state.js";
+import {
+  createTerminalTargetFromObservation,
+  proveNumericEvidenceJoin,
+  type TerminalTarget,
+  type TerminationOrigin,
+  type TerminalInventoryDetailedObservation,
+  type TerminationState,
+} from "../api/terminal-session-contract.js";
+import { terminalInventoryQueryOptions } from "../api/queries.js";
+import { requestGuardedTermination } from "../lib/terminal-session-actions.js";
 
 export interface InstallState {
   status: "idle" | "installing" | "done" | "error";
@@ -40,6 +50,7 @@ const getEmptyProfiles = () => EMPTY_PROFILES;
 
 export interface PortEntry {
   profileId: string;
+  owner?: ConnectionRef | null;
   port: number;
   project: string | null;
   state: "provisional" | "listening" | "lost" | "unknown";
@@ -47,6 +58,8 @@ export interface PortEntry {
   incarnation?: number;
   /** Active tunnel for this port, or null if none. */
   tunnel: TunnelInfo | null;
+  terminationTarget?: TerminalTarget | null;
+  origin?: TerminationOrigin;
 }
 
 export function portEntryKey(entry: PortEntry): string {
@@ -73,7 +86,10 @@ export function usePorts(options?: {
   isError: boolean;
   createTunnel: (port: number, label: string, targetProfileId?: string) => Promise<void>;
   stopTunnel: (id: string, targetProfileId?: string) => Promise<void>;
-  killPortSession: (sessionId: string, targetProfileId?: string) => Promise<void>;
+  endPortSession: (
+    target: TerminalTarget,
+    origin: TerminationOrigin,
+  ) => Promise<TerminationState>;
   installCloudflared: (targetProfileId?: string) => Promise<void>;
   installState: InstallState;
 } {
@@ -174,26 +190,73 @@ export function usePorts(options?: {
       };
     }),
   });
+  const inventoryQueries = useQueries({
+    queries: targetOwners.map((owner) => ({
+      ...terminalInventoryQueryOptions(owner),
+      enabled: isCurrentConnection(owner),
+    })),
+  });
 
   // Merge detected ports + active tunnels across target profiles
   const ports = useMemo<PortEntry[]>(() => {
     const result: PortEntry[] = [];
     for (let i = 0; i < targetProfiles.length; i++) {
       const profileId = targetProfiles[i].id;
-      if (!isCurrentConnection(targetOwners[i])) continue;
+      const owner = targetOwners[i];
+      if (!isCurrentConnection(owner)) continue;
       const detected: DetectedPort[] = (portQueries[i]?.data as DetectedPort[] | undefined) ?? [];
       const tunnels: TunnelInfo[] = (tunnelQueries[i]?.data as TunnelInfo[] | undefined) ?? [];
+      const inventory = inventoryQueries[i]?.data as TerminalInventoryDetailedObservation | undefined;
       const tunnelByPort = new Map<number, TunnelInfo>(tunnels.map((t: TunnelInfo) => [t.port, t]));
 
       for (const p of detected) {
+        let terminationTarget: TerminalTarget | null = null;
+        let origin: TerminationOrigin | undefined = undefined;
+
+        if (
+          inventory &&
+          p.session_id &&
+          typeof p.incarnation === "number" &&
+          Number.isSafeInteger(p.incarnation)
+        ) {
+          const row = inventory.sessions.find((r) => r.id === p.session_id);
+          if (row && row.incarnationExact) {
+            const matchesNumeric = proveNumericEvidenceJoin(
+              p.incarnation,
+              row.incarnationExact,
+            );
+            if (matchesNumeric) {
+              const target = createTerminalTargetFromObservation(
+                inventory,
+                row,
+              );
+              if (target) {
+                if (row.terminationState === "live" && row.alive === true) {
+                  terminationTarget = target;
+                  origin = "live";
+                } else if (
+                  row.terminationState === "restartPending" &&
+                  row.alive === false
+                ) {
+                  terminationTarget = target;
+                  origin = "restartPending";
+                }
+              }
+            }
+          }
+        }
+
         result.push({
           profileId,
+          owner,
           port: p.port,
           project: p.project,
           state: p.state,
           sessionId: p.session_id,
           incarnation: p.incarnation,
           tunnel: tunnelByPort.get(p.port) ?? null,
+          terminationTarget,
+          origin,
         });
       }
 
@@ -202,17 +265,20 @@ export function usePorts(options?: {
         if (!detectedPorts.has(t.port)) {
           result.push({
             profileId,
+            owner,
             port: t.port,
             project: t.label,
             state: "unknown",
             sessionId: null,
             tunnel: t,
+            terminationTarget: null,
+            origin: undefined,
           });
         }
       }
     }
     return result;
-  }, [targetProfiles, portQueries, tunnelQueries]);
+  }, [targetProfiles, targetOwners, portQueries, tunnelQueries, inventoryQueries]);
   // Port push events — patch ["ports"] cache in-place
   useEffect(() => {
     const unsubs = [
@@ -346,15 +412,25 @@ export function usePorts(options?: {
   }, [qc, transportGeneration, updateInstallState]);
 
   const installCloudflared = useCallback(async () => {
-    const requestGeneration = transportGeneration;
-    const requestTransport = transport;
+    const targetOwner = targetOwners[0];
+    const requestGeneration = targetOwner?.generation ?? transportGeneration;
+    const requestTransport = targetOwner
+      ? (getBoundTransport(targetOwner) as Transport)
+      : transport;
     updateInstallState({ status: "installing", downloaded: 0, total: 0 });
     try {
       await requestTransport.invoke("tunnel:install");
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       if (msg.toLowerCase().includes("already in progress")) return;
-      if (
+      if (targetOwner) {
+        if (
+          !isCurrentConnection(targetOwner) ||
+          targetOwner.generation !== requestGeneration
+        ) {
+          return;
+        }
+      } else if (
         getTransport() !== requestTransport ||
         getTransportGeneration() !== requestGeneration
       ) {
@@ -367,8 +443,7 @@ export function usePorts(options?: {
         error: msg || "Install request failed",
       });
     }
-  }, [transport, transportGeneration, updateInstallState]);
-
+  }, [targetOwners, transport, transportGeneration, updateInstallState]);
   const createTunnel = useCallback(
     async (port: number, label: string, targetProfileId?: string) => {
       const profileId = targetProfileId ?? options?.owner?.profileId ?? options?.profileId ?? getActiveProfileId();
@@ -390,29 +465,43 @@ export function usePorts(options?: {
     },
     [options?.owner?.profileId, options?.profileId, qc, targetOwners],
   );
-
-  const killPortSession = useCallback(
-    async (sessionId: string, targetProfileId?: string) => {
-      const profileId = targetProfileId ?? options?.owner?.profileId ?? options?.profileId ?? getActiveProfileId();
-      const conn = targetOwners.find((owner) => owner.profileId === profileId);
-      if (!conn || !isCurrentConnection(conn)) throw new Error("Connection changed or disconnected");
-      await getBoundTransport(conn).invoke("terminal:kill", sessionId);
-      if (!isCurrentConnection(conn)) return;
+  const endPortSession = useCallback(
+    async (target: TerminalTarget, origin: TerminationOrigin) => {
+      const conn = targetOwners.find(
+        (owner) =>
+          owner.profileId === target.profileId &&
+          owner.generation === target.generation,
+      );
+      if (!conn || !isCurrentConnection(conn)) {
+        throw new Error("Connection changed or disconnected");
+      }
+      const client = getBoundApiClient(conn);
+      const action = await requestGuardedTermination(target, origin, client);
+      if (!isCurrentConnection(conn)) return action;
       await Promise.all([
         qc.invalidateQueries({ queryKey: profilePortsQueryKey(conn) }),
-        qc.invalidateQueries({ queryKey: ["terminal-sessions"] }),
+        qc.invalidateQueries({
+          queryKey: profileQueryKey(conn, "terminal-sessions"),
+        }),
       ]);
+      return action;
     },
-    [options?.owner?.profileId, options?.profileId, qc, targetOwners],
+    [qc, targetOwners],
   );
+
 
   return {
     ports,
-    isLoading: portQueries.some((q) => q.isLoading) || tunnelQueries.some((q) => q.isLoading),
-    isError: portQueries.some((q) => q.isError) || tunnelQueries.some((q) => q.isError),
+    isLoading:
+      portQueries.some((q) => q.isLoading) ||
+      tunnelQueries.some((q) => q.isLoading) ||
+      inventoryQueries.some((q) => q.isLoading),
+    isError:
+      portQueries.some((q) => q.isError) ||
+      tunnelQueries.some((q) => q.isError),
     createTunnel,
     stopTunnel,
-    killPortSession,
+    endPortSession,
     installCloudflared,
     installState: currentInstallState,
   };

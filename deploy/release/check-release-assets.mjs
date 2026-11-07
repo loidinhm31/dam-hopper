@@ -663,7 +663,7 @@ function validateSignature(signature, expectedDigest, label) {
 const VALID_PROFILES = Object.freeze(["linux", "windows", "all"]);
 const WINDOWS_ZIP_REQUIRED_MEMBERS = Object.freeze([
   "dam-hopper-server.exe",
-  "dam-hopper.example.toml",
+  "config.example.toml",
   "LICENSE",
   "README.md",
 ]);

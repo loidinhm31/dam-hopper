@@ -4,7 +4,12 @@ import { DndContext } from "@dnd-kit/core";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PaneContainer } from "./PaneContainer.js";
-import { terminalRegistry } from "@/lib/terminal-registry.js";
+import { registerTerminal, terminalRegistry } from "@/lib/terminal-registry.js";
+import {
+  acquireTerminalPresentation,
+  isCurrentTerminalPresenter,
+} from "@/lib/terminal-presentation-input.js";
+import type { TerminalAttachGate } from "./MultiTerminalDisplay.js";
 
 vi.mock("./TabBar.js", () => ({
   TabBar: () => <div data-testid="terminal-tab-bar" />,
@@ -42,38 +47,9 @@ vi.mock("./TerminalScrollButtons.js", () => ({
   ),
 }));
 
-vi.mock("./MobileTerminalAccessoryBar.js", () => ({
-  MobileTerminalAccessoryBar: ({
-    sessionId,
-    onPanelOpenChange,
-  }: {
-    sessionId: string;
-    onPanelOpenChange?: (isOpen: boolean) => void;
-  }) => (
-    <div
-      data-testid="pane-floating-terminal-controls"
-      data-session-id={sessionId}
-    >
-      <button
-        type="button"
-        data-testid="pane-accessory-open"
-        onClick={() => onPanelOpenChange?.(true)}
-      >
-        Open accessory
-      </button>
-      <button
-        type="button"
-        data-testid="pane-accessory-close"
-        onClick={() => onPanelOpenChange?.(false)}
-      >
-        Close accessory
-      </button>
-    </div>
-  ),
-}));
 
-vi.mock("@/lib/terminal-native-input-policy.js", () => ({
-  syncNativeKeyboardSuppression: vi.fn(),
+vi.mock("@/lib/terminal-input-policy.js", () => ({
+  syncTerminalInputSuppression: vi.fn(),
 }));
 
 vi.mock("react-resizable-panels", () => ({
@@ -187,17 +163,6 @@ describe("PaneContainer browser integration", () => {
     expect(outputHost).not.toBeNull();
     expect(outputHost?.className).toContain("bg-[var(--color-background)]");
     expect(outputHost?.className).not.toContain("#0f172a");
-    expect(
-      outputHost?.parentElement?.querySelector(
-        "[data-testid=pane-floating-terminal-controls]",
-      ),
-    ).not.toBeNull();
-    expect(
-      container
-        .querySelector("[data-testid=terminal-browser-split]")
-        ?.querySelector("[data-testid=pane-floating-terminal-controls]")
-        ?.getAttribute("data-session-id"),
-    ).toBe("shell:demo");
     const divider = container.querySelector('[role="separator"]');
     expect(divider?.getAttribute("aria-orientation")).toBe("vertical");
     expect(divider?.getAttribute("aria-label")).toBe(
@@ -342,14 +307,14 @@ describe("PaneContainer browser integration", () => {
     globalSearchInput.remove();
   });
 
-  it("gates scroll controls to the global active session and mirrors accessory state", async () => {
+  it("gates scroll controls to the global active session", async () => {
     mockSettings.terminalScrollButtonsEnabled = true;
-    const accessoryPane = {
+    const scrollPane = {
       ...pane,
       sessionIds: ["shell:demo", "shell:next"],
     };
     const renderPane = async (
-      node: typeof accessoryPane,
+      node: typeof scrollPane,
       activeSessionId: string | null,
     ) => {
       await act(async () => {
@@ -374,45 +339,140 @@ describe("PaneContainer browser integration", () => {
       });
     };
 
-    await renderPane(accessoryPane, "shell:demo");
+    await renderPane(scrollPane, "shell:demo");
     const scrollButtons = () =>
       container.querySelector("[data-testid=terminal-scroll-buttons]");
-    await act(async () =>
-      container
-        .querySelector<HTMLButtonElement>("[data-testid=pane-accessory-open]")
-        ?.click(),
-    );
-    expect(scrollButtons()?.getAttribute("data-accessory-panel-open")).toBe(
-      "true",
-    );
-    await act(async () =>
-      container
-        .querySelector<HTMLButtonElement>("[data-testid=pane-accessory-close]")
-        ?.click(),
-    );
-    expect(scrollButtons()?.getAttribute("data-accessory-panel-open")).toBe(
-      "false",
-    );
-    expect(
-      container.querySelectorAll("[data-testid=terminal-scroll-buttons]"),
-    ).toHaveLength(1);
+    expect(scrollButtons()?.getAttribute("data-session-id")).toBe("shell:demo");
 
-    await renderPane(accessoryPane, "shell:other");
+    await renderPane(scrollPane, "shell:other");
     expect(scrollButtons()).toBeNull();
-    expect(
-      container.querySelector("[data-testid=pane-floating-terminal-controls]"),
-    ).toBeNull();
 
     await renderPane(
-      { ...accessoryPane, activeSessionId: "shell:next" },
+      { ...scrollPane, activeSessionId: "shell:next" },
       "shell:next",
     );
     expect(scrollButtons()?.getAttribute("data-session-id")).toBe("shell:next");
     mockSettings.terminalScrollButtonsEnabled = false;
     await renderPane(
-      { ...accessoryPane, activeSessionId: "shell:next" },
+      { ...scrollPane, activeSessionId: "shell:next" },
       "shell:next",
     );
     expect(scrollButtons()).toBeNull();
+  });
+
+  it("renders placeholder and does not attach when attachGate denies resolution", async () => {
+    const element = document.createElement("div");
+    const terminal = {
+      element,
+      focus: vi.fn(),
+      attachCustomKeyEventHandler: vi.fn(),
+      blur: vi.fn(),
+    };
+    registerTerminal("shell:demo", terminal as never, {} as never, { close: vi.fn() } as never, element);
+
+    const gate: TerminalAttachGate = {
+      resolveTerminal: vi.fn(() => undefined),
+      renderPlaceholder: vi.fn(() => (
+        <div data-testid="denied-placeholder">Terminal open elsewhere</div>
+      )),
+      revision: 1,
+    };
+
+    await act(async () => {
+      root.render(
+        <DndContext>
+          <PaneContainer
+            node={pane}
+            layout={layout as never}
+            mountedSessions={[]}
+            openTabs={[{ sessionId: "shell:demo", label: "Demo" }]}
+            onNewTerminal={vi.fn()}
+            onSessionExit={vi.fn()}
+            onSelectTab={vi.fn()}
+            onCloseTab={vi.fn()}
+            activeSessionId="shell:demo"
+            attachGate={gate}
+          />
+        </DndContext>,
+      );
+    });
+
+    const host = container.querySelector("[data-testid=terminal-pane-output-host]");
+    expect(host).not.toBeNull();
+    // Terminal element should NOT be attached into host
+    expect(element.parentElement).not.toBe(host);
+    // Placeholder should be rendered
+    expect(container.querySelector("[data-testid=denied-placeholder]")).not.toBeNull();
+  });
+
+  it("acquires presentation on attach and cleans up on unmount or successor acquisition", async () => {
+    const originHost = document.createElement("div");
+    const element = document.createElement("div");
+    originHost.appendChild(element);
+
+    const attachCustomKeyEventHandler = vi.fn();
+    const terminal = {
+      element,
+      focus: vi.fn(),
+      attachCustomKeyEventHandler,
+      blur: vi.fn(),
+    };
+    const baseKeyEventHandler = vi.fn(() => true);
+    const entry = registerTerminal(
+      "shell:demo",
+      terminal as never,
+      { fit: vi.fn() } as never,
+      { close: vi.fn() } as never,
+      element,
+    );
+    entry.baseKeyEventHandler = baseKeyEventHandler;
+
+    const gate: TerminalAttachGate = {
+      hubWindowId: "hub-1",
+      resolveTerminal: vi.fn((id) => (id === "shell:demo" ? entry : undefined)),
+      renderPlaceholder: vi.fn(() => null),
+      revision: 1,
+    };
+
+    // 1. Mount pane with gate
+    await act(async () => {
+      root.render(
+        <DndContext>
+          <PaneContainer
+            node={pane}
+            layout={layout as never}
+            mountedSessions={[]}
+            openTabs={[{ sessionId: "shell:demo", label: "Demo" }]}
+            onNewTerminal={vi.fn()}
+            onSessionExit={vi.fn()}
+            onSelectTab={vi.fn()}
+            onCloseTab={vi.fn()}
+            activeSessionId="shell:demo"
+            attachGate={gate}
+          />
+        </DndContext>,
+      );
+    });
+
+    const host = container.querySelector("[data-testid=terminal-pane-output-host]");
+    expect(element.parentElement).toBe(host);
+
+    // Successor acquires presentation before old pane unmounts
+    const successorToken = acquireTerminalPresentation(terminal as never, "standalone-win-1");
+    expect(isCurrentTerminalPresenter(terminal as never, successorToken)).toBe(true);
+
+    // Clear mock calls to verify unmount behavior
+    attachCustomKeyEventHandler.mockClear();
+
+    // 2. Unmount pane
+    await act(async () => {
+      root.unmount();
+    });
+
+    // Since successor acquired presentation, the old pane's cleanup must be a no-op!
+    // Keyboard handler should NOT be reset to baseKeyEventHandler
+    expect(attachCustomKeyEventHandler).not.toHaveBeenCalledWith(baseKeyEventHandler);
+    // Element should NOT be parked back to originHost
+    expect(element.parentElement).toBe(host);
   });
 });

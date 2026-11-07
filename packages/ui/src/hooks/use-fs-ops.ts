@@ -9,7 +9,11 @@ import {
 } from "@/api/connections.js";
 import {
   toServerProjectTarget,
+  normalizeFsTarget,
+  toServerFsTarget,
+  fsTargetKey,
   type ConnectionRef,
+  type FsTargetRef,
 } from "@/api/ownership.js";
 import type { WsTransport } from "@/api/ws-transport.js";
 import type { FsOpResult } from "@/api/fs-types.js";
@@ -17,6 +21,7 @@ import {
   normalizeProjectTarget,
   projectTargetCacheKey,
   type ProjectTargetInput,
+  type ProjectTargetRef,
 } from "@/api/client.js";
 import {
   getProfiles,
@@ -24,8 +29,10 @@ import {
   getServerUrl,
 } from "@/api/server-config.js";
 import {
+  fsTreeQueryKey,
   invalidateGitFileOperation,
   markTargetUnavailableIfNeeded,
+  useWorkspaceStatus,
 } from "@/api/queries.js";
 import { isVideoFile } from "@/lib/video-file.js";
 import { startVideoDownload } from "@/lib/start-video-download.js";
@@ -38,31 +45,48 @@ const MAX_BLOB_DOWNLOAD_BYTES = 100 * 1024 * 1024;
  * Watcher events will also trigger invalidation via useFsSubscription, so
  * double invalidation is idempotent and safe.
  */
-export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
+export function useFsOps(
+  target: FsTargetRef | ProjectTargetInput,
+  subscribedPath: string,
+) {
   const qc = useQueryClient();
-  const targetRef = normalizeProjectTarget(target);
-  const project = targetRef.project;
-  const targetKey = projectTargetCacheKey(targetRef);
-
+  const isTargetValid = !(target && typeof target === "object" && "kind" in target && target.kind === "project" && !target.project?.trim());
+  const targetRef = isTargetValid ? normalizeFsTarget(target) : { kind: "project" as const, project: "", profileId: (target as FsTargetRef).profileId ?? "" };
+  const { data: wsStatus } = useWorkspaceStatus(
+    targetRef.kind === "workspace" && targetRef.profileId
+      ? { profileId: targetRef.profileId }
+      : undefined,
+  );
+  const effectiveTargetRef: FsTargetRef =
+    targetRef.kind === "workspace" && targetRef.workspaceEpoch === undefined && wsStatus?.workspaceEpoch !== undefined
+      ? { ...targetRef, workspaceEpoch: wsStatus.workspaceEpoch }
+      : targetRef;
+  const targetKey = isTargetValid ? fsTargetKey(effectiveTargetRef) : "invalid";
+  const projectRef: ProjectTargetRef | null =
+    targetRef.kind === "project"
+      ? targetRef.worktreePath
+        ? {
+            project: targetRef.project,
+            worktreePath: targetRef.worktreePath,
+            profileId: targetRef.profileId || undefined,
+          }
+        : targetRef.profileId
+          ? { project: targetRef.project, profileId: targetRef.profileId }
+          : { project: targetRef.project }
+      : null;
   function invalidateTree() {
-    if (targetRef.profileId) {
-      void qc.invalidateQueries({
-        queryKey: [
-          "fs-tree",
-          targetRef.profileId,
-          project,
-          targetKey,
-          subscribedPath,
-        ],
-      });
-    }
-    void qc.invalidateQueries({
-      queryKey: ["fs-tree", project, targetKey, subscribedPath],
-    });
+    const queryKey = fsTreeQueryKey(effectiveTargetRef, subscribedPath);
+    void qc.invalidateQueries({ queryKey });
   }
 
   function invalidateGit(path: string) {
-    void invalidateGitFileOperation(qc, targetRef, path);
+    if (targetRef.kind === "project") {
+      void invalidateGitFileOperation(
+        qc,
+        targetRef as unknown as ProjectTargetRef,
+        path,
+      );
+    }
   }
 
   function getBoundTransport(): {
@@ -88,21 +112,26 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
   ): Promise<FsOpResult> {
     const { transport: t, connectionRef } = getBoundTransport();
     try {
-      const wire = toServerProjectTarget(targetRef);
       const result = await t.fsOp(op, {
-        ...wire,
-        ...params,
+        target: effectiveTargetRef,
+        path: params.path,
+        newPath: params.newPath,
+        forceGit: params.forceGit,
       });
       if (connectionRef && !isCurrentConnection(connectionRef)) {
         return { ok: false, error: "Connection changed during operation" };
       }
-      markTargetUnavailableIfNeeded(targetRef, result);
+      if (projectRef) {
+        markTargetUnavailableIfNeeded(projectRef, result);
+      }
       return result;
     } catch (error) {
       if (connectionRef && !isCurrentConnection(connectionRef)) {
         return { ok: false, error: "Connection changed during operation" };
       }
-      markTargetUnavailableIfNeeded(targetRef, error);
+      if (projectRef) {
+        markTargetUnavailableIfNeeded(projectRef, error);
+      }
       throw error;
     }
   }
@@ -159,13 +188,15 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
 
   async function download(path: string, size?: number): Promise<void> {
     if (isVideoFile(path)) {
-      try {
-        await startVideoDownload(targetRef, path);
-      } catch (error) {
-        markTargetUnavailableIfNeeded(targetRef, error);
-        throw error;
+      if (projectRef) {
+        try {
+          await startVideoDownload(projectRef, path);
+        } catch (error) {
+          markTargetUnavailableIfNeeded(projectRef, error);
+          throw error;
+        }
+        return;
       }
-      return;
     }
     if (!Number.isFinite(size) || size === undefined) {
       throw new Error("Cannot safely download a file with unknown size.");
@@ -175,9 +206,15 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
         "This file is too large for browser download. Use an external client.",
       );
     }
-    const params = new URLSearchParams({ project, path });
-    if (targetRef.worktreePath != null) {
-      params.set("worktreePath", targetRef.worktreePath);
+    const params = new URLSearchParams({ path });
+    if (targetRef.kind === "workspace") {
+      params.set("targetType", "workspace");
+    } else {
+      params.set("targetType", "project");
+      params.set("project", targetRef.project);
+      if (targetRef.worktreePath != null) {
+        params.set("worktreePath", targetRef.worktreePath);
+      }
     }
     const profileId = targetRef.profileId;
     let serverUrl = getServerUrl();
@@ -217,7 +254,9 @@ export function useFsOps(target: ProjectTargetInput, subscribedPath: string) {
         } catch {
           // Keep the HTTP status error when the response is not JSON.
         }
-        markTargetUnavailableIfNeeded(targetRef, error);
+        if (projectRef) {
+          markTargetUnavailableIfNeeded(projectRef, error);
+        }
         throw new Error(error.message);
       }
 

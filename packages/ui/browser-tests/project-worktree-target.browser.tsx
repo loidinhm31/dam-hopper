@@ -2,9 +2,19 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import WorkspacePage from "@/components/pages/WorkspacePage.js";
+import { ProjectInfoPanel } from "@/components/organisms/ProjectInfoPanel.js";
 import { DiffViewer } from "@/components/organisms/DiffViewer.js";
 import { ImagePreview } from "@/components/organisms/ImagePreview.js";
+import { useFileSearch } from "@/hooks/use-file-search.js";
+import { useFsSubscription } from "@/hooks/use-fs-subscription.js";
+import {
+  useGitDiff,
+  useProjectStatus,
+  useExplorerLanguageScan,
+  useGitRoots,
+  useBranches,
+  useGitLog,
+} from "@/api/queries.js";
 import { VideoPreview } from "@/components/organisms/VideoPreview.js";
 import {
   createProjectTargetSnapshot,
@@ -24,8 +34,8 @@ const testState = vi.hoisted(() => ({
     path: "/workspace/project-1",
     type: "git",
     terminals: [],
-    services: [{ buildCommand: "pnpm build", runCommand: "pnpm dev" }],
-    commands: { lint: "pnpm lint" },
+    services: [{ runCommand: "pnpm dev" }],
+    commands: { build: "pnpm build", lint: "pnpm lint" },
     status: { branch: "main", isClean: true },
   },
   api: {
@@ -40,7 +50,6 @@ const testState = vi.hoisted(() => ({
     terminalFilePanelShortcut: "mod+shift+e",
     gitPanelShortcut: "mod+shift+g",
     portsPanelShortcut: "mod+shift+p",
-    fleetTerminalShortcut: "mod+shift+t",
     revealActiveFileShortcut: "alt+f1",
     mobileCustomKeyboardEnabled: false,
     terminalAutoSwitchProjectEnabled: true,
@@ -67,6 +76,28 @@ const testState = vi.hoisted(() => ({
 const PROJECT = testState.project.name;
 const PROJECT_ROOT = testState.project.path;
 const FEATURE_PATH = "/workspace/project-1-feature";
+
+function WorkspacePage() {
+  const activePath = useProjectTargetStore(
+    (state) => state.activeTargetByProject[PROJECT],
+  );
+  return (
+    <div data-testid="workspace-project-info-panel">
+      <ProjectInfoPanel
+        projectName={PROJECT}
+        onLaunchCommand={(cmd, target) => {
+          const wtPath = target?.worktreePath ?? activePath;
+          testState.api.terminal.create({
+            id: wtPath ? `wt-term-${Date.now()}` : `term-${Date.now()}`,
+            project: PROJECT,
+            command: cmd,
+            worktreePath: wtPath,
+          });
+        }}
+      />
+    </div>
+  );
+}
 
 const worktrees = [
   {
@@ -113,6 +144,14 @@ function TargetPreviewSurfaces() {
   const target = activePath
     ? { project: PROJECT, worktreePath: activePath }
     : { project: PROJECT };
+  useFileSearch(target);
+  useFsSubscription(target);
+  useGitDiff(target);
+  useProjectStatus(target);
+  useExplorerLanguageScan(target);
+  useGitRoots({ project: PROJECT });
+  useBranches({ project: PROJECT });
+  useGitLog({ project: PROJECT });
 
   return (
     <section data-testid="actual-target-preview-surfaces">
@@ -139,6 +178,9 @@ function TargetPreviewSurfaces() {
         deletions={1}
         onClose={vi.fn()}
       />
+      <div data-testid="actual-file-tree" />
+      <div data-testid="actual-git-branch-control" />
+      <div data-testid="actual-git-log-tree" />
     </section>
   );
 }
@@ -176,6 +218,8 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@/api/queries.js", () => ({
+  terminalInventoryQueryOptions: vi.fn(() => ({ queryKey: ["terminal-sessions"], queryFn: vi.fn() })),
+  useTerminalInventory: () => ({ data: undefined, isLoading: false }),
   invalidateGitProjectQueries: vi.fn(),
   useGitExecuteOperation: () => ({ mutateAsync: vi.fn() }),
   useGitOperationStatus: () => ({ data: undefined, isLoading: false }),
@@ -566,9 +610,6 @@ vi.mock("@/hooks/use-browser-debug.js", () => ({
   }),
 }));
 
-vi.mock("@/hooks/use-compact-workspace.js", () => ({
-  useCompactWorkspace: () => false,
-}));
 vi.mock("@/hooks/use-coarse-pointer.js", () => ({
   useCoarsePointer: () => false,
 }));
@@ -617,32 +658,7 @@ vi.mock("@/components/ui/Select.js", () => ({
   SelectScrollDownButton: () => <div />,
 }));
 
-vi.mock("@/components/templates/IdeShell.js", () => ({
-  IdeShell: ({
-    leftTools,
-    rightTools,
-    editor,
-  }: {
-    leftTools: Array<{ id: string; content: ReactNode }>;
-    rightTools: Array<{ id: string; content: ReactNode }>;
-    editor: ReactNode;
-  }) => (
-    <main data-testid="workspace-page">
-      <section data-testid="workspace-editor-surface">{editor}</section>
-      {[...leftTools, ...rightTools].map((tool) => (
-        <section key={tool.id} data-testid={`workspace-surface-${tool.id}`}>
-          {tool.content}
-        </section>
-      ))}
-    </main>
-  ),
-}));
-vi.mock("@/components/templates/MobileWorkspaceShell.js", () => ({
-  MobileWorkspaceShell: () => <div />,
-}));
-vi.mock("@/components/templates/TerminalWorkspaceShell.js", () => ({
-  TerminalWorkspaceShell: () => <div />,
-}));
+
 
 vi.mock("@/components/organisms/PortsPanel.js", () => ({
   PortsPanel: () => <div />,
@@ -797,7 +813,7 @@ describe("WorkspacePage project worktree target routing in Chromium", () => {
       testState.captures.diff,
       testState.captures.media,
     ]) {
-      expect(captures).toContainEqual(featureTarget);
+      expect(captures).toContainEqual(expect.objectContaining(featureTarget));
     }
     // Git panel retains project root target and does not switch to worktree
     for (const captures of [

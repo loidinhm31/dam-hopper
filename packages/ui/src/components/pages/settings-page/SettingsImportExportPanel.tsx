@@ -52,8 +52,8 @@ export function SettingsImportExportPanel({
         title="Export Settings"
         description={
           <>
-            Download the active workspace{" "}
-            <code className="text-[var(--color-primary)]">dam-hopper.toml</code>.
+            Download the server{" "}
+            <code className="text-[var(--color-primary)]">config.toml</code>.
             Preserves all formatting and comments.
           </>
         }
@@ -87,7 +87,7 @@ export function SettingsImportExportPanel({
         title="Import Settings"
         description={
           <>
-            Replace the active workspace configuration with a{" "}
+            Replace the server configuration with a{" "}
             <code className="text-[var(--color-primary)]">.toml</code> file.
             Validates syntax, schema, and paths before writing; creates an automatic backup.
           </>

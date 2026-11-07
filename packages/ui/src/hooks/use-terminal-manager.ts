@@ -8,6 +8,11 @@ import {
 import { captureConnection, getApi } from "@/api/connections.js";
 import { parseProjectKey, projectKey, parseTerminalKey, terminalKey, type ConnectionRef, type ProjectRef, type QualifiedProjectRef } from "@/api/ownership.js";
 import { api, isProjectTargetError, type ApiClient } from "@/api/client.js";
+import type {
+  TerminalTarget,
+  TerminationOrigin,
+} from "@/api/terminal-session-contract.js";
+import { requestGuardedTermination } from "@/lib/terminal-session-actions.js";
 import {
   markProjectTargetUnavailable,
   projectScopeKey,
@@ -543,7 +548,6 @@ export function useTerminalManager(
   const [initialPinnedTerminalIds] = useState(() =>
     loadPinnedTerminalIds(),
   );
-  const removingSessionIdsRef = useRef<Set<string>>(new Set());
   const suppressedAutoAttachIdsRef = useRef<Set<string>>(new Set());
   const pendingAutoAttachIdsRef = useRef<Set<string>>(new Set());
   const locallyStoppedSessionMarkersRef = useRef<
@@ -714,28 +718,6 @@ export function useTerminalManager(
     );
   }
 
-  async function removeSessionDurably(sessionId: string): Promise<boolean> {
-    if (removingSessionIdsRef.current.has(sessionId)) return false;
-    removingSessionIdsRef.current.add(sessionId);
-    const tab = openTabs.find((t) => t.sessionId === sessionId);
-    const mounted = mountedSessions.find((m) => m.sessionId === sessionId);
-    const { profileId: targetProfileId, id: rawId } = requireTerminal(sessionId);
-    try {
-      await getBoundApi(targetProfileId).terminal.remove(rawId);
-    } catch (error) {
-      logger.error("useTerminalManager", "failed to remove terminal session", {
-        sessionId,
-        error,
-      });
-      await invalidateTerminalQueries(targetProfileId);
-      return false;
-    } finally {
-      removingSessionIdsRef.current.delete(sessionId);
-    }
-
-    await invalidateTerminalQueries(targetProfileId);
-    return true;
-  }
 
   useEffect(() => {
     if (searchParams.get("action") !== "new-terminal") return;
@@ -1067,19 +1049,7 @@ export function useTerminalManager(
     const project = projects.find((p) => p.profileId === profileId && p.name === projectName);
     if (!project) return;
 
-    const sanitizedName = sanitizeSessionSegment(
-      profileName.replace(/ /g, "_"),
-    );
-    const prefix = `terminal:${projectName}:${sanitizedName}:`;
-    const instanceIds = sessions
-      .filter((s) => parseTerminalKey(s.id)?.profileId === profileId && requireTerminal(s.id).id.startsWith(prefix))
-      .map((s) => s.id);
-    for (const id of instanceIds) {
-      if (!(await removeSessionDurably(id))) {
-        throw new Error(`Failed to remove terminal ${id}`);
-      }
-      removeSessionsFromUi([id]);
-    }
+    // Config edits/renames do NOT terminate or evict running sessions
 
     const updated = (project.terminals ?? []).filter(
       (t) => t.name !== profileName,
@@ -1126,18 +1096,7 @@ export function useTerminalManager(
       throw new Error("Profile not found");
     }
 
-    if (originalName !== trimmedName) {
-      const prefix = `terminal:${projectName}:${sanitizeSessionSegment(originalName.replace(/ /g, "_"))}:`;
-      const instanceIds = sessions
-        .filter((session) => parseTerminalKey(session.id)?.profileId === profileId && requireTerminal(session.id).id.startsWith(prefix))
-        .map((session) => session.id);
-      for (const id of instanceIds) {
-        if (!(await removeSessionDurably(id))) {
-          throw new Error(`Failed to remove terminal ${id}`);
-        }
-        removeSessionsFromUi([id]);
-      }
-    }
+    // Config edits/renames do NOT terminate or evict running sessions
 
     await client.config.updateProject(projectName, {
       terminals: updated,
@@ -1172,20 +1131,7 @@ export function useTerminalManager(
         key === originalKey ? trimmedCommand : value;
     }
 
-    if (originalKey !== trimmedKey) {
-      const oldIds = findCustomCommandSessionIds(
-        sessions.filter((session) => parseTerminalKey(session.id)?.profileId === profileId).map((session) => ({...session, id: requireTerminal(session.id).id})),
-        projectName,
-        originalKey,
-      );
-      for (const rawId of oldIds) {
-        const id = terminalKey({profileId, id: rawId});
-        if (!(await removeSessionDurably(id))) {
-          throw new Error(`Failed to remove terminal ${id}`);
-        }
-        removeSessionsFromUi([id]);
-      }
-    }
+    // Config edits/renames do NOT terminate or evict running sessions
 
     await client.config.updateProject(projectName, {
       commands: Object.keys(updated).length > 0 ? updated : undefined,
@@ -1526,7 +1472,7 @@ export function useTerminalManager(
     preferredFallbackSessionId?: string,
   ) {
     if (!isTerminalTabClosable(openTabs, sessionId)) return;
-    if (!(await removeSessionDurably(sessionId))) return;
+    // Local presentation-only close; no durable remove
     suppressedAutoAttachIdsRef.current.add(sessionId);
     pendingAutoAttachIdsRef.current.delete(sessionId);
     locallyStoppedSessionMarkersRef.current.delete(sessionId);
@@ -1544,15 +1490,26 @@ export function useTerminalManager(
     setMountedSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
   }
 
-  function handleKillTerminal(sessionId: string) {
-    const tab = openTabs.find((t) => t.sessionId === sessionId);
-    const mounted = mountedSessions.find((m) => m.sessionId === sessionId);
-    const { profileId: targetProfileId, id: rawId } = requireTerminal(sessionId);
-    void getBoundApi(targetProfileId).terminal.kill(rawId);
-    void invalidateTerminalQueries(targetProfileId);
+  async function handleKillTerminal(
+    sessionId: string,
+    target?: TerminalTarget,
+    origin?: TerminationOrigin,
+  ) {
+    const { profileId: targetProfileId, id: rawId } =
+      requireTerminal(sessionId);
+    if (target && origin) {
+      const client = getBoundApi(targetProfileId);
+      await requestGuardedTermination(target, origin, client);
+      void invalidateTerminalQueries(targetProfileId);
+    } else {
+      logger.warn(
+        "useTerminalManager",
+        "guarded termination unavailable; missing target or origin",
+        { sessionId },
+      );
+    }
   }
-  async function handleRemoveFreeTerminal(sessionId: string) {
-    if (!(await removeSessionDurably(sessionId))) return;
+  function handleRemoveFreeTerminal(sessionId: string) {
     removeSessionsFromUi([sessionId]);
   }
 

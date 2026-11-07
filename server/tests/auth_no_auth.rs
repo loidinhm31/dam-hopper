@@ -47,6 +47,8 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
         server: dam_hopper_server::config::ServerConfig::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_root.join("dam-hopper.toml"),
     };
 
@@ -82,7 +84,6 @@ fn create_no_auth_state(workspace_root: PathBuf) -> AppState {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("Failed to create no-auth AppState in test");
 
@@ -111,6 +112,8 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
         server: dam_hopper_server::config::ServerConfig::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_root.join("dam-hopper.toml"),
     };
 
@@ -146,7 +149,6 @@ fn create_normal_auth_state(workspace_root: PathBuf) -> AppState {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("Failed to create normal auth AppState in test");
 
@@ -385,6 +387,8 @@ async fn test_no_auth_with_mongodb_fails() {
         agent_store: None,
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_root.join("dam-hopper.toml"),
     };
 
@@ -419,7 +423,6 @@ async fn test_no_auth_with_mongodb_fails() {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     );
 
     assert!(
@@ -458,6 +461,8 @@ async fn test_no_auth_in_production_env_fails() {
         agent_store: None,
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_root.join("dam-hopper.toml"),
     };
 
@@ -484,7 +489,6 @@ async fn test_no_auth_in_production_env_fails() {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     );
 
     // Clean up environment variable
@@ -526,6 +530,8 @@ async fn test_production_missing_mongodb_fails() {
         agent_store: None,
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_root.join("dam-hopper.toml"),
     };
 
@@ -552,7 +558,6 @@ async fn test_production_missing_mongodb_fails() {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     );
 
     // Clean up environment variable

@@ -1,11 +1,11 @@
-# Preferences, Settings, Usage, and Host Resources Architecture
+# Preferences, Settings, and Host Resources Architecture
 
 **Authority:** Multi-Profile Workbench Preferences & Host Resources (`packages/ui/src/`, `server/src/config/`, `server/src/system/`, `server/src/idle_suspend/`)  
 **Status:** Maintained Architecture Specification  
 
-This specification defines the frontend and transport boundaries for multi-profile preference sources, Settings targets, profile-local usage analytics, host-resource presentation, and revision-fenced host actions.
+This specification defines the frontend and transport boundaries for multi-profile preference sources, Settings targets, host-resource presentation, and revision-fenced host actions.
 
-The server remains authoritative for workspace configuration, usage storage, host metrics, idle-suspend policy, fleet state, revisions, authentication, and host action admission. The browser supplies an explicit owner whenever work crosses an async boundary:
+The server remains authoritative for workspace configuration, host metrics, idle-suspend policy, fleet state, revisions, authentication, and host action admission. The browser supplies an explicit owner whenever work crosses an async boundary:
 
 ```ts
 type ConnectionRef = { profileId: string; generation: number };
@@ -18,11 +18,10 @@ Three user selections operate independently:
 | Selection | Meaning | Persistence and Removal |
 | --- | --- | --- |
 | `preferencesProfileId` | Source for shared workbench appearance, fonts, shortcuts, terminal suggestion/display options, explorer presentation, notifications, and mobile keyboard settings. | `dam-hopper:preferences-source:v1` stores the selection and last successful allowlisted snapshot. Removing the source retains the snapshot with `preferencesStatus: "source-removed"`. |
-| `settingsProfileId` | Server whose global/workspace config, maintenance, usage setup, and host policy are inspected or changed. | `dam-hopper:settings-target:v1` stores the target. Removing the profile clears the target and requires an explicit replacement. |
+| `settingsProfileId` | Server whose global/workspace config, maintenance, and host policy are inspected or changed. | `dam-hopper:settings-target:v1` stores the target. Removing the profile clears the target and requires an explicit replacement. |
 | `browserTargetProfileId` | Browser Debug owner. | Removal clears the target; it does not change the preference source or Settings target. |
 
-Project navigation does not change any of these selections. Usage totals and host values are profile-targeted; equal endpoints may describe one physical host, so the UI does not sum, average, or deduplicate them across profiles.
-
+Project navigation does not change any of these selections. Host values are profile-targeted; equal endpoints may describe one physical host, so the UI does not sum, average, or deduplicate them across profiles.
 ## Preference Source Transaction
 
 `packages/ui/src/stores/settings.ts` is the store boundary for allowlisted `PersistedSettingsState`. It hydrates through a captured owner and uses `withUiConfigDefaults` plus existing clamps for font, keyboard, scroll, volume, and language-filter values. A missing source uses local defaults or the last safe snapshot and marks the source unset; an unavailable source keeps the last snapshot and disables remote saving.
@@ -33,24 +32,22 @@ Project navigation does not change any of these selections. Usage totals and hos
 
 ## Settings Target and Configuration UI
 
-`SettingsPage` renders separate **Settings Target Server** and **Workbench Preferences Source** selectors. Target labels include the profile name and server URL. Every config, workspace, known-workspace, maintenance, import, export, usage, and idle-suspend hook receives the target owner; an absent target uses the existing compatibility/default-server path only when no explicit profile is selected.
+`SettingsPage` renders separate **Settings Target Server** and **Workbench Preferences Source** selectors. Target labels include the profile name and server URL. Every config, workspace, known-workspace, maintenance, import, export, and idle-suspend hook receives the target owner; an absent target uses the existing compatibility/default-server path only when no explicit profile is selected.
+
+### Controlled Mode & OS Window Decoupling
+When hosted within OS windows (`SettingsApp`), `SettingsPage` operates in controlled mode via `SettingsPageProps` (`noLayout`, `targetProfileId`, `onTargetProfileChange`):
+- **Window AppState Isolation:** Target profile changes update window-local state and trigger `onTargetProfileChange`, leaving global `useWorkbenchSelectionsStore.settingsProfileId` unmodified.
+- **Async Boundary Currency:** Handlers capture target references via `getCurrentEffectiveProfileId()`, ensuring async configuration writes and TOML imports recheck the effective target upon completion rather than referencing stale global store properties.
+- **Devices Page Controlled Props:** `DevicesPage` (`DevicesPageProps`) provides `noLayout`, `profileId`, and `onProfileChange`, rendering the server selector for `profiles.length > 0` and offering `(Current / Default Server)`.
 
 - `GlobalConfigEditor` and `ConfigEditor` pass `OwnerInput` to their queries and mutations; server-local defaults, projects, commands, and terminal profiles are never copied to the preference source or another profile.
 - Maintenance cache clearing invalidates only the target profile's query prefix. Nuclear reset is target-labelled and explicit about terminal disposal; it is not a connection-management operation.
 - Export requests target the selected server and download raw TOML through a Blob with a server-labelled filename. Import accepts `.toml` only, keeps the 1 MiB client limit, confirms the workspace and target, reads the file after confirmation, and rejects a changed target or connection generation before dispatch. The server remains responsible for validation, backup, atomic publication, and rollback.
-- `SettingsUsageInsightsSection` sends setup/configuration mutations to the target owner and redacts bearer tokens and local endpoints from displayed errors.
 - `SettingsIdleSuspendTimingSection` edits the complete bounded quiet/wake pair for the target server. Handoff conflicts, no-auth rejection, disabled actors, and capability errors remain visible; the UI never widens backend bounds.
 - `SettingsPage` includes a dedicated **Session Changes** section binding to `targetOwner` (`config.server.sessionChangesEnabled`). Full configuration updates preserve all other server fields (`[key: string]: unknown`). Async mutation captures `{ actionProfileId, actionGeneration }` to avoid applying late notices if the operator switches targets. On successful mutation, the UI invalidates the target owner's config queries and cancels/removes all cached `session-changes` queries for that owner. Enabling displays an honest notice to restart active OMP sessions; failures surface actionable server error messages without optimistic UI state.
-
-## Owner-Qualified Usage
-
-`UsagePage` selects a profile from the `profileId` URL parameter, then the Settings target, then the first configured profile. The selected owner is used for summary, settings, session list/detail, pause/resume, and deletion queries. Deep links preserve `profileId`, `view`, `session`, and opaque `cursor` values.
-
-`api/queries.ts` builds `profileQueryKey(owner, "usage", ...)` keys for summary, sessions, details, health, settings, setup, and mutations. Session list/detail polling runs every 15 seconds only while the document is visible. Destructive usage actions confirm the selected owner and UTC range before dispatch and do not silently switch to another profile; successful mutations invalidate only that owner's usage cache.
-
 ## Host Resources and Idle Suspend
 
-In single-profile mode the host popover resolves an effective owner in this order: explicit `owner`, `settingsProfileId`, then the active profile. Snapshot, alert history, legacy metrics, idle-suspend status, and UiConfig updates all use that owner. When no `owner` is supplied and more than one profile is configured, the top-nav popover enters Fleet mode instead: it opens the read-only fleet deck, and a connected profile selection supplies the exact owner for the shared drilldown. The optional `hostResourcePinnedMount` remains a presentation preference in the owning server's UiConfig. A missing saved mount stays visibly missing rather than silently binding to another filesystem.
+In DamHopper OS, `SystemMonitorApp` (`packages/ui/src/os/apps/SystemMonitorApp.tsx`) and `MonitorTray` (`packages/ui/src/os/MonitorTray.tsx`) host fleet health and status (the legacy `HostResourcePopover` was deleted in Phase 08). Snapshot, alert history, metrics, idle-suspend status, and `hostResourcePinnedMount` stay owner-local. When inspecting hosts across profiles, `HostResourceFleetDeck` provides fleet inspection with connected/disconnected profile state.
 
 Fleet mode is documented in [System Architecture](../system-architecture.md#multi-profile-ownership-model): its toolbar keeps a Fleet toggle and profile pills. Visible connected detail uses SSE streaming with a 5-second REST fallback under the owner/QueryClient source gate.
 
@@ -75,11 +72,10 @@ In the Android native client (`native-app/`):
 | Preferences and selector persistence | `packages/ui/src/stores/settings.ts`, `stores/workbench-selections.ts` |
 | Owner-qualified query/mutation routing | `packages/ui/src/api/queries.ts`, `api/client.ts`, `hooks/use-sse.ts` |
 | Settings composition and import/export | `components/pages/SettingsPage.tsx`, `components/pages/settings-page/*`, `components/organisms/{GlobalConfigEditor,ConfigEditor}.tsx` |
-| Usage UI and deep links | `components/pages/UsagePage.tsx`, `components/usage/*` |
-| Host status, incidents, and manual action | `HostResourcePopover.tsx`, `HostIdleSuspendStatus.tsx`, `ForceSleepDialog.tsx`, `use-host-resource-alert-presentation.ts` |
-| Android native Resources panel & zero-FAB UI | `native-app/shared/.../features/host/ResourcesUnifiedPanelScreen.kt`, `FleetScreens.kt`, `UsageScreens.kt` |
+| Host status, incidents, and manual action | `SystemMonitorApp.tsx`, `MonitorTray.tsx`, `HostIdleSuspendStatus.tsx`, `ForceSleepDialog.tsx`, `use-host-resource-alert-presentation.ts` |
+| Android native Resources panel & zero-FAB UI | `native-app/shared/.../features/host/ResourcesUnifiedPanelScreen.kt`, `FleetScreens.kt` |
 | Android native SSE streaming & coordinator | `native-app/shared/.../core/transport/HostResourceSseClient.kt`, `features/host/ResourceStreamCoordinator.kt` |
-| Android native repositories & controllers | `native-app/shared/.../features/host/HostResourceRepository.kt`, `UsageRepository.kt`, `HostResourceController.kt`, `UsageController.kt` |
+| Android native repositories & controllers | `native-app/shared/.../features/host/HostResourceRepository.kt`, `HostResourceController.kt` |
 | Android native settings & preferences repository | `native-app/shared/.../features/settings/SettingsRepository.kt`, `SettingsModels.kt`, `PreferencesStore.kt` |
 | Android native preferences storage | `native-app/androidApp/.../platform/storage/AndroidPreferencesStore.kt` |
 | Android native Settings panel UI | `native-app/shared/.../features/settings/SettingsScreens.kt`, `PreferencesPrivacyView.kt`, `MaintenanceView.kt`, `NotificationsView.kt` |

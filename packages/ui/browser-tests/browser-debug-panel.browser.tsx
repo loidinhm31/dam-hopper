@@ -33,11 +33,7 @@ function setInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-function ViewportHarness({
-  hostKind = "web",
-}: {
-  hostKind?: "web" | "native";
-}) {
+function ViewportHarness() {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [viewportState, setViewportState] = useState<BrowserDebugViewportState>(
     () => loadBrowserDebugViewport(VIEWPORT_TEST_PLATFORM),
@@ -51,11 +47,6 @@ function ViewportHarness({
     <BrowserDebugPanel
       url="http://localhost:3000"
       bridgeStatus="ready"
-      hostEnvironment={
-        hostKind === "native"
-          ? { kind: "native", platform: "windows" }
-          : { kind: "web" }
-      }
       viewportRef={viewportRef}
       viewportState={viewportState}
       onViewportModeChange={(mode) =>
@@ -103,9 +94,7 @@ describe("BrowserDebugPanel capture controls in Chromium", () => {
     );
   });
 
-  it.each(["web", "native"] as const)(
-    "changes %s viewport dimensions with manual and step controls",
-    async (hostKind) => {
+  it("changes viewport dimensions with manual and step controls", async () => {
       localStorage.setItem(
         "dam-hopper:browser-debug-viewport:v1:browser-test",
         JSON.stringify({
@@ -115,7 +104,7 @@ describe("BrowserDebugPanel capture controls in Chromium", () => {
         }),
       );
       await act(async () =>
-        root.render(<ViewportHarness hostKind={hostKind} />),
+        root.render(<ViewportHarness />),
       );
 
       const viewport = container.querySelector<HTMLElement>(

@@ -58,6 +58,8 @@ fn create_test_state(workspace_root: PathBuf) -> AppState {
         server: dam_hopper_server::config::ServerConfig::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_root.join("dam-hopper.toml"),
     };
 
@@ -90,7 +92,6 @@ fn create_test_state(workspace_root: PathBuf) -> AppState {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("create test AppState");
 

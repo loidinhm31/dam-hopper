@@ -23,7 +23,6 @@ use dam_hopper_server::diagnostics::DiagnosticStore;
 use dam_hopper_server::fs::FsSubsystem;
 use dam_hopper_server::pty::{BroadcastEventSink, PtySessionManager};
 use dam_hopper_server::state::AppState;
-use dam_hopper_server::telemetry::TelemetryRuntime;
 use opaque_ke::ServerSetup;
 use rand::rngs::OsRng;
 use serde_json::{json, Value};
@@ -72,6 +71,8 @@ fn new_state(tmp: &TempDir, store: Option<AuthStore>, no_auth: bool) -> anyhow::
         agent_store: None,
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: root.join("dam-hopper.toml"),
     };
     let tunnel_manager = common::make_tunnel_manager(&event_sink);
@@ -92,7 +93,6 @@ fn new_state(tmp: &TempDir, store: Option<AuthStore>, no_auth: bool) -> anyhow::
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         DiagnosticStore::new(root.join("diagnostics.jsonl")),
-        TelemetryRuntime::new(),
     )
 }
 

@@ -154,4 +154,64 @@ describe("SessionChangesPanel Browser Tests", () => {
       );
     });
   });
+
+  it("renders status metadata disagreement error view when returned incarnation mismatches", async () => {
+    // Status returns terminalIncarnation "999" while component requested "1"
+    mockStatusToReturn = {
+      ...fixture.valid.statusToolObservedReady,
+      terminalIncarnation: "999",
+    };
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={qc}>
+          <SessionChangesPanel
+            owner={owner}
+            terminalId="t1"
+            terminalIncarnation="1"
+            ompSessionId="sess-1"
+            onClose={() => {}}
+          />
+        </QueryClientProvider>,
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Status Metadata Disagreement");
+      expect(container.textContent).toContain("does not match expected terminal incarnation");
+    });
+  });
+
+  it("accepts verified ReviewTarget props and passes serverEpoch and baselineId", async () => {
+    mockStatusToReturn = fixture.valid.statusToolObservedReady;
+    const target = {
+      profileId: owner.profileId,
+      generation: owner.generation,
+      terminalId: "t1",
+      terminalIncarnation: "1",
+      ompSessionId: "sess-1",
+      serverEpoch: "epoch-verified",
+      rootId: "root-verified",
+      baselineId: "baseline-verified",
+    };
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={qc}>
+          <SessionChangesPanel
+            owner={owner}
+            terminalId={target.terminalId}
+            terminalIncarnation={target.terminalIncarnation}
+            ompSessionId={target.ompSessionId}
+            target={target}
+            onClose={() => {}}
+          />
+        </QueryClientProvider>,
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Session Changes");
+    });
+  });
 });

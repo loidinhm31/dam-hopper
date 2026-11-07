@@ -12,7 +12,7 @@ type KeyboardShortcutHandler = (event: KeyboardEvent) => void;
 type WheelShortcutHandler = (event: WheelEvent) => void;
 
 export function useDocumentKeyboardShortcut(
-  shortcut: string,
+  shortcut: string | null | undefined,
   handler: KeyboardShortcutHandler,
 ) {
   const handlerRef = useRef(handler);
@@ -37,7 +37,7 @@ export function useDocumentKeyboardShortcut(
 
 export function addKeyboardShortcutListener(
   target: EventTarget,
-  getShortcut: () => string,
+  getShortcut: () => string | null | undefined,
   handler: KeyboardShortcutHandler,
 ): () => void {
   const detector = new DoubleShiftDetector();
@@ -56,7 +56,7 @@ export function addKeyboardShortcutListener(
 
 export function addWheelShortcutListener(
   target: EventTarget,
-  getShortcut: () => string,
+  getShortcut: () => string | null | undefined,
   handler: WheelShortcutHandler,
 ): () => void {
   const onWheel = (event: Event) => {
@@ -71,10 +71,11 @@ export function addWheelShortcutListener(
 }
 
 function matchesShortcut(
-  shortcut: string,
+  shortcut: string | null | undefined,
   event: KeyboardEvent,
   detector: DoubleShiftDetector,
 ): boolean {
+  if (!shortcut) return false;
   const parsed = parseShortcut(shortcut);
   if (!parsed) return false;
   if (shortcut === DOUBLE_SHIFT_SHORTCUT || parsed.kind === "double-shift") {

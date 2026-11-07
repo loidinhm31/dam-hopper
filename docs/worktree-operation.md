@@ -24,8 +24,8 @@ Example layout:
 
 ## 2. Configure DamHopper once
 
-Register the repository once in the DamHopper registry, normally
-~/.config/dam-hopper/dam-hopper.toml:
+Register the repository once in the DamHopper configuration, normally
+`~/.config/dam-hopper/config.toml`:
 
 ```toml
 [[projects]]

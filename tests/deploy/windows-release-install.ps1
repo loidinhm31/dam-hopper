@@ -117,7 +117,7 @@ try {
     $v100Zip = Join-Path $ArtifactsDir "dam-hopper-v1.0.0-windows-x86_64.zip"
     Create-ZipArchive -ZipPath $v100Zip -Entries @{
         "dam-hopper-server.exe"   = [System.Text.Encoding]::ASCII.GetBytes("MZ-MOCK-BINARY-V1.0.0")
-        "dam-hopper.example.toml" = "[server]`nhost = '127.0.0.1'`nport = 4801`n"
+        "config.example.toml" = "[server]`nhost = '127.0.0.1'`nport = 4801`n"
         "LICENSE"                 = "Apache-2.0 OR MIT"
         "README.md"               = "# DamHopper Server v1.0.0"
     }
@@ -126,7 +126,7 @@ try {
     $v101Zip = Join-Path $ArtifactsDir "dam-hopper-v1.0.1-windows-x86_64.zip"
     Create-ZipArchive -ZipPath $v101Zip -Entries @{
         "dam-hopper-server.exe"   = [System.Text.Encoding]::ASCII.GetBytes("MZ-MOCK-BINARY-V1.0.1-UPGRADED")
-        "dam-hopper.example.toml" = "[server]`nhost = '127.0.0.1'`nport = 4801`n"
+        "config.example.toml" = "[server]`nhost = '127.0.0.1'`nport = 4801`n"
         "LICENSE"                 = "Apache-2.0 OR MIT"
         "README.md"               = "# DamHopper Server v1.0.1"
     }
@@ -135,7 +135,7 @@ try {
     $v120Zip = Join-Path $ArtifactsDir "dam-hopper-v1.2.0-windows-x86_64.zip"
     Create-ZipArchive -ZipPath $v120Zip -Entries @{
         "dam-hopper-server.exe"   = [System.Text.Encoding]::ASCII.GetBytes("MZ-MOCK-BINARY-V1.2.0-LATEST")
-        "dam-hopper.example.toml" = "[server]`nhost = '127.0.0.1'`nport = 4801`n"
+        "config.example.toml" = "[server]`nhost = '127.0.0.1'`nport = 4801`n"
         "LICENSE"                 = "Apache-2.0 OR MIT"
         "README.md"               = "# DamHopper Server v1.2.0"
     }
@@ -144,7 +144,7 @@ try {
     $traversalZip = Join-Path $ArtifactsDir "unsafe-traversal.zip"
     Create-ZipArchive -ZipPath $traversalZip -Entries @{
         "dam-hopper-server.exe"   = "MZ-MOCK"
-        "dam-hopper.example.toml" = "host = '127.0.0.1'"
+        "config.example.toml" = "host = '127.0.0.1'"
         "LICENSE"                 = "MIT"
         "../evil.txt"             = "traversal payload"
     }
@@ -153,7 +153,7 @@ try {
     $dirZip = Join-Path $ArtifactsDir "unsafe-directory.zip"
     Create-ZipArchive -ZipPath $dirZip -Entries @{
         "bin/dam-hopper-server.exe" = "MZ-MOCK"
-        "dam-hopper.example.toml"   = "host = '127.0.0.1'"
+        "config.example.toml"   = "host = '127.0.0.1'"
         "LICENSE"                   = "MIT"
         "README.md"                 = "README"
     }
@@ -162,7 +162,7 @@ try {
     $extraZip = Join-Path $ArtifactsDir "extra-member.zip"
     Create-ZipArchive -ZipPath $extraZip -Entries @{
         "dam-hopper-server.exe"   = "MZ-MOCK"
-        "dam-hopper.example.toml" = "host = '127.0.0.1'"
+        "config.example.toml" = "host = '127.0.0.1'"
         "LICENSE"                 = "MIT"
         "README.md"               = "README"
         "unauthorized.exe"        = "extra payload"
@@ -212,14 +212,14 @@ try {
     }
 
     $binExe = Join-Path $InstallDir1 "bin\dam-hopper-server.exe"
-    $configToml = Join-Path $InstallDir1 "dam-hopper.toml"
-    $exampleToml = Join-Path $InstallDir1 "dam-hopper.example.toml"
+    $configToml = Join-Path $InstallDir1 "config.toml"
+    $exampleToml = Join-Path $InstallDir1 "config.example.toml"
     $license = Join-Path $InstallDir1 "LICENSE"
     $readme = Join-Path $InstallDir1 "README.md"
 
     if (-not (Test-Path -LiteralPath $binExe)) { Write-Error "Test 1: bin\dam-hopper-server.exe missing"; exit 1 }
-    if (-not (Test-Path -LiteralPath $configToml)) { Write-Error "Test 1: dam-hopper.toml missing"; exit 1 }
-    if (-not (Test-Path -LiteralPath $exampleToml)) { Write-Error "Test 1: dam-hopper.example.toml missing"; exit 1 }
+    if (-not (Test-Path -LiteralPath $configToml)) { Write-Error "Test 1: config.toml missing"; exit 1 }
+    if (-not (Test-Path -LiteralPath $exampleToml)) { Write-Error "Test 1: config.example.toml missing"; exit 1 }
     if (-not (Test-Path -LiteralPath $license)) { Write-Error "Test 1: LICENSE missing"; exit 1 }
     if (-not (Test-Path -LiteralPath $readme)) { Write-Error "Test 1: README.md missing"; exit 1 }
 

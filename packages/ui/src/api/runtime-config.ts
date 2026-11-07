@@ -135,10 +135,9 @@ export async function fetchRuntimeConfig(
       signal: controller.signal,
     });
 
-    if (!response.ok) {
+    if (!response.ok || response.status === 204) {
       return null;
     }
-
     const contentLength = response.headers.get("content-length");
     if (
       contentLength &&
@@ -148,10 +147,9 @@ export async function fetchRuntimeConfig(
     }
 
     const text = await response.text();
-    if (text.length > MAX_RUNTIME_CONFIG_BYTES) {
+    if (!text.trim() || text.length > MAX_RUNTIME_CONFIG_BYTES) {
       return null;
     }
-
     const json = JSON.parse(text);
     return validateRuntimeConfig(json);
   } catch {

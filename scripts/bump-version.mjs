@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Repository-wide Version Bump, Release Tag, and Push Script for DamHopper.
- * Synchronizes all 13 release locations, refreshes Cargo locks,
+ * Synchronizes all 9 release locations, refreshes Cargo locks,
  * validates alignment, and manages Git staging, commits, tags, and pushes.
  */
 import { existsSync } from "node:fs";
@@ -70,8 +70,8 @@ export async function main() {
   for (const rel of filesToStage) console.log(`  ✓ ${rel}`);
 
   // [2/5] Refresh Cargo Lockfiles
-  console.log(`\n[2/5] Refreshing Cargo lockfiles (server & apps/native)...`);
-  filesToStage.push("server/Cargo.lock", "apps/native/src-tauri/Cargo.lock");
+  console.log(`\n[2/5] Refreshing Cargo lockfiles (server)...`);
+  filesToStage.push("server/Cargo.lock");
 
   if (!options.dryRun) {
     const bridgeAsset = resolve(REPO_ROOT, "packages/browser-bridge/dist/index.iife.js");
@@ -85,17 +85,12 @@ export async function main() {
         stdio: ["ignore", "ignore", "pipe"],
       });
       console.log(`  ✓ server/Cargo.lock updated`);
-      runCommand("cargo", ["metadata", "--format-version", "1", "--manifest-path", "apps/native/src-tauri/Cargo.toml"], {
-        stdio: ["ignore", "ignore", "pipe"],
-      });
-      console.log(`  ✓ apps/native/src-tauri/Cargo.lock updated`);
     } catch (err) {
       console.error(`Failed to refresh Cargo locks: ${err.stderr || err.message}`);
       process.exit(1);
     }
   } else {
     console.log(`  [dry-run] cargo metadata --format-version 1 --manifest-path server/Cargo.toml`);
-    console.log(`  [dry-run] cargo metadata --format-version 1 --manifest-path apps/native/src-tauri/Cargo.toml`);
   }
 
   // [3/5] Verify release version alignment

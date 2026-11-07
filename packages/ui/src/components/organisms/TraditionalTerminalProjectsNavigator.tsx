@@ -1,5 +1,5 @@
 import { useId, useMemo, useRef, useState } from "react";
-import { GitBranch, GitCommit, GitMerge, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { Link } from "react-router-dom";
 import { TraditionalTerminalAgentGroupRow } from "@/components/molecules/traditional-terminal-agent-group-row.js";
 import { TraditionalTerminalAgentFilter } from "@/components/molecules/traditional-terminal-agent-filter.js";
@@ -13,248 +13,19 @@ import {
   type TraditionalAgentStatusSelection,
 } from "@/lib/traditional-terminal-agent-filter.js";
 import type { TraditionalTerminalAgentRow as TraditionalTerminalAgentRowModel } from "@/lib/traditional-terminal-agents.js";
-import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
-import { useProjectStatus, useWorktrees } from "@/api/queries.js";
-import type { ProjectTargetInput } from "@/api/client.js";
-import type { ProjectRef } from "@/api/ownership.js";
-import { TerminalProjectActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
-import {
-  traditionalTerminalProjectPanelId,
-  traditionalTerminalProjectTabId,
-} from "@/lib/traditional-terminal-projects.js";
 import type { TraditionalTerminalProjectGroup } from "@/lib/traditional-terminal-projects.js";
+import { TraditionalTerminalProjectWorkspaceRow } from "@/components/organisms/TraditionalTerminalProjectWorkspaceRow.js";
+import { OpenProjectWorkspacePicker } from "@/components/organisms/OpenProjectWorkspacePicker.js";
+import type { AggregatedProjectItem } from "@/hooks/use-aggregated-projects.js";
+import type { OpenWorkspaceRef } from "@/lib/agent-hub-open-workspaces.js";
+import type { IntentPayloadMap } from "@/os/intents.js";
 import { cn } from "@/lib/utils.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { useProjectTarget } from "@/hooks/use-project-target.js";
-import { normalizeWorktreePath } from "@/stores/project-target.js";
-import { TraditionalTerminalWorktreeSelect } from "@/components/organisms/TraditionalTerminalWorktreeSelect.js";
 
-function TraditionalProjectGitSummary({
-  projectName,
-  profileId,
-  target,
-  selectedPath,
-}: {
-  projectName: string;
-  profileId?: string;
-  target?: ProjectTargetInput;
-  selectedPath?: string | null;
-}) {
-  const targetInput: ProjectTargetInput = useMemo(() => {
-    const base =
-      target ?? (profileId ? { profileId, project: projectName } : projectName);
-    if (selectedPath != null) {
-      if (typeof base === "string") {
-        return { project: base, worktreePath: selectedPath };
-      }
-      return { ...base, worktreePath: selectedPath };
-    }
-    return base;
-  }, [profileId, projectName, selectedPath, target]);
-
-  const {
-    data: status,
-    isLoading,
-    isError,
-  } = useProjectStatus(targetInput, true);
-
-  const {
-    data: worktrees,
-    isLoading: isWorktreesLoading,
-    isError: isWorktreesError,
-  } = useWorktrees(targetInput);
-
-  const lastCommit = status?.lastCommit;
-  const worktree =
-    selectedPath != null
-      ? worktrees?.find(
-          (candidate) =>
-            normalizeWorktreePath(candidate.path) ===
-            normalizeWorktreePath(selectedPath),
-        )
-      : worktrees?.find((candidate) => candidate.isMain);
-
-  if (
-    isLoading ||
-    isError ||
-    isWorktreesLoading ||
-    isWorktreesError ||
-    !status ||
-    !worktree?.path ||
-    worktree.isAvailable !== true ||
-    worktree.isPrunable ||
-    status.pathExists === false ||
-    status.statusError ||
-    !status.branch ||
-    !lastCommit?.hash ||
-    !lastCommit.message ||
-    Number.isNaN(new Date(lastCommit.date).getTime())
-  ) {
-    return null;
-  }
-
-  const accessibleLabel = `Branch ${status.branch}; Worktree ${worktree.path}; latest commit ${lastCommit.message}`;
-  return (
-    <span
-      aria-label={accessibleLabel}
-      className="mt-1 flex min-w-0 flex-col gap-0.5 text-xs leading-snug"
-      role="status"
-      title={accessibleLabel}
-    >
-      <span className="flex min-w-0 items-start gap-1 text-[var(--color-info)]">
-        <GitBranch className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
-        <span className="min-w-0 truncate font-mono" title={status.branch}>
-          {status.branch}
-        </span>
-      </span>
-      <span className="flex min-w-0 items-start gap-1 text-[var(--color-text-muted)]">
-        <GitMerge className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
-        <span className="min-w-0 truncate font-mono" title={worktree.path}>
-          {worktree.path}
-        </span>
-      </span>
-      <span className="flex min-w-0 items-start gap-1 text-[var(--color-primary)]">
-        <GitCommit className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
-        <span
-          className="min-w-0 whitespace-normal break-words"
-          title={status.lastCommit.message}
-        >
-          {status.lastCommit.message}
-        </span>
-      </span>
-    </span>
-  );
-}
-
-interface TraditionalProjectRowProps {
-  group: TraditionalTerminalProjectGroup;
-  index: number;
-  isActive: boolean;
-  activeGroupId: string | null;
-  onSelectGroup: (groupId: string) => void;
-  onKeyDown: (
-    event: React.KeyboardEvent<HTMLButtonElement>,
-    groupIndex: number,
-  ) => void;
-  setButtonRef: (groupId: string, element: HTMLButtonElement | null) => void;
-  showCommitStatus: boolean;
-  touchOptimized?: boolean;
-}
-
-function TraditionalProjectRow({
-  group,
-  index,
-  isActive,
-  activeGroupId,
-  onSelectGroup,
-  onKeyDown,
-  setButtonRef,
-  showCommitStatus,
-  touchOptimized = false,
-}: TraditionalProjectRowProps) {
-  const projectScope = useMemo<string | ProjectRef | null>(() => {
-    if (!group.projectName) return null;
-    return (
-      group.projectRef ??
-      (group.profileId
-        ? { profileId: group.profileId, project: group.projectName }
-        : group.projectName)
-    );
-  }, [group.profileId, group.projectName, group.projectRef]);
-  const targetSnapshot = useProjectTarget(projectScope);
-  const selectedPath = targetSnapshot?.target.worktreePath ?? null;
-  const { data: projectStatus } = useProjectStatus(
-    projectScope ?? "",
-    Boolean(group.projectName),
-  );
-  const isGitProject = projectStatus
-    ? Boolean(
-        projectStatus.pathExists !== false &&
-          !projectStatus.statusError &&
-          Boolean(projectStatus.branch || projectStatus.lastCommit?.hash),
-      )
-    : false;
-  return (
-    <div
-      role="presentation"
-      className={cn(
-        "group/row relative flex flex-col gap-1 px-3 py-1 transition-colors",
-        isActive
-          ? "workbench-selection"
-          : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)]/40",
-      )}
-    >
-      <button
-        id={traditionalTerminalProjectTabId(group.id)}
-        ref={(element) => setButtonRef(group.id, element)}
-        type="button"
-        role="tab"
-        aria-selected={isActive}
-        aria-controls={
-          isActive ? traditionalTerminalProjectPanelId(group.id) : undefined
-        }
-        tabIndex={isActive || (!activeGroupId && index === 0) ? 0 : -1}
-        onClick={() => onSelectGroup(group.id)}
-        onKeyDown={(event) => onKeyDown(event, index)}
-        className={cn(
-          "flex min-h-11 w-full items-start gap-2 rounded px-1 py-1.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-primary)]",
-          touchOptimized && "min-h-12",
-        )}
-      >
-        <TerminalProjectActivityIndicator tabs={group.terminalTabs} />
-        <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 items-center gap-2">
-            <span
-              className={cn(
-                "min-w-0 truncate font-mono",
-                isActive ? "text-[var(--color-selection-text)] font-semibold" : "text-current",
-              )}
-            >
-              {group.label}
-            </span>
-            {group.profileName && (
-              <ProfileBadge
-                profileId={group.profileId}
-                name={group.profileName}
-              />
-            )}
-            <span
-              className={cn(
-                "ml-auto shrink-0 text-2xs",
-                isActive ? "text-[var(--color-selection-text)]/80" : "text-[var(--color-text-muted)]",
-              )}
-            >
-              {group.terminalTabs.length}
-            </span>
-          </span>
-          {group.projectName && showCommitStatus ? (
-            <TraditionalProjectGitSummary
-              projectName={group.projectName}
-              profileId={group.profileId}
-              target={group.projectRef}
-              selectedPath={selectedPath}
-            />
-          ) : null}
-        </span>
-      </button>
-      {group.projectName && isGitProject ? (
-        <div className="pl-5 pr-1 pb-1">
-          <TraditionalTerminalWorktreeSelect
-            projectName={group.projectName}
-            profileId={group.profileId}
-            projectRef={group.projectRef}
-            touchOptimized={touchOptimized}
-          />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-interface TraditionalTerminalProjectsNavigatorProps {
-  groups: readonly TraditionalTerminalProjectGroup[];
-  activeGroupId: string | null;
-  onSelectGroup: (groupId: string) => void;
+export interface TraditionalTerminalProjectsNavigatorProps {
+  groups?: readonly TraditionalTerminalProjectGroup[];
+  activeGroupId?: string | null;
+  onSelectGroup?: (groupId: string) => void;
   onNewTerminal?: () => void;
   width?: number;
   className?: string;
@@ -263,12 +34,23 @@ interface TraditionalTerminalProjectsNavigatorProps {
   readonly activeSessionId?: string | null;
   readonly onSelectAgent?: (sessionId: string) => void;
   readonly agentSettingsHref?: string;
+  disclosedGroupIds?: ReadonlySet<string>;
+  onToggleDisclosure?: (groupId: string) => void;
+  onNewTerminalInGroup?: (groupId: string) => void;
+  onCloseWorkspace?: (groupId: string) => void;
+  onOpenFile?: (payload: IntentPayloadMap["file:open"]) => void;
+  picker?: {
+    items: readonly AggregatedProjectItem[];
+    openGroupIds: ReadonlySet<string>;
+    isLoading: boolean;
+    onOpen: (ref: OpenWorkspaceRef) => void;
+  };
 }
 
 export function TraditionalTerminalProjectsNavigator({
-  groups,
-  activeGroupId,
-  onSelectGroup,
+  groups = [],
+  activeGroupId = null,
+  onSelectGroup = () => {},
   onNewTerminal,
   width,
   className,
@@ -277,6 +59,12 @@ export function TraditionalTerminalProjectsNavigator({
   activeSessionId,
   onSelectAgent,
   agentSettingsHref,
+  disclosedGroupIds,
+  onToggleDisclosure,
+  onNewTerminalInGroup,
+  onCloseWorkspace,
+  onOpenFile,
+  picker,
 }: TraditionalTerminalProjectsNavigatorProps) {
   const projectsHeadingId = useId();
   const agentsHeadingId = useId();
@@ -339,23 +127,37 @@ export function TraditionalTerminalProjectsNavigator({
     >
       <section aria-labelledby={projectsHeadingId} className="flex min-h-0 flex-1 flex-col">
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
-          <h2 id={projectsHeadingId} className="text-2xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
-            projects
+          <h2
+            id={projectsHeadingId}
+            className="text-2xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]"
+          >
+            {groups.length > 0 ? `projects (${groups.length})` : "projects"}
           </h2>
-          {onNewTerminal ? (
-            <button
-              type="button"
-              aria-label="New terminal in selected project"
-              title="New terminal in selected project"
-              onClick={onNewTerminal}
-              className={cn(
-                "flex h-8 w-8 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]",
-                touchOptimized && "min-h-11 min-w-11",
-              )}
-            >
-              <Plus className="h-4 w-4" aria-hidden="true" />
-            </button>
-          ) : null}
+          <div className="flex items-center gap-1">
+            {picker ? (
+              <OpenProjectWorkspacePicker
+                items={picker.items}
+                openGroupIds={picker.openGroupIds}
+                isLoading={picker.isLoading}
+                onOpen={picker.onOpen}
+                touchOptimized={touchOptimized}
+              />
+            ) : null}
+            {onNewTerminal ? (
+              <button
+                type="button"
+                aria-label="New terminal in selected project"
+                title="New terminal in selected project"
+                onClick={onNewTerminal}
+                className={cn(
+                  "flex h-8 w-8 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]",
+                  touchOptimized && "min-h-11 min-w-11",
+                )}
+              >
+                <Plus className="h-4 w-4" aria-hidden="true" />
+              </button>
+            ) : null}
+          </div>
         </div>
         <div
           role="tablist"
@@ -364,7 +166,7 @@ export function TraditionalTerminalProjectsNavigator({
           className="min-h-0 flex-1 overflow-y-auto py-1"
         >
           {groups.map((group, index) => (
-            <TraditionalProjectRow
+            <TraditionalTerminalProjectWorkspaceRow
               key={group.id}
               group={group}
               index={index}
@@ -378,6 +180,11 @@ export function TraditionalTerminalProjectsNavigator({
               }}
               showCommitStatus={showCommitStatus}
               touchOptimized={touchOptimized}
+              isDisclosed={disclosedGroupIds?.has(group.id) ?? false}
+              onToggleDisclosure={onToggleDisclosure}
+              onNewTerminalInGroup={onNewTerminalInGroup}
+              onCloseWorkspace={onCloseWorkspace}
+              onOpenFile={onOpenFile}
             />
           ))}
         </div>

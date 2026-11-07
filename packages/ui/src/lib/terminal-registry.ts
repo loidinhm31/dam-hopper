@@ -7,6 +7,7 @@ import type { FitAddon } from "@xterm/addon-fit";
 import type { TerminalFindController } from "@/lib/terminal-find-controller.js";
 import { cancelScheduledTerminalFit } from "@/lib/terminal-fit-scheduler.js";
 import { toTerminalKey, type TerminalRef } from "@/api/ownership.js";
+import type { TerminalTarget } from "@/api/terminal-session-contract.js";
 
 export interface TerminalEntry {
   terminal: Terminal;
@@ -33,7 +34,7 @@ function notifyRegistryChange(id: string): void {
 }
 
 export function registerTerminal(
-  target: TerminalRef | string,
+  target: TerminalTarget | TerminalRef | string,
   terminal: Terminal,
   fitAddon: FitAddon,
   findController: TerminalFindController,
@@ -42,7 +43,12 @@ export function registerTerminal(
   commitDesiredRenderer?: () => void,
 ): TerminalEntry {
   const key = toTerminalKey(target);
-  const terminalRef = typeof target === "object" ? target : ref;
+  const terminalRef: TerminalRef | undefined =
+    typeof target === "object"
+      ? ("terminalId" in target
+          ? { profileId: target.profileId, id: target.terminalId }
+          : target)
+      : ref;
   const entry: TerminalEntry = {
     terminal,
     fitAddon,
@@ -53,16 +59,16 @@ export function registerTerminal(
   };
   terminalRegistry.set(key, entry);
   const rawId =
-    typeof target === "object" ? target.id : (terminalRef?.id ?? null);
+    typeof target === "object"
+      ? ("terminalId" in target ? target.terminalId : target.id)
+      : (terminalRef?.id ?? null);
   if (rawId && rawId !== key) {
     if (!terminalRegistry.has(rawId)) {
       terminalRegistry.set(rawId, entry);
     } else {
       const existing = terminalRegistry.get(rawId);
-      if (
-        existing &&
-        existing.terminalRef?.profileId !== terminalRef?.profileId
-      ) {
+      // Fail closed whenever multiple entries share rawId (different profile, generation, epoch, or incarnation)
+      if (existing && existing !== entry) {
         terminalRegistry.delete(rawId);
       }
     }
@@ -87,7 +93,7 @@ export function getTerminalRegistrySnapshot(): ReadonlySet<string> {
 }
 
 export function getTerminal(
-  target: TerminalRef | string,
+  target: TerminalTarget | TerminalRef | string,
 ): TerminalEntry | undefined {
   const direct = terminalRegistry.get(toTerminalKey(target));
   if (direct) return direct;
@@ -97,11 +103,11 @@ export function getTerminal(
   return undefined;
 }
 
-export function hasTerminal(target: TerminalRef | string): boolean {
+export function hasTerminal(target: TerminalTarget | TerminalRef | string): boolean {
   return getTerminal(target) !== undefined;
 }
 
-export function removeTerminal(target: TerminalRef | string): void {
+export function removeTerminal(target: TerminalTarget | TerminalRef | string): void {
   const key = toTerminalKey(target);
   const entry =
     terminalRegistry.get(key) ??
@@ -111,11 +117,14 @@ export function removeTerminal(target: TerminalRef | string): void {
   if (typeof target === "string") {
     deleted = terminalRegistry.delete(target) || deleted;
   }
-  if (entry?.terminalRef?.id) {
-    const rawEntry = terminalRegistry.get(entry.terminalRef.id);
-    if (rawEntry === entry) {
-      deleted = terminalRegistry.delete(entry.terminalRef.id) || deleted;
-    }
+  const rawId =
+    typeof target === "object"
+      ? ("terminalId" in target ? target.terminalId : target.id)
+      : (entry?.terminalRef?.id ?? null);
+  if (rawId && terminalRegistry.get(rawId) === entry) {
+    deleted = terminalRegistry.delete(rawId) || deleted;
   }
-  if (deleted) notifyRegistryChange(key);
+  if (deleted) {
+    notifyRegistryChange(key);
+  }
 }

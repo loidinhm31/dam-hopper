@@ -19,7 +19,7 @@ import {
   WorkflowContextSheet,
   type MobileWorkflowSegment,
 } from "@/components/organisms/WorkflowContextSheet.js";
-import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+import { useOsViewport } from "@/os/use-os-viewport.js";
 import { useWorkflowSurfaceActions } from "@/hooks/use-workflow-surface-actions.js";
 import { cn } from "@/lib/utils.js";
 import {
@@ -43,7 +43,7 @@ export function WorkflowContextSurface({
   onOpenTerminal,
   onSelectTarget,
 }: WorkflowContextSurfaceProps) {
-  const isCompact = useCompactWorkspace();
+  const { isCompact } = useOsViewport();
   const [localIsOpen, setLocalIsOpen] = useState(false);
   const [selectedTarget, setSelectedTarget] = useState<ProjectTargetRef | null>(
     target ?? null,

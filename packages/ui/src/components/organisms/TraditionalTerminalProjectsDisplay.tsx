@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -6,7 +7,9 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { Plus } from "lucide-react";
+import { Plus, BookOpen, Folder, X, GitBranch } from "lucide-react";
+import { TraditionalProjectWorkspaceTree } from "@/components/organisms/TraditionalProjectWorkspaceTree.js";
+import { TraditionalProjectFileChanges } from "@/components/organisms/TraditionalProjectFileChanges.js";
 import {
   getConnectionSnapshot,
   subscribeConnections,
@@ -33,7 +36,7 @@ import {
 import { TraditionalTerminalProjectsNavigator } from "@/components/organisms/TraditionalTerminalProjectsNavigator.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
-import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+import { useOsViewport } from "@/os/use-os-viewport.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
 import { useTraditionalTerminalProjectSelection } from "@/hooks/use-traditional-terminal-project-selection.js";
 import {
@@ -48,7 +51,14 @@ import { buildAgentSettingsHref } from "@/lib/agent-store-navigation.js";
 import { buildTraditionalTerminalAgentRows } from "@/lib/traditional-terminal-agents.js";
 import { useAgentStatusStore } from "@/stores/agent-status.js";
 import { cn } from "@/lib/utils.js";
-
+import type { AggregatedProjectItem } from "@/hooks/use-aggregated-projects.js";
+import {
+  unionOpenWorkspaceGroups,
+  type OpenWorkspaceRef,
+} from "@/lib/agent-hub-open-workspaces.js";
+import { useHubTerminalAttachGate } from "@/os/agent-hub/use-hub-terminal-attach-gate.js";
+import type { TerminalTarget } from "@/api/terminal-session-contract.js";
+import type { IntentPayloadMap } from "@/os/intents.js";
 const TRADITIONAL_PROJECTS_NAVIGATOR_WIDTH_KEY =
   "dam-hopper:traditional-projects-navigator-width";
 
@@ -82,6 +92,27 @@ export interface TraditionalTerminalProjectsDisplayProps {
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
   onOpenSessionChanges?: (sessionId: string) => void;
+  isCompact?: boolean;
+  openWorkspaceRefs?: readonly OpenWorkspaceRef[];
+  projectInventory?: readonly AggregatedProjectItem[];
+  inventoryLoading?: boolean;
+  sidebarHidden?: boolean;
+  fileTreeHidden?: boolean;
+  onToggleFileTree?: () => void;
+  disclosedGroupIds?: ReadonlySet<string>;
+  onToggleDisclosure?: (groupId: string) => void;
+  onOpenWorkspace?: (ref: OpenWorkspaceRef) => void;
+  onCloseWorkspace?: (groupId: string) => void;
+  onNewTerminalInGroup?: (groupId: string) => void;
+  onOpenFile?: (payload: IntentPayloadMap["file:open"]) => void;
+  onOpenRecipes?: () => void;
+  onOpenGit?: () => void;
+  onSelectedGroupChange?: (group: TraditionalTerminalProjectGroup | null) => void;
+  selectGroupRequest?: { groupId: string; nonce: number };
+  hubAttach?: {
+    hubWindowId: string;
+    resolveTarget: (logicalKey: string) => TerminalTarget | undefined;
+  };
 }
 
 export function TraditionalTerminalProjectsDisplay({
@@ -106,8 +137,30 @@ export function TraditionalTerminalProjectsDisplay({
   renderBrowserContent,
   onCloseBrowser,
   onOpenSessionChanges,
+  isCompact,
+  openWorkspaceRefs,
+  projectInventory,
+  inventoryLoading,
+  sidebarHidden,
+  fileTreeHidden = false,
+  onToggleFileTree,
+  disclosedGroupIds,
+  onToggleDisclosure,
+  onOpenWorkspace,
+  onCloseWorkspace,
+  onNewTerminalInGroup,
+  onOpenFile,
+  onOpenRecipes,
+  onOpenGit,
+  onSelectedGroupChange,
+  selectGroupRequest,
+  hubAttach,
 }: TraditionalTerminalProjectsDisplayProps) {
-  const isCompactWorkspace = useCompactWorkspace();
+  const { isCompact: defaultCompact } = useOsViewport();
+  const isCompactWorkspace =
+    isCompact !== undefined ? isCompact : defaultCompact;
+  const [projectsSheetOpen, setProjectsSheetOpen] = useState(false);
+  const projectsOpenerRef = useRef<HTMLButtonElement>(null);
   const {
     width: projectsNavigatorWidth,
     handleProps: projectsNavigatorResizeProps,
@@ -119,8 +172,6 @@ export function TraditionalTerminalProjectsDisplay({
     keyboardResizeEnabled: true,
     storageKey: TRADITIONAL_PROJECTS_NAVIGATOR_WIDTH_KEY,
   });
-  const [projectsSheetOpen, setProjectsSheetOpen] = useState(false);
-  const projectsOpenerRef = useRef<HTMLButtonElement>(null);
   const statusProfiles = useAgentStatusStore((state) => state.profiles);
   const profileVersion = useSyncExternalStore(
     subscribeToProfileChanges,
@@ -151,10 +202,20 @@ export function TraditionalTerminalProjectsDisplay({
     }
     return snapshots;
   }, [registeredProfiles, connectionSignature]);
-  const groups = useMemo(
+  const sessionGroups = useMemo(
     () => buildTraditionalTerminalProjectGroups(mountedSessions, terminalTabs),
     [mountedSessions, terminalTabs, registeredProfiles],
   );
+  const groups = useMemo(() => {
+    if (openWorkspaceRefs && projectInventory) {
+      return unionOpenWorkspaceGroups(
+        sessionGroups,
+        openWorkspaceRefs,
+        projectInventory,
+      );
+    }
+    return sessionGroups;
+  }, [sessionGroups, openWorkspaceRefs, projectInventory]);
   const rosterGroups = useMemo(
     () =>
       groups.map((group) => {
@@ -209,6 +270,61 @@ export function TraditionalTerminalProjectsDisplay({
     onSelectTab,
   });
   const { selectedGroup, activeSessionForGroup } = selection;
+
+  const selectedGroupSessionIdsKey = useMemo(() => {
+    return selectedGroup
+      ? selectedGroup.terminalTabs.map((t) => t.sessionId).join(";")
+      : "";
+  }, [selectedGroup]);
+
+  const selectedGroupSessionIds = useMemo(() => {
+    return selectedGroup
+      ? selectedGroup.terminalTabs.map((t) => t.sessionId)
+      : [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedGroup?.id, selectedGroupSessionIdsKey]);
+
+  const hubAttachOptions = useMemo(() => {
+    if (!hubAttach) return null;
+    return {
+      hubWindowId: hubAttach.hubWindowId,
+      sessionIds: selectedGroupSessionIds,
+      resolveTarget: hubAttach.resolveTarget,
+    };
+  }, [hubAttach, selectedGroupSessionIds]);
+
+  const attachGate = useHubTerminalAttachGate(hubAttachOptions);
+
+  const [sidebarToggleCount, setSidebarToggleCount] = useState(0);
+  const prevSidebarHiddenRef = useRef(sidebarHidden);
+  useEffect(() => {
+    if (prevSidebarHiddenRef.current !== sidebarHidden) {
+      prevSidebarHiddenRef.current = sidebarHidden;
+      setSidebarToggleCount((c) => c + 1);
+    }
+  }, [sidebarHidden]);
+  const effectiveLayoutRevision = layoutRevision + sidebarToggleCount;
+
+  const lastHandledNonceRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (
+      selectGroupRequest &&
+      selectGroupRequest.nonce !== lastHandledNonceRef.current
+    ) {
+      lastHandledNonceRef.current = selectGroupRequest.nonce;
+      selection.handleSelectGroup(selectGroupRequest.groupId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectGroupRequest?.groupId, selectGroupRequest?.nonce]);
+
+  const lastReportedGroupIdRef = useRef<string | undefined | null>(undefined);
+  useEffect(() => {
+    const currentGroupId = selectedGroup?.id ?? null;
+    if (lastReportedGroupIdRef.current !== currentGroupId) {
+      lastReportedGroupIdRef.current = currentGroupId;
+      onSelectedGroupChange?.(selectedGroup ?? null);
+    }
+  }, [selectedGroup, onSelectedGroupChange]);
   // Status-bearing tabs or session renames rebuild groups/mountedSessions,
   // but unchanged PTY membership must not retrigger MultiTerminalDisplay's
   // prune/reparent/fit path and steal focus.
@@ -281,7 +397,7 @@ export function TraditionalTerminalProjectsDisplay({
     if (!group) return;
     rememberNewTerminalTarget(groupProjectTargetId(group));
     selection.handleSelectGroup(groupId);
-    setProjectsSheetOpen(false);
+    if (isCompactWorkspace) setProjectsSheetOpen(false);
   }
 
   function handleSelectTab(sessionId: string) {
@@ -308,7 +424,7 @@ export function TraditionalTerminalProjectsDisplay({
     const committed = committedAgentSelection.current;
     if (!offeredKey || committed?.keys.get(sessionId) !== offeredKey) return;
     committed.selectTab(sessionId);
-    setProjectsSheetOpen(false);
+    if (isCompactWorkspace) setProjectsSheetOpen(false);
   }
   function handleCloseTerminalTab(sessionId: string) {
     const group = groups.find((candidate) =>
@@ -330,7 +446,77 @@ export function TraditionalTerminalProjectsDisplay({
   }
 
   function renderTerminalSurface() {
-    if (!selectedGroup) return null;
+    if (!selectedGroup) {
+      return (
+        <div
+          data-testid="traditional-terminal-no-workspaces"
+          className="flex h-full flex-1 flex-col items-center justify-center p-6 text-center text-xs text-[var(--color-text-muted)]"
+        >
+          <p>No workspace open. Use the sidebar to open a project.</p>
+        </div>
+      );
+    }
+
+    if (selectedGroup.terminalTabs.length === 0) {
+      return (
+        <div
+          data-testid="traditional-terminal-empty-workspace"
+          className="flex h-full flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-xs text-[var(--color-text-muted)]"
+        >
+          <p className="max-w-xs text-[var(--color-text-muted)]">
+            No terminals running in this workspace. Start a new terminal or open a recipe.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (onNewTerminalInGroup) {
+                  onNewTerminalInGroup(selectedGroup.id);
+                } else {
+                  handleNewTerminal();
+                }
+              }}
+              className="flex items-center gap-1.5 rounded bg-[var(--color-primary)] px-3 py-1.5 font-medium text-[var(--color-primary-foreground)] hover:opacity-90"
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              <span>New Terminal</span>
+            </button>
+            {onOpenRecipes && (
+              <button
+                type="button"
+                onClick={onOpenRecipes}
+                className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-2)]"
+              >
+                <BookOpen className="h-4 w-4" aria-hidden="true" />
+                <span>Recipes</span>
+              </button>
+            )}
+            {onOpenGit && (
+              <button
+                type="button"
+                onClick={onOpenGit}
+                disabled={!selectedGroup.projectName}
+                aria-label={
+                  selectedGroup.projectName
+                    ? `Open Git panel (${selectedGroup.projectName})`
+                    : "Open Git panel (no project selected)"
+                }
+                title={
+                  selectedGroup.projectName
+                    ? `Open Git panel (${selectedGroup.projectName})`
+                    : "Open Git panel (no project selected)"
+                }
+                className="flex items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <GitBranch className="h-4 w-4" aria-hidden="true" />
+                <span>Git</span>
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <MultiTerminalDisplay
         key={selectedGroup.id}
@@ -339,8 +525,9 @@ export function TraditionalTerminalProjectsDisplay({
         openTabs={selectedGroup.terminalTabs}
         layoutStorageKey={traditionalTerminalLayoutStorageKey(selectedGroup.id)}
         terminalCommitStatusEnabled={false}
-        layoutRevision={layoutRevision}
+        layoutRevision={effectiveLayoutRevision}
         renderTerminals={renderTerminals}
+        attachGate={attachGate}
         onSessionExit={onSessionExit}
         onNewTerminal={handleNewTerminal}
         onSelectTab={handleSelectTab}
@@ -357,36 +544,59 @@ export function TraditionalTerminalProjectsDisplay({
     );
   }
 
-  if (!selectedGroup) return null;
-  const selectedGroupTabId = traditionalTerminalProjectTabId(selectedGroup.id);
-  const selectedGroupPanelId = traditionalTerminalProjectPanelId(
-    selectedGroup.id,
-  );
+  const selectedGroupTabId = selectedGroup
+    ? traditionalTerminalProjectTabId(selectedGroup.id)
+    : undefined;
+  const selectedGroupPanelId = selectedGroup
+    ? traditionalTerminalProjectPanelId(selectedGroup.id)
+    : undefined;
 
   if (isCompactWorkspace) {
     return (
       <div className="flex h-full min-h-0 flex-col overflow-clip bg-[var(--color-background)]">
         <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1">
           <span className="min-w-0 flex items-center gap-1.5 truncate text-xs font-semibold text-[var(--color-text)]">
-            <span className="min-w-0 truncate">{selectedGroup.label}</span>
-            {selectedGroup.profileName && (
+            <span className="min-w-0 truncate">
+              {selectedGroup ? selectedGroup.label : "No project"}
+            </span>
+            {selectedGroup?.profileName && (
               <ProfileBadge
                 profileId={selectedGroup.profileId}
                 name={selectedGroup.profileName}
               />
             )}
           </span>
-          <button
-            type="button"
-            aria-label="New terminal in selected project"
-            onClick={handleNewTerminal}
-            title="New terminal in selected project"
-            className="ml-auto flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] active:bg-[var(--color-border)]"
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-          </button>
-          {/* Keep the sheet action on its own trailing row: the mobile shell's
-              default floating Panels selector occupies the leading edge. */}
+          <div className="ml-auto flex items-center gap-1.5">
+            {onOpenGit && (
+              <button
+                type="button"
+                aria-label={
+                  selectedGroup?.projectName
+                    ? `Open Git panel (${selectedGroup.projectName})`
+                    : "Open Git panel (no project selected)"
+                }
+                title={
+                  selectedGroup?.projectName
+                    ? `Open Git panel (${selectedGroup.projectName})`
+                    : "Open Git panel (no project selected)"
+                }
+                onClick={onOpenGit}
+                disabled={!selectedGroup?.projectName}
+                className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] active:bg-[var(--color-border)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <GitBranch className="h-4 w-4" aria-hidden="true" />
+              </button>
+            )}
+            <button
+              type="button"
+              aria-label="New terminal in selected project"
+              onClick={handleNewTerminal}
+              title="New terminal in selected project"
+              className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] active:bg-[var(--color-border)]"
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
           <button
             ref={projectsOpenerRef}
             type="button"
@@ -398,8 +608,6 @@ export function TraditionalTerminalProjectsDisplay({
             <span>Projects + Agents</span>
           </button>
         </div>
-        {/* The pane host changes sibling position between layouts. Keep its
-            React identity so a breakpoint does not detach or remount xterm. */}
         <main
           key="terminal-surface"
           id={selectedGroupPanelId}
@@ -412,8 +620,6 @@ export function TraditionalTerminalProjectsDisplay({
         </main>
         <Dialog open={projectsSheetOpen} onOpenChange={setProjectsSheetOpen}>
           <DialogContent
-            // Keep modal keys out of document-level workspace shortcuts.
-            // Do not preventDefault: Radix still owns Tab trapping and Escape.
             onKeyDown={(event) => event.stopPropagation()}
             onCloseAutoFocus={(event) => {
               event.preventDefault();
@@ -431,13 +637,28 @@ export function TraditionalTerminalProjectsDisplay({
             </DialogHeader>
             <TraditionalTerminalProjectsNavigator
               groups={groups}
-              activeGroupId={selectedGroup.id}
+              activeGroupId={selectedGroup ? selectedGroup.id : null}
               onSelectGroup={handleSelectGroup}
               onNewTerminal={handleNewTerminal}
               agentRows={agentRows}
               activeSessionId={activeSessionId}
               onSelectAgent={handleSelectAgent}
               agentSettingsHref={agentSettingsHref}
+              disclosedGroupIds={disclosedGroupIds}
+              onToggleDisclosure={onToggleDisclosure}
+              onNewTerminalInGroup={onNewTerminalInGroup}
+              onCloseWorkspace={onCloseWorkspace}
+              onOpenFile={onOpenFile}
+              picker={
+                projectInventory
+                  ? {
+                      items: projectInventory,
+                      openGroupIds: new Set(groups.map((g) => g.id)),
+                      isLoading: Boolean(inventoryLoading),
+                      onOpen: onOpenWorkspace ?? (() => {}),
+                    }
+                  : undefined
+              }
               className="max-h-[calc(var(--app-viewport-height)*0.75_-_5rem)]"
               touchOptimized
             />
@@ -446,7 +667,6 @@ export function TraditionalTerminalProjectsDisplay({
       </div>
     );
   }
-
   return (
     <div
       className={cn(
@@ -454,37 +674,56 @@ export function TraditionalTerminalProjectsDisplay({
         isResizingProjectsNavigator && "select-none",
       )}
     >
-      <TraditionalTerminalProjectsNavigator
-        groups={groups}
-        activeGroupId={selectedGroup.id}
-        onSelectGroup={handleSelectGroup}
-        onNewTerminal={handleNewTerminal}
-        agentRows={agentRows}
-        activeSessionId={activeSessionId}
-        onSelectAgent={handleSelectAgent}
-        agentSettingsHref={agentSettingsHref}
-        width={projectsNavigatorWidth}
-      />
-      <div
-        {...projectsNavigatorResizeProps}
-        role="separator"
-        aria-label="Resize projects panel"
-        aria-orientation="vertical"
-        aria-valuemin={220}
-        aria-valuemax={520}
-        aria-valuenow={projectsNavigatorWidth}
-        aria-valuetext={`${projectsNavigatorWidth} pixels`}
-        data-testid="traditional-projects-resize-handle"
-        title="Resize projects panel"
-        className="group relative w-1 shrink-0 cursor-col-resize hover:bg-[var(--color-primary)]/20 focus-visible:bg-[var(--color-primary)]/20 focus-visible:outline-none"
-      >
-        <div
-          className={cn(
-            "absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-[var(--color-primary)]/50 opacity-0 transition-opacity group-hover:opacity-100",
-            isResizingProjectsNavigator && "opacity-100",
-          )}
-        />
-      </div>
+      {!sidebarHidden && (
+        <>
+          <TraditionalTerminalProjectsNavigator
+            groups={groups}
+            activeGroupId={selectedGroup ? selectedGroup.id : null}
+            onSelectGroup={handleSelectGroup}
+            onNewTerminal={handleNewTerminal}
+            agentRows={agentRows}
+            activeSessionId={activeSessionId}
+            onSelectAgent={handleSelectAgent}
+            agentSettingsHref={agentSettingsHref}
+            width={projectsNavigatorWidth}
+            disclosedGroupIds={disclosedGroupIds}
+            onToggleDisclosure={onToggleDisclosure}
+            onNewTerminalInGroup={onNewTerminalInGroup}
+            onCloseWorkspace={onCloseWorkspace}
+            onOpenFile={onOpenFile}
+            picker={
+              projectInventory
+                ? {
+                    items: projectInventory,
+                    openGroupIds: new Set(groups.map((g) => g.id)),
+                    isLoading: Boolean(inventoryLoading),
+                    onOpen: onOpenWorkspace ?? (() => {}),
+                  }
+                : undefined
+            }
+          />
+          <div
+            {...projectsNavigatorResizeProps}
+            role="separator"
+            aria-label="Resize projects panel"
+            aria-orientation="vertical"
+            aria-valuemin={220}
+            aria-valuemax={520}
+            aria-valuenow={projectsNavigatorWidth}
+            aria-valuetext={`${projectsNavigatorWidth} pixels`}
+            data-testid="traditional-projects-resize-handle"
+            title="Resize projects panel"
+            className="group relative w-1 shrink-0 cursor-col-resize hover:bg-[var(--color-primary)]/20 focus-visible:bg-[var(--color-primary)]/20 focus-visible:outline-none"
+          >
+            <div
+              className={cn(
+                "absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-[var(--color-primary)]/50 opacity-0 transition-opacity group-hover:opacity-100",
+                isResizingProjectsNavigator && "opacity-100",
+              )}
+            />
+          </div>
+        </>
+      )}
       <main
         key="terminal-surface"
         id={selectedGroupPanelId}
@@ -495,6 +734,60 @@ export function TraditionalTerminalProjectsDisplay({
       >
         {renderTerminalSurface()}
       </main>
+      {onToggleFileTree && !fileTreeHidden && selectedGroup?.projectName && (
+        <aside
+          role="complementary"
+          aria-label={`${selectedGroup.projectName} files and changes`}
+          data-testid="agent-hub-right-file-tree-sidebar"
+          className="flex h-full w-72 min-w-[240px] max-w-[420px] shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)]"
+        >
+          <div className="flex h-9 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3 text-xs">
+            <div className="flex min-w-0 items-center gap-1.5 font-medium text-[var(--color-text)]">
+              <Folder className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]" aria-hidden="true" />
+              <span className="truncate">{selectedGroup.projectName}</span>
+            </div>
+            {onToggleFileTree && (
+              <button
+                type="button"
+                onClick={onToggleFileTree}
+                aria-label="Close files sidebar"
+                className="rounded p-1 text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            )}
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex h-7 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-2)]/50 px-3 text-2xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
+              <span>files</span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <TraditionalProjectWorkspaceTree
+                projectName={selectedGroup.projectName}
+                profileId={selectedGroup.profileId}
+                projectRef={selectedGroup.projectRef}
+                regionId={`agent-hub-right-file-tree-${selectedGroup.id}`}
+                onOpenFile={onOpenFile}
+                className="h-full px-2 py-1"
+              />
+            </div>
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col border-t border-[var(--color-border)]">
+            <div className="flex h-7 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-2)]/50 px-3 text-2xs font-semibold lowercase tracking-wide text-[var(--color-text-muted)]">
+              <span>file changes</span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <TraditionalProjectFileChanges
+                projectName={selectedGroup.projectName}
+                profileId={selectedGroup.profileId}
+                projectRef={selectedGroup.projectRef}
+                onOpenFile={onOpenFile}
+                className="px-2 py-1"
+              />
+            </div>
+          </div>
+        </aside>
+      )}
     </div>
   );
 }

@@ -21,7 +21,6 @@ use dam_hopper_server::diagnostics::DiagnosticStore;
 use dam_hopper_server::fs::FsSubsystem;
 use dam_hopper_server::pty::{BroadcastEventSink, PtySessionManager};
 use dam_hopper_server::state::AppState;
-use dam_hopper_server::telemetry::TelemetryRuntime;
 use opaque_ke::ServerSetup;
 use rand::rngs::OsRng;
 use serde_json::Value;
@@ -73,6 +72,8 @@ async fn setup_fixture() -> Option<TestFixture> {
         agent_store: None,
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_root.join("dam-hopper.toml"),
     };
 
@@ -98,7 +99,6 @@ async fn setup_fixture() -> Option<TestFixture> {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        TelemetryRuntime::new(),
     )
     .expect("Failed to create AppState");
 

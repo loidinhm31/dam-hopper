@@ -1,5 +1,8 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useState } from "react";
 import { logger } from "@dam-hopper/shared/logger";
+import { Server, LogIn } from "lucide-react";
+import { ServerProfilesDialog } from "@/components/organisms/ServerProfilesDialog.js";
+import { ServerSettingsDialog } from "@/components/organisms/ServerSettingsDialog.js";
 import {
   BrowserRouter,
   Routes,
@@ -25,7 +28,7 @@ import {
   getAuthToken,
   setAuthToken,
   readServerProfiles,
-  isSameOriginProfile,
+  type ServerProfile,
   subscribeToProfileChanges,
 } from "@/api/server-config.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
@@ -33,21 +36,14 @@ import { TerminalNotificationToastViewport } from "@/components/organisms/Termin
 import { AgentStatusBridge } from "@/components/organisms/AgentStatusBridge.js";
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import { AppZoomProvider } from "@/contexts/AppZoomContext.js";
-import { AndroidChromeInputPolicyProvider } from "@/contexts/AndroidChromeInputPolicyContext.js";
-import { useSshForwardHost } from "@/contexts/SshForwardHostContext.js";
-import { AndroidChromeKeyboardNotice } from "@/components/organisms/AndroidChromeKeyboardNotice.js";
 import { TunnelReminderBanner } from "@/components/organisms/TunnelReminderBanner.js";
 import { PassphrasePrompt } from "@/components/molecules/PassphrasePrompt.js";
 import { HostSleepConsentHost } from "@/components/organisms/HostSleepConsentHost.js";
 import { useCognitoModeInputGuard } from "@/hooks/use-cognito-mode-input-guard.js";
 import { CognitoModeOverlay } from "@/components/organisms/CognitoModeOverlay.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
-import { useBrowserShortcutGuard } from "@/hooks/use-browser-shortcut-guard.js";
 import { useBrowserContextMenuSuppression } from "@/hooks/use-browser-context-menu-suppression.js";
-import { useWorkspaceStore } from "@/stores/workspace.js";
-import { matchesNewTerminalShortcut } from "@/lib/shortcuts.js";
-import { handleTerminalFontSizeShortcut } from "@/lib/terminal-keyboard-shortcuts.js";
-import { isTerminalSurfaceTarget } from "@/lib/browser-shortcut-guard.js";
+import { installRootKeyboardCoordinator } from "@/os/action-dispatch.js";
 import { normalizeRouterBasename } from "@/lib/router-basename.js";
 import { recordClientRoute } from "@/lib/diagnostics-client.js";
 import {
@@ -55,17 +51,7 @@ import {
   dismissFreshResetNotice,
   checkLegacyDeepLink,
 } from "@/lib/fresh-state-reset.js";
-export {
-  SshForwardHostProvider,
-  SshForwardScopeBridge,
-  useSshForwardHost,
-  type SshForwardHostEnvironment,
-} from "@/contexts/SshForwardHostContext.js";
-export {
-  BrowserDebugHostProvider,
-  useBrowserDebugHost,
-  type BrowserDebugHostEnvironment,
-} from "@/contexts/BrowserDebugHostContext.js";
+import { translateLegacyRoute } from "@/os/deep-links.js";
 export {
   AppZoomProvider,
   useAppZoom,
@@ -83,41 +69,11 @@ function syncFontSizeCssVar(fontSize: number): void {
     `${fontSize}px`,
   );
 }
-
-const WorkspacePage = lazy(() => import("@/components/pages/WorkspacePage.js"));
-const DashboardPage = lazy(() =>
-  import("@/components/pages/DashboardPage.js").then((m) => ({
-    default: m.DashboardPage,
-  })),
-);
-const GitPage = lazy(() =>
-  import("@/components/pages/GitPage.js").then((m) => ({
-    default: m.GitPage,
-  })),
-);
-const SettingsPage = lazy(() =>
-  import("@/components/pages/SettingsPage.js").then((m) => ({
-    default: m.SettingsPage,
-  })),
-);
-const DevicesPage = lazy(() =>
-  import("@/components/pages/DevicesPage.js").then((m) => ({
-    default: m.DevicesPage,
-  })),
-);
-const AgentStorePage = lazy(() =>
-  import("@/components/pages/AgentStorePage.js").then((m) => ({
-    default: m.AgentStorePage,
-  })),
-);
-const UsagePage = lazy(() =>
-  import("@/components/pages/UsagePage.js").then((m) => ({
-    default: m.UsagePage,
-  })),
-);
-const SshForwardingPage = lazy(() =>
-  import("@/components/pages/SshForwardingPage.js").then((m) => ({
-    default: m.SshForwardingPage,
+const useClientLayoutEffect =
+  typeof window === "undefined" ? useEffect : useLayoutEffect;
+const OsShell = lazy(() =>
+  import("@/os/OsShell.js").then((m) => ({
+    default: m.OsShell,
   })),
 );
 
@@ -127,71 +83,154 @@ const LOADING_FALLBACK = (
   </div>
 );
 
-/** Redirect /terminals or /ide to /workspace, preserving search params. */
-function LegacyRedirect({ to }: { to: string }) {
+function LegacyRouteHandler() {
   const location = useLocation();
-  return <Navigate to={`${to}${location.search}`} replace />;
+  const translation = translateLegacyRoute(location.pathname, location.search);
+
+  if (translation.status === "redirect" && translation.targetUrl) {
+    const hash = location.hash || "";
+    return <Navigate to={`${translation.targetUrl}${hash}`} replace />;
+  }
+
+  if (translation.status === "unqualified") {
+    return (
+      <div className="flex flex-col h-full w-full">
+        <div
+          role="alert"
+          data-testid="legacy-unqualified-notice"
+          className="bg-red-500/10 border-b border-red-500/30 px-4 py-2 text-xs text-red-400 shrink-0 select-none z-50"
+        >
+          {translation.guidance}
+        </div>
+        <div className="flex-1 min-h-0">
+          <AuthenticatedOsRoute />
+        </div>
+      </div>
+    );
+  }
+
+  return <Navigate to="/" replace />;
 }
 
-/** Registers Ctrl+` as a global shortcut to open a new free terminal in workspace. */
-function GlobalShortcuts() {
-  const navigate = useNavigate();
-  const activeProject = useWorkspaceStore((state) => state.activeProject);
+function RemovedFeatureNotice({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div
+      data-testid={`removed-route-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
+      className="flex h-full items-center justify-center p-8 text-center"
+    >
+      <div className="max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
+        <h2 className="mb-2 text-lg font-semibold text-[var(--color-text)]">
+          {title}
+        </h2>
+        <p className="text-sm text-[var(--color-text-muted)]">{description}</p>
+      </div>
+    </div>
+  );
+}
 
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (matchesNewTerminalShortcut(e)) {
-        e.preventDefault();
-        const params = new URLSearchParams({ action: "new-terminal" });
-        if (activeProject) params.set("project", activeProject);
-        navigate(`/workspace?${params.toString()}`);
+export function isRemovedRoutePath(pathname: string, basename = ""): boolean {
+  let relative = pathname;
+  if (basename && basename !== "/" && relative.startsWith(basename)) {
+    relative = relative.slice(basename.length);
+  }
+  const clean = relative.replace(/^\/+/, "").replace(/\/+$/, "").toLowerCase();
+  const segment = clean.split("/")[0] ?? "";
+  return segment === "usage" || segment === "ssh-forwarding";
+}
+
+function RemovedRouteScreen({ pathname }: { pathname: string }) {
+  const isUsage = pathname.toLowerCase().includes("usage");
+  return (
+    <div
+      data-testid={
+        isUsage
+          ? "removed-route-usage-telemetry-retired"
+          : "removed-route-ssh-port-forwarding-retired"
       }
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeProject, navigate]);
-
-  return null;
+      className="app-screen-height flex items-center justify-center p-8 bg-[var(--color-bg)] text-[var(--color-text)]"
+    >
+      <RemovedFeatureNotice
+        title={
+          isUsage
+            ? "Usage & Telemetry Retired"
+            : "SSH Port Forwarding Retired"
+        }
+        description={
+          isUsage
+            ? "Usage telemetry and reporting services have been permanently removed."
+            : "Native desktop SSH port forwarding has been removed. Use standard SSH client tunneling or server-managed port forwards."
+        }
+      />
+    </div>
+  );
 }
 
-/** Applies terminal font-size shortcuts anywhere in the current page. */
-function GlobalTerminalFontSizeShortcuts() {
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      // The xterm handler already applied the shortcut and prevented the
-      // browser default; page-level handling must not apply it a second time.
-      if (event.defaultPrevented && isTerminalSurfaceTarget(event.target)) {
-        return;
-      }
-      const settings = useSettingsStore.getState();
-      handleTerminalFontSizeShortcut(event, {
-        increaseShortcut: settings.terminalFontSizeIncreaseShortcut,
-        decreaseShortcut: settings.terminalFontSizeDecreaseShortcut,
-        onIncrease: () => {
-          const current = useSettingsStore.getState();
-          if (current.terminalFontSize < 32) {
-            current.saveDebounced({
-              terminalFontSize: current.terminalFontSize + 1,
-            });
-          }
-        },
-        onDecrease: () => {
-          const current = useSettingsStore.getState();
-          if (current.terminalFontSize > 10) {
-            current.saveDebounced({
-              terminalFontSize: current.terminalFontSize - 1,
-            });
-          }
-        },
-      });
-    }
+function AuthenticatedOsRoute() {
+  const profile = useServerProfile();
+  const token = profile ? getAuthToken(profile.id) : null;
+  const isAuthenticated = Boolean(
+    profile && (profile.authType === "none" || token),
+  );
+  const [profilesOpen, setProfilesOpen] = useState(false);
+  const [editingProfile, setEditingProfile] = useState<ServerProfile | null | undefined>(undefined);
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  if (!isAuthenticated) {
+    return (
+      <div
+        data-testid="os-unauthenticated"
+        className="flex h-full w-full items-center justify-center p-8 text-center bg-[var(--color-bg)]"
+      >
+        <div className="max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-6 space-y-4 shadow-xl">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[var(--color-primary)]/10 text-[var(--color-primary)]">
+            <Server className="h-6 w-6" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-[var(--color-text)]">
+              Authentication Required
+            </h2>
+            <p className="mt-1 text-sm text-[var(--color-text-muted)]">
+              Connect to an active authenticated server profile to access DamHopper OS.
+            </p>
+          </div>
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={() => setProfilesOpen(true)}
+              data-testid="os-login-button"
+              className="inline-flex items-center gap-2 rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white shadow-xs hover:bg-[var(--color-primary)]/90 transition-colors"
+            >
+              <LogIn className="h-4 w-4" />
+              Manage Servers &amp; Log In
+            </button>
+          </div>
+          {profilesOpen && (
+            <ServerProfilesDialog
+              open={profilesOpen}
+              onClose={() => setProfilesOpen(false)}
+              onEditProfile={(p) => setEditingProfile(p)}
+            />
+          )}
+          {editingProfile !== undefined && (
+            <ServerSettingsDialog
+              open={editingProfile !== undefined}
+              profile={editingProfile}
+              onClose={() => setEditingProfile(undefined)}
+            />
+          )}
+        </div>
+      </div>
+    );
+  }
 
-  return null;
+  return <OsShell />;
 }
+
 
 function RouteDiagnostics() {
   const location = useLocation();
@@ -241,6 +280,7 @@ function FreshResetBanner() {
 
 function LegacyDeepLinkNotice() {
   const location = useLocation();
+  if (location.pathname.startsWith("/os")) return null;
   const check = checkLegacyDeepLink(location);
 
   if (!check.isLegacy) return null;
@@ -255,17 +295,16 @@ function LegacyDeepLinkNotice() {
   );
 }
 
-export function DamHopperApp() {
+function DamHopperAppInner() {
   useCognitoModeInputGuard();
-  useBrowserShortcutGuard();
+  useClientLayoutEffect(() => {
+    return installRootKeyboardCoordinator();
+  }, []);
+  const routerBasename = normalizeRouterBasename(import.meta.env.BASE_URL);
   useBrowserContextMenuSuppression();
   const cognitoActive = useCognitoModeStore((state) => state.active);
   const qc = useQueryClient();
   const activeProfile = useServerProfile();
-  const { host: sshForwardHost, environment: sshForwardEnvironment } =
-    useSshForwardHost();
-  const sshForwardAvailable =
-    sshForwardHost !== null && sshForwardEnvironment.kind === "nativeDesktop";
   const activeProfileId = activeProfile?.id;
   const activeProfileUrl = activeProfile?.url;
   const activeProfileConnectionKey = JSON.stringify([
@@ -274,7 +313,6 @@ export function DamHopperApp() {
     activeProfile?.authType ?? "",
     activeProfileId ? (getAuthToken(activeProfileId) ?? "") : "",
   ]);
-  const routerBasename = normalizeRouterBasename(import.meta.env.BASE_URL);
 
   useEffect(() => {
     return registerConnectionRegistryQueryClient(qc);
@@ -306,6 +344,14 @@ export function DamHopperApp() {
     let cancelled = false;
 
     const bootstrapProfiles = async () => {
+      // Skip bootstrap when viewing retired feature notice to guarantee zero network/mutation
+      if (typeof window !== "undefined") {
+        const path = window.location.pathname;
+        if (path.endsWith("/usage") || path.endsWith("/ssh-forwarding")) {
+          return;
+        }
+      }
+
       const profilesResult = readServerProfiles();
       if (profilesResult.status !== "available") return;
 
@@ -355,11 +401,7 @@ export function DamHopperApp() {
   return (
     <AppZoomProvider>
       <EncryptProvider>
-        <AndroidChromeInputPolicyProvider>
-          <BrowserRouter basename={routerBasename}>
-            <CognitoModeOverlay />
-            <GlobalShortcuts />
-            <GlobalTerminalFontSizeShortcuts />
+        <CognitoModeOverlay />
             <TerminalNotificationToastViewport />
             <AgentStatusBridge />
             <RouteDiagnostics />
@@ -369,7 +411,6 @@ export function DamHopperApp() {
               aria-hidden={cognitoActive ? "true" : undefined}
               className="app-screen-height flex flex-col overflow-hidden"
             >
-              <AndroidChromeKeyboardNotice />
               <PassphrasePrompt />
               <FreshResetBanner />
               <LegacyDeepLinkNotice />
@@ -377,100 +418,73 @@ export function DamHopperApp() {
               <HostSleepConsentHost />
               <div className="app-route-viewport min-h-0 flex-1">
               <Routes>
-              <Route
-                path="/"
-                element={
-                  <ErrorBoundary>
-                    <Suspense fallback={LOADING_FALLBACK}>
-                      <DashboardPage />
-                    </Suspense>
-                  </ErrorBoundary>
-                }
-              />
-              <Route
-                path="/workspace"
-                element={
-                  <ErrorBoundary>
-                    <Suspense fallback={LOADING_FALLBACK}>
-                      <WorkspacePage />
-                    </Suspense>
-                  </ErrorBoundary>
-                }
-              />
-              {/* Backward-compat redirects — preserve search params for deep-links */}
-              <Route
-                path="/terminals"
-                element={<LegacyRedirect to="/workspace" />}
-              />
-              <Route path="/ide" element={<LegacyRedirect to="/workspace" />} />
-              <Route
-                path="/git"
-                element={
-                  <ErrorBoundary>
-                    <Suspense fallback={LOADING_FALLBACK}>
-                      <GitPage />
-                    </Suspense>
-                  </ErrorBoundary>
-                }
-              />
-              <Route
-                path="/settings"
-                element={
-                  <ErrorBoundary>
-                    <Suspense fallback={LOADING_FALLBACK}>
-                      <SettingsPage />
-                    </Suspense>
-                  </ErrorBoundary>
-                }
-              />
-              <Route
-                path="/agent-store"
-                element={
-                  <ErrorBoundary>
-                    <Suspense fallback={LOADING_FALLBACK}>
-                      <AgentStorePage />
-                    </Suspense>
-                  </ErrorBoundary>
-                }
-              />
-              <Route
-                path="/usage"
-                element={
-                  <ErrorBoundary>
-                    <Suspense fallback={LOADING_FALLBACK}>
-                      <UsagePage />
-                    </Suspense>
-                  </ErrorBoundary>
-                }
-              />
-              <Route
-                path="/devices"
-                element={
-                  <ErrorBoundary>
-                    <Suspense fallback={LOADING_FALLBACK}>
-                      <DevicesPage />
-                    </Suspense>
-                  </ErrorBoundary>
-                }
-              />
-              {sshForwardAvailable ? (
                 <Route
-                  path="/ssh-forwarding"
+                  path="/"
                   element={
                     <ErrorBoundary>
                       <Suspense fallback={LOADING_FALLBACK}>
-                        <SshForwardingPage />
+                        <AuthenticatedOsRoute />
                       </Suspense>
                     </ErrorBoundary>
                   }
                 />
-              ) : null}
-            </Routes>
+                <Route
+                  path="/os"
+                  element={
+                    <ErrorBoundary>
+                      <Suspense fallback={LOADING_FALLBACK}>
+                        <AuthenticatedOsRoute />
+                      </Suspense>
+                    </ErrorBoundary>
+                  }
+                />
+                <Route path="/workspace" element={<LegacyRouteHandler />} />
+                <Route path="/terminals" element={<LegacyRouteHandler />} />
+                <Route path="/ide" element={<LegacyRouteHandler />} />
+                <Route path="/git" element={<LegacyRouteHandler />} />
+                <Route path="/settings" element={<LegacyRouteHandler />} />
+                <Route path="/devices" element={<LegacyRouteHandler />} />
+                <Route path="/agent-store" element={<LegacyRouteHandler />} />
+                <Route
+                  path="/ssh-forwarding"
+                  element={
+                    <RemovedFeatureNotice
+                      title="SSH Port Forwarding Retired"
+                      description="Native desktop SSH port forwarding has been removed. Use standard SSH client tunneling or server-managed port forwards."
+                    />
+                  }
+                />
+                <Route
+                  path="/usage"
+                  element={
+                    <RemovedFeatureNotice
+                      title="Usage & Telemetry Retired"
+                      description="Usage telemetry and reporting services have been permanently removed."
+                    />
+                  }
+                />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
               </div>
             </div>
-          </BrowserRouter>
-        </AndroidChromeInputPolicyProvider>
       </EncryptProvider>
     </AppZoomProvider>
+  );
+}
+
+function AppContentRouter() {
+  const location = useLocation();
+  if (isRemovedRoutePath(location.pathname)) {
+    return <RemovedRouteScreen pathname={location.pathname} />;
+  }
+  return <DamHopperAppInner />;
+}
+
+export function DamHopperApp() {
+  const routerBasename = normalizeRouterBasename(import.meta.env.BASE_URL);
+  return (
+    <BrowserRouter basename={routerBasename}>
+      <AppContentRouter />
+    </BrowserRouter>
   );
 }

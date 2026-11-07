@@ -162,7 +162,7 @@ native/android-app/
 │       │       │   └── host/        # PortRepository, TunnelRepository, IdleSuspendRepository, IdleConsentController,
 │       │       │                    # SshRepository, HostControlRepository, DiagnosticsRepository, PortsPanelScreen,
 │       │       │                    # PortsDialogs, IdleSuspendDialogs, HostControlScreens, WorkbenchSleepConsentBanner,
-│       │       │                    # HostResourceRepository, UsageRepository, ResourceStreamCoordinator, UsageController
+│       │       │                    # HostResourceRepository, ResourceStreamCoordinator, ResourceFrameCommitter
 │       │       ├── model/       # WorkbenchModel.kt (WorkbenchPanel, WorkbenchState, shell invariants)
 │       │       └── ui/
 │       │           ├── components/ # WorkbenchHeader, PanelNavigationRow, PanelPlaceholders

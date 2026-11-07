@@ -6,8 +6,10 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryOptions,
 } from "@tanstack/react-query";
+import type { ReviewTarget } from "./terminal-session-contract";
 import { type ConnectionRef } from "./ownership";
 import { profileQueryKey } from "./query-client";
 import {
@@ -94,6 +96,153 @@ export const sessionChangesQueryKeys = {
       rootId,
     ),
 };
+
+/**
+ * Predicate that matches TanStack query keys against an exact ReviewTarget.
+ *
+ * Distinguishes 'status', 'files', and 'file' category shapes and checks exact
+ * identity tuple (profileId, generation, terminalId, incarnation, ompSessionId, rootId,
+ * serverEpoch, baselineId).
+ */
+export function matchesReviewTargetQuery(
+  queryKey: readonly unknown[],
+  target: ReviewTarget,
+): boolean {
+  if (
+    queryKey.length < 5 ||
+    queryKey[0] !== "profile" ||
+    queryKey[1] !== target.profileId ||
+    queryKey[2] !== target.generation ||
+    queryKey[3] !== "session-changes"
+  ) {
+    return false;
+  }
+
+  const category = queryKey[4];
+
+  if (category === "status") {
+    if (
+      queryKey[5] === target.terminalId &&
+      queryKey[6] === target.terminalIncarnation &&
+      queryKey[7] === target.ompSessionId
+    ) {
+      if (queryKey[8] === undefined || queryKey[8] === target.rootId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (category === "files") {
+    if (
+      queryKey[5] === target.terminalId &&
+      queryKey[6] === target.terminalIncarnation &&
+      queryKey[7] === target.ompSessionId &&
+      queryKey[8] === target.serverEpoch &&
+      queryKey[9] === target.baselineId
+    ) {
+      if (queryKey[13] === undefined || queryKey[13] === target.rootId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (category === "file") {
+    if (
+      queryKey[5] === target.terminalId &&
+      queryKey[6] === target.terminalIncarnation &&
+      queryKey[7] === target.ompSessionId &&
+      queryKey[8] === target.serverEpoch &&
+      queryKey[9] === target.baselineId
+    ) {
+      if (queryKey[12] === undefined || queryKey[12] === target.rootId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  return false;
+}
+
+/**
+ * Targeted cancellation for an exact ReviewTarget identity.
+ * Does NOT cancel other sessions or sibling review caches under the same owner.
+ */
+export async function cancelReviewQueries(
+  qc: QueryClient,
+  target: ReviewTarget,
+): Promise<void> {
+  await qc.cancelQueries({
+    predicate: (query) => matchesReviewTargetQuery(query.queryKey, target),
+  });
+}
+
+/**
+ * Targeted removal for an exact ReviewTarget identity.
+ * Does NOT purge sibling review caches under the same owner.
+ */
+export function removeReviewQueries(
+  qc: QueryClient,
+  target: ReviewTarget,
+): void {
+  qc.removeQueries({
+    predicate: (query) => matchesReviewTargetQuery(query.queryKey, target),
+  });
+}
+
+/**
+ * Closes a review target safely upon presentation window close:
+ * Cancels and removes queries ONLY if no other open window shares that exact review target.
+ */
+export function closeReviewTargetSafely(
+  qc: QueryClient,
+  target: ReviewTarget,
+  closingWindowId: string,
+  sessionWindows: Record<
+    string,
+    {
+      appId?: string;
+      runtimeIdentity?: { kind?: string; target?: unknown };
+      appState?: Record<string, unknown>;
+    }
+  >,
+): void {
+  const hasOtherWindow = Object.entries(sessionWindows).some(([id, w]) => {
+    if (id === closingWindowId || w.appId !== "session-changes") return false;
+    const otherTarget = (
+      w.runtimeIdentity?.kind === "review"
+        ? w.runtimeIdentity.target
+        : w.appState?.target
+    ) as ReviewTarget | undefined;
+    if (!otherTarget) return false;
+    return (
+      otherTarget.terminalId === target.terminalId &&
+      otherTarget.terminalIncarnation === target.terminalIncarnation &&
+      otherTarget.ompSessionId === target.ompSessionId &&
+      otherTarget.serverEpoch === target.serverEpoch &&
+      otherTarget.baselineId === target.baselineId
+    );
+  });
+  if (!hasOtherWindow) {
+    void cancelReviewQueries(qc, target);
+    removeReviewQueries(qc, target);
+  }
+}
+
+/**
+ * Owner-wide purge restricted strictly to retirement, disconnect, or config-disable.
+ * Never invoked on normal single-window close.
+ */
+export async function purgeOwnerReviewQueries(
+  qc: QueryClient,
+  owner: ConnectionRef,
+): Promise<void> {
+  const queryKey = sessionChangesQueryKeys.all(owner);
+  await qc.cancelQueries({ queryKey });
+  qc.removeQueries({ queryKey });
+}
 
 function getClient(owner: ConnectionRef): SessionChangesClient {
   const apiClient = getBoundApiClient(owner);

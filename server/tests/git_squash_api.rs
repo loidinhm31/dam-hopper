@@ -125,6 +125,8 @@ fn setup(no_auth: bool) -> TestApp {
         agent_store: None,
         projects: vec![project("test-repo", &path), project("other-repo", &other)],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: root.join("dam-hopper.toml"),
     };
     let state = AppState::new(
@@ -142,7 +144,6 @@ fn setup(no_auth: bool) -> TestApp {
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         DiagnosticStore::new(root.join("diagnostics.jsonl")),
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .unwrap();
     TestApp {

@@ -1,15 +1,14 @@
 # System Architecture
 
-**Status:** Current architecture overview, updated 2026-10-23. Detailed subsystem contracts are linked below; source code is authoritative.
+**Status:** Current architecture overview, updated 2026-11-07 (reflecting Phase 01 OS lifecycle prototype, Phase 02 native Tauri / desktop SSH-forwarding removal, Phase 04 shell chrome, Phase 05 app migration, Phase 06 System Monitor and tray, Phase 07 Agent Hub and Launch Recipes, Phase 08 root cutover to OsShell with legacy shell deletion and generic terminal input suppression, Phase 09 qualification, and Phase 10 documentation hand-off). Detailed subsystem contracts are linked below; source code is authoritative.
 
 ## Runtime Overview
 
-DamHopper is a monorepo with an Axum/Tokio Rust server and multiple workbench clients: shared React UI for browser and desktop (Tauri 2), and a dedicated native Android client (`native/android-app`) built with Kotlin Multiplatform and Jetpack Compose. The server owns remote project/workspace configuration, filesystem operations, Git, PTYs, authentication, workflow data, host resources, and privileged helper coordination. Clients own only their local profile connection state, credentials, and UI presentation.
+DamHopper is a monorepo with an Axum/Tokio Rust server and workbench clients: shared React 19 UI for web (Vite web host `apps/web`), and a dedicated native Android client (`native/android-app`) built with Kotlin Multiplatform and Jetpack Compose. (The former Tauri 2 desktop host `apps/native` was retired in Phase 02). The server owns remote project/workspace configuration, filesystem operations, Git, PTYs, authentication, workflow data, host resources, and privileged helper coordination. Clients own only their local profile connection state, credentials, and UI presentation.
 
 ```mermaid
 flowchart LR
   Web["Vite web host (apps/web)"] --> UI["Shared React 19 UI (packages/ui)"]
-  Native["Tauri 2 host (apps/native)"] --> UI
   Android["Android host (native/android-app/androidApp)"] --> KMP["KMP Shared Core (native/android-app/shared)"]
   UI --> Profiles["Web Profile connection runtime<br/>profileId + generation"]
   KMP --> Reg["ConnectionRegistry<br/>ConnectionRef + watermark"]
@@ -24,9 +23,9 @@ flowchart LR
 ### Code Boundaries
 
 - `server/src/api/` registers protected HTTP, REST-backed client operations, and authenticated WebSocket routes. `server/src/state.rs` contains shared application state.
-- `server/src/` domains include `auth`, `config`, `crypto`, `fs`, `git`, `pty`, `workflow`, `agent_status`, `agent_store`, `session_changes`, `telemetry`, `idle_suspend`, `linux_release`, `port_forward`, and `tunnel`.
+- `server/src/` domains include `auth`, `config`, `crypto`, `fs`, `git`, `pty`, `workflow`, `agent_status`, `agent_store`, `session_changes`, `idle_suspend`, `linux_release`, `port_forward`, and `tunnel`.
 - `packages/ui/src/` owns the shared React application, owner-bound API clients, transports, query keys, stores, and feature components (canonical entry `packages/ui/src/embed/dam-hopper-app.tsx`).
-- `apps/web/` is the Vite browser host; `apps/native/` is the Tauri 2 desktop host. `packages/shared/` contains shared utilities; `packages/browser-bridge/` contains browser-debug runtime protocol v1.
+- `apps/web/` is the Vite browser host; the former Tauri 2 desktop host `apps/native/` was removed in Phase 02. `packages/shared/` contains shared utilities; `packages/browser-bridge/` contains browser-debug runtime protocol v1.
 - `native/android-app/` is the native Android workbench implementation using Kotlin Multiplatform (`:shared` for core models, connection registry, and live transports; `:androidApp` for Jetpack Compose UI, `MainActivity`, and Android platform OkHttp network factory).
 - The former DamHopper plugin platform, runner, SDK, plugin APIs, and plugin iframe bridge are retired.
 
@@ -42,9 +41,9 @@ _Security Warning:_ When starting the server with `--no-auth` during local devel
 
 ### UI Surfaces and Settings Topology
 
-The shared React 19 UI partitions workbench surfaces into IDE mode (`IdeShell`), terminal workspace mode (`TerminalWorkspaceShell`), Git management (`GitPage`), and server settings (`SettingsPage`). On the Settings page, persistent uncollapsed server selectors govern the active target server and workbench preferences source, while all individual configuration sections (`SettingsSectionAccordion`) default to a collapsed state (`defaultOpen = false`), reducing cognitive load and mount overhead across appearance, shortcuts, idle suspend, maintenance, and import/export panels.
+The shared React 19 UI renders `OsShell` across both root `/` and `/os`, mounting a multi-window, multi-desktop workspace hosting 17 registered applications (terminals, editor, browser, git, search, files, changes, conflict-resolver, session-changes, system-monitor, agent-hub, recipes, settings, devices, etc.). On the Settings window, persistent uncollapsed server selectors govern the active target server and preferences source, while individual configuration sections default to a collapsed state (`defaultOpen = false`), reducing cognitive load and mount overhead across appearance, shortcuts, idle suspend, maintenance, and import/export panels.
 
-The ambient ribbon and floating surface (`WorkflowContextRibbon`, `WorkflowContextDeck`, `WorkflowContextSheet`) provide responsive task tracking across all shell viewports without persisting ephemeral UI state.
+The workflow context surface (embedded in `WorkflowPlansApp`, composed of `WorkflowContextSurface`, `WorkflowContextDeck`, and `WorkflowContextSheet`) provides responsive task tracking across desktop and window viewports without persisting ephemeral UI state.
 
 ### Traditional Projects + Agents navigator
 
@@ -52,7 +51,7 @@ Traditional terminal mode retains Projects first and adds a flat Agents list acr
 
 Connection generation/status and profile metadata are subscribed once in the display. Retained observations become Unavailable until the current owner has a ready baseline. Agent activation rejects stale instance callbacks and forwards the exact existing terminal selection, including split panes. Agent Settings targets the selected project's registered owner; unresolved owners require explicit choice, never ambient fallback.
 
-`WorkspacePage` owns the sole `TerminalKeepAliveHost` above responsive shell selection, keeping backend PTY attachments and xterm DOM elements alive across wide/compact shell switches (`MobileWorkspaceShell` vs. `TerminalWorkspaceShell`). Responsive shells and split panes own visible host attachment and layout geometry, not xterm object lifetime.
+`OsResourceHost` inside `OsShell` owns `TerminalKeepAliveHost`, `MonacoKeepAliveHost`, and `OsBrowserKeepAliveHost` above desktop and window transitions, keeping backend PTY attachments and xterm DOM elements alive across window docking, floating, maximizing, and desktop switching. App bodies and split panes own visible host attachment and layout geometry, not xterm object lifetime.
 
 Primary labels are Working, Idle, Needs attention and Unknown. `Done (turn ended)` is a secondary historical hint only for ready, nonexpired Idle evidence with explicit ended outcome and no current turn; it is not task success. Notification preferences and server semantics are unchanged. Component, focused browser, and production application journey gates have been qualified; full-viewport visual review is accepted. See [implementation progress](../plans/261008-0233-traditional-terminal-agents-sidebar/progress.md).
 
@@ -76,12 +75,12 @@ The session changes subsystem (`server/src/session_changes/`) provides an owner-
   - 2 global blocking scan permits (`MAX_BLOCKING_PERMITS`); saturation returns HTTP 409 `busy` without queuing.
   - 16 KiB maximum request body size (`MAX_REQUEST_BODY_BYTES`).
 - **Server Switch & UI Settings Toggle:** Controlled by `server.session_changes_enabled` (default `false`, JSON `sessionChangesEnabled`). When disabled, all public and private routes return HTTP 503 with wire error code `trackingDisabled`, in-flight tasks are fenced via generation increment, and retained data is purged (`disable_and_purge()`). `SettingsPage.tsx` binds an accessible toggle to the selected Settings Target Server (`targetOwner`), preserving unrelated server configuration fields, capturing action profile/generation to prevent late responses from clobbering new targets, and invalidating config queries while explicitly purging the target owner's session changes cache on success. Enabling displays an honest restart notice for active OMP sessions.
-- **Terminal Trigger Gating:** Review entry points across desktop `TabBar`, `ActiveTerminalRuntimeDisplay`, and mobile `MobileTerminalAccessoryBar` query `useSessionChangesEnabled(terminalOwner)` and strictly hide or disable when the owning server is disabled, disconnected, or loading. `WorkspacePage.handleOpenSessionChanges` explicitly verifies server enablement and generation before opening.
-- **Single UI Host & Modal Isolation:** `SessionChangesHost` modal dialog mounts once in `WorkspacePage.tsx` above responsive shells, embedding `SessionChangesPanel` keyed by the full terminal tuple (`profileId:generation:terminalId:terminalIncarnation:ompSessionId:rootId`). It fails closed if the owning server is disabled or disconnected, closing immediately and purging owner query cache. Dialog content intercepts keyboard events (`e.stopPropagation()` on `onKeyDown`) to prevent keystrokes and shortcuts from leaking into underlying live xterm PTYs, while `WorkspacePage` gates all window-level keyboard shortcut listeners when the modal is open, preserving internal Monaco editor and file list keyboard handling (full physical PTY input isolation and focus recovery remain governed by live journey qualification).
+- **Terminal Trigger Gating:** Review entry points across desktop `TabBar`, `ActiveTerminalRuntimeDisplay`, and OS intent router query `useSessionChangesEnabled(terminalOwner)` and strictly hide or disable when the owning server is disabled, disconnected, or loading.
+- **Single UI Host & Modal Isolation:** The session changes review host mounts within `SessionChangesApp` (or modal dialog host), embedding `SessionChangesPanel` keyed by the full terminal tuple (`profileId:generation:terminalId:terminalIncarnation:ompSessionId:rootId`). It fails closed if the owning server is disabled or disconnected, closing immediately and purging owner query cache. Dialog content intercepts keyboard events (`e.stopPropagation()` on `onKeyDown`) to prevent keystrokes and shortcuts from leaking into underlying live xterm PTYs, while OS-level input arbitration isolates global shortcuts during active modal review.
 - **Lazy Viewer-Only Comparison & Diff Bootstrap:** `SessionChangesPanel` mounts from metadata-only status without requiring a pre-existing comparison. Initial `useSessionChangesFiles` requests `/files` without a comparison revision; the backend lazily computes comparison and returns `comparisonRevision` with the first page (up to 500 paths display bound, UI page size 200). `useSessionChangesFileDetail` mounts only when a file and revision are active. Stale revision errors (`refreshRequired`, `serverRestarted`) clear selected file state and trigger `onRefresh` to synchronize a new revision.
 - **Capability-Free Monaco Diff Viewer:** `ReadonlyMonacoDiffViewer` renders side-by-side or inline unified diffs with `readOnly: true`, `originalEditable: false`, and `domReadOnly: true`. Editing commands, drop, and paste are disabled; model URIs are owner-scoped, and models are disposed with deferred disposal guards.
 - **Local Producer Lifecycle & Disambiguation:** The managed OMP tool-event producer (`omp-session-changes.ts`) correlates `tool_call` and `tool_result` events using authoritative compound pending keys (`${ompSessionId}\0${agentId}\0${toolCallId}`). Live tool-call routing requires an explicitly authorized session present and enabled in `roots` (`authorizedSessions`), unbinding switching agents and their descendant lineage recursively at switch start and failing closed if registration is pending or fails, while retaining historical roots for legitimate late in-flight result attribution. Late tool results deliver multi-chunk result-time unproven paths to their originating session across `handleSessionSwitch` boundaries by checking the immutable identity tuple, instance-level root registration object equality (`registry.roots.get(targetSessionId) === originalRoot`), and a monotonic `registryEpoch` (advanced upon registry `clear()`), eliminating false drops caused by global active-session switching while protecting against ABA replacements. Timed-out pre-edit attempts are bounded by snapshot batches per flush pass, coalesced per root via `activeFlushPromise`, removed by exact object identity upon wire acknowledgment (intersected with sent chunks and terminal wire statuses), and retained across transient failures subject to the 64-entry capacity FIFO eviction limit. Collision tracking combines dynamic live outstanding collision detection across pending descriptors with a bounded `ambiguousCallHistory` set (FIFO-evicted at capacity `MAX_PENDING_CALLS = 128` and purged during registry reset), ensuring agentless resolutions reject collided tool-call IDs without accumulating unbounded memory over long-lived daemon lifecycles.
-- **Platform Boundaries & Qualification Status:** Strictly read-only (no git mutations, undo, or staging). Prior component and browser qualifications apply to the superseded baseline (Linux x86_64 web and shared Tauri; Windows producer platform-unqualified; Android-native client excluded). Under the lightweight tool-event refactor, Phase 01 through Phase 04 deliver default-off server configuration, independent managed extension lifecycle, lightweight per-file capture engine, standalone producer asset, target-server Settings UI toggle, lazy diff viewer, and modal isolation with 104 reported passing web unit/browser tests; integrated Linux live OMP journeys, no-viewer disk verification, and shared Tauri visual qualification remain open release gates.
+- **Platform Boundaries & Qualification Status:** Strictly read-only (no git mutations, undo, or staging). Prior component and browser qualifications apply to the superseded baseline (Linux x86_64 web and shared Tauri; Windows producer platform-unqualified; Android-native client excluded; former shared Tauri host retired in Phase 02). Under the lightweight tool-event refactor, Phase 01 through Phase 04 deliver default-off server configuration, independent managed extension lifecycle, lightweight per-file capture engine, standalone producer asset, target-server Settings UI toggle, lazy diff viewer, and modal isolation with 104 reported passing web unit/browser tests; integrated Linux live OMP journeys, no-viewer disk verification, and human visual qualification remain open release gates.
 ### Traditional Terminal Worktree Shortcut
 
 **Implemented and qualified.** See [implementation plan](../plans/261009-1403-traditional-terminal-worktree-switching/phase-01-scoped-target-routing.md).
@@ -91,6 +90,320 @@ The session changes subsystem (`server/src/session_changes/`) provides an owner-
 - New terminals resolve the selected target through the owning profile's launch path (`worktreePath`). Existing PTYs, terminal grouping, splits, and editor target bindings remain completely unchanged; selection never sends `cd`, restarts a process, or checks out a branch.
 - Discovery uses profile/generation-qualified worktree queries (`useWorktrees`). Project root is explicit; unavailable, bare, or prunable paths are disabled and cannot be selected. Detached HEAD and locked worktree states are informative; failed discovery or transport errors preserve the current target selection safely.
 - Project tabs and dropdown triggers remain separate interactive controls in desktop and compact Projects-sheet layouts. Same-name cross-profile isolation, root switching, and unchanged live-terminal identity/directory are verified by focused Chromium regressions and production application PTY journeys.
+
+## AI Dev OS Lifecycle Architecture (Phase 01 Prototype)
+
+**Status:** Phase 01 core implementation under the [AI Dev OS Redesign Plan](../plans/261101-1738-ai-dev-os-redesign/plan.md) reached administrative completion per user direction (Task 1 `generalize-tile-tree`, Task 2 `implement-os-lifecycle`, and Task 3 `integrate-os-prototype-route` completed in source). Task 4 (`qualify-prototype-gate`) lifecycle qualification is technically incomplete and carried forward to Phase 09, retaining open critical issues H1/H2 (and predecessor C1/C2) and warnings W1–W4.
+
+The AI Dev OS redesign establishes a web-native multi-window, multi-desktop operating environment with the architectural requirement to preserve existing live-resource identities (xterm PTY instances, Monaco editor models/undo history, and running browser preview iframes) across window repositioning, docking, floating, maximizing, and desktop switching without remounting or re-attaching.
+
+### 1. Canonical Generic TileTree & Lossless Wire Codec
+
+- **Generic Data Model (`packages/ui/src/types/tile-tree.ts`):** `TileTree<T>` establishes a canonical recursive binary tree for arbitrary pane content `T`. A `TileNode<T>` is either a `TileSplitNode<T>` (`direction: "horizontal" | "vertical"`, `sizes: [number, number]`, `children: [TileNode<T>, TileNode<T>]`) or a `TilePaneNode<T>` (`id: string`, `items: T[]`, `active: T | null`). Dock targets support `pane-center`, `pane-edge` (`top | bottom | left | right`), and `tab-index`.
+- **Wire Codec & Invariant Validation (`packages/ui/src/lib/tile-tree.ts`):** Layout transformation functions (`insertItemIntoTilePane`, `removeItemFromTilePane`, `dockItemIntoTileTree`, `pruneEmptyTileSplits`, `updateTileSizes`) operate generically across item types. Pure tree validation (`isValidTileNode`) enforces UUID presence, non-empty child arrays, positive finite sizes, and active item membership.
+- **Storage-Key vs Payload Version Separation:** Terminal layouts retain unchanged `terminal-layout:v3:*` localStorage keys containing `{ version: 2, root: LayoutNode }` with `sessionIds` and `activeSessionId`. The codec (`layoutNodeToTileNode` / `tileNodeToLayoutNode`, `parsePersistedTerminalLayout` / `serializeTerminalLayout`) provides bidirectional lossless projection between `LayoutNode` (`sessionIds`/`activeSessionId`) and `TileNode<string>` (`items`/`active`) without disk migration.
+- **Renderer Delegation (`packages/ui/src/lib/terminal-layout-tree.ts` & `SplitLayout.tsx`):** Existing terminal layout operations delegate directly to generic tile tree primitives. `SplitLayout.tsx` introduces `GenericTileRenderer<T>`, which orchestrates `react-resizable-panels` (`Group`, `Panel`, `Separator`) with debounced resize propagation and recursive rendering.
+
+### 2. OS Session State, Pure Window Operations & Zustand Store
+
+- **OS Types (`packages/ui/src/os/types.ts`):** Models multi-desktop session state `OsSessionV1` (`schema: 1`, `activeDesktopId: string`, `desktops: OsDesktop[]`, `windows: Record<string, OsWindow>`). Each `OsWindow` owns an immutable identity, application identifier (`appId: "terminals" | "editor" | "browser"`), window context (`profileId`, optional `projectId`, `worktreeId`), placement mode (`mode: "tile" | "float"`), target `desktopId`, `maximized: boolean`, `minimized: boolean`, optional `floatBounds: FloatBounds`, `restorePlacement: RestorePlacement`, and allowlisted `appState`. Desktops contain a tiled tree `tree: TileNode<string> | null`, `floatingWindowIds: string[]`, and `focusedWindowId: string | null`.
+- **Pure Window Operations (`packages/ui/src/os/window-ops.ts`):** Pure state transition functions execute atomic placement mutations: `openWindow`, `closeWindow`, `focusWindow`, `setWindowMode` (tile vs float), `toggleMaximizeWindow`, `minimizeWindow`, `restoreWindow`, `switchDesktop`, `moveWindowToDesktop`, `dockWindowInDesktopTree`, and `updateFloatBounds`. Floating coordinates are clamped to visible viewport boundaries via `clampFloatBounds` (`minWidth: 280`, `minHeight: 200`, 50px boundary inset).
+- **Zustand Window Store (`packages/ui/src/os/window-store.ts`):** `useWindowStore` manages active session state and viewport dimensions in React, triggering pure operations with single-transaction state updates. Viewport resize events automatically reclamp all floating window bounds.
+
+### 3. Central ResourceRegistry & Claim Contract
+
+- **Claim Authority (`packages/ui/src/os/resource-registry.ts`):** `ResourceRegistry` coordinates visual visible-slot exclusivity to prevent conflicting UI surfaces from rendering the same live resource concurrently.
+- **Deterministic Claim Keys:** Claim identities format deterministically as `${resourceKind}/${profileId}/${generation}/${resourceId}[/inc:${incarnation}][/ep:${epoch}]` via `formatClaimKey`.
+- **Single-Visible-Slot Enforcement:** `registry.claim(key, windowId)` grants placement if the resource is free or already held by the same window. Conflicting requests from a second window are rejected, returning `{ success: false, existingHolderWindowId }`. Windows release all claims atomically upon close (`releaseAllForWindow`).
+- **Reactive Hook (`useResourceClaim`):** App components subscribe to claim state via `useSyncExternalStore`. To ensure reactive updates on reference changes, the hook's `useEffect` explicitly depends on `[key, formattedKey, windowId]` and its `useCallback` snapshot selector depends on `[key, windowId]`. When a claim is denied, the adapter renders a fallback overlay indicating the session is active in another window, providing a "Focus Existing Window" action.
+- **Contract Boundary Caveat:** Single-visible-slot enforcement is a UI registry contract; as noted in Cycle 6 review, it coordinates visual visible-slot exclusivity to prevent duplicate visible slots, but does not itself enforce transport ownership or keyboard isolation at the network boundary.
+
+### 4. Persistence Validation & Exact-One-Placement Invariants
+
+- **Storage Target (`packages/ui/src/os/persistence.ts`):** Session state is saved under localStorage key `dam-hopper:os:v1:session` with a 300 ms debounce.
+- **Allowlisted View State Sanitization:** `sanitizeSessionForPersistence` strips runtime credentials, output buffers, dirty text, generations, and incarnations before disk writes, projecting only allowlisted view attributes: `sessionId` and `cwd` for `terminals`; `filePath` for `editor`; `url` for `browser`.
+- **Corrupt-Byte Suspension Guard:** Malformed JSON or schema corruption sets `autosaveSuspended = true`, retains unparseable raw bytes via `preservedCorruptBytes`, and displays an operator `PersistenceNotice` banner (`kind: "invalid-schema" | "storage-error" | "corrupt-data"`), preventing corrupt data from overwriting disks until explicit user reset.
+- **Strict Invariant Validation (`validateOsSession`):** Enforces rigorous structural consistency:
+  1. *Exactly-One-Placement:* Every non-minimized tiled window must appear exactly once in its desktop's `tree` and zero times in `floatingWindowIds`. Every non-minimized floating window must appear exactly once in `floatingWindowIds` and zero times in `tree`. Minimized windows must have zero placements in both.
+  2. *Desktop Ownership Alignment:* Every placed window's `desktopId` must match the desktop in which it is placed.
+  3. *Valid Desktop Focus:* If `focusedWindowId` is set, the referenced window must belong to that desktop, cannot be minimized, and must be currently placed on that desktop.
+  4. *Tile Tree Integrity:* Non-empty panes must contain valid items, non-null active items present in `items`, and zero duplicate items.
+
+### 5. Input Precedence & Arbitration
+
+- **Arbitration Engine (`packages/ui/src/os/input-arbiter.ts`):** Pure `arbitrateKeyboardEvent` establishes a strict input priority model:
+  1. `cognito-blocked`: Active Cognito Privacy Mode intercepts and suppresses all physical keyboard input (`preventDefault()`, `stopPropagation()`).
+  1b. `lock-screen-blocked`: Active client-side PIN lock suppresses physical keystrokes (`isLockScreenActive`), with trailing release guards preventing keystroke leakage to underlying PTYs upon unlock.
+  2. `ime-passthrough`: Composition states (`isComposing`, `keyCode === 229`, `key === "Dead"`, `key === "Process"`, or `AltGraph`) pass through immediately to prevent chord interception during IME text entry.
+  3. `os-shortcut-handled`: OS global chords (specifically `Ctrl+Alt+Escape`, excluding AltGr) cycle window focus across visible desktop windows without emitting PTY bytes.
+  4. `frame-focused-handled`: Chrome toolbar and window frame header controls intercept input when focused.
+  5. `app-passthrough`: Default pass-through to the active window application body.
+- **Implementation Status & Gaps:** `WindowFrame.tsx` captures keyboard events using `data-os-window-slot`. As noted in Cycle 6 code review, iframe preview keyboard events do not traverse the React frame capture handler, and shortcut-capture bypass remains an open qualification item.
+
+### 6. Root OS Cutover, Same-Shell `/os` Routing & Zero-Network Retirement Boundary
+
+- **Unified Route Integration (`packages/ui/src/embed/dam-hopper-app.tsx`):** DamHopper mounts `OsShell` across both root `/` and `/os` as the primary web application shell via `<AuthenticatedOsRoute />` wrapped in `<ErrorBoundary>` and `<Suspense>`.
+- **Authentication Gate Contract:** `AuthenticatedOsRoute` checks client-side profile presence and token credentials via `useServerProfile()`. If authenticated locally, renders `<OsShell />`; if unauthenticated, displays an explicit fallback notice (`data-testid="os-unauthenticated"`) requiring active profile connection. When locally observed profile/token state changes, it reactively unmounts `<OsShell />`.
+- **Zero-Network Retirement Boundary:** Navigation to retired routes (`/usage`, `/ssh-forwarding`) is intercepted at `AppContentRouter` via `isRemovedRoutePath`, rendering `RemovedRouteScreen` / `RemovedFeatureNotice` outside network hooks to ensure zero requests or store mutations across history navigation.
+- **Legacy Path Translation:** `translateLegacyRoute` converts legacy `/workspace`, `/terminals`, `/ide`, `/git`, `/settings`, `/devices`, and `/agent-store` into qualified OS intents, returning helpful guidance on unqualified links.
+### 7. Component Hierarchy & Resource Keep-Alive Architecture
+
+- **Root Keep-Alive (`packages/ui/src/os/OsResourceHost.tsx`):** Mounted at the root of `OsShell.tsx` above all desktop canvas and window render branches. Hosts long-lived resource containers that keep underlying runtime instances alive across window placement and desktop switches:
+  - `TerminalKeepAliveHost`: Holds live xterm DOM instances for derived and mounted terminal sessions. `OsResourceHost` merges standalone `terminals` window sessions with active Hub mount descriptors from `useHubTerminalMountsStore` (`mergeTerminalMountDescriptors`). Validates target generation against active connection snapshots and prunes closed Hub windows reactively, preserving underlying xterm runtime instances across project switches, sidebar toggles, and splits (while imperative DOM reattachment into visible slots remains necessary; live container PTY streaming continuity across transitions remains an open qualification item tracked by H1).
+  - `MonacoKeepAliveHost`: Maintains an off-screen parking container (`getMonacoParkingHost()`, `data-monaco-parking-host="true"` styled at `position: absolute`, `visibility: hidden`, `top: -10000px`, `left: -10000px`, `width: 1024px`, `height: 768px`) and registry (`parkedMonacoRegistry`). Renders `ParkedMonacoItem` instances wrapping `MonacoHost` keyed by `editorFileTabKey(target, filePath)`. Imperatively attaches DOM nodes to visible slots via `attachMonacoToSlot(slot, tabKey)` and reparks via `parkMonacoElement(parkingHost, tabKey)`. Designed to preserve Monaco models, undo/redo history, and editor DOM across window float/tile, maximize, minimize, and desktop moves (with synthetic DOM element retention demonstrated in browser tests, while live model and undo stack preservation under a live daemon remains technically unqualified).
+  - *Unresolved Safety Note (W2):* Moving the React-rendered Monaco host wrapper into disposable window slots carries an open concern regarding React DOM ownership and unmount cleanup exceptions, requiring an imperatively owned attachment boundary.
+  - `OsBrowserKeepAliveHost`: Renders off-canvas parked iframes (`OsBrowserIframe`, `data-os-browser-parking-host="true"`) for each browser window (`appId === "browser"`). In tandem with `registerBrowserSlot` and `updateBrowserSlot`, tracks visible geometry and coordinates DOM attachment/reparenting into window frames or floating containers without reloading the underlying preview URL across tile/float/maximize/desktop switches (with DOM iframe continuity demonstrated in browser tests, while live preview JavaScript runtime continuity under a live container remains unqualified).
+- **Canvas & Frame (`packages/ui/src/os/DesktopCanvas.tsx` & `WindowFrame.tsx`):** `DesktopCanvas` renders the active desktop's tiled layout via `GenericTileRenderer` and floating windows via `WindowFrame`. `WindowFrame` provides draggable title bars, mode toggle (tile/float), maximize/minimize controls, desktop reassignment menus, and keyboard capture listeners (`data-os-window-slot`).
+- **Application Adapters (`packages/ui/src/os/apps/`):**
+  - `TerminalsApp`: Captures owner context via `useWindowOwner()`, claims slot via `useResourceClaim`, and attaches xterm DOM elements via `attachTerminalsToHost`. Renders a disconnected banner when owner server status is not connected.
+  - `EditorApp`: Resolves project target, computes tab key via `editorFileTabKey`, claims slot, and imperatively attaches parked Monaco DOM nodes via `attachMonacoToSlot`.
+  - `BrowserApp`: Coordinates iframe positioning and visibility with `OsResourceHost` via slot registration, hiding overlays during Cognito mode or desktop switching.
+
+### 8. Verification Evidence & Carried-Forward Qualification Gates
+
+- **Prototype Automated Verification (`plans/reports/tester-cycle4-261102-1120-lifecycle-prototype.md`):** 86/86 tests reported passed across 11 files (10 shell unit tests, 26 OS core tests, 9 browser component tests, and 41 regression tests), clean TypeScript build, and bundle compilation.
+- **Carried-Forward Lifecycle Gates:** Live containerized Playwright journey (`os-lifecycle.spec.ts`) and operator visual inspection (`packages/ui/e2e/os-lifecycle/review.md`) remain open qualification gates carried forward to Phase 09, retaining open oracles (H1 live xterm object continuity, H2 behavioral Cognito outcome assertions, and C1/C2/W1–W4 carryovers).
+
+## AI Dev OS Shell Chrome & Services Infrastructure (Phase 04)
+
+**Status:** Phase 04 implementation under the [AI Dev OS Redesign Plan](../plans/261101-1738-ai-dev-os-redesign/plan.md) reached administrative completion per user direction (Task 1 `complete-os-chrome` and Task 2 `integrate-os-services` completed in source). Technical acceptance is incomplete and carried forward: live lifecycle oracles (H1/H2), Monaco model continuity, and caller integrations remain open downstream gates.
+
+Phase 04 builds upon the Phase 01 prototype to establish shell chrome and operating services: desktop and window controls, launcher dock, command palette, notification logging, typed intent routing, topic subscription infrastructure, 4-namespace persistence envelopes, and input arbitration.
+
+### 1. Shell Chrome, Window Management & Viewport Adaptation
+
+- **TopBar & Virtual Desktops (`packages/ui/src/os/TopBar.tsx` & `DesktopSwitcher.tsx`):**
+  - `DesktopSwitcher` provides horizontal virtual desktop tab navigation (`role="tablist"`), inline desktop renaming via `Enter` / `Escape`, desktop addition, and desktop removal with window migration to a surviving desktop (`removeDesktop`).
+  - Per-desktop `defaultCtx` configuration (`profileId`, optional `projectId`, `worktreeId`) is modifiable via the TopBar context dropdown. Context changes apply to newly launched windows only; existing open windows remain bound to their originating server profiles.
+  - The TopBar hosts the notification bell with unread badge counter and command palette trigger.
+- **Application Dock & Window List (`packages/ui/src/os/Dock.tsx` & `WindowList.tsx`):**
+  - `Dock` renders pinned application launchers (`dam-hopper:os:v1:dock`) with running/minimized pip indicators (`.os-dock-pip`, `.os-dock-pip-active`). Launch semantics check `APP_MANIFESTS`: single-instance apps (`terminals`) restore and focus existing instances; multi-instance apps spawn new windows using the active desktop's `defaultCtx`.
+  - `WindowList` provides quick window focus and restoration across desktops. Closing an editor window checks `useEditorStore` for unsaved dirty tabs and presents an explicit confirmation guard (`globalThis.confirm`) before window destruction.
+- **WindowFrame Controls & 5-Zone Split Layout (`packages/ui/src/os/WindowFrame.tsx` & `DesktopCanvas.tsx`):**
+  - Floating windows feature 8-way resize handles (`n`, `s`, `w`, `e`, `nw`, `ne`, `sw`, `se`) and header dragging. Active drag and resize gestures abort immediately upon Cognito activation via `dragCleanupRef`.
+  - Floating coordinates are clamped to visible viewport boundaries via `clampFloatBounds`.
+  - `DesktopCanvas` renders tiled tree panes via `GenericTileRenderer`. Multi-window panes render accessible pane tabs (`data-os-pane-tabs`), and `splitWindow` provides 5-zone docking primitives (`top`, `bottom`, `left`, `right`, `tab`).
+- **Command Palette (`packages/ui/src/os/CommandPalette.tsx`):**
+  - Provides 5 operational search modes with query prefix routing: `>` (commands), `@` (agents), `#` (windows), `/` (files), and `!` (recipes).
+  - Triggers via configurable shortcut (default `Ctrl+Alt+KeyK`). Closes immediately if Cognito Privacy Mode activates.
+- **Viewport Tiers & Container Queries (`packages/ui/src/os/use-os-viewport.ts` & `os.css`):**
+  - Shell chrome scales via CSS tokens: `--os-topbar-height` (40px standard, 36px compact, 34px narrow height) and `--os-dock-width` (48px standard, 44px compact).
+  - `useOsViewport` establishes non-destructive layout tiers: Standard ($\ge 1280\text{px}$), Compact ($1024\text{--}1279\text{px}$), Narrow Height ($640\text{--}767\text{px}$), and Unsupported ($<1024\times 640\text{px}$ notice).
+  - `useContainerQuery` provides container-width observation for embedded components, driving compact navigator layouts in `TraditionalTerminalProjectsDisplay`.
+
+### 2. Input Precedence, Remappable Shortcuts & `/os` Isolation
+
+- **Tiered Input Arbitration (`packages/ui/src/os/input-arbiter.ts`):** Coordinates prioritized tiers: Cognito Privacy Mode (`cognito-blocked`) > Client-side PIN lock (`lock-screen-blocked`) > IME composition (`ime-passthrough`) > modal ownership (`app-passthrough`) > OS shortcuts (`os-shortcut-handled`, `os-palette-handled`) > frame focus (`frame-focused-handled`) > application body (`app-passthrough`). Refined in OS Desktop Polish by root coordinator (`action-dispatch.ts`).
+- **Remappable Shortcuts (`packages/ui/src/stores/settings.ts` & `lib/shortcuts.ts`):** `osPaletteShortcut` (default `Ctrl+Alt+KeyK`) and `osCycleFocusShortcut` (default `Ctrl+Alt+Escape`) are remappable in Settings > Keyboard Shortcuts (`SettingsKeyboardShortcutsSection.tsx`), with global isolation on `/os` avoiding double dispatch.
+
+### 3. Fenced Services, Topics, Notifications & Intents
+
+- **Explicit Window Context & Fenced Action Helper (`packages/ui/src/os/window-context.tsx`):**
+  - `WindowContextProvider` validates target server profile existence against `readServerProfiles()`; missing profiles demote the window to a read-only preserved state with a user repair affordance.
+  - Exposes `fencedAction`: an available helper capturing connection generation and status before and after execution (discarding results if disconnected or generation rotated). Note: caller integration across application mutation paths remains open.
+- **Topic Broker Infrastructure (`packages/ui/src/os/topics.ts`):**
+  - `globalTopicBroker` (`subscribeTopic`, `publishTopic`, `useTopic`) provides a lightweight topic broker for 7 OS topics: `agent:status`, `host:resources`, `host:sleep`, `ports:list`, `git:status`, `workflow:context`, `fs:watch`.
+  - Subscriptions and snapshots are strictly partitioned by `(profileId, generation)`. Late subscribers receive cached snapshots, and unsubscriptions are bound to the originating owner generation. (Note: topic broker infrastructure and tests delivered; live background subscriptions across all workbench hooks remain open).
+- **OS Notifications & Attention Routing (`packages/ui/src/os/notifications.ts` & `NotificationCenter.tsx`):**
+  - `useOsNotificationStore` maintains an in-memory bounded 50-entry FIFO log (`MAX_NOTIFICATION_ENTRIES = 50`) across 4 levels (`info`, `warning`, `error`, `attention`).
+  - Unifies OS events with terminal attention notifications, providing target window and terminal focus routing (exact-target terminal routing retaining open gaps).
+  - Immediate Cognito Redaction: `redactNotification` masks title, body, and target identifiers with protected placeholders ("Notification (Protected)") whenever Cognito Mode is active, without wiping in-memory state.
+- **Typed OS Intent Router (`packages/ui/src/os/intents.ts`):**
+  - `globalIntentRouter` (`dispatchIntent`, `registerIntentHandler`, `createIntent`) defines 11 typed actions: `terminal:open`, `terminal:focus`, `file:open`, `file:edit`, `browser:preview`, `browser:open`, `git:status`, `git:diff`, `git:history`, `system:monitor`, `recipes:launch`.
+  - Unknown or unregistered intents fail closed with a safe unhandled no-op result without process execution or side-effects.
+- **4-Namespace Envelope Persistence (`packages/ui/src/os/persistence.ts`):**
+  - `exportOsEnvelope` and `importOsEnvelope` support four namespaces (`session`, `dock`, `shortcuts`, `notifications_prefs`) under `dam-hopper:os:v1:*` localStorage keys.
+  - Serialized session data strips credentials, output buffers, and dirty text, projecting allowlisted view attributes only. Autosave suspends (`autosaveSuspended = true`) on corrupt bytes to protect disk state. The importer validates and projects envelope records without directly applying namespaces to storage or Settings (namespace schema validation and Settings wiring tracked as open W3).
+
+## AI Dev OS Application Catalog & Deep Link Infrastructure (Phase 05)
+
+**Status:** Phase 05 implementation and remediation checkpoint completed per user direction (Task 1 `migrate-workspace-apps`, Task 2 `migrate-git-and-reviews`, Task 3 `migrate-management-apps`, and 4-cycle code review remediation completed in source). Technical acceptance remains incomplete and carries forward open live qualification gates (lifecycle oracles, Monaco model continuity, and caller integrations) to Phase 09. Full details are documented in [OS Application Catalog & Deep Links Architecture](./architecture/os-application-catalog-and-deep-links.md).
+
+Phase 05 migrates existing workbench and management panels into the OS windowing system, establishing the 14-application catalog, typed deep link URL query parsing, standard project desktop layouts, intent delivery routing, decoupled page props, and single-transport generation fences:
+
+### 1. 14-Application Manifest Registry & Adapter Architecture
+- **Catalog Registry (`packages/ui/src/os/app-registry.ts`):** `APP_MANIFESTS` statically registers all 14 retained applications (`terminals`, `editor`, `browser`, `files`, `search`, `changes`, `git`, `conflict-resolver`, `session-changes`, `workflow-plans`, `ports-tunnels`, `project-info`, `agent-store`, `settings`). Each manifest specifies `appId`, `displayName`, `instancing`, `minimumCtx`, `defaultPlacement`, `minSize`, and supported `intents`.
+- **Application Adapters (`packages/ui/src/os/apps/`):** 11 adapter components wrap canonical organism and page bodies (`FilesApp`, `SearchApp`, `ChangesApp`, `GitApp`, `ConflictResolverApp`, `SessionChangesApp`, `WorkflowPlansApp`, `PortsTunnelsApp`, `ProjectInfoApp`, `AgentStoreApp`, `SettingsApp`), maintaining existing state and database layers without duplicate business logic. `SearchApp` enforces `isolatedState: true` for independent per-mode queries; `ChangesApp` prioritizes canonical project paths; `ConflictResolverApp` strictly verifies active git operations.
+- **Management Pages State Decoupling (`packages/ui/src/components/pages/`):** `AgentStorePage`, `SettingsPage`, and `DevicesPage` expose controlled props (`AgentStorePageProps`, `SettingsPageProps`, `DevicesPageProps`) and `noLayout`, decoupling window tab and target profile selection from global route search parameters and singleton workbench stores. `DevicesPage` shows server picker for `profiles.length > 0` with explicit `(Current / Default Server)`.
+- **Instancing Granularity (`findExistingWindowForApp`):** Deduplicates windows across 6 instancing models: `single-instance` (Settings), `profile-instance` (Ports & Tunnels, Agent Store), `project-instance` (Workflow & Plans, Project Info; specialized operation-matching for Conflict Resolver), `worktree-instance` (Files, Search, Changes, Git), `tuple-instance` (Session Changes), and `multi-instance` (Terminals, Editor, Browser).
+
+### 2. Typed Deep Link URL Protocol & Desktop Templates
+- **URL Query Parser (`packages/ui/src/os/deep-links.ts`):** Evaluates `/os?<query>` links with strict profile existence validation, minimum context enforcement, positive integer line parsing, and full tuple requirements for Session Changes (`terminal`, `incarnation`, `ompSession`). Generates typed `OsIntent` records without executing ambient shell commands or duplicating existing windows.
+- **Project Desktop Template (`packages/ui/src/os/desktop-templates.ts`):** `createProjectDesktopTemplate` generates the standard 60/40 binary split layout: 60% Terminals on the left; 40% on the right split into Files tabbed with Search (top 50%) above Git tabbed with Changes (bottom 50%). All windows are bound to the desktop's `WindowContext`.
+- **Intent Delivery & Consumption (`OsShell.tsx`, `intents.ts`):** `OsShell` actively registers default intent consumers for `search:query`, `changes:diff`, `terminal:focus`, `file:open` (generation fenced), `git:status`, and `settings:open` (with tab/profile update), stamping unique `deliveryId` in window `appState` to prevent repeated stale intent replays on unrelated query invalidations.
+
+### 3. Single-Transport Routing & Generation-Fencing Hardening
+- **DiffViewer Hardening (`packages/ui/src/components/organisms/DiffViewer.tsx`):** Resolves transport strictly via `getBoundTransport(targetRef)`, checks connection generation before read, after read, and after `fsWriteFile`. Tracks `documentIdentityRef`, `editRevisionRef`, and `activeSaveRef`: typing during an in-flight stat/save increments `editRevisionRef` and resets `saveState` from `"saving"` to `"idle"`. Authoritative modified pinning (`authoritativeModified`) protects post-save baseline while preserving newer local dirty edits over external refetches.
+- **Search & Replace Hardening (`SearchPanel.tsx`, `use-file-search.ts`, `use-search-panel-replace.ts`):** Captures profile connection with `isCurrentConnection` assertion upon result arrival; empty federated search returns empty results safely without ambient fallback. `SearchPanel` enforces `isSearchMatchingInput` query-result binding and 200-char input normalization, disabling replace when typing diverges. `useSearchPanelReplace` validates match generations across Replace Next and batch Replace All (`allMatchesValid`) while skipping dirty tabs.
+- **Session Changes App (`packages/ui/src/os/apps/SessionChangesApp.tsx`):** Requires complete 6-part owner tuple, stably captures generation via `useState` on mount, acquires `session-changes` resource claim, and closes the mounted window while purging query cache if Session Changes becomes disabled or disconnected (offscreen/hidden review retirement remains open under W2).
+
+<a id="ai-dev-os-system-monitor--tray-infrastructure-phase-06"></a>
+<a id="ai-dev-os-system-monitor-tray-infrastructure-phase-06"></a>
+## AI Dev OS System Monitor & Tray Infrastructure (Phase 06)
+
+**Status:** Administratively closed per user direction (2026-11-02 22:10:00 +07:00); technical acceptance incomplete. Carryover findings C2–C6 and W1–W4 from Cycle 3 review (score 6.5/10) remain active qualification gates carried forward to Phase 08/09.
+
+Phase 06 consolidates the standalone Dashboard overview and Host Resources popovers into a unified System Monitor application, introduces a TopBar system tray with live hardware meters, and routes activity telemetry into OS notifications:
+
+### 1. Unified System Monitor Application (`SystemMonitorApp.tsx`)
+- **Fleet-Wide Overview & Composition:** Registered in `APP_MANIFESTS` as `system-monitor` (`single-instance`, `minimumCtx: "none"`, `defaultPlacement: "tile"`). Merges fleet project counts (clean/dirty), aggregated terminal sessions, and host resource telemetry by composing `HostResourceFleetDeck`, `HostResourceGlance`, `HostResourceDiagnosis`, `HostIdleSuspendStatus`, and `ForceSleepDialog`.
+- **Profile-Filtered Inspection & Alert Drilldown:** Supports inspecting specific hosts via window `appState.inspectedProfileId`, falling back to full-fleet view when null. Selecting a profile clears incident highlights. Alert drilldowns (`selectedIncidentId`) navigate directly to incident evidence; acknowledgment (`markRead`) updates presentation state.
+- **Process Termination Safety:** Terminal session kill flows require explicit confirmation via a Radix Dialog modal, capturing target `{ profileId, generation, terminalId, incarnation }`. Client revalidation rejects locally observed profile generation or terminal incarnation mismatches (authoritative replacement safety remains open under C2 requiring an atomic expected-incarnation server mutation contract). Jump actions dispatch `terminal:focus` intents without creating replacement sessions.
+- **Cognito Privacy Masking:** Masks hostnames to `protected-host` and redacts kill confirmation command text when Cognito Privacy Mode is active (full detail masking across loaded child storage/incident drilldowns remains open under C3).
+
+### 2. TopBar Monitor Tray & Stream Coordination (`MonitorTray.tsx`)
+- **Status Presentation & Tray Lifecycle:** Displays compact CPU/memory utilization meters alongside live battery percentage and status indicators (`MonitorTray.tsx`), with mapped connection indicators (`Live`, `Stale`, `Connecting`, `Offline`). TopBar tray unmounts gracefully when hidden while maintaining background telemetry.
+- **Battery Telemetry Integration:** Validates host battery hardware metrics (`count > 0` integer, state `available` or `stale`, capacity percentage $0 \le \text{bat} \le 100$). Renders honest status: charging lightning bolt (`os-monitor-tray-battery-charging`), stale indicator (60% opacity), and critical threshold color coding ($< 20\%$ danger bold, $< 30\%$ warning bold). Battery metrics are masked to `●●●` or suppressed under Cognito Privacy Mode to avoid hardware fingerprinting.
+- **Alert Indicators & Intent Dispatch:** Unread alert indicator dot reflects `useHostResourceAlertPresentationStore`. Clicking opens System Monitor and dispatches `monitor:alert` (for targeted incident inspection) or `system:monitor` (for profile fleet overview).
+
+### 3. Intent Routing & Activity Notification Ingestion
+- **Typed OS Intents (`intents.ts`, `OsShell.tsx`):** Adds `system:monitor` (`profileId`, `incidentId`, `tab`) and `monitor:alert` (`profileId`, `incidentId`). `OsShell` handles both intents by focusing existing instances or creating new windows with stamped `deliveryId`.
+- **Activity Telemetry Ingestion (`notifications.ts`):** `ingestIpcActivityEvent` filters typed activity events via `TYPED_ACTIVITY_EVENTS` (`git:*`, `terminal:*`, `agent:*`, `host:*`, `idle-suspend:*`), mapping them to structured `NotificationCenter` items with source, level, and title classification. Replaces legacy Dashboard activity cards while keeping raw tool outputs out of notification history (strict producer-bound schema validation and payload containment remain open under C6).
+
+### 4. Open Carryovers & Qualification Boundaries
+- **C2 Replacement-Process Kill Safety:** Server-side atomic expected-incarnation kill contracts remain an open requirement; client-side revalidation protects against known cached mismatches.
+- **C3/C4 Detail Masking & Event Containment:** Thorough Cognito masking across deep diagnostic drilldowns and capture-phase modal shortcut containment remain active carryovers.
+- **C5/C6 Multi-Host Attention & Activity Schemas:** Cross-host read-state isolation and strict producer-bound typed notification contracts are tracked as release gates carried to Phase 09.
+<a id="ai-dev-os-agent-hub--launch-recipes-phase-07"></a>
+<a id="ai-dev-os-agent-hub-launch-recipes-phase-07"></a>
+## AI Dev OS Agent Hub & Launch Recipes (Phase 07)
+
+**Status:** User approved with noted carryovers to Phase 08 & 09 (Task 1 `implement-agent-hub` and Task 2 `implement-launch-recipes` completed in source; 126 unit tests across 6 files and 6 browser component tests across 3 files reported passing in `plans/reports/tester-261102-2354-phase-07-agent-hub-and-recipes-cycle-3.md`; this documentation update did not rerun runtime qualification). Technical acceptance is incomplete; Cycle 3 code review (`plans/reports/code-review-261102-2353-phase-07-agent-hub-and-recipes-cycle-3.md`, score 5/10) carries critical findings C1–C3 and warnings W1–W9 forward as open qualification gates.
+
+Phase 07 introduces a multi-profile fleet AI agent home and client-only declarative launch recipes:
+
+### 1. Agent Hub Terminal-First Workspace (2026-11-06 Superseding Transformation)
+- **Terminal-First Architecture:** Supersedes the historical Nov 3 card roster baseline with `TraditionalTerminalProjectsDisplay` containing project/tree sidebar, agent rows, and Hub-mounted terminal panes. Renders maximized on Desktop 1 "Hub".
+- **Single-Visible-Slot Attach Gate (B1):** Single-visible-slot claim gate (`useHubTerminalAttachGate`) enforces that only one pane attaches to a live xterm instance. Conflicting requests render `HubTerminalClaimPlaceholder` with an atomic "Go to window" reveal action (`revealWindow` in `window-ops.ts`, switching desktop + restoring + focusing holder).
+- **Right-Sidebar File Tree & Git Float Button:** `TraditionalTerminalProjectsDisplay` embeds a collapsible right sidebar (`agent-hub-right-file-tree-sidebar`) mounting `TraditionalProjectWorkspaceTree`. Toggled via `AgentHubHeader` button and sidebar close control; file clicks trigger `file:open` in `mode: "float"` to float editor windows above the maximized Hub. `AgentHubHeader` and project rows provide a dedicated Git launch button (`GitBranch` icon) dispatching `git:status` intent (`mode: "float"`), strictly binding `selectedGroup.profileId`, `selectedGroup.projectName`, and `selectedWorktree`. Disables with tooltip when no project is active, preventing ambient fallback.
+- **Presentation Input Ownership (F2):** WeakMap-backed owner-scoped presentation tokens (`packages/ui/src/lib/terminal-presentation-input.ts`) arbitrate interactive presentation across Hub panes and standalone terminal windows (`acquireTerminalPresentation`, `releaseTerminalPresentation`). Permanently marks terminals as `managed: true` with strictly monotonic epochs; stale unmount releases from predecessors no-op, preventing stdin muting on quiet PTYs. (Visual claims and presentation tokens govern UI presentation exclusivity only; backend transport, connection generation, and PTY incarnation fencing remain binding).
+- **Per-Profile Pin Retention:** Pinned terminals are partitioned per profile in tab-scoped `sessionStorage` (`dam-hopper:terminal-pins:v2:<profileId>`). `useHubTerminalTabActions` preserves pins across reloads, network delays, and disconnected profiles, pruning only against confirmed inventory sessions when the profile inventory is loaded. Tab close actions are target-fenced and never close the Hub window.
+- **Global Float-Over-Maximized Stacking (B2):** In `DesktopCanvas.tsx`, when the active desktop's focused window is a float, the floating layer container stacks at z-index 60 above maximized presentation planes (z-index 40, focused slot 50). Focusing a maximized window lowers the floating layer container to z-index 20. Decided limitation: `BrowserApp` iframe hosting (fixed z 20) remains outside B2 stacking (V4).
+- **Float File Open & Deduplication (AC1, AC2):** `file:open` supports `mode: "float"`, opening format-appropriate floating editor windows with owner badges above maximized Hub workspaces. Reuses existing windows across desktops when `ctx.generation` is undefined or matches request; defined generation mismatches fail closed to reveal-only.
+- **Editor Endpoint Save Fence (V1, F1):** Binds document identity to `EndpointIdentity` (`{ profileId, serverUrl }` normalized via `normalizeServerUrl`) on baseline read; profile URL re-pointing denies saves fail-closed (`saveBlockedReason`) with buffer intact; `discardAndReload` rebinds; dirty tab endpoint identity is persisted with saved dirty tabs (legacy dirty tabs fail closed once; V6).
+- **Shared Terminal Launch Lifecycle (B3, V3):** Shared PTY launch lifecycle (reservation, creation, settlement) shared by Hub and TerminalsApp. Provides manual "Clear stuck launch" strictly fenced on fresh owner-qualified inventory confirmation (`definitely-absent`). In-flight tracking is page-scoped (V5).
+- **Decided Limitations:** V2 uncapped renderers (memory scales linearly with live sessions, measured without threshold in R5); V4 iframe stacking outside B2; V5 cross-tab in-flight launch; V6 legacy dirty tab without endpoint identity.
+### 2. Client-Only Launch Recipes & Save Subset (`recipes/`)
+- **Declarative Recipe Model (`RecipeV1`):** Stored under `dam-hopper:os:v1:recipes`. Bounded to a single profile and project; includes `terminalSteps` (`key`, `name`, `command`, `worktreePath?`, descriptive `agent?`), `appSteps` (`key`, `appId`, `worktreePath?`, `appState?`), and binary `layout` (`tree`, `floating`).
+- **Save Subset Preflight & Topology Pruning:** Pre-save wizard prompts for target profile and project. BEFORE confirmation, `calculateSaveSubset` partitions desktop windows into matching vs. excluded windows, explicitly displaying each nonmatching window with name, context, and exclusion reason. Excluded nodes are pruned from canonical binary trees with normalized split ratios without altering active source windows (compatibility non-binary splits fall back to random node IDs; W6). Full restoration into the window manager and captured PTY adoption remain open carryovers (W1).
+- **Command & Schema Validation:** Terminal commands require explicit authoring or confirmation in the UI (W7 notes confirmation is UI-only, not an invariant bound to saved values across subsequent edits). Recipe import validates step keys, app IDs, tree depth (<= 10), and node caps (<= 64) before inert review, while schema permits non-binary splits (W5). Portable exports warn that commands and local paths are included (`RECIPE_EXPORT_WARNING`).
+
+### 3. Launch Records, Locking Scope & Execution State (`launch-records.ts`, `recipe-engine.ts`)
+- **Durable Records & Per-Launch Locking:** Stored in localStorage under `dam-hopper:os:v1:recipe-launches`. `withRecipeLaunchLock` serializes execution using `navigator.locks` keyed per `launchId` (`dam-hopper:recipe-launch:${launchId}`); missing lock support fails closed. Note: run selection and reservation occur outside cross-tab locks (C1), so separate launch IDs can permit concurrent duplicate runs; shared-blob storage transactions across different runs and unlocked startup recovery (`recoverDurableLaunchRecordsOnStartup`) remain open carryovers (C1, C3).
+- **Step State Machine:** Models step progression as `pending` -> `dispatched` -> `{confirmed | failed | outcomeUnknown}`. `pending` allocates a fresh UUID; `dispatched` records profile and render-time `serverEpoch` before dispatch.
+- **`outcomeUnknown` Handling:** Interrupted dispatch, response loss, or startup recovery transition in-flight steps to `outcomeUnknown`. Dismissal marks steps dismissed without relaunching. Action-time epoch rechecking at the network effect boundary and generation fencing during list reconciliation remain active carryovers (C2).
+## AI Dev OS Root Cutover & Legacy Shell Deletion (Phase 08)
+
+**Status:** Administratively marked DONE per user direction (2026-11-03); technical acceptance incomplete. Cycle 3 review scored 6/10 (0 Critical, 2 High findings); C2 router location reactivity, C3 dynamic session window matching in OsShell `file:open`, and W4 migration of 16 browser test files were tracked as carryovers into Phase 09 qualification, where they were subsequently resolved in source.
+
+Phase 08 cuts over the root web route `/` to `OsShell`, translates legacy paths into qualified deep links, eliminates over 45 legacy web shells and mobile-specific components, and standardizes terminal input suppression:
+
+### 1. Root OS Routing & Zero-Network Retirement Boundary
+- **Unified Entry Point (`dam-hopper-app.tsx`):** A top-level React Router `BrowserRouter` wraps `AppContentRouter`. Both root `/` and `/os` render `AuthenticatedOsRoute` (loading `OsShell`), gated by profile and credential presence.
+- **Zero-Network Retirement Isolation:** `AppContentRouter` checks `isRemovedRoutePath(location.pathname)` for retired features (`/usage` and `/ssh-forwarding`), mounting `RemovedRouteScreen` outside service and network hooks to isolate network requests, session queries, and state mutations; full reactive route boundary across browser Back/Forward history is tracked under Phase 09 qualification (C2).
+- **Legacy Route Translation (`deep-links.ts`):** `translateLegacyRoute` translates `/workspace`, `/terminals`, `/ide`, `/git`, `/settings`, `/devices`, and `/agent-store` into qualified OS intents (`open=terminals|git|settings|agent-store|editor`). Missing legacy qualifications render actionable guidance rather than falling back to an ambient profile.
+
+### 2. Elimination of Legacy Web Shells & Mobile Virtual Keyboards
+- **Deleted Shell Templates:** Permanently deleted `WorkspacePage`, `DashboardPage`, `IdeShell`, `TerminalWorkspaceShell`, `MobileWorkspaceShell`, `AppLayout`, `TopNav` (and fragments), `HostResourcePopover`, and floating panel wrappers (`TerminalFloatingFilePanel`, `TerminalFloatingToolPanel`, `TerminalFloatingControlShell`).
+- **Generic Terminal Input Policy (`terminal-input-policy.ts`):** All web mobile virtual keyboard modules (`MobileTerminalAccessoryBar`, `MobileTerminalCustomKeyboard`, `android-chrome-input-policy`, `use-compact-workspace`, `use-coarse-pointer`) are eliminated. Replaced by `syncTerminalInputSuppression`, synchronizing xterm's hidden textarea (`inputMode = "none"`, `tabIndex = -1`, `blur()`) and `disableStdin = true` across Cognito privacy mode, disconnected server profiles, and modal focus trapping.
+- **OS Frame Authority & TopBar Management:** Floating conflict resolution z-index is governed directly by OS frame authority (`OS_RESOLVER_PANEL_TOPMOST_Z_INDEX = 30`). Multi-server profile management dialogs (`ServerProfilesDialog`, `ServerSettingsDialog`) are embedded directly into the OS `TopBar` context menu ("Manage Profiles…").
+
+<a id="ai-dev-os-application-qualification--visual-review-phase-09"></a>
+<a id="ai-dev-os-application-qualification-visual-review-phase-09"></a>
+## AI Dev OS Application Qualification & Visual Review (Phase 09)
+
+**Status:** Automated qualification checkpoint recorded (2026-11-03 07:16:06 +07:00); technical acceptance incomplete. Per dated integration report (`plans/261101-1738-ai-dev-os-redesign/reports/integration.md`), 4,735 automated unit, browser, and cargo tests passed (0 failures, 4 skipped, 1 ignored out of 4,740 test cases; typecheck, lint, and build gates clean). This documentation update recorded findings and did not re-execute runtime qualification. Carried live lifecycle/container oracles and visual review ledgers remain open release gates for production staging/deployment.
+
+Phase 09 qualifies the full DamHopper OS web platform, including application journeys, browser component regressions, server integration, and release alignment:
+
+### 1. Architectural Ingress & Defect Resolutions
+- **Router Location Reactivity (Phase 08 C2):** `AppContentRouter` in `packages/ui/src/embed/dam-hopper-app.tsx` subscribes directly to React Router's `useLocation()` above `DamHopperAppInner`, rendering `RemovedRouteScreen` immediately with zero network requests or mutations when navigating to `/usage` or `/ssh-forwarding` across browser history (Back/Forward).
+- **Dynamic Window Session Matching & Rejection (Phase 08 C3):** In `packages/ui/src/os/OsShell.tsx`, intent consumers query live window session state dynamically (`useWindowStore.getState().session.windows`). The `terminal:focus` handler inspects running terminal windows; if not found, it returns `{ status: "unhandled", reason: "terminal-not-found" }` without spawning duplicate windows or mutating active layouts.
+- **Browser Component Migration & Pruning (Phase 08 W4):** Migrated 10 browser component suites to OS components and `useWindowStore`, permanently pruned deleted legacy floating panels suite (`terminal-floating-panels.browser.tsx`), and added `host-resource-popover-fixture.tsx`. All 59 active browser test suites pass in headless Chromium (324 passed, 4 skipped across 61 files).
+- **Zero Telemetry Runtime Verification (Phase 03 P0):** Cleaned server test fixture (`server/examples/agent_free_consent_fixture.rs`); verified zero telemetry runtime, collector, or OTLP dependencies in repository; aligned release versions across 9 manifest targets at `v0.15.6`.
+
+### 2. Root Cutover Journey & Governance
+- **Root Cutover E2E Journey:** Authored `packages/ui/e2e/os-cutover/os-cutover.spec.ts` exercising root `/` cutover, legacy path translation (`translateLegacyRoute`), retired feature notice boundaries, and xterm placement continuity.
+- **Carried Release Qualification Gates:**
+  - H1 & H2 (Live Lifecycle & Privacy Oracles): PTY stream continuity under live container daemon, zero outbound attach/replay counters across placement, and behavioral Cognito isolation (zero received PTY bytes) are structured in `os-lifecycle.spec.ts` and `os-cutover.spec.ts`, but require containerized Playwright daemon runs for final verification.
+  - C1 & C2: Editor save generation fencing and ambient transport retirement remain open qualification gates carried forward.
+  - Phase 07 C1–C3 & AC8: Run concurrency fences, Web Locks storage synchronization, and transaction defects identified in Phase 07 review remain open release qualification gates for live multi-tab and containerized environments.
+- **Visual Review Governance:** Ledgers across `packages/ui/e2e/os-cutover/review.md`, `os-recipes/review.md`, `os-lifecycle/review.md`, and `host-auto-sleep/review.md` remain in authentic `PENDING_HUMAN_REVIEW` state, preserving repository governance that automated tests certify behavioral assertions only and never synthesize human visual acceptance.
+
+<a id="os-session-management-guarded-termination-and-shell-interactions"></a>
+## AI Dev OS Session Management, Guarded Termination & Shell Interactions
+
+**Status:** Implemented in source (Phases P01–P07) with critical-carryovers (C1–C4) addressed in code; tester reports 4,619 automated unit/integration tests passing (0 failures); formal human visual review and technical release qualification remain pending.
+
+### 1. Guarded Terminal Termination Protocol
+- **PTY Manager Lifetime Epoch & Creation Headers:** The PTY manager allocates an immutable UUID (`serverEpoch`) upon construction, shared by clones and never persisted. Both terminal creation (`POST /api/terminal`) and inventory queries return `X-DamHopper-Termination-Version: 1`, `X-DamHopper-PTY-Epoch: <uuid>`, and `Cache-Control: no-store`. Transport decodes these headers and binds `serverEpoch` directly to the created `SessionInfo`, establishing originating lifetime authority at launch.
+- **Strict Termination Endpoint (`POST /api/terminal/{id}/terminate`):** Requires JSON payload (`<= 512` bytes) containing `{ version: 1, expectedServerEpoch: "<uuid>", expectedIncarnation: "<canonical-positive-u64>" }`.
+- **Atomic Selection & Outcome Codes:** Atomically rechecks expected epoch, target incarnation, pending replacements, and manager closing state under inner lock before mutation. Live running sessions receive fallible OS process signaling returning HTTP 202 (`outcome: "terminationRequested"`); HTTP 202 signals request dispatch only and does not prove completed process exit. Dead sessions scheduled for restart have their delay cleared, restart flag disabled, and fleet pending cancelled atomically returning HTTP 200 (`outcome: "restartCancelled"`). Exact cancellation markers persist on in-memory tombstones so subsequent inventory observations resolve dropped or lost cancellation responses.
+- **Fail-Closed Refusals:** Refuses requests with HTTP 400 (`TERMINATION_INVALID_REQUEST`, `TERMINATION_UNSUPPORTED_VERSION`), 404 (`TERMINATION_NOT_FOUND`), 409 (`TERMINATION_EPOCH_MISMATCH`, `TERMINATION_INCARNATION_MISMATCH`, `TERMINATION_REPLACEMENT_PENDING`, `TERMINATION_ALREADY_REQUESTED`, `TERMINATION_NOT_LIVE`, `TERMINATION_MANAGER_CLOSING`), 413 (`TERMINATION_BODY_TOO_LARGE`), or 500 (`TERMINATION_SIGNAL_FAILED`).
+
+### 2. Additive Terminal Inventory Observation
+- **Original Headers:** Both `GET /api/terminal` and `GET /api/terminal/detailed` return `X-DamHopper-Termination-Version: 1`, `X-DamHopper-PTY-Epoch: <uuid>`, and `Cache-Control: no-store`. Custom headers are exposed through server CORS.
+- **Dual Projections with Flat Authority:** Every session row includes flat `incarnationExact: string` (canonical decimal up to `"18446744073709551615"`) and `terminationState: "live" | "terminationRequested" | "restartPending" | "restartCancelled" | "exited" | "unavailable"`. Canonical eligibility rejects conflicting safe-integer evidence: when a legacy number is safe, it must agree losslessly with `incarnationExact`. Legacy numeric arrays and detail fields (`buffer_bytes`) remain intact.
+- **Origin-Specific Loss Reconciliation:** Single snapshot decode prevents combining stale session rows with newly fetched epochs. An exact cancellation marker resolves lost restart cancellations, whereas live exit requires authoritative `exited` observation.
+
+### 3. ReviewTarget Immutable 8-Tuple & Hidden Review Retirement
+- **Immutable 8-Tuple:** Supersedes the earlier 6-part tuple: Review targets bind strictly to `(profileId, generation, terminalId, terminalIncarnation, ompSessionId, serverEpoch, rootId, baselineId)`. `serverEpoch` references the Session Changes domain epoch, never the PTY manager epoch.
+- **Hidden Window Retirement Guard (`ReviewRetirementGuard`):** Resolves the previously open hidden retirement gate: mounted per protected Review window across all desktops (including minimized and offscreen windows). When session tracking is disabled or disconnected, it synchronously revokes live viewer eligibility, cancels in-flight TanStack queries, purges cache entries, and strips target tuples from window runtime/app state while retaining content-free explanation UI.
+
+### 4. Shell Input Context & Reversible Float Cascade
+- **Shell Input Context (`ShellInputProvider`):** Manages modal depth tracking via monotonic tokens, nonmodal popover tracking (`target-selector`, `window-list`, `notification-center`), command palette states, and Cognito privacy mode. Derives `isTerminalSuppressed` to isolate physical xterm PTYs across active modal/nonmodal layers.
+- **Reversible Float Bounds Cascade:** New unpositioned floating windows calculate coordinates via `calculateNextFloatBounds` using deterministic 28px offset cascades (`CASCADE_STEP = 28`), wrapping within safe viewport margins. Viewport resizing uses `projectFloatBounds` as a non-destructive runtime projection without rewriting saved persisted bounds. Double-clicking titlebars toggles maximize/tile atomically while preserving float bounds.
+### 5. Ordinary View Provenance & Originating Authority
+- **Provenance Requirements:** Ordinary launched terminal views in `OsShell` and `TerminalsApp` do not acquire destructive authority from arbitrary inventory matches. In addition to matching the exact terminal session ID (`row.id === effectiveSessionId`) and passing numeric/exact row eligibility (`isTerminalInventoryRowEligible`), the resolver (`resolveWindowTerminalObservation`) enforces complete 4-part originating lifetime provenance before promoting an ordinary view to a destructive target:
+  1. *Originating Connection Generation:* Safe non-negative integer strictly matching observation generation (`obs.owner.generation === winGeneration`).
+  2. *Originating Profile ID:* Non-empty string strictly matching observation profile (`obs.owner.profileId === winProfileId`).
+  3. *Originating PTY ServerEpoch:* Canonical UUID strictly matching observation epoch (`obs.termination.serverEpoch === winServerEpoch` and `obs.termination.version === 1`).
+  4. *Originating Incarnation:* Canonical positive u64 string and/or safe positive integer with mutual consistency, strictly matching `row.incarnationExact`.
+- **Fail-Closed Safety:** If any of the four provenance properties is missing or mismatched, destructive actions ("End Session", "Cancel Restart") remain disabled with an explanatory reason, failing closed without ambient epoch promotion, while preserving safe presentation "Close View".
+
+### 6. Shared Terminal Action Coordinator & Token Domain Separation
+- **Presentation-Independent Coordinator (`TerminalSessionActionCoordinator`):** Singleton store located at `packages/ui/src/lib/terminal-session-action-coordinator.ts`, centralizing destructive terminal operations across `PortsPanel`, `SystemMonitorApp`, and `TerminalCloseDialog`. Persists in-flight dispatches and retained action states across view unmount, remount, minimize, and tab switching, preventing dropped reconciliation ownership. Authoritative settlements (`ended`, `restartCancelled`) are preserved and never overwritten by subsequent transient errors or stale events.
+- **Single-Flight Dispatch Reservation:** Atomically reserves dispatch per target (`reserveDispatch`), blocking concurrent requests while in flight or unresolved (`dispatching`, `terminationRequested`, `outcomeUnknown`).
+- **Token Domain Separation:** Enforces explicit architectural separation between network dispatch fencing and UI modal presentation lifecycles:
+  - *Network / Action Domain (`attemptToken`):* Strictly monotonic integer allocated by the action coordinator per target on reservation. Used in `recordOutcome` to fence late, out-of-order, or superseded network responses.
+  - *UI Presentation Domain (`presentationToken` / `promptToken`):* Component ref-based token tracking the active modal prompt lifecycle (e.g., `promptTokenRef` in `PortsPanel` and `terminal-close-context.tsx`). Prevents completed async terminations from leaking outcome notifications or error banners into new or reopened modal dialogs after dismissal.
+## OS Desktop Polish Architecture & Subsystem Invariants
+
+The OS desktop polish release ([plan](../plans/261105-0711-os-desktop-polish/plan.md)) delivers unified action dispatch, persistent floating dock, work-area maximize, background context menu, scoped native cursors, and launch safety journaling.
+
+### 1. Unified Action Catalog & Sole Action Executor
+- **Manifest Action Catalog (`packages/ui/src/os/actions.ts`):** Pure action catalog statically derived from all 17 application manifests (`APP_MANIFESTS` in `app-registry.ts`). Normalizes application launch modes (`open`, `focus-or-open`, `new-window`, `action`) and binding sources (scalar preferences like `terminalWorkspaceShortcut` vs extra opt-in action bindings). Explicit unbinding survives round-trips via nullable `appShortcuts` in `UiConfig`.
+- **Sole Action Executor (`packages/ui/src/os/action-executor.ts`):** `executeAction` serves as the sole action executor across migrated catalog-driven entry points (Command Palette, Dock, Applications modal, and Desktop context menu). Maintains runtime MRU tracking across desktops and windows. Guarantees independent chooser state for Editor and Browser windows without premature PTY or network claims, and fences terminal creation through the launch safety journal.
+
+### 2. Single Root Keyboard & Input Coordinator
+- **8-Stage Resolution (`packages/ui/src/os/action-dispatch.ts`, `dam-hopper-app.tsx`):** Single layout-effect coordinator at application root supersedes scattered window-level listeners:
+  1. *Cognito Privacy Policy:* Intercepts physical codes first (`Mod+Alt+KeyB`).
+  1b. *Lock Screen Suppression:* When `useLockScreenStore.getState().isLocked` is true, suppresses physical keys (`lock-screen-blocked`) before shortcuts or PTY dispatch, with trailing release guards preventing keystroke leakage on unlock; underlying shell container is marked `inert` and `aria-hidden`.
+  2. *Settings Shortcut Capture:* Yields key recording when remapping shortcuts.
+  3. *IME/AltGraph Passthrough:* Passes composition events (`isComposing`, `keyCode 229`, `Dead`, `AltGraph`) without chord interception.
+  4. *Modal & Menu Ownership:* Traps Escape/navigation for open dialogs and context menus.
+  5. *Configured Action Resolution:* Resolves DoubleShift (Search), action catalog bindings, and page-wide terminal font scaling (`terminal.font-increase` / `decrease`).
+  6. *Browser Suppression:* Blocks reserved browser chords (e.g. `Mod+W`, `Mod+R` when intercepted).
+  7. *Local App Input:* Dispatches remaining keystrokes to active frame/xterm/Monaco/iframe.
+- **Deduplication:** WeakMap event caching eliminates duplicate dispatch across synthetic or replayed DOM events.
+
+### 3. Persistent Floating Dock & Canonical Pins
+- **4-Way Dock Orientation & Appearance Geometry (`packages/ui/src/os/Dock.tsx`, `SettingsAppearanceSection.tsx`, `OsShell.tsx`):** Configurable 4-way positioning (`dockPosition: "left" | "right" | "top" | "bottom"`), persisted in `UiConfig` and Rust backend schema (`schema.rs`). In `OsShell.tsx`, orientation is controlled dynamically via `workspaceFlexClass` (`flex-row`, `flex-row-reverse`, `flex-col`, `flex-col-reverse`) on `os-workspace-container` without reordering JSX `<Dock>` + `<main>` child elements, preserving React Fiber DOM stability and portal keepalives for Monaco and xterm PTYs. Configurable via `UiConfig` (`dockPadding`, `dockItemSpacing`, `dockOuterSpacing`, `dockRadius`). Provides 44px hit targets with 20px SVG icons.
+- **Canonical Pins & Applications Modal:** Pins persist in browser storage with deduplication and cross-tab `storage` event synchronization. `AppLauncher.tsx` renders an accessible modal catalog grid to search, launch, and pin unopened apps.
+
+### 4. Canvas Work-Area Maximize & Runtime Continuity
+- **Presentation Plane (`packages/ui/src/os/DesktopCanvas.tsx`, `WindowFrame.tsx`):** Maximized windows render into a sibling presentation plane (`z-40`, inset 0 to canvas) preserving the underlying tile tree and float bounds.
+- **Stable Presentation Slots:** Single React owner reparenting preserves live xterm PTY instances, Monaco dirty/undo buffers, and iframe browsing contexts without unmounting, reload, or duplicate attach/replay. Decouples support tiers (1024×640 supported) from canvas ResizeObserver geometry.
+- **Hologram-Inspired Home Background (`DesktopCanvas.tsx`, `os.css`):** Lightweight, theme-adaptive cyber aesthetic rendered behind windows in `DesktopCanvas`. Zero-CPU overhead: uses pure CSS gradients and static inline SVG with `pointer-events-none` and `aria-hidden="true"`, ensuring no JS layout or animation recalculations. Combines a dual-scale cyber grid (64px major and 16px minor grid lines via `.os-hologram-grid`), radial vignette masking (`radial-gradient(ellipse 80% 75% ...)`), fine scanline texture (`.os-hologram-bg`), and a center telemetry reticle with segmented arcs, cardinal crosshairs, and precision rings.
+
+### 5. Background Desktop Context Menu & Scoped Native SVG Cursors
+- **Desktop Context Menu (`packages/ui/src/os/DesktopContextMenu.tsx`):** Rendered behind windows in `DesktopCanvas`, capturing target/directory context to offer New Terminal, Applications, Palette, and Desktop Appearance. Dismisses synchronously on Escape or Cognito activation via `context-menu-coordinator.ts`.
+- **Scoped Cursors (`packages/ui/src/os/cursor.ts`):** Applies scoped SVG cursors (`cursor-default.svg`, `cursor-pointer.svg`) to shell root and owned portals, honoring `forced-colors: active` system fallback.
+
+### 6. Hardened Launch Safety Journal & Terminal Rebind
+- **Web Lock Launch Safety Journal (`packages/ui/src/os/persistence.ts`):** Ordinary terminal launches reserve an atomic pre-send attempt in `dam-hopper:os-launch-journal` under `navigator.locks` (bounded to 1 MiB, max 100 records, 8 KiB/record). Prevents duplicate or destructive PTY recreation under repeated triggers within the same browser origin.
+- **Durable Settlement:** Dispatched attempts settle as `confirmed-success` (with validated `serverEpoch`, positive u64 `incarnationExact`, and `TerminalTarget`), `confirmed-not-created` (for pre-dispatch throws or authoritative API 4xx responses: 400, 401, 403, 404, 413, 422), or `uncertain` (timeouts, disconnections, 5xx). Uncertain records block duplicate reuse and require explicit operator review.
+- **Terminal Rebind (`TerminalPanel.tsx`, `TerminalsApp.tsx`):** Terminal views require complete originating lifetime provenance (`profileId`, `generation`, `serverEpoch`, `incarnationExact`) before acquiring destructive authority. During transport reconnection or replacement, `TerminalPanel` rebinds xterm instances only to the reconnecting owner, preserving terminal scrollback and active peer instances.
 
 ## Multi-Profile Ownership Model
 
@@ -162,14 +475,14 @@ Keep API handlers responsible for request decoding, auth/role checks, and respon
 
 Ephemeral Cloudflared quick tunnels (`server/src/tunnel/`) isolate subprocesses from host and user configurations by passing `--config ""` and `--no-autoupdate`. Forwarded dev-server requests rewrite the Host header (`--http-host-header localhost`) to prevent DNS rebinding rejections on modern dev servers (such as Vite 6 `server.allowedHosts`). The tunnel lifecycle enforces a **single-authority supervisor exit pattern**: `child.wait()` in the supervisor task is the sole authority for emitting `Exited` or `Failed` notifications, guarded by atomic state flags (`terminal_reached`) to eliminate race conditions with the stderr URL-discovery reader task. Discovered ports are validated against danger port deny-lists (`[22, 25, 110, 143, 3306, 5432, 6379, 27017]`) and ports < 1024.
 
-Tunnels are explicitly started port forwards, independent of detected PTY ownership and origin-listener lifetime. Port loss, terminal exit/removal, and ownership replacement do not terminate Cloudflared or reset the tunnel's PID, URL, ID, or start time. Explicit Stop, connector termination/startup failure, and DamHopper shutdown remain terminal; no automatic restart or cross-server-restart restoration. A Tokio monotonic creation deadline marks required `reminderDue: boolean` at three hours and emits one `tunnel:reminder` event. REST retains due state for reload/reconnect catch-up. Shared web/native UI provides profile-qualified URL, port, Dismiss, and captured-owner Stop, without expiry; sessionStorage dismissal survives reload/reconnect in that browser session. Current-generation events cancel superseded list queries before patch/reconciliation. Undetected origins remain visible as untracked, not falsely listening. A replacement service binding the same port is public until Stop; an offline origin normally returns 502, and Quick Tunnel hostnames do not survive connector recreation.
+Tunnels are explicitly started port forwards, independent of detected PTY ownership and origin-listener lifetime. Port loss, terminal exit/removal, and ownership replacement do not terminate Cloudflared or reset the tunnel's PID, URL, ID, or start time. Explicit Stop, connector termination/startup failure, and DamHopper shutdown remain terminal; no automatic restart or cross-server-restart restoration. A Tokio monotonic creation deadline marks required `reminderDue: boolean` at three hours and emits one `tunnel:reminder` event. REST retains due state for reload/reconnect catch-up. Shared web UI provides profile-qualified URL, port, Dismiss, and captured-owner Stop, without expiry; sessionStorage dismissal survives reload/reconnect in that browser session. Current-generation events cancel superseded list queries before patch/reconciliation. Undetected origins remain visible as untracked, not falsely listening. A replacement service binding the same port is public until Stop; an offline origin normally returns 502, and Quick Tunnel hostnames do not survive connector recreation.
 
-## Native Desktop & Platform Boundaries
+## Native Desktop & Platform Boundaries (Retired in Phase 02)
 
-- **Windows Desktop:** Supports native local SSH port forwarding (`cfg(windows)`) via `apps/native/src-tauri/src/ssh_forward/` using `russh`, DPAPI credential storage, elliptic-curve host trust, and 20 specialized Tauri IPC commands. Allows connecting to remote HTTP/HTTPS profile URLs.
-- **Linux Desktop & Web:** Native SSH port forwarding is unsupported (`cfg(windows)` gated). Non-Windows native desktop enforces exact same-origin server profile URLs for security isolation.
+The desktop Tauri host (`apps/native`), native Windows local SSH port forwarding subsystem, and related UI components were permanently retired in Phase 02 (P0a) of the AI Dev OS redesign.
+- **Desktop SSH Port Forwarding:** Removed from source (`apps/native/src-tauri/src/ssh_forward/` and 40 UI/context/hook modules deleted). Route navigation to `/ssh-forwarding` displays retired-feature guidance. Remote Git SSH authentication remains fully supported via server APIs and UI retry helpers (`SshRetryStatusMessage`, `use-git-with-ssh-retry`).
+- **Web Profile Security:** The web client operates over standard browser HTTP/HTTPS/WSS connections, enforcing same-origin and CORS policies.
 - **Host Remediation Actions:** The `HostActionService` scaffolding exists in `server/src/host_actions/` (`/api/system/actions/v1/*`), but `HostActionService::new()` uses `UnavailableExecutor`, and capabilities currently report `available: false` (reasons include `noAuth`, `reauthUnavailable`, or `helperNotEnrolled`).
-
 ### Android Native Client Transport Boundary (`native/android-app`)
 
 The native Android client connects directly to the Axum backend using a specialized, owner-fenced Kotlin networking stack:
@@ -237,15 +550,6 @@ See [Workflow API Specification](./workflow-api.md).
   isolated harness; full cross-target build requires native MSVC tools. Windows
   runtime remains explicitly unqualified until tested on Windows.
 
-## Telemetry & OTLP Analytics
-
-<a id="codex-otel-usage-analytics"></a>
-DamHopper server includes an internal loopback OTLP collector (`server/src/telemetry/`) receiving protobuf metrics and execution traces:
-
-- **Identifier Obfuscation:** Uses HMAC-SHA256 (`~/.config/dam-hopper/telemetry-hmac-key`, regular file, mode `0600`, opened with `O_NOFOLLOW`).
-- **Strict Privacy Invariants:** Forbidden fields (`command`, `argv`, `cwd`, `environment`, `pty_output`, `prompt`, `response`, `tool_arguments`, `tool_output`) are dropped during normalization.
-- **Storage:** Persisted locally in SQLite (`~/.config/dam-hopper/telemetry.db`) with daily retention rollups.
-
 ## Agent Status
 
 `AgentStatusRuntime` correlates terminal ID with PTY incarnation and stores current semantic state in process memory. It does not replace PTY process state, workflow lifecycle, or task outcome.
@@ -257,8 +561,45 @@ DamHopper server includes an internal loopback OTLP collector (`server/src/telem
 
 See [Agent Status Architecture](./architecture/agent-status.md).
 
-## Git Safety Model
+## Workspace-First Filesystem & Marked Projects
 
+DamHopper decouples whole-workspace filesystem access from project registration. Users can navigate, view, edit, search, and launch folder terminals across the authorized server workspace root without configuring projects. Projects represent explicitly marked folders associating directories with build metadata, command palettes, agent configurations, and Git capabilities.
+
+### Core Architecture & Invariants
+
+1. **Authoritative Browse Root:**
+   - Security authority is derived explicitly from `[workspace] root` in `config.toml`, resolved relative to the configuration file path.
+   - It is never derived from ambient `workspace_dir` or config parent paths.
+   - Roots resolving to, within, or containing sensitive daemon configuration directories (`~/.config/dam-hopper`, `/etc/dam-hopper`, `/var/lib/dam-hopper`) are strictly rejected and fail closed with `UNCONFIGURED_WORKSPACE_ROOT` (HTTP 403 / WS error) without disrupting existing project access.
+2. **Target Discrimination:**
+   - All filesystem operations (REST `/api/fs/*` and WebSocket `fs:*` commands) use explicit target discrimination:
+     - `Workspace`: `{ "type": "workspace" }` (or `targetType=workspace` in REST queries).
+     - `Project`: `{ "type": "project", "project": "name", "worktreePath": "..." }`.
+   - Missing project fields never silently expand access to the workspace.
+
+3. **Workspace Sandbox & Authority Fencing:**
+   - `WorkspaceSandbox` in `FsSubsystem` tracks the root `DirectoryIdentity` and generation token.
+   - Pre-mutation checks refuse deleting, renaming, or modifying the workspace root, marked project roots, registered worktree roots, or their containing ancestors.
+   - Plain and encrypted writes, chunked uploads, and media ticket consumption verify directory identity and target authority at commit time, rejecting root replacements and symlink swaps.
+   - **Stale-Root Save Fence**: When the active workspace root switches, dirty editor buffers or pending client writes referencing old relative paths fail closed and are strictly prevented from saving into the new root.
+4. **Canonical Editor Document Identity:**
+   - Document identity is decoupled from access routes:
+     `documentKey = JSON.stringify(["file", profileId, workspaceId, workspaceEpoch, canonicalPath])`.
+   - Opening a file (e.g. `src/main.rs`) via Workspace mode or Projects mode (`project: "backend"`) shares one Monaco editor model, undo stack, and dirty buffer.
+   - Saves route through the authorizing target. Unmarking a project revokes project route access while preserving dirty buffers in memory.
+
+5. **Project-Gated Git Operations:**
+   - Git operations, Git blame, and conflict resolution strictly require a configured project target and a registered worktree.
+   - Direct server requests carrying workspace targets or unconfigured projects fail closed with `UNKNOWN_PROJECT` (HTTP 404).
+   - Client UI displays an actionable CTA: *"Mark as project to use Git"*. No automatic `git init` or command execution occurs.
+
+6. **Project Metadata Lifecycle (Mark / Unmark):**
+   - `POST /api/config/projects`: Adds a project entry to `[[projects]]` in `config.toml` with folder path (target-relative or existing path). Rejects duplicate names and duplicate canonical roots (nested roots permitted). Mutates TOML atomically and publishes config changes.
+   - `DELETE /api/config/projects/:name`: Removes project configuration from `config.toml` without deleting disk files or killing running PTYs.
+7. **Folder Terminals:**
+   - Untargeted folder terminal creation validates that requested `cwd` is canonically contained within the authorized workspace root. Traversal escapes or paths outside the workspace fail closed without fallback to `$HOME`.
+
+## Git Safety Model
 Git operations use porcelain semantics for worktree/index state. Normal push remains fast-forward-only. A commit-message edit or squash operates on raw object plumbing without modifying working tree files or index entries:
 
 - **Compare-and-swap ref updates**: First captures branch and HEAD, checks candidate rewrites against that snapshot, and updates refs via compare-and-swap. Squash requires a unique contiguous oldest-first parent chain reaching the captured tip and preserving the final tree. Signature loss requires explicit consent when applicable.
@@ -277,7 +618,7 @@ Search filters full commit messages before pagination without mutating refs. See
 
 ### Git Conflict Resolver Architecture (Phase 08 Workspace Integration & Cutover Completed; Phase 09 Automation & Documentation Delivered, Qualification Pending)
 
-Development progresses under the [Git conflict resolver plan](../plans/261019-1505-git-conflict-resolver/plan.md). Phase 02 discovery and snapshots, Phase 03 safe backend resolution, Phase 04 operation lifecycle, Phase 05 scoped client and in-memory draft stores, and Phase 06 merge model/decision history are implemented. Phase 07 delivers the floating cross-shell Monaco surface (`ConflictResolverPanel`), unified floating panel stacking identity across `WorkspacePage` and `TerminalWorkspaceShell`, scoped Escape key arbitration, responsive narrow tabbed mode, in-memory model routing, region-ID actions, and browser regression coverage. Phase 08 delivers complete workspace integration and cutover: `ConflictResolverPanel` cross-shell host integration in `WorkspacePage`, reveal intent routing (`ConflictRevealIntent`) avoiding editor tabs, entry root derivation in aggregate views, active operation banner entry and floating conflict pill, stage bypass closures (CUT1) across row checkboxes, popovers, bulk staging, and backend preflight, retirement of legacy `conflict-parser.ts` and `ConflictBlock` (CUT2), configured-editor terminal handoff guidance with post-return requery, and nonce-tracked selection stability. Phase 09 qualification gates remain pending. Backend contracts are enforced in `server/src/git/conflict_resolve.rs`, `server/src/git/mutation_coordination.rs`, `server/src/git/diff.rs`, and `server/src/git/operation.rs`; frontend client DTO cutover, in-memory draft stores, merge model, history controllers, and floating surface are implemented in `packages/ui/src/lib/conflict-*.ts`, `packages/ui/src/lib/joint-history-authority.ts`, `packages/ui/src/api/client.ts`, and `packages/ui/src/components/organisms/MergeConflictEditor.tsx`.
+Development progresses under the [Git conflict resolver plan](../plans/261019-1505-git-conflict-resolver/plan.md). Phase 02 discovery and snapshots, Phase 03 safe backend resolution, Phase 04 operation lifecycle, Phase 05 scoped client and in-memory draft stores, and Phase 06 merge model/decision history are implemented. In the AI Dev OS desktop (`OsShell`), `ConflictResolverApp` hosts the conflict resolver panel as a windowed application or floating frame governed directly by OS frame authority (`OS_RESOLVER_PANEL_TOPMOST_Z_INDEX = 30`), with scoped Escape key arbitration, responsive narrow tabbed mode, in-memory model routing, region-ID actions, and browser regression coverage. Legacy workspace shell wrappers (`WorkspacePage`, `TerminalWorkspaceShell`) are deleted. Reveals from Changed Files route via `ConflictRevealIntent` avoiding editor tabs, entry roots derive accurately in aggregate views, active operations render banner entry and floating conflict pills, and stage bypasses (CUT1) remain closed across row checkboxes, popovers, bulk staging, and backend preflight. Backend contracts are enforced in `server/src/git/conflict_resolve.rs`, `server/src/git/mutation_coordination.rs`, `server/src/git/diff.rs`, and `server/src/git/operation.rs`; frontend client DTO cutover, in-memory draft stores, merge model, history controllers, and floating surface are implemented in `packages/ui/src/lib/conflict-*.ts`, `packages/ui/src/lib/joint-history-authority.ts`, `packages/ui/src/api/client.ts`, and `packages/ui/src/components/organisms/MergeConflictEditor.tsx`.
 
 - **Implemented Discovery & Snapshots (Phase 02):**
   - `GET /api/git/{project}/conflicts`: returns bounded deterministic `ConflictSummaryResponse` directly from the unmerged index without reading blob content or touching worktree files. Opaque v2 cursors bind the full unmerged conflict-set fingerprint and last raw-path anchor; changed sets or missing anchors return `GIT_CONFLICT_CURSOR_STALE`, allowing a client to restart pagination from the first page.
@@ -330,15 +671,10 @@ Development progresses under the [Git conflict resolver plan](../plans/261019-15
     - _Open Defect — Redo Dirtiness Invariant:_ On redo of an identical-text accept, `applyDraftRedo` computes `isDirty` strictly against initial text, meaning decision-only changes do not register as dirty after redo and risk premature clean eviction under memory pressure or missed recovery.
     - _Open Defect — Typing Coalescing Sequence:_ In text-changing store actions, `draft.canCoalesceHistory = false` is assigned after `updateResult`, so typing edits immediately preceding an accept action within 1000ms may coalesce unless explicitly interrupted.
     - _Open Gate — BOM Re-application Boundary:_ Store actions serialize via `getModelSerializedResult`, while manual Monaco edits return un-BOM'd strings from `getValue()`; downstream Phase 07/08 wiring will reconcile the single authority for BOM re-attachment prior to backend staging.
-- **Joint History Authority (`JointHistoryAuthority`):**
-  - Located at `packages/ui/src/lib/joint-history-authority.ts`.
-  - Standalone controller wrapping Monaco editor public APIs (`model.onDidChangeContent`, `editor.addCommand`, `editor.addAction`) to intercept `Ctrl+Z`, `Ctrl+Shift+Z`, and `Ctrl+Y`, and register context-menu Undo/Redo actions.
-  - Records atomic transactions (`JointTransaction`: text, metadata, or combined atomic text+decisions) with `maxDepth` bounding (default 100) and branch-clears-redo semantics.
-  - Supports `getSnapshot()` / `restoreSnapshot()` across Monaco editor remounts.
-  - _Open Qualification & Integration Gates:_ `JointHistoryAuthority` is verified in isolated unit tests and headless Chromium browser tests (`conflict-monaco-history.browser.tsx`), but operates as a separate controller alongside `ConflictDraftRegistry`'s internal `draft.history`. Phase 01 native-history and Monaco byte-fidelity gates remain open, and unification into a single integrated history authority wired to `MergeConflictEditor` remains tracked under Phase 09 qualification.
-- **Floating Monaco Surface, Unified Stacking & Responsive Narrow Mode (Phase 07):**
-  - **Shared Floating Host (`ConflictResolverPanel` & `ConflictResolverToolbar`):** Mounted in `WorkspacePage` above `IdeShell`, `TerminalWorkspaceShell`, and `MobileWorkspaceShell` when `conflictResolver.isPanelVisible` is true. Keeps draft model and history ownership strictly outside frame visibility so hiding and reopening retains in-progress draft text and decision states in memory (while unified Monaco-level command undo/redo remains an open Phase 09 gate). When unmerged conflicts exist and the panel is hidden, a floating conflict pill button (`bottom-4 right-4 z-40`) displays conflict counts and provides one-click panel reopening.
-  - **Unified Floating Panel Stacking Identity (`terminal-workspace-panel.ts`):** Extends `TerminalFloatingPanelId` to `"files" | "tool" | "resolver"`. Employs `updateFloatingPanelStack`, `resolveFloatingPanelStackZIndex` (`TERMINAL_FLOATING_PANEL_BASE_Z_INDEX = 20`, with +2 per stack depth), and `isTopmostFloatingPanel` across both `WorkspacePage` and `TerminalWorkspaceShell` to coordinate logical stack ordering across panels, provided compatible ancestor CSS stacking contexts are maintained.
+- **Joint History Authority (`JointHistoryAuthority`):** Located at `packages/ui/src/lib/joint-history-authority.ts`. Standalone controller wrapping Monaco editor APIs (`onDidChangeContent`, `addCommand`, `addAction`) to intercept undo/redo chords and context menus, recording bounded atomic transactions (`JointTransaction`) with snapshot recovery across remounts. Integrated unification into `MergeConflictEditor` remains tracked under Phase 09.
+- **Floating Monaco Surface, OS Frame Authority & Responsive Narrow Mode:**
+  - **Shared Floating Host (`ConflictResolverPanel` & `ConflictResolverToolbar`):** Mounted in `ConflictResolverApp` or as a floating surface within the OS environment when `conflictResolver.isPanelVisible` is true. Keeps draft model and history ownership strictly outside frame visibility so hiding and reopening retains in-progress draft text and decision states in memory (while unified Monaco-level command undo/redo remains an open Phase 09 gate). When unmerged conflicts exist and the panel is hidden, a floating conflict pill button (`bottom-4 right-4 z-40`) displays conflict counts and provides one-click panel reopening.
+  - **OS Frame Authority & Stacking Identity:** Floating resolver z-index layering is governed directly by OS frame authority (`OS_RESOLVER_PANEL_TOPMOST_Z_INDEX = 30`), coordinating z-order within the desktop canvas without legacy panel stack controllers (`terminal-workspace-panel.ts` deleted).
   - **Scoped Keyboard Arbitration & Escape Priority (`conflict-resolver-panel-state.ts`):** `handleResolverPanelKeyDown` checks `event.key === "Escape"` and hides the panel only when:
     1. The resolver panel is the topmost floating panel (`isTopmost === true`).
     2. Focus is inside the panel DOM subtree or at document body.
@@ -350,22 +686,14 @@ Development progresses under the [Git conflict resolver plan](../plans/261019-15
   - **Region-ID Keyed Navigation & Actions (`ConflictRegionNav.tsx`):** Exposes conflict chunk navigation chips and actions (`onAcceptSide`, `onAcceptBoth`, `onIgnoreSide`, `onMarkReviewed`) keyed strictly by stable `region.id` to prevent hunk mismatching.
   - **Monaco Public Delta Decorations (`conflict-editor-decorations.ts`):** `buildResultDecorations` and `buildSourceDecorations` apply public Monaco delta decorations using CSS rules (`.mc-conflict-marker`, `.mc-conflict-ours`, `.mc-conflict-theirs`, `.mc-conflict-base`, `.mc-conflict-sep`, `.mc-conflict-resolved`) injected once via `injectConflictStylesOnce()`.
   - **Workspace Integration, Reveal Intent Routing & Cutover (Phase 08):**
-    - **Shared Floating Host Mount:** Mounted conditionally in `WorkspacePage` above `IdeShell`, `TerminalWorkspaceShell`, and `MobileWorkspaceShell` when `conflictResolver.isPanelVisible` is true. Retains in-progress draft text and region decisions for the matching `DraftKey` in `ConflictDraftRegistry` outside component lifecycle (while Monaco-specific view states like scroll position and local undo command stacks reset on remount).
+    - **Shared Floating Host Mount:** Mounted conditionally inside `ConflictResolverApp` or as an OS floating surface when `conflictResolver.isPanelVisible` is true. Retains in-progress draft text and region decisions for the matching `DraftKey` in `ConflictDraftRegistry` outside component lifecycle (while Monaco-specific view states like scroll position and local undo command stacks reset on remount).
     - **Reveal Intent Routing (`ConflictRevealIntent`):** `ChangedFilesList` routes row selection for conflicted files (`status === "conflicted"`) via `onSelectConflict` to `handleOpenConflictResolver(selection)` instead of calling `onSelectFile`. `openChangedFileDiff` returns immediately when `selection.status === "conflicted"`, preventing editor tab opening or diff invocation. `buildConflictRevealIntent` produces `{ nonce, filePath, root }`, mapping `selection.gitRootId` (when not `"."`) to `root` to ensure aggregate and multi-root views resolve to the entry's actual worktree rather than assuming the project root.
     - **Stopped Operation Entry & Floating Conflict Pill:** `ChangedFilesList` renders an active operation banner (`GitMerge` status badge) when `useGitOperationStatus` returns an active operation (`merge`, `rebase`, `cherry-pick`, `revert`), displaying stopped reasons (`conflicts`, `messageEditRequired`) and providing an "Open Resolver" button. A floating conflict pill also mounts when conflicts exist or an active operation is stopped while the resolver panel is hidden.
     - **Stage Bypass Closures (CUT1):** Conflicted row checkboxes in `ChangedFilesList` are disabled (`disabled={isConflicted}`, `readOnly`, `cursor-not-allowed`, click handler early returns). `GitContextMenuPopover` replaces "Add to commit", "Remove from commit", and "Discard changes" with "Resolve conflict…" for conflicted rows. Bulk staging (`handleStageAll`) filters out conflicted entries (`files.filter(f => f.status !== "conflicted")`). Backend CUT1 preflight in `server/src/git/diff.rs` (`stage_files`) acquires `GitMutationCoordinator` lock and checks `index.has_conflicts()`; any batch containing unmerged conflicted files is rejected with HTTP 400 `INVALID_INPUT` before any clean files in the batch are staged. Legacy resolve payloads with `{ path, content }` fail closed with HTTP 400 `LEGACY_PAYLOAD_REJECTED`.
     - **Retirement of Legacy Conflict Parser & Block Types (CUT2):** `packages/ui/src/lib/conflict-parser.ts` is deleted (`git status: D`). `ConflictBlock`, `parseConflictRegions`, and `hasRemainingConflicts` removed from `MergeConflictEditor.tsx` and all production exports. Zero production occurrences in `packages/ui` or `server`. Android Chrome read-only input policy coverage preserved through behavioral rewrite against `ConflictRegionNav`.
     - **Configured-Editor Terminal Handoff & Post-Terminal Requery:** When `resolver.terminalHandoff` is set (stopped reason `messageEditRequired`), the resolver toolbar and editor card display a prominent guidance banner detailing the exact `worktreeRoot` and Git configured editor requirement. A "Refresh after terminal return" button invokes `resolver.refreshAfterTerminalReturn(terminalHandoff)` or `resolver.refetchAll()`, triggering authoritative requery of operation status, conflict inventory, and index fingerprints.
     - **Nonce Consumption & Intent Snap-Back Prevention:** `ConflictResolverPanel` tracks `lastConsumedNonceRef` during component mount to apply `revealIntent` file paths once without snapping back during background refetches. Because `lastConsumedNonceRef` is local to the panel component, unmounting the panel resets the ref; reopening via fresh reveal intent re-evaluates the intent.
-    - **Phase 09 Automation & Documentation Delivery (Qualification Pending):**
-      - **Delivered Subprocess & Cancellation Hardening:** `run_bounded_git_command` implements `ProcessGroupGuard` RAII termination (`-pgid` SIGKILL on Unix, best-effort `taskkill /F /T` on Windows). In `server/src/api/git_diff.rs`, `execute_operation` decouples mutation tasks via `tokio::spawn`, ensuring client disconnects do not abort mutations mid-flight or release the `GitMutationCoordinator` lock while Git subprocesses run.
-      - **Streaming Editor Sentinel Detection:** `RollingSentinelScanner` and `drain_bounded_with_sentinel` inspect streaming stderr across chunk boundaries (sliding window of `sentinel.len() - 1` bytes), reliably detecting `DAM_HOPPER_EDITOR_REQUIRED` across arbitrary chunk splits and streaming data volumes independently of retained diagnostic buffer limits.
-      - **Diagnostic Sanitization:** `sanitize_git_diagnostic` replaces known worktree paths with `[WORKTREE_ROOT]`, redacts secrets via `redact_diagnostic_text`, and bounds trimmed text to 4,096 bytes plus `... [truncated]`.
-      - **Stat Cache Coherence on Index Stage:** `stage_index_entry` populates index entry stat fields (`mtime`, `ctime`, `dev`, `ino`, `uid`, `gid`) from disk metadata (`symlink_metadata`), ensuring porcelain Git commands recognize staged files as clean.
-      - **Multi-Panel Browser Layout & TopNav Z-Order Matrix:** Headless Chromium component tests in `packages/ui/browser-tests/git-conflict-resolver.browser.tsx` verify wide 3-pane layout at 1400px, narrow tabbed switcher at <768px, and z-order arbitration ensuring floating panels (z-20 to z-24) remain subordinate to TopNav (z-50) for hit testing.
-      - **Live Daemon Smoke Verification:** `scripts/qualify-git-conflict-resolver.mjs` verifies functional lifecycle across 54 assertions in primary and nested repositories (operation status, conflict inventory, snapshots, CUT1 staging rejection, CUT2 legacy rejection, stale preconditions, text resolution, guarded continue, commit-message editor sentinel handoff, nested repository target isolation, and confirmed abort). Linked-worktree isolation is independently verified by integration tests in `server/tests/git_conflict_operation_lifecycle.rs`.
-      - **Preserved Open Deferrals & Review Items:** Joint history authority unification, draft capacity accounting on metadata actions, decision-only redo dirtiness evaluation, owner-qualified Monaco URIs, aggregate nested-root operation-banner parity, multi-panel layout test depth across all simultaneous panes, and Monaco view-zones/marker-parser cleanup deferral tracking remain documented under [plan.md](../plans/261019-1505-git-conflict-resolver/plan.md) and [phase-09](../plans/261019-1505-git-conflict-resolver/phase-09-qualification-and-documentation.md).
-      - **Release Gating & Platform Status:** Production release remains blocked pending AC12 actual Linux-native host launch, fresh local captures, human visual review, and authoritative disposition of remaining Cycle 2 review items. Windows-native client qualification remains separately pending and explicitly unqualified.
+    - **Phase 09 Automation, Verification & Release Boundaries:** Delivers subprocess and cancellation hardening (`run_bounded_git_command` RAII `ProcessGroupGuard`, `execute_operation` decoupled via `tokio::spawn`), streaming editor sentinel detection (`RollingSentinelScanner`), diagnostic sanitization (`sanitize_git_diagnostic`), and index stat cache coherence (`stage_index_entry`). Automated lifecycle verified across 54 assertions in `scripts/qualify-git-conflict-resolver.mjs`. Full production release remains gated on AC12 host launch and review items.
 
 ## Cognito Privacy Mode
 
@@ -383,10 +711,16 @@ Current CSS in `packages/ui/src/index.css` sets Heavy Blur to `blur(16px) satura
 - Encrypted uploads use OPAQUE PAKE exchange and chunked AES-256-GCM over the WebSocket transport. One captured profile/generation transport owns authentication and final write; no plaintext or alternate-owner fallback is allowed.
 - The shared logger redacts sensitive metadata. Agent status carries lifecycle facts only, never conversation content.
 
+### Client-Side PIN Privacy Lock State Machine
+
+The client-side PIN privacy lock provides walkaway screen security without ending server authentication or terminating background processes:
+- **Cryptographic Key Derivation (PBKDF2-SHA256):** `packages/ui/src/stores/lock-screen.ts` uses Web Cryptography API (`crypto.subtle`) with PBKDF2-SHA256, 100,000 iterations, a 16-byte cryptographically secure random salt (`generateLockSalt`), and a 256-bit derived key. Verifier records persist in `localStorage` under `dam-hopper:os-lock-verifier` as `{ version: 1, salt, hash, length, updatedAt }`. Plaintext PINs are never stored.
+- **State Machine & Throttling (`useLockScreenStore`):** Tracks `isLocked`, `hasPin`, `pinLength` (4–8 digits), `isCooldown`, `cooldownUntil`, `failedAttempts`, and `isVerifying`. Reaching 5 consecutive failed attempts triggers an enforced 15-second cooldown (`LOCK_COOLDOWN_MS = 15_000`, persisted under `dam-hopper:os-lock-cooldown` to survive page reloads).
+- **Fullscreen Lock Screen Overlay (`LockScreenOverlay.tsx`):** Portal-rendered at `z-[9990]` (below Cognito Mode's `z-[9999]`), featuring live clock, date, PIN dot indicators, 3x4 numeric keypad, error shake animation (`.os-lock-shake`), and cooldown timer. Focus is trapped within the overlay while locked and restored to prior focus on unlock. A trailing keyboard release guard consumes lingering `keydown`/`keyup` events to prevent keystroke leakage to underlying PTYs.
+- **PIN Setup & Management Dialog (`PinSetupDialog.tsx`):** Supports `setup`, `change`, and `remove` modes with submission generation fencing, preventing multiple submissions in the same event turn.
+
 <a id="login-device-management-design"></a>
-
 ### Device Login Sessions Architecture (Delivered)
-
 Device login session management operates across the entire selected server for the authenticated user account, spanning all projects rather than per-project ACLs or physical device identities.
 
 - **Backend Routing & Middleware:** `router.rs` mounts `/api/auth/sessions` (`GET`) and `/api/auth/sessions/{id}` (`DELETE`) wrapped in an outer `no_store` middleware layer that inserts `Cache-Control: no-store` across all success and error responses.
@@ -409,109 +743,14 @@ Linux terminal idle suspend is coordinated by the server and an enrolled Unix-so
 
 ### Semantic agent-free automatic sleep
 
-Feature branch `feat/host-resources-auto-sleep`; implementation plan: `plans/261010-1746-host-resources-auto-sleep/plan.md`.
-Phase 01 through Phase 06 are fully implemented and certified, including end-to-end verification, security boundaries, and safe operational rollout runbooks.
+Feature branch `feat/host-resources-auto-sleep` (`plans/261010-1746-host-resources-auto-sleep/plan.md`, Phases 01–06 certified). The semantic agent-free automatic sleep subsystem coordinates quiescence across managed terminal sessions and public clients:
+- **Policy & Quiescence Epoch:** Opt-in immutable `agent-free` policy with fixed 10,800s (3 hours) quiet period enforced fail-closed at startup.
+- **Managed Process Lineage:** Traces complete `descendant_processes` closures per recognized agent (Codex, Claude, OMP) using process-tree traversal; unrefreshed native CLI hooks fail closed after 15s.
+- **Public Client Presence Registry:** Bounded in-memory registry (`ClientPresenceRegistry`) tracking authenticated public UI `/ws` connections with two-phase reservation guards and cryptographic capability verification.
+- **Actor Revalidation & Handoff:** Pre-dispatch database revalidation verifies approving actor before execution; atomic 8-point admission fence under middle lock claims PTY handoff and dispatches `SuspendWithRtcWakeRequest`.
+- **Lock Order Invariant:** `ClientPresenceRegistry` (outer) -> `PtySessionManager::inner` (middle) -> `AgentStatusRuntime::registry` (inner). Never hold locks across `.await` or I/O.
 
-- **Policy & Fixed Timing**:
-  - Opt-in startup policy `agent-free` (`IdleSuspendAutomaticPolicy::AgentFree`); retains existing `empty-fleet` and `agent-activity` policies without regression.
-  - Fixed 10,800s (3 hours) quiet period enforced fail-closed at startup validation and timing PATCH admission; dynamic adjustment rejected.
-  - Startup policy is immutable: full configuration updates, workspace reload, and settings import preserve the running startup policy even if the on-disk file changes.
-  - Wire protocol `IdleSuspendStatusV1` enforces strict mutual exclusivity between `activity` (`agent-activity` only) and `agentFree`/`clientPresence`/`consent` (`agent-free` only).
-- **Managed Agent Inventory & Descendant Closures**:
-  - `ProcessDiscovery` in `server/src/idle_suspend/activity/process.rs` bounds candidate matching strictly to managed PTY session roots and retained lineage (`MAX_MANAGED_ROOTS_LIMIT = 64`, `MAX_RELEVANT_PROCESSES_LIMIT = 1024`, `MAX_SCANNED_PROCESSES_LIMIT = 8192`).
-  - Traces complete `descendant_processes` closures per recognized agent (Codex, Claude, OMP) using process-tree traversal; child workers or subagents cannot hide running activity under an idle parent.
-  - Privacy-preserving `ProcessImageKey` captures device ID (`exe_dev`), inode (`exe_ino`), and sanitized entrypoint token without exposing raw arguments or environment variables.
-  - Produces deduplicated, sorted `matched_agents: Vec<MatchedManagedAgent>` with exact process identities (`pid`, `start_ticks`) and terminal bindings.
-  - Independent external agents (tmux, SSH, shell outside managed PTYs) are deliberately excluded by product design and do not block sleep.
-- **Verified OMP TCP Peer Binding**:
-  - `verify_tcp_peer_process` in `server/src/agent_status/collector.rs` binds loopback WebSocket connections to verified OS process identities on Linux:
-    1. Pre-check: reads `/proc/<claimed_pid>/stat` to record `start_ticks` and reject zombie/dead states (`Z`, `X`).
-    2. Socket lookup: locates client socket inode from `/proc/net/tcp` and `/proc/net/tcp6` matching `peer_addr.port()`.
-    3. Descriptor check: scans `/proc/<claimed_pid>/fd/` for symlinks targeting `socket:[<inode>]`, bounded by `MAX_PEER_FDS_SCAN = 256` to prevent DoS.
-    4. Ancestry check: traces `/proc/<pid>/stat` parent PIDs (up to 32 hops) ensuring lineage connects to the registered terminal root; asserts `stat_before.start_ticks == root.start_ticks` on direct root match to defeat recycled PID spoofing.
-    5. Post-check: re-reads `/proc/<claimed_pid>/stat` ensuring `start_ticks` remained identical and the process remained alive.
-  - Unverified connections fail closed in semantic evaluation as `UnverifiedProcessBinding` without leaking socket inodes or PIDs to clients.
-- **Hard Fail-Closed Native Freshness Gate**:
-  - Codex and Claude CLI hooks lack keepalive heartbeats; leases expire after 15s (`DEFAULT_LEASE_MS = 15_000`).
-  - Enforces hard fail-closed gate: zero synthetic lease stretching, zero simulated Idle states from stop events, zero screen/transcript scraping, and zero cloud API substitution.
-  - Unrefreshed native providers transition to `AgentSemanticBlockReason::UnrefreshedNativeProvider` (`AgentSemanticEvaluation::Unknown`), blocking automatic sleep until refreshed or proven exited.
-- **Monotonic Non-Free Generation Tracking & Semantic Evaluation**:
-  - `AgentStatusRegistry` maintains monotonic `non_free_generation: u64` (initialized at 1) incremented on every non-free mutation: working reporter admission, hook state transition, lease expiration sweep, terminal removal, or reconnect.
-  - Brief `Working -> Idle` gaps between coordinator polling sweeps increment `non_free_generation`, invalidating previous Free claim tickets.
-  - `evaluate_managed_agents` executes under registry read lock:
-    - Empty matched agents -> `Free` (0 idle, 0 blocked).
-    - Any agent `Working` -> `Working` (capturing implicated PIDs).
-    - Expired lease, unrefreshed native provider, unverified binding, ambiguous owner, or uncovered subagent -> `Unknown`.
-    - All matched agents `Idle` or `Blocked` with active leases -> `Free` with `min_lease_remaining_ms`, current `non_free_generation`, and `semantic_revision`.
-- **AgentFreeClaimTicket & PTY Manager Handoff Fences**:
-  - `AgentFreeClaimTicket` in `server/src/idle_suspend/activity/sampler.rs` captures atomic evaluation snapshot with sanitized `Debug` formatting.
-  - `PtySessionManager::try_claim_agent_free_handoff` in `server/src/pty/manager.rs` enforces 8-point admission fence under `inner` lock:
-    1. Policy is `AgentFree` and enabled.
-    2. Request ID, semantic revision, non-free generation, and timing revision match ticket.
-    3. Monotonic eligibility deadline is expired.
-    4. Observation age <= 5 seconds (`MAX_ACCEPTED_OBSERVATION_AGE`).
-    5. Input revision matches ticket.
-    6. Fleet generation matches ticket.
-    7. Live sessions count and root process identities match ticket roots exactly.
-    8. Atomic fleet handoff claim acquires handoff flag, verifying no session is creating, closing, disposing, or restarting.
-- **Public WebSocket Client Presence Registry & RAII Guards**:
-  - `ClientPresenceRegistry` (`server/src/idle_suspend/client_presence.rs`) provides a bounded in-memory registry (`DEFAULT_MAX_PUBLIC_CLIENTS = 1024`) embedded in `AppState.client_presence`.
-  - Exclusions: Strictly tracks authenticated public UI `/ws` WebSocket connections. Private loopback OMP reporter sockets (`/ws/agent-status`) and HTTP Server-Sent Events streams (host-resource SSE) are deliberately excluded.
-  - Two-Phase Connection Admission:
-    1. `PendingUpgradeGuard`: Reserved post-authentication (`reserve_pending_upgrade`) before Axum WebSocket upgrade. Capacity saturation immediately rejects admission with `PresenceAdmissionError::CapacityExceeded` (HTTP 503 `PRESENCE_UNAVAILABLE`). Expired pending reservations (`PENDING_UPGRADE_TIMEOUT = 30s`) are pruned on every mutation. Dropped guards cleanly release reservation slots without leaking active state.
-    2. `ClientPresenceGuard`: Promoted upon upgrade completion (`promote_pending_to_live`), capturing connection ID (UUIDv4) and actor session invariants (`subject`, `session_id`, `auth_version`, `credential_version`, `effective_deadline`). Guard drop automatically decrements connection count and increments monotonic membership revision.
-  - Zero-Client Admission Fence: `try_claim_no_client_fence(expected_revision)` atomically asserts zero live connections and zero pending upgrades while verifying monotonic revision match; latches `host_suspending = true` to immediately reject new upgrades with `HostSuspending` (HTTP 503).
-  - Monotonic `membership_revision: u64`: Increments on every reservation, promotion, liveness prune, retirement, or fence transition. Broadcasts `IdleSuspendClientPresenceStatusV1` snapshots via a Tokio watch channel without lock contention.
-- **Cryptographic Capability Verification & Session Invariants**:
-  - Immediate Receipt Delivery: Immediately after upgrade promotion, the server sends a private `host:uiConnection` frame (`UiConnectionFrame`: `{ kind: "host:uiConnection", version: 1, connectionId, decisionCapability }`) directly to the socket's private channel ahead of broadcast events.
-  - 122-bit high-entropy secret (`Uuid::new_v4()`) generated per socket. Server stores only a 32-byte SHA-256 digest (`hash_capability`); plaintext capability secrets are never logged, never emitted to `event_sink`, and never exposed in GET/status endpoints.
-  - `verify_decision_capability`: Validates candidate capability secrets using constant-time comparison (`subtle::ConstantTimeEq`) to defeat timing attacks. Enforces actor session invariants (`subject`, `session_id`, `auth_version`, `credential_version`, and non-expired `effective_deadline`).
-  - Active/Closing Invariant: Rejects connections with `closing: true`; explicit `mark_closing()` immediately revokes decision capability prior to task teardown.
-- **Decoupled Frame Reader & Heartbeat Supervision**:
-  - Dedicated `frame_reader` loop in `server/src/api/ws.rs` decouples WebSocket control frames (Ping, Pong, Close) from the bounded application queue (`APP_MSG_CAP = 64`), ensuring long PTY or filesystem commands cannot starve transport liveness.
-  - Control frames and application data immediately refresh `last_liveness` via `record_pong()`.
-  - Dedicated heartbeat supervisor task sends periodic pings (`HEARTBEAT_INTERVAL = 30s`) and evaluates elapsed silence against `HEARTBEAT_DEADLINE = 90s`. Silent connections exceeding 90 seconds are marked closing, logged, and gracefully terminated via unified cancellation channels.
-- **UI Exact-Owner Receipt Binding & Lifecycle**:
-  - `WsTransport` (`packages/ui/src/api/ws-transport.ts`): Caches `host:uiConnection` receipt in memory upon arrival (`getUiConnectionReceipt()`); immediately delivers cached snapshot to late subscribers (`subscribeUiConnection`). Socket disconnect, close, error, reconnect, or transport disposal resets receipt to `null` and notifies subscribers.
-  - `connections.ts` (`packages/ui/src/api/connections.ts`): Provides `getUiConnectionReceipt(owner)` and `subscribeUiConnectionReceipt(owner, listener)` gated strictly by `isCurrentConnection(owner)` with generation matching. Stale owners, disconnected profiles, or non-WebSocket transports return `null` with no ambient or fallback profile resolution.
-- **Three-Hour Coordinator Engine & Monotonic Epochs**:
-  - Tracks continuous quiescence epoch (>10,800s, 3 hours) using monotonic `Instant` timestamps (`free_anchor`, `elapsed > Duration::from_secs(quiet_period_seconds)`). Strict inequality required; exact boundary (`== 10,800s`) rejected.
-  - Clean zero-agent boot support: fleets starting with zero agents initialize directly in valid tracking epoch without false blockers.
-  - Intervening non-free agent activity (`Working`, hook transitions, lease expiration) or safety invalidations immediately reset continuity and clear `free_anchor`.
-- **Public Client Presence Arbitration & Branching**:
-  - Zero connected public clients (`connection_count == 0 && pending_upgrade_count == 0`): coordinator enters `FinalCheck` automatically, bypassing consent prompt.
-  - Positive connected public clients (`connection_count > 0`): coordinator issues single active consent request (`ActiveConsentRequest`) with unique UUID (`consent-<uuid>`), monotonic revision, and 60-second expiration (`expires_at = now + 60s`), transitioning to `AgentFreePhase::AwaitingConsent`.
-  - Pending-only connection upgrades (`pending_upgrade_count > 0`): coordinator pauses and waits across cadence ticks until pending upgrades complete promotion or timeout, eliminating handshake race conditions.
-- **First-Valid Consent Latching & Immediate Final Check Dispatch**:
-  - `POST /api/system/idle-suspend/v1/consent/decision` endpoint passes decisions to coordinator actor loop.
-  - First valid server-accepted decision latches atomically into `active_consent.decision` and records `last_settled_consent`.
-  - Subsequent contrary decisions return HTTP 409 `decisionAlreadySettled`.
-  - Duplicate identical decisions return idempotent HTTP 200 OK (`Success { idempotent: true }`).
-  - Approval (`Approve`): sets `AgentFreePhase::Approved`, captures approving actor and connection ID, responds HTTP 200 OK, and immediately dispatches `attempt_agent_free_final_check(true, ...)` without waiting for the 60s timeout.
-  - Refusal (`Deny`): sets `AgentFreePhase::Deferred` with reason `ClientRefusal`, responds HTTP 200 OK, and defers coordinator for full `> 10,800s` (3 hours) cooldown.
-- **Timeouts, Disconnects, and Pre-Dispatch Invalidation**:
-  - 60s Unanswered Timeout: if `now >= expires_at` with no decision, consent request transitions to `ConsentState::Expired`, sets reason `UnansweredTimeout`, and defers coordinator for `> 10,800s`.
-  - Last-Client Disconnect: if client count drops to 0 while in `AwaitingConsent` or `Approved`, in-flight consent transitions to `ConsentState::Cancelled`, sets reason `LastClientDisconnected`, and defers for `> 10,800s`.
-  - Pre-Dispatch Actor Revalidation: `revalidate_approving_actor` re-checks the approving actor before final execution against database: user enabled, auth version matched, session unrevoked, session non-expired (`now < expires_at`), MFA deadline valid (`now < mfa_due_at`), and credential version matched. Revalidation failure cancels consent with `SafetyInvalidation` and defers for `> 10,800s`.
-- **Fresh Final Check Pipeline & Atomic Handoff**:
-  - Captures fresh PTY snapshot and runs `process_discovery.prepare_sample` / `commit_sample` and `agent_status.evaluate_managed_agents`.
-  - Any working agent, ambiguous owner, unrefreshed native provider, or expired lease cancels consent, sets `Blocked`, and resets quiet anchor.
-  - All-free evaluation acquires PTY handoff claim via `try_claim_agent_free_handoff(admission)` under middle lock.
-  - Zero-client flow: atomically claims `try_claim_no_client_fence(pres_rev)`. If clients arrived during final check, releases PTY claim and issues consent request instead.
-  - Approved client flow: sets `client_presence.set_host_suspending(true)`.
-  - Emits `FinalCheckCompleted`, `HandoffClaimAccepted`, `HelperRequestDispatched` server events and dispatches single `SuspendWithRtcWakeRequest` to executor.
-- **Audit Logging & Privacy-Preserving Redaction**:
-  - `IdleSuspendServerAudit` appends `ConsentAuditRecord` (version, timestamp, actor, request_id, request_revision, connection_id, decision, status_revision, result) via verified file descriptors (`O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK`, mode 0600, UID/GID checks, `sync_data`).
-  - `project_server_audit` redacts actor subject to boolean `actor_present: bool`, omits `connection_id`, projects canonical UUID `correlation_id`, and redacts details to `requestRevision,statusRevision` for diagnostic bundles.
-- **Canonical Admission Lock Order**:
-  1. Outer / Coarse: `ClientPresenceRegistry` lock (synchronous in-memory lock for live/pending sockets and reservation guards).
-  2. Middle: `PtySessionManager::inner` lock (synchronous lock for fleet generation and managed terminal sessions).
-  3. Inner / Fine: `AgentStatusRuntime::registry` lock (synchronous read/write lock for semantic agent states).
-     Invariants:
-  - Never hold any lock across `.await`, Tokio channel dispatch, filesystem I/O, or procfs/network inspection.
-  - Never acquire in reverse order (`AgentStatusRuntime` -> `PtySessionManager` -> `ClientPresence`).
-  - Asynchronous authentication, database verification, and fresh process sampling complete before acquiring the final admission fence; only monotonic session/revocation epochs and fleet/semantic revisions are checked under the fence.
-
+Full architectural contracts, state machine transitions, lock specifications, and audit logging invariants are detailed in [Idle Suspend Architecture](./architecture/idle-suspend.md).
 `deploy/release/` provides release packaging, installers, and service templates. Host-resource SSE streams deep Linux metrics under capped subscriber leases (max 32 global, 4 per subject). See [Host-Resource SSE Architecture](./architecture/host-resource-sse.md).
 
 ## Android Native Client Architecture
@@ -521,7 +760,7 @@ Phase 01 through Phase 06 are fully implemented and certified, including end-to-
 
 ### Architecture and Separation
 
-The native Android client (`native/android-app/`) is an independent Kotlin Multiplatform and Jetpack Compose implementation, completely isolated from the desktop Tauri host (`apps/native/`):
+The native Android client (`native/android-app/`) is an independent Kotlin Multiplatform and Jetpack Compose implementation, completely isolated from the web host (and former desktop Tauri host `apps/native/`):
 - **`:shared` (KMP Module):** Targets Android and JVM (`jvmTarget = 17`, `minSdk = 29`). Contains common domain models, state stores, networking clients, and Compose Multiplatform UI components. Strictly excludes platform-specific Android or Swing APIs.
 - **`:androidApp` (Application Module):** Android app module (`compileSdk = 35`, `minSdk = 29`, `targetSdk = 35`, ABI filters `arm64-v8a` and `x86_64`). Hosts `MainActivity.kt`, Compose entry point with system inset handling, Android manifest, and platform Keystore adapters.
 
@@ -546,4 +785,4 @@ Comprehensive subsystem contracts across editor tiers, Git repositories, encrypt
 
 ## Qualification Boundary
 
-Automated unit and integration tests establish only their exercised contracts. Live browser behavior, particular agent versions, Linux deployment behavior, Windows native scopes, and deployed proxies are separately qualified. See [Project Roadmap](./project-roadmap.md) and [Testing Guide](./testing.md) for current open gates.
+Automated unit and integration tests establish only their exercised contracts. Live browser behavior, particular agent versions, Linux deployment behavior, Windows server deployment, and deployed proxies are separately qualified (desktop native SSH scopes retired in Phase 02). See [Project Roadmap](./project-roadmap.md) and [Testing Guide](./testing.md) for current open gates.

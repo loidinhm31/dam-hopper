@@ -1,20 +1,22 @@
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
+use crate::pty::event_sink::EventSink;
 use serde_json::Value;
 use std::path::{Path as FsPath, Path as StdPath, PathBuf};
 
 use crate::config::parser::project_path_for_toml;
 use crate::config::schema::DamHopperConfig;
 use crate::config::{
-    global_config_path, read_config, read_global_config_at, write_global_config_at,
+    read_config, read_global_config_at, write_global_config_at,
 };
 use crate::error::AppError;
 use crate::state::{project_roots_from_config, AppState};
 use crate::utils::atomic_write;
-use crate::workspace_target::ProjectTargetRef;
+use crate::workspace_target::{FilesystemTargetRef, ProjectTargetRef};
 
 use super::error::ApiError;
 
@@ -37,18 +39,29 @@ pub async fn update_config(
 ) -> Result<impl IntoResponse, ApiError> {
     let _workspace_context = state.workspace_context_guard.write().await;
     let current = state.config.read().await.clone();
-    preserve_and_reject_telemetry_mutation(&mut body, &current)?;
     preserve_and_reject_idle_suspend_mutation(&mut body, &current)?;
     let config_path = current.config_path.clone();
+    let ws_root = current.resolve_workspace_root().ok();
     let config_dir = config_path.parent().unwrap_or(StdPath::new("/"));
-    relativize_project_paths(&mut body, config_dir);
+    let project_base_dir = ws_root.as_deref().unwrap_or(config_dir);
+    relativize_project_paths(&mut body, project_base_dir);
     normalize_config_json_for_toml(&mut body);
 
-    // Validate rendered candidate before filesystem mutation
+    // Read existing TOML to preserve unrepresented sections
+    let mut doc = read_toml_value(&config_path)?;
     let tv = json_to_toml(&body).ok_or_else(|| {
         ApiError::from_app(AppError::InvalidInput("Cannot convert JSON to TOML".into()))
     })?;
-    let toml_str = toml::to_string_pretty(&tv)
+    if let (Some(doc_table), Some(new_table)) = (doc.as_table_mut(), tv.as_table()) {
+        for key in ["workspace", "server", "projects", "features", "agent_store"] {
+            if let Some(val) = new_table.get(key) {
+                doc_table.insert(key.to_string(), val.clone());
+            }
+        }
+    } else {
+        doc = tv;
+    }
+    let toml_str = toml::to_string_pretty(&doc)
         .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
     let candidate = crate::config::parse_config_str_at_path(&toml_str, &config_path)
         .map_err(ApiError::from_app)?;
@@ -96,34 +109,6 @@ pub async fn update_config(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-fn preserve_and_reject_telemetry_mutation(
-    body: &mut Value,
-    current: &DamHopperConfig,
-) -> Result<(), ApiError> {
-    let current = serde_json::to_value(&current.server.telemetry)
-        .map_err(|error| ApiError::from_app(AppError::Internal(error.to_string())))?;
-    let root = body.as_object_mut().ok_or_else(|| {
-        ApiError::from_app(AppError::InvalidInput(
-            "Config must be an object".to_string(),
-        ))
-    })?;
-    let server = root
-        .entry("server")
-        .or_insert_with(|| Value::Object(serde_json::Map::new()))
-        .as_object_mut()
-        .ok_or_else(|| {
-            ApiError::from_app(AppError::InvalidInput(
-                "server must be an object".to_string(),
-            ))
-        })?;
-    let requested = server.entry("telemetry").or_insert_with(|| current.clone());
-    if requested != &current {
-        return Err(ApiError::from_app(AppError::InvalidInput(
-            "Update telemetry through /api/usage/settings".to_string(),
-        )));
-    }
-    Ok(())
-}
 
 fn preserve_and_reject_idle_suspend_mutation(
     body: &mut Value,
@@ -226,6 +211,250 @@ fn preserve_and_reject_idle_suspend_mutation(
     Ok(())
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkProjectRequest {
+    pub name: String,
+    pub target: FilesystemTargetRef,
+    pub path: String,
+    #[serde(default)]
+    pub project_type: Option<String>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/config/projects — mark folder as project
+// ---------------------------------------------------------------------------
+
+pub async fn mark_project(
+    State(state): State<AppState>,
+    Json(body): Json<MarkProjectRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::custom(
+            StatusCode::BAD_REQUEST,
+            "INVALID_NAME",
+            "Project name cannot be empty",
+        ));
+    }
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        return Err(ApiError::custom(
+            StatusCode::BAD_REQUEST,
+            "INVALID_NAME",
+            "Project name contains invalid characters",
+        ));
+    }
+
+    // Resolve target and path
+    let resolved = state
+        .resolve_filesystem_target(&body.target)
+        .await
+        .map_err(ApiError::from)?;
+    if !resolved.available() {
+        return Err(ApiError::custom(
+            StatusCode::BAD_REQUEST,
+            "TARGET_UNAVAILABLE",
+            "Filesystem target is unavailable",
+        ));
+    }
+
+    let root_path = resolved.root_path().to_path_buf();
+    let rel_path = body.path.trim_start_matches('/');
+    let target_folder = if rel_path.is_empty() || rel_path == "." {
+        root_path.clone()
+    } else {
+        root_path.join(rel_path)
+    };
+
+    if target_folder
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        return Err(ApiError::custom(
+            StatusCode::BAD_REQUEST,
+            "PATH_ESCAPE",
+            "Project path cannot escape target root",
+        ));
+    }
+
+    let canonical_folder = dunce::canonicalize(&target_folder).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            ApiError::custom(StatusCode::NOT_FOUND, "NOT_FOUND", format!("Folder not found: {}", target_folder.display()))
+        } else {
+            ApiError::from_app(AppError::Io(e))
+        }
+    })?;
+
+    if !canonical_folder.is_dir() {
+        return Err(ApiError::custom(
+            StatusCode::BAD_REQUEST,
+            "NOT_A_DIRECTORY",
+            format!("Path is not a directory: {}", canonical_folder.display()),
+        ));
+    }
+
+    let canonical_root = dunce::canonicalize(&root_path).unwrap_or(root_path.clone());
+    if !crate::workspace_target::target_path_is_within(&canonical_folder, &canonical_root) {
+        return Err(ApiError::custom(
+            StatusCode::BAD_REQUEST,
+            "PATH_ESCAPE",
+            "Project folder resolves outside target root",
+        ));
+    }
+
+    let _workspace_context = state.workspace_context_guard.write().await;
+    let cfg_guard = state.config.read().await;
+    let config_path = cfg_guard.config_path.clone();
+    let ws_root = cfg_guard.resolve_workspace_root().ok();
+    let config_dir = config_path.parent().unwrap_or_else(|| std::path::Path::new("/"));
+    let project_base_dir = ws_root.as_deref().unwrap_or(config_dir);
+    drop(cfg_guard);
+    // Reread latest disk state
+    let mut doc = read_toml_value(&config_path)?;
+    if let Some(table) = doc.as_table_mut() {
+        if !table.contains_key("projects") {
+            table.insert("projects".to_string(), toml::Value::Array(Vec::new()));
+        }
+    }
+    let projects = doc
+        .get_mut("projects")
+        .and_then(|p| p.as_array_mut())
+        .ok_or_else(|| {
+            ApiError::from_app(AppError::Config("projects in config is not an array".into()))
+        })?;
+
+    // Check duplicate project name
+    if projects
+        .iter()
+        .any(|p| p.get("name").and_then(|n| n.as_str()) == Some(name))
+    {
+        return Err(ApiError::custom(
+            StatusCode::CONFLICT,
+            "DUPLICATE_PROJECT_NAME",
+            format!("Project name already exists: {name}"),
+        ));
+    }
+
+    // Check duplicate canonical root (distinct nested roots allowed)
+    for p in projects.iter() {
+        if let Some(path_str) = p.get("path").and_then(|pt| pt.as_str()) {
+            let existing_path = if std::path::Path::new(path_str).is_absolute() {
+                PathBuf::from(path_str)
+            } else {
+                project_base_dir.join(path_str)
+            };
+            if let Ok(existing_canonical) = dunce::canonicalize(&existing_path) {
+                if existing_canonical == canonical_folder {
+                    return Err(ApiError::custom(
+                        StatusCode::CONFLICT,
+                        "DUPLICATE_PROJECT_ROOT",
+                        "A project with this root path already exists",
+                    ));
+                }
+            }
+        }
+    }
+
+    // Determine project_type
+    let project_type = if let Some(pt_str) = body.project_type.as_deref() {
+        match pt_str.to_lowercase().as_str() {
+            "maven" => "maven",
+            "gradle" => "gradle",
+            "npm" => "npm",
+            "pnpm" => "pnpm",
+            "cargo" => "cargo",
+            "custom" => "custom",
+            other => {
+                return Err(ApiError::custom(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_PROJECT_TYPE",
+                    format!("Unsupported projectType: {other}"),
+                ));
+            }
+        }
+        .to_string()
+    } else {
+        crate::config::discovery::detect_project_type(&canonical_folder)
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "custom".to_string())
+    };
+
+    let toml_path = project_path_for_toml(&canonical_folder, project_base_dir);
+
+    let mut new_proj_table = toml::map::Map::new();
+    new_proj_table.insert("name".to_string(), toml::Value::String(name.to_string()));
+    new_proj_table.insert("path".to_string(), toml::Value::String(toml_path));
+    new_proj_table.insert("type".to_string(), toml::Value::String(project_type));
+    if let Some(tags) = body.tags {
+        let tag_values: Vec<toml::Value> = tags.into_iter().map(toml::Value::String).collect();
+        new_proj_table.insert("tags".to_string(), toml::Value::Array(tag_values));
+    }
+
+    projects.push(toml::Value::Table(new_proj_table));
+
+    let toml_str = toml::to_string_pretty(&doc)
+        .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
+    let candidate = crate::config::parse_config_str_at_path(&toml_str, &config_path)
+        .map_err(ApiError::from_app)?;
+
+    atomic_write(&config_path, &toml_str).map_err(ApiError::from_app)?;
+    reconcile_and_publish_config_locked(&state, candidate).await?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "name": name,
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// DELETE /api/config/projects/:name — unmark project
+// ---------------------------------------------------------------------------
+
+pub async fn unmark_project(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let _workspace_context = state.workspace_context_guard.write().await;
+    let config_path = state.config.read().await.config_path.clone();
+
+    let mut doc = read_toml_value(&config_path)?;
+    let projects = match doc.get_mut("projects").and_then(|p| p.as_array_mut()) {
+        Some(p) => p,
+        None => {
+            return Err(ApiError::custom(
+                StatusCode::NOT_FOUND,
+                "UNKNOWN_PROJECT",
+                format!("Project not found: {name}"),
+            ));
+        }
+    };
+
+    let index = projects
+        .iter()
+        .position(|p| p.get("name").and_then(|n| n.as_str()) == Some(&name))
+        .ok_or_else(|| {
+            ApiError::custom(
+                StatusCode::NOT_FOUND,
+                "UNKNOWN_PROJECT",
+                format!("Project not found: {name}"),
+            )
+        })?;
+
+    projects.remove(index);
+
+    let toml_str = toml::to_string_pretty(&doc)
+        .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
+    let candidate = crate::config::parse_config_str_at_path(&toml_str, &config_path)
+        .map_err(ApiError::from_app)?;
+
+    atomic_write(&config_path, &toml_str).map_err(ApiError::from_app)?;
+    reconcile_and_publish_config_locked(&state, candidate).await?;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 // ---------------------------------------------------------------------------
 // PATCH /api/config/projects/:name
 // ---------------------------------------------------------------------------
@@ -262,25 +491,104 @@ pub async fn get_global_config(State(state): State<AppState>) -> impl IntoRespon
 // POST /api/global-config/defaults  { defaults: object }
 // ---------------------------------------------------------------------------
 
-pub async fn update_global_defaults(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> Result<impl IntoResponse, ApiError> {
-    let gc_path = global_config_path();
-    let mut gc = read_global_config_at(&gc_path)
-        .map_err(ApiError::from_app)?
-        .unwrap_or_default();
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateGlobalWorkspaceRequest {
+    pub root: String,
+    pub name: Option<String>,
+}
 
-    if let Some(defaults_val) = body.get("defaults") {
-        let new_defaults: crate::config::schema::GlobalDefaults =
-            serde_json::from_value(defaults_val.clone())
-                .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
-        gc.defaults = Some(new_defaults);
+pub async fn update_global_workspace(
+    State(state): State<AppState>,
+    Json(body): Json<UpdateGlobalWorkspaceRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let root_str = body.root.trim();
+    if root_str.is_empty() {
+        return Err(ApiError::custom(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ROOT",
+            "Workspace root cannot be empty",
+        ));
+    }
+    let candidate_path = PathBuf::from(root_str);
+    let canonical = dunce::canonicalize(&candidate_path).map_err(|e| {
+        ApiError::custom(
+            StatusCode::BAD_REQUEST,
+            "NOT_FOUND",
+            format!("Workspace root does not exist: {e}"),
+        )
+    })?;
+    if !canonical.is_dir() {
+        return Err(ApiError::custom(
+            StatusCode::BAD_REQUEST,
+            "NOT_A_DIRECTORY",
+            "Workspace root is not a directory",
+        ));
+    }
+    if crate::config::parser::is_sensitive_workspace_root(&canonical) {
+        return Err(ApiError::custom(
+            StatusCode::BAD_REQUEST,
+            "SENSITIVE_DIRECTORY",
+            "Workspace root resolves to sensitive directory",
+        ));
+    }
+    crate::fs::sandbox::WorkspaceSandbox::new(canonical.clone()).map_err(|e| {
+        ApiError::custom(StatusCode::BAD_REQUEST, "INVALID_ROOT", e.to_string())
+    })?;
+
+    let _workspace_context = state.workspace_context_guard.write().await;
+    let config_path = state.config.read().await.config_path.clone();
+    let mut doc = read_toml_value(&config_path)?;
+    let root_table = doc.as_table_mut().ok_or_else(|| {
+        ApiError::from_app(AppError::Config("Expected TOML table at root".into()))
+    })?;
+    let ws_table = root_table
+        .entry("workspace")
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .ok_or_else(|| {
+            ApiError::from_app(AppError::Config("[workspace] must be a table".into()))
+        })?;
+
+    ws_table.insert(
+        "root".to_string(),
+        toml::Value::String(canonical.to_string_lossy().into_owned()),
+    );
+    if let Some(name) = body.name.filter(|n| !n.trim().is_empty()) {
+        ws_table.insert("name".to_string(), toml::Value::String(name));
     }
 
-    write_global_config_at(&gc_path, &gc).map_err(ApiError::from_app)?;
-    *state.global_config.write().await = gc;
-    Ok(Json(serde_json::json!({ "updated": true })))
+    let toml_str = toml::to_string_pretty(&doc)
+        .map_err(|e| ApiError::from_app(AppError::Internal(e.to_string())))?;
+    let candidate = crate::config::parse_config_str_at_path(&toml_str, &config_path)
+        .map_err(ApiError::from_app)?;
+
+    atomic_write(&config_path, &toml_str).map_err(ApiError::from_app)?;
+
+    let _ = state.pty_manager.dispose();
+    state.media_tickets.revoke_all();
+    state.fs.reinit_workspace_sandbox(Some(canonical.clone()));
+    state.fs.bump_workspace_epoch();
+    state.fs.reinit_sandbox(project_roots_from_config(&candidate));
+    state.workspace_target_resolver.invalidate_all().await;
+    *state.workspace_dir.write().await = canonical.clone();
+    *state.global_config.write().await = crate::config::schema::GlobalConfig {
+        workspace: Some(candidate.workspace.clone()),
+        workspaces: candidate.workspaces.clone(),
+        ui: candidate.ui.clone(),
+        server: candidate.server.clone(),
+    };
+    *state.config.write().await = candidate;
+
+    state.event_sink.broadcast(
+        "workspace:changed",
+        serde_json::json!({
+            "path": canonical.to_string_lossy(),
+            "workspaceEpoch": state.workspace_epoch()
+        }),
+    );
+
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 // ---------------------------------------------------------------------------
@@ -291,12 +599,31 @@ pub async fn update_global_ui(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let gc_path = global_config_path();
-    update_global_ui_at_path(&state, &gc_path, body.get("ui"))
+    let _workspace_context = state.workspace_context_guard.write().await;
+    let gc_path = state.config_path().await;
+    let ui_value = body.get("ui").unwrap_or(&body);
+    update_global_ui_at_path(&state, &gc_path, Some(ui_value))
         .await
         .map_err(ApiError::from_app)?;
     Ok(Json(serde_json::json!({ "updated": true })))
 }
+
+const EXTRA_ACTION_IDS: &[&str] = &[
+    "app.editor.open",
+    "app.browser.open",
+    "app.changes.open",
+    "app.conflict-resolver.open",
+    "app.session-changes.open",
+    "app.workflow-plans.open",
+    "app.agent-store.open",
+    "app.settings.open",
+    "app.system-monitor.open",
+    "app.agent-hub.open",
+    "app.recipes.open",
+    "app.terminals.new-window",
+    "app.editor.new-window",
+    "app.browser.new-window",
+];
 
 pub(crate) fn merge_global_ui_config(
     existing: Option<crate::config::schema::UiConfig>,
@@ -341,6 +668,35 @@ pub(crate) fn merge_global_ui_config(
                 .remove("terminalAgentNotifications");
         }
     }
+
+    // Per-entry appShortcuts merge against stored map with strict validation
+    let incoming_app_shortcuts = incoming.get("appShortcuts").or_else(|| incoming.get("app_shortcuts"));
+    if let Some(shortcuts_val) = incoming_app_shortcuts {
+        let Some(map) = shortcuts_val.as_object() else {
+            return Err(AppError::InvalidInput("appShortcuts must be an object".to_string()));
+        };
+        for (key, val) in map {
+            if !EXTRA_ACTION_IDS.contains(&key.as_str()) {
+                return Err(AppError::InvalidInput(format!("Invalid extra action ID in appShortcuts: {key}")));
+            }
+            if !val.is_null() && !val.is_string() {
+                return Err(AppError::InvalidInput(format!("appShortcuts entry for {key} must be string or null")));
+            }
+        }
+        if merged.get("appShortcuts").is_none() || !merged["appShortcuts"].is_object() {
+            merged["appShortcuts"] = serde_json::json!({});
+        }
+        if let Some(target_map) = merged["appShortcuts"].as_object_mut() {
+            for (key, val) in map {
+                target_map.insert(key.clone(), val.clone());
+            }
+        }
+        if let Some(inc_obj) = incoming.as_object_mut() {
+            inc_obj.remove("appShortcuts");
+            inc_obj.remove("app_shortcuts");
+        }
+    }
+
     merge_json_objects(&mut merged, &incoming);
     let new_ui: crate::config::schema::UiConfig = serde_json::from_value(merged)
         .map_err(|e| AppError::InvalidInput(format!("Invalid UI config: {e}")))?;
@@ -355,6 +711,15 @@ pub(crate) fn merge_global_ui_config(
         .map_err(AppError::InvalidInput)?;
     new_ui
         .validate_host_resource_pinned_mount()
+        .map_err(AppError::InvalidInput)?;
+    new_ui
+        .validate_window_placement()
+        .map_err(AppError::InvalidInput)?;
+    new_ui
+        .validate_appearance()
+        .map_err(AppError::InvalidInput)?;
+    new_ui
+        .validate_cognito_mode_shortcut()
         .map_err(AppError::InvalidInput)?;
     Ok(new_ui)
 }
@@ -494,7 +859,8 @@ pub(crate) async fn update_global_ui_at_path(
     }
 
     write_global_config_at(gc_path, &gc)?;
-    *state.global_config.write().await = gc;
+    *state.global_config.write().await = gc.clone();
+    state.config.write().await.ui = gc.ui;
     Ok(())
 }
 
@@ -595,7 +961,7 @@ fn relativize_project_paths(body: &mut Value, config_dir: &StdPath) {
     }
 }
 
-fn read_toml_value(path: &std::path::Path) -> Result<toml::Value, ApiError> {
+pub(crate) fn read_toml_value(path: &std::path::Path) -> Result<toml::Value, ApiError> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| ApiError::from_app(AppError::Config(e.to_string())))?;
     toml::from_str(&content).map_err(|e| ApiError::from_app(AppError::Config(e.to_string())))
@@ -603,19 +969,27 @@ fn read_toml_value(path: &std::path::Path) -> Result<toml::Value, ApiError> {
 
 
 fn patch_project(doc: &mut toml::Value, name: &str, patch: &Value) -> Result<(), ApiError> {
-    let projects = doc
-        .get_mut("projects")
-        .and_then(|p| p.as_array_mut())
-        .ok_or_else(|| {
-            ApiError::from_app(AppError::Config("No projects array in config".into()))
-        })?;
+    let projects = match doc.get_mut("projects").and_then(|p| p.as_array_mut()) {
+        Some(p) => p,
+        None => {
+            return Err(ApiError::custom(
+                StatusCode::NOT_FOUND,
+                "UNKNOWN_PROJECT",
+                format!("Project not found: {name}"),
+            ));
+        }
+    };
 
     let project = projects
         .iter_mut()
         .find(|p| p.get("name").and_then(|n| n.as_str()) == Some(name));
 
     let proj = project.ok_or_else(|| {
-        ApiError::from_app(AppError::NotFound(format!("Project not found: {name}")))
+        ApiError::custom(
+            StatusCode::NOT_FOUND,
+            "UNKNOWN_PROJECT",
+            format!("Project not found: {name}"),
+        )
     })?;
 
     if let (toml::Value::Table(tbl), Value::Object(patch_map)) = (proj, patch) {
@@ -774,12 +1148,23 @@ pub async fn reconcile_and_publish_config_locked(
             .apply_to_config(&mut new_cfg, &timing);
     }
     state.media_tickets.revoke_all();
+    let ws_root = new_cfg.resolve_workspace_root().ok();
+    state.fs.reinit_workspace_sandbox(ws_root.clone());
+    if let Some(r) = &ws_root {
+        *state.workspace_dir.write().await = r.clone();
+    }
     state.fs.reinit_sandbox(project_roots_from_config(&new_cfg));
     state.workspace_target_resolver.invalidate_all().await;
     state
         .host_resource_monitor
         .reconfigure(new_cfg.server.host_resources.clone())
         .await;
+    *state.global_config.write().await = crate::config::schema::GlobalConfig {
+        workspace: Some(new_cfg.workspace.clone()),
+        workspaces: new_cfg.workspaces.clone(),
+        ui: new_cfg.ui.clone(),
+        server: new_cfg.server.clone(),
+    };
     *state.config.write().await = new_cfg;
     Ok(())
 }

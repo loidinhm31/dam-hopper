@@ -18,6 +18,14 @@ import type {
   FsWriteResponse,
   FsPutResult,
 } from "./ws-transport.js";
+import type {
+  TerminalInventoryDetailedPayload,
+  TerminalInventoryPayload,
+  TerminalInventoryTerminationState,
+  TerminalTarget,
+  TerminationOrigin,
+  TerminationResult,
+} from "./terminal-session-contract.js";
 import type { CommandHistoryEntry } from "@/lib/command-history.js";
 import {
   decodeAgentStatusSnapshot,
@@ -40,12 +48,19 @@ import {
   terminalKey,
   terminalInstanceKey,
   connectionKey,
+  normalizeFsTarget,
+  toServerFsTarget,
+  fsTargetKey,
+  parseFsTargetKey,
+  isSameFsTarget,
   type ConnectionRef,
   type ProfileId,
   type ProjectRef,
   type ProjectTargetRef,
   type ResourceBinding,
   type ServerProjectTarget,
+  type FsTargetRef,
+  type ServerFsTarget,
   type TerminalInstanceRef,
   type TerminalRef,
   type Owned,
@@ -60,6 +75,11 @@ export {
   terminalKey,
   terminalInstanceKey,
   connectionKey,
+  normalizeFsTarget,
+  toServerFsTarget,
+  fsTargetKey,
+  parseFsTargetKey,
+  isSameFsTarget,
 };
 export type {
   ConnectionRef,
@@ -68,9 +88,25 @@ export type {
   ProjectTargetRef,
   ResourceBinding,
   ServerProjectTarget,
+  FsTargetRef,
+  ServerFsTarget,
   TerminalInstanceRef,
   TerminalRef,
   Owned,
+};
+import type {
+  FileIdentity,
+  MarkProjectRequest,
+  MarkProjectResponse,
+  UnmarkProjectResponse,
+  WorkspaceFolderTerminalRequest,
+} from "./fs-types.js";
+export type {
+  FileIdentity,
+  MarkProjectRequest,
+  MarkProjectResponse,
+  UnmarkProjectResponse,
+  WorkspaceFolderTerminalRequest,
 };
 import type {
   AbandonSessionRequest,
@@ -169,6 +205,12 @@ export interface SessionInfo {
   id: string;
   /** Opaque concrete PTY identity used to reject stale push events. */
   incarnation?: number;
+  /** Canonical u64 incarnation string from backend termination inventory observation */
+  incarnationExact?: string;
+  /** Originating PTY manager lifetime epoch, when proven by creation response or observation */
+  serverEpoch?: string;
+  /** Flat termination state from backend termination inventory observation */
+  terminationState?: TerminalInventoryTerminationState;
   project?: string;
   command: string;
   cwd: string;
@@ -1919,145 +1961,6 @@ export interface LastCommit {
   date: string;
 }
 
-export type UsageBucket = "hour" | "day";
-export type UsageWindow = "24h" | "7d" | "30d";
-/** Bounded provider model identifier. Treat as display-only opaque text. */
-export type UsageModel = string;
-
-export interface UsageSummaryQuery {
-  from?: number;
-  to?: number;
-  window?: UsageWindow;
-  bucket?: UsageBucket;
-  model?: UsageModel;
-}
-
-export interface UsageTokens {
-  inputTokens: number | null;
-  cachedInputTokens: number | null;
-  outputTokens: number | null;
-  reasoningTokens: number | null;
-  responseCount?: number;
-  durationMs?: number | null;
-}
-
-/** Privacy-safe aggregate bucket; no command, event, or conversation data. */
-export interface UsageTimeBucket {
-  startUtcMs: number;
-  codex: UsageTokens | null;
-}
-
-export interface UsageSummary {
-  range: { from: number; to: number; bucket: UsageBucket };
-  codex: UsageTokens | null;
-  timeSeries: UsageTimeBucket[];
-  health: UsageHealth;
-}
-
-export interface UsageHealth {
-  available: boolean;
-  paused: boolean;
-  writerErrors: number;
-  rejectedEvents: number;
-  sampledAt: number;
-  collector: UsageCollectorHealth;
-}
-
-export interface UsageCollectorHealth {
-  running: boolean;
-  malformed: number;
-  rejected: number;
-  queued: number;
-  dropped: number;
-  duplicate: number;
-  unverifiedVersion: number;
-  coreSchemaDrift: number;
-  unavailableTokenCoverage: number;
-  lastAcceptedAtUtcMs: number | null;
-}
-
-export interface UsageCollectorSettings {
-  enabled: boolean;
-  host: string;
-  port: number;
-}
-
-export interface UsageRuntimeStatus {
-  active: boolean;
-  collector: UsageCollectorHealth;
-  collectorError: string | null;
-}
-
-export type UsageCodexExporterStatus = "notConfigured" | "managed" | "conflict";
-
-export interface UsageCollectorSetup {
-  codexExporter: UsageCodexExporterStatus;
-  restartRequired: boolean;
-  serverRestartRequired: boolean;
-}
-
-export interface UsageSetupStatus {
-  enabled: boolean;
-  paused: boolean;
-  collectorEnabled: boolean;
-  runtime: UsageRuntimeStatus;
-  collectorSetup: UsageCollectorSetup;
-}
-
-export interface UsageSettings {
-  enabled: boolean;
-  paused: boolean;
-  detailRetentionDays: number;
-  aggregateRetentionDays: number | null;
-  collectorEnabled: boolean;
-  runtime: UsageRuntimeStatus;
-  collectorSetup: UsageCollectorSetup;
-}
-
-export interface UsageSettingsPatch {
-  enabled?: boolean;
-  paused?: boolean;
-  detailRetentionDays?: number;
-  aggregateRetentionDays?: number | null;
-  collector?: UsageCollectorSettings;
-  codexExporter?: boolean;
-  retryCollector?: boolean;
-}
-
-export interface UsageSessionQuery {
-  from?: number;
-  to?: number;
-  model?: UsageModel;
-  limit?: number;
-  cursor?: string;
-}
-
-export interface UsageSessionExecutorModel {
-  model: UsageModel | null;
-  responseCount: number;
-  tokens: UsageTokens;
-}
-
-export interface UsageSessionSummary {
-  id: string;
-  startedAtUtcMs: number;
-  endedAtUtcMs: number | null;
-  model: UsageModel | null;
-  tokens: UsageTokens;
-  models: UsageSessionExecutorModel[];
-}
-
-export interface UsageSessionPage {
-  range: { from: number; to: number };
-  sessions: UsageSessionSummary[];
-  nextCursor: string | null;
-  paused: boolean;
-}
-
-export interface UsageSessionDetail {
-  session: UsageSessionSummary;
-  paused: boolean;
-}
 
 export interface ProjectWithStatus extends ProjectConfig {
   status: GitStatus | null;
@@ -2068,6 +1971,7 @@ export interface WorkspaceInfo {
   root: string;
   configPath: string;
   projectCount: number;
+  workspaceEpoch?: number;
 }
 
 export interface KnownWorkspace {
@@ -2086,6 +1990,7 @@ export interface WorkspaceStatus {
   configPath?: string;
   name?: string;
   projectCount?: number;
+  workspaceEpoch?: number;
 }
 
 export interface DiscoveredProject {
@@ -2152,17 +2057,16 @@ export interface UiConfig {
   editorFontSize: number;
   terminalFontSize?: number;
   editorZoomWheelEnabled: boolean;
-  searchTextShortcut: string;
-  searchFilenameShortcut: string;
-  terminalWorkspaceShortcut: string;
-  terminalFilePanelShortcut: string;
-  projectPanelShortcut: string;
-  revealActiveFileShortcut: string;
-  gitPanelShortcut: string;
-  portsPanelShortcut: string;
-  fleetTerminalShortcut: string;
-  terminalFontSizeIncreaseShortcut?: string;
-  terminalFontSizeDecreaseShortcut?: string;
+  searchTextShortcut?: string | null;
+  searchFilenameShortcut?: string | null;
+  terminalWorkspaceShortcut?: string | null;
+  terminalFilePanelShortcut?: string | null;
+  projectPanelShortcut?: string | null;
+  revealActiveFileShortcut?: string | null;
+  gitPanelShortcut?: string | null;
+  portsPanelShortcut?: string | null;
+  terminalFontSizeIncreaseShortcut?: string | null;
+  terminalFontSizeDecreaseShortcut?: string | null;
   terminalSuggestionsEnabled?: boolean;
   terminalAutoSwitchProjectEnabled?: boolean;
   terminalAgentNotifications?: TerminalAgentNotifications;
@@ -2183,12 +2087,24 @@ export interface UiConfig {
   agentSettingsPaths?: AgentSettingsPaths;
   cognitoModeShortcut?: string;
   cognitoModeStyle?: CognitoModeStyle;
+  defaultWindowPlacement?: "float" | "tile";
+  osPaletteShortcut?: string | null;
+  osCycleFocusShortcut?: string | null;
+  dockPadding?: number;
+  dockItemSpacing?: number;
+  dockOuterSpacing?: number;
+  dockRadius?: number;
+  dockPosition?: "left" | "right" | "top" | "bottom";
+  cursorTheme?: "system" | "theme";
+  appShortcuts?: Record<string, string | null>;
 }
-
 export interface GlobalConfig {
+  workspace?: { name: string; root: string };
   defaults?: { workspace?: string };
   workspaces?: KnownWorkspace[];
   ui?: UiConfig;
+  server?: Record<string, unknown>;
+  configPath?: string;
 }
 
 export interface Worktree {
@@ -2802,15 +2718,19 @@ export function createApiClient(
     if (!targets) return undefined;
     return targets.map(toWireTarget);
   }
+  function toFsWireTarget(
+    target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
+  ): ServerFsTarget {
+    if (typeof target === "object" && target !== null && "type" in target) {
+      return target as ServerFsTarget;
+    }
+    const norm = normalizeFsTarget(target, owner.profileId);
+    if (norm.profileId && owner.profileId) {
+      assertOwnerMatch(owner, norm, "fs-target");
+    }
+    return toServerFsTarget(norm);
+  }
 
-  const usageDelete = (request: {
-    confirmation: string;
-    from?: number;
-    to?: number;
-  }) =>
-    transport.invoke<{ deleted: true }>("usage:deleteAll", {
-      ...request,
-    });
 
   return {
     owner,
@@ -2835,6 +2755,11 @@ export function createApiClient(
     },
     globalConfig: {
       get: () => transport.invoke<GlobalConfig>("globalConfig:get"),
+      updateWorkspace: (workspace: { root: string; name?: string }) =>
+        transport.invoke<{ updated: true }>(
+          "globalConfig:updateWorkspace",
+          workspace,
+        ),
       updateDefaults: (defaults: { workspace?: string }) =>
         transport.invoke<{ updated: true }>(
           "globalConfig:updateDefaults",
@@ -3240,6 +3165,39 @@ export function createApiClient(
           name,
           patch: data,
         }),
+      markProject: (
+        profileIdOrReq: ProfileId | MarkProjectRequest,
+        maybeReq?: MarkProjectRequest,
+      ) => {
+        const req =
+          typeof profileIdOrReq === "string" ? maybeReq! : profileIdOrReq;
+        const profileId =
+          typeof profileIdOrReq === "string"
+            ? profileIdOrReq
+            : owner.profileId;
+        if (profileId && owner.profileId) {
+          assertOwnerMatch(owner, profileId, "config:markProject");
+        }
+        return transport.invoke<MarkProjectResponse>("config:markProject", {
+          ...req,
+          target: toServerFsTarget(req.target),
+        });
+      },
+      unmarkProject: (
+        profileIdOrName: ProfileId | string,
+        maybeName?: string,
+      ) => {
+        const name = maybeName ?? (profileIdOrName as string);
+        const profileId = maybeName
+          ? (profileIdOrName as ProfileId)
+          : owner.profileId;
+        if (profileId && owner.profileId) {
+          assertOwnerMatch(owner, profileId, "config:unmarkProject");
+        }
+        return transport.invoke<UnmarkProjectResponse>("config:unmarkProject", {
+          name,
+        });
+      },
     },
     settings: {
       clearCache: () => transport.invoke<{ cleared: boolean }>("cache:clear"),
@@ -3400,6 +3358,7 @@ export function createApiClient(
     terminal: {
       create: (opts: {
         id: string;
+        target?: ServerFsTarget | FsTargetRef;
         project?: string;
         command: string;
         cwd?: string;
@@ -3407,14 +3366,42 @@ export function createApiClient(
         rows: number;
         worktreePath?: string;
         name?: string | null;
-      }) => transport.invoke<SessionInfo>("terminal:create", opts),
-      kill: (id: string) => transport.invoke<void>("terminal:kill", id),
-      remove: (id: string) => transport.invoke<void>("terminal:remove", id),
+      }) =>
+        transport.invoke<SessionInfo>("terminal:create", {
+          ...opts,
+          ...(opts.target ? { target: toFsWireTarget(opts.target) } : {}),
+        }),
       rename: (id: string, name: string | null) =>
         transport.invoke<SessionInfo>("terminal:rename", { id, name }),
       list: () => transport.invoke<SessionInfo[]>("terminal:list"),
       listDetailed: () =>
         transport.invoke<SessionInfo[]>("terminal:listDetailed"),
+      listObservation: (options?: TransportInvokeOptions) =>
+        transport.invoke<TerminalInventoryPayload>(
+          "terminal:listObservation",
+          undefined,
+          options,
+        ),
+      listDetailedObservation: (options?: TransportInvokeOptions) =>
+        transport.invoke<TerminalInventoryDetailedPayload>(
+          "terminal:listDetailedObservation",
+          undefined,
+          options,
+        ),
+      terminateSessionGuarded: (
+        target: TerminalTarget,
+        origin: TerminationOrigin,
+        options?: TransportInvokeOptions,
+      ) =>
+        transport.invoke<TerminationResult>(
+          "terminal:terminate",
+          { target, origin },
+          options,
+        ),
+      remove: (id: string) =>
+        transport.invoke<void>("terminal:remove", id),
+      kill: (id: string) =>
+        transport.invoke<void>("terminal:kill", id),
       getBuffer: (id: string) =>
         transport.invoke<string>("terminal:buffer", id),
       agentStatusSnapshot: async () =>
@@ -3523,106 +3510,74 @@ export function createApiClient(
         return decodeConsentDecisionResponse(raw);
       },
     },
-    usage: {
-      summary: (query: UsageSummaryQuery = {}) =>
-        transport.invoke<UsageSummary>("usage:summary", query),
-      sessions: (query: UsageSessionQuery = {}) =>
-        transport.invoke<UsageSessionPage>("usage:sessions", query),
-      session: (id: string) =>
-        transport.invoke<UsageSessionDetail>("usage:session", { id }),
-      health: () => transport.invoke<UsageHealth>("usage:health"),
-      settings: () => transport.invoke<UsageSettings>("usage:settings"),
-      setupStatus: () =>
-        transport.invoke<UsageSetupStatus>("usage:setupStatus"),
-      updateSettings: (patch: UsageSettingsPatch) =>
-        transport.invoke<UsageSettings>("usage:updateSettings", patch),
-      configure: (patch: UsageSettingsPatch) =>
-        transport.invoke<UsageSetupStatus>("usage:configure", patch),
-      delete: (request: { confirmation: string; from?: number; to?: number }) =>
-        transport.invoke<{ deleted: true }>("usage:deleteAll", {
-          ...request,
-        }),
-      deleteAll: () => usageDelete({ confirmation: "delete-usage-data" }),
-      deleteRange: (from: number, to: number) =>
-        usageDelete({ confirmation: "delete-usage-data", from, to }),
-    },
     fs: {
-      list: (target: ProjectTargetInput, path: string) =>
+      list: (
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
+        path: string,
+      ) =>
         transport.invoke<FsListResponse>("fs:list", {
-          ...toWireTarget(target),
+          target: toFsWireTarget(target),
           path,
         }),
-      languageFiles: (target: ProjectTargetInput) =>
-        transport.invoke<LanguageFilesResponse>(
-          "fs:languageFiles",
-          toWireTarget(target),
-        ),
+      languageFiles: (
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
+      ) =>
+        transport.invoke<LanguageFilesResponse>("fs:languageFiles", {
+          target: toFsWireTarget(target),
+        }),
       read: (
-        target: ProjectTargetInput,
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
         path: string,
         opts?: { offset?: number; len?: number; mode?: "plan-document" },
       ) => {
-        const wire = toWireTarget(target);
+        const wire = toFsWireTarget(target);
+        const norm = normalizeFsTarget(target, owner.profileId);
         const fsTrans = transport as unknown as FsTransportSeam;
         if (typeof fsTrans.fsRead === "function") {
-          return fsTrans.fsRead(
-            {
-              profileId: owner.profileId,
-              project: wire.project,
-              worktreePath: wire.worktreePath,
-            },
-            path,
-            opts,
-          ) as Promise<FsReadResponse>;
+          return fsTrans.fsRead(norm, path, opts) as Promise<FsReadResponse>;
         }
         return transport.invoke<FsReadResponse>("fs:read", {
-          ...wire,
+          target: wire,
           path,
           ...opts,
         });
       },
       writeFile: (
-        target: ProjectTargetInput,
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
         path: string,
         content: string,
         expectedMtime: number,
       ) => {
-        const wire = toWireTarget(target);
+        const wire = toFsWireTarget(target);
+        const norm = normalizeFsTarget(target, owner.profileId);
         const fsTrans = transport as unknown as FsTransportSeam;
         if (typeof fsTrans.fsWriteFile === "function") {
           return fsTrans.fsWriteFile(
-            {
-              profileId: owner.profileId,
-              project: wire.project,
-              worktreePath: wire.worktreePath,
-            },
+            norm,
             path,
             content,
             expectedMtime,
           ) as Promise<FsWriteResponse>;
         }
         return transport.invoke<FsWriteResponse>("fs:writeFile", {
-          ...wire,
+          target: wire,
           path,
           content,
           expectedMtime,
         });
       },
       subscribeTree: (
-        target: ProjectTargetInput,
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
         path: string,
         opts?: { watchOnly?: boolean },
       ) => {
-        const wire = toWireTarget(target);
+        const wire = toFsWireTarget(target);
+        const norm = normalizeFsTarget(target, owner.profileId);
         const fsTrans = transport as unknown as FsTransportSeam;
         if (typeof fsTrans.fsSubscribeTree === "function") {
           return (
             fsTrans.fsSubscribeTree(
-              {
-                profileId: owner.profileId,
-                project: wire.project,
-                worktreePath: wire.worktreePath,
-              },
+              norm,
               path,
               opts,
             ) as Promise<number | { sub_id: number }>
@@ -3631,7 +3586,7 @@ export function createApiClient(
         return transport
           .invoke<{
             sub_id: number;
-          }>("fs:subscribeTree", { ...wire, path, ...opts })
+          }>("fs:subscribeTree", { target: wire, path, ...opts })
           .then((r) => r.sub_id);
       },
       unsubscribeTree: (sub_id: number) => {
@@ -3665,20 +3620,16 @@ export function createApiClient(
         );
       },
       uploadFile: (
-        target: ProjectTargetInput,
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
         dir: string,
         file: File,
         onProgress?: (pct: number) => void,
       ) => {
-        const wire = toWireTarget(target);
+        const norm = normalizeFsTarget(target, owner.profileId);
         const fsTrans = transport as unknown as FsTransportSeam;
         if (typeof fsTrans.fsUploadFile === "function") {
           return fsTrans.fsUploadFile(
-            {
-              profileId: owner.profileId,
-              project: wire.project,
-              worktreePath: wire.worktreePath,
-            },
+            norm,
             dir,
             file,
             onProgress,
@@ -3689,22 +3640,18 @@ export function createApiClient(
         );
       },
       putFile: (
-        target: ProjectTargetInput,
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
         dir: string,
         file: File,
         uploadId: string,
         encKey: CryptoKey,
         onProgress?: (pct: number) => void,
       ) => {
-        const wire = toWireTarget(target);
+        const norm = normalizeFsTarget(target, owner.profileId);
         const fsTrans = transport as unknown as FsTransportSeam;
         if (typeof fsTrans.fsPutFile === "function") {
           return fsTrans.fsPutFile(
-            {
-              profileId: owner.profileId,
-              project: wire.project,
-              worktreePath: wire.worktreePath,
-            },
+            norm,
             dir,
             file,
             uploadId,
@@ -3717,21 +3664,17 @@ export function createApiClient(
         );
       },
       putSave: (
-        target: ProjectTargetInput,
+        target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
         path: string,
         blob: Blob,
         saveId: string,
         encKey: CryptoKey,
       ) => {
-        const wire = toWireTarget(target);
+        const norm = normalizeFsTarget(target, owner.profileId);
         const fsTrans = transport as unknown as FsTransportSeam;
         if (typeof fsTrans.fsPutSave === "function") {
           return fsTrans.fsPutSave(
-            {
-              profileId: owner.profileId,
-              project: wire.project,
-              worktreePath: wire.worktreePath,
-            },
+            norm,
             path,
             blob,
             saveId,
@@ -3870,6 +3813,10 @@ export interface ApiClient {
   };
   globalConfig: {
     get: () => Promise<GlobalConfig>;
+    updateWorkspace: (workspace: {
+      root: string;
+      name?: string;
+    }) => Promise<{ updated: true }>;
     updateDefaults: (defaults: {
       workspace?: string;
     }) => Promise<{ updated: true }>;
@@ -4090,6 +4037,14 @@ export interface ApiClient {
       name: string,
       data: Partial<ProjectConfig>,
     ) => Promise<ProjectConfig>;
+    markProject: {
+      (req: MarkProjectRequest): Promise<MarkProjectResponse>;
+      (profileId: ProfileId, req: MarkProjectRequest): Promise<MarkProjectResponse>;
+    };
+    unmarkProject: {
+      (name: string): Promise<UnmarkProjectResponse>;
+      (profileId: ProfileId, name: string): Promise<UnmarkProjectResponse>;
+    };
   };
   settings: {
     clearCache: () => Promise<{ cleared: boolean }>;
@@ -4184,6 +4139,7 @@ export interface ApiClient {
   terminal: {
     create: (opts: {
       id: string;
+      target?: ServerFsTarget | FsTargetRef;
       project?: string;
       command: string;
       cwd?: string;
@@ -4192,11 +4148,22 @@ export interface ApiClient {
       worktreePath?: string;
       name?: string | null;
     }) => Promise<SessionInfo>;
-    kill: (id: string) => Promise<void>;
-    remove: (id: string) => Promise<void>;
     rename: (id: string, name: string | null) => Promise<SessionInfo>;
     list: () => Promise<SessionInfo[]>;
     listDetailed: () => Promise<SessionInfo[]>;
+    listObservation: (
+      options?: TransportInvokeOptions,
+    ) => Promise<TerminalInventoryPayload>;
+    listDetailedObservation: (
+      options?: TransportInvokeOptions,
+    ) => Promise<TerminalInventoryDetailedPayload>;
+    terminateSessionGuarded: (
+      target: TerminalTarget,
+      origin: TerminationOrigin,
+      options?: TransportInvokeOptions,
+    ) => Promise<TerminationResult>;
+    remove: (id: string) => Promise<void>;
+    kill: (id: string) => Promise<void>;
     getBuffer: (id: string) => Promise<string>;
     agentStatusSnapshot: () => Promise<AgentStatusSnapshotV1>;
     getOmpExtensionStatus: (
@@ -4242,41 +4209,27 @@ export interface ApiClient {
       request: ConsentDecisionRequest,
     ) => Promise<ConsentDecisionResponse>;
   };
-  usage: {
-    summary: (query?: UsageSummaryQuery) => Promise<UsageSummary>;
-    sessions: (query?: UsageSessionQuery) => Promise<UsageSessionPage>;
-    session: (id: string) => Promise<UsageSessionDetail>;
-    health: () => Promise<UsageHealth>;
-    settings: () => Promise<UsageSettings>;
-    setupStatus: () => Promise<UsageSetupStatus>;
-    updateSettings: (patch: UsageSettingsPatch) => Promise<UsageSettings>;
-    configure: (patch: UsageSettingsPatch) => Promise<UsageSetupStatus>;
-    delete: (request: {
-      confirmation: string;
-      from?: number;
-      to?: number;
-    }) => Promise<{ deleted: true }>;
-    deleteAll: () => Promise<{ deleted: true }>;
-    deleteRange: (from: number, to: number) => Promise<{ deleted: true }>;
-  };
   fs: {
-    list: (target: ProjectTargetInput, path: string) => Promise<FsListResponse>;
+    list: (
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
+      path: string,
+    ) => Promise<FsListResponse>;
     languageFiles: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
     ) => Promise<LanguageFilesResponse>;
     read: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
       path: string,
       opts?: { offset?: number; len?: number; mode?: "plan-document" },
     ) => Promise<FsReadResponse>;
     writeFile: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
       path: string,
       content: string,
       expectedMtime: number,
     ) => Promise<FsWriteResponse>;
     subscribeTree: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
       path: string,
       opts?: { watchOnly?: boolean },
     ) => Promise<number>;
@@ -4287,13 +4240,13 @@ export interface ApiClient {
       cb: (message: string) => void,
     ) => () => void;
     uploadFile: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
       dir: string,
       file: File,
       onProgress?: (pct: number) => void,
     ) => Promise<FsUploadResult>;
     putFile: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
       dir: string,
       file: File,
       uploadId: string,
@@ -4301,7 +4254,7 @@ export interface ApiClient {
       onProgress?: (pct: number) => void,
     ) => Promise<FsPutResult>;
     putSave: (
-      target: ProjectTargetInput,
+      target: FsTargetRef | ServerFsTarget | ProjectTargetInput,
       path: string,
       blob: Blob,
       saveId: string,
@@ -4443,3 +4396,5 @@ export const api = createApiClient(
   { profileId: "", generation: 0 },
   defaultAmbientTransport,
 );
+
+export const client = api;

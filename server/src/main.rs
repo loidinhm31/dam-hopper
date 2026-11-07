@@ -12,8 +12,9 @@ use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::router::{build_router_with_web_dir_and_origins, parse_cors_origins},
     config::{
-        global_config_path, global_env_path, global_registry_path, read_global_config_at,
+        global_env_path,
         resolve_startup_config, ConfigResolutionInput, ConfigSource, DamHopperConfig,
+        GlobalConfig,
     },
     crypto::load_or_create_server_setup,
     diagnostics::{DiagnosticStore, DiagnosticTracingLayer},
@@ -22,7 +23,6 @@ use dam_hopper_server::{
     probe_inotify_limit,
     pty::{BroadcastEventSink, PtySessionManager, PtyTargetContext},
     state::AppState,
-    telemetry::TelemetryRuntime,
     tunnel::{CloudflaredDriver, TunnelSessionManager},
 };
 
@@ -32,11 +32,11 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Path to a specific dam-hopper.toml registry file
+    /// Path to authoritative config.toml file
     #[arg(long, env = "DAM_HOPPER_CONFIG")]
     config: Option<PathBuf>,
 
-    /// Path to workspace directory containing dam-hopper.toml
+    /// Optional workspace directory override
     #[arg(long, env = "DAM_HOPPER_WORKSPACE")]
     workspace: Option<PathBuf>,
 
@@ -703,7 +703,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("auth.db");
         let session_path = tmp.path().join("sessions.db");
-        let telemetry_str = tmp.path().join("telemetry.db").display().to_string();
 
         // 1. Lite mode with explicit path opens SQLite
         std::env::set_var("DAM_HOPPER_LITE_MODE", "true");
@@ -714,7 +713,7 @@ mod tests {
         std::env::remove_var("RUST_ENV");
         std::env::remove_var("ENVIRONMENT");
 
-        let store = super::init_auth_store(&session_path, &telemetry_str)
+        let store = super::init_auth_store(&session_path)
             .await
             .expect("sqlite store opened");
         assert!(db_path.exists());
@@ -726,7 +725,7 @@ mod tests {
         std::env::set_var("RUST_ENV", "production");
         std::env::remove_var("DAM_HOPPER_MFA_KEY_FILE");
 
-        let err = match super::init_auth_store(&session_path, &telemetry_str).await {
+        let err = match super::init_auth_store(&session_path).await {
             Err(e) => e,
             Ok(_) => panic!("expected init_auth_store to fail in production without MFA key"),
         };
@@ -747,7 +746,7 @@ mod tests {
         std::env::remove_var("RUST_ENV");
         let default_db_path = tmp.path().join("default_auth.db");
         std::env::set_var("DAM_HOPPER_AUTH_SQLITE_PATH", &default_db_path);
-        let default_store = super::init_auth_store(&session_path, &telemetry_str)
+        let default_store = super::init_auth_store(&session_path)
             .await
             .expect("default sqlite store opened");
         assert!(default_db_path.exists());
@@ -762,7 +761,6 @@ mod tests {
 /// MongoDB settings are ignored in lite mode.
 async fn init_auth_store(
     session_db_path: &std::path::Path,
-    telemetry_db_path: &str,
 ) -> anyhow::Result<dam_hopper_server::auth::AuthStore> {
     use dam_hopper_server::auth::{AuthBackendConfig, AuthStore};
 
@@ -782,13 +780,8 @@ async fn init_auth_store(
                     anyhow::anyhow!("FATAL: Failed to load MFA key from {key_path}: {e}")
                 })?;
             }
-            let telemetry_path =
-                dam_hopper_server::telemetry::runtime::telemetry_path(telemetry_db_path);
             backend
-                .ensure_distinct_from(&[
-                    ("session", session_db_path),
-                    ("telemetry", telemetry_path.as_path()),
-                ])
+                .ensure_distinct_from(&[("session", session_db_path)])
                 .map_err(|e| anyhow::anyhow!("FATAL: {e}"))?;
             let store = AuthStore::open_sqlite(&path).await.map_err(|e| {
                 anyhow::anyhow!(
@@ -893,26 +886,16 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let gc_path = global_config_path();
-    let global_config = read_global_config_at(&gc_path)?.unwrap_or_default();
-
-    // ── Workspace ─────────────────────────────────────────────────────────────
-
-    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let resolution = resolve_startup_config(ConfigResolutionInput {
-        explicit_config: cli.config.clone(),
-        workspace_dir: cli.workspace.clone(),
-        global_default_workspace: global_config
-            .defaults
-            .as_ref()
-            .and_then(|d| d.workspace.as_ref())
-            .map(PathBuf::from),
-        current_dir,
-        registry_path: global_registry_path(),
-    })?;
+    let resolution = resolve_startup_config(ConfigResolutionInput::from_explicit(cli.config.clone()))?;
 
     let workspace_dir = resolution.workspace_dir;
     let config = resolution.config;
+    let global_config = GlobalConfig {
+        workspace: Some(config.workspace.clone()),
+        workspaces: config.workspaces.clone(),
+        ui: config.ui.clone(),
+        server: config.server.clone(),
+    };
 
     if cli.config.is_none() {
         if let Some(parent) = config.config_path.parent() {
@@ -982,21 +965,6 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     };
-
-    // The Codex usage runtime stays independent from the PTY manager for the
-    // life of the server. A disabled runtime is cheap and can be activated by
-    // Settings without changing terminal behavior.
-    let telemetry_runtime = TelemetryRuntime::with_session_db_path(db_path.clone());
-    if config.server.telemetry.enabled {
-        let disabled = dam_hopper_server::config::TelemetryConfig::default();
-        if let Err(error) = telemetry_runtime
-            .apply_config(&disabled, &config.server.telemetry)
-            .await
-        {
-            tracing::warn!(error = %error, "Telemetry runtime unavailable; terminal operation continues");
-        }
-    }
-
     let pty_manager = PtySessionManager::with_persist(
         std::sync::Arc::new(event_sink.clone()),
         persist_tx.clone(), // Clone to keep sender alive until end of main() for graceful shutdown
@@ -1079,12 +1047,13 @@ async fn main() -> anyhow::Result<()> {
     // ── Build state + router ──────────────────────────────────────────────────
 
     let allowed_origins = parse_cors_origins(cli.cors_origins.as_deref())?;
-    let fs = FsSubsystem::new(project_roots(&config));
+    let ws_root = config.resolve_workspace_root().ok();
+    let fs = FsSubsystem::new_with_workspace(project_roots(&config), ws_root);
 
     let auth_store = if cli.no_auth {
         None
     } else {
-        Some(init_auth_store(&db_path, &config.server.telemetry.db_path).await?)
+        Some(init_auth_store(&db_path).await?)
     };
 
     // Load (or generate) OPAQUE server keypair — persisted to ~/.config/dam-hopper/opaque-server-setup
@@ -1111,7 +1080,6 @@ async fn main() -> anyhow::Result<()> {
         Some(port_forward_manager.clone()),
         opaque_server_setup,
         diagnostics,
-        telemetry_runtime.clone(),
     )?
     .with_workflow_store(workflow_store.clone())
     .with_agent_status(agent_status_runtime.clone());
@@ -1247,7 +1215,6 @@ async fn main() -> anyhow::Result<()> {
     // Spawn /proc/net/tcp polling loop for port detection (Linux-only; warns on other OS).
     tokio::spawn(proc_poll_loop(port_forward_manager));
 
-    let telemetry_shutdown = state.telemetry_runtime.clone();
     let router = build_router_with_web_dir_and_origins(state.clone(), allowed_origins, cli.web_dir);
 
     // ── Serve ─────────────────────────────────────────────────────────────────
@@ -1319,7 +1286,6 @@ async fn main() -> anyhow::Result<()> {
     // Reap all tunnel children before exit — no orphaned cloudflared processes.
     tunnel_manager_shutdown.dispose_all().await;
     browser_debug_artifacts_shutdown.dispose_all().await;
-    telemetry_shutdown.shutdown().await;
     if let Some(collector) = agent_status_collector {
         collector.shutdown();
     }

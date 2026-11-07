@@ -5,7 +5,8 @@ use crate::utils::atomic_write;
 
 use super::schema::{
     DamHopperConfig, DamHopperConfigRaw, ProjectConfig, ProjectConfigRaw, RestartPolicy,
-    ServiceConfig, TerminalProfile, TerminalProfileRaw, DEFAULT_RESTART_MAX_RETRIES,
+    ServiceConfig, TerminalProfile, TerminalProfileRaw, WorkspaceRootError,
+    DEFAULT_RESTART_MAX_RETRIES,
 };
 
 // ──────────────────────────────────────────────
@@ -39,10 +40,15 @@ pub fn parse_config_str_at_path(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| fallback_config_dir().to_path_buf());
 
+    let workspace_root_candidate = raw.workspace.resolve_root(&config_dir).ok();
+    let project_base_dir = workspace_root_candidate
+        .as_deref()
+        .unwrap_or(&config_dir);
+
     let projects = raw
         .projects
         .into_iter()
-        .map(|p| resolve_project(p, &config_dir))
+        .map(|p| resolve_project(p, project_base_dir))
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(DamHopperConfig {
@@ -51,10 +57,11 @@ pub fn parse_config_str_at_path(
         server: raw.server,
         projects,
         features: raw.features,
+        ui: raw.ui,
+        workspaces: raw.workspaces,
         config_path: canonical,
     })
 }
-
 fn validate_config(raw: &DamHopperConfigRaw) -> Result<(), AppError> {
     raw.server.validate().map_err(AppError::Config)?;
     // Unique project names
@@ -241,6 +248,96 @@ fn resolve_terminal(raw: TerminalProfileRaw, project_path: &Path) -> TerminalPro
     }
 }
 
+/// Determines if a path points to, is inside of, or is an ancestor of a sensitive server
+/// configuration or daemon directory (such as ~/.config/dam-hopper, /var/lib/dam-hopper, /etc/dam-hopper).
+pub fn is_sensitive_workspace_root(path: &Path) -> bool {
+    let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+    let mut sensitive_dirs = Vec::new();
+    sensitive_dirs.push(super::global::dam_hopper_config_dir());
+    if let Some(home) = dirs::home_dir() {
+        sensitive_dirs.push(home.join(".config").join("dam-hopper"));
+    }
+    sensitive_dirs.push(PathBuf::from("/var/lib/dam-hopper"));
+    sensitive_dirs.push(PathBuf::from("/etc/dam-hopper"));
+
+    for dir in sensitive_dirs {
+        let canonical_dir = dunce::canonicalize(&dir).unwrap_or(dir);
+        // Exact match or inside sensitive directory
+        if canonical == canonical_dir || canonical.starts_with(&canonical_dir) {
+            return true;
+        }
+        // Ancestor of sensitive directory (candidate contains the sensitive directory)
+        if canonical_dir.starts_with(&canonical) {
+            return true;
+        }
+    }
+
+    // Component-level safety guard: detect any path segment sequence .config -> dam-hopper
+    let components: Vec<_> = canonical
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect();
+    for window in components.windows(2) {
+        if window[0] == ".config" && window[1] == "dam-hopper" {
+            return true;
+        }
+    }
+
+    // If candidate contains a .config/dam-hopper subdirectory, it contains sensitive daemon data
+    if canonical.join(".config").join("dam-hopper").exists() {
+        return true;
+    }
+
+    false
+}
+
+/// Authoritatively resolves the workspace browse root relative to the config file directory.
+///
+/// Requires the root to exist on disk as a directory and passes sensitive directory safety guards.
+pub fn resolve_workspace_root(
+    config_dir: &Path,
+    raw_root: &str,
+) -> Result<PathBuf, WorkspaceRootError> {
+    let trimmed = raw_root.trim();
+    if trimmed.is_empty() {
+        return Err(WorkspaceRootError::Unconfigured);
+    }
+    let candidate = if trimmed == "." {
+        config_dir.to_path_buf()
+    } else {
+        let p = Path::new(trimmed);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            config_dir.join(p)
+        }
+    };
+
+    let canonical = dunce::canonicalize(&candidate).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            WorkspaceRootError::NotFound(candidate.clone())
+        } else {
+            WorkspaceRootError::CanonicalizationFailed(format!("{}: {}", candidate.display(), e))
+        }
+    })?;
+
+    if !canonical.is_dir() {
+        return Err(WorkspaceRootError::NotADirectory(canonical));
+    }
+
+    let canonical_config_dir = dunce::canonicalize(config_dir).unwrap_or_else(|_| config_dir.to_path_buf());
+    if is_sensitive_workspace_root(&canonical_config_dir) && canonical_config_dir.starts_with(&canonical) {
+        return Err(WorkspaceRootError::SensitiveDirectory(canonical));
+    }
+
+    if is_sensitive_workspace_root(&canonical) {
+        return Err(WorkspaceRootError::SensitiveDirectory(canonical));
+    }
+
+    Ok(canonical)
+}
+
 // ──────────────────────────────────────────────
 // Write
 // ──────────────────────────────────────────────
@@ -253,27 +350,48 @@ pub fn write_config(file_path: &Path, config: &DamHopperConfig) -> Result<(), Ap
         .map(Path::to_path_buf)
         .unwrap_or_else(|| fallback_config_dir().to_path_buf());
 
-    let raw = build_raw_toml(config, &config_dir);
+    let workspace_root_candidate = config.resolve_workspace_root().ok();
+    let project_base_dir = workspace_root_candidate
+        .as_deref()
+        .unwrap_or(&config_dir);
+
+    let raw = build_raw_toml(config, project_base_dir, file_path)?;
     let toml_str = toml::to_string_pretty(&raw)
         .map_err(|e| AppError::Config(format!("Failed to serialize config: {}", e)))?;
 
     atomic_write(file_path, &toml_str)
 }
 
-fn build_raw_toml(config: &DamHopperConfig, config_dir: &Path) -> toml::Value {
+fn build_raw_toml(
+    config: &DamHopperConfig,
+    project_base_dir: &Path,
+    file_path: &Path,
+) -> Result<toml::Value, AppError> {
     use toml::Value;
 
-    let mut map = toml::map::Map::new();
+    let mut map = if file_path.exists() {
+        let existing = std::fs::read_to_string(file_path)
+            .map_err(|e| AppError::Config(format!("Cannot read config {}: {}", file_path.display(), e)))?;
+        toml::from_str::<toml::Value>(&existing)
+            .map_err(|e| AppError::Config(format!("Invalid TOML in {}: {}", file_path.display(), e)))?
+            .as_table()
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        toml::map::Map::new()
+    };
 
     let mut ws = toml::map::Map::new();
     ws.insert(
         "name".to_string(),
         Value::String(config.workspace.name.clone()),
     );
-    ws.insert(
-        "root".to_string(),
-        Value::String(config.workspace.root.clone()),
-    );
+    if !config.workspace.root.is_empty() {
+        ws.insert(
+            "root".to_string(),
+            Value::String(config.workspace.root.clone()),
+        );
+    }
     map.insert("workspace".to_string(), Value::Table(ws));
 
     if let Some(agent_store) = &config.agent_store {
@@ -282,23 +400,61 @@ fn build_raw_toml(config: &DamHopperConfig, config_dir: &Path) -> toml::Value {
         map.insert("agent_store".to_string(), Value::Table(ast));
     }
 
-    if config.server != Default::default() {
-        map.insert("server".to_string(), server_to_toml(&config.server));
+    let serialized_server = server_to_toml(&config.server);
+    if let Some(existing_server) = map.get_mut("server").and_then(|t| t.as_table_mut()) {
+        existing_server.remove("advisor");
+        if !config.server.session_changes_enabled {
+            existing_server.remove("session_changes_enabled");
+        }
+        if let Some(new_server) = serialized_server.as_table() {
+            for (sk, sv) in new_server {
+                existing_server.insert(sk.clone(), sv.clone());
+            }
+        }
+        if existing_server.is_empty() && config.server == Default::default() {
+            map.remove("server");
+        }
+    } else if config.server != Default::default() {
+        let mut s = serialized_server;
+        if let Some(t) = s.as_table_mut() {
+            t.remove("advisor");
+        }
+        map.insert("server".to_string(), s);
     }
 
     let projects: Vec<Value> = config
         .projects
         .iter()
-        .map(|p| project_to_toml(p, config_dir))
+        .map(|p| project_to_toml(p, project_base_dir))
         .collect();
     if !projects.is_empty() {
         map.insert("projects".to_string(), Value::Array(projects));
+    } else {
+        map.remove("projects");
     }
 
-    Value::Table(map)
+    if let Some(ui) = &config.ui {
+        let ui_json = serde_json::to_value(ui)
+            .map_err(|e| AppError::Config(format!("Failed to serialize ui config: {e}")))?;
+        let mut normalized_json = ui_json;
+        super::global::normalize_ui_json_for_toml(&mut normalized_json);
+        if let Some(ui_toml) = super::global::json_to_toml(&normalized_json) {
+            map.insert("ui".to_string(), ui_toml);
+        }
+    }
+
+    if let Some(workspaces) = &config.workspaces {
+        let ws_json = serde_json::to_value(workspaces)
+            .map_err(|e| AppError::Config(format!("Failed to serialize workspaces: {e}")))?;
+        if let Some(ws_toml) = super::global::json_to_toml(&ws_json) {
+            map.insert("workspaces".to_string(), ws_toml);
+        }
+    }
+
+    Ok(Value::Table(map))
 }
 
-fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
+pub(crate) fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
     use toml::Value;
     let mut config = toml::map::Map::new();
     config.insert(
@@ -326,41 +482,6 @@ fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Value {
             "session_changes_enabled".to_string(),
             Value::Boolean(true),
         );
-    }
-    if server.telemetry != Default::default() {
-        let telemetry = &server.telemetry;
-        let mut table = toml::map::Map::new();
-        table.insert("enabled".to_string(), Value::Boolean(telemetry.enabled));
-        table.insert("paused".to_string(), Value::Boolean(telemetry.paused));
-        table.insert(
-            "db_path".to_string(),
-            Value::String(telemetry.db_path.clone()),
-        );
-        table.insert(
-            "detail_retention_days".to_string(),
-            Value::Integer(telemetry.detail_retention_days.into()),
-        );
-        if let Some(days) = telemetry.aggregate_retention_days {
-            table.insert(
-                "aggregate_retention_days".to_string(),
-                Value::Integer(days.into()),
-            );
-        }
-        let mut collector = toml::map::Map::new();
-        collector.insert(
-            "enabled".to_string(),
-            Value::Boolean(telemetry.collector.enabled),
-        );
-        collector.insert(
-            "host".to_string(),
-            Value::String(telemetry.collector.host.clone()),
-        );
-        collector.insert(
-            "port".to_string(),
-            Value::Integer(telemetry.collector.port.into()),
-        );
-        table.insert("collector".to_string(), Value::Table(collector));
-        config.insert("telemetry".to_string(), Value::Table(table));
     }
     if server.host_resources != Default::default() {
         let resources = &server.host_resources;

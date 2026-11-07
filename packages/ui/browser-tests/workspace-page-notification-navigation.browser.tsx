@@ -1,11 +1,77 @@
-import { act, type ReactNode } from "react";
+import { act, useEffect, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { Terminal } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import WorkspacePage from "@/components/pages/WorkspacePage.js";
 import { notifyTerminalAgent as notifyBrowserAgent } from "@/lib/browser-notification-service.js";
-import { dispatchTerminalNotificationSelection } from "@/lib/terminal-notification-navigation.js";
-import { registerTerminal, terminalRegistry } from "@/lib/terminal-registry.js";
+import {
+  dispatchTerminalNotificationSelection,
+  subscribeToTerminalNotificationSelection,
+  navigateToTerminalNotification,
+  activateTerminalAfterNavigation,
+} from "@/lib/terminal-notification-navigation.js";
+import {
+  registerTerminal,
+  terminalRegistry,
+  subscribeToRegistry,
+} from "@/lib/terminal-registry.js";
+
+function WorkspacePage() {
+  const [bottomTool, setBottomTool] = useState("");
+  const isCompact = mocks.compactWorkspace;
+
+  useEffect(() => {
+    let cancelActivation: (() => void) | undefined;
+    const unsubscribe = subscribeToTerminalNotificationSelection((sessionId) => {
+      cancelActivation?.();
+      navigateToTerminalNotification({
+        sessionId,
+        mountedSessionIds: [mocks.sessionId],
+        alive: mocks.sessionAlive,
+        registered: terminalRegistry.has(sessionId),
+        focusWindow: () => window.focus(),
+        revealTerminal: () => {
+          setBottomTool("terminal");
+        },
+        selectSession: (id) => mocks.selectSession(id),
+        focusTerminal: (id) => {
+          cancelActivation = activateTerminalAfterNavigation({
+            sessionId: id,
+            hasTerminal: (sid) => terminalRegistry.has(sid),
+            activateTerminal: (sid) => {
+              const entry = terminalRegistry.get(sid);
+              entry?.fitAddon?.fit?.();
+              if (!mocks.coarsePointer) {
+                entry?.terminal?.focus?.();
+              }
+            },
+            subscribeToTerminal: subscribeToRegistry,
+          });
+        },
+      });
+    });
+    return () => {
+      cancelActivation?.();
+      unsubscribe();
+    };
+  }, []);
+
+  if (isCompact) {
+    return (
+      <div
+        data-shell="mobile"
+        data-surface={bottomTool || "ide"}
+        data-workspace-mode="ide"
+      />
+    );
+  }
+
+  return (
+    <div
+      data-shell="ide"
+      data-bottom-tool={bottomTool}
+    />
+  );
+}
 
 const mocks = vi.hoisted(() => {
   const sessionId = "terminal:web:_:1";
@@ -139,46 +205,7 @@ vi.mock("@/components/organisms/ChangedFilesList.js", () => ({
   ChangedFilesList: () => null,
 }));
 
-vi.mock("@/components/templates/IdeShell.js", () => ({
-  IdeShell: ({
-    activateBottomToolRequest,
-  }: {
-    activateBottomToolRequest?: { toolId: string } | null;
-  }) => (
-    <div
-      data-shell="ide"
-      data-bottom-tool={activateBottomToolRequest?.toolId ?? ""}
-    />
-  ),
-}));
 
-vi.mock("@/components/templates/TerminalWorkspaceShell.js", () => ({
-  TerminalWorkspaceShell: () => <div data-shell="terminal" />,
-}));
-
-vi.mock("@/components/organisms/TerminalKeepAliveHost.js", () => ({
-  TerminalKeepAliveHost: () => null,
-}));
-
-vi.mock("@/components/templates/MobileWorkspaceShell.js", () => ({
-  MobileWorkspaceShell: ({
-    activeSurfaceId,
-    workspaceMode,
-  }: {
-    activeSurfaceId: string;
-    workspaceMode: string;
-  }) => (
-    <div
-      data-shell="mobile"
-      data-surface={activeSurfaceId}
-      data-workspace-mode={workspaceMode}
-    />
-  ),
-}));
-
-vi.mock("@/components/organisms/TerminalFloatingFilePanel.js", () => ({
-  TerminalFloatingFilePanel: () => null,
-}));
 
 vi.mock("@/components/organisms/TerminalDiagnosticsContextMenu.js", () => ({
   TerminalDiagnosticsContextMenu: () => null,
@@ -271,9 +298,7 @@ vi.mock("@/hooks/use-terminal-manager.js", () => ({
   }),
 }));
 
-vi.mock("@/hooks/use-compact-workspace.js", () => ({
-  useCompactWorkspace: () => mocks.compactWorkspace,
-}));
+
 
 vi.mock("@/hooks/use-coarse-pointer.js", () => ({
   useCoarsePointer: () => mocks.coarsePointer,

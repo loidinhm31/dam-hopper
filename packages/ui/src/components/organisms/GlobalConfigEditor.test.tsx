@@ -2,23 +2,19 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GlobalConfigEditor } from "./GlobalConfigEditor.js";
 
-const mockPolicy = vi.hoisted(() => ({ enabled: false }));
-
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
-  }),
-}));
 
 vi.mock("@/api/queries.js", () => ({
   useGlobalConfig: () => ({
-    data: { defaults: { workspace: "/workspaces/demo" } },
+    data: { workspace: { name: "demo", root: "/workspaces/demo" } },
     isLoading: false,
   }),
-  useUpdateGlobalDefaults: () => ({
+  useSwitchWorkspace: () => ({
     isPending: false,
     error: null,
     mutateAsync: vi.fn(),
+  }),
+  useWorkspaceStatus: () => ({
+    data: { ready: true, path: "/workspaces/demo", configPath: "/home/user/.config/dam-hopper/config.toml" },
   }),
   useKnownWorkspaces: () => ({
     data: { workspaces: [] },
@@ -37,18 +33,13 @@ vi.mock("@/api/queries.js", () => ({
   useWorkspace: () => ({ data: { root: "/workspaces/demo" } }),
 }));
 
-describe("GlobalConfigEditor Android Chrome policy", () => {
-  beforeEach(() => {
-    mockPolicy.enabled = false;
-  });
-
-  it("blocks default and known-workspace text entry actions", () => {
-    mockPolicy.enabled = true;
+describe("GlobalConfigEditor", () => {
+  it("renders workspace configuration and known-workspace inputs enabled", () => {
     const markup = renderToStaticMarkup(<GlobalConfigEditor />);
 
-    expect(markup).toContain('placeholder="/path/to/workspace" disabled=""');
-    expect(markup).toContain(
-      "Unavailable on Android Chrome: text entry is disabled",
-    );
+    expect(markup).toContain("Workspace Configuration");
+    expect(markup).toContain("Canonical Workspace Root");
+    expect(markup).toContain('placeholder="/path/to/workspace"');
+    expect(markup).not.toContain('placeholder="/path/to/workspace" disabled=""');
   });
 });

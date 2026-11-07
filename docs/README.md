@@ -15,6 +15,7 @@ Use this index to find maintained product, architecture, API, development, and o
 - [Code standards](./code-standards.md) — Rust, React, transport, ownership, testing, and security practices.
 - [Testing guide](./testing.md) — test suites and development verification.
 - [Frontend components](./frontend-components.md) — shared UI composition and lifecycle.
+- [Design guidelines](./design-guidelines.md) — visual aesthetic, holographic canvas, TopBar iconography, and PIN lock UX.
 - [Configuration guide](./configuration-guide.md), [configuration index](./configuration/index.md), and [server environment and authentication](./configuration/server-environment-auth.md) — project, UI, and server configuration, SQLite lite mode, and the canonical first-account operator approval runbook.
 - [API reference](./api-reference.md), [authentication API](./api/authentication.md), [workflow API](./workflow-api.md), and [WebSocket protocol](./ws-protocol-guide.md).
 
@@ -31,7 +32,7 @@ Use this index to find maintained product, architecture, API, development, and o
 | [Agent Store, ports, and browser](./architecture/agent-store-ports-and-browser.md) | Multi-profile store, port aggregation, and browser debug |
 | [Preferences, settings, and host resources](./architecture/preferences-settings-and-host-resources.md) | Preference ownership, privacy mode, host resources, and settings |
 | [Media isolation and encryption](./architecture/media-isolation-and-encryption.md) | Owner-bound media tickets and encrypted writes |
-| [Native SSH forwarding](./architecture/native-ssh-forwarding.md) | Windows-native concurrent desktop forwarding scopes |
+| Native SSH forwarding | (Retired) Desktop SSH forwarding scopes removed in Phase 02 |
 | [Idle-suspend security](./terminal-idle-suspend-security.md) | Linux helper IPC, admission, and fail-closed behavior |
 | [Android native client](./architecture/android-native-client.md) | Implemented three-screen entry flow, navigation lifecycle, and retained panel-shell boundary |
 | [Android native acceptance ledger](./android-native-acceptance.md) | Frozen scope baseline, panel registry, and verification matrix for native-app |

@@ -9,7 +9,7 @@ import {
   migrateToProfiles,
   reconcileManagedProfile,
 } from "@dam-hopper/ui/api/server-config";
-import { connectProfile } from "@dam-hopper/ui/api/connections";
+import { connectProfile, getConnectionSnapshot } from "@dam-hopper/ui/api/connections";
 import { fetchRuntimeConfig } from "@dam-hopper/ui/api/runtime-config";
 import { initializeClientDiagnostics } from "@dam-hopper/ui/diagnostics-client";
 import { performFreshStateReset } from "@dam-hopper/ui/lib/fresh-state-reset";
@@ -26,6 +26,17 @@ configureLogger({
   ),
 });
 initializeClientDiagnostics();
+if (import.meta.env.DEV) {
+  interface GlobalWithConnections extends Window {
+    __CONNECTIONS__?: {
+      getConnectionSnapshot: typeof getConnectionSnapshot;
+    };
+  }
+  const globalWindow: GlobalWithConnections = window;
+  globalWindow.__CONNECTIONS__ = {
+    getConnectionSnapshot,
+  };
+}
 
 async function bootstrap() {
   // Step 2.9: Idempotent fresh-state reset before restoring profiles/connections
@@ -41,7 +52,13 @@ async function bootstrap() {
     reconcileManagedProfile(runtimeConfig);
   }
 
-
+  const profiles = getProfiles();
+  const activeProfile = profiles.find((p) => p.autoConnect) ?? profiles[0];
+  if (activeProfile) {
+    try {
+      await connectProfile(activeProfile.id);
+    } catch {}
+  }
   // Standard ordinary QueryClient (no profileScopedQueryKeyHash)
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -51,6 +68,9 @@ async function bootstrap() {
       },
     },
   });
+  if (typeof window !== "undefined") {
+    (window as unknown as { __DAM_HOPPER_QUERY_CLIENT__?: QueryClient }).__DAM_HOPPER_QUERY_CLIENT__ = queryClient;
+  }
 
   createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>

@@ -1,11 +1,10 @@
 # Configuration Guide
 
-## Project Registry (dam-hopper.toml)
+## Authoritative Configuration (config.toml)
 
-DamHopper loads project registry data from `dam-hopper.toml`. You can point the server at a specific registry file with `--config <path>` or `DAM_HOPPER_CONFIG`, or let it use the canonical global registry at `~/.config/dam-hopper/dam-hopper.toml`.
+DamHopper loads its complete server and workspace configuration from a single server-global `config.toml` document. You can point the server at a specific configuration file with `--config <path>` or `DAM_HOPPER_CONFIG`, or let it use the canonical global file at `~/.config/dam-hopper/config.toml` (or `/var/lib/dam-hopper/config.toml` in production systemd services).
 
-Legacy workspace-root discovery still works when you pass `--workspace <dir>` or `DAM_HOPPER_WORKSPACE`, but it is no longer the primary model.
-
+The previous per-workspace `dam-hopper.toml` registry and directory-discovery model have been cut over to this single authoritative `config.toml`. The `[workspace].root` setting is the sole canonical workspace browse root authority for filesystem browsing, editor access, and file tree operations. Ambient upward directory discovery and `defaults.workspace` selectors are removed.
 ### Basic Setup
 
 For end-to-end validation steps after setup, jump to the [Manual Smoke Checklist](./configuration/server-operations.md#manual-smoke-checklist).
@@ -13,8 +12,14 @@ For end-to-end validation steps after setup, jump to the [Manual Smoke Checklist
 ```toml
 [workspace]
 name = "my-workspace"
+root = "/home/developer/workspace" # Authorized filesystem browse root (must not be ~/.config/dam-hopper or system directories)
 ```
 
+### Workspace Root Authority
+
+The `[workspace] root` setting specifies the authorized directory that the Files app and whole-workspace search can browse.
+- When `root` is omitted or points to sensitive configuration directories (such as `~/.config/dam-hopper`, `/etc/dam-hopper`, or `/var/lib/dam-hopper`), workspace browsing is disabled (`UNCONFIGURED_WORKSPACE_ROOT`), but configured projects remain fully accessible.
+- Folders within the workspace can be marked as projects via the Files context menu (*"Mark as Project..."*) or via the `POST /api/config/projects` REST endpoint without restarting the server.
 ### Project Discovery
 
 Define projects with type-specific defaults. `projects[].path` may be
@@ -83,14 +88,6 @@ run_command = "pnpm dev"
 tags = ["frontend"]
 
 [[projects]]
-name = "native"
-path = "./apps/native"
-type = "pnpm"
-build_command = "pnpm tauri:build"
-run_command = "pnpm tauri:dev"
-tags = ["frontend", "native", "tauri"]
-
-[[projects]]
 name = "scripts"
 path = "./scripts"
 type = "custom"
@@ -112,56 +109,47 @@ run_command = "bash scripts/run.sh"
 
 ## File Access Boundaries
 
-Runtime file access via `/api/fs/*` and WebSocket file operations is **sandboxed per project root**. The server maintains a set of allowed roots derived from the currently loaded `projects[].path` entries. All file paths are validated against these configured roots. This prevents traversal attempts from escaping a project's directory tree and blocks access to other projects' files.
+Runtime file access via `/api/fs/*` and WebSocket file operations enforces explicit target discrimination:
+- **Workspace Target (`target: { "type": "workspace" }`)**: Sandboxed to the authorized workspace root defined by `[workspace].root` in `config.toml`. All browse, list, read, write, and folder terminal operations are strictly validated against this canonical root. Traversal attempts outside the workspace boundary fail closed without `$HOME` fallback.
+- **Project Target (`target: { "type": "project", "project": "<name>" }`)**: Sandboxed to the project root specified in `[[projects]]`. Operations resolve within that specific project tree and prevent bleeding across projects.
 
-**Security note:** `workspace_dir` is now a display/legacy field only; the security boundary is enforced by per-project roots derived from the config. This allows projects to be located anywhere on the filesystem while maintaining strict access control.
-
-- Symlink targets are canonicalized and re-validated against the project boundary
-- Tree subscriptions (watchers) are rooted at each project root
-- Relative path sequences containing `..` are rejected before filesystem access
-- After config reload or workspace switch, the sandbox roots are automatically reinitialized
-
+Invariants:
+- Symlink targets are canonicalized and re-validated against the authorizing target boundary.
+- Relative path sequences containing `..` or attempting directory traversal outside the target are rejected before filesystem access.
+- Tree subscriptions (watchers) and media tickets are bound to target directory identities and revoke upon invalidation.
+- After config update or workspace root switch, sandbox boundaries and target resolvers reinitialize immediately.
 ## Startup Config Resolution
 
-Server startup resolves configuration in this order:
+Server startup resolves configuration:
 
-1. `--config <path>` or `DAM_HOPPER_CONFIG` — load exact registry file
-2. `--workspace <dir>` or `DAM_HOPPER_WORKSPACE` — load from directory or search upward
-3. `~/.config/dam-hopper/dam-hopper.toml` — global registry
-4. `defaults.workspace` from `~/.config/dam-hopper/config.toml`
-5. Current working directory via legacy upward `dam-hopper.toml` discovery
-6. Empty config fallback
+1. **Explicit Config Flag or Env**: `--config <path>` or the `DAM_HOPPER_CONFIG` environment variable. This is the explicit launch model for production systemd services (`ExecStart=... --config /var/lib/dam-hopper/config.toml`), Windows launchers (`--config "$installDir\config.toml"`), and custom environments.
+2. **Canonical Direct Default**: `~/.config/dam-hopper/config.toml` when no explicit flag or environment variable is provided.
 
-**Registry note:** Workspace APIs now report `configPath` (the authoritative registry file path) separately from `path`/`root` (legacy display fields).
+Legacy ambient directory discovery (`--workspace`, upward `.dam-hopper.toml` searches, and `defaults.workspace`) has been removed in favor of explicit configuration.
 
-## Workspace Switching and Config Reload
+**Configuration note:** Workspace APIs report `configPath` (the authoritative configuration file path) alongside `path`/`root` (the canonical workspace browse root path resolved from `[workspace].root`).
+
+## Workspace Switching and Config Persistence
 
 **POST /api/workspace/switch**
 
-The workspace switch endpoint accepts either a directory path or a direct path to a `dam-hopper.toml` file:
+The workspace switch endpoint changes the active workspace root directory:
 
 ```json
 { "path": "/home/user/projects/my-workspace" }
 ```
 
-or
-
-```json
-{ "path": "/home/user/.config/dam-hopper/dam-hopper.toml" }
-```
-
 When switching:
 
-- The server reloads configuration from the specified path (or discovers `dam-hopper.toml` in the directory)
-- File API sandbox is reinitialized from the newly loaded project roots
-- All PTY sessions are disposed
-- All connected clients receive a `workspace:changed` broadcast event
+1. **Pre-validation**: The server validates that the specified folder exists, is a directory, and does not resolve to or contain a sensitive daemon configuration directory (`~/.config/dam-hopper`, `/etc/dam-hopper`, `/var/lib/dam-hopper`). Invalid paths reject immediately with HTTP 400/403/404 without mutating configuration.
+2. **Persistence**: The validated path is atomically persisted to `[workspace].root` in the active `config.toml` file.
+3. **Sandbox reload & event dispatch**: Only after validation succeeds, the filesystem sandbox is reinitialized from the updated root, `workspaceEpoch` is incremented, target resolvers are cleared, and a `workspace:changed` broadcast event is emitted to all connected clients. Active remote PTY sessions are disposed to prevent process leakage across workspace roots; clients rebind their active workspace targets.
+4. **Fail-Closed Stale-Root Fence**: Dirty editor tabs or client requests referencing old relative paths are fenced against saving into the new root, ensuring dirty editor contents fail closed rather than corrupting the newly selected workspace.
 
-**Config updates and settings changes** (`PUT /api/config`, `PATCH /api/config/projects/:name`, `POST /api/settings`) also trigger sandbox reinitialization after writing the new configuration. The reload always reads from the current `configPath` without re-discovery.
-
+**Config updates** (`PUT /api/config`, `PATCH /api/config/projects/:name`, `POST /api/config/projects`, `DELETE /api/config/projects/:name`) commit directly to the active `configPath` through atomic same-directory writes and trigger sandbox reinitialization.
 ### Project Type Presets
 
-When registering projects in `dam-hopper.toml`, DamHopper assigns default service build, run, and dev commands based on the detected project type (these reflect standard scripts inside the target project workspace, not DamHopper monorepo root scripts):
+When registering projects under `[[projects]]` in `config.toml`, DamHopper assigns default service build, run, and dev commands based on the detected project type (these reflect standard scripts inside the target project workspace, not DamHopper monorepo root scripts):
 #### npm
 
 - Build: `npm run build`
@@ -278,8 +266,8 @@ helper also supports the execution-only indefinite-sleep sentinel; that
 path is not a configuration mutation.
 
 The feature is **disabled by default** (`enabled = false`) and requires explicit
-host configuration under `[server.idle_suspend]` in the loaded registry TOML
-(`~/.config/dam-hopper/dam-hopper.toml`).
+host configuration under `[server.idle_suspend]` in the authoritative `config.toml`
+(`~/.config/dam-hopper/config.toml` or `/var/lib/dam-hopper/config.toml`).
 
 [server.idle_suspend]
 enabled = false
@@ -347,25 +335,20 @@ omission resolves to the defaults.
 
 ### Configuration Paths and Registry Locations
 
-DamHopper uses three distinct registry locations depending on deployment mode:
+DamHopper uses authoritative `config.toml` locations depending on deployment mode:
 
-1. **Direct/source development default**: `~/.config/dam-hopper/dam-hopper.toml`. Overridden with `--config <path>` or the `DAM_HOPPER_CONFIG` environment variable.
-2. **Release-manager / systemd production**: `/var/lib/dam-hopper/dam-hopper.toml`, owned by the API service identity with mode `0600`; it is the sole `--config` operand in `deploy/systemd/dam-hopper-api.service` `ExecStart`.
-   On first start only, the runtime provisioner may validate and copy the
-   exact bytes from `/etc/dam-hopper/dam-hopper.toml` when the canonical file
-   is absent. The legacy file is read-only and is never synchronized after the
-   canonical file exists. The server timing/manual audit is
-   `/var/lib/dam-hopper/idle-suspend-audit.jsonl`, also mode `0600`.
-3. **UAT runner default**: `/tmp/dam-hopper-uat/dam-hopper.toml` generated by `scripts/run-uat.sh`. Never treat this temporary path as the production registry.
-4. **Windows direct-server default**: `%LOCALAPPDATA%\Programs\dam-hopper\dam-hopper.toml` (or `%USERPROFILE%\.config\dam-hopper\dam-hopper.toml`). Passed explicitly with `--config "$env:LOCALAPPDATA\Programs\dam-hopper\dam-hopper.toml"`.
+1. **Direct/source development default**: `~/.config/dam-hopper/config.toml`. Overridden with `--config <path>` or the `DAM_HOPPER_CONFIG` environment variable.
+2. **Release-manager / systemd production**: `/var/lib/dam-hopper/config.toml`, owned by the API service identity with mode `0600`; it is the sole `--config` operand in `deploy/systemd/dam-hopper-api.service` `ExecStart`.
+   The server timing/manual audit is `/var/lib/dam-hopper/idle-suspend-audit.jsonl`, also mode `0600`.
+   Existing installations migrating from legacy `dam-hopper.toml` should preserve a copy as `dam-hopper.toml.bak`; the server operates in clean cutover mode and does not perform ongoing dual-file reads or runtime fallback.
+3. **UAT runner default**: `/tmp/dam-hopper-uat/config.toml` generated by `scripts/run-uat.sh`. Never treat this temporary path as the production registry.
+4. **Windows direct-server default**: `%LOCALAPPDATA%\Programs\dam-hopper\config.toml` (or `%USERPROFILE%\.config\dam-hopper\config.toml`). Passed explicitly with `--config "$env:LOCALAPPDATA\Programs\dam-hopper\config.toml"`.
 
 ### Production configuration ownership and updates
 
-For systemd deployments, `/var/lib/dam-hopper/dam-hopper.toml` is the
-canonical daemon registry and the only startup authority. The API service owns
-the file as its configured `User=`/`Group=` with mode `0600`; the legacy
-`/etc/dam-hopper/dam-hopper.toml` is a read-only migration source and is not a
-second live configuration.
+For systemd deployments, `/var/lib/dam-hopper/config.toml` is the
+canonical daemon configuration and the only startup authority. The API service owns
+the file as its configured `User=`/`Group=` with mode `0600`.
 
 Use the authenticated API for normal changes:
 
@@ -476,13 +459,13 @@ warnings are a no-go for enablement.
 1. Inspect protected status `GET /api/system/idle-suspend/v1/status`. If a
    handoff is active (`finalCheck` or `handedOff`), reconcile its outcome before
    editing configuration; a config edit is not cancellation.
-2. In `/var/lib/dam-hopper/dam-hopper.toml`, set `automatic_policy = "empty-fleet"`.
+2. In `/var/lib/dam-hopper/config.toml`, set `automatic_policy = "empty-fleet"`.
 3. Restart the API: `sudo systemctl restart dam-hopper-api.service`.
 4. Refetch status: verify `automaticPolicy: "empty-fleet"` and `activity: null`.
 
 #### Emergency disable (immediately halts automatic scheduling)
 
-1. In `/var/lib/dam-hopper/dam-hopper.toml`, set `enabled = false` and `automatic_policy = "empty-fleet"`.
+1. In `/var/lib/dam-hopper/config.toml`, set `enabled = false` and `automatic_policy = "empty-fleet"`.
 2. Restart the API: `sudo systemctl restart dam-hopper-api.service`.
 3. Refetch status: verify `state: "disabled"`.
 
@@ -575,10 +558,7 @@ cover `localhost` and `127.0.0.1` on ports 5173 and 4800.
 The extension uses the existing bounded bridge protocol and does not receive a
 DamHopper server token.
 
-Native desktop clients use the embedded Tauri child-WebView controller and do
-not require extension installation. The browser-extension ZIP instructions
-below apply only to the web/browser host. Linux native builds remain
-experimental and unverified at runtime; macOS support is deferred.
+The desktop Tauri client (`apps/native`) was retired in Phase 02 (P0a). The browser-extension ZIP instructions below apply to web/browser development targets when cross-origin address synchronization, History navigation, or console forwarding are needed.
 
 Use HTTP loopback URLs or URLs on currently-ready tunnel origins in the
 Browser URL field; paths, query strings, and hashes are supported, but
@@ -636,6 +616,7 @@ Example:
 
 ```toml
 [ui]
+dock_position = "left" # OS Dock placement: "left", "right", "top", or "bottom"
 terminal_workspace_shortcut = "Mod+Shift+Backquote"
 git_panel_shortcut = "Mod+Shift+KeyG"
 project_panel_shortcut = "Mod+Shift+KeyZ"

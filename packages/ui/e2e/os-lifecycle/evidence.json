@@ -1,0 +1,48 @@
+{
+  "run_id": "local-run-1793670875580",
+  "command": "eval-browser-local-capture",
+  "started_at": "2026-11-03T01:54:35.580Z",
+  "completed_at": "2026-11-03T01:54:35.580Z",
+  "case_name": "os-lifecycle",
+  "route": "/os",
+  "git_head": "3f4a7506d03847dc86bc9a41dfb42fa8cd6bf0f3",
+  "browser": "chromium",
+  "browser_version": "1.61.1",
+  "os": "linux",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_pixel_ratio": 1.25,
+  "checkpoints": [
+    {
+      "checkpoint": "screenshot",
+      "file_name": "screenshot.png",
+      "sha256": "dc53562fa4cf6241c35981d726c0059dd5e1c282b8cec22f4f9109af2d3065af",
+      "dimensions": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "checkpoint": "fhd",
+      "file_name": "fhd.png",
+      "sha256": "eb619cd4beaa4f1efe4555409ef274308cb1f6f707ef7ff8442778938596b3a4",
+      "dimensions": {
+        "width": 1920,
+        "height": 1080
+      }
+    },
+    {
+      "checkpoint": "compact",
+      "file_name": "compact.png",
+      "sha256": "38e0c4bfb48964389676400b19aed4cd696696afbec2b61a131915d0bb5fcc31",
+      "dimensions": {
+        "width": 1024,
+        "height": 640
+      }
+    }
+  ],
+  "functional_outcome": "passed",
+  "cleanup_outcome": "passed"
+}

@@ -26,7 +26,7 @@ export function AgentHarnessBadge({
       role="status"
       aria-label={`Agent: ${trimmed}`}
       className={cn(
-        "inline-flex items-center rounded-sm px-1.5 py-0.5 text-[9px] font-mono font-medium tracking-wide uppercase border shrink-0",
+        "inline-flex items-center rounded-sm px-1.5 py-0.5 text-xs font-mono font-medium tracking-wide uppercase border shrink-0",
         colorClass,
         className,
       )}

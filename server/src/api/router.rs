@@ -31,7 +31,7 @@ use super::{
     agent_import, agent_memory, agent_status, agent_store, auth, auth_mfa, browser_debug, commands,
     config, diagnostics, fs as fs_api, fs_image, fs_video, git, git_blame, git_diff, host_actions,
     idle_suspend, media_session, plans as plans_api, port_forward as port_forward_api,
-    resource_events, session_changes, settings, ssh, system, terminal, tunnel, usage, usage_sessions, workflow,
+    resource_events, session_changes, settings, ssh, system, terminal, tunnel, workflow,
     workspace, ws,
 };
 
@@ -134,8 +134,8 @@ pub fn build_router_with_web_dir_and_origins(
         // Global config
         .route("/api/global-config", get(config::get_global_config))
         .route(
-            "/api/global-config/defaults",
-            post(config::update_global_defaults),
+            "/api/global-config/workspace",
+            post(config::update_global_workspace),
         )
         .route("/api/global-config/ui", post(config::update_global_ui))
         // Projects
@@ -148,23 +148,11 @@ pub fn build_router_with_web_dir_and_origins(
         // Config
         .route("/api/config", get(config::get_config))
         .route("/api/config", put(config::update_config))
-        .route("/api/config/projects/{name}", patch(config::update_project))
-        // Usage analytics is aggregate-only and always protected by this router.
-        .route("/api/usage/summary", get(usage::summary))
-        .route("/api/usage/sessions", get(usage_sessions::list_sessions))
-        .route("/api/usage/sessions/{id}", get(usage_sessions::get_session))
-        .route("/api/usage/health", get(usage::health))
+        .route("/api/config/projects", post(config::mark_project))
         .route(
-            "/api/usage/settings",
-            get(usage::get_settings)
-                .post(usage::update_settings)
-                .patch(usage::update_settings),
+            "/api/config/projects/{name}",
+            patch(config::update_project).delete(config::unmark_project),
         )
-        .route(
-            "/api/usage/setup",
-            get(usage::get_setup_status).patch(usage::update_settings),
-        )
-        .route("/api/usage", delete(usage::delete_all))
         // Git
         .route("/api/git/fetch", post(git::fetch_projects))
         .route("/api/git/pull", post(git::pull_projects))
@@ -289,6 +277,11 @@ pub fn build_router_with_web_dir_and_origins(
         .route("/api/terminal", get(terminal::list_sessions))
         .route("/api/terminal/detailed", get(terminal::list_detailed))
         .route("/api/terminal/{id}/buffer", get(terminal::get_buffer))
+        .route(
+            "/api/terminal/{id}/terminate",
+            post(terminal::terminate_session)
+                .layer(DefaultBodyLimit::max(terminal::TERMINATION_MAX_BODY_BYTES)),
+        )
         .route(
             "/api/terminal/{id}",
             delete(terminal::kill_session).patch(terminal::rename_session),
@@ -720,6 +713,10 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
     const X_EXPECTED_SECURITY_REVISION: HeaderName =
         HeaderName::from_static("x-expected-security-revision");
     const X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
+    const X_DAM_HOPPER_TERMINATION_VERSION: HeaderName =
+        HeaderName::from_static("x-damhopper-termination-version");
+    const X_DAM_HOPPER_PTY_EPOCH: HeaderName =
+        HeaderName::from_static("x-damhopper-pty-epoch");
     let headers = [
         AUTHORIZATION,
         CONTENT_TYPE,
@@ -744,6 +741,8 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
         X_EXPECTED_SHA256,
         X_EXPECTED_SECURITY_REVISION,
         X_CONTENT_TYPE_OPTIONS,
+        X_DAM_HOPPER_TERMINATION_VERSION,
+        X_DAM_HOPPER_PTY_EPOCH,
     ];
     CorsLayer::new()
         .allow_origin(allowed_origins.to_vec())

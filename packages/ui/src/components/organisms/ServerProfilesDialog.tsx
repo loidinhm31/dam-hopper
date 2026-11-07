@@ -1,5 +1,9 @@
 import { ConfirmDialog, AlertDialog } from "@/components/ui/ConfirmDialog.js";
-import { useState, useSyncExternalStore } from "react";
+import { useState, useEffect, useSyncExternalStore } from "react";
+import {
+  useShellInputContext,
+  type ShellInputContextValue,
+} from "@/os/shell-input-context.js";
 import {
   X,
   Plus,
@@ -125,6 +129,36 @@ export function ServerProfilesDialog({
   );
   const [isDeleting, setIsDeleting] = useState(false);
 
+  const { registerModalMount } = useShellInputContext();
+
+  useEffect(() => {
+    if (open) {
+      return registerModalMount("server-profiles-dialog");
+    }
+  }, [open, registerModalMount]);
+
+  const isConfirmOpen = profileToDelete !== null || deleteAlertMessage !== null;
+  useEffect(() => {
+    if (isConfirmOpen) {
+      return registerModalMount("confirm-dialog");
+    }
+  }, [isConfirmOpen, registerModalMount]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (profileToDelete !== null || deleteAlertMessage !== null) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open, profileToDelete, deleteAlertMessage, onClose]);
   // Subscribe to profile list changes and cross-tab updates
   useSyncExternalStore(
     subscribeToProfileChanges,
@@ -188,7 +222,13 @@ export function ServerProfilesDialog({
       className="safe-area-inline safe-area-bottom fixed inset-0 z-50 flex items-center justify-center p-3"
       style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (
+          e.target === e.currentTarget &&
+          profileToDelete === null &&
+          deleteAlertMessage === null
+        ) {
+          onClose();
+        }
       }}
     >
       <div

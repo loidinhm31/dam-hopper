@@ -62,6 +62,8 @@ fn make_test_state(tmp: &TempDir, presence_registry: Option<Arc<ClientPresenceRe
         server: dam_hopper_server::config::ServerConfig::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_dir.join("dam-hopper.toml"),
     };
 
@@ -87,7 +89,6 @@ fn make_test_state(tmp: &TempDir, presence_registry: Option<Arc<ClientPresenceRe
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_test_state failed")
     .with_auth_service(Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0));

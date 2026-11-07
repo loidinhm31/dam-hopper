@@ -103,7 +103,12 @@ open class HostResourceSseClient(
 
             while (coroutineContext.isActive && !channel.isClosedForRead) {
                 registry?.assertCurrentOwner(connection, "HostResourceSseClient read line")
-                val line = channel.readUTF8Line(MAX_DATA_EVENT_BYTES) ?: break
+                val line = try {
+                    channel.readUTF8Line(MAX_DATA_EVENT_BYTES) ?: break
+                } catch (_: Exception) {
+                    // Line exceeds MAX_DATA_EVENT_BYTES: stop stream safely without allocating unbounded heap
+                    break
+                }
                 onByteProgress(line.length.toLong() + 1)
 
                 if (line.isEmpty()) {

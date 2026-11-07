@@ -392,7 +392,7 @@ try {
 
     $RequiredMembers = @(
         "dam-hopper-server.exe",
-        "dam-hopper.example.toml",
+        "config.example.toml",
         "LICENSE",
         "README.md"
     )
@@ -468,7 +468,7 @@ try {
     # 9. DryRun check
     $BinDir = Join-Path $canonicalInstallDir "bin"
     $DestExe = Join-Path $BinDir "dam-hopper-server.exe"
-    $DestConfig = Join-Path $canonicalInstallDir "dam-hopper.toml"
+    $DestConfig = Join-Path $canonicalInstallDir "config.toml"
 
     if ($DryRun) {
         Write-Host ""
@@ -543,12 +543,20 @@ try {
     # Copy notices & example configuration
     Copy-Item -LiteralPath (Join-Path $StageDir "LICENSE") -Destination (Join-Path $canonicalInstallDir "LICENSE") -Force
     Copy-Item -LiteralPath (Join-Path $StageDir "README.md") -Destination (Join-Path $canonicalInstallDir "README.md") -Force
-    Copy-Item -LiteralPath (Join-Path $StageDir "dam-hopper.example.toml") -Destination (Join-Path $canonicalInstallDir "dam-hopper.example.toml") -Force
+    Copy-Item -LiteralPath (Join-Path $StageDir "config.example.toml") -Destination (Join-Path $canonicalInstallDir "config.example.toml") -Force
 
-    # Preserve existing configuration or create from example
+    # Preserve existing configuration, migrate legacy dam-hopper.toml, or create from example
+    $legacyConfig = Join-Path $canonicalInstallDir "dam-hopper.toml"
     if (-not (Test-Path -LiteralPath $DestConfig)) {
-        Copy-Item -LiteralPath (Join-Path $StageDir "dam-hopper.example.toml") -Destination $DestConfig
-        Write-Host "Created initial configuration: $DestConfig"
+        if (Test-Path -LiteralPath $legacyConfig) {
+            Write-Host "Migrating existing configuration from $legacyConfig to $DestConfig"
+            Copy-Item -LiteralPath $legacyConfig -Destination "$legacyConfig.bak" -Force
+            Move-Item -LiteralPath $legacyConfig -Destination $DestConfig -Force
+            Write-Host "Migrated existing configuration to: $DestConfig (backup at $legacyConfig.bak)"
+        } else {
+            Copy-Item -LiteralPath (Join-Path $StageDir "config.example.toml") -Destination $DestConfig
+            Write-Host "Created initial configuration: $DestConfig"
+        }
     } else {
         Write-Host "Preserved existing configuration: $DestConfig"
     }

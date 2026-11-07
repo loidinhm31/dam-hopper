@@ -2,21 +2,25 @@ import { useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
 import { TerminalKeepAliveHost } from "@/components/organisms/TerminalKeepAliveHost.js";
 import { SplitLayout } from "@/components/organisms/SplitLayout.js";
-import { useCoarsePointer } from "@/hooks/use-coarse-pointer.js";
-import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
-import { useSettingsStore } from "@/stores/settings.js";
 import {
   collectPanes,
   useTerminalLayout,
 } from "@/hooks/use-terminal-layout.js";
 import { fitAllTerminals } from "@/lib/terminal-fit-scheduler.js";
-import { terminalRegistry } from "@/lib/terminal-registry.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
+import { terminalRegistry, type TerminalEntry } from "@/lib/terminal-registry.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import type { TerminalRef } from "@/api/ownership.js";
+import type { TerminalTarget } from "../../api/terminal-session-contract.js";
 
+export interface TerminalAttachGate {
+  readonly hubWindowId?: string;
+  resolveTerminal(sessionId: string): TerminalEntry | undefined;
+  renderPlaceholder(sessionId: string): ReactNode | null;
+  readonly revision: number;
+}
 export interface MountedSession {
+  mountKey?: string;
   sessionId: string;
   project: string;
   name?: string;
@@ -25,6 +29,8 @@ export interface MountedSession {
   worktreePath?: string;
   profileId?: string;
   terminalRef?: TerminalRef;
+  terminalTarget?: TerminalTarget;
+  attachPolicy?: "existing-only" | "create-explicit";
 }
 
 interface Props {
@@ -47,6 +53,7 @@ interface Props {
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
   onOpenSessionChanges?: (sessionId: string) => void;
+  attachGate?: TerminalAttachGate;
 }
 
 export function MultiTerminalDisplay({
@@ -69,23 +76,10 @@ export function MultiTerminalDisplay({
   renderBrowserContent,
   onCloseBrowser,
   onOpenSessionChanges,
+  attachGate,
 }: Props) {
   const layout = useTerminalLayout(layoutStorageKey);
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
-  const isCompactWorkspace = useCompactWorkspace();
-  const isCoarsePointer = useCoarsePointer();
-  const mobileCustomKeyboardEnabled = useSettingsStore(
-    (state) => state.mobileCustomKeyboardEnabled,
-  );
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
-  const mobileInputPolicyApplies =
-    !!activeSessionId &&
-    (isAndroidChromeNativeInputSuppressed ||
-      (isCompactWorkspace && isCoarsePointer));
-  const suppressTerminalNativeInput =
-    isAndroidChromeNativeInputSuppressed ||
-    (mobileInputPolicyApplies && mobileCustomKeyboardEnabled);
   const visibleSessionIds = useMemo(
     () =>
       new Set(
@@ -188,8 +182,8 @@ export function MultiTerminalDisplay({
           onSessionExit={onSessionExit}
           onNewTerminal={onNewTerminal}
           onTerminalReady={handleTerminalReady}
-          suppressAutoFocus={suppressTerminalNativeInput}
-          suppressNativeKeyboard={suppressTerminalNativeInput}
+          suppressAutoFocus={false}
+          suppressNativeKeyboard={false}
           webglEnabledSessionIds={visibleSessionIds}
         />
       )}
@@ -213,11 +207,12 @@ export function MultiTerminalDisplay({
           onRenameSession={onRenameSession}
           onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
           activeSessionId={activeSessionId}
-          suppressTerminalFocus={suppressTerminalNativeInput}
+          suppressTerminalFocus={false}
           browserOpen={browserOpen}
           renderBrowserContent={renderBrowserContent}
           onCloseBrowser={onCloseBrowser}
           onOpenSessionChanges={onOpenSessionChanges}
+          attachGate={attachGate}
         />
       </div>
     </div>

@@ -152,7 +152,7 @@ class RemoteConfigEditor(
         if (!authority.isCurrent(owner)) {
             false
         } else {
-            val workspace = ((global["defaults"] as? JsonObject)?.get("workspace") as? JsonPrimitive)
+            val workspace = ((global["workspace"] as? JsonObject)?.get("root") as? JsonPrimitive)
                 ?.takeIf { it.isString }?.content
             _defaults.update { it.copy(workspace = workspace, loaded = true, error = null) }
             true
@@ -371,16 +371,14 @@ class RemoteConfigEditor(
         ) { guard -> repository.patchProject(originalName!!, patch.toString(), guard) }
     }
 
-    /** Sets `{"defaults":{"workspace":path}}` on the target (replaces defaults, not the known registry). */
+    /** Sets `[workspace].root` on the target in config.toml (via POST /api/global-config/workspace). */
     suspend fun setGlobalDefaultWorkspace(path: String): SettingsOutcome<Unit> {
         val trimmed = path.trim()
         if (trimmed.isEmpty()) return SettingsOutcome.NotSubmitted("The path is blank.")
-        return mutateDefaults(trimmed)
+        return mutateWorkspaceRoot(trimmed)
     }
-    /** Clears defaults with exactly `{"defaults":{}}`. */
-    suspend fun clearGlobalDefaultWorkspace(): SettingsOutcome<Unit> = mutateDefaults(null)
 
-    private suspend fun mutateDefaults(path: String?): SettingsOutcome<Unit> {
+    private suspend fun mutateWorkspaceRoot(path: String): SettingsOutcome<Unit> {
         _defaults.update { it.copy(busy = true) }
         try {
             return guardedMutation(
@@ -390,7 +388,7 @@ class RemoteConfigEditor(
                         _defaults.update { it.copy(workspace = path, loaded = true, error = null) }
                     }
                 },
-            ) { guard -> repository.updateGlobalDefaults(path, guard) }
+            ) { guard -> repository.updateGlobalWorkspace(path, guard = guard) }
         } finally {
             _defaults.update { it.copy(busy = false) }
         }

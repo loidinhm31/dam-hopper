@@ -23,6 +23,8 @@ class ProjectTargetStore {
         val knownWorktreesByProject: Map<String, List<ProjectWorktree>> = emptyMap(),
         val workspaceRevisionByProfile: Map<String, Long> = emptyMap(),
         val activeWorkspaceConfigPath: Map<String, String> = emptyMap(),
+        val activeWorkspaceRoot: Map<String, String> = emptyMap(),
+        val activeWorkspaceEpoch: Map<String, Long> = emptyMap(),
     )
 
     private val _state = MutableStateFlow(State())
@@ -34,23 +36,49 @@ class ProjectTargetStore {
 
     fun getActiveWorkspaceConfigPath(profileId: ProfileId?): String? {
         return _state.value.activeWorkspaceConfigPath[profileId.orEmpty()]
+            ?: _state.value.activeWorkspaceRoot[profileId.orEmpty()]
+    }
+
+    fun getActiveWorkspaceRoot(profileId: ProfileId?): String? {
+        return _state.value.activeWorkspaceRoot[profileId.orEmpty()]
+    }
+
+    fun getActiveWorkspaceEpoch(profileId: ProfileId?): Long? {
+        return _state.value.activeWorkspaceEpoch[profileId.orEmpty()]
     }
 
     /**
      * Called when active workspace changes (via switch or server event).
-     * Bumps revision counter and updates active workspace config path.
+     * Bumps revision counter and updates active workspace root, epoch, and config path.
      */
-    fun invalidateWorkspace(profileId: ProfileId?, newConfigPath: String?) {
+    fun invalidateWorkspace(
+        profileId: ProfileId?,
+        newWorkspaceRoot: String? = null,
+        epoch: Long? = null,
+        configPath: String? = null,
+    ) {
         val profKey = profileId.orEmpty()
         _state.update { current ->
             val nextRev = (current.workspaceRevisionByProfile[profKey] ?: 0L) + 1L
+            val resolvedConfigPath = configPath
+                ?: (if (newWorkspaceRoot?.endsWith(".toml") == true) newWorkspaceRoot else current.activeWorkspaceConfigPath[profKey])
             current.copy(
                 workspaceRevisionByProfile = current.workspaceRevisionByProfile + (profKey to nextRev),
-                activeWorkspaceConfigPath = if (newConfigPath != null) {
-                    current.activeWorkspaceConfigPath + (profKey to newConfigPath)
+                activeWorkspaceRoot = if (newWorkspaceRoot != null) {
+                    current.activeWorkspaceRoot + (profKey to newWorkspaceRoot)
+                } else {
+                    current.activeWorkspaceRoot - profKey
+                },
+                activeWorkspaceEpoch = if (epoch != null) {
+                    current.activeWorkspaceEpoch + (profKey to epoch)
+                } else {
+                    current.activeWorkspaceEpoch - profKey
+                },
+                activeWorkspaceConfigPath = if (resolvedConfigPath != null) {
+                    current.activeWorkspaceConfigPath + (profKey to resolvedConfigPath)
                 } else {
                     current.activeWorkspaceConfigPath - profKey
-                }
+                },
             )
         }
     }
@@ -171,13 +199,16 @@ class ProjectTargetStore {
         val key = projectScopeKey(profileId, workspaceConfigPath, project)
         val selectedWt = current.activeTargetByProject[key]
         val revision = current.workspaceRevisionByProfile[profileId.orEmpty()] ?: 0L
+        val root = current.activeWorkspaceRoot[profileId.orEmpty()]
+        val epoch = current.activeWorkspaceEpoch[profileId.orEmpty()]
         val targetKey = ProjectTargetSnapshot.buildStructuredTargetKey(
-            profileId,
-            workspaceConfigPath,
-            project,
-            selectedWt,
+            profileId = profileId,
+            workspaceConfigPath = workspaceConfigPath,
+            project = project,
+            worktreePath = selectedWt,
+            workspaceRoot = root,
+            workspaceRevision = revision,
         )
-
         if (selectedWt == null) {
             return ProjectTargetSnapshot(
                 profileId = profileId,
@@ -191,6 +222,8 @@ class ProjectTargetStore {
                 isAvailable = true,
                 statusLabel = "Configured root",
                 worktree = null,
+                workspaceRoot = root,
+                workspaceEpoch = epoch,
             )
         }
 
@@ -218,6 +251,8 @@ class ProjectTargetStore {
             isAvailable = isAvailable,
             statusLabel = statusLabel,
             worktree = matchedWt,
+            workspaceRoot = root,
+            workspaceEpoch = epoch,
         )
     }
 

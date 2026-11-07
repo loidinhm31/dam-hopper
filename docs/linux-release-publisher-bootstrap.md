@@ -116,7 +116,7 @@ dam-hopper-install.ps1 (-Version vX.Y.Z | -Latest)
 `-AddToPath` changes only the invoking user's PATH and requires a new shell;
 `-VerifyAttestation` requires `gh`; and `-DryRun` performs metadata/archive
 verification without changing files, config, PATH, or processes. The installer
-preserves an existing `dam-hopper.toml`, does not start the server, and checks
+preserves an existing `config.toml`, does not start the server, and checks
 the release asset's size and SHA-256 before extraction. See
 [Windows Release Asset Packaging](./windows-release-packaging.md) for
 copyable commands, launch/config behavior, and focused installer tests.

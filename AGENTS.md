@@ -22,9 +22,10 @@ DamHopper is a monorepo consisting of a Rust server backend, a shared React 19 U
   - `agent_store/` — Symlink-based distribution of agent items across projects.
   - `tests/` — Rust integration tests using real temporary filesystems.
 - **`apps/web/`** — React 19 / Vite SPA entry application. Thin host rendering `@dam-hopper/ui`.
-- **`apps/native/`** — Tauri 2 desktop entry application sharing `@dam-hopper/ui`, backed by `src-tauri/` Rust layer.
+- **`apps/native/`** *(retired)* — Former Tauri 2 desktop host and local SSH port forwarding (removed in Phase 02).
 - **`packages/ui/`** (`@dam-hopper/ui`) — Shared React 19 UI package:
-  - `components/` — UI organism, molecule, and atom components (IdeShell, TerminalPanel, GitPage, FileTree, HostResources, PortsPanel, CognitoOverlay).
+  - `os/` — Full OS subsystem: `OsShell`, window management (`TileTree<T>`), 4-way `Dock`, `TopBar`, `WindowFrame`, `DesktopCanvas` with holographic reticle, `CommandPalette`, `WindowList`, `MonitorTray` with battery hardware telemetry, `NotificationCenter`, `LockScreenOverlay` with client-side walkaway PIN lock, `OsResourceHost`, 17 static application manifests (`app-registry.ts`), deep links, topics broker, and launch recipes engine.
+  - `components/` — UI organism, molecule, and atom components (`TerminalPanel`, `GitPage`, `FileTree`, `HostResources`, `PortsPanel`, `CognitoOverlay`). Legacy shell wrappers (`WorkspacePage`, `DashboardPage`, `IdeShell`, `TerminalWorkspaceShell`, `MobileWorkspaceShell`, `TopNav`, `AppLayout`) were retired in Phase 08.
   - `lib/` — Frontend utilities (terminal buffer, crypto, git helpers, suggestion controller).
   - `api/` — Frontend API client and `WsTransport` implementation.
   - `hooks/` & `stores/` — React hooks and Zustand stores with strict profile/generation scoping.
@@ -56,6 +57,10 @@ pnpm lint
 pnpm format
 
 # Type check
+pnpm --filter @dam-hopper/ui build
+pnpm --filter @dam-hopper/ui test:e2e:typecheck
+
+# Full check (build, lint, server tests)
 pnpm check
 ```
 
@@ -158,18 +163,22 @@ dam-hopper-server (Rust, Axum on Tokio; default port 4801)
 ├── persistence/  — SQLite persistence with bounded background writer
 └── api/          — Axum REST routes (/api/*) + WebSocket (/ws)
 
-Browser / Tauri Host (React 19 SPA)
-├── apps/web or apps/native host wrappers
+Web Browser Host (React 19 Vite SPA; apps/web)
+├── OsShell (authenticated root / and /os router entry)
+│   ├── OS Chrome: TopBar, 4-Way Dock, DesktopCanvas, CommandPalette, WindowList, MonitorTray, LockScreenOverlay
+│   ├── Window Manager: TileTree<T> tiling + float hybrid, multi-desktop, window frame, layout persistence
+│   ├── 17 Static App Adapters: Terminals, Editor, Browser, Git, Changes, Files, Search, ConflictResolver, SessionChanges, SystemMonitor, AgentHub, Recipes, PortsTunnels, AgentStore, Settings, ProjectInfo, WorkflowPlans
+│   ├── Root Keep-Alive Hosts: OsResourceHost, TerminalKeepAliveHost (parked xterms), MonacoKeepAliveHost, OsBrowserKeepAliveHost
+│   └── Input Arbiter & Topic Facade: focus arbitration, keyboard isolation, typed intent routing
 ├── WsTransport:
-│   ├── REST fetch (/api/*) for queries and commands
+│   ├── REST fetch (/api/*) for queries and commands (unchanged owner-bound server APIs)
 │   └── WebSocket (/ws) with strict {"kind": "..."} envelope (no legacy "type")
 ├── Multi-Server Profile Store (Zustand + localStorage)
 │   ├── QueryClient scoped by ['profile', profileId, generation, ...]
 │   └── Independent server targets, active projects, and settings
-├── xterm.js TerminalPanel (per-session input, stream replay, activity indicators)
+├── xterm.js TerminalPanel (per-session input, stream replay, activity indicators, fail-closed lifecycle)
 └── Cognito Privacy Overlay (ephemeral blur, input & keyboard isolation)
 ```
-
 ---
 
 ## 5. Key Design Decisions & Subsystem Invariants
@@ -204,12 +213,29 @@ Browser / Tauri Host (React 19 SPA)
 
 6. **Cognito Privacy Mode**:
    - Ephemeral privacy mode (cleared on reload) activated via configured keyboard shortcut.
-   - Overlays a frosted backdrop (`blur(20px) saturate(140%)`, rgba(13, 17, 23, 0.52)) with opaque fallback.
+   - Overlays a frosted backdrop (`blur(16px) saturate(180%)`, rgba(148, 163, 184, 0.12)) with opaque fallback.
    - Implements capture-phase input isolation to guarantee key events and clicks do not leak into live terminals or editors while active.
 
 7. **Zero-Knowledge Encrypted Uploads**:
    - Client and server negotiate via OPAQUE PAKE (`@serenity-kit/opaque`); passphrase is never transmitted.
    - Derives AES-256-GCM key; uploaded in chunks via `fs:put_*` WebSocket protocol.
+8. **Root OS Routing & Legacy Path Translation**:
+   - Root `/` and `/os` route directly to `OsShell` via `AuthenticatedOsRoute`.
+   - Legacy paths (`/workspace`, `/terminals`, `/ide`, `/git`, `/settings`, `/devices`, `/agent-store`) safely translate into qualified OS deep links via `translateLegacyRoute` in `packages/ui/src/os/deep-links.ts`.
+   - Permanently retired routes (`/usage`, `/ssh-forwarding`) intercept at the router boundary with zero network mounting via `RemovedRouteScreen`.
+
+9. **OS Resource Continuity & Parked Terminals (F2 Invariant)**:
+   - Transitions across window states (docking, tiling, floating, maximizing, restoring, minimizing, desktop switching) preserve underlying runtime DOM nodes and state.
+   - Terminals remain parked in the root `TerminalKeepAliveHost` inside `OsResourceHost` with zero-placement attach/replay/reset.
+   - Monaco editor instances park in `MonacoKeepAliveHost` preserving undo stacks and dirty buffer state.
+
+10. **Terminal Lifecycle & Fail-Closed Termination**:
+    - Terminals fail closed without ambient fallback; closing terminates root shell processes immediately.
+    - Termination uses a manager-lifetime UUID epoch (`X-DamHopper-PTY-Epoch`) and atomic `POST /api/terminal/{id}/terminate`.
+
+11. **Generic Terminal Input Policy**:
+    - All web mobile virtual keyboard modules and coarse-pointer layout hooks are retired.
+    - Terminal stdin suppression is generic via `syncTerminalInputSuppression` (`terminal-input-policy.ts`), synchronizing xterm's hidden textarea (`inputMode = "none"`, `tabIndex = -1`, `blur()`) and `disableStdin = true` across Cognito Privacy Mode, disconnected profiles, and modal focus trapping.
 
 ---
 

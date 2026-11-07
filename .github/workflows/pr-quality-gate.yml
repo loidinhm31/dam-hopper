@@ -48,8 +48,6 @@ jobs:
           pnpm --filter @dam-hopper/browser-extension build
       - name: Build web app
         run: pnpm --filter @dam-hopper/web build
-      - name: Build native frontend
-        run: pnpm --filter @dam-hopper/native build
 
   js_tests:
     name: JS tests - ${{ matrix.suite }}
@@ -65,8 +63,6 @@ jobs:
             command: pnpm --filter @dam-hopper/browser-bridge test
           - suite: ui
             command: pnpm --filter @dam-hopper/ui test
-          - suite: native
-            command: pnpm --filter @dam-hopper/native test
           - suite: create-admin
             command: node --test tests/create-admin.test.mjs
     steps:
@@ -80,9 +76,6 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Build native frontend for native smoke-backed tests
-        if: matrix.suite == 'native'
-        run: pnpm --filter @dam-hopper/native build
       - name: Run ${{ matrix.suite }} tests
         run: ${{ matrix.command }}
 
@@ -213,95 +206,6 @@ jobs:
       - name: Check all server targets
         run: cargo check --manifest-path server/Cargo.toml --all-targets
 
-  native_linux:
-    name: Native client - Linux
-    runs-on: ubuntu-22.04
-    timeout-minutes: 50
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: apps/native/src-tauri
-      - name: Install native Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Build browser bridge prerequisite
-        run: pnpm --filter @dam-hopper/browser-bridge build
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path apps/native/src-tauri/Cargo.toml -- --check
-      - name: Clippy
-        # Keep Clippy visible, but do not let inherited warning debt prevent the
-        # platform tests and E2E gates from executing. Compilation errors still fail.
-        run: cargo clippy --manifest-path apps/native/src-tauri/Cargo.toml --all-targets
-      - name: Native Rust tests
-        run: cargo test --manifest-path apps/native/src-tauri/Cargo.toml
-      - name: Native frontend build
-        run: pnpm --filter @dam-hopper/native build
-      - name: Native smoke build
-        run: pnpm --filter @dam-hopper/native smoke:ssh-forward
-      - name: Tauri compile without bundle
-        run: pnpm --filter @dam-hopper/native exec tauri build --no-bundle
-
-  native_windows:
-    name: Native client - Windows SSH gate
-    runs-on: windows-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: apps/native/src-tauri
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Build native frontend
-        run: pnpm --filter @dam-hopper/native build
-      - name: Build browser bridge prerequisite
-        run: pnpm --filter @dam-hopper/browser-bridge build
-      - name: Clippy
-        # Windows currently has inherited Clippy warning debt. Keep diagnostics
-        # in CI while allowing the stronger Rust tests and SSH E2E gate to run.
-        run: cargo clippy --manifest-path apps/native/src-tauri/Cargo.toml --all-targets
-      - name: Native Rust tests
-        run: cargo test --manifest-path apps/native/src-tauri/Cargo.toml
-      - name: SSH forwarding E2E
-        run: pnpm --filter @dam-hopper/native test:e2e:ssh-forward
-      - name: SSH forwarding smoke build
-        run: pnpm --filter @dam-hopper/native smoke:ssh-forward
-      - name: Tauri compile without bundle
-        run: pnpm --filter @dam-hopper/native exec tauri build --no-bundle
-
   release_contract_linux:
     name: Release contract - Linux
     runs-on: ubuntu-22.04
@@ -353,8 +257,6 @@ jobs:
       - application_e2e
       - server_linux
       - server_windows
-      - native_linux
-      - native_windows
       - release_contract_linux
       - release_contract_windows
     runs-on: ubuntu-22.04
@@ -367,8 +269,6 @@ jobs:
           APPLICATION_E2E: ${{ needs.application_e2e.result }}
           SERVER_LINUX: ${{ needs.server_linux.result }}
           SERVER_WINDOWS: ${{ needs.server_windows.result }}
-          NATIVE_LINUX: ${{ needs.native_linux.result }}
-          NATIVE_WINDOWS: ${{ needs.native_windows.result }}
           RELEASE_LINUX: ${{ needs.release_contract_linux.result }}
           RELEASE_WINDOWS: ${{ needs.release_contract_windows.result }}
         run: |
@@ -379,8 +279,6 @@ jobs:
             "$APPLICATION_E2E" \
             "$SERVER_LINUX" \
             "$SERVER_WINDOWS" \
-            "$NATIVE_LINUX" \
-            "$NATIVE_WINDOWS" \
             "$RELEASE_LINUX" \
             "$RELEASE_WINDOWS"; do
             if [ "$result" != "success" ]; then

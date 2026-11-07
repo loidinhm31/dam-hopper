@@ -1,5 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
@@ -34,6 +35,7 @@ use super::error::ApiError;
 pub struct ProjectsBody {
     pub projects: Option<Vec<String>>,
     pub targets: Option<Vec<ProjectTargetRef>>,
+    pub target: Option<crate::workspace_target::FilesystemTargetRef>,
 }
 
 #[derive(Serialize)]
@@ -128,13 +130,17 @@ pub async fn fetch_projects(
     State(state): State<AppState>,
     Json(body): Json<ProjectsBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if body.target.as_ref().map(|t| t.is_workspace()).unwrap_or(false) {
+        return Err(ApiError::custom(
+            StatusCode::NOT_FOUND,
+            "UNKNOWN_PROJECT",
+            "Git operations are not supported for workspace target",
+        ));
+    }
     let (project_list, failures) =
         collect_project_list(&state, body.projects.as_deref(), body.targets.as_deref()).await?;
-    let ssh_cred = state.ssh_creds.read().await.clone();
 
-    // BulkGitService is intentionally per-request: each request manages its own
-    // concurrency (Semaphore(4)). Two concurrent fetch requests each run 4 ops = 8 total,
-    // which is acceptable for a local dev tool targeting a few dozen projects.
+    let ssh_cred = state.ssh_creds.read().await.clone();
     let bulk = BulkGitService::new(4).with_creds(ssh_cred);
     forward_progress_events(bulk.subscribe(), state.event_sink.clone());
 
@@ -159,14 +165,19 @@ pub async fn pull_projects(
     State(state): State<AppState>,
     Json(body): Json<ProjectsBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if body.target.as_ref().map(|t| t.is_workspace()).unwrap_or(false) {
+        return Err(ApiError::custom(
+            StatusCode::NOT_FOUND,
+            "UNKNOWN_PROJECT",
+            "Git operations are not supported for workspace target",
+        ));
+    }
     let (project_list, failures) =
         collect_project_list(&state, body.projects.as_deref(), body.targets.as_deref()).await?;
-    let ssh_cred = state.ssh_creds.read().await.clone();
 
-    // Intentionally per-request — see fetch_projects for rationale.
+    let ssh_cred = state.ssh_creds.read().await.clone();
     let bulk = BulkGitService::new(4).with_creds(ssh_cred);
     forward_progress_events(bulk.subscribe(), state.event_sink.clone());
-
     let refs: Vec<ProjectRef<'_>> = project_list
         .iter()
         .map(|(n, p, _)| ProjectRef {
@@ -187,17 +198,25 @@ pub async fn pull_projects(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PushBody {
-    pub project: String,
+    pub project: Option<String>,
     pub worktree_path: Option<String>,
     pub root: Option<String>,
+    pub target: Option<crate::workspace_target::FilesystemTargetRef>,
 }
 
 pub async fn push_project(
     State(state): State<AppState>,
     Json(body): Json<PushBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let project_path = resolve_target_path(&state, &body.project, body.worktree_path).await?;
-    let ssh_cred = state.ssh_creds.read().await.clone();
+    if body.target.as_ref().map(|t| t.is_workspace()).unwrap_or(false) {
+        return Err(ApiError::custom(
+            StatusCode::NOT_FOUND,
+            "UNKNOWN_PROJECT",
+            "Git operations are not supported for workspace target",
+        ));
+    }
+    let project_name = body.project.as_deref().unwrap_or("");
+    let project_path = resolve_target_path(&state, project_name, body.worktree_path).await?;
     let root = resolve_git_request_root(&project_path, body.root.as_deref())
         .map_err(ApiError::from_app)?;
     let progress = Some(create_progress_channel());
@@ -213,7 +232,8 @@ pub async fn push_project(
         });
     }
 
-    let result = crate::git::push(&root.root_path, &body.project, &progress, ssh_cred).await;
+    let ssh_cred = state.ssh_creds.read().await.clone();
+    let result = crate::git::push(&root.root_path, project_name, &progress, ssh_cred).await;
     Ok(Json(result))
 }
 
@@ -301,6 +321,17 @@ pub async fn get_worktrees(
     State(state): State<AppState>,
     Path(project): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let configured = {
+        let cfg = state.config.read().await;
+        cfg.projects.iter().any(|p| p.name == project)
+    };
+    if !configured {
+        return Err(ApiError::custom(
+            StatusCode::NOT_FOUND,
+            "UNKNOWN_PROJECT",
+            format!("Project not found: {project}"),
+        ));
+    }
     let worktrees = state
         .refresh_project_worktrees(&project)
         .await
@@ -956,6 +987,17 @@ async fn resolve_target_path(
     project_name: &str,
     worktree_path: Option<String>,
 ) -> Result<PathBuf, ApiError> {
+    let configured = {
+        let cfg = state.config.read().await;
+        cfg.projects.iter().any(|p| p.name == project_name)
+    };
+    if !configured {
+        return Err(ApiError::custom(
+            StatusCode::NOT_FOUND,
+            "UNKNOWN_PROJECT",
+            format!("Project not found: {project_name}"),
+        ));
+    }
     state
         .resolve_project_target(&ProjectTargetRef {
             project: project_name.to_string(),

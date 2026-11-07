@@ -7,8 +7,10 @@ import {
   invalidateGitHistoryDetails,
   normalizeGitMessageQuery,
   resolveGitPushTarget,
-  usageSessionPollInterval,
+  terminalInventoryQueryOptions,
 } from "./queries.js";
+import { ConnectionOwnerError } from "./ownership.js";
+import { profileQueryKey } from "./query-client.js";
 import {
   __setConnectionSnapshotForTests,
   resetConnections,
@@ -34,16 +36,6 @@ describe("resolveGitPushTarget", () => {
   });
 });
 
-describe("usageSessionPollInterval", () => {
-  it("polls visible documents and stops when hidden or server-rendered", () => {
-    expect(usageSessionPollInterval()).toBe(false);
-    vi.stubGlobal("document", { visibilityState: "visible" });
-    expect(usageSessionPollInterval()).toBe(15_000);
-    vi.stubGlobal("document", { visibilityState: "hidden" });
-    expect(usageSessionPollInterval()).toBe(false);
-    vi.unstubAllGlobals();
-  });
-});
 
 describe("normalizeGitMessageQuery", () => {
   it("returns undefined for null, undefined, empty, or whitespace-only input", () => {
@@ -334,5 +326,78 @@ describe("consumer-visible cache isolation and search query variants", () => {
 
     expect(qc.getQueryCache().find({ queryKey: keyMain })?.isStale()).toBe(true);
     expect(qc.getQueryCache().find({ queryKey: keyFeature })?.isStale()).toBe(true);
+  });
+});
+describe("terminalInventoryQueryOptions", () => {
+  it("builds profileQueryKey for qualified owner and ambient key for null owner", () => {
+    const owner = { profileId: "prof-1", generation: 1 };
+    const options = terminalInventoryQueryOptions(owner);
+    expect(options.queryKey).toEqual(profileQueryKey(owner, "terminal-sessions"));
+    expect(options.staleTime).toBe(Infinity);
+
+    const ambientOptions = terminalInventoryQueryOptions(null);
+    expect(ambientOptions.queryKey).toEqual(["terminal-sessions"]);
+    expect(ambientOptions.staleTime).toBe(Infinity);
+  });
+
+  it("discards stale generation and throws ConnectionOwnerError when owner is no longer current", async () => {
+    const owner = { profileId: "prof-1", generation: 1 };
+    const mockTransport: Transport = {
+      invoke: vi.fn().mockResolvedValue({
+        sessions: [],
+        termination: { version: 1, serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483" },
+      }),
+      onEvent: vi.fn(),
+      offEvent: vi.fn(),
+      destroy: vi.fn(),
+    };
+
+    // Connection is at generation 2, but query was initiated with owner generation 1
+    __setConnectionSnapshotForTests("prof-1", {
+      owner: { profileId: "prof-1", generation: 2 },
+      status: "connected",
+      transport: mockTransport,
+    });
+
+    const options = terminalInventoryQueryOptions(owner);
+    await expect(options.queryFn()).rejects.toThrow(ConnectionOwnerError);
+  });
+
+  it("attaches owner and caches complete observation on success", async () => {
+    const owner = { profileId: "prof-1", generation: 1 };
+    const mockPayload = {
+      sessions: [
+        {
+          id: "term-1",
+          command: "bash",
+          cwd: "/home",
+          type: "terminal",
+          startedAt: 100,
+          alive: true,
+          incarnation: 10,
+          incarnationExact: "10",
+          terminationState: "live",
+        },
+      ],
+      termination: { version: 1, serverEpoch: "e7b0c36b-67df-4f0e-b7d5-866468453483" },
+    };
+    const mockTransport: Transport = {
+      invoke: vi.fn().mockResolvedValue(mockPayload),
+      onEvent: vi.fn(),
+      offEvent: vi.fn(),
+      destroy: vi.fn(),
+    };
+
+    __setConnectionSnapshotForTests("prof-1", {
+      owner,
+      status: "connected",
+      transport: mockTransport,
+    });
+
+    const options = terminalInventoryQueryOptions(owner);
+    const result = await options.queryFn();
+    expect(result.owner).toEqual(owner);
+    expect(result.termination).toEqual(mockPayload.termination);
+    expect(result.sessions).toEqual(mockPayload.sessions);
   });
 });

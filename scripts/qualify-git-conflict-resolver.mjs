@@ -80,10 +80,11 @@ git("add .", nestedDir);
 git('commit -m "nested initial"', nestedDir);
 
 // Server TOML configuration
-const configFile = join(tempBase, "dam-hopper.toml");
+const configFile = join(tempBase, "config.toml");
 const sessionDb = join(tempBase, "session.db");
 const tomlContent = `[workspace]
 name = "ConflictQualification"
+root = "${tempBase}"
 
 [[projects]]
 name = "primary"

@@ -25,16 +25,17 @@ const VAR_LIB_PATH: &str = "/var/lib";
 const API_STATE_PATH: &str = "/var/lib/dam-hopper";
 const API_DOT_CONFIG_PATH: &str = "/var/lib/dam-hopper/.config";
 const API_CONFIG_PATH: &str = "/var/lib/dam-hopper/.config/dam-hopper";
-const CANONICAL_CONFIG_PATH: &str = "/var/lib/dam-hopper/dam-hopper.toml";
-const CONFIG_TEMP_PATH: &str = "/var/lib/dam-hopper/.dam-hopper.toml.provisioning";
+const CANONICAL_CONFIG_PATH: &str = "/var/lib/dam-hopper/config.toml";
+const CONFIG_TEMP_PATH: &str = "/var/lib/dam-hopper/.config.toml.provisioning";
 const AUDIT_PATH: &str = "/var/lib/dam-hopper/idle-suspend-audit.jsonl";
 
 const ETC_PATH: &str = "/etc";
 const API_ETC_PATH: &str = "/etc/dam-hopper";
+const LEGACY_CONFIG_NAME: &str = "dam-hopper.toml";
 const LEGACY_CONFIG_PATH: &str = "/etc/dam-hopper/dam-hopper.toml";
 
-const CONFIG_NAME: &str = "dam-hopper.toml";
-const CONFIG_TEMP_NAME: &str = ".dam-hopper.toml.provisioning";
+const CONFIG_NAME: &str = "config.toml";
+const CONFIG_TEMP_NAME: &str = ".config.toml.provisioning";
 const AUDIT_NAME: &str = "idle-suspend-audit.jsonl";
 
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
@@ -731,7 +732,7 @@ fn inspect_legacy<S: RuntimeSyscalls>(
         .map_err(|e| io_error(API_ETC_PATH, "open directory", e))?;
     let api_etc_guard = DirFd(api_etc_fd);
 
-    let legacy_config_stat = match sys.stat_at(api_etc_guard.0, CONFIG_NAME) {
+    let legacy_config_stat = match sys.stat_at(api_etc_guard.0, LEGACY_CONFIG_NAME) {
         Ok(stat) => stat,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(LegacyStatus::Absent),
         Err(e) => return Err(io_error(LEGACY_CONFIG_PATH, "inspect configuration file", e)),
@@ -748,7 +749,7 @@ fn inspect_legacy<S: RuntimeSyscalls>(
         });
     }
     let file_fd = sys
-        .open_readable_file_at(api_etc_guard.0, CONFIG_NAME)
+        .open_readable_file_at(api_etc_guard.0, LEGACY_CONFIG_NAME)
         .map_err(|e| io_error(LEGACY_CONFIG_PATH, "open configuration file", e))?;
     let file_guard = DirFd(file_fd);
     let open_stat = sys

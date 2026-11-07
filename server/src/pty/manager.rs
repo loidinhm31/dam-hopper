@@ -148,6 +148,9 @@ pub(crate) struct RespawnTestHook {
     entered: Notify,
     release: Notify,
     pause_next: AtomicBool,
+    validation_entered: Notify,
+    validation_release: Notify,
+    pause_validation_next: AtomicBool,
 }
 
 #[cfg(test)]
@@ -157,6 +160,9 @@ impl RespawnTestHook {
             entered: Notify::new(),
             release: Notify::new(),
             pause_next: AtomicBool::new(false),
+            validation_entered: Notify::new(),
+            validation_release: Notify::new(),
+            pause_validation_next: AtomicBool::new(false),
         }
     }
 
@@ -176,6 +182,25 @@ impl RespawnTestHook {
         if self.pause_next.swap(false, Ordering::AcqRel) {
             self.entered.notify_one();
             self.release.notified().await;
+        }
+    }
+
+    pub(crate) fn pause_validation_next(&self) {
+        self.pause_validation_next.store(true, Ordering::Release);
+    }
+
+    pub(crate) async fn wait_until_validation_paused(&self) {
+        self.validation_entered.notified().await;
+    }
+
+    pub(crate) fn release_validation(&self) {
+        self.validation_release.notify_one();
+    }
+
+    async fn wait_if_validation_paused(&self) {
+        if self.pause_validation_next.swap(false, Ordering::AcqRel) {
+            self.validation_entered.notify_one();
+            self.validation_release.notified().await;
         }
     }
 }
@@ -559,6 +584,62 @@ pub struct SessionDetail {
     pub buffer_bytes: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuardedTerminationOutcome {
+    TerminationRequested,
+    RestartCancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuardedTerminationError {
+    EpochMismatch,
+    ManagerClosing,
+    ReplacementPending,
+    NotFound,
+    IncarnationMismatch,
+    AlreadyRequested,
+    NotLive,
+    SignalFailed(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TerminalInventoryState {
+    Live,
+    TerminationRequested,
+    RestartPending,
+    RestartCancelled,
+    Exited,
+    Unavailable,
+}
+
+impl TerminalInventoryState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::TerminationRequested => "terminationRequested",
+            Self::RestartPending => "restartPending",
+            Self::RestartCancelled => "restartCancelled",
+            Self::Exited => "exited",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TerminalInventorySnapshotRow {
+    pub meta: SessionMeta,
+    pub incarnation: u64,
+    pub termination_state: TerminalInventoryState,
+    pub buffer_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TerminalInventorySnapshot {
+    pub server_epoch: uuid::Uuid,
+    pub rows: Vec<TerminalInventorySnapshotRow>,
+}
+
 // ---------------------------------------------------------------------------
 // PtySessionManager
 // ---------------------------------------------------------------------------
@@ -609,6 +690,7 @@ pub struct PtySessionManager {
     active_reader_count: Arc<AtomicUsize>,
     fleet_watcher: crate::pty::fleet_state::PtyFleetWatcher,
     activity_watcher: PtyActivityWatcher,
+    termination_epoch: uuid::Uuid,
     #[cfg(test)]
     respawn_test_hook: Arc<RespawnTestHook>,
     #[cfg(test)]
@@ -653,6 +735,9 @@ struct Inner {
     last_input_at: Option<std::time::Instant>,
     /// Broadcast watch channel for private coalescing activity invalidation.
     activity_watch_tx: tokio::sync::watch::Sender<u64>,
+    /// Sessions that received a successful guarded termination signal while live.
+    /// Reader threads check this exact identity to suppress auto-restart and clear the marker on exit.
+    termination_requested: HashSet<(String, u64)>,
 }
 
 struct FailedReplacement {
@@ -703,7 +788,20 @@ impl Inner {
             input_revision: 0,
             last_input_at: None,
             activity_watch_tx,
+            termination_requested: HashSet::new(),
         }
+    }
+
+    pub fn is_termination_requested(&self, id: &str, incarnation: u64) -> bool {
+        self.termination_requested.contains(&(id.to_string(), incarnation))
+    }
+
+    pub fn mark_termination_requested(&mut self, id: String, incarnation: u64) {
+        self.termination_requested.insert((id, incarnation));
+    }
+
+    pub fn remove_termination_requested(&mut self, id: &str, incarnation: u64) -> bool {
+        self.termination_requested.remove(&(id.to_string(), incarnation))
     }
 
     #[cfg(test)]
@@ -834,6 +932,17 @@ impl Inner {
                 .unwrap_or(false)
     }
 
+    fn respawn_admission_is_current(&self, id: &str, incarnation: u64) -> bool {
+        self.respawn_source_is_current(id, incarnation)
+            && self
+                .dead
+                .get(id)
+                .map(|session| session.will_restart && !session.restart_cancelled)
+                .unwrap_or(false)
+            && self.fleet.is_restart_pending(id, incarnation)
+            && !self.pending_replacements.contains_key(id)
+    }
+
     fn respawn_replacement_is_current(
         &self,
         id: &str,
@@ -842,6 +951,7 @@ impl Inner {
     ) -> bool {
         self.respawn_source_is_current(id, source_incarnation)
             && self.replacement_is_current(id, replacement_incarnation)
+            && self.fleet.is_creating(id, replacement_incarnation)
     }
 
     fn prune_killed_markers(&mut self) {
@@ -854,6 +964,9 @@ impl Inner {
             .cloned()
             .collect::<HashSet<_>>();
         self.killed.retain(|id| known_ids.contains(id));
+        self.termination_requested.retain(|(id, inc)| {
+            self.live.get(id).is_some_and(|s| s.incarnation == *inc)
+        });
     }
 
     fn advance_past(&mut self, persisted_max: Option<u64>) {
@@ -1072,6 +1185,7 @@ impl PtySessionManager {
             active_reader_count: Arc::new(AtomicUsize::new(0)),
             fleet_watcher,
             activity_watcher: PtyActivityWatcher::new(activity_watch_rx),
+            termination_epoch: uuid::Uuid::new_v4(),
             #[cfg(test)]
             respawn_test_hook: Arc::new(RespawnTestHook::new()),
             #[cfg(test)]
@@ -2438,6 +2552,177 @@ impl PtySessionManager {
         Ok(updated)
     }
 
+    pub fn termination_epoch(&self) -> uuid::Uuid {
+        self.termination_epoch
+    }
+
+    pub fn server_epoch(&self) -> uuid::Uuid {
+        self.termination_epoch
+    }
+
+    pub fn termination_inventory_snapshot(
+        &self,
+        include_buffer_bytes: bool,
+    ) -> TerminalInventorySnapshot {
+        let inner = self.inner.lock().unwrap();
+        let is_closing = self.lifecycle_gate.is_disposing()
+            || inner.closing
+            || inner.fleet.is_closing()
+            || inner.fleet.is_disposing()
+            || inner.fleet.is_handoff_active();
+
+        let mut rows = Vec::with_capacity(inner.live.len() + inner.dead.len());
+
+        for s in inner.live.values() {
+            let buffer_bytes = if include_buffer_bytes {
+                Some(s.buffer.lock().unwrap().len())
+            } else {
+                None
+            };
+            let state = if is_closing
+                || s.meta.target_unavailable
+                || inner.pending_replacements.contains_key(&s.meta.id)
+            {
+                TerminalInventoryState::Unavailable
+            } else if inner.is_termination_requested(&s.meta.id, s.incarnation) {
+                TerminalInventoryState::TerminationRequested
+            } else {
+                TerminalInventoryState::Live
+            };
+
+            rows.push(TerminalInventorySnapshotRow {
+                meta: s.meta.clone(),
+                incarnation: s.incarnation,
+                termination_state: state,
+                buffer_bytes,
+            });
+        }
+
+        for d in inner.dead.values() {
+            let buffer_bytes = if include_buffer_bytes {
+                Some(0)
+            } else {
+                None
+            };
+            let state = if is_closing
+                || d.meta.target_unavailable
+                || inner.pending_replacements.contains_key(&d.meta.id)
+            {
+                TerminalInventoryState::Unavailable
+            } else if d.restart_cancelled {
+                TerminalInventoryState::RestartCancelled
+            } else if d.will_restart && inner.fleet.is_restart_pending(&d.meta.id, d.incarnation) {
+                TerminalInventoryState::RestartPending
+            } else if d.will_restart {
+                TerminalInventoryState::Unavailable
+            } else {
+                TerminalInventoryState::Exited
+            };
+
+            rows.push(TerminalInventorySnapshotRow {
+                meta: d.meta.clone(),
+                incarnation: d.incarnation,
+                termination_state: state,
+                buffer_bytes,
+            });
+        }
+
+        TerminalInventorySnapshot {
+            server_epoch: self.termination_epoch,
+            rows,
+        }
+    }
+
+    pub fn request_termination(
+        &self,
+        id: &str,
+        expected_epoch: &uuid::Uuid,
+        expected_incarnation: u64,
+    ) -> Result<GuardedTerminationOutcome, GuardedTerminationError> {
+        let _persistence_guard = self.persistence_gate.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
+
+        // 1. Epoch check
+        if expected_epoch != &self.termination_epoch {
+            return Err(GuardedTerminationError::EpochMismatch);
+        }
+
+        // 2. Manager closing check
+        if self.lifecycle_gate.is_disposing()
+            || inner.closing
+            || inner.fleet.is_closing()
+            || inner.fleet.is_disposing()
+            || inner.fleet.is_handoff_active()
+        {
+            return Err(GuardedTerminationError::ManagerClosing);
+        }
+
+        // 3. Admitted pending replacement check: refuse before mutation
+        if inner.pending_replacements.contains_key(id) {
+            return Err(GuardedTerminationError::ReplacementPending);
+        }
+
+        // 4. Absent check across live & dead
+        let has_live = inner.live.contains_key(id);
+        let has_dead = inner.dead.contains_key(id);
+        if !has_live && !has_dead {
+            return Err(GuardedTerminationError::NotFound);
+        }
+
+        // 5. Incarnation mismatch
+        let current_incarnation = if let Some(session) = inner.live.get(id) {
+            session.incarnation
+        } else if let Some(session) = inner.dead.get(id) {
+            session.incarnation
+        } else {
+            return Err(GuardedTerminationError::NotFound);
+        };
+        if expected_incarnation != current_incarnation {
+            return Err(GuardedTerminationError::IncarnationMismatch);
+        }
+
+        // 6. Already requested / cancelled
+        if inner.is_termination_requested(id, expected_incarnation)
+            || inner.dead.get(id).is_some_and(|d| d.restart_cancelled)
+        {
+            return Err(GuardedTerminationError::AlreadyRequested);
+        }
+
+        // 7. Exact LiveSession signal or exact dead restart admission predicate
+        if let Some(session) = inner.live.get(id) {
+            if session.incarnation == expected_incarnation {
+                session
+                    .request_termination()
+                    .map_err(GuardedTerminationError::SignalFailed)?;
+                inner.mark_termination_requested(id.to_string(), expected_incarnation);
+                return Ok(GuardedTerminationOutcome::TerminationRequested);
+            }
+        }
+
+        let restart_pending = inner.fleet.is_restart_pending(id, expected_incarnation)
+            && !inner.pending_replacements.contains_key(id);
+        if let Some(session) = inner.dead.get_mut(id) {
+            if session.incarnation == expected_incarnation {
+                if session.will_restart && restart_pending {
+                    session.will_restart = false;
+                    session.restart_in_ms = None;
+                    session.restart_cancelled = true;
+                    inner.fleet.cancel_restart_pending(id, expected_incarnation);
+                    inner.publish_activity_invalidation();
+                    drop(inner);
+                    drop(_persistence_guard);
+                    self.sink.send_terminal_changed();
+                    return Ok(GuardedTerminationOutcome::RestartCancelled);
+                } else {
+                    return Err(GuardedTerminationError::NotLive);
+                }
+            }
+        }
+
+        // 8. Not live / not pending restart
+        Err(GuardedTerminationError::NotLive)
+    }
+
     pub fn is_alive(&self, id: &str) -> bool {
         self.inner.lock().unwrap().live.contains_key(id)
     }
@@ -2792,6 +3077,7 @@ impl PtySessionManager {
             inner.dead.clear();
             inner.failed_replacements.clear();
             inner.pending_replacements.clear();
+            inner.termination_requested.clear();
             (sessions, live_session_ids)
         };
         for session in &sessions {
@@ -3217,8 +3503,22 @@ fn reader_thread(
 
     // Collect real exit code from child. By the time the PTY reader sees EOF the
     // child has exited (slave-side fd closed), so wait() returns immediately.
-    // Falls back to 0 on error (treated as clean exit).
-    let exit_code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(0);
+    // For guarded-requested sessions, failed wait stays unresolved live/requested.
+    // Ordinary sessions fall back to 0 on error (treated as clean exit).
+    let wait_res = child.wait();
+    let is_guarded_requested = inner
+        .lock()
+        .unwrap()
+        .is_termination_requested(&session_id, incarnation);
+    if wait_res.is_err() && is_guarded_requested {
+        warn!(
+            id = %session_id,
+            incarnation,
+            "Child process wait failed for guarded termination session; remaining unresolved live/requested"
+        );
+        return;
+    }
+    let exit_code = wait_res.map(|s| s.exit_code() as i32).unwrap_or(0);
     info!(id = %session_id, exit_code, "PTY session exited");
 
     let (
@@ -3231,8 +3531,10 @@ fn reader_thread(
         persist_exit,
     ) = {
         let mut inner_guard = inner.lock().unwrap();
-        let was_killed =
-            inner_guard.killed.contains(&session_id) || inner_guard.generation != generation;
+        let was_requested = inner_guard.is_termination_requested(&session_id, incarnation);
+        let was_killed = inner_guard.killed.contains(&session_id)
+            || inner_guard.generation != generation
+            || was_requested;
 
         let owns_live_session = inner_guard
             .live
@@ -3244,6 +3546,9 @@ fn reader_thread(
             .unwrap_or(false);
 
         if owns_live_session {
+            // Keep termination_requested marker for (session_id, incarnation)
+            // so that duplicate termination requests continue to return ALREADY_REQUESTED
+            // rather than NOT_LIVE for this exact tombstone.
             let session = inner_guard
                 .live
                 .remove(&session_id)
@@ -3333,6 +3638,9 @@ fn reader_thread(
                 true,
             )
         } else if inner_guard.live.contains_key(&session_id) {
+            if was_requested {
+                inner_guard.remove_termination_requested(&session_id, incarnation);
+            }
             consume_suppressed_exit(&mut inner_guard, &session_id);
             // A newer PTY with the same public session id was already created.
             // This reader belongs to the old PTY; do not remove or emit exit for
@@ -3566,9 +3874,8 @@ async fn supervisor_loop(
         // Check if session was killed during backoff.
         {
             let mut inner_guard = inner.lock().unwrap();
-            if !inner_guard.respawn_source_is_current(&session_id, cmd.incarnation)
+            if !inner_guard.respawn_admission_is_current(&session_id, cmd.incarnation)
                 || inner_guard.generation != cmd.generation
-                || inner_guard.killed.contains(&session_id)
             {
                 inner_guard
                     .fleet
@@ -3593,6 +3900,8 @@ async fn supervisor_loop(
         let workflow_recorder = workflow_recorder_cell.read().unwrap().clone();
         let source_incarnation = cmd.incarnation;
         let mut target_unavailable = false;
+        #[cfg(test)]
+        respawn_test_hook.wait_if_validation_paused().await;
         let respawn_result = if let Some(context) = target_context {
             let _lifecycle_guard = context.lifecycle_guard.write().await;
             let validation = if let Some(worktree_path) = cmd.respawn_opts.worktree_path.clone() {
@@ -3677,14 +3986,6 @@ async fn supervisor_loop(
         };
         if let Err(e) = respawn_result {
             warn!(id = %session_id, error = %e, "Respawn failed");
-            let recorder = workflow_recorder.clone();
-            recorder.record(crate::workflow::WorkflowObservation::TerminalFinalExit {
-                session_id: session_id.clone(),
-                incarnation: source_incarnation,
-                exit_code: Some(prev_exit_code),
-                restart_count,
-                observed_at: crate::workflow::now_ms(),
-            });
             let failure_state = {
                 let _persistence_guard = persistence_gate.lock().unwrap();
                 finish_respawn_source_failure(
@@ -3696,28 +3997,38 @@ async fn supervisor_loop(
                     target_unavailable,
                 )
             };
-            if target_unavailable && failure_state.is_some() {
-                if let (Some(project), Some(worktree_path)) =
-                    (project.as_deref(), target_path.as_deref())
-                {
-                    let event_sink: Arc<dyn EventSink> = Arc::new(IncarnationEventSink::new(
-                        Arc::clone(&sink),
-                        Arc::clone(&inner),
-                        session_id.clone(),
-                        source_incarnation,
-                    ));
-                    event_sink.broadcast(
-                        "terminal:target-unavailable",
-                        serde_json::json!({
-                            "project": project,
-                            "worktreePath": worktree_path,
-                            "sessionId": session_id,
-                            "incarnation": source_incarnation,
-                            "targetUnavailable": true,
-                            "willRestart": false,
-                        }),
-                    );
-                    event_sink.send_terminal_changed();
+            if let Some((_, is_unavailable)) = failure_state {
+                let recorder = workflow_recorder.clone();
+                recorder.record(crate::workflow::WorkflowObservation::TerminalFinalExit {
+                    session_id: session_id.clone(),
+                    incarnation: source_incarnation,
+                    exit_code: Some(prev_exit_code),
+                    restart_count,
+                    observed_at: crate::workflow::now_ms(),
+                });
+                if is_unavailable {
+                    if let (Some(project), Some(worktree_path)) =
+                        (project.as_deref(), target_path.as_deref())
+                    {
+                        let event_sink: Arc<dyn EventSink> = Arc::new(IncarnationEventSink::new(
+                            Arc::clone(&sink),
+                            Arc::clone(&inner),
+                            session_id.clone(),
+                            source_incarnation,
+                        ));
+                        event_sink.broadcast(
+                            "terminal:target-unavailable",
+                            serde_json::json!({
+                                "project": project,
+                                "worktreePath": worktree_path,
+                                "sessionId": session_id,
+                                "incarnation": source_incarnation,
+                                "targetUnavailable": true,
+                                "willRestart": false,
+                            }),
+                        );
+                        event_sink.send_terminal_changed();
+                    }
                 }
             }
             if let Some(store) = &diag_store {
@@ -3732,7 +4043,7 @@ async fn supervisor_loop(
                 }
                 store.record_terminal_event("pty", "terminal.respawn_failed", fields);
             }
-        } else if let Ok(Some(ref meta)) = respawn_result {
+        } else if let Ok(Some(meta)) = &respawn_result {
             let recorder = workflow_recorder.clone();
             recorder.record(crate::workflow::WorkflowObservation::TerminalRestarted {
                 session_id: meta.id.clone(),
@@ -3776,15 +4087,23 @@ fn finish_respawn_source_failure(
         if guard.pending_replacements.contains_key(session_id) {
             return None;
         }
+        if !guard.fleet.is_restart_pending(session_id, incarnation) {
+            return None;
+        }
         let tombstone = guard.dead.get_mut(session_id)?;
         if tombstone.incarnation != incarnation {
+            return None;
+        }
+        if tombstone.restart_cancelled || !tombstone.will_restart {
             return None;
         }
         tombstone.meta.alive = false;
         tombstone.meta.target_unavailable |= target_unavailable;
         tombstone.will_restart = false;
         tombstone.restart_in_ms = None;
-        Some((incarnation, tombstone.meta.target_unavailable))
+        let state = Some((incarnation, tombstone.meta.target_unavailable));
+        guard.fleet.cancel_restart_pending(session_id, incarnation);
+        state
     };
 
     if let Some((incarnation, target_unavailable)) = state {
@@ -4304,7 +4623,7 @@ async fn respawn_internal(
     // Reserve before slow PTY setup so a newer request invalidates this one.
     let (replacement_incarnation, preserve_target_unavailable, source_buffer) = {
         let mut guard = inner.lock().unwrap();
-        if !guard.respawn_source_is_current(session_id, source_incarnation) {
+        if !guard.respawn_admission_is_current(session_id, source_incarnation) {
             guard
                 .fleet
                 .cancel_restart_pending(session_id, source_incarnation);
@@ -5444,6 +5763,14 @@ mod tests {
 
         let stale_replacement = inner.begin_replacement("terminal:race");
         let newer_replacement = inner.begin_replacement("terminal:race");
+        inner
+            .fleet
+            .transition_restart_pending_to_creating(
+                "terminal:race",
+                source_incarnation,
+                newer_replacement,
+            )
+            .unwrap();
 
         assert!(!inner.respawn_replacement_is_current(
             "terminal:race",

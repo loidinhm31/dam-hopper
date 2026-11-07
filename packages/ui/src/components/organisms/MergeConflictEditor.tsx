@@ -32,6 +32,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils.js";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 import { useGitConflictFile, useGitFileDiff } from "@/api/queries.js";
 import {
   useConflictResolver,
@@ -43,7 +44,6 @@ import {
   type ProjectTargetInput,
 } from "@/api/client.js";
 import { parseResultMarkerBlocks } from "@/lib/conflict-marker-parser.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import {
   injectConflictStylesOnce,
   buildResultDecorations,
@@ -92,8 +92,6 @@ export function MergeConflictEditor({
 }: Props) {
   const targetRef = normalizeProjectTarget(target ?? projectName);
   const targetKey = projectTargetCacheKey(targetRef);
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
 
   useInsertionEffect(() => {
     injectConflictStylesOnce();
@@ -129,6 +127,11 @@ export function MergeConflictEditor({
   const [isResolving, setIsResolving] = useState(false);
   const [selectedConflict, setSelectedConflict] = useState(0);
   const [draftKey, setDraftKey] = useState<string | null>(null);
+  const [confirmState, setConfirmState] = useState<{
+    title: string;
+    description: string;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
   const draftKeyRef = useRef<string | null>(null);
   const [resultContent, setResultContent] = useState<string>("");
   const resultContentRef = useRef<string>("");
@@ -488,7 +491,6 @@ export function MergeConflictEditor({
       theirsMouseDownDisposableRef.current?.dispose();
       theirsMouseDownDisposableRef.current = editor.onMouseDown((e) => {
         if (
-          isAndroidChromeNativeInputSuppressed ||
           !targetAvailable ||
           !activeDraftRef.current ||
           activeDraftRef.current.isRecovery
@@ -517,7 +519,7 @@ export function MergeConflictEditor({
 
       applyDecorations();
     },
-    [applyDecorations, isAndroidChromeNativeInputSuppressed, syncScroll, targetAvailable],
+    [applyDecorations, syncScroll, targetAvailable],
   );
 
   const handleResultMount: OnMount = useCallback(
@@ -526,13 +528,11 @@ export function MergeConflictEditor({
       resultDecorationsCollection.current = null;
       modelsRef.current.result = editor.getModel();
       if (
-        isAndroidChromeNativeInputSuppressed ||
         !targetAvailable ||
         !activeDraft ||
         activeDraft.isRecovery
       ) {
         editor.updateOptions({ readOnly: true });
-        if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
       }
       editor.onDidChangeModel(() => {
         modelsRef.current.result = editor.getModel();
@@ -600,9 +600,7 @@ export function MergeConflictEditor({
         const line = pendingRevealLineRef.current;
         editor.revealLineInCenter(line);
         editor.setPosition({ lineNumber: line, column: 1 });
-        if (!isAndroidChromeNativeInputSuppressed) {
-          editor.focus();
-        }
+        editor.focus();
         pendingRevealLineRef.current = null;
       }
     },
@@ -610,7 +608,6 @@ export function MergeConflictEditor({
       activeDraft?.id,
       activeDraft?.isRecovery,
       applyDecorations,
-      isAndroidChromeNativeInputSuppressed,
       resolver.redoDraft,
       resolver.undoDraft,
       resolver.updateDraftResult,
@@ -624,16 +621,13 @@ export function MergeConflictEditor({
     if (!editor) return;
     editor.updateOptions({
       readOnly:
-        isAndroidChromeNativeInputSuppressed ||
         !targetAvailable ||
         !activeDraft ||
         Boolean(activeDraft.isRecovery),
     });
-    if (isAndroidChromeNativeInputSuppressed) blurEditorSurface(editor);
   }, [
     activeDraft?.id,
     activeDraft?.isRecovery,
-    isAndroidChromeNativeInputSuppressed,
     targetAvailable,
   ]);
 
@@ -652,7 +646,6 @@ export function MergeConflictEditor({
       oursMouseDownDisposableRef.current?.dispose();
       oursMouseDownDisposableRef.current = editor.onMouseDown((e) => {
         if (
-          isAndroidChromeNativeInputSuppressed ||
           !targetAvailable ||
           !activeDraftRef.current ||
           activeDraftRef.current.isRecovery
@@ -681,7 +674,7 @@ export function MergeConflictEditor({
 
       applyDecorations();
     },
-    [applyDecorations, isAndroidChromeNativeInputSuppressed, syncScroll, targetAvailable],
+    [applyDecorations, syncScroll, targetAvailable],
   );
 
   const handleBaseMount: OnMount = useCallback(
@@ -719,9 +712,7 @@ export function MergeConflictEditor({
         lineNumber: region.startLine,
         column: 1,
       });
-      if (!isAndroidChromeNativeInputSuppressed) {
-        editor.focus();
-      }
+      editor.focus();
       pendingRevealLineRef.current = null;
     }
     if (theirsEditorRef.current && conflictMergeRegions[index]) {
@@ -760,7 +751,6 @@ export function MergeConflictEditor({
   // Model-bound Accept actions keyed by exact regionId
   function applyAccept(regionId: string, side: "ours" | "theirs") {
     if (
-      isAndroidChromeNativeInputSuppressed ||
       !targetAvailable ||
       !activeDraft ||
       activeDraft.isRecovery ||
@@ -799,7 +789,6 @@ export function MergeConflictEditor({
     order: "ours-then-theirs" | "theirs-then-ours",
   ) {
     if (
-      isAndroidChromeNativeInputSuppressed ||
       !targetAvailable ||
       !activeDraft ||
       activeDraft.isRecovery ||
@@ -838,7 +827,6 @@ export function MergeConflictEditor({
 
   function acceptAll(side: "ours" | "theirs") {
     if (
-      isAndroidChromeNativeInputSuppressed ||
       !targetAvailable ||
       !activeDraft ||
       activeDraft.isRecovery ||
@@ -919,18 +907,22 @@ export function MergeConflictEditor({
   }
 
   function handleDiscardRecovery(recoveryKey: string) {
-    if (!window.confirm("Discard this saved conflict recovery text?")) return;
-    if (!resolver.discardDraft(recoveryKey, true)) {
-      setResolveError("Recovery text could not be discarded");
-      return;
-    }
-    if (recoveryKey === draftKey) onClose();
+    setConfirmState({
+      title: "Discard Recovery Text?",
+      description: "Discard this saved conflict recovery text?",
+      onConfirm: () => {
+        if (!resolver.discardDraft(recoveryKey, true)) {
+          setResolveError("Recovery text could not be discarded");
+          return;
+        }
+        if (recoveryKey === draftKey) onClose();
+      },
+    });
   }
 
   async function handleMarkResolved() {
     if (
       !allResolved ||
-      isAndroidChromeNativeInputSuppressed ||
       !targetAvailable
     ) {
       return;
@@ -1009,38 +1001,37 @@ export function MergeConflictEditor({
       snapshot?.unsupportedReason,
   );
 
-  const handleBinaryChoice = async (side: "ours" | "theirs") => {
+  const handleBinaryChoice = (side: "ours" | "theirs") => {
     if (!draftKey || isResolving || !targetAvailable) return;
     const sideLabel = side === "ours" ? "Ours (Stage 2)" : "Theirs (Stage 3)";
-    if (
-      !window.confirm(
-        `Resolve binary conflict for ${filePath} by keeping ${sideLabel} and staging the file?`,
-      )
-    ) {
-      return;
-    }
-    setIsResolving(true);
-    setResolveError(null);
-    try {
-      const outcome = await resolver.applyIndexSide(draftKey, side);
-      if (outcome.outcome === "applied") {
-        onResolved();
-      } else {
-        const errorMsg =
-          "error" in outcome
-            ? outcome.error
-            : "reason" in outcome
-              ? outcome.reason
-              : "Binary resolution failed";
-        setResolveError(errorMsg);
-      }
-    } catch (err) {
-      setResolveError(
-        err instanceof Error ? err.message : "Binary resolution failed",
-      );
-    } finally {
-      setIsResolving(false);
-    }
+    setConfirmState({
+      title: "Resolve Binary Conflict?",
+      description: `Resolve binary conflict for ${filePath} by keeping ${sideLabel} and staging the file?`,
+      onConfirm: async () => {
+        setIsResolving(true);
+        setResolveError(null);
+        try {
+          const outcome = await resolver.applyIndexSide(draftKey, side);
+          if (outcome.outcome === "applied") {
+            onResolved();
+          } else {
+            const errorMsg =
+              "error" in outcome
+                ? outcome.error
+                : "reason" in outcome
+                  ? outcome.reason
+                  : "Binary resolution failed";
+            setResolveError(errorMsg);
+          }
+        } catch (err) {
+          setResolveError(
+            err instanceof Error ? err.message : "Binary resolution failed",
+          );
+        } finally {
+          setIsResolving(false);
+        }
+      },
+    });
   };
   const oursPresent = Boolean(
     snapshot?.stages?.ours && snapshot.stages.ours.kind !== "missing",
@@ -1079,35 +1070,34 @@ export function MergeConflictEditor({
     }
   };
 
-  const handleDeleteFile = async () => {
+  const handleDeleteFile = () => {
     if (!draftKey || isResolving || !targetAvailable) return;
-    if (
-      !window.confirm(
-        `Delete ${filePath} from the working tree and index to resolve this conflict?`,
-      )
-    ) {
-      return;
-    }
-    setIsResolving(true);
-    setResolveError(null);
-    try {
-      const outcome = await resolver.applyDelete(draftKey);
-      if (outcome.outcome === "applied") {
-        onResolved();
-      } else {
-        const errorMsg =
-          "error" in outcome
-            ? outcome.error
-            : "reason" in outcome
-              ? outcome.reason
-              : "Delete failed";
-        setResolveError(errorMsg);
-      }
-    } catch (err) {
-      setResolveError(err instanceof Error ? err.message : "Delete failed");
-    } finally {
-      setIsResolving(false);
-    }
+    setConfirmState({
+      title: "Delete Conflicted File?",
+      description: `Delete ${filePath} from the working tree and index to resolve this conflict?`,
+      onConfirm: async () => {
+        setIsResolving(true);
+        setResolveError(null);
+        try {
+          const outcome = await resolver.applyDelete(draftKey);
+          if (outcome.outcome === "applied") {
+            onResolved();
+          } else {
+            const errorMsg =
+              "error" in outcome
+                ? outcome.error
+                : "reason" in outcome
+                  ? outcome.reason
+                  : "Delete failed";
+            setResolveError(errorMsg);
+          }
+        } catch (err) {
+          setResolveError(err instanceof Error ? err.message : "Delete failed");
+        } finally {
+          setIsResolving(false);
+        }
+      },
+    });
   };
 
   const isLoading =
@@ -1223,7 +1213,6 @@ export function MergeConflictEditor({
             disabled={
               !activeDraft ||
               activeDraft.history.past.length === 0 ||
-              isAndroidChromeNativeInputSuppressed ||
               !targetAvailable
             }
             onClick={() => restoreDraftHistory(resolver.undoDraft)}
@@ -1238,7 +1227,6 @@ export function MergeConflictEditor({
             disabled={
               !activeDraft ||
               activeDraft.history.future.length === 0 ||
-              isAndroidChromeNativeInputSuppressed ||
               !targetAvailable
             }
             onClick={() => restoreDraftHistory(resolver.redoDraft)}
@@ -1249,7 +1237,6 @@ export function MergeConflictEditor({
           <button
             onClick={() => acceptAll("theirs")}
             disabled={
-              isAndroidChromeNativeInputSuppressed ||
               !targetAvailable ||
               Boolean(activeDraft?.isRecovery) ||
               conflictRegions.length === 0
@@ -1262,7 +1249,6 @@ export function MergeConflictEditor({
           <button
             onClick={() => acceptAll("ours")}
             disabled={
-              isAndroidChromeNativeInputSuppressed ||
               !targetAvailable ||
               Boolean(activeDraft?.isRecovery) ||
               conflictRegions.length === 0
@@ -1293,7 +1279,6 @@ export function MergeConflictEditor({
           <button
             onClick={() => void handleMarkResolved()}
             disabled={
-              isAndroidChromeNativeInputSuppressed ||
               !targetAvailable ||
               !allResolved ||
               isResolving ||
@@ -1310,11 +1295,9 @@ export function MergeConflictEditor({
                   ? "Import recovery against a fresh snapshot before editing"
                   : activeDraft?.requiresReview
                     ? "Confirm fresh-snapshot review before Apply"
-                    : isAndroidChromeNativeInputSuppressed
-                      ? "Unavailable on Android Chrome: result is read-only"
-                      : allResolved
-                        ? "Write resolved content and stage file"
-                        : "Resolve all conflicts first"
+                    : allResolved
+                      ? "Write resolved content and stage file"
+                      : "Resolve all conflicts first"
             }
             className={cn(
               "text-[10px] px-1.5 py-0.5 rounded border transition-colors flex items-center gap-1",
@@ -1361,16 +1344,6 @@ export function MergeConflictEditor({
         </div>
       )}
 
-      {isAndroidChromeNativeInputSuppressed && (
-        <p
-          role="note"
-          className="shrink-0 border-b border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-300"
-        >
-          Text editing is unavailable on Android Chrome. Accept, apply, and
-          resolve actions are disabled; use a desktop browser to edit this
-          conflict.
-        </p>
-      )}
 
       {!targetAvailable && (
         <p
@@ -1717,7 +1690,6 @@ export function MergeConflictEditor({
                   contextmenu: false,
                   ...editorOptions,
                   readOnly:
-                    isAndroidChromeNativeInputSuppressed ||
                     !targetAvailable ||
                     !activeDraft ||
                     Boolean(activeDraft.isRecovery),
@@ -1788,7 +1760,6 @@ export function MergeConflictEditor({
                 contextmenu: false,
                 ...editorOptions,
                 readOnly:
-                  isAndroidChromeNativeInputSuppressed ||
                   !targetAvailable ||
                   !activeDraft ||
                   Boolean(activeDraft.isRecovery),
@@ -1822,7 +1793,6 @@ export function MergeConflictEditor({
         onAcceptBoth={applyAcceptBoth}
         onMarkReviewed={applyMarkReviewed}
         disabled={
-          isAndroidChromeNativeInputSuppressed ||
           !targetAvailable ||
           Boolean(activeDraft?.isRecovery)
         }
@@ -1837,6 +1807,22 @@ export function MergeConflictEditor({
         </div>
       )}
         </>
+      )}
+      {confirmState && (
+        <ConfirmDialog
+          open={Boolean(confirmState)}
+          onClose={() => setConfirmState(null)}
+          onConfirm={() => {
+            const fn = confirmState.onConfirm;
+            setConfirmState(null);
+            void fn();
+          }}
+          title={confirmState.title}
+          description={confirmState.description}
+          confirmText="Confirm"
+          cancelText="Cancel"
+          variant="danger"
+        />
       )}
     </div>
   );

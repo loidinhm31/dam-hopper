@@ -94,7 +94,7 @@ class WorkbenchShellPhase06Test {
     fun testTargetStoreFailsClosedOnUnavailableTargets() {
         val store = ProjectTargetStore()
         val profile = "p1"
-        val ws = "/data/dam-hopper.toml"
+        val ws = "/data/workspace"
         val project = "app"
         val missingWorktree = "missing-wt"
 

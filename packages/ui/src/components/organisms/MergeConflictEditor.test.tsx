@@ -4,7 +4,6 @@ import { MergeConflictEditor } from "./MergeConflictEditor.js";
 import { ConflictRegionNav } from "./ConflictRegionNav.js";
 import type { ConflictSnapshot } from "@/api/client.js";
 
-const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 const editorOptions: Array<Record<string, unknown>> = [];
 
 const recoveryState = vi.hoisted(() => ({
@@ -64,11 +63,6 @@ const mockConflictFileState = vi.hoisted(() => ({
   data: null as ConflictSnapshot | null,
 }));
 
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
-  }),
-}));
 
 vi.mock("@/hooks/use-conflict-resolver.js", () => ({
   useConflictResolver: () => ({
@@ -123,7 +117,6 @@ vi.mock("@monaco-editor/react", () => ({
 
 describe("MergeConflictEditor Android policy", () => {
   beforeEach(() => {
-    mockPolicy.enabled = false;
     editorOptions.length = 0;
     recoveryState.drafts = [];
     recoveryState.activeDraft = null;
@@ -200,33 +193,6 @@ describe("MergeConflictEditor Android policy", () => {
     );
   });
 
-  it("keeps the result editor read-only and disables text mutations on Android policy", () => {
-    mockPolicy.enabled = true;
-
-    const markup = renderToStaticMarkup(
-      <MergeConflictEditor
-        project="demo-project"
-        filePath="src/conflict.ts"
-        onClose={() => {}}
-        onResolved={() => {}}
-      />,
-    );
-
-    expect(editorOptions).toHaveLength(3);
-    expect(editorOptions[0]?.readOnly).toBe(true);
-    expect(editorOptions[1]?.readOnly).toBe(true);
-    expect(editorOptions[2]?.readOnly).toBe(true);
-    expect(markup).toContain('title="Undo conflict draft edit" disabled=""');
-    expect(markup).toContain('title="Redo conflict draft edit" disabled=""');
-    expect(markup).toContain(
-      'disabled="" title="Accept all incoming (theirs)"',
-    );
-    expect(markup).toContain('disabled="" title="Accept all current (ours)"');
-    expect(markup).toContain(
-      'disabled="" title="Unavailable on Android Chrome: result is read-only"',
-    );
-    expect(markup).toContain("Text editing is unavailable on Android Chrome");
-  });
 
   it("disables each per-conflict accept action when the result is read-only", () => {
     const markup = renderToStaticMarkup(

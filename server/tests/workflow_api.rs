@@ -78,6 +78,8 @@ fn setup_test_app_with_workflow(
             health_check_url: None,
         }],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: root_path.join("dam-hopper.toml"),
     };
 
@@ -110,7 +112,6 @@ fn setup_test_app_with_workflow(
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("Failed to create AppState in test")
     .with_workflow_store(workflow_enabled.then_some(workflow_store));

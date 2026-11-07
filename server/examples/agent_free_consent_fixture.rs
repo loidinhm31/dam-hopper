@@ -34,7 +34,6 @@ use dam_hopper_server::{
     },
     pty::{BroadcastEventSink, PtySessionManager},
     state::AppState,
-    telemetry::TelemetryRuntime,
     tunnel::{CloudflaredDriver, TunnelSessionManager},
 };
 use opaque_ke::ServerSetup;
@@ -94,7 +93,7 @@ automatic_policy = "agent-free"
     let (event_sink, _rx) = BroadcastEventSink::new(512);
     let pty_manager = PtySessionManager::new(Arc::new(event_sink.clone()));
 
-    let mut config = DamHopperConfig {
+    let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "smoke-fixture-ws".into(),
             root: workspace_dir.display().to_string(),
@@ -112,9 +111,10 @@ automatic_policy = "agent-free"
         },
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
-    config.server.telemetry.db_path = tmp.path().join("telemetry.db").display().to_string();
 
     let agent_store = AgentStoreService::new(workspace_dir.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(vec![]);
@@ -137,7 +137,6 @@ automatic_policy = "agent-free"
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        TelemetryRuntime::new(),
     )
     .expect("AppState::new");
 

@@ -25,12 +25,13 @@ import {
   getConnectionSnapshot,
   subscribeConnections,
 } from "@/api/connections.js";
+import { normalizeFsTarget, type FsTargetRef } from "@/api/ownership.js";
 type ImageState = "loading" | "ready" | "error";
 type MediaTicketErrorCode = "MEDIA_SESSION_UNSUPPORTED";
 
 interface ImagePreviewProps {
   project: string;
-  target?: ProjectTargetRef;
+  target?: FsTargetRef | ProjectTargetRef;
   path: string;
   fileName: string;
   mime?: string;
@@ -81,8 +82,8 @@ export function ImagePreview({
   mime,
   onTargetUnavailable,
 }: ImagePreviewProps) {
-  const worktreePath = target?.worktreePath;
-  const targetProject = target?.project ?? project;
+  const worktreePath = target && "worktreePath" in target ? target.worktreePath : undefined;
+  const targetProject = target && "project" in target ? target.project : project;
   const imageRef = useRef<HTMLImageElement | null>(null);
   const issueControllerRef = useRef<AbortController | null>(null);
   const previewRef = useRef<ImagePreviewTicket | null>(null);
@@ -127,15 +128,18 @@ export function ImagePreview({
     const controller = new AbortController();
     issueControllerRef.current = controller;
 
-    const projectTarget =
-      worktreePath == null && !target?.profileId
-        ? targetProject
-        : {
-            project: targetProject,
-            ...(worktreePath != null ? { worktreePath } : {}),
-            ...(target?.profileId ? { profileId: target.profileId } : {}),
-          };
-    void issueImageTicket(projectTarget, path, controller.signal)
+    const mediaTarget: FsTargetRef =
+      target && "kind" in target
+        ? normalizeFsTarget(target, target.profileId)
+        : targetProject
+          ? {
+              kind: "project",
+              project: targetProject,
+              profileId: target?.profileId ?? "",
+              worktreePath: worktreePath ?? null,
+            }
+          : { kind: "workspace", profileId: target?.profileId ?? "" };
+    void issueImageTicket(mediaTarget, path, controller.signal)
       .then((ticket) => {
         if (ticket.purpose !== "preview") {
           revokePreview(ticket);

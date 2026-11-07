@@ -22,6 +22,8 @@ data class WorkspaceFileOwner(
     val accountUser: String,
     val project: String,
     val worktreePath: String? = null,
+    val workspaceRoot: String? = null,
+    val workspaceEpoch: Long? = null,
 ) {
     val normalizedBaseUrl: String = normalizeBaseUrl(baseUrl)
     val normalizedWorktreePath: String? = normalizeWorktree(worktreePath)
@@ -46,18 +48,20 @@ data class WorkspaceFileOwner(
             normalizedBaseUrl == other.normalizedBaseUrl &&
             accountUser == other.accountUser &&
             project == other.project &&
-            normalizedWorktreePath == other.normalizedWorktreePath
+            normalizedWorktreePath == other.normalizedWorktreePath &&
+            workspaceRoot == other.workspaceRoot &&
+            workspaceEpoch == other.workspaceEpoch
     }
-
     override fun hashCode(): Int {
         var result = profileId?.hashCode() ?: 0
         result = 31 * result + normalizedBaseUrl.hashCode()
         result = 31 * result + accountUser.hashCode()
         result = 31 * result + project.hashCode()
         result = 31 * result + (normalizedWorktreePath?.hashCode() ?: 0)
+        result = 31 * result + (workspaceRoot?.hashCode() ?: 0)
+        result = 31 * result + (workspaceEpoch?.hashCode() ?: 0)
         return result
     }
-
     fun toProjectTargetRef(): ProjectTargetRef = ProjectTargetRef(
         profileId = profileId,
         project = project,

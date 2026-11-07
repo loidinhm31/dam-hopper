@@ -24,8 +24,6 @@ import dev.damhopper.nativeapp.features.editor.EditorRepository
 import dev.damhopper.nativeapp.features.files.FileRepository
 import dev.damhopper.nativeapp.features.host.IdleConsentController
 import dev.damhopper.nativeapp.features.host.IdleSuspendRepository
-import dev.damhopper.nativeapp.features.host.UsageController
-import dev.damhopper.nativeapp.features.host.UsageRepository
 import dev.damhopper.nativeapp.features.profiles.AuthStatus
 import dev.damhopper.nativeapp.features.profiles.ProfileRepository
 import dev.damhopper.nativeapp.features.workspace.WorkspacePanel
@@ -1248,7 +1246,6 @@ class NativeWorkspaceViewModel(
                 keys.mapNotNull { cache.remove(it) }
             }
             dropped.forEach {
-                it.usageController?.dispose()
                 it.idleController?.retire()
             }
         }
@@ -1294,7 +1291,6 @@ class NativeWorkspaceViewModel(
                 configEditor = configEditor,
                 workspaceRepository = workspace,
                 agentIntegration = integration,
-                usageController = UsageController(owner.connection, UsageRepository(client), runtimeScope),
                 idleController = IdleConsentController(
                     connection = owner.connection,
                     repository = IdleSuspendRepository(client),

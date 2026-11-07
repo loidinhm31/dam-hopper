@@ -10,7 +10,8 @@ import kotlinx.serialization.json.add
 
 /**
  * Status of current active workspace returned by GET /api/workspace/status.
- * Authoritative workspace identity is [configPath].
+ * Authoritative workspace root is [path]; [configPath] points to the stable server config.toml.
+ * [workspaceEpoch] fences filesystem mutations and workspace switches.
  */
 @Serializable
 data class WorkspaceStatus(
@@ -19,8 +20,8 @@ data class WorkspaceStatus(
     val configPath: String? = null,
     val name: String? = null,
     val projectCount: Int = 0,
+    val workspaceEpoch: Long? = null,
 )
-
 /**
  * Detailed workspace info returned by GET /api/workspace.
  */
@@ -30,6 +31,7 @@ data class WorkspaceInfo(
     val root: String? = null,
     val configPath: String? = null,
     val projectCount: Int = 0,
+    val workspaceEpoch: Long? = null,
 )
 
 /**
@@ -138,6 +140,8 @@ data class ProjectTargetSnapshot(
     val isAvailable: Boolean,
     val statusLabel: String,
     val worktree: ProjectWorktree? = null,
+    val workspaceRoot: String? = null,
+    val workspaceEpoch: Long? = null,
 ) {
     companion object {
         const val ROOT_TARGET_LABEL = "Project root"
@@ -150,11 +154,14 @@ data class ProjectTargetSnapshot(
             workspaceConfigPath: String?,
             project: String,
             worktreePath: String?,
+            workspaceRoot: String? = null,
+            workspaceRevision: Long = 0L,
         ): String {
             val normalizedWt = normalizeProjectTargetPath(worktreePath)
             return buildJsonArray {
                 add(profileId.orEmpty())
-                add(workspaceConfigPath.orEmpty())
+                add(workspaceRoot ?: workspaceConfigPath.orEmpty())
+                add(workspaceRevision)
                 add(project)
                 if (normalizedWt != null) add(normalizedWt) else add(null as String?)
             }.toString()

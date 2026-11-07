@@ -1,4 +1,9 @@
 // @vitest-environment jsdom
+vi.hoisted(() => {
+  if (typeof document !== "undefined" && !(document as unknown as Record<string, unknown>).queryCommandSupported) {
+    (document as unknown as Record<string, unknown>).queryCommandSupported = () => false;
+  }
+});
 import { renderToStaticMarkup } from "react-dom/server";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -43,18 +48,13 @@ vi.mock("@/api/client.js", () => ({
   projectTargetCacheKey: (target: { project: string }) => target.project,
 }));
 
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: false,
-  }),
-}));
 import {
   ChangedFilesList,
   GitContextMenuPopover,
   createChangedFileSelection,
   entryRootId,
 } from "./ChangedFilesList.js";
-import { buildConflictRevealIntent } from "../pages/WorkspacePage.js";
+import { buildConflictRevealIntent } from "./ConflictResolverPanel.js";
 describe("Phase 08 Workspace Integration & Cutover", () => {
   let container: HTMLDivElement;
   let root: Root;

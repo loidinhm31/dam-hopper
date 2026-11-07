@@ -2,6 +2,7 @@ import {
   useRef,
   useCallback,
   useEffect,
+  useMemo,
   useState,
   type ReactNode,
 } from "react";
@@ -18,16 +19,20 @@ import {
 import type { Layout } from "react-resizable-panels";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import type { DockTarget, LayoutNode } from "@/types/terminal-layout.js";
+import type { TileNode, TilePaneNode } from "@/types/tile-tree.js";
+import { layoutNodeToTileNode } from "@/lib/tile-tree.js";
 import type { UseTerminalLayoutResult } from "@/hooks/use-terminal-layout.js";
 import { PaneContainer } from "@/components/organisms/PaneContainer.js";
 import type { DragItem } from "@/components/organisms/TabBar.js";
 import { fitAllTerminals } from "@/lib/terminal-fit-scheduler.js";
 import { terminalRegistry } from "@/lib/terminal-registry.js";
-import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
+import type {
+  MountedSession,
+  TerminalAttachGate,
+} from "@/components/organisms/MultiTerminalDisplay.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 export function resolveDragOverlayTitle(tab: DisplayTabEntry | undefined) {
   return { title: tab?.title, label: tab?.label ?? "Terminal" };
 }
@@ -51,77 +56,87 @@ interface LayoutTreeProps {
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
   onOpenSessionChanges?: (sessionId: string) => void;
+  attachGate?: TerminalAttachGate;
 }
 
-function LayoutTree({
-  node,
-  layout,
-  mountedSessions,
-  terminalCommitStatusEnabled,
-  openTabs,
-  onNewTerminal,
-  onSessionExit,
-  onSelectTab,
-  onToggleTabPin,
-  onCloseTab,
-  onOpenDiagnosticsMenu,
-  onRenameSession,
-  activeSessionId,
-  suppressTerminalFocus = false,
-  browserOpen = false,
-  renderBrowserContent,
-  onCloseBrowser,
-  onOpenSessionChanges,
-}: LayoutTreeProps) {
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+function LayoutTree(props: LayoutTreeProps) {
+  const tileRoot = useMemo(
+    () => layoutNodeToTileNode(props.node),
+    [props.node],
+  );
 
-  // Clear pending debounce timer on unmount
+  return (
+    <GenericTileRenderer<string>
+      node={tileRoot}
+      onUpdateSizes={props.layout.updateSizes}
+      renderPane={(tilePane) => (
+        <PaneContainer
+          node={{
+            type: "pane",
+            id: tilePane.id,
+            sessionIds: tilePane.items,
+            activeSessionId: tilePane.active,
+          }}
+          layout={props.layout}
+          mountedSessions={props.mountedSessions}
+          terminalCommitStatusEnabled={props.terminalCommitStatusEnabled}
+          openTabs={props.openTabs}
+          onNewTerminal={props.onNewTerminal}
+          onSessionExit={props.onSessionExit}
+          onSelectTab={props.onSelectTab}
+          onToggleTabPin={props.onToggleTabPin ?? (() => {})}
+          onCloseTab={props.onCloseTab}
+          onRenameSession={props.onRenameSession}
+          onOpenDiagnosticsMenu={props.onOpenDiagnosticsMenu}
+          activeSessionId={props.activeSessionId}
+          suppressTerminalFocus={props.suppressTerminalFocus}
+          browserOpen={props.browserOpen}
+          renderBrowserContent={props.renderBrowserContent}
+          onCloseBrowser={props.onCloseBrowser}
+          onOpenSessionChanges={props.onOpenSessionChanges}
+          attachGate={props.attachGate}
+        />
+      )}
+    />
+  );
+}
+
+export interface GenericTileRendererProps<T> {
+  node: TileNode<T>;
+  onUpdateSizes: (nodeId: string, sizes: [number, number]) => void;
+  renderPane: (pane: TilePaneNode<T>) => ReactNode;
+}
+
+export function GenericTileRenderer<T>({
+  node,
+  onUpdateSizes,
+  renderPane,
+}: GenericTileRendererProps<T>) {
+  const timerRef = useRef<number | undefined>(undefined);
+
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+      clearTimeout(timerRef.current);
     };
   }, []);
 
-  // v4.9.0: onLayoutChanged receives Layout = { [panelId: string]: number }
   const handleResize = useCallback(
     (layoutMap: Layout) => {
       if (node.type !== "split") return;
       const leftId = node.children[0].id;
       const rightId = node.children[1].id;
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
+      clearTimeout(timerRef.current);
+      timerRef.current = window.setTimeout(() => {
         const leftSize = layoutMap[leftId] ?? 50;
         const rightSize = layoutMap[rightId] ?? 50;
-        layout.updateSizes(node.id, [leftSize, rightSize]);
+        onUpdateSizes(node.id, [leftSize, rightSize]);
       }, 100);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [node.type === "split" ? node.id : null, layout.updateSizes],
+    [node, onUpdateSizes],
   );
 
   if (node.type === "pane") {
-    return (
-      <PaneContainer
-        node={node}
-        layout={layout}
-        mountedSessions={mountedSessions}
-        terminalCommitStatusEnabled={terminalCommitStatusEnabled}
-        openTabs={openTabs}
-        onNewTerminal={onNewTerminal}
-        onSessionExit={onSessionExit}
-        onSelectTab={onSelectTab}
-        onToggleTabPin={onToggleTabPin ?? (() => {})}
-        onCloseTab={onCloseTab}
-        onRenameSession={onRenameSession}
-        onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
-        activeSessionId={activeSessionId}
-        suppressTerminalFocus={suppressTerminalFocus}
-        browserOpen={browserOpen}
-        renderBrowserContent={renderBrowserContent}
-        onCloseBrowser={onCloseBrowser}
-        onOpenSessionChanges={onOpenSessionChanges}
-      />
-    );
+    return <>{renderPane(node)}</>;
   }
 
   return (
@@ -137,30 +152,15 @@ function LayoutTree({
         minSize={10}
         style={{ overflow: "clip" }}
       >
-        <LayoutTree
+        <GenericTileRenderer
           node={node.children[0]}
-          layout={layout}
-          mountedSessions={mountedSessions}
-          terminalCommitStatusEnabled={terminalCommitStatusEnabled}
-          openTabs={openTabs}
-          onNewTerminal={onNewTerminal}
-          onSessionExit={onSessionExit}
-          onSelectTab={onSelectTab}
-          onToggleTabPin={onToggleTabPin}
-          onCloseTab={onCloseTab}
-          onRenameSession={onRenameSession}
-          onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
-          activeSessionId={activeSessionId}
-          suppressTerminalFocus={suppressTerminalFocus}
-          browserOpen={browserOpen}
-          renderBrowserContent={renderBrowserContent}
-          onCloseBrowser={onCloseBrowser}
-          onOpenSessionChanges={onOpenSessionChanges}
+          onUpdateSizes={onUpdateSizes}
+          renderPane={renderPane}
         />
       </Panel>
       <Separator
         aria-label="Resize split pane"
-        className="bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:w-px data-[orientation=vertical]:cursor-col-resize data-[orientation=horizontal]:h-px data-[orientation=horizontal]:cursor-row-resize"
+        className="relative bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] active:bg-[var(--color-primary)] data-[orientation=vertical]:w-1 data-[orientation=vertical]:cursor-col-resize data-[orientation=horizontal]:h-1 data-[orientation=horizontal]:cursor-row-resize z-20 after:absolute after:inset-y-0 after:-inset-x-2 after:z-30 data-[orientation=horizontal]:after:inset-x-0 data-[orientation=horizontal]:after:-inset-y-2"
       />
       <Panel
         id={node.children[1].id}
@@ -168,25 +168,10 @@ function LayoutTree({
         minSize={10}
         style={{ overflow: "clip" }}
       >
-        <LayoutTree
+        <GenericTileRenderer
           node={node.children[1]}
-          layout={layout}
-          mountedSessions={mountedSessions}
-          terminalCommitStatusEnabled={terminalCommitStatusEnabled}
-          openTabs={openTabs}
-          onNewTerminal={onNewTerminal}
-          onSessionExit={onSessionExit}
-          onSelectTab={onSelectTab}
-          onToggleTabPin={onToggleTabPin}
-          onCloseTab={onCloseTab}
-          onRenameSession={onRenameSession}
-          onOpenDiagnosticsMenu={onOpenDiagnosticsMenu}
-          activeSessionId={activeSessionId}
-          suppressTerminalFocus={suppressTerminalFocus}
-          browserOpen={browserOpen}
-          renderBrowserContent={renderBrowserContent}
-          onCloseBrowser={onCloseBrowser}
-          onOpenSessionChanges={onOpenSessionChanges}
+          onUpdateSizes={onUpdateSizes}
+          renderPane={renderPane}
         />
       </Panel>
     </Group>
@@ -212,9 +197,10 @@ export interface SplitLayoutProps {
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
   onOpenSessionChanges?: (sessionId: string) => void;
+  attachGate?: TerminalAttachGate;
 }
 
-function parseDockTarget(id: string): DockTarget | null {
+export function parseDockTarget(id: string): DockTarget | null {
   const parts = id.split(":");
   if (parts[0] === "pane" && parts[2] === "center") {
     return { kind: "pane-center", paneId: parts[1] ?? "" };
@@ -258,11 +244,9 @@ export function SplitLayout({
   renderBrowserContent,
   onCloseBrowser,
   onOpenSessionChanges,
+  attachGate,
 }: SplitLayoutProps) {
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
-  const shouldSuppressTerminalFocus =
-    isAndroidChromeNativeInputSuppressed || suppressTerminalFocus;
+  const shouldSuppressTerminalFocus = Boolean(suppressTerminalFocus);
   // ── dnd-kit drag sensors (8px activation so clicks still work) ──────────
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -345,6 +329,7 @@ export function SplitLayout({
           renderBrowserContent={renderBrowserContent}
           onCloseBrowser={onCloseBrowser}
           onOpenSessionChanges={onOpenSessionChanges}
+          attachGate={attachGate}
         />
       </div>
       {/* Drag overlay: floating tab label following the pointer */}

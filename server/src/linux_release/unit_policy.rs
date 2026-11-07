@@ -149,7 +149,7 @@ pub fn validate_api_unit_policy(
     }
 
     let expected_exec = format!(
-        "{}/bin/dam-hopper-server --config {}/dam-hopper.toml --host 0.0.0.0 --port 4801",
+        "{}/bin/dam-hopper-server --config {}/config.toml --host 0.0.0.0 --port 4801",
         ctx.release_root.display(),
         ctx.api_home
     );

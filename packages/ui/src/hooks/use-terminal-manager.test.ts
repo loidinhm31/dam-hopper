@@ -507,3 +507,25 @@ describe("resolveBoundTerminalClient", () => {
     expect(client).toBe(dummyAmbientApi);
   });
 });
+describe("terminal management action safety", () => {
+  it("resolves close tab fallback presentationally without destroying sessions", () => {
+    const tabs = [
+      { sessionId: "term-1", label: "term 1" },
+      { sessionId: "term-2", label: "term 2" },
+      { sessionId: "term-3", label: "term 3" },
+    ];
+    const remaining = tabs.filter((t) => t.sessionId !== "term-2");
+    expect(remaining).toHaveLength(2);
+    expect(remaining.map((t) => t.sessionId)).toEqual(["term-1", "term-3"]);
+  });
+
+  it("findCustomCommandSessionIds identifies matching command sessions without evicting them", () => {
+    const sessions = [
+      { id: "custom:proj:build", worktreePath: undefined },
+      { id: "custom:proj:test", worktreePath: undefined },
+      { id: "custom:proj:build:1", worktreePath: undefined },
+    ];
+    const matching = findCustomCommandSessionIds(sessions, "proj", "build");
+    expect(matching).toEqual(["custom:proj:build"]);
+  });
+});

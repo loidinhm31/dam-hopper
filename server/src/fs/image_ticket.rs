@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::workspace_target::ResolvedProjectTarget;
+use crate::workspace_target::{ResolvedFilesystemTarget, ResolvedProjectTarget};
 
 use super::{
     media_session::{MediaClientId, MediaSessionToken},
@@ -40,7 +40,7 @@ pub fn is_supported_image(path: &Path) -> bool {
 
 #[derive(Clone)]
 pub struct ImageTicketRecord {
-    pub target: ResolvedProjectTarget,
+    pub target: ResolvedFilesystemTarget,
     pub project_relative_path: PathBuf,
     pub file: MediaFileVersion,
     pub mime: String,

@@ -14,7 +14,7 @@ pub async fn cache_clear(State(state): State<AppState>) -> impl IntoResponse {
         Ok(_) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.0.to_string() })),
+            Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response(),
     }
@@ -52,7 +52,7 @@ pub async fn export_workspace_settings(
             ),
             (
                 axum::http::header::CONTENT_DISPOSITION,
-                "attachment; filename=\"dam-hopper.toml\"",
+                "attachment; filename=\"config.toml\"",
             ),
             (axum::http::header::CACHE_CONTROL, "no-store"),
         ],
@@ -64,7 +64,7 @@ pub async fn export_workspace_settings(
 // POST /api/settings/import/workspace.toml
 // ---------------------------------------------------------------------------
 
-const BACKUP_PREFIX: &str = "dam-hopper.toml.bak.";
+const BACKUP_PREFIX: &str = "config.toml.bak.";
 const MAX_BACKUPS_RETAINED: usize = 5;
 
 fn create_backup(
@@ -207,8 +207,26 @@ pub async fn import_workspace_settings(
         )))
     })?;
     let current_cfg = state.config.read().await.clone();
+    let mut imported_doc: toml::Value = toml::from_str(toml_str)
+        .map_err(|e| ApiError::from_app(crate::error::AppError::Config(e.to_string())))?;
+    if let Ok(old_doc) = toml::from_str::<toml::Value>(std::str::from_utf8(&old_bytes).unwrap_or("")) {
+        if let (Some(imp_table), Some(old_table)) = (imported_doc.as_table_mut(), old_doc.as_table()) {
+            if !imp_table.contains_key("ui") {
+                if let Some(ui_val) = old_table.get("ui") {
+                    imp_table.insert("ui".to_string(), ui_val.clone());
+                }
+            }
+            if !imp_table.contains_key("semantic") {
+                if let Some(sem_val) = old_table.get("semantic") {
+                    imp_table.insert("semantic".to_string(), sem_val.clone());
+                }
+            }
+        }
+    }
+    let merged_toml_str = toml::to_string_pretty(&imported_doc)
+        .map_err(|e| ApiError::from_app(crate::error::AppError::Internal(e.to_string())))?;
 
-    let candidate_cfg = crate::config::parse_config_str_at_path(toml_str, &current_path)
+    let candidate_cfg = crate::config::parse_config_str_at_path(&merged_toml_str, &current_path)
         .map_err(ApiError::from_app)?;
 
     crate::config::validate_protected_config_replacement(&current_cfg, &candidate_cfg)
@@ -227,7 +245,7 @@ pub async fn import_workspace_settings(
     let backup_file_name =
         create_backup(&current_path, &old_bytes).map_err(ApiError::from_app)?;
 
-    if let Err(write_err) = crate::utils::fs::atomic_write_bytes(&current_path, &body) {
+    if let Err(write_err) = crate::utils::fs::atomic_write_bytes(&current_path, merged_toml_str.as_bytes()) {
         let parent = current_path.parent().unwrap_or(std::path::Path::new("."));
         let backup_path = parent.join(&backup_file_name);
         let _ = std::fs::remove_file(&backup_path);
@@ -239,7 +257,7 @@ pub async fn import_workspace_settings(
             return Err(ApiError::from_app(crate::error::AppError::Internal(format!(
                 "Failed to reload imported config after session changes was disabled; tracking remains runtime OFF. Backup retained at {}: {}",
                 backup_file_name,
-                reload_err.0
+                reload_err
             ))));
         }
         let restore_res = crate::utils::fs::atomic_write_bytes(&current_path, &old_bytes);
@@ -250,7 +268,7 @@ pub async fn import_workspace_settings(
             let _ = std::fs::remove_file(&backup_path);
             return Err(ApiError::from_app(crate::error::AppError::Internal(format!(
                 "Failed to reload imported config, restored previous configuration: {}",
-                reload_err.0
+                reload_err
             ))));
         } else {
             return Err(ApiError::from_app(crate::error::AppError::Internal(format!(
@@ -258,7 +276,7 @@ pub async fn import_workspace_settings(
                 restore_res.is_ok(),
                 reload_restore_res.is_ok(),
                 backup_file_name,
-                reload_err.0
+                reload_err
             ))));
         }
     }
@@ -269,7 +287,7 @@ pub async fn import_workspace_settings(
     let workspace_name = candidate_cfg.workspace.name.clone();
     Ok(Json(ImportWorkspaceResponse {
         imported: true,
-        file_name: "dam-hopper.toml".to_string(),
+        file_name: "config.toml".to_string(),
         backup_file_name,
         workspace_name: Some(workspace_name),
     }))

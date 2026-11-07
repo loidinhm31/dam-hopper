@@ -107,14 +107,16 @@ const mocks = vi.hoisted(() => {
       revealActiveFileShortcut: "Alt+F1",
       gitPanelShortcut: "Mod+Shift+KeyG",
       portsPanelShortcut: "Mod+Shift+KeyP",
-      fleetTerminalShortcut: "Mod+Shift+KeyM",
       terminalFontSizeIncreaseShortcut: "Ctrl+Alt+Shift+Equal",
       terminalFontSizeDecreaseShortcut: "Ctrl+Alt+Minus",
       saveDebounced: vi.fn(),
     },
     transport: {
       invoke: vi.fn((channel: string) => {
-        if (channel === "terminal:listDetailed") {
+        if (
+          channel === "terminal:listDetailed" ||
+          channel === "terminal:listDetailedObservation"
+        ) {
           mocks.currentOffsets.set("term-1", 0);
           return (
             mocks.listDetailedResponses.shift() ??
@@ -274,6 +276,7 @@ vi.mock("@/api/client.js", () => ({
   }),
   projectTargetCacheKey: (target: unknown) => "root",
   isProjectTargetError: () => false,
+  isGitUnavailableError: () => false,
   ApiRequestError: class ApiRequestError extends Error {
     constructor(
       message: string,

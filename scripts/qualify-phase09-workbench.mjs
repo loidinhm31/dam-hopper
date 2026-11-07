@@ -77,12 +77,13 @@ initRepo(repoA, "SERVER_A\n", "SERVER_A");
 initRepo(repoB, "SERVER_B\n", "SERVER_B");
 
 // Write configs
-const configA = join(dirA, "dam-hopper.toml");
-const configB = join(dirB, "dam-hopper.toml");
+const configA = join(dirA, "config.toml");
+const configB = join(dirB, "config.toml");
 
-function makeConfig(name, repoPath, sessionDb, telemetryDb, collectorPort) {
+function makeConfig(name, repoPath, sessionDb) {
   return `[workspace]
 name = "${name}"
+root = "${repoPath}"
 
 [[projects]]
 name = "web"
@@ -92,22 +93,13 @@ type = "custom"
 [server]
 session_db_path = "${sessionDb}"
 
-[server.telemetry]
-enabled = false
-db_path = "${telemetryDb}"
-
-[server.telemetry.collector]
-enabled = false
-host = "127.0.0.1"
-port = ${collectorPort}
-
 [server.idle_suspend]
 enabled = false
 `;
 }
 
-writeFileSync(configA, makeConfig("Fixture A", repoA, join(dirA, "sessions.db"), join(dirA, "telemetry.db"), 14811));
-writeFileSync(configB, makeConfig("Fixture B", repoB, join(dirB, "sessions.db"), join(dirB, "telemetry.db"), 14812));
+writeFileSync(configA, makeConfig("Fixture A", repoA, join(dirA, "sessions.db")));
+writeFileSync(configB, makeConfig("Fixture B", repoB, join(dirB, "sessions.db")));
 
 const processes = [];
 

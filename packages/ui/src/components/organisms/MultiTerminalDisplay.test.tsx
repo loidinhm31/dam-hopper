@@ -4,7 +4,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MultiTerminalDisplay } from "./MultiTerminalDisplay.js";
 
-const mockPolicy = vi.hoisted(() => ({ enabled: false }));
 const mockSettings = vi.hoisted(() => ({ customKeyboard: true }));
 const mockSplitProps = vi.hoisted(() => ({
   suppressTerminalFocus: undefined as boolean | undefined,
@@ -60,27 +59,11 @@ vi.mock("@/hooks/use-terminal-layout.js", () => ({
     return mockLayout;
   },
 }));
-vi.mock("@/hooks/use-compact-workspace.js", () => ({
-  useCompactWorkspace: () => false,
-}));
-vi.mock("@/hooks/use-coarse-pointer.js", () => ({
-  useCoarsePointer: () => false,
-}));
-vi.mock("@/stores/settings.js", () => ({
-  useSettingsStore: (
-    selector: (state: { mobileCustomKeyboardEnabled: boolean }) => unknown,
-  ) => selector({ mobileCustomKeyboardEnabled: mockSettings.customKeyboard }),
-}));
 vi.mock("@/lib/terminal-fit-scheduler.js", () => ({
   fitAllTerminals: vi.fn(),
 }));
 vi.mock("@/lib/terminal-registry.js", () => ({
   terminalRegistry: { values: () => [] },
-}));
-vi.mock("@/contexts/AndroidChromeInputPolicyContext.js", () => ({
-  useAndroidChromeInputPolicy: () => ({
-    isAndroidChromeNativeInputSuppressed: mockPolicy.enabled,
-  }),
 }));
 
 describe("MultiTerminalDisplay floating controls", () => {
@@ -89,7 +72,6 @@ describe("MultiTerminalDisplay floating controls", () => {
 
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    mockPolicy.enabled = false;
     mockSettings.customKeyboard = true;
     mockSplitProps.suppressTerminalFocus = undefined;
     mockSplitProps.activeSessionId = undefined;
@@ -249,5 +231,36 @@ describe("MultiTerminalDisplay floating controls", () => {
     // Now unmount cleanup fires exactly once with empty set
     expect(onVisibleSessionIdsChange).toHaveBeenCalledTimes(2);
     expect([...onVisibleSessionIdsChange.mock.calls[1][0]]).toEqual([]);
+  });
+
+  it("retains denied and unresolved sessions in layout pruning checks when attachGate is present", async () => {
+    const sessions = [
+      { sessionId: "session-1", project: "demo", command: "" },
+      { sessionId: "session-denied", project: "demo", command: "" },
+    ];
+
+    const gate = {
+      resolveTerminal: vi.fn((id: string) => (id === "session-1" ? ({} as never) : undefined)),
+      renderPlaceholder: vi.fn(() => <div>Denied</div>),
+      revision: 1,
+    };
+
+    await act(async () => {
+      root.render(
+        <MultiTerminalDisplay
+          activeSessionId="session-1"
+          mountedSessions={sessions}
+          openTabs={[]}
+          layoutStorageKey="terminal-layout:test"
+          renderTerminals={false}
+          attachGate={gate}
+        />,
+      );
+    });
+
+    // pruneSessions must receive the full set of mountedSessions including the denied one
+    expect(mockLayout.pruneSessions).toHaveBeenCalledWith(
+      new Set(["session-1", "session-denied"]),
+    );
   });
 });

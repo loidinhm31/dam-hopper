@@ -13,6 +13,7 @@ import {
   normalizeProgressRatio,
 } from "@/lib/host-resource-state.js";
 import { formatPercent } from "@/lib/host-metrics-format.js";
+import { AlertTriangle } from "lucide-react";
 import { HostResourceIncidentDetails } from "./HostResourceIncidentDetails.js";
 import { HostResourceStorageDetails } from "./HostResourceStorageDetails.js";
 import {
@@ -20,7 +21,7 @@ import {
   HostResourceMetric,
 } from "./HostResourceDiagnosisRows.js";
 
-interface Props {
+export interface HostResourceDiagnosisProps {
   snapshot: HostResourceSnapshotV1;
   alerts: HostResourceAlertIncident[];
   legacyMetrics?: HostMetrics;
@@ -28,8 +29,9 @@ interface Props {
   onPin?: (mountPoint: string | null) => void;
   isPinPending?: boolean;
   pinError?: Error | null;
+  highlightIncidentId?: string | null;
+  className?: string;
 }
-
 export function HostResourceDiagnosis({
   snapshot,
   alerts,
@@ -38,7 +40,9 @@ export function HostResourceDiagnosis({
   onPin = () => undefined,
   isPinPending = false,
   pinError = null,
-}: Props) {
+  highlightIncidentId = null,
+  className = "",
+}: HostResourceDiagnosisProps) {
   const { memory, pressure, processes, mountContext } = snapshot;
   const visibleCgroups = snapshot.cgroups?.filter(isUsableCgroup) ?? [];
   const availableProgress = normalizeProgressRatio(
@@ -48,8 +52,20 @@ export function HostResourceDiagnosis({
   const battery = getBatteryPresentation(snapshot.battery);
 
   return (
-    <div className="space-y-4">
-      <HostResourceIncidentDetails snapshot={snapshot} alerts={alerts} />
+    <div className={`space-y-4 ${className}`}>
+      {highlightIncidentId && (
+        <div
+          data-testid="highlighted-incident-banner"
+          className="p-2.5 rounded border border-[var(--color-primary)] bg-[var(--color-primary)]/10 text-xs text-[var(--color-text)] flex items-center justify-between"
+        >
+          <span className="font-semibold flex items-center gap-1.5 text-[var(--color-primary)]">
+            <AlertTriangle className="h-4 w-4" />
+            Inspecting Incident: {highlightIncidentId}
+          </span>
+          <span className="text-[10px] text-[var(--color-text-muted)]">Target Incident Revealed</span>
+        </div>
+      )}
+      <HostResourceIncidentDetails snapshot={snapshot} alerts={alerts} highlightIncidentId={highlightIncidentId} />
 
       <section aria-label="Core host metrics" className="space-y-3">
         <HostResourceMetric

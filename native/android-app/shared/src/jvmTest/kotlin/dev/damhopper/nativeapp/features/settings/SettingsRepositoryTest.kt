@@ -158,7 +158,7 @@ class SettingsRepositoryTest {
         server.route("/api/settings/reset") { _ -> 200 to """{"ok":true}""" }
         server.route("/api/settings/export/workspace.toml") { _ -> 200 to "name = \"x\"\n" }
         server.route("/api/settings/import/workspace.toml") { _ ->
-            200 to """{"imported":true,"fileName":"dam-hopper.toml","backupFileName":"dam-hopper.toml.bak.1","workspaceName":"W"}"""
+            200 to """{"imported":true,"fileName":"config.toml","backupFileName":"config.toml.bak.1","workspaceName":"W"}"""
         }
     }
 
@@ -539,7 +539,7 @@ class SettingsRepositoryTest {
         val outcome = repository.importWorkspaceToml(op, "name = \"w\"".encodeToByteArray())
         assertTrue(outcome is SettingsOutcome.Confirmed, outcome.toString())
         val confirmed = (outcome as SettingsOutcome.Confirmed).value
-        assertEquals("dam-hopper.toml.bak.1", confirmed.backupFileName)
+        assertEquals("config.toml.bak.1", confirmed.backupFileName)
         assertEquals("W", confirmed.workspaceName)
         assertEquals(confirmed, repository.importExportState.value.lastImportResult)
         assertTrue(server.posts("/api/settings/import/workspace.toml").single().contentType.orEmpty().startsWith("application/toml"))

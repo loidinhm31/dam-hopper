@@ -22,7 +22,7 @@ The ZIP must contain exactly these four root-level regular files, with no nested
 paths, duplicate names, traversal components, comments, or trailing bytes:
 
 - `dam-hopper-server.exe`
-- `dam-hopper.example.toml`
+- `config.example.toml`
 - `LICENSE`
 - `README.md`
 
@@ -132,7 +132,7 @@ files, stages the replacement privately, and never starts the server or
 registers a Windows service. The default destination is
 `%LOCALAPPDATA%\Programs\dam-hopper`; `bin\dam-hopper-server.exe`, notices,
 and the example TOML are installed there. An existing
-`dam-hopper.toml` is preserved on upgrades.
+`config.toml` is preserved on upgrades.
 
 Download the script from the same release as the ZIP, inspect it according to
 your organization's script trust policy, then invoke it with PowerShell:
@@ -184,7 +184,7 @@ After installation, launch the server explicitly with the generated config:
 ```powershell
 $installDir = Join-Path $env:LOCALAPPDATA "Programs\dam-hopper"
 & "$installDir\bin\dam-hopper-server.exe" `
-  --config "$installDir\dam-hopper.toml"
+  --config "$installDir\config.toml"
 ```
 
 The installer uses the release asset's metadata as the digest authority and

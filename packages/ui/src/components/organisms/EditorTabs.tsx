@@ -132,7 +132,7 @@ export function EditorTabs({
       const tab = tabs.find((t) => t.key === key);
       if (!project || !isEncryptEnabled(project)) {
         const saved = await save(key);
-        if (saved && tab?.path) {
+        if (saved && tab?.path && tab.target.kind === "project") {
           await invalidateGitFileOperation(queryClient, tab.target, tab.path);
         }
         return;
@@ -168,7 +168,9 @@ export function EditorTabs({
       if (!isCurrentAsyncRequest(key, requestGeneration)) return;
       if (result.ok) {
         markSaved(key, result.newMtime ?? tab.mtime);
-        await invalidateGitFileOperation(queryClient, tab.target, tab.path);
+        if (tab.target.kind === "project") {
+          await invalidateGitFileOperation(queryClient, tab.target, tab.path);
+        }
       }
     },
     [
@@ -199,8 +201,8 @@ export function EditorTabs({
     ? editorActiveKeyForTarget(activeKeys, targetRef)
     : null;
   const activeTab = projectTabs.find((t) => t.key === activeKey) ?? null;
-  const activeTargetProject = activeTab?.target.project;
-  const activeTargetWorktreePath = activeTab?.target.worktreePath;
+  const activeTargetProject = activeTab?.target.kind === "project" ? activeTab.target.project : undefined;
+  const activeTargetWorktreePath = activeTab?.target.kind === "project" ? activeTab.target.worktreePath : undefined;
   const handleActiveTargetUnavailable = () => {
     if (activeTargetProject) {
       const unavailableTarget = {
@@ -238,7 +240,7 @@ export function EditorTabs({
   const openActiveDiff = () => {
     if (!project || !activeGitState) return;
     openDiff(
-      activeTab?.target ?? targetRef,
+      activeTab?.target.kind === "project" ? activeTab.target : targetRef,
       activeGitState.path,
       activeGitState.status,
       activeGitState.additions,
@@ -275,7 +277,7 @@ export function EditorTabs({
       return;
     }
 
-    if (onRevealGitCommit) {
+    if (onRevealGitCommit && (!("kind" in activeTab.target) || activeTab.target.kind === "project")) {
       const nonce = ++revealNonceRef.current;
       const request: GitCommitRevealRequest = {
         nonce,
@@ -403,7 +405,7 @@ export function EditorTabs({
                     const state = gitIndex.files.get(tab.path);
                     if (!project || !state) return;
                     openDiff(
-                      tab.target,
+                      tab.target.kind === "project" ? tab.target : targetRef,
                       state.path,
                       state.status,
                       state.additions,
@@ -453,9 +455,9 @@ export function EditorTabs({
             <span key={tab.key} className="flex shrink-0 items-center gap-1">
               <span
                 className="max-w-[12rem] truncate"
-                title={`${tab.target.worktreePath ?? "Project root"}: ${tab.path}`}
+                title={`${tab.target.kind === "project" && tab.target.worktreePath ? tab.target.worktreePath : "Project root"}: ${tab.path}`}
               >
-                {tab.target.worktreePath
+                {tab.target.kind === "project" && tab.target.worktreePath
                   ? `${tab.target.worktreePath}: `
                   : "Project root: "}
                 {tab.name}
@@ -488,7 +490,7 @@ export function EditorTabs({
             <VideoPreview
               key={`${activeTab.key}:${activeTab.previewRevision ?? 0}`}
               project={activeTab.project}
-              target={activeTab.target}
+              target={activeTab.target.kind === "project" ? activeTab.target : undefined}
               path={activeTab.path}
               fileName={activeTab.name}
               mime={activeTab.mime ?? videoMimeType(activeTab.name)}
@@ -498,7 +500,7 @@ export function EditorTabs({
             <ImagePreview
               key={`${activeTab.key}:${activeTab.previewRevision ?? 0}`}
               project={activeTab.project}
-              target={activeTab.target}
+              target={activeTab.target.kind === "project" ? activeTab.target : undefined}
               path={activeTab.path}
               fileName={activeTab.name}
               mime={activeTab.mime ?? imageMimeType(activeTab.name)}
@@ -527,7 +529,7 @@ export function EditorTabs({
             <DiffViewer
               key={activeTab.key}
               project={activeTab.project}
-              target={activeTab.target}
+              target={activeTab.target.kind === "project" ? activeTab.target : targetRef}
               filePath={activeTab.path}
               fileStatus={activeTab.fileStatus ?? "modified"}
               additions={activeTab.additions ?? 0}
@@ -542,7 +544,7 @@ export function EditorTabs({
           ) : activeTab.tier === "large" ? (
             <LargeFileViewer
               project={activeTab.project}
-              target={activeTab.target}
+              target={activeTab.target.kind === "project" ? activeTab.target : undefined}
               path={activeTab.path}
               fileName={activeTab.name}
               size={activeTab.size}

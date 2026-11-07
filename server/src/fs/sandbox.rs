@@ -3,15 +3,18 @@ use std::path::{Component, Path, PathBuf};
 use tokio::task;
 
 use crate::fs::error::FsError;
+use crate::fs::secure_path::{self, DirectoryIdentity};
 use crate::workspace_target::{target_path_identity, target_path_is_within, ResolvedProjectTarget};
 
 /// Validates that a proposed path resolves within a workspace root.
 ///
 /// Canonicalization uses `dunce::canonicalize` which strips Windows `\\?\`
 /// verbatim prefixes so that `starts_with` checks work cross-platform.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WorkspaceSandbox {
     root: PathBuf, // dunce-canonicalized workspace root
+    identity: DirectoryIdentity,
+    generation: u64,
 }
 
 /// Validates proposed file paths against the configured root for a named project.
@@ -107,17 +110,46 @@ impl ProjectSandbox {
 }
 
 impl WorkspaceSandbox {
-    /// Canonicalize `root` synchronously. Called at startup — not a hot path.
+    /// Canonicalize `root` synchronously and capture directory identity. Called at startup — not a hot path.
     pub fn new(root: PathBuf) -> Result<Self, FsError> {
+        Self::new_with_generation(root, 1)
+    }
+
+    pub fn new_with_generation(root: PathBuf, generation: u64) -> Result<Self, FsError> {
         let canonical = canonicalize_existing(root)?;
-        Ok(Self { root: canonical })
+        let identity = secure_path::directory_identity(&canonical)?;
+        Ok(Self {
+            root: canonical,
+            identity,
+            generation,
+        })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// Validates `proposed` (an absolute path formed by joining a project root
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn identity(&self) -> DirectoryIdentity {
+        self.identity
+    }
+
+    /// Verifies that the underlying workspace root directory has not been replaced on disk.
+    pub fn check_identity(&self) -> Result<(), FsError> {
+        let current = secure_path::directory_identity(&self.root)?;
+        if current != self.identity {
+            return Err(FsError::MutationRefused(
+                "workspace root directory was replaced".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validates `proposed` (an absolute path formed by joining the workspace root
     /// with a user-supplied relative path) against the workspace root.
     ///
     /// Fast-path lexical rejection: if the path contains any `..` component,
@@ -125,10 +157,10 @@ impl WorkspaceSandbox {
     /// Otherwise canonicalize on a blocking thread and verify the result is
     /// still inside the workspace root.
     pub async fn validate(&self, proposed: PathBuf) -> Result<PathBuf, FsError> {
+        self.check_identity()?;
         if proposed.components().any(|c| c == Component::ParentDir) {
             return Err(FsError::PathEscape);
         }
-
         let root = self.root.clone();
         let canonical = canonicalize_existing_blocking(proposed).await?;
 
@@ -139,12 +171,19 @@ impl WorkspaceSandbox {
         Ok(canonical)
     }
 
+    /// Explicit workspace validation alias.
+    pub async fn validate_workspace(&self, proposed: PathBuf) -> Result<PathBuf, FsError> {
+        self.validate(proposed).await
+    }
+
     /// Validate a not-yet-existing path by canonicalizing its parent directory.
     ///
     /// `name` must not contain path separators or `..`. The parent directory
     /// must already exist and must resolve within the workspace root.
     /// Returns the full absolute path of the would-be new entry.
+    /// Refuses mutating the workspace root itself or escaping via `..`.
     pub async fn validate_new_path(&self, parent: PathBuf, name: &str) -> Result<PathBuf, FsError> {
+        self.check_identity()?;
         validate_new_name(name)?;
 
         if parent.components().any(|c| c == Component::ParentDir) {
@@ -158,7 +197,37 @@ impl WorkspaceSandbox {
             return Err(FsError::PathEscape);
         }
 
-        Ok(canonical_parent.join(name))
+        let candidate = canonical_parent.join(name);
+        if candidate == root {
+            return Err(FsError::MutationRefused(
+                "cannot mutate workspace root".to_string(),
+            ));
+        }
+        if !target_path_is_within(&candidate, &root) {
+            return Err(FsError::PathEscape);
+        }
+
+        Ok(candidate)
+    }
+
+    /// Explicit workspace new path validation alias.
+    pub async fn validate_workspace_new_path(
+        &self,
+        parent: PathBuf,
+        name: &str,
+    ) -> Result<PathBuf, FsError> {
+        self.validate_new_path(parent, name).await
+    }
+
+    /// Verifies that a mutation does not target the workspace root itself.
+    pub fn check_mutation_target(&self, target: &Path) -> Result<(), FsError> {
+        self.check_identity()?;
+        if target == self.root {
+            return Err(FsError::MutationRefused(
+                "cannot mutate workspace root".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 

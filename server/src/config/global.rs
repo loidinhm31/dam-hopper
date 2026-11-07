@@ -20,11 +20,6 @@ pub fn dam_hopper_config_dir() -> PathBuf {
 pub fn global_config_path() -> PathBuf {
     dam_hopper_config_dir().join("config.toml")
 }
-
-pub fn global_registry_path() -> PathBuf {
-    dam_hopper_config_dir().join("dam-hopper.toml")
-}
-
 pub fn global_env_path() -> PathBuf {
     dam_hopper_config_dir().join(".env")
 }
@@ -41,8 +36,11 @@ pub fn read_global_config_at(path: &Path) -> Result<Option<GlobalConfig>, AppErr
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "Cannot read global config — ignoring");
-            return Ok(None);
+            return Err(AppError::Config(format!(
+                "Cannot read global config {}: {}",
+                path.display(),
+                e
+            )));
         }
     };
 
@@ -76,11 +74,11 @@ pub fn read_global_config_at(path: &Path) -> Result<Option<GlobalConfig>, AppErr
     });
     match parsed {
         Ok(cfg) => Ok(Some(cfg)),
-        Err(e) => {
-            // Matches Node.js behavior: corrupted global config is warned and ignored.
-            tracing::warn!(path = %path.display(), error = %e, "Failed to parse global config — ignoring");
-            Ok(None)
-        }
+        Err(e) => Err(AppError::Config(format!(
+            "Failed to parse global config {}: {}",
+            path.display(),
+            e
+        ))),
     }
 }
 
@@ -95,96 +93,126 @@ pub fn write_global_config_at(path: &Path, config: &GlobalConfig) -> Result<(), 
         ));
     }
     let toml_value = serialize_global_config_for_toml(config)?;
-    let content = toml::to_string_pretty(&toml_value)
+    let mut root_table = if path.exists() {
+        let existing = std::fs::read_to_string(path)
+            .map_err(|e| AppError::Config(format!("Cannot read config {}: {}", path.display(), e)))?;
+        toml::from_str::<toml::Value>(&existing)
+            .map_err(|e| AppError::Config(format!("Invalid TOML in {}: {}", path.display(), e)))?
+            .as_table()
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        toml::map::Map::new()
+    };
+
+    if let toml::Value::Table(new_table) = toml_value {
+        for (k, v) in new_table {
+            if k == "server" {
+                if let (Some(existing_sub), Some(new_sub)) = (
+                    root_table.get_mut(&k).and_then(|t| t.as_table_mut()),
+                    v.as_table(),
+                ) {
+                    existing_sub.remove("idleSuspend");
+                    existing_sub.remove("hostResources");
+                    existing_sub.remove("sessionChangesEnabled");
+                    existing_sub.remove("workflowDeletedNoteRetentionDays");
+                    existing_sub.remove("workflowEventRetentionDays");
+                    existing_sub.remove("workflowStaleAfterHours");
+                    for (sub_k, sub_v) in new_sub {
+                        existing_sub.insert(sub_k.clone(), sub_v.clone());
+                    }
+                    continue;
+                }
+            }
+            root_table.insert(k, v);
+        }
+    }
+
+    let content = toml::to_string_pretty(&toml::Value::Table(root_table))
         .map_err(|e| AppError::Config(format!("Cannot serialize global config: {}", e)))?;
-    // atomic_write uses 0o600 on Unix (protects workspace paths + future auth tokens)
     atomic_write(path, &content)
 }
 
 fn serialize_global_config_for_toml(config: &GlobalConfig) -> Result<toml::Value, AppError> {
-    let mut json = serde_json::to_value(config)
-        .map_err(|e| AppError::Config(format!("Cannot serialize global config: {}", e)))?;
-    normalize_global_config_json_for_toml(&mut json);
-    json_to_toml(&json)
-        .ok_or_else(|| AppError::Config("Cannot convert global config to TOML".to_string()))
-}
+    let mut table = toml::map::Map::new();
 
-fn normalize_global_config_json_for_toml(value: &mut Value) {
-    let Some(root) = value.as_object_mut() else {
-        return;
-    };
-
-    if let Some(ui) = root.get_mut("ui") {
-        normalize_ui_json_for_toml(ui);
+    if let Some(ws) = &config.workspace {
+        let mut ws_table = toml::map::Map::new();
+        ws_table.insert("name".to_string(), toml::Value::String(ws.name.clone()));
+        ws_table.insert("root".to_string(), toml::Value::String(ws.root.clone()));
+        table.insert("workspace".to_string(), toml::Value::Table(ws_table));
     }
-    if let Some(server) = root.get_mut("server") {
-        normalize_server_json_for_toml(server);
-    }
-}
 
-fn normalize_server_json_for_toml(value: &mut Value) {
-    let Some(server) = value.as_object_mut() else {
-        return;
-    };
-
-    let entries = std::mem::take(server);
-    for (key, value) in entries {
-        let toml_key = match key.as_str() {
-            "sessionDbPath" => "session_db_path",
-            "sessionBufferTtlHours" => "session_buffer_ttl_hours",
-            other => other,
-        };
-        let mut value = value;
-        if toml_key == "telemetry" {
-            normalize_telemetry_json_for_toml(&mut value);
+    if let Some(workspaces) = &config.workspaces {
+        let ws_json = serde_json::to_value(workspaces)
+            .map_err(|e| AppError::Config(format!("Failed to serialize workspaces: {e}")))?;
+        if let Some(ws_toml) = json_to_toml(&ws_json) {
+            table.insert("workspaces".to_string(), ws_toml);
         }
-        server.insert(toml_key.to_string(), value);
     }
+
+    if let Some(ui) = &config.ui {
+        let mut ui_json = serde_json::to_value(ui)
+            .map_err(|e| AppError::Config(format!("Failed to serialize ui config: {e}")))?;
+        normalize_ui_json_for_toml(&mut ui_json);
+        if let Some(ui_toml) = json_to_toml(&ui_json) {
+            table.insert("ui".to_string(), ui_toml);
+        }
+    }
+
+    if config.server != Default::default() {
+        let server_toml = crate::config::parser::server_to_toml(&config.server);
+        table.insert("server".to_string(), server_toml);
+    }
+
+    Ok(toml::Value::Table(table))
 }
 
-fn normalize_telemetry_json_for_toml(value: &mut Value) {
-    let Some(telemetry) = value.as_object_mut() else {
-        return;
-    };
-    let entries = std::mem::take(telemetry);
-    for (key, value) in entries {
-        let toml_key = match key.as_str() {
-            "dbPath" => "db_path",
-            "detailRetentionDays" => "detail_retention_days",
-            "aggregateRetentionDays" => "aggregate_retention_days",
-            other => other,
-        };
-        telemetry.insert(toml_key.to_string(), value);
-    }
-}
+pub(crate) const KNOWN_SCALAR_SHORTCUT_KEYS: &[&str] = &[
+    "search_text_shortcut",
+    "search_filename_shortcut",
+    "terminal_workspace_shortcut",
+    "terminal_file_panel_shortcut",
+    "project_panel_shortcut",
+    "reveal_active_file_shortcut",
+    "git_panel_shortcut",
+    "ports_panel_shortcut",
+    "terminal_font_size_increase_shortcut",
+    "terminal_font_size_decrease_shortcut",
+    "os_palette_shortcut",
+    "os_cycle_focus_shortcut",
+];
 
-fn normalize_ui_json_for_toml(value: &mut Value) {
+pub(crate) fn normalize_ui_json_for_toml(value: &mut Value) {
     let Some(ui) = value.as_object_mut() else {
         return;
     };
 
     let entries = std::mem::take(ui);
     for (key, mut value) in entries {
+        if key == "fleetTerminalShortcut" || key == "fleet_terminal_shortcut" {
+            continue;
+        }
+
         let toml_key = match key.as_str() {
-            "systemFontSize" => "system_font_size",
-            "editorFontSize" => "editor_font_size",
-            "terminalFontSize" => "terminal_font_size",
-            "editorZoomWheelEnabled" => "editor_zoom_wheel_enabled",
-            "searchTextShortcut" => "search_text_shortcut",
-            "searchFilenameShortcut" => "search_filename_shortcut",
-            "terminalWorkspaceShortcut" => "terminal_workspace_shortcut",
-            "terminalFilePanelShortcut" => "terminal_file_panel_shortcut",
-            "projectPanelShortcut" => "project_panel_shortcut",
-            "revealActiveFileShortcut" => "reveal_active_file_shortcut",
-            "gitPanelShortcut" => "git_panel_shortcut",
-            "portsPanelShortcut" => "ports_panel_shortcut",
-            "fleetTerminalShortcut" => "fleet_terminal_shortcut",
-            "terminalFontSizeIncreaseShortcut" => "terminal_font_size_increase_shortcut",
-            "terminalFontSizeDecreaseShortcut" => "terminal_font_size_decrease_shortcut",
-            "hostResourcePinnedMount" => "host_resource_pinned_mount",
-            "terminalSuggestionsEnabled" => "terminal_suggestions_enabled",
-            "terminalAutoSwitchProjectEnabled" => "terminal_auto_switch_project_enabled",
-            "terminalAgentNotifications" => "terminal_agent_notifications",
+            "systemFontSize" | "system_font_size" => "system_font_size",
+            "editorFontSize" | "editor_font_size" => "editor_font_size",
+            "terminalFontSize" | "terminal_font_size" => "terminal_font_size",
+            "editorZoomWheelEnabled" | "editor_zoom_wheel_enabled" => "editor_zoom_wheel_enabled",
+            "searchTextShortcut" | "search_text_shortcut" => "search_text_shortcut",
+            "searchFilenameShortcut" | "search_filename_shortcut" => "search_filename_shortcut",
+            "terminalWorkspaceShortcut" | "terminal_workspace_shortcut" => "terminal_workspace_shortcut",
+            "terminalFilePanelShortcut" | "terminal_file_panel_shortcut" => "terminal_file_panel_shortcut",
+            "projectPanelShortcut" | "project_panel_shortcut" => "project_panel_shortcut",
+            "revealActiveFileShortcut" | "reveal_active_file_shortcut" => "reveal_active_file_shortcut",
+            "gitPanelShortcut" | "git_panel_shortcut" => "git_panel_shortcut",
+            "portsPanelShortcut" | "ports_panel_shortcut" => "ports_panel_shortcut",
+            "terminalFontSizeIncreaseShortcut" | "terminal_font_size_increase_shortcut" => "terminal_font_size_increase_shortcut",
+            "terminalFontSizeDecreaseShortcut" | "terminal_font_size_decrease_shortcut" => "terminal_font_size_decrease_shortcut",
+            "hostResourcePinnedMount" | "host_resource_pinned_mount" => "host_resource_pinned_mount",
+            "terminalSuggestionsEnabled" | "terminal_suggestions_enabled" => "terminal_suggestions_enabled",
+            "terminalAutoSwitchProjectEnabled" | "terminal_auto_switch_project_enabled" => "terminal_auto_switch_project_enabled",
+            "terminalAgentNotifications" | "terminal_agent_notifications" => "terminal_agent_notifications",
             "agentSettingsPaths" | "agent_settings_paths" => {
                 if let Value::Object(inner) = &mut value {
                     let inner_entries: Vec<(String, Value)> =
@@ -202,29 +230,53 @@ fn normalize_ui_json_for_toml(value: &mut Value) {
                 }
                 "agent_settings_paths"
             }
-            "explorerShowHidden" => "explorer_show_hidden",
-            "explorerLanguageFilter" => "explorer_language_filter",
-            "mobileCustomKeyboardEnabled" => "mobile_custom_keyboard_enabled",
-            "mobileCustomKeyboardFontSize" => "mobile_custom_keyboard_font_size",
-            "mobileCustomKeyboardPadding" => "mobile_custom_keyboard_padding",
-            "mobileCustomKeyboardRowGap" => "mobile_custom_keyboard_row_gap",
-            "terminalOrder" => "terminal_order",
-            "projectOrder" => "project_order",
-            "projectCommandOrder" => "project_command_order",
-            "runtimeGroupOrder" => "runtime_group_order",
-            "runtimeItemOrder" => "runtime_item_order",
-            "terminalScrollButtonsEnabled" => "terminal_scroll_buttons_enabled",
-            "terminalCommitStatusEnabled" => "terminal_commit_status_enabled",
-            "terminalScrollStep" => "terminal_scroll_step",
+            "explorerShowHidden" | "explorer_show_hidden" => "explorer_show_hidden",
+            "explorerLanguageFilter" | "explorer_language_filter" => "explorer_language_filter",
+            "mobileCustomKeyboardEnabled" | "mobile_custom_keyboard_enabled" => "mobile_custom_keyboard_enabled",
+            "mobileCustomKeyboardFontSize" | "mobile_custom_keyboard_font_size" => "mobile_custom_keyboard_font_size",
+            "mobileCustomKeyboardPadding" | "mobile_custom_keyboard_padding" => "mobile_custom_keyboard_padding",
+            "mobileCustomKeyboardRowGap" | "mobile_custom_keyboard_row_gap" => "mobile_custom_keyboard_row_gap",
+            "terminalOrder" | "terminal_order" => "terminal_order",
+            "projectOrder" | "project_order" => "project_order",
+            "projectCommandOrder" | "project_command_order" => "project_command_order",
+            "runtimeGroupOrder" | "runtime_group_order" => "runtime_group_order",
+            "runtimeItemOrder" | "runtime_item_order" => "runtime_item_order",
+            "terminalScrollButtonsEnabled" | "terminal_scroll_buttons_enabled" => "terminal_scroll_buttons_enabled",
+            "terminalCommitStatusEnabled" | "terminal_commit_status_enabled" => "terminal_commit_status_enabled",
+            "terminalScrollStep" | "terminal_scroll_step" => "terminal_scroll_step",
             "cognitoModeShortcut" | "cognito_mode_shortcut" => "cognito_mode_shortcut",
             "cognitoModeStyle" | "cognito_mode_style" => "cognito_mode_style",
+            "defaultWindowPlacement" | "default_window_placement" => "default_window_placement",
+            "osPaletteShortcut" | "os_palette_shortcut" => "os_palette_shortcut",
+            "osCycleFocusShortcut" | "os_cycle_focus_shortcut" => "os_cycle_focus_shortcut",
+            "dockPadding" | "dock_padding" => "dock_padding",
+            "dockItemSpacing" | "dock_item_spacing" => "dock_item_spacing",
+            "dockOuterSpacing" | "dock_outer_spacing" => "dock_outer_spacing",
+            "dockRadius" | "dock_radius" => "dock_radius",
+            "dockPosition" | "dock_position" => "dock_position",
+            "cursorTheme" | "cursor_theme" => "cursor_theme",
+            "appShortcuts" | "app_shortcuts" => "app_shortcuts",
             other => other,
         };
+
+        // Known shortcut paths only: encode explicit unbound as TOML "" before generic null dropping
+        if KNOWN_SCALAR_SHORTCUT_KEYS.contains(&toml_key) && value.is_null() {
+            value = Value::String("".to_string());
+        } else if toml_key == "app_shortcuts" {
+            if let Value::Object(inner) = &mut value {
+                for val in inner.values_mut() {
+                    if val.is_null() {
+                        *val = Value::String("".to_string());
+                    }
+                }
+            }
+        }
+
         ui.insert(toml_key.to_string(), value);
     }
 }
 
-fn json_to_toml(v: &Value) -> Option<toml::Value> {
+pub(crate) fn json_to_toml(v: &Value) -> Option<toml::Value> {
     match v {
         Value::Null => None,
         Value::Bool(b) => Some(toml::Value::Boolean(*b)),

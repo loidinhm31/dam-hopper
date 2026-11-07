@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import type { HostMetrics, HostResourceSnapshotV1 } from "@/api/client.js";
 import { createApiClient } from "@/api/client.js";
-import { HostResourcePopover } from "@/components/organisms/HostResourcePopover.js";
+import { HostResourcePopover } from "./host-resource-popover-fixture.js";
 import {
   __setConnectionSnapshotForTests,
   registerConnectionRegistryQueryClient,

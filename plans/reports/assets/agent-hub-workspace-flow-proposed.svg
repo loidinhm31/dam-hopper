@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 620" fill="none" role="img" aria-labelledby="wf-title wf-desc" font-family="JetBrains Mono, ui-monospace, monospace" font-size="14">
+  <title id="wf-title">Approved Design: Agent Hub Terminal-First Workspace and External Floating File Window</title>
+  <desc id="wf-desc">Approved OS desktop layout showing terminal-first Agent Hub, hide/show Projects and Agents sidebar, independently expandable project file trees, and a standalone floating editor window outside Hub. Design only; not implemented.</desc>
+  <style>
+    @supports (color: var(--fg)) {
+      .s-border { stroke: var(--border); }
+      .s-accent { stroke: var(--accent); }
+      .s-warning { stroke: var(--warning); }
+      .f-fg { fill: var(--fg); }
+      .f-muted { fill: var(--muted); }
+      .f-accent { fill: var(--accent); }
+      .f-success { fill: var(--success); }
+      .f-warning { fill: var(--warning); }
+      .f-error { fill: var(--error); }
+      .f-surface { fill: var(--surface); }
+    }
+  </style>
+  <!-- PROPOSED STATUS HEADER -->
+  <text class="f-warning" x="8" y="19" fill="currentColor" font-weight="700">APPROVED DESIGN — Terminal-First Hub + External Floating File Window</text>
+  <!-- 1. OS DESKTOP CANVAS & SHELL CHROME (x=8..972, y=28..612) -->
+  <rect class="s-border" x="8" y="28" width="964" height="584" rx="6" stroke="currentColor" stroke-opacity="0.45" stroke-dasharray="4 3"/>
+  <path class="s-border" d="M8 60H972 M54 60V612" stroke="currentColor" stroke-opacity="0.45"/>
+  <!-- OS TopBar -->
+  <text class="f-accent" x="16" y="49" fill="currentColor" font-weight="700">DH//OS</text>
+  <text class="f-fg" x="84" y="49" fill="currentColor" font-weight="600">[1:Hub !1]</text>
+  <text class="f-muted" x="184" y="49" fill="currentColor" fill-opacity="0.65">[2:Review]</text>
+  <text class="f-muted" x="290" y="49" fill="currentColor" fill-opacity="0.65">Fleet: 2/2</text>
+  <text class="f-muted" x="680" y="49" fill="currentColor" fill-opacity="0.65">OS Canvas (Desktop 1) · ⌘ Palette</text>
+  <!-- OS Left Dock -->
+  <rect class="s-accent" x="13" y="70" width="36" height="32" rx="4" stroke="currentColor"/>
+  <text class="f-accent" x="18" y="91" fill="currentColor" font-weight="700">HUB</text>
+  <rect class="s-border" x="13" y="110" width="36" height="32" rx="4" stroke="currentColor" stroke-opacity="0.45"/>
+  <text class="f-muted" x="21" y="131" fill="currentColor" fill-opacity="0.65">&gt;_</text>
+  <rect class="s-border" x="13" y="150" width="36" height="32" rx="4" stroke="currentColor" stroke-opacity="0.45"/>
+  <text class="f-muted" x="18" y="171" fill="currentColor" fill-opacity="0.65">DIR</text>
+  <rect class="s-accent" x="13" y="190" width="36" height="32" rx="4" stroke="currentColor"/>
+  <circle class="f-accent" cx="45" cy="194" r="3.5" fill="currentColor"/>
+  <text class="f-fg" x="18" y="211" fill="currentColor">EDT</text>
+  <rect class="s-border" x="13" y="230" width="36" height="32" rx="4" stroke="currentColor" stroke-opacity="0.45"/>
+  <text class="f-muted" x="18" y="251" fill="currentColor" fill-opacity="0.65">GIT</text>
+  <!-- 2. AGENT HUB WINDOW (x=64..860, y=68..602) — Clipped around Floating Editor (x=520..966, y=166..544) -->
+  <path class="s-border" d="M64 68H860V166 M860 544V602H64V68" stroke="currentColor" stroke-width="1.5"/>
+  <!-- Hub Titlebar (y=68..100) -->
+  <path class="s-border" d="M64 100H860" stroke="currentColor" stroke-opacity="0.5"/>
+  <rect class="s-border" x="72" y="74" width="28" height="20" rx="3" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-fg" x="79" y="89" fill="currentColor" font-weight="700">☰</text>
+  <text class="f-fg" x="108" y="89" fill="currentColor" font-weight="700">Agent Hub</text>
+  <rect class="s-border" x="194" y="74" width="214" height="20" rx="3" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-accent" x="202" y="89" fill="currentColor">local/dam-hopper · main</text>
+  <text class="f-warning" x="420" y="89" fill="currentColor" font-weight="600">!1 Attn</text>
+  <text class="f-success" x="494" y="89" fill="currentColor">●2 Work</text>
+  <text class="f-muted" x="572" y="89" fill="currentColor" fill-opacity="0.65">[Recipes]</text>
+  <text class="f-muted" x="692" y="89" fill="currentColor" fill-opacity="0.65">[Float][_][□][✕]</text>
+  <!-- Resizable Left Sidebar Divider (x=344, width=280px, range 220..520px) -->
+  <path class="s-border" d="M344 100V602" stroke="currentColor" stroke-opacity="0.5"/>
+  <!-- 2A. LEFT SIDEBAR TOP: OPEN PROJECT WORKSPACES + INLINE FILE TREE (y=100..404) -->
+  <path class="s-border" d="M64 130H344" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-muted" x="72" y="120" fill="currentColor" fill-opacity="0.65" font-weight="700">PROJECTS (3)</text>
+  <rect class="s-border" x="192" y="106" width="84" height="19" rx="3" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-fg" x="198" y="120" fill="currentColor">+ Open ▾</text>
+  <rect class="s-border" x="282" y="106" width="54" height="19" rx="3" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-fg" x="288" y="120" fill="currentColor">+ &gt;_</text>
+  <!-- Project 1: Active Workspace (dam-hopper, 2 terminals) with Sibling Tree Disclosure -->
+  <rect class="s-accent" x="70" y="136" width="268" height="194" rx="4" stroke="currentColor" stroke-width="1.5"/>
+  <text class="f-fg" x="78" y="156" fill="currentColor" font-weight="700">▾</text>
+  <circle class="f-success" cx="96" cy="151" r="4" fill="currentColor"/>
+  <text class="f-accent" x="106" y="156" fill="currentColor" font-weight="700">dam-hopper</text>
+  <text class="f-muted" x="196" y="156" fill="currentColor" fill-opacity="0.65">[local]</text>
+  <text class="f-fg" x="262" y="156" fill="currentColor" font-weight="700">2</text>
+  <text class="f-muted" x="280" y="156" fill="currentColor" fill-opacity="0.65">[+]</text>
+  <!-- Sibling Compact Worktree + Git Summary Bar -->
+  <rect class="s-border" x="78" y="163" width="252" height="22" rx="3" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-fg" x="84" y="179" fill="currentColor">⎇ wt: main (root) ▾</text>
+  <text class="f-muted" x="258" y="179" fill="currentColor" fill-opacity="0.65">a91f20c</text>
+  <!-- Sibling Inline Project File Tree Region (scoped via fsTargetKey) -->
+  <text class="f-fg" x="84" y="202" fill="currentColor">▾ packages/ui/src/os</text>
+  <text class="f-fg" x="98" y="223" fill="currentColor">▾ apps/</text>
+  <rect class="s-accent" x="108" y="230" width="222" height="21" rx="3" stroke="currentColor"/>
+  <text class="f-accent" x="114" y="245" fill="currentColor" font-weight="700">AgentHubApp.tsx ↗ Float</text>
+  <text class="f-muted" x="114" y="266" fill="currentColor" fill-opacity="0.65">EditorApp.tsx</text>
+  <text class="f-muted" x="98" y="287" fill="currentColor" fill-opacity="0.65">WindowFrame.tsx</text>
+  <text class="f-muted" x="84" y="308" fill="currentColor" fill-opacity="0.65">▸ server/</text>
+  <text class="f-muted" x="84" y="325" fill="currentColor" fill-opacity="0.65">README.md</text>
+  <!-- Project 2: Collapsed Tree, Active Agent Needs Attention -->
+  <rect class="s-border" x="70" y="335" width="268" height="28" rx="4" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-muted" x="78" y="354" fill="currentColor" fill-opacity="0.65">▸</text>
+  <circle class="f-warning" cx="96" cy="349" r="4" fill="currentColor"/>
+  <text class="f-fg" x="106" y="354" fill="currentColor">backend-api</text>
+  <text class="f-muted" x="198" y="354" fill="currentColor" fill-opacity="0.65">[prod]</text>
+  <text class="f-warning" x="252" y="354" fill="currentColor" font-weight="700">!1</text>
+  <text class="f-muted" x="274" y="354" fill="currentColor" fill-opacity="0.65">wt:auth</text>
+  <!-- Project 3: Open Project with 0 Terminals (File-browsing only, no implicit PTY) -->
+  <rect class="s-border" x="70" y="368" width="268" height="28" rx="4" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-muted" x="78" y="387" fill="currentColor" fill-opacity="0.65">▸</text>
+  <circle class="f-muted" cx="96" cy="382" r="4" fill="currentColor" fill-opacity="0.5"/>
+  <text class="f-muted" x="106" y="387" fill="currentColor" fill-opacity="0.65">docs-portal</text>
+  <text class="f-muted" x="198" y="387" fill="currentColor" fill-opacity="0.65">[local]</text>
+  <text class="f-muted" x="262" y="387" fill="currentColor" fill-opacity="0.65">0</text>
+  <text class="f-muted" x="280" y="387" fill="currentColor" fill-opacity="0.65">[+][×]</text>
+  <!-- 2B. LEFT SIDEBAR BOTTOM: CROSS-PROJECT OBSERVED AGENTS (y=404..576) -->
+  <path class="s-border" d="M64 404H344 M64 432H344 M64 462H344" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-muted" x="72" y="423" fill="currentColor" fill-opacity="0.65" font-weight="700">AGENTS</text>
+  <text class="f-muted" x="198" y="423" fill="currentColor" fill-opacity="0.65">Agent Settings ↗</text>
+  <!-- Persisted Multi-Select Status Filter Combobox -->
+  <text class="f-fg" x="72" y="452" fill="currentColor">Filter: Attn, Working (3) ▾</text>
+  <!-- Agent Group Row 1: Cross-project Needs Attention -->
+  <rect class="s-warning" x="70" y="468" width="268" height="48" rx="4" stroke="currentColor"/>
+  <text class="f-warning" x="78" y="487" fill="currentColor" font-weight="700">[Codex] ! Approval</text>
+  <text class="f-fg" x="298" y="487" fill="currentColor" font-weight="700">×1</text>
+  <text class="f-muted" x="78" y="507" fill="currentColor" fill-opacity="0.65">backend-api · [prod] · Hook</text>
+  <!-- Agent Group Row 2: Active Project Working Group (click cycles members) -->
+  <rect class="s-accent" x="70" y="521" width="268" height="48" rx="4" stroke="currentColor"/>
+  <text class="f-success" x="78" y="540" fill="currentColor" font-weight="700">[OMP][Claude] ● Working</text>
+  <text class="f-fg" x="298" y="540" fill="currentColor" font-weight="700">×2</text>
+  <text class="f-muted" x="78" y="560" fill="currentColor" fill-opacity="0.65">dam-hopper · [local] · ↻</text>
+  <!-- Sidebar Footer -->
+  <path class="s-border" d="M64 576H344" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-muted" x="72" y="594" fill="currentColor" fill-opacity="0.65">☰ Hide · ↔ Resize (220-520)</text>
+  <!-- 2C. RIGHT MAIN STAGE: TERMINAL-ONLY WORKSPACE (2 tabs matching project count 2) -->
+  <path class="s-border" d="M344 130H860" stroke="currentColor" stroke-opacity="0.5"/>
+  <rect class="s-accent" x="352" y="105" width="166" height="21" rx="3" stroke="currentColor"/>
+  <text class="f-accent" x="360" y="120" fill="currentColor" font-weight="700">● [OMP] #1 [pin] ×</text>
+  <rect class="s-border" x="524" y="105" width="166" height="21" rx="3" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-fg" x="532" y="120" fill="currentColor">● [Claude] #2 ×</text>
+  <text class="f-muted" x="716" y="120" fill="currentColor" fill-opacity="0.65">[+ New] [◫ Split]</text>
+  <!-- Split Terminal Panes inside Hub (Pane 1 x=344..516, Pane 2 x=516..860) -->
+  <path class="s-border" d="M516 130V576" stroke="currentColor" stroke-opacity="0.5" stroke-dasharray="3 3"/>
+  <text class="f-muted" x="354" y="156" fill="currentColor" fill-opacity="0.65">Pane 1 · #1 (OMP)</text>
+  <text class="f-fg" x="354" y="184" fill="currentColor">$ omp</text>
+  <text class="f-success" x="354" y="210" fill="currentColor">● Working (wt:main)</text>
+  <text class="f-muted" x="354" y="236" fill="currentColor" fill-opacity="0.65">✓ Split layout v3</text>
+  <text class="f-muted" x="354" y="262" fill="currentColor" fill-opacity="0.65">✓ Terminal-only</text>
+  <text class="f-fg" x="354" y="288" fill="currentColor">$ git status -sb</text>
+  <text class="f-muted" x="354" y="314" fill="currentColor" fill-opacity="0.65">## main...origin</text>
+  <text class="f-accent" x="354" y="344" fill="currentColor" font-weight="700">▌</text>
+  <!-- Visible top/bottom peek of Pane 2 behind floating window -->
+  <text class="f-muted" x="524" y="156" fill="currentColor" fill-opacity="0.65">Pane 2 · [Claude] dam-hopper #2</text>
+  <text class="f-muted" x="524" y="566" fill="currentColor" fill-opacity="0.65">✓ PTY stays mounted under float</text>
+  <!-- Hub Terminal Footer (y=576..602) -->
+  <path class="s-border" d="M344 576H860" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-muted" x="354" y="594" fill="currentColor" fill-opacity="0.65">Terminal Stage · MultiTerminalDisplay (2 open tabs, split layout)</text>
+  <!-- Connector Arrow from Clicked File in Hub Sidebar to Floating OS Editor Window -->
+  <path class="s-accent" d="M330 240H514" stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <path class="s-accent" d="M508 235L518 240L508 245" stroke="currentColor" stroke-width="1.5"/>
+  <!-- 3. FLOATING OS EDITOR / VIEWER WINDOW OUTSIDE AGENT HUB (x=520..966, y=166..544) -->
+  <rect class="s-border" x="526" y="172" width="446" height="378" rx="6" stroke="currentColor" stroke-opacity="0.45" stroke-dasharray="2 2"/>
+  <rect class="s-accent f-surface" x="520" y="166" width="446" height="378" rx="6" stroke="currentColor" stroke-width="2"/>
+  <!-- Floating OS Window Titlebar (y=166..198) -->
+  <path class="s-border" d="M520 198H966 M520 226H966 M520 512H966" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-accent" x="530" y="187" fill="currentColor" font-weight="700">AgentHubApp.tsx</text>
+  <rect class="s-border" x="662" y="172" width="160" height="19" rx="3" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-muted" x="668" y="186" fill="currentColor" fill-opacity="0.65">local / dam-hopper</text>
+  <text class="f-fg" x="828" y="187" fill="currentColor">[Float][_][□][✕]</text>
+  <!-- Floating Window Breadcrumb / Format Bar (y=198..226) -->
+  <text class="f-muted" x="530" y="217" fill="currentColor" fill-opacity="0.65">packages/ui/src/os/apps/AgentHubApp.tsx · wt:main</text>
+  <!-- Floating Editor / Viewer Content (y=226..512) -->
+  <text class="f-muted" x="532" y="252" fill="currentColor" fill-opacity="0.65">1</text>
+  <text class="f-fg" x="556" y="252" fill="currentColor">export function AgentHubApp(props: Props) {</text>
+  <text class="f-muted" x="532" y="278" fill="currentColor" fill-opacity="0.65">2</text>
+  <text class="f-muted" x="556" y="278" fill="currentColor" fill-opacity="0.65">  // Standalone OS EditorApp (mode: &quot;float&quot;)</text>
+  <text class="f-muted" x="532" y="304" fill="currentColor" fill-opacity="0.65">3</text>
+  <text class="f-fg" x="556" y="304" fill="currentColor">  const owner = useWindowOwner();</text>
+  <text class="f-muted" x="532" y="330" fill="currentColor" fill-opacity="0.65">4</text>
+  <text class="f-fg" x="556" y="330" fill="currentColor">  return &lt;HubTerminalWorkspace /&gt;;</text>
+  <text class="f-muted" x="532" y="356" fill="currentColor" fill-opacity="0.65">5</text>
+  <text class="f-fg" x="556" y="356" fill="currentColor">}</text>
+  <!-- Floating Window Architecture Callout Box -->
+  <rect class="s-border" x="532" y="378" width="422" height="118" rx="4" stroke="currentColor" stroke-opacity="0.5"/>
+  <text class="f-accent" x="542" y="401" fill="currentColor" font-weight="700">Floating OS File Panel (Outside Agent Hub)</text>
+  <text class="f-fg" x="542" y="425" fill="currentColor">• Emits file:open (mode: &quot;float&quot;, generation)</text>
+  <text class="f-fg" x="542" y="447" fill="currentColor">• Routes Monaco / Markdown / Image / Video</text>
+  <text class="f-fg" x="542" y="469" fill="currentColor">• Deduplicates via canonical editorFileTabKey</text>
+  <text class="f-muted" x="542" y="491" fill="currentColor" fill-opacity="0.65">• True OS window: survives project switches</text>
+  <!-- Floating Window Status Bar (y=512..544) -->
+  <text class="f-muted" x="530" y="533" fill="currentColor" fill-opacity="0.65">UTF-8 · TSX · Exclusive Claim · Float z-top</text>
+</svg>

@@ -26,12 +26,18 @@ import {
   withUiConfigDefaults,
   normalizeTerminalAgentNotifications,
   normalizeCognitoModeStyle,
+  clampDockPadding,
+  clampDockItemSpacing,
+  clampDockOuterSpacing,
+  clampDockRadius,
+  type DockPosition,
+  isDockPosition,
+  normalizeDockPosition,
 } from "@/lib/ui-config.js";
 import {
   DEFAULT_COGNITO_MODE_SHORTCUT,
   normalizeCognitoModeShortcut,
   DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
-  DEFAULT_FLEET_TERMINAL_SHORTCUT,
   DEFAULT_GIT_PANEL_SHORTCUT,
   DEFAULT_PORTS_PANEL_SHORTCUT,
   DEFAULT_PROJECT_PANEL_SHORTCUT,
@@ -41,8 +47,9 @@ import {
   DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
   DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
   DEFAULT_TERMINAL_WORKSPACE_SHORTCUT,
+  DEFAULT_OS_PALETTE_SHORTCUT,
+  DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
 } from "@/lib/shortcuts.js";
-
 const FONT_MIN = 10;
 const FONT_MAX = 32;
 const KEYBOARD_FONT_MIN = 9;
@@ -82,17 +89,16 @@ interface PersistedSettingsState {
   editorFontSize: number;
   terminalFontSize: number;
   editorZoomWheelEnabled: boolean;
-  searchTextShortcut: string;
-  searchFilenameShortcut: string;
-  terminalWorkspaceShortcut: string;
-  terminalFilePanelShortcut: string;
-  projectPanelShortcut: string;
-  revealActiveFileShortcut: string;
-  gitPanelShortcut: string;
-  portsPanelShortcut: string;
-  fleetTerminalShortcut: string;
-  terminalFontSizeIncreaseShortcut: string;
-  terminalFontSizeDecreaseShortcut: string;
+  searchTextShortcut: string | null;
+  searchFilenameShortcut: string | null;
+  terminalWorkspaceShortcut: string | null;
+  terminalFilePanelShortcut: string | null;
+  projectPanelShortcut: string | null;
+  revealActiveFileShortcut: string | null;
+  gitPanelShortcut: string | null;
+  portsPanelShortcut: string | null;
+  terminalFontSizeIncreaseShortcut: string | null;
+  terminalFontSizeDecreaseShortcut: string | null;
   terminalSuggestionsEnabled: boolean;
   terminalAutoSwitchProjectEnabled: boolean;
   terminalAgentNotifications: TerminalAgentNotifications;
@@ -108,8 +114,17 @@ interface PersistedSettingsState {
   agentSettingsPaths?: AgentSettingsPaths;
   cognitoModeShortcut: string;
   cognitoModeStyle: CognitoModeStyle;
+  osPaletteShortcut: string | null;
+  osCycleFocusShortcut: string | null;
+  defaultWindowPlacement: "float" | "tile";
+  dockPadding: number;
+  dockItemSpacing: number;
+  dockOuterSpacing: number;
+  dockRadius: number;
+  dockPosition: DockPosition;
+  cursorTheme: "system" | "theme";
+  appShortcuts: Record<string, string | null>;
 }
-
 interface SettingsState extends PersistedSettingsState {
   hydrated: boolean;
   sourceUnset: boolean;
@@ -180,30 +195,57 @@ function applySnapshotToStore(
     clamped.terminalFontSize = clampFont(snapshot.terminalFontSize);
   if (typeof snapshot.editorZoomWheelEnabled === "boolean")
     clamped.editorZoomWheelEnabled = snapshot.editorZoomWheelEnabled;
-  if (typeof snapshot.searchTextShortcut === "string")
+  if (typeof snapshot.searchTextShortcut === "string" || snapshot.searchTextShortcut === null)
     clamped.searchTextShortcut = snapshot.searchTextShortcut;
-  if (typeof snapshot.searchFilenameShortcut === "string")
+  if (typeof snapshot.searchFilenameShortcut === "string" || snapshot.searchFilenameShortcut === null)
     clamped.searchFilenameShortcut = snapshot.searchFilenameShortcut;
-  if (typeof snapshot.terminalWorkspaceShortcut === "string")
+  if (typeof snapshot.terminalWorkspaceShortcut === "string" || snapshot.terminalWorkspaceShortcut === null)
     clamped.terminalWorkspaceShortcut = snapshot.terminalWorkspaceShortcut;
-  if (typeof snapshot.terminalFilePanelShortcut === "string")
+  if (typeof snapshot.terminalFilePanelShortcut === "string" || snapshot.terminalFilePanelShortcut === null)
     clamped.terminalFilePanelShortcut = snapshot.terminalFilePanelShortcut;
-  if (typeof snapshot.projectPanelShortcut === "string")
+  if (typeof snapshot.projectPanelShortcut === "string" || snapshot.projectPanelShortcut === null)
     clamped.projectPanelShortcut = snapshot.projectPanelShortcut;
-  if (typeof snapshot.revealActiveFileShortcut === "string")
+  if (typeof snapshot.revealActiveFileShortcut === "string" || snapshot.revealActiveFileShortcut === null)
     clamped.revealActiveFileShortcut = snapshot.revealActiveFileShortcut;
-  if (typeof snapshot.gitPanelShortcut === "string")
+  if (typeof snapshot.gitPanelShortcut === "string" || snapshot.gitPanelShortcut === null)
     clamped.gitPanelShortcut = snapshot.gitPanelShortcut;
-  if (typeof snapshot.portsPanelShortcut === "string")
+  if (typeof snapshot.portsPanelShortcut === "string" || snapshot.portsPanelShortcut === null)
     clamped.portsPanelShortcut = snapshot.portsPanelShortcut;
-  if (typeof snapshot.fleetTerminalShortcut === "string")
-    clamped.fleetTerminalShortcut = snapshot.fleetTerminalShortcut;
-  if (typeof snapshot.terminalFontSizeIncreaseShortcut === "string")
+  if (typeof snapshot.terminalFontSizeIncreaseShortcut === "string" || snapshot.terminalFontSizeIncreaseShortcut === null)
     clamped.terminalFontSizeIncreaseShortcut =
       snapshot.terminalFontSizeIncreaseShortcut;
-  if (typeof snapshot.terminalFontSizeDecreaseShortcut === "string")
+  if (typeof snapshot.terminalFontSizeDecreaseShortcut === "string" || snapshot.terminalFontSizeDecreaseShortcut === null)
     clamped.terminalFontSizeDecreaseShortcut =
       snapshot.terminalFontSizeDecreaseShortcut;
+  if (typeof snapshot.osPaletteShortcut === "string" || snapshot.osPaletteShortcut === null)
+    clamped.osPaletteShortcut = snapshot.osPaletteShortcut;
+  if (typeof snapshot.osCycleFocusShortcut === "string" || snapshot.osCycleFocusShortcut === null)
+    clamped.osCycleFocusShortcut = snapshot.osCycleFocusShortcut;
+  if (snapshot.dockPadding !== undefined)
+    clamped.dockPadding = clampDockPadding(snapshot.dockPadding);
+  if (snapshot.dockItemSpacing !== undefined)
+    clamped.dockItemSpacing = clampDockItemSpacing(snapshot.dockItemSpacing);
+  if (snapshot.dockOuterSpacing !== undefined)
+    clamped.dockOuterSpacing = clampDockOuterSpacing(snapshot.dockOuterSpacing);
+  if (snapshot.dockRadius !== undefined)
+    clamped.dockRadius = clampDockRadius(snapshot.dockRadius);
+  if (snapshot.cursorTheme === "system" || snapshot.cursorTheme === "theme")
+    clamped.cursorTheme = snapshot.cursorTheme;
+  if (snapshot.appShortcuts !== undefined) {
+    clamped.appShortcuts =
+      typeof snapshot.appShortcuts === "object" && snapshot.appShortcuts !== null
+        ? { ...(snapshot.appShortcuts as Record<string, string | null>) }
+        : {};
+  }
+  const placement =
+    snapshot.defaultWindowPlacement ??
+    (snapshot as Record<string, unknown>).default_window_placement;
+  if (placement === "float" || placement === "tile")
+    clamped.defaultWindowPlacement = placement;
+  const pos =
+    snapshot.dockPosition ??
+    (snapshot as Record<string, unknown>).dock_position;
+  if (isDockPosition(pos)) clamped.dockPosition = pos;
   if (typeof snapshot.terminalSuggestionsEnabled === "boolean")
     clamped.terminalSuggestionsEnabled = snapshot.terminalSuggestionsEnabled;
   if (typeof snapshot.terminalAutoSwitchProjectEnabled === "boolean")
@@ -279,7 +321,6 @@ function pickPersistedSettings(
     revealActiveFileShortcut: state.revealActiveFileShortcut,
     gitPanelShortcut: state.gitPanelShortcut,
     portsPanelShortcut: state.portsPanelShortcut,
-    fleetTerminalShortcut: state.fleetTerminalShortcut,
     terminalFontSizeIncreaseShortcut: state.terminalFontSizeIncreaseShortcut,
     terminalFontSizeDecreaseShortcut: state.terminalFontSizeDecreaseShortcut,
     terminalSuggestionsEnabled: state.terminalSuggestionsEnabled,
@@ -297,6 +338,16 @@ function pickPersistedSettings(
     agentSettingsPaths: state.agentSettingsPaths,
     cognitoModeShortcut: state.cognitoModeShortcut,
     cognitoModeStyle: state.cognitoModeStyle,
+    osPaletteShortcut: state.osPaletteShortcut,
+    osCycleFocusShortcut: state.osCycleFocusShortcut,
+    defaultWindowPlacement: state.defaultWindowPlacement ?? "float",
+    dockPadding: state.dockPadding ?? 8,
+    dockItemSpacing: state.dockItemSpacing ?? 6,
+    dockOuterSpacing: state.dockOuterSpacing ?? 12,
+    dockRadius: state.dockRadius ?? 18,
+    dockPosition: state.dockPosition ?? "left",
+    cursorTheme: state.cursorTheme ?? "system",
+    appShortcuts: state.appShortcuts ?? {},
   };
 }
 
@@ -328,7 +379,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   revealActiveFileShortcut: DEFAULT_REVEAL_ACTIVE_FILE_SHORTCUT,
   gitPanelShortcut: DEFAULT_GIT_PANEL_SHORTCUT,
   portsPanelShortcut: DEFAULT_PORTS_PANEL_SHORTCUT,
-  fleetTerminalShortcut: DEFAULT_FLEET_TERMINAL_SHORTCUT,
   terminalFontSizeIncreaseShortcut:
     DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
   terminalFontSizeDecreaseShortcut:
@@ -348,8 +398,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   agentSettingsPaths: undefined,
   cognitoModeShortcut: DEFAULT_COGNITO_MODE_SHORTCUT,
   cognitoModeStyle: "heavy-blur",
+  osPaletteShortcut: DEFAULT_OS_PALETTE_SHORTCUT,
+  osCycleFocusShortcut: DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
+  defaultWindowPlacement: "float",
+  dockPadding: 8,
+  dockItemSpacing: 6,
+  dockOuterSpacing: 12,
+  dockRadius: 18,
+  cursorTheme: "system",
+  dockPosition: "left",
+  appShortcuts: {},
   hydrated: false,
-  sourceUnset: true,
+  sourceUnset: false,
 
   hydrate: async (options?: {
     owner?: ConnectionRef;
@@ -419,13 +479,28 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         revealActiveFileShortcut: ui.revealActiveFileShortcut,
         gitPanelShortcut: ui.gitPanelShortcut,
         portsPanelShortcut: ui.portsPanelShortcut,
-        fleetTerminalShortcut: ui.fleetTerminalShortcut,
+        osPaletteShortcut:
+          ui.osPaletteShortcut !== undefined
+            ? ui.osPaletteShortcut
+            : DEFAULT_OS_PALETTE_SHORTCUT,
+        osCycleFocusShortcut:
+          ui.osCycleFocusShortcut !== undefined
+            ? ui.osCycleFocusShortcut
+            : DEFAULT_OS_CYCLE_FOCUS_SHORTCUT,
+        dockPadding: ui.dockPadding ?? 8,
+        dockItemSpacing: ui.dockItemSpacing ?? 6,
+        dockOuterSpacing: ui.dockOuterSpacing ?? 12,
+        dockRadius: ui.dockRadius ?? 18,
+        cursorTheme: ui.cursorTheme ?? "system",
+        appShortcuts: ui.appShortcuts ?? {},
         terminalFontSizeIncreaseShortcut:
-          ui.terminalFontSizeIncreaseShortcut ??
-          DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
+          ui.terminalFontSizeIncreaseShortcut !== undefined
+            ? ui.terminalFontSizeIncreaseShortcut
+            : DEFAULT_TERMINAL_FONT_SIZE_INCREASE_SHORTCUT,
         terminalFontSizeDecreaseShortcut:
-          ui.terminalFontSizeDecreaseShortcut ??
-          DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
+          ui.terminalFontSizeDecreaseShortcut !== undefined
+            ? ui.terminalFontSizeDecreaseShortcut
+            : DEFAULT_TERMINAL_FONT_SIZE_DECREASE_SHORTCUT,
         terminalSuggestionsEnabled: ui.terminalSuggestionsEnabled ?? true,
         terminalAutoSwitchProjectEnabled:
           ui.terminalAutoSwitchProjectEnabled ?? true,
@@ -442,6 +517,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         agentSettingsPaths: ui.agentSettingsPaths,
         cognitoModeShortcut: ui.cognitoModeShortcut,
         cognitoModeStyle: ui.cognitoModeStyle,
+        defaultWindowPlacement: ui.defaultWindowPlacement ?? "float",
+        dockPosition: ui.dockPosition ?? "left",
         hydrated: true,
         sourceUnset: false,
       });
@@ -496,14 +573,28 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.gitPanelShortcut = partial.gitPanelShortcut;
     if (partial.portsPanelShortcut !== undefined)
       clamped.portsPanelShortcut = partial.portsPanelShortcut;
-    if (partial.fleetTerminalShortcut !== undefined)
-      clamped.fleetTerminalShortcut = partial.fleetTerminalShortcut;
     if (partial.terminalFontSizeIncreaseShortcut !== undefined)
       clamped.terminalFontSizeIncreaseShortcut =
         partial.terminalFontSizeIncreaseShortcut;
     if (partial.terminalFontSizeDecreaseShortcut !== undefined)
       clamped.terminalFontSizeDecreaseShortcut =
         partial.terminalFontSizeDecreaseShortcut;
+    if (partial.dockPadding !== undefined)
+      clamped.dockPadding = clampDockPadding(partial.dockPadding);
+    if (partial.dockItemSpacing !== undefined)
+      clamped.dockItemSpacing = clampDockItemSpacing(partial.dockItemSpacing);
+    if (partial.dockOuterSpacing !== undefined)
+      clamped.dockOuterSpacing = clampDockOuterSpacing(partial.dockOuterSpacing);
+    if (partial.dockRadius !== undefined)
+      clamped.dockRadius = clampDockRadius(partial.dockRadius);
+    if (partial.cursorTheme === "system" || partial.cursorTheme === "theme")
+      clamped.cursorTheme = partial.cursorTheme;
+    if (partial.appShortcuts !== undefined) {
+      clamped.appShortcuts = {
+        ...(get().appShortcuts ?? {}),
+        ...partial.appShortcuts,
+      };
+    }
     if (partial.terminalSuggestionsEnabled !== undefined)
       clamped.terminalSuggestionsEnabled = partial.terminalSuggestionsEnabled;
     if (partial.terminalAutoSwitchProjectEnabled !== undefined)
@@ -554,6 +645,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       clamped.cognitoModeStyle = normalizeCognitoModeStyle(
         partial.cognitoModeStyle,
       );
+    if (
+      partial.defaultWindowPlacement === "float" ||
+      partial.defaultWindowPlacement === "tile"
+    ) {
+      clamped.defaultWindowPlacement = partial.defaultWindowPlacement;
+    }
+    if (isDockPosition(partial.dockPosition))
+      clamped.dockPosition = partial.dockPosition;
+    if (partial.osPaletteShortcut !== undefined)
+      clamped.osPaletteShortcut = partial.osPaletteShortcut;
+    if (partial.osCycleFocusShortcut !== undefined)
+      clamped.osCycleFocusShortcut = partial.osCycleFocusShortcut;
     set(clamped);
   },
 
@@ -613,10 +716,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const currentTx = activeTransaction;
     const boundApi = bound.api;
 
-    pendingPersistedPatch = {
-      ...pendingPersistedPatch,
-      ...persistedPatch,
-    };
+    if (persistedPatch.appShortcuts) {
+      pendingPersistedPatch = {
+        ...pendingPersistedPatch,
+        ...persistedPatch,
+        appShortcuts: {
+          ...(pendingPersistedPatch.appShortcuts ?? {}),
+          ...persistedPatch.appShortcuts,
+        },
+      };
+    } else {
+      pendingPersistedPatch = {
+        ...pendingPersistedPatch,
+        ...persistedPatch,
+      };
+    }
 
     clearTimeout(debounceTimer!);
     debounceTimer = setTimeout(() => {
@@ -635,6 +749,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
               lastSavedSettings = {
                 ...(lastSavedSettings ?? pickPersistedSettings(get())),
                 ...payload,
+                ...(payload.appShortcuts
+                  ? {
+                      appShortcuts: {
+                        ...((lastSavedSettings ?? pickPersistedSettings(get())).appShortcuts ?? {}),
+                        ...payload.appShortcuts,
+                      },
+                    }
+                  : {}),
               };
               if (currentTx.editId === latestLocalEditId) {
                 set(lastSavedSettings);

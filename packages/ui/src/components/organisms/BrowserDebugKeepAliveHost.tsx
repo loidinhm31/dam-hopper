@@ -1,9 +1,7 @@
 import {
   forwardRef,
   useCallback,
-  useEffect,
   useImperativeHandle,
-  useLayoutEffect,
   useRef,
   type RefObject,
 } from "react";
@@ -13,9 +11,6 @@ import {
   applyBrowserDebugHostEvent,
   type BrowserDebugHostEvent,
 } from "@/lib/browser-debug-host.js";
-import { getBrowserDebugNativeViewportFrame } from "@/lib/browser-debug-keep-alive.js";
-import { APP_ZOOM_CHANGE_EVENT, getAppZoomFactor } from "@/lib/app-zoom.js";
-import { useBrowserDebugHost } from "@/contexts/BrowserDebugHostContext.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import {
   BrowserDebugIframeHost,
@@ -34,23 +29,13 @@ export interface BrowserDebugKeepAliveHostProps {
 export type BrowserDebugKeepAliveHandle = BrowserDebugIframeHostHandle;
 
 /**
- * Shared controller adapter for browser-debug hosts. Native hosts own their
- * child lifecycle; the iframe lifecycle and trust boundary remain in the web
- * fallback host.
+ * Shared controller adapter for browser-debug web iframe host.
  */
 export const BrowserDebugKeepAliveHost = forwardRef<
   BrowserDebugKeepAliveHandle,
   BrowserDebugKeepAliveHostProps
 >(function BrowserDebugKeepAliveHost(props, ref) {
-  const { host: suppliedHost } = useBrowserDebugHost();
   const { browser } = props;
-  const {
-    setBridgeStatus,
-    setBridgeCapabilities,
-    setSelection,
-    setPickerActive,
-    setError,
-  } = browser;
   const iframeRef = useRef<BrowserDebugIframeHostHandle>(null);
   const generationRef = useRef<number | null>(null);
   const isCognitoActive = useCognitoModeStore((state) => state.active);
@@ -68,96 +53,21 @@ export const BrowserDebugKeepAliveHost = forwardRef<
     [browser],
   );
 
-  useLayoutEffect(() => {
-    generationRef.current = null;
-  }, [suppliedHost]);
-
-  useEffect(() => {
-    if (!suppliedHost) return;
-    if (props.browser.target) {
-      setBridgeStatus("loading");
-      setBridgeCapabilities([]);
-      setSelection(null);
-      setPickerActive(false);
-      setError(null);
-    }
-    suppliedHost.setTarget(props.browser.target);
-    return () => suppliedHost.setTarget(null);
-  }, [
-    props.browser.target,
-    props.profileId,
-    setBridgeStatus,
-    setBridgeCapabilities,
-    setSelection,
-    setPickerActive,
-    setError,
-    suppliedHost,
-  ]);
-
-  useEffect(() => {
-    if (!suppliedHost) return;
-    return suppliedHost.subscribe(onHostEvent);
-  }, [onHostEvent, suppliedHost]);
-
-  useLayoutEffect(() => {
-    if (!suppliedHost) return;
-    const viewport = props.viewportRef.current;
-    const stage = props.viewportStageRef?.current;
-    const updateFrame = () => {
-      suppliedHost.setZoom?.(getAppZoomFactor());
-      const frame = effectiveViewportVisible
-        ? getBrowserDebugNativeViewportFrame(
-            props.viewportRef.current,
-            props.viewportStageRef?.current,
-          )
-        : null;
-      suppliedHost.setViewport(frame);
-    };
-    updateFrame();
-    const observer =
-      typeof ResizeObserver === "undefined"
-        ? null
-        : new ResizeObserver(updateFrame);
-    if (viewport) observer?.observe(viewport);
-    if (stage) observer?.observe(stage);
-    stage?.addEventListener("scroll", updateFrame);
-    window.addEventListener("resize", updateFrame);
-    window.addEventListener("scroll", updateFrame, true);
-    window.addEventListener(APP_ZOOM_CHANGE_EVENT, updateFrame);
-    return () => {
-      observer?.disconnect();
-      stage?.removeEventListener("scroll", updateFrame);
-      window.removeEventListener("resize", updateFrame);
-      window.removeEventListener("scroll", updateFrame, true);
-      window.removeEventListener(APP_ZOOM_CHANGE_EVENT, updateFrame);
-      suppliedHost.setViewport(null);
-    };
-  }, [
-    effectiveViewportVisible,
-    props.viewportRef,
-    props.viewportStageRef,
-    props.viewportVersion,
-    suppliedHost,
-  ]);
-
   useImperativeHandle(ref, () => {
-    const getHost = () => suppliedHost ?? iframeRef.current;
     return {
-      setTarget: (target) => getHost()?.setTarget(target),
-      setViewport: (viewport) => getHost()?.setViewport(viewport),
-      command: (command) => getHost()?.command(command),
+      setTarget: (target) => iframeRef.current?.setTarget(target),
+      setViewport: (viewport) => iframeRef.current?.setViewport(viewport),
+      command: (command) => iframeRef.current?.command(command),
       subscribe: (listener) =>
-        getHost()?.subscribe(listener) ?? (() => undefined),
-      destroy: () => getHost()?.destroy(),
-      startPicker: () => getHost()?.command("start-picker"),
-      stopPicker: () => getHost()?.command("stop-picker"),
-      goBack: () => getHost()?.command("go-back"),
-      goForward: () => getHost()?.command("go-forward"),
-      reload: () => getHost()?.command("reload"),
+        iframeRef.current?.subscribe(listener) ?? (() => undefined),
+      destroy: () => iframeRef.current?.destroy(),
+      startPicker: () => iframeRef.current?.command("start-picker"),
+      stopPicker: () => iframeRef.current?.command("stop-picker"),
+      goBack: () => iframeRef.current?.command("go-back"),
+      goForward: () => iframeRef.current?.command("go-forward"),
+      reload: () => iframeRef.current?.command("reload"),
     };
-  }, [suppliedHost]);
-
-  if (suppliedHost) return null;
+  }, []);
 
   return (
     <BrowserDebugIframeHost

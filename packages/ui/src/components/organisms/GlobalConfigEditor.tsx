@@ -3,52 +3,48 @@ import { Loader2, X } from "lucide-react";
 import { Button, inputClass } from "@/components/atoms/Button.js";
 import {
   useGlobalConfig,
-  useUpdateGlobalDefaults,
   useKnownWorkspaces,
   useAddKnownWorkspace,
   useRemoveKnownWorkspace,
   useWorkspace,
+  useWorkspaceStatus,
+  useSwitchWorkspace,
   type OwnerInput,
 } from "@/api/queries.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 
-// ── Default Workspace Section ─────────────────────────────────────────────
+// ── Workspace Configuration Section ──────────────────────────────────────────
 
-function DefaultWorkspaceSection({ owner }: { owner?: OwnerInput }) {
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
-  const { data: globalConfig, isLoading } = useGlobalConfig(owner);
-  const updateDefaults = useUpdateGlobalDefaults(owner);
+function WorkspaceConfigSection({ owner }: { owner?: OwnerInput }) {
+  const { data: globalConfig, isLoading: configLoading } = useGlobalConfig(owner);
+  const { data: workspace, isLoading: workspaceLoading } = useWorkspace(owner);
+  const { data: workspaceStatus } = useWorkspaceStatus(owner);
+  const switchWorkspace = useSwitchWorkspace(owner);
   const [draft, setDraft] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  const currentDefault = globalConfig?.defaults?.workspace ?? "";
-  const value = draft ?? currentDefault;
+  const currentRoot = globalConfig?.workspace?.root ?? workspace?.root ?? "";
+  const selectedConfigPath =
+    workspaceStatus?.configPath ?? globalConfig?.configPath ?? "~/.config/dam-hopper/config.toml";
+  const value = draft ?? currentRoot;
 
   async function handleSet() {
-    if (isAndroidChromeNativeInputSuppressed) return;
     const trimmed = value.trim();
-    await updateDefaults.mutateAsync({ workspace: trimmed || undefined });
+    if (!trimmed) return;
+    await switchWorkspace.mutateAsync(trimmed);
     setDraft(null);
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
   }
 
-  async function handleClear() {
-    await updateDefaults.mutateAsync({ workspace: undefined });
-    setDraft(null);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
-  }
-
-  const isDirty = draft !== null && draft.trim() !== currentDefault;
-  const isPending = updateDefaults.isPending;
+  const isDirty = draft !== null && draft.trim() !== currentRoot;
+  const isPending = switchWorkspace.isPending;
+  const isLoading = configLoading || workspaceLoading;
 
   return (
     <div className="space-y-3">
       <div className="space-y-1">
         <label className="block text-xs font-medium text-[var(--color-text-muted)]">
-          Default workspace path
+          Canonical Workspace Root
         </label>
         <div className="flex gap-2">
           <input
@@ -59,50 +55,33 @@ function DefaultWorkspaceSection({ owner }: { owner?: OwnerInput }) {
               setSaved(false);
             }}
             placeholder="/path/to/workspace"
-            disabled={
-              isLoading || isPending || isAndroidChromeNativeInputSuppressed
-            }
+            disabled={isLoading || isPending}
           />
           <Button
             variant="primary"
             size="sm"
             onClick={() => void handleSet()}
-            disabled={
-              !isDirty || isPending || isAndroidChromeNativeInputSuppressed
-            }
-            title={
-              isAndroidChromeNativeInputSuppressed
-                ? "Unavailable on Android Chrome: text entry is disabled"
-                : undefined
-            }
+            disabled={!isDirty || isPending}
             loading={isPending}
           >
-            Set
+            Apply Root
           </Button>
-          {currentDefault && (
-            <Button
-              variant="danger"
-              size="sm"
-              onClick={() => void handleClear()}
-              disabled={isPending}
-            >
-              Clear
-            </Button>
-          )}
         </div>
         <p className="text-xs text-[var(--color-text-muted)]">
-          Bare <code className="font-mono">dam-hopper</code> invocations will
-          use this workspace when no config is found in CWD.
+          All projects, services, and filesystem operations resolve relative to this canonical workspace root.
+        </p>
+        <p className="text-2xs text-[var(--color-text-muted)] font-mono pt-1">
+          Config document: {selectedConfigPath}
         </p>
       </div>
-      {saved && !updateDefaults.error && (
+      {saved && !switchWorkspace.error && (
         <p className="text-xs text-[var(--color-success)]">
-          Saved successfully
+          Workspace root updated successfully.
         </p>
       )}
-      {updateDefaults.error && (
+      {switchWorkspace.error && (
         <p className="text-xs text-[var(--color-danger)]">
-          {(updateDefaults.error as Error).message}
+          {(switchWorkspace.error as Error).message}
         </p>
       )}
     </div>
@@ -112,8 +91,6 @@ function DefaultWorkspaceSection({ owner }: { owner?: OwnerInput }) {
 // ── Known Workspaces Section ──────────────────────────────────────────────
 
 function KnownWorkspacesSection({ owner }: { owner?: OwnerInput }) {
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
   const { data: workspace } = useWorkspace(owner);
   const { data: known, isLoading } = useKnownWorkspaces(owner);
   const addMutation = useAddKnownWorkspace(owner);
@@ -122,7 +99,6 @@ function KnownWorkspacesSection({ owner }: { owner?: OwnerInput }) {
   const [removingPath, setRemovingPath] = useState<string | null>(null);
 
   function handleAdd() {
-    if (isAndroidChromeNativeInputSuppressed) return;
     const trimmed = addPath.trim();
     if (!trimmed) return;
     removeMutation.reset();
@@ -218,7 +194,7 @@ function KnownWorkspacesSection({ owner }: { owner?: OwnerInput }) {
             placeholder="/path/to/workspace"
             className={inputClass}
             disabled={
-              addMutation.isPending || isAndroidChromeNativeInputSuppressed
+              addMutation.isPending
             }
           />
           <Button
@@ -227,13 +203,7 @@ function KnownWorkspacesSection({ owner }: { owner?: OwnerInput }) {
             onClick={handleAdd}
             disabled={
               !addPath.trim() ||
-              addMutation.isPending ||
-              isAndroidChromeNativeInputSuppressed
-            }
-            title={
-              isAndroidChromeNativeInputSuppressed
-                ? "Unavailable on Android Chrome: text entry is disabled"
-                : undefined
+              addMutation.isPending
             }
             loading={addMutation.isPending}
           >
@@ -258,9 +228,9 @@ export function GlobalConfigEditor({ owner }: { owner?: OwnerInput } = {}) {
     <div className="space-y-6">
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-3">
         <h3 className="text-sm font-medium text-[var(--color-text)]">
-          Default Workspace
+          Workspace Configuration
         </h3>
-        <DefaultWorkspaceSection owner={owner} />
+        <WorkspaceConfigSection owner={owner} />
       </section>
 
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-3">

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CaseSensitive,
@@ -7,7 +7,7 @@ import {
   X,
 } from "lucide-react";
 import { useFileSearch } from "@/hooks/use-file-search.js";
-import { useSearchUiStore } from "@/stores/search-ui.js";
+import { useSearchUiStore, type SearchScope } from "@/stores/search-ui.js";
 import type { SearchResultItem } from "@/lib/search-matches.js";
 import {
   groupContentSearchMatches,
@@ -19,11 +19,12 @@ import { SearchPanelResults } from "@/components/organisms/SearchPanelResults.js
 import { useSearchPanelReplace } from "@/hooks/use-search-panel-replace.js";
 import type { PathSearchMatch, SearchMatch } from "@/api/fs-types.js";
 import { cn } from "@/lib/utils.js";
-import type { ProjectTargetRef } from "@/api/client.js";
+import type { ProjectTargetInput, ProjectTargetRef } from "@/api/client.js";
+import type { FsTargetRef } from "@/api/ownership.js";
 
 interface SearchPanelProps {
   project: string;
-  target?: ProjectTargetRef;
+  target?: ProjectTargetRef | FsTargetRef;
   onResultClick: (
     match: SearchResultItem,
     options?: { closeSearch?: boolean },
@@ -33,6 +34,11 @@ interface SearchPanelProps {
   inputRef?: React.RefObject<HTMLInputElement | null>;
   consumeOpenSelection?: boolean;
   autoFocus?: boolean;
+  initialQuery?: string;
+  query?: string;
+  onQueryChange?: (query: string) => void;
+  isolatedState?: boolean;
+  initialMode?: "filename" | "content";
 }
 
 export function SearchPanel({
@@ -44,28 +50,60 @@ export function SearchPanel({
   inputRef,
   consumeOpenSelection = Boolean(onClose),
   autoFocus = Boolean(onClose),
+  initialQuery,
+  query: controlledQuery,
+  onQueryChange: controlledOnQueryChange,
+  isolatedState = false,
+  initialMode,
 }: SearchPanelProps) {
-  const worktreePath = target?.worktreePath;
-  const targetProject = target?.project ?? project;
-  const requestTarget =
-    worktreePath == null
-      ? targetProject
-      : { project: targetProject, worktreePath };
+  const requestTarget = useMemo(() => {
+    if (target && "kind" in target) {
+      return target;
+    }
+    const worktreePath = target?.worktreePath;
+    const targetProject = target?.project ?? project;
+    const targetProfileId = target?.profileId;
+    const base =
+      worktreePath == null
+        ? { project: targetProject }
+        : { project: targetProject, worktreePath };
+    return targetProfileId ? { ...base, profileId: targetProfileId } : base;
+  }, [target, project]);
   const localInputRef = useRef<HTMLInputElement>(null);
   const resolvedRef = inputRef ?? localInputRef;
-  const {
-    scope,
-    setScope,
-    mode,
-    setMode,
-    queries,
-    replaceQuery,
-    setQuery,
-    setReplaceQuery,
-    selectOnOpen: shouldSelectOnOpen,
-    consumeSelectOnOpen,
-  } = useSearchUiStore();
-  const query = queries[mode];
+  const globalStore = useSearchUiStore();
+  const [localScope, setLocalScope] = useState<SearchScope>("project");
+  const [localMode, setLocalMode] = useState<"filename" | "content">(initialMode ?? "content");
+  const [localQueries, setLocalQueries] = useState<{
+    filename: string;
+    content: string;
+  }>({
+    filename: initialMode === "filename" ? (controlledQuery ?? initialQuery ?? "") : "",
+    content: initialMode === "filename" ? "" : (controlledQuery ?? initialQuery ?? ""),
+  });
+  const [localReplaceQuery, setLocalReplaceQuery] = useState("");
+
+  const scope = isolatedState ? localScope : globalStore.scope;
+  const setScope = isolatedState ? setLocalScope : globalStore.setScope;
+  const mode = isolatedState ? localMode : globalStore.mode;
+  const setMode = isolatedState ? setLocalMode : globalStore.setMode;
+  const queries = isolatedState ? localQueries : globalStore.queries;
+  const replaceQuery = isolatedState
+    ? localReplaceQuery
+    : globalStore.replaceQuery;
+  const setReplaceQuery = isolatedState
+    ? setLocalReplaceQuery
+    : globalStore.setReplaceQuery;
+  const setQuery = isolatedState
+    ? (m: "filename" | "content", val: string) =>
+        setLocalQueries((prev: { filename: string; content: string }) => ({
+          ...prev,
+          [m]: val,
+        }))
+    : globalStore.setQuery;
+  const { selectOnOpen: shouldSelectOnOpen, consumeSelectOnOpen } = globalStore;
+  const isControlledQuery = controlledQuery !== undefined;
+  const query = (isControlledQuery ? controlledQuery : (queries && mode ? queries[mode] : "")) ?? "";
   const {
     caseSensitive,
     setCaseSensitive,
@@ -130,6 +168,26 @@ export function SearchPanel({
     return sortContentSearchMatches(matches.filter(isContentSearchMatch));
   };
 
+  const isSearchMatchingInput =
+    data !== undefined &&
+    data.query.length >= 2 &&
+    data.query === query.slice(0, 200) &&
+    !isLoading;
+
+  const searchReplaceTarget: ProjectTargetInput = useMemo(() => {
+    if (requestTarget && "kind" in requestTarget) {
+      if (requestTarget.kind === "workspace") {
+        return { project: "", profileId: requestTarget.profileId };
+      }
+      return {
+        project: requestTarget.project,
+        worktreePath: requestTarget.worktreePath,
+        profileId: requestTarget.profileId,
+      };
+    }
+    return requestTarget as ProjectTargetInput;
+  }, [requestTarget]);
+
   const {
     selectedMatchKey,
     isReplacing,
@@ -140,12 +198,13 @@ export function SearchPanel({
     replaceNext,
     replaceAll,
   } = useSearchPanelReplace({
-    target: requestTarget,
+    target: searchReplaceTarget,
     scope,
-    matches: contentMatches,
-    searchQuery: queries.content,
+    matches: isSearchMatchingInput ? contentMatches : [],
+    searchQuery: data?.query ?? "",
     replaceQuery,
     caseSensitive,
+    replaceDisabled: !isSearchMatchingInput,
     refreshMatches: refreshContentMatches,
     openMatch: (match, options) => onResultClick(match, options),
   });
@@ -229,7 +288,11 @@ export function SearchPanel({
             }
             value={query}
             // Synchronously update query state on each keystroke for controlled input
-            onChange={(event) => setQuery(mode, event.target.value)}
+            onChange={(event) =>
+              isControlledQuery
+                ? controlledOnQueryChange?.(event.target.value)
+                : setQuery(mode, event.target.value)
+            }
             className="flex-1 text-xs px-2 py-1.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)] transition-colors"
           />
           <button
@@ -289,7 +352,7 @@ export function SearchPanel({
           </div>
         )}
 
-        {query.length >= 2 && (
+        {(query?.length ?? 0) >= 2 && (
           <div className="text-2xs text-[var(--color-text-muted)] flex items-center gap-1.5">
             {isLoading ? (
               <>

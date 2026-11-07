@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import type { MarkProjectRequest } from "./fs-types.js";
 import type { QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import {
@@ -10,6 +11,7 @@ import {
   type ProjectTargetInput,
 } from "./client.js";
 import { getTransport } from "./transport.js";
+import { normalizeFsTarget, type FsTargetRef } from "./ownership.js";
 import { useEditorStore } from "@/stores/editor.js";
 import type {
   ExplorerLanguageScanCache,
@@ -24,6 +26,11 @@ import {
   getExplorerLanguageScanCache,
 } from "@/lib/explorer-language-scan.js";
 import { invalidateBlameForTarget } from "@/lib/editor-git-blame-cache.js";
+import type {
+  TerminalInventoryDetailedPayload,
+  TerminalInventoryDetailedObservation,
+  TerminalInventoryDetailedRow,
+} from "./terminal-session-contract.js";
 import type {
   DamHopperConfig,
   ProjectConfig,
@@ -42,10 +49,6 @@ import type {
   OperationOutcome,
   ResetMode,
   UiConfig,
-  UsageSettingsPatch,
-  UsageSetupStatus,
-  UsageSummaryQuery,
-  UsageSessionQuery,
   HostMetrics,
   HostResourceAlertIncident,
   HostResourceSnapshotV1,
@@ -159,21 +162,6 @@ function projectsQueryKey(owner?: ConnectionRef) {
   return owner ? profileQueryKey(owner, "projects") : ["projects"];
 }
 
-function fsTreeQueryKey(normalized: {
-  project: string;
-  profileId?: string;
-  worktreePath?: string;
-}) {
-  const owner = resolveTargetOwner(normalized.profileId);
-  return owner
-    ? profileQueryKey(
-        owner,
-        "fs",
-        normalized.project,
-        projectTargetCacheKey(normalized),
-      )
-    : ["fs-tree", normalized.project, projectTargetCacheKey(normalized)];
-}
 
 export function gitQueryKey(
   prefix: string,
@@ -200,6 +188,24 @@ export function gitQueryKey(
   ];
 }
 
+export function fsTreeQueryKey(
+  target: FsTargetRef | ProjectTargetInput,
+  path: string = "",
+): unknown[] {
+  const targetRef = normalizeFsTarget(target);
+  const targetKey =
+    targetRef.kind === "workspace"
+      ? "workspace"
+      : targetRef.worktreePath == null
+        ? "root"
+        : targetRef.worktreePath;
+  if (targetRef.kind === "workspace") {
+    return ["fs-tree", targetRef.profileId || "workspace", "root", path];
+  }
+  return targetRef.profileId
+    ? ["fs-tree", targetRef.profileId, targetRef.project, targetKey, path]
+    : ["fs-tree", targetRef.project, targetKey, path];
+}
 async function reconcileAffectedEditorTabs(
   target: ProjectTargetInput,
   paths: string[],
@@ -216,6 +222,7 @@ async function reconcileAllOpenEditorTargets() {
   const state = useEditorStore.getState();
   const targets = new Map<string, ProjectTargetInput>();
   for (const tab of state.tabs ?? []) {
+    if (tab.target.kind === "workspace") continue;
     const normalized = normalizeProjectTarget(tab.target);
     targets.set(
       `${normalized.project}::${projectTargetCacheKey(normalized)}`,
@@ -306,6 +313,7 @@ function markFailedGitResults(
 
     const openTargets = new Map<string, ProjectTargetInput>();
     for (const tab of useEditorStore.getState().tabs ?? []) {
+      if (tab.target.kind === "workspace") continue;
       const normalized = normalizeProjectTarget(tab.target);
       if (normalized.project !== result.projectName) continue;
       openTargets.set(
@@ -323,6 +331,7 @@ function markOpenEditorTargetsUnavailableIfNeeded(error: unknown) {
   const state = useEditorStore.getState();
   const targets = new Map<string, ProjectTargetInput>();
   for (const tab of state.tabs ?? []) {
+    if (tab.target.kind === "workspace") continue;
     const normalized = normalizeProjectTarget(tab.target);
     targets.set(
       `${normalized.project}::${projectTargetCacheKey(normalized)}`,
@@ -1092,26 +1101,62 @@ export function useGlobalConfig(options?: OwnerInput) {
   });
 }
 
+export function terminalInventoryQueryOptions(owner?: ConnectionRef | null) {
+  const queryKey = owner
+    ? profileQueryKey(owner, "terminal-sessions")
+    : (["terminal-sessions"] as const);
+
+  return {
+    queryKey,
+    queryFn: async (): Promise<TerminalInventoryDetailedObservation> => {
+      const transport = owner ? getBoundTransport(owner) : getTransport();
+      const raw = await transport.invoke<
+        TerminalInventoryDetailedPayload | TerminalInventoryDetailedRow[]
+      >("terminal:listDetailedObservation");
+      const payload: TerminalInventoryDetailedPayload = Array.isArray(raw)
+        ? {
+            sessions: raw,
+            termination: {
+              version: null,
+              serverEpoch: null,
+              reason: "unsupported",
+            },
+          }
+        : raw;
+      if (owner && !isCurrentConnection(owner)) {
+        throw new ConnectionOwnerError(
+          "Terminal session owner is stale",
+          "stale",
+        );
+      }
+      rememberTerminalSessionIncarnations(payload.sessions, owner?.profileId);
+      return Object.freeze({
+        ...payload,
+        owner: owner ?? null,
+      });
+    },
+    staleTime: Infinity, // driven by terminal:changed push event invalidation
+  };
+}
+
+export function useTerminalInventory(owner?: ConnectionRef | null) {
+  const resolvedOwner =
+    owner !== undefined ? owner : resolveWorkflowOwner(undefined);
+  return useQuery<TerminalInventoryDetailedObservation>({
+    ...terminalInventoryQueryOptions(resolvedOwner),
+  });
+}
+
 export function useTerminalSessions(options?: {
   owner?: ConnectionRef;
   profileId?: ProfileId;
 }) {
   const owner = resolveWorkflowOwner(options);
-  const queryKey = owner
-    ? profileQueryKey(owner, "terminal-sessions")
-    : (["terminal-sessions"] as const);
+  const baseOptions = terminalInventoryQueryOptions(owner);
 
-  return useQuery<SessionInfo[]>({
-    queryKey,
-    queryFn: async () => {
-      const transport = owner ? getBoundTransport(owner) : getTransport();
-      const sessions = await transport.invoke<SessionInfo[]>(
-        "terminal:listDetailed",
-      );
-      rememberTerminalSessionIncarnations(sessions, owner?.profileId);
-      return sessions;
-    },
-    staleTime: Infinity, // driven by terminal:changed push event invalidation
+  return useQuery<TerminalInventoryDetailedObservation, Error, SessionInfo[]>({
+    ...baseOptions,
+    select: (obs) => obs.sessions as unknown as SessionInfo[],
   });
 }
 
@@ -1258,6 +1303,47 @@ export function useUpdateProject(options?: OwnerInput) {
       });
       void qc.invalidateQueries({
         queryKey: owner ? profileQueryKey(owner, "projects") : ["projects"],
+      });
+    },
+  });
+}
+export function useMarkProject(options?: OwnerInput) {
+  const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
+  const profileId = typeof options === "string" ? options : (options && "profileId" in options ? options.profileId : undefined);
+  return useMutation({
+    mutationFn: (req: MarkProjectRequest) =>
+      getBoundApiClient(owner).config.markProject(profileId ?? "", req),
+    onSuccess: () => {
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "projects") : ["projects"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "config") : ["config"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "workspace") : ["workspace"],
+      });
+    },
+  });
+}
+
+export function useUnmarkProject(options?: OwnerInput) {
+  const qc = useQueryClient();
+  const owner = resolveTargetOwner(options);
+  const profileId = typeof options === "string" ? options : (options && "profileId" in options ? options.profileId : undefined);
+  return useMutation({
+    mutationFn: (name: string) =>
+      getBoundApiClient(owner).config.unmarkProject(profileId ?? "", name),
+    onSuccess: () => {
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "projects") : ["projects"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "config") : ["config"],
+      });
+      void qc.invalidateQueries({
+        queryKey: owner ? profileQueryKey(owner, "workspace") : ["workspace"],
       });
     },
   });
@@ -2270,148 +2356,6 @@ export function useImportSettings(options?: OwnerInput) {
   });
 }
 
-export function useUsageSummary(
-  query: UsageSummaryQuery = {},
-  options?: OwnerInput,
-) {
-  const owner = resolveTargetOwner(options);
-  const queryKey = owner
-    ? profileQueryKey(owner, "usage", "summary", query)
-    : (["usage", "summary", query] as const);
-  return useQuery({
-    queryKey,
-    queryFn: () => getBoundApiClient(owner).usage.summary(query),
-  });
-}
-
-export const usageSessionPollInterval = () =>
-  typeof document !== "undefined" && document.visibilityState === "visible"
-    ? 15_000
-    : false;
-
-export function useUsageSessions(
-  query: UsageSessionQuery = {},
-  enabled = true,
-  options?: OwnerInput,
-) {
-  const owner = resolveTargetOwner(options);
-  const queryKey = owner
-    ? profileQueryKey(owner, "usage", "sessions", query)
-    : (["usage", "sessions", query] as const);
-  return useQuery({
-    queryKey,
-    queryFn: () => getBoundApiClient(owner).usage.sessions(query),
-    enabled,
-    refetchInterval: usageSessionPollInterval,
-  });
-}
-
-export function useUsageSession(
-  id: string | null,
-  enabled = true,
-  options?: OwnerInput,
-) {
-  const owner = resolveTargetOwner(options);
-  const queryKey = owner
-    ? profileQueryKey(owner, "usage", "session", id)
-    : (["usage", "session", id] as const);
-  return useQuery({
-    queryKey,
-    queryFn: () => getBoundApiClient(owner).usage.session(id!),
-    enabled: enabled && id !== null,
-    refetchInterval: usageSessionPollInterval,
-  });
-}
-
-export function useUsageHealth(options?: OwnerInput) {
-  const owner = resolveTargetOwner(options);
-  const queryKey = owner
-    ? profileQueryKey(owner, "usage", "health")
-    : (["usage", "health"] as const);
-  return useQuery({
-    queryKey,
-    queryFn: () => getBoundApiClient(owner).usage.health(),
-    refetchInterval: 30_000,
-  });
-}
-
-export function useUsageSettings(options?: OwnerInput) {
-  const owner = resolveTargetOwner(options);
-  const queryKey = owner
-    ? profileQueryKey(owner, "usage", "settings")
-    : (["usage", "settings"] as const);
-  return useQuery({
-    queryKey,
-    queryFn: () => getBoundApiClient(owner).usage.settings(),
-  });
-}
-
-export function useUsageSetupStatus(options?: OwnerInput) {
-  const owner = resolveTargetOwner(options);
-  const queryKey = owner
-    ? profileQueryKey(owner, "usage", "setup")
-    : (["usage", "setup"] as const);
-  return useQuery<UsageSetupStatus>({
-    queryKey,
-    queryFn: () => getBoundApiClient(owner).usage.setupStatus(),
-    refetchInterval: 10_000,
-  });
-}
-
-export function useConfigureUsageInsights(options?: OwnerInput) {
-  const qc = useQueryClient();
-  const owner = resolveTargetOwner(options);
-  return useMutation({
-    mutationFn: (patch: UsageSettingsPatch) =>
-      getBoundApiClient(owner).usage.configure(patch),
-    onSuccess: () => {
-      void qc.invalidateQueries({
-        queryKey: owner ? profileQueryKey(owner, "usage") : ["usage"],
-      });
-      void qc.invalidateQueries({
-        queryKey: owner ? profileQueryKey(owner, "config") : ["config"],
-      });
-    },
-  });
-}
-
-export function useUpdateUsageSettings(options?: OwnerInput) {
-  const qc = useQueryClient();
-  const owner = resolveTargetOwner(options);
-  return useMutation({
-    mutationFn: (patch: UsageSettingsPatch) =>
-      getBoundApiClient(owner).usage.updateSettings(patch),
-    onSuccess: () =>
-      void qc.invalidateQueries({
-        queryKey: owner ? profileQueryKey(owner, "usage") : ["usage"],
-      }),
-  });
-}
-
-export function useDeleteUsageData(options?: OwnerInput) {
-  const qc = useQueryClient();
-  const owner = resolveTargetOwner(options);
-  return useMutation({
-    mutationFn: () => getBoundApiClient(owner).usage.deleteAll(),
-    onSuccess: () =>
-      void qc.invalidateQueries({
-        queryKey: owner ? profileQueryKey(owner, "usage") : ["usage"],
-      }),
-  });
-}
-
-export function useDeleteUsageRange(options?: OwnerInput) {
-  const qc = useQueryClient();
-  const owner = resolveTargetOwner(options);
-  return useMutation({
-    mutationFn: ({ from, to }: { from: number; to: number }) =>
-      getBoundApiClient(owner).usage.deleteRange(from, to),
-    onSuccess: () =>
-      void qc.invalidateQueries({
-        queryKey: owner ? profileQueryKey(owner, "usage") : ["usage"],
-      }),
-  });
-}
 
 export function useExportDiagnostics(options?: OwnerInput) {
   const owner = resolveTargetOwner(options);

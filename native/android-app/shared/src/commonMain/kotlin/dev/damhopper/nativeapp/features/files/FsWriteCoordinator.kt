@@ -86,6 +86,7 @@ class FsWriteCoordinator(
             expectedMtime = expectedMtime,
             size = utf8Bytes.size.toULong(),
             encoding = "base64",
+            workspaceEpoch = owner?.workspaceEpoch,
         )
 
         val beginResp = try {

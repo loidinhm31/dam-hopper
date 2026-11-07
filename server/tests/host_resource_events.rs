@@ -47,6 +47,8 @@ fn create_test_state(no_auth: bool, allowed_origins: Vec<String>) -> (AppState, 
         server: ServerConfig::default(),
         projects: vec![],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_root.join("dam-hopper.toml"),
     };
 
@@ -78,7 +80,6 @@ fn create_test_state(no_auth: bool, allowed_origins: Vec<String>) -> (AppState, 
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("create test AppState");
 

@@ -10,7 +10,10 @@ import { useDndMonitor } from "@dnd-kit/core";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { Plus, X, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils.js";
-import { attachTerminalsToHost } from "@/lib/terminal-host-attachment.js";
+import {
+  attachTerminalsToHost,
+  parkTerminalElement,
+} from "@/lib/terminal-host-attachment.js";
 import {
   cancelScheduledTerminalFit,
   scheduleTerminalFit,
@@ -18,18 +21,29 @@ import {
 import {
   getTerminal,
   subscribeToRegistry,
+  type TerminalEntry,
 } from "@/lib/terminal-registry.js";
+import {
+  acquireTerminalPresentation,
+  isCurrentTerminalPresenter,
+  releaseTerminalPresentation,
+  runIfCurrentPresenter,
+  setPresenterInputSuppression,
+  type TerminalPresentationToken,
+} from "@/lib/terminal-presentation-input.js";
+import type { Terminal } from "@xterm/xterm";
+import type {
+  MountedSession,
+  TerminalAttachGate,
+} from "@/components/organisms/MultiTerminalDisplay.js";
 import type { PaneNode } from "@/types/terminal-layout.js";
 import type { UseTerminalLayoutResult } from "@/hooks/use-terminal-layout.js";
-import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { TerminalDiagnosticsMenuHandler } from "@/components/organisms/TerminalDiagnosticsContextMenu.js";
 import { TabBar } from "@/components/organisms/TabBar.js";
 import { TerminalDockPreview } from "@/components/organisms/TerminalDockPreview.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
-import { syncNativeKeyboardSuppression } from "@/lib/terminal-native-input-policy.js";
-import { MobileTerminalAccessoryBar } from "@/components/organisms/MobileTerminalAccessoryBar.js";
+import { syncTerminalInputSuppression } from "@/lib/terminal-input-policy.js";
 import { TerminalScrollButtons } from "@/components/organisms/TerminalScrollButtons.js";
 
 interface PaneContainerProps {
@@ -51,6 +65,7 @@ interface PaneContainerProps {
   renderBrowserContent?: (onClose: () => void) => ReactNode;
   onCloseBrowser?: () => void;
   onOpenSessionChanges?: (sessionId: string) => void;
+  attachGate?: TerminalAttachGate;
 }
 
 export const PaneContainer = memo(function PaneContainer({
@@ -71,12 +86,10 @@ export const PaneContainer = memo(function PaneContainer({
   browserOpen = false,
   renderBrowserContent,
   onCloseBrowser,
+  attachGate,
 }: PaneContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
-  const shouldSuppressTerminalFocus =
-    isAndroidChromeNativeInputSuppressed || suppressTerminalFocus;
+  const shouldSuppressTerminalFocus = Boolean(suppressTerminalFocus);
   const isFocused = layout.focusedPaneId === node.id;
   const configuredTerminalCommitStatusEnabled = useSettingsStore(
     (state) => state.terminalCommitStatusEnabled,
@@ -89,25 +102,6 @@ export const PaneContainer = memo(function PaneContainer({
   const activeProject = mountedSessions.find(
     (session) => session.sessionId === node.activeSessionId,
   )?.project;
-  const [accessoryPanelState, setAccessoryPanelState] = useState<{
-    sessionId: string | null;
-    isOpen: boolean;
-  }>({ sessionId: null, isOpen: false });
-  const isAccessoryPanelOpen =
-    activeSessionId !== null &&
-    accessoryPanelState.sessionId === activeSessionId &&
-    accessoryPanelState.isOpen;
-  const handleAccessoryPanelOpenChange = useCallback(
-    (isOpen: boolean) => {
-      if (!activeSessionId) return;
-      setAccessoryPanelState((current) =>
-        current.sessionId === activeSessionId && current.isOpen === isOpen
-          ? current
-          : { sessionId: activeSessionId, isOpen },
-      );
-    },
-    [activeSessionId],
-  );
 
   // Track drag state to show/hide drop zones
   const [isDragging, setIsDragging] = useState(false);
@@ -117,6 +111,27 @@ export const PaneContainer = memo(function PaneContainer({
     onDragCancel: () => setIsDragging(false),
   });
 
+  const presentationRef = useRef<{
+    entry: TerminalEntry;
+    token: TerminalPresentationToken;
+    term: Terminal;
+    host: HTMLElement;
+  } | null>(null);
+  const presentationTokenRef = useRef<TerminalPresentationToken | null>(null);
+
+  const resolveTerminal = useCallback(
+    (sessionId: string): TerminalEntry | undefined => {
+      if (attachGate) {
+        return attachGate.resolveTerminal(sessionId);
+      }
+      return getTerminal(sessionId);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [attachGate?.resolveTerminal, attachGate?.revision],
+  );
+
+  const [reparentRevision, setReparentRevision] = useState(0);
+
   // ── reparent terminal elements into this container ──────────────────────
   useEffect(() => {
     const container = containerRef.current;
@@ -125,7 +140,7 @@ export const PaneContainer = memo(function PaneContainer({
     const doReparent = () => {
       if (shouldSuppressTerminalFocus) {
         for (const sessionId of node.sessionIds) {
-          cancelScheduledTerminalFit(getTerminal(sessionId));
+          cancelScheduledTerminalFit(resolveTerminal(sessionId));
         }
       }
       attachTerminalsToHost({
@@ -133,13 +148,87 @@ export const PaneContainer = memo(function PaneContainer({
         sessionIds: node.sessionIds,
         activeSessionId: node.activeSessionId,
         suppressTerminalFocus: shouldSuppressTerminalFocus,
+        resolveTerminal,
       });
+
+      // Presentation management (R7a) when gate is present
+      if (attachGate && node.activeSessionId) {
+        const activeEntry = resolveTerminal(node.activeSessionId);
+        if (activeEntry) {
+          const term = activeEntry.terminal;
+          const presenterId = `hub:${attachGate.hubWindowId ?? "window"}:${node.id}`;
+          const currentPres = presentationRef.current;
+
+          if (
+            !currentPres ||
+            currentPres.entry !== activeEntry ||
+            !isCurrentTerminalPresenter(term, currentPres.token)
+          ) {
+            if (currentPres) {
+              runIfCurrentPresenter(currentPres.term, currentPres.token, () => {
+                try {
+                  currentPres.term.attachCustomKeyEventHandler(
+                    currentPres.entry.baseKeyEventHandler ?? (() => true),
+                  );
+                } catch {}
+                syncTerminalInputSuppression(currentPres.term, true);
+                try {
+                  currentPres.term.blur();
+                } catch {}
+                cancelScheduledTerminalFit(currentPres.entry);
+                parkTerminalElement(currentPres.entry, currentPres.host);
+              });
+              releaseTerminalPresentation(currentPres.term, currentPres.token);
+              presentationRef.current = null;
+            }
+
+            const token = acquireTerminalPresentation(term, presenterId);
+            presentationTokenRef.current = token;
+            presentationRef.current = {
+              entry: activeEntry,
+              token,
+              term,
+              host: container,
+            };
+          }
+
+          if (presentationRef.current) {
+            setPresenterInputSuppression(
+              term,
+              presentationRef.current.token,
+              "pane-focus-suppressed",
+              shouldSuppressTerminalFocus,
+            );
+          }
+        } else if (presentationRef.current) {
+          const currentPres = presentationRef.current;
+          runIfCurrentPresenter(currentPres.term, currentPres.token, () => {
+            try {
+              currentPres.term.attachCustomKeyEventHandler(
+                currentPres.entry.baseKeyEventHandler ?? (() => true),
+              );
+            } catch {}
+            syncTerminalInputSuppression(currentPres.term, true);
+            try {
+              currentPres.term.blur();
+            } catch {}
+            cancelScheduledTerminalFit(currentPres.entry);
+            parkTerminalElement(currentPres.entry, currentPres.host);
+          });
+          releaseTerminalPresentation(currentPres.term, currentPres.token);
+          presentationRef.current = null;
+        }
+      }
+
       for (const sessionId of node.sessionIds) {
-        syncNativeKeyboardSuppression(
-          getTerminal(sessionId)?.terminal ?? null,
-          shouldSuppressTerminalFocus,
+        const isActiveSession = sessionId === node.activeSessionId;
+        const suppress = shouldSuppressTerminalFocus || !isActiveSession;
+        syncTerminalInputSuppression(
+          resolveTerminal(sessionId)?.terminal ?? null,
+          suppress,
         );
       }
+      setReparentRevision((r) => r + 1);
     };
 
     // Initial reparent attempt
@@ -147,24 +236,62 @@ export const PaneContainer = memo(function PaneContainer({
 
     // Subscribe to registry changes to handle terminals that initialize late
     const unsubscribe = subscribeToRegistry((registeredId) => {
-      const entry = getTerminal(registeredId);
-      const rawId = entry?.terminalRef?.id ?? registeredId;
-      if (
-        node.sessionIds.includes(registeredId) ||
-        node.sessionIds.includes(rawId)
-      ) {
-        doReparent();
+      if (attachGate) {
+        const registeredEntry = getTerminal(registeredId);
+        if (
+          registeredEntry &&
+          node.sessionIds.some(
+            (id) => attachGate.resolveTerminal(id) === registeredEntry,
+          )
+        ) {
+          doReparent();
+        }
+      } else {
+        const entry = getTerminal(registeredId);
+        const rawId = entry?.terminalRef?.id ?? registeredId;
+        if (
+          node.sessionIds.includes(registeredId) ||
+          node.sessionIds.includes(rawId)
+        ) {
+          doReparent();
+        }
       }
     });
 
-    return unsubscribe;
-  }, [node.sessionIds, node.activeSessionId, shouldSuppressTerminalFocus]);
+    return () => {
+      unsubscribe();
+      if (attachGate && presentationRef.current) {
+        const currentPres = presentationRef.current;
+        runIfCurrentPresenter(currentPres.term, currentPres.token, () => {
+          try {
+            currentPres.term.attachCustomKeyEventHandler(
+              currentPres.entry.baseKeyEventHandler ?? (() => true),
+            );
+          } catch {}
+          syncTerminalInputSuppression(currentPres.term, true);
+          try {
+            currentPres.term.blur();
+          } catch {}
+          cancelScheduledTerminalFit(currentPres.entry);
+          parkTerminalElement(currentPres.entry, currentPres.host);
+        });
+        releaseTerminalPresentation(currentPres.term, currentPres.token);
+        presentationRef.current = null;
+      }
+    };
+  }, [
+    node.sessionIds,
+    node.activeSessionId,
+    shouldSuppressTerminalFocus,
+    attachGate?.revision,
+    resolveTerminal,
+  ]);
 
   // ── install keyboard handler on active terminal ──────────────────────────
   useEffect(() => {
     if (!node.activeSessionId) return;
 
-    const entry = getTerminal(node.activeSessionId);
+    const entry = resolveTerminal(node.activeSessionId);
     if (!entry) return;
 
     const { terminal } = entry;
@@ -200,7 +327,7 @@ export const PaneContainer = memo(function PaneContainer({
           layout.setFocusedPaneId(prev.id);
           if (prev.activeSessionId) {
             onSelectTab(prev.activeSessionId);
-            const prevEntry = getTerminal(prev.activeSessionId);
+            const prevEntry = resolveTerminal(prev.activeSessionId);
             if (!shouldSuppressTerminalFocus) prevEntry?.terminal.focus();
           }
         }
@@ -222,7 +349,7 @@ export const PaneContainer = memo(function PaneContainer({
           layout.setFocusedPaneId(next.id);
           if (next.activeSessionId) {
             onSelectTab(next.activeSessionId);
-            const nextEntry = getTerminal(next.activeSessionId);
+            const nextEntry = resolveTerminal(next.activeSessionId);
             if (!shouldSuppressTerminalFocus) nextEntry?.terminal.focus();
           }
         }
@@ -272,9 +399,20 @@ export const PaneContainer = memo(function PaneContainer({
     return () => {
       // Restore the TerminalPanel handler when this pane stops owning the terminal.
       try {
-        terminal.attachCustomKeyEventHandler(
-          entry.baseKeyEventHandler ?? (() => true),
-        );
+        if (attachGate) {
+          const token = presentationTokenRef.current;
+          if (token) {
+            runIfCurrentPresenter(terminal, token, () => {
+              terminal.attachCustomKeyEventHandler(
+                entry.baseKeyEventHandler ?? (() => true),
+              );
+            });
+          }
+        } else {
+          terminal.attachCustomKeyEventHandler(
+            entry.baseKeyEventHandler ?? (() => true),
+          );
+        }
       } catch {
         // terminal may be disposed
       }
@@ -286,6 +424,9 @@ export const PaneContainer = memo(function PaneContainer({
     layout,
     onSelectTab,
     shouldSuppressTerminalFocus,
+    attachGate?.revision,
+    reparentRevision,
+    resolveTerminal,
   ]);
 
   // Focus only when semantic pane focus changes, not when callback identities churn.
@@ -293,8 +434,14 @@ export const PaneContainer = memo(function PaneContainer({
     if (!isFocused || shouldSuppressTerminalFocus || !node.activeSessionId) {
       return;
     }
-    getTerminal(node.activeSessionId)?.terminal.focus();
-  }, [node.activeSessionId, isFocused, shouldSuppressTerminalFocus]);
+    resolveTerminal(node.activeSessionId)?.terminal.focus();
+  }, [
+    node.activeSessionId,
+    isFocused,
+    shouldSuppressTerminalFocus,
+    attachGate?.revision,
+    resolveTerminal,
+  ]);
 
   // ── resize observer → fit active terminal ───────────────────────────────
   useEffect(() => {
@@ -303,12 +450,16 @@ export const PaneContainer = memo(function PaneContainer({
 
     const observer = new ResizeObserver(() => {
       if (!node.activeSessionId) return;
-      scheduleTerminalFit(getTerminal(node.activeSessionId));
+      scheduleTerminalFit(resolveTerminal(node.activeSessionId));
     });
 
     observer.observe(container);
     return () => observer.disconnect();
-  }, [node.activeSessionId]);
+  }, [
+    node.activeSessionId,
+    attachGate?.revision,
+    resolveTerminal,
+  ]);
 
   // ── derive tab entries for this pane ────────────────────────────────────
   const paneTabs = node.sessionIds
@@ -328,11 +479,14 @@ export const PaneContainer = memo(function PaneContainer({
         if (node.activeSessionId) {
           onSelectTab(node.activeSessionId);
           if (!shouldSuppressTerminalFocus) {
-            getTerminal(node.activeSessionId)?.terminal.focus();
+            resolveTerminal(node.activeSessionId)?.terminal.focus();
           }
         }
       }}
     >
+      {attachGate && node.activeSessionId
+        ? attachGate.renderPlaceholder(node.activeSessionId)
+        : null}
       {isEmpty && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-[var(--color-text-muted)] bg-[var(--color-background)]/50">
           <TerminalIcon className="h-10 w-10 opacity-10" />
@@ -372,37 +526,17 @@ export const PaneContainer = memo(function PaneContainer({
   const terminalPane = (
     <div className="relative flex h-full min-h-0 flex-col">
       {terminalHost}
-      <div
-        className={
-          isAccessoryPanelOpen ? "relative w-full shrink-0" : "w-full shrink-0"
-        }
-      >
-        {node.activeSessionId &&
-        node.activeSessionId === activeSessionId &&
-        terminalScrollButtonsEnabled ? (
+      {node.activeSessionId &&
+      node.activeSessionId === activeSessionId &&
+      terminalScrollButtonsEnabled ? (
+        <div className="w-full shrink-0">
           <TerminalScrollButtons
             sessionId={node.activeSessionId}
-            reserveAccessoryRail={Boolean(node.activeSessionId)}
-            accessoryPanelOpen={isAccessoryPanelOpen}
+            reserveAccessoryRail={false}
+            accessoryPanelOpen={false}
           />
-        ) : null}
-        {node.activeSessionId && node.activeSessionId === activeSessionId ? (
-          <MobileTerminalAccessoryBar
-            key={node.activeSessionId}
-            sessionId={node.activeSessionId}
-            profileId={
-              mountedSessions.find((s) => s.sessionId === node.activeSessionId)
-                ?.profileId
-            }
-            terminalRef={
-              mountedSessions.find((s) => s.sessionId === node.activeSessionId)
-                ?.terminalRef
-            }
-            onPanelOpenChange={handleAccessoryPanelOpenChange}
-            onOpenSessionChanges={onOpenSessionChanges}
-          />
-        ) : null}
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 
@@ -455,7 +589,7 @@ export const PaneContainer = memo(function PaneContainer({
           </Panel>
           <Separator
             aria-label="Resize terminal and browser panels"
-            className="w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize"
+            className="relative w-1 shrink-0 bg-[var(--color-border)] transition-colors hover:bg-[var(--color-primary)] active:bg-[var(--color-primary)] data-[orientation=vertical]:cursor-col-resize z-20 after:absolute after:inset-y-0 after:-inset-x-2 after:z-30"
           />
           <Panel id={`${node.id}:browser`} defaultSize={40} minSize={20}>
             <div className="h-full min-w-0 overflow-hidden">

@@ -12,7 +12,12 @@ import {
   useSessionChangesFiles,
   useSessionChangesFileDetail,
   useSessionChangesRefreshMutation,
+  matchesReviewTargetQuery,
+  cancelReviewQueries,
+  removeReviewQueries,
+  purgeOwnerReviewQueries,
 } from "./session-changes-queries";
+import type { ReviewTarget } from "./terminal-session-contract";
 import fixture from "../../../../server/tests/fixtures/session-changes-wire.json";
 
 declare global {
@@ -397,5 +402,125 @@ describe("session-changes React Query hooks", () => {
 
     // Refresh calls strictly bounded to 1
     expect(refreshCalls).toBe(1);
+  });
+});
+
+describe("targeted ReviewTarget query cancellation and owner purge", () => {
+  const targetA: ReviewTarget = {
+    profileId: "prof-1",
+    generation: 1,
+    terminalId: "term-A",
+    terminalIncarnation: "1",
+    ompSessionId: "omp-A",
+    serverEpoch: "epoch-A",
+    rootId: "root-A",
+    baselineId: "base-A",
+  };
+
+  const targetB: ReviewTarget = {
+    profileId: "prof-1", // Same profile & generation!
+    generation: 1,
+    terminalId: "term-B",
+    terminalIncarnation: "1",
+    ompSessionId: "omp-B",
+    serverEpoch: "epoch-B",
+    rootId: "root-B",
+    baselineId: "base-B",
+  };
+
+  it("matchesReviewTargetQuery correctly discriminates status, files, and fileDetail queries", () => {
+    const owner: ConnectionRef = { profileId: targetA.profileId, generation: targetA.generation };
+
+    const statusKeyA = sessionChangesQueryKeys.status(
+      owner,
+      targetA.terminalId,
+      targetA.terminalIncarnation,
+      targetA.ompSessionId,
+      targetA.rootId,
+    );
+    const statusKeyB = sessionChangesQueryKeys.status(
+      owner,
+      targetB.terminalId,
+      targetB.terminalIncarnation,
+      targetB.ompSessionId,
+      targetB.rootId,
+    );
+
+    const filesKeyA = sessionChangesQueryKeys.files(
+      owner,
+      targetA.terminalId,
+      targetA.terminalIncarnation,
+      targetA.ompSessionId,
+      targetA.serverEpoch,
+      targetA.baselineId,
+      "rev-1",
+      null,
+      null,
+      targetA.rootId,
+    );
+
+    expect(matchesReviewTargetQuery(statusKeyA, targetA)).toBe(true);
+    expect(matchesReviewTargetQuery(statusKeyB, targetA)).toBe(false);
+    expect(matchesReviewTargetQuery(filesKeyA, targetA)).toBe(true);
+    expect(matchesReviewTargetQuery(filesKeyA, targetB)).toBe(false);
+  });
+
+  it("removeReviewQueries removes only target queries and preserves sibling review caches under same owner", () => {
+    const qc = new QueryClient();
+    const owner: ConnectionRef = { profileId: targetA.profileId, generation: targetA.generation };
+
+    const statusKeyA = sessionChangesQueryKeys.status(
+      owner,
+      targetA.terminalId,
+      targetA.terminalIncarnation,
+      targetA.ompSessionId,
+      targetA.rootId,
+    );
+    const statusKeyB = sessionChangesQueryKeys.status(
+      owner,
+      targetB.terminalId,
+      targetB.terminalIncarnation,
+      targetB.ompSessionId,
+      targetB.rootId,
+    );
+
+    qc.setQueryData(statusKeyA, { state: "ready", session: "A" });
+    qc.setQueryData(statusKeyB, { state: "ready", session: "B" });
+
+    // Single-view close targeted removal for targetA
+    removeReviewQueries(qc, targetA);
+
+    // Target A queries are removed
+    expect(qc.getQueryData(statusKeyA)).toBeUndefined();
+    // Sibling target B queries remain intact!
+    expect(qc.getQueryData(statusKeyB)).toEqual({ state: "ready", session: "B" });
+  });
+
+  it("purgeOwnerReviewQueries removes all review queries under retired owner", async () => {
+    const qc = new QueryClient();
+    const owner: ConnectionRef = { profileId: targetA.profileId, generation: targetA.generation };
+
+    const statusKeyA = sessionChangesQueryKeys.status(
+      owner,
+      targetA.terminalId,
+      targetA.terminalIncarnation,
+      targetA.ompSessionId,
+      targetA.rootId,
+    );
+    const statusKeyB = sessionChangesQueryKeys.status(
+      owner,
+      targetB.terminalId,
+      targetB.terminalIncarnation,
+      targetB.ompSessionId,
+      targetB.rootId,
+    );
+
+    qc.setQueryData(statusKeyA, { state: "ready", session: "A" });
+    qc.setQueryData(statusKeyB, { state: "ready", session: "B" });
+
+    await purgeOwnerReviewQueries(qc, owner);
+
+    expect(qc.getQueryData(statusKeyA)).toBeUndefined();
+    expect(qc.getQueryData(statusKeyB)).toBeUndefined();
   });
 });

@@ -22,7 +22,7 @@ import {
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
 import type { DisplayTabEntry } from "@/components/organisms/TerminalTabBar.js";
 import type { OpenTerminalTitle } from "@/lib/terminal-title.js";
-import { useCompactWorkspace } from "@/hooks/use-compact-workspace.js";
+import { useOsViewport } from "@/os/use-os-viewport.js";
 import { usePorts } from "@/hooks/use-ports.js";
 import { useResizeHandle } from "@/hooks/use-resize-handle.js";
 import { TerminalTitleText } from "@/components/atoms/TerminalTitleText.js";
@@ -143,7 +143,7 @@ export function ActiveTerminalRuntimeDisplay({
     (state) => state.terminalCommitStatusEnabled,
   );
   const { ports, createTunnel, stopTunnel } = usePorts();
-  const isCompactWorkspace = useCompactWorkspace();
+  const { isCompact: isCompactWorkspace } = useOsViewport();
   const [runtimeSheetOpen, setRuntimeSheetOpen] = useState(false);
   const uiConfig = useMemo(
     () => withUiConfigDefaults(globalConfig?.ui),

@@ -1,8 +1,7 @@
 import { useEffect } from "react";
-import { isNativeWindowsHost } from "@/api/server-config.js";
 import { terminalKey } from "@/api/ownership.js";
+import { terminalTargetKey } from "@/api/terminal-session-contract.js";
 import { TerminalPanel } from "@/components/organisms/TerminalPanel.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { useAppZoom } from "@/contexts/AppZoomContext.js";
 import { subscribeToTerminalAppZoomChanges } from "@/lib/terminal-zoom-invalidation.js";
 import type { MountedSession } from "@/components/organisms/MultiTerminalDisplay.js";
@@ -29,14 +28,11 @@ export function TerminalKeepAliveHost({
   suppressNativeKeyboard = suppressAutoFocus,
   webglEnabledSessionIds,
 }: TerminalKeepAliveHostProps) {
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
   const { level: appZoomLevel } = useAppZoom();
-  const disableWebgl = isNativeWindowsHost() || appZoomLevel !== 100;
-  const shouldSuppressNativeKeyboard =
-    isAndroidChromeNativeInputSuppressed || suppressNativeKeyboard;
+  const disableWebgl = appZoomLevel !== 100;
+  const shouldSuppressNativeKeyboard = Boolean(suppressNativeKeyboard);
   const shouldSuppressTerminalFocus =
-    shouldSuppressNativeKeyboard || suppressAutoFocus;
+    shouldSuppressNativeKeyboard || Boolean(suppressAutoFocus);
 
   useEffect(() => subscribeToTerminalAppZoomChanges(), []);
 
@@ -67,12 +63,18 @@ export function TerminalKeepAliveHost({
             ? tabIndex + 1
             : undefined
           : mountedIndex + 1;
-        const key = session.terminalRef
-          ? terminalKey(session.terminalRef)
-          : session.profileId
-            ? JSON.stringify([session.profileId, session.sessionId])
-            : session.sessionId;
-
+        const profileId =
+          session.terminalTarget?.profileId ??
+          session.terminalRef?.profileId ??
+          session.profileId ??
+          "default";
+        const sessionId =
+          session.terminalTarget?.terminalId ??
+          session.terminalRef?.id ??
+          session.sessionId;
+        const key =
+          session.mountKey ??
+          terminalKey({ profileId, id: sessionId });
         return (
           <TerminalPanel
             key={key}
@@ -83,6 +85,8 @@ export function TerminalKeepAliveHost({
             worktreePath={session.worktreePath}
             profileId={session.profileId}
             terminalRef={session.terminalRef}
+            terminalTarget={session.terminalTarget}
+            attachPolicy={session.attachPolicy}
             onExit={() => onSessionExit?.(session.sessionId)}
             onNewTerminal={onNewTerminal}
             onTerminalReady={() => onTerminalReady?.(session.sessionId)}

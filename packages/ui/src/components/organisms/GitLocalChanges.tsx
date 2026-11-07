@@ -10,7 +10,6 @@ import { normalizeProjectTarget } from "@/api/client.js";
 import type { DiffFileEntry, ProjectTargetRef } from "@/api/client.js";
 import { Button } from "@/components/atoms/Button.js";
 import { FilePathLabel } from "@/components/atoms/FilePathLabel.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 
 interface GitLocalChangesProps {
@@ -20,8 +19,6 @@ interface GitLocalChangesProps {
 
 export function GitLocalChanges({ project, target }: GitLocalChangesProps) {
   const targetRef = normalizeProjectTarget(target ?? project);
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
   const { data: diff, isLoading, refetch } = useGitDiff(targetRef);
   const [commitMessage, setCommitMessage] = useState("");
   const [amendCommit, setAmendCommit] = useState(false);
@@ -37,7 +34,7 @@ export function GitLocalChanges({ project, target }: GitLocalChangesProps) {
   const unstagedFiles = diff?.entries.filter((e) => !e.staged) || [];
 
   const handleCommit = async () => {
-    if (isAndroidChromeNativeInputSuppressed || !commitMessage.trim()) return;
+    if (!commitMessage.trim()) return;
     setCommitError(null);
     try {
       await commitMutation.mutateAsync({
@@ -198,7 +195,6 @@ export function GitLocalChanges({ project, target }: GitLocalChangesProps) {
           value={commitMessage}
           onChange={(e) => setCommitMessage(e.target.value)}
           placeholder="Commit message..."
-          disabled={isAndroidChromeNativeInputSuppressed}
           className="w-full h-20 p-2 text-xs bg-[var(--color-surface)] border border-[var(--color-border)] rounded focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none mb-2"
         />
         <div className="mb-2 flex items-center justify-between">
@@ -220,15 +216,9 @@ export function GitLocalChanges({ project, target }: GitLocalChangesProps) {
             size="sm"
             variant="primary"
             disabled={
-              isAndroidChromeNativeInputSuppressed ||
               stagedFiles.length === 0 ||
               !commitMessage.trim() ||
               commitMutation.isPending
-            }
-            title={
-              isAndroidChromeNativeInputSuppressed
-                ? "Unavailable on Android Chrome: text entry is disabled"
-                : undefined
             }
             onClick={handleCommit}
           >

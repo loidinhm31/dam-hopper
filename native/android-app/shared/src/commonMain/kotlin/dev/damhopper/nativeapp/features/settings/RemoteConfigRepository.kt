@@ -13,7 +13,7 @@ import kotlinx.serialization.json.put
 /**
  * Sole owner of the server config endpoints used by Settings:
  * - `/api/config` (GET/PUT), `/api/config/projects/{name}` (PATCH)
- * - `/api/global-config` (GET), `/api/global-config/ui` and `/api/global-config/defaults` (POST)
+ * - `/api/global-config` (GET), `/api/global-config/ui` and `/api/global-config/workspace` (POST)
  *
  * Every mutation takes a **required** request-local [RequestAdmissionGuard] (C2b) that is forwarded unchanged
  * to the existing transport. A `false` return means the server did not confirm; after admission the caller
@@ -57,6 +57,19 @@ class RemoteConfigRepository(
         require(!preferences.isEmpty()) { "UI preference patch is empty" }
         val text = apiClient.postJson("/api/global-config/ui", preferences.toUiRequestBody(), guard)
         return confirmedFlag(text, "updated")
+    }
+    /**
+     * Updates the server-global [workspace] root (and optional name) in config.toml.
+     * Posts {"root": root} or {"root": root, "name": name} to /api/global-config/workspace.
+     */
+    suspend fun updateGlobalWorkspace(root: String, name: String? = null, guard: RequestAdmissionGuard): Boolean {
+        require(root.isNotBlank()) { "Workspace root path is blank" }
+        val body = buildJsonObject {
+            put("root", root)
+            if (name != null) put("name", name)
+        }.toString()
+        val text = apiClient.postJson("/api/global-config/workspace", body, guard)
+        return confirmedFlag(text, "updated") || confirmedFlag(text, "ok")
     }
 
     /**

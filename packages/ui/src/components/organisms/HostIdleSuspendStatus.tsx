@@ -15,6 +15,7 @@ export interface HostIdleSuspendStatusProps {
   onForceSleep?: (status: IdleSuspendStatusV1) => void;
   isForceSleepPending?: boolean;
   owner?: OwnerInput;
+  className?: string;
 }
 
 const STATE_BADGES: Record<
@@ -154,6 +155,7 @@ export function HostIdleSuspendStatus({
   onForceSleep,
   isForceSleepPending,
   owner,
+  className = "",
 }: HostIdleSuspendStatusProps = {}) {
   const { data: status, isLoading, isError } = useIdleSuspendStatus(true, owner);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -279,7 +281,7 @@ export function HostIdleSuspendStatus({
   return (
     <div
       aria-label="Terminal idle suspend status"
-      className="space-y-2 rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5 text-xs text-[var(--color-text)]"
+      className={cn("space-y-2 rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5 text-xs text-[var(--color-text)]", className)}
     >
       <div className="flex items-center justify-between gap-2">
         <span className="font-semibold text-[11px] text-[var(--color-text)]">

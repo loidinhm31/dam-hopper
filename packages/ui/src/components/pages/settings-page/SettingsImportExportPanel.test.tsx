@@ -22,7 +22,7 @@ describe("SettingsImportExportPanel", () => {
     container.remove();
   });
 
-  it("renders export and import action rows with active workspace wording", () => {
+  it("renders export and import action rows with server configuration wording", () => {
     act(() => {
       root.render(
         <SettingsImportExportPanel
@@ -39,9 +39,9 @@ describe("SettingsImportExportPanel", () => {
     });
 
     expect(container.textContent).toContain("Export Settings");
-    expect(container.textContent).toContain("Download the active workspace");
+    expect(container.textContent).toContain("Download the server config.toml");
     expect(container.textContent).toContain("Import Settings");
-    expect(container.textContent).toContain("Replace the active workspace configuration");
+    expect(container.textContent).toContain("Replace the server configuration");
   });
 
   it("calls onExport when export button is clicked", () => {

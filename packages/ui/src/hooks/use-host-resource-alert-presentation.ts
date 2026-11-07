@@ -160,7 +160,10 @@ export const useHostResourceAlertPresentationStore =
               unreadIds: [],
             },
           };
-          return { unreadIds: [], byProfile: nextByProfile };
+          const remainingUnreadIds = Array.from(
+            new Set(Object.values(nextByProfile).flatMap((p) => p.unreadIds)),
+          );
+          return { unreadIds: remainingUnreadIds, byProfile: nextByProfile };
         }
         return { unreadIds: [] };
       }),

@@ -1,6 +1,5 @@
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
-import { useState, useEffect } from "react";
-import { AppLayout } from "@/components/templates/AppLayout.js";
+import { useState, useEffect, useRef } from "react";
 import { Switch } from "@/components/atoms/Switch.js";
 import type { DamHopperConfig } from "@/api/client.js";
 import {
@@ -17,7 +16,6 @@ import { useWorkbenchSelectionsStore } from "@/stores/workbench-selections.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { SettingsAppearanceSection } from "@/components/organisms/SettingsAppearanceSection.js";
 import { SettingsKeyboardShortcutsSection } from "@/components/organisms/SettingsKeyboardShortcutsSection.js";
-import { SettingsUsageInsightsSection } from "@/components/organisms/SettingsUsageInsightsSection.js";
 import { DiagnosticsExportButton } from "@/components/organisms/DiagnosticsExportButton.js";
 import { SettingsIdleSuspendTimingSection } from "@/components/organisms/SettingsIdleSuspendTimingSection.js";
 import { SettingsSectionAccordion } from "@/components/pages/settings-page/SettingsSectionAccordion.js";
@@ -33,28 +31,89 @@ const SETTINGS_DIAGNOSTICS_SCOPE = {
   frontendScopes: ["SettingsPage", "settings"],
 };
 
-export function SettingsPage() {
+export interface SettingsPageProps {
+  noLayout?: boolean;
+  targetProfileId?: string | null;
+  onTargetProfileChange?: (profileId: string | null) => void;
+  requestedSection?: string;
+  deliveryId?: string;
+}
+
+export function SettingsPage({
+  noLayout = false,
+  targetProfileId: explicitTargetProfileId,
+  onTargetProfileChange,
+  requestedSection,
+  deliveryId,
+}: SettingsPageProps = {}) {
   const profilesResult = readServerProfiles();
   const profiles: ServerProfile[] =
     profilesResult.status === "available" ? profilesResult.profiles : [];
 
   const {
-    settingsProfileId,
+    settingsProfileId: globalSettingsProfileId,
     setSettingsProfileId,
     preferencesProfileId,
     preferencesStatus,
   } = useWorkbenchSelectionsStore();
+
+  const [localSettingsProfileId, setLocalSettingsProfileId] = useState<
+    string | null
+  >(() => explicitTargetProfileId ?? null);
+
+  useEffect(() => {
+    if (explicitTargetProfileId !== undefined) {
+      setLocalSettingsProfileId(explicitTargetProfileId);
+    }
+  }, [explicitTargetProfileId]);
+
+  const effectiveSettingsProfileId =
+    explicitTargetProfileId !== undefined
+      ? explicitTargetProfileId
+      : noLayout
+        ? localSettingsProfileId
+        : globalSettingsProfileId;
+
+  const effectiveSettingsProfileIdRef = useRef(effectiveSettingsProfileId);
+  effectiveSettingsProfileIdRef.current = effectiveSettingsProfileId;
+
+  function getCurrentEffectiveProfileId() {
+    if (noLayout || explicitTargetProfileId !== undefined) {
+      return effectiveSettingsProfileIdRef.current;
+    }
+    return useWorkbenchSelectionsStore.getState().settingsProfileId;
+  }
   const switchPreferenceSource = useSettingsStore(
     (s) => s.switchPreferenceSource,
   );
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const appearanceRef = useRef<HTMLDivElement>(null);
+  const lastProcessedDeliveryIdRef = useRef<string | null>(null);
 
-  const targetSnapshot = settingsProfileId
-    ? getConnectionSnapshot(settingsProfileId)
+  useEffect(() => {
+    if (
+      requestedSection === "appearance" &&
+      deliveryId &&
+      deliveryId !== lastProcessedDeliveryIdRef.current
+    ) {
+      lastProcessedDeliveryIdRef.current = deliveryId;
+      setAppearanceOpen(true);
+      appearanceRef.current?.scrollIntoView?.({
+        behavior: "smooth",
+        block: "start",
+      });
+      const button = appearanceRef.current?.querySelector("button");
+      button?.focus();
+    }
+  }, [requestedSection, deliveryId]);
+
+  const targetSnapshot = effectiveSettingsProfileId
+    ? getConnectionSnapshot(effectiveSettingsProfileId)
     : null;
   const targetProfile =
-    profiles.find((p) => p.id === settingsProfileId) ?? null;
-  const targetOwner = settingsProfileId
-    ? (targetSnapshot?.owner ?? { profileId: settingsProfileId, generation: 1 })
+    profiles.find((p) => p.id === effectiveSettingsProfileId) ?? null;
+  const targetOwner = effectiveSettingsProfileId
+    ? (targetSnapshot?.owner ?? { profileId: effectiveSettingsProfileId, generation: 1 })
     : undefined;
 
   const prefProfile =
@@ -90,9 +149,9 @@ export function SettingsPage() {
   useEffect(() => {
     setSessionChangesNotice(null);
     setSessionChangesError(null);
-  }, [settingsProfileId, targetOwner?.generation]);
+  }, [effectiveSettingsProfileId, targetOwner?.generation]);
 
-  const isTargetReady = settingsProfileId
+  const isTargetReady = effectiveSettingsProfileId
     ? Boolean(
         targetProfile &&
           (!targetSnapshot || targetSnapshot.status === "connected"),
@@ -108,7 +167,7 @@ export function SettingsPage() {
     setSessionChangesNotice(null);
     setSessionChangesError(null);
 
-    const actionProfileId = settingsProfileId;
+    const actionProfileId = effectiveSettingsProfileId;
     const actionGeneration = targetOwner?.generation ?? 1;
 
     try {
@@ -121,8 +180,7 @@ export function SettingsPage() {
       };
       await updateConfig(nextConfig);
 
-      const currentSettingsProfileId =
-        useWorkbenchSelectionsStore.getState().settingsProfileId;
+      const currentSettingsProfileId = getCurrentEffectiveProfileId();
       const currentSnapshot = currentSettingsProfileId
         ? getConnectionSnapshot(currentSettingsProfileId)
         : null;
@@ -143,8 +201,7 @@ export function SettingsPage() {
         }
       }
     } catch (err) {
-      const currentSettingsProfileId =
-        useWorkbenchSelectionsStore.getState().settingsProfileId;
+      const currentSettingsProfileId = getCurrentEffectiveProfileId();
       const currentSnapshot = currentSettingsProfileId
         ? getConnectionSnapshot(currentSettingsProfileId)
         : null;
@@ -212,8 +269,8 @@ export function SettingsPage() {
       const a = document.createElement("a");
       a.href = url;
       const downloadFilename = targetProfile
-        ? `dam-hopper-${targetProfile.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.toml`
-        : "dam-hopper.toml";
+        ? `dam-hopper-${targetProfile.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-config.toml`
+        : "config.toml";
       a.download = downloadFilename;
       document.body.appendChild(a);
       a.click();
@@ -249,14 +306,13 @@ export function SettingsPage() {
     const file = pendingImportFile;
     setPendingImportFile(null);
 
-    const targetAtStart = settingsProfileId;
+    const targetAtStart = effectiveSettingsProfileId;
     const generationAtStart = targetSnapshot?.owner.generation ?? 1;
     const currentSnap = targetAtStart
       ? getConnectionSnapshot(targetAtStart)
       : null;
     if (
-      useWorkbenchSelectionsStore.getState().settingsProfileId !==
-        targetAtStart ||
+      getCurrentEffectiveProfileId() !== targetAtStart ||
       (currentSnap && currentSnap.owner.generation !== generationAtStart)
     ) {
       setImportErr(
@@ -283,17 +339,8 @@ export function SettingsPage() {
     }, 6000);
   }
 
-  return (
-    <AppLayout
-      title="Settings"
-      actions={
-        <DiagnosticsExportButton
-          compact
-          terminalIds={[]}
-          scope={SETTINGS_DIAGNOSTICS_SCOPE}
-        />
-      }
-    >
+  const content = (
+    <>
       <div className="max-w-4xl space-y-3">
         <section
           data-testid="settings-profile-targets"
@@ -308,8 +355,8 @@ export function SettingsPage() {
                 Settings Target Server
               </label>
               <p className="text-xs text-[var(--color-text-muted)]">
-                Server whose workspace configuration, global defaults, usage,
-                and maintenance are inspected and modified.
+                Server whose workspace configuration, global defaults, and
+                maintenance are inspected and modified.
               </p>
               {targetProfile && (
                 <div className="flex items-center gap-2 pt-1 text-xs font-mono text-[var(--color-text-muted)]">
@@ -325,10 +372,15 @@ export function SettingsPage() {
               <select
                 id="settings-target-select"
                 className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[var(--color-text)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
-                value={settingsProfileId ?? ""}
+                value={effectiveSettingsProfileId ?? ""}
                 onChange={(e) => {
-                  const val = e.target.value;
-                  setSettingsProfileId(val || null);
+                  const val = e.target.value || null;
+                  if (noLayout || explicitTargetProfileId !== undefined) {
+                    setLocalSettingsProfileId(val);
+                    onTargetProfileChange?.(val);
+                  } else {
+                    setSettingsProfileId(val);
+                  }
                 }}
               >
                 <option value="">(Current / Default Server)</option>
@@ -390,25 +442,22 @@ export function SettingsPage() {
             </div>
           </div>
         </section>
-        <SettingsSectionAccordion
-          title="Appearance"
-          description="Theme, layout density, editor behavior, and notification preferences."
-        >
-          <SettingsAppearanceSection />
-        </SettingsSectionAccordion>
+        <div ref={appearanceRef} data-testid="settings-section-appearance">
+          <SettingsSectionAccordion
+            title="Appearance"
+            description="Theme, layout density, editor behavior, and notification preferences."
+            open={appearanceOpen}
+            onOpenChange={setAppearanceOpen}
+          >
+            <SettingsAppearanceSection />
+          </SettingsSectionAccordion>
+        </div>
 
         <SettingsSectionAccordion
           title="Keyboard Shortcuts"
           description="Tune command keys used across workspace navigation and terminals."
         >
           <SettingsKeyboardShortcutsSection />
-        </SettingsSectionAccordion>
-
-        <SettingsSectionAccordion
-          title="Usage insights"
-          description="Opt in to privacy-safe local Codex response telemetry and token summaries."
-        >
-          <SettingsUsageInsightsSection owner={targetOwner} />
         </SettingsSectionAccordion>
         <SettingsSectionAccordion
           title="Terminal Idle Suspend"
@@ -579,6 +628,24 @@ export function SettingsPage() {
         variant="danger"
         loading={importSettings.isPending}
       />
-    </AppLayout>
+    </>
+  );
+
+  if (noLayout) {
+    return content;
+  }
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0 overflow-y-auto p-4 gradient-bg">
+      <div className="flex items-center justify-between pb-3 border-b border-[var(--color-border)] mb-4">
+        <h1 className="text-lg font-semibold text-[var(--color-text)]">Settings</h1>
+        <DiagnosticsExportButton
+          compact
+          terminalIds={[]}
+          scope={SETTINGS_DIAGNOSTICS_SCOPE}
+        />
+      </div>
+      {content}
+    </div>
   );
 }

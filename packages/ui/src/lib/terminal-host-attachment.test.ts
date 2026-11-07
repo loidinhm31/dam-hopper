@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { attachTerminalsToHost } from "./terminal-host-attachment.js";
+import {
+  attachTerminalsToHost,
+  parkTerminalElement,
+} from "./terminal-host-attachment.js";
 import type { TerminalEntry } from "./terminal-registry.js";
 
 function animationFrameFixture() {
@@ -228,5 +231,41 @@ describe("attachTerminalsToHost", () => {
     expect(fitIndex).toBeGreaterThan(-1);
     expect(commitIndex).toBeLessThan(fitIndex);
     frames.flush();
+  });
+
+  it("captures origin parent on first reparent and parks only when parent is fromHost", () => {
+    const events: string[] = [];
+    const element = elementFixture(events);
+    const originHost = hostFixture(events);
+    // Element starts in originHost
+    Object.defineProperty(element, "parentElement", {
+      value: originHost,
+      writable: true,
+      configurable: true,
+    });
+
+    const entry = entryFixture(events, element);
+    const paneHost1 = hostFixture(events);
+    const paneHost2 = hostFixture(events);
+
+    // First reparent: moves from originHost to paneHost1
+    attachTerminalsToHost({
+      host: paneHost1,
+      sessionIds: ["term-1"],
+      activeSessionId: "term-1",
+      resolveTerminal: () => entry,
+    });
+    expect(element.parentElement).toBe(paneHost1);
+
+    // Attempt parking from wrong host (paneHost2) -> no-op, returns false
+    const wrongPark = parkTerminalElement(entry, paneHost2);
+    expect(wrongPark).toBe(false);
+    expect(element.parentElement).toBe(paneHost1);
+
+    // Park from current host (paneHost1) -> moves back to originHost, returns true
+    const correctPark = parkTerminalElement(entry, paneHost1);
+    expect(correctPark).toBe(true);
+    expect(element.parentElement).toBe(originHost);
+    expect(events).toContain("display:none");
   });
 });

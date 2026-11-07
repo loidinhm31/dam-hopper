@@ -95,6 +95,8 @@ fn make_test_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) 
         server: dam_hopper_server::config::ServerConfig::default(),
         projects,
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: workspace_dir.join("dam-hopper.toml"),
     };
 
@@ -120,7 +122,6 @@ fn make_test_state_with_project_roots(tmp: &TempDir, roots: Vec<(&str, &Path)>) 
         None,
         ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
         diagnostics,
-        dam_hopper_server::telemetry::TelemetryRuntime::new(),
     )
     .expect("make_test_state failed")
     .with_auth_service(std::sync::Arc::new(dam_hopper_server::auth::AuthService::new_mock_default().0))

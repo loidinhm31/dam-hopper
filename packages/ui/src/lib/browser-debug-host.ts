@@ -69,14 +69,11 @@ export type BrowserDebugHostEvent = BrowserDebugHostEventPayload & {
 };
 
 /**
- * Lifecycle contract for a host-owned browser surface. Native and web
- * adapters implement this contract; the web adapter remains the default.
+ * Lifecycle contract for a host-owned browser surface.
  */
 export interface BrowserDebugHost {
   setTarget(target: BrowserDebugTarget | null): void;
   setViewport(viewport: BrowserDebugHostViewport | null): void;
-  /** Native child hosts mirror the shared document's presentation zoom. */
-  setZoom?(scaleFactor: number): void;
   command(command: BrowserDebugHostCommand): void;
   subscribe(listener: (event: BrowserDebugHostEvent) => void): () => void;
   destroy(): void;

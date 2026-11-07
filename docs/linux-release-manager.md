@@ -70,9 +70,9 @@ without mutating it:
 | `/var/lib/dam-hopper` | API UID/GID, directory `0700` |
 | `/var/lib/dam-hopper/.config` | API UID/GID, directory `0700` |
 | `/var/lib/dam-hopper/.config/dam-hopper` | API UID/GID, directory `0700` |
-| `/var/lib/dam-hopper/dam-hopper.toml` | API UID/GID, regular file `0600` |
+| `/var/lib/dam-hopper/config.toml` | API UID/GID, regular file `0600` |
 | `/var/lib/dam-hopper/idle-suspend-audit.jsonl` | API UID/GID, regular file `0600` |
-| `/etc/dam-hopper/dam-hopper.toml` | Optional migration source: `root:root`, regular file `0644`; read-only |
+| `/etc/dam-hopper/dam-hopper.toml` | Optional migration source: `root:root`, regular file `0644`; read-only legacy |
 
 The canonical config and server audit are under `/var/lib/dam-hopper`. When the
 canonical config is absent, the provisioner validates the optional legacy file
@@ -87,8 +87,8 @@ The API audit consumer never lazily creates or follows this file. See
 [Linux API Runtime State Provisioning](./linux-release-runtime-provisioning.md)
 for the decision table, descriptor walk, and publication refusal boundaries.
 The same unit contract fixes one API command: the template uses
-`@API_HOME@/dam-hopper.toml`; the checked-in production-default unit renders
-`/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/dam-hopper.toml --host 0.0.0.0 --port 4801`.
+`@API_HOME@/config.toml`; the checked-in production-default unit renders
+`/opt/dam-hopper/current/bin/dam-hopper-server --config /var/lib/dam-hopper/config.toml --host 0.0.0.0 --port 4801`.
 It is a synchronized reference, not a second policy source.
 `validate_api_unit_policy` requires exactly one `ExecStart` equal to the
 rendered command and preserves exactly one zero-operand privileged prestart;
@@ -110,7 +110,7 @@ silently redirected.
 holders only for `server`/`both`; `web` reads no API state. Discovery is
 read-only and completes before quiesce, stop, or switch:
 
-1. Inspect canonical `/var/lib/dam-hopper/dam-hopper.toml`, then extant
+1. Inspect canonical `/var/lib/dam-hopper/config.toml`, then extant
    `/etc/dam-hopper/dam-hopper.toml`, with no-follow open, descriptor `fstat`,
    regular-file check, 64 KiB bound, UTF-8 decode, and TOML parse.
 2. Only `ENOENT` is absent. Links, special/unreadable/oversized/malformed
@@ -141,7 +141,7 @@ does not provision/repair daemon TOML under `/etc` or `/var/lib`;
 `server`/`both` first provision fixed state at explicit `sudo dam-hopper start`,
 while `web` never invokes the provisioner.
 
-Reset defaults to `/var/lib/dam-hopper/dam-hopper.toml`; explicit `--config`
+Reset defaults to `/var/lib/dam-hopper/config.toml`; explicit `--config`
 is for controlled alternate layouts. It parses the installed API unit for the
 exact non-root `User=`/`Group=`, refuses absent/link/non-regular or
 wrong-owner/group/mode (`0600`) files, and never repairs those preconditions.
@@ -542,7 +542,7 @@ under a temporary root and no host files are changed.
 | `/etc/dam-hopper/server.env` and `/etc/dam-hopper/web.env`      | Machine-local service environments        |
 | `/etc/dam-hopper/dam-hopper.toml`                              | Legacy API registry; read-only migration source |
 | `/var/lib/dam-hopper/`                                         | API-owned state root (`0700`, final API UID/GID) |
-| `/var/lib/dam-hopper/dam-hopper.toml`                          | Canonical API registry (`0600`, final API UID/GID) |
+| `/var/lib/dam-hopper/config.toml`                              | Canonical API configuration (`0600`, final API UID/GID) |
 | `/var/lib/dam-hopper/idle-suspend-audit.jsonl`                  | Server timing/manual audit (`0600`, final API UID/GID) |
 | `/var/lib/dam-hopper-manager/pending-units-<tx_id>/`           | Rendered candidate units/sysusers/tmpfiles |
 | `/var/lib/dam-hopper-manager/pending-host-config-<tx_id>.json` | Candidate public config                   |

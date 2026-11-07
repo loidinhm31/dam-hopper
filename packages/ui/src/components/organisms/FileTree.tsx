@@ -10,7 +10,7 @@ import {
   type ComponentPropsWithoutRef,
 } from "react";
 import { Tree } from "react-arborist";
-import type { NodeApi, NodeRendererProps, TreeApi } from "react-arborist";
+import type { NodeApi, NodeRendererProps, RowRendererProps, TreeApi } from "react-arborist";
 import {
   ChevronRight,
   ChevronDown,
@@ -25,20 +25,30 @@ import {
 import { getFileTreeRowHeight } from "@/lib/workbench-typography.js";
 import { cn } from "@/lib/utils.js";
 import { FileDecorationIcon } from "@/lib/file-decoration-icon.js";
-import { useFsSubscription } from "@/hooks/use-fs-subscription.js";
+import { useFsSubscription, resolveSubscriptionTransport, spliceChildren } from "@/hooks/use-fs-subscription.js";
 import { useFsOps } from "@/hooks/use-fs-ops.js";
 import { useFsUpload } from "@/hooks/use-fs-upload.js";
 import { isHtmlFile } from "@/lib/html-file.js";
 import { saveHtmlViewMode } from "@/lib/html-view-mode-persistence.js";
-import type { FsArborNode } from "@/api/fs-types.js";
-import type { ProjectTargetRef } from "@/api/client.js";
+import type { FsArborNode, FsListResponse } from "@/api/fs-types.js";
+import type { ProjectTargetInput, ProjectTargetRef } from "@/api/client.js";
+import { toServerFsTarget, type FsTargetRef } from "@/api/ownership.js";
 import { TreeContextMenu } from "./TreeContextMenu.js";
 import { UploadDropzone } from "./UploadDropzone.js";
 import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog.js";
 import { NewItemDialog } from "./NewItemDialog.js";
 import { RenameItemDialog } from "./RenameItemDialog.js";
+import { MarkProjectDialog } from "./MarkProjectDialog.js";
+import { UnmarkProjectDialog } from "./UnmarkProjectDialog.js";
 import { LockToggle } from "@/components/atoms/LockToggle.js";
 import { EncryptedUploadDialog } from "@/components/organisms/EncryptedUploadDialog.js";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/Select.js";
 import { useEncryptMode } from "@/contexts/EncryptContext.js";
 import { useSettingsStore } from "@/stores/settings.js";
 import { useEditorStore } from "@/stores/editor.js";
@@ -50,6 +60,8 @@ import {
   useExplorerLanguageScan,
   useGitDiff,
   useProject,
+  useProjects,
+  useWorkspaceStatus,
 } from "@/api/queries.js";
 import type { ExplorerLanguageFilter } from "@/api/fs-types.js";
 import { isExplorerLanguageFilter } from "@/lib/ui-config.js";
@@ -150,20 +162,29 @@ type NodeRendererWithContextProps = Omit<
     onContextMenu?: React.MouseEventHandler<HTMLDivElement>;
     gitState?: GitFileState;
     hasChangedDescendant?: boolean;
+    isProject?: boolean;
     onOpenDiff?: (state: GitFileState) => void;
+    onFileOpen?: (node: FsArborNode) => void;
+    onToggleDir?: (node: NodeApi<FsArborNode>) => void;
+    isLanguageMode?: boolean;
   };
 
 const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
   function NodeRenderer(
     {
       node,
+      tree: _tree,
       style,
       dragHandle,
       gitState,
       hasChangedDescendant,
+      isProject,
       onOpenDiff,
       onContextMenu,
-      ...props
+      onFileOpen,
+      onToggleDir,
+      isLanguageMode,
+      ...domProps
     },
     forwardedRef,
   ) {
@@ -178,7 +199,7 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
     if (isLoadingSentinel(node.data.id)) {
       return (
         <div
-          {...props}
+          {...domProps}
           ref={combinedRef}
           style={style}
           className="flex items-center gap-1.5 px-1 py-0.5 text-xs text-[var(--color-text-muted)] opacity-40 select-none"
@@ -195,9 +216,10 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
 
     return (
       <div
-        {...props}
+        {...domProps}
         ref={combinedRef}
         style={style}
+        data-testid={`file-tree-item-${node.data.id}`}
         className={cn(
           "flex items-center gap-1.5 px-1 py-0.5 cursor-pointer rounded-sm select-none",
           "hover:bg-[var(--color-surface-2)] text-xs",
@@ -212,8 +234,37 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
             "bg-[var(--color-primary)]/10 ring-1 ring-[var(--color-primary)]",
         )}
         onContextMenu={onContextMenu}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (e.metaKey || e.ctrlKey) {
+            node.isSelected ? node.deselect() : node.selectMulti();
+          } else if (e.shiftKey) {
+            node.selectContiguous();
+          } else {
+            node.select();
+            if (isDir) {
+              onToggleDir?.(node);
+            } else if (isLanguageMode && node.data.kind === "file") {
+              onFileOpen?.(node.data);
+            }
+          }
+        }}
+        onDoubleClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (isLoadingSentinel(node.data.id)) return;
+          if (node.data.kind === "file") {
+            onFileOpen?.(node.data);
+          }
+        }}
       >
-        <span className="w-4 shrink-0 flex items-center justify-center">
+        <span
+          className="w-4 shrink-0 flex items-center justify-center cursor-pointer hover:text-[var(--color-text)]"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleDir?.(node);
+          }}
+        >
           {isDir ? (
             node.isOpen ? (
               <ChevronDown className="h-3 w-3 text-[var(--color-text-muted)]" />
@@ -223,12 +274,21 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
           ) : null}
         </span>
 
-        <TreeNodeIcon
-          path={getNodeDecorationPath(node.data)}
-          isDir={isDir}
-          isOpen={node.isOpen}
-        />
-
+        <span
+          className={cn(isDir && "cursor-pointer")}
+          onClick={(e) => {
+            if (isDir) {
+              e.stopPropagation();
+              onToggleDir?.(node);
+            }
+          }}
+        >
+          <TreeNodeIcon
+            path={getNodeDecorationPath(node.data)}
+            isDir={isDir}
+            isOpen={node.isOpen}
+          />
+        </span>
         <span
           className="truncate"
           title={
@@ -240,6 +300,15 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
           {node.data.name}
         </span>
 
+        {isDir && isProject && (
+          <span
+            data-testid="project-badge"
+            className="px-1 py-0 text-[10px] font-semibold rounded bg-[var(--color-primary)]/20 text-[var(--color-primary)] border border-[var(--color-primary)]/30 shrink-0"
+            title="Marked project"
+          >
+            [Project]
+          </span>
+        )}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {isDir && hasChangedDescendant && (
             <span
@@ -302,12 +371,15 @@ const NodeRenderer = forwardRef<HTMLDivElement, NodeRendererWithContextProps>(
 // FileTree
 // ---------------------------------------------------------------------------
 
-interface FileTreeProps {
-  project: string;
-  target?: ProjectTargetRef;
+export interface FileTreeProps {
+  project?: string;
+  target?: FsTargetRef | ProjectTargetRef;
+  mode?: "workspace" | "projects";
+  projectFilter?: string;
+  onReturnToWorkspace?: () => void;
   path?: string;
   onFileOpen?: (node: FsArborNode) => void;
-  onOpenTerminal?: () => void;
+  onOpenTerminal?: (cwd?: string) => void;
   className?: string;
   revealRequest?: FileTreeRevealRequest | null;
 }
@@ -323,22 +395,68 @@ interface DeleteState {
 }
 
 export function FileTree({
-  project,
+  project = "",
   target,
+  mode,
+  projectFilter,
+  onReturnToWorkspace,
   path = "",
   onFileOpen,
   onOpenTerminal,
   className,
   revealRequest,
 }: FileTreeProps) {
-  const worktreePath = target?.worktreePath;
-  const targetProject = target?.project ?? project;
-  const requestTarget = useMemo(
-    () =>
-      target ?? (worktreePath == null
-        ? targetProject
-        : { project: targetProject, worktreePath }),
-    [target, targetProject, worktreePath],
+  const resolvedMode =
+    mode ??
+    (target && "kind" in target && target.kind === "workspace"
+      ? "workspace"
+      : project
+        ? "projects"
+        : "workspace");
+  const isWorkspaceMode = resolvedMode === "workspace";
+  const { data: projects = [] } = useProjects({ profileId: target?.profileId });
+
+  const targetProject = (target && "project" in target ? target.project : project)?.trim();
+  const worktreePath = target && "worktreePath" in target ? target.worktreePath : undefined;
+  const isProjectsAll =
+    resolvedMode === "projects" && (!targetProject || projectFilter === "all");
+
+  const { data: wsStatus } = useWorkspaceStatus(
+    target?.profileId ? { profileId: target.profileId } : undefined,
+  );
+
+  const requestTarget = useMemo<FsTargetRef>(() => {
+    if (isWorkspaceMode) {
+      const explicitEpoch =
+        target && "workspaceEpoch" in target && typeof target.workspaceEpoch === "number"
+          ? target.workspaceEpoch
+          : undefined;
+      const epoch = explicitEpoch ?? wsStatus?.workspaceEpoch;
+      if (target && "kind" in target && target.kind === "workspace") {
+        return epoch !== undefined && target.workspaceEpoch !== epoch
+          ? { ...target, workspaceEpoch: epoch }
+          : target;
+      }
+      return {
+        kind: "workspace" as const,
+        profileId: target?.profileId ?? "",
+        ...(epoch !== undefined ? { workspaceEpoch: epoch } : {}),
+      };
+    }
+    if (target && "kind" in target) {
+      if (target.kind === "workspace") return target;
+      return target;
+    }
+    if (isProjectsAll || !targetProject) {
+      return { kind: "project" as const, project: "", profileId: target?.profileId ?? "" };
+    }
+    return worktreePath == null
+      ? { kind: "project" as const, project: targetProject, profileId: target?.profileId ?? "" }
+      : { kind: "project" as const, project: targetProject, worktreePath, profileId: target?.profileId ?? "" };
+  }, [isWorkspaceMode, target, targetProject, worktreePath, wsStatus?.workspaceEpoch]);
+  const scopeKey = useMemo(
+    () => explorerTreeScopeKey(requestTarget),
+    [requestTarget],
   );
   const settings = useSettingsStore();
   const showHidden = settings?.explorerShowHidden ?? false;
@@ -359,10 +477,20 @@ export function FileTree({
   const languageFilterId = useId();
   const [encUploadOpen, setEncUploadOpen] = useState(false);
   const { data, isLoading, isError, error, loadChildren, refetch, isFetching } =
-    useFsSubscription(requestTarget, path);
-  const languageScan = useExplorerLanguageScan(requestTarget);
+    useFsSubscription(requestTarget, path, {
+      enabled: isWorkspaceMode || (Boolean(targetProject) && !isProjectsAll),
+    });
+  const projectTargetInput: ProjectTargetInput = useMemo(
+    () => ({
+      project: isWorkspaceMode ? "" : (targetProject || ""),
+      worktreePath: worktreePath ?? undefined,
+      profileId: target?.profileId,
+    }),
+    [isWorkspaceMode, targetProject, worktreePath, target?.profileId],
+  );
+  const languageScan = useExplorerLanguageScan(projectTargetInput);
   const { cache: languageScanCache, scan } = languageScan;
-  const { data: gitDiff } = useGitDiff(requestTarget, "*");
+  const { data: gitDiff } = useGitDiff(projectTargetInput, "*");
   const openDiff = useEditorStore((s) => s.openDiff);
   const ops = useFsOps(requestTarget, path);
   const { progress, upload, clearProgress } = useFsUpload(requestTarget, path);
@@ -384,17 +512,116 @@ export function FileTree({
   const [uploadDir, setUploadDir] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const treeRef = useRef<TreeApi<FsArborNode> | undefined>(undefined);
+  const [markDialog, setMarkDialog] = useState<{
+    open: boolean;
+    folderPath: string;
+  } | null>(null);
+  const [unmarkDialog, setUnmarkDialog] = useState<{
+    open: boolean;
+    projectName: string;
+  } | null>(null);
+
+  const projectPathMap = useMemo(() => {
+    const map = new Map<string, (typeof projects)[number]>();
+    for (const p of projects) {
+      if (p.path) {
+        const norm = p.path.replace(/^\.\//, "").replace(/^\/+|\/+$/g, "");
+        map.set(norm, p);
+      }
+      map.set(p.name, p);
+    }
+    return map;
+  }, [projects]);
+
+  const [allProjectsChildren, setAllProjectsChildren] = useState<
+    Record<string, FsArborNode[]>
+  >({});
+
+  const loadProjectChildren = useCallback(
+    async (nodeId: string) => {
+      const parts = nodeId.split("/");
+      const projectName = parts[0];
+      const relPath = parts.slice(1).join("/");
+      const proj = projects.find((p) => p.name === projectName);
+      if (!proj) return [];
+      const projectTarget: FsTargetRef = {
+        kind: "project",
+        project: projectName,
+        profileId: (requestTarget as FsTargetRef).profileId,
+      };
+      const t = resolveSubscriptionTransport(projectTarget);
+      const wire = toServerFsTarget(projectTarget);
+      const resp = await t.invoke<FsListResponse>("fs:list", {
+        target: wire,
+        path: relPath,
+      });
+      const children: FsArborNode[] = resp.entries.map((e) => ({
+        id: nodeId + "/" + e.name,
+        name: e.name,
+        kind: e.kind,
+        size: e.size,
+        mtime: e.mtime,
+        isSymlink: e.isSymlink,
+        children: null,
+      }));
+      setAllProjectsChildren((prev) => {
+        const rootNodes = prev[projectName] ?? [];
+        if (nodeId === projectName) {
+          return { ...prev, [projectName]: children };
+        }
+        return {
+          ...prev,
+          [projectName]: spliceChildren(rootNodes, nodeId, children),
+        };
+      });
+      return children;
+    },
+    [projects, requestTarget],
+  );
+
+  const inFlightLoadsRef = useRef<Map<string, Promise<FsArborNode[]>>>(new Map());
+
+  const effectiveLoadChildren = useCallback(
+    (nodeId: string): Promise<FsArborNode[]> => {
+      const loadKey = `${scopeKey}:${nodeId}`;
+      const existing = inFlightLoadsRef.current.get(loadKey);
+      if (existing) {
+        return existing;
+      }
+      const promise = (async () => {
+        try {
+          if (isProjectsAll) {
+            return await loadProjectChildren(nodeId);
+          }
+          return await loadChildren(nodeId);
+        } finally {
+          inFlightLoadsRef.current.delete(loadKey);
+        }
+      })();
+      inFlightLoadsRef.current.set(loadKey, promise);
+      return promise;
+    },
+    [scopeKey, isProjectsAll, loadProjectChildren, loadChildren],
+  );
+
+  const allProjectNodes: FsArborNode[] = useMemo(() => {
+    return projects.map((p) => ({
+      id: p.name,
+      name: p.name,
+      kind: "dir" as const,
+      size: 0,
+      mtime: 0,
+      isSymlink: false,
+      children: allProjectsChildren[p.name] ?? null,
+    }));
+  }, [projects, allProjectsChildren]);
   const handledRevealNonceRef = useRef<number | null>(null);
+  const treeRef = useRef<TreeApi<FsArborNode> | undefined>(undefined);
   const pendingRevealRef = useRef<FileTreeRevealRequest | null>(null);
   const pendingDownloadsRef = useRef(new Set<string>());
   const liveTreeCommitVersionRef = useRef(0);
   const liveTreeCommitWaitersRef = useRef<Set<() => void>>(new Set());
 
-  const scopeKey = useMemo(
-    () => explorerTreeScopeKey(requestTarget),
-    [requestTarget],
-  );
   const openMap = useExplorerTreeStore((s) => s.openMapByTarget[scopeKey]);
   const setFolderOpen = useExplorerTreeStore((s) => s.setFolderOpen);
   const prunePath = useExplorerTreeStore((s) => s.prunePath);
@@ -430,11 +657,11 @@ export function FileTree({
     if (openIds.size === 0) return;
     const unloaded = collectUnloadedExpanded(data.nodes, openIds);
     for (const id of unloaded) {
-      void loadChildren(id).catch(() => {
+      void effectiveLoadChildren(id).catch(() => {
         prunePath(scopeKey, id);
       });
     }
-  }, [data, isLanguageMode, loadChildren, prunePath, scopeKey]);
+  }, [data, isLanguageMode, effectiveLoadChildren, prunePath, scopeKey]);
 
   const clearTreeSelection = useCallback(() => {
     const tree = treeRef.current as
@@ -491,7 +718,7 @@ export function FileTree({
       path: revealRequest.path,
       nodes: data.nodes,
       tree: treeRef.current,
-      loadChildren,
+      loadChildren: effectiveLoadChildren,
       getTreeCommitVersion: () => liveTreeCommitVersionRef.current,
       waitForTreeCommitAfter: waitForLiveTreeCommitAfter,
     }).then((revealed) => {
@@ -507,19 +734,21 @@ export function FileTree({
     clearTreeSelection,
     data,
     languageFilter,
-    loadChildren,
+    effectiveLoadChildren,
     project,
     revealRequest,
     saveDebounced,
     waitForLiveTreeCommitAfter,
   ]);
 
+  const rawNodes = isProjectsAll ? allProjectNodes : (data?.nodes ?? []);
+
   const visibleNodes = useMemo(
     () =>
       showHidden
-        ? (data?.nodes ?? [])
-        : (data?.nodes ?? []).filter((n) => !n.name.startsWith(".")),
-    [data, showHidden],
+        ? rawNodes
+        : rawNodes.filter((n) => !n.name.startsWith(".")),
+    [rawNodes, showHidden],
   );
   const languageNodes = useMemo(() => {
     if (!isLanguageMode || !languageScanCache?.result) return [];
@@ -533,8 +762,8 @@ export function FileTree({
   // Arborist owns a focused-node pointer independently from DOM focus. Remount
   // when a projection changes so synthetic nodes cannot retain live-tree focus.
   const treeKey = isLanguageMode
-    ? `${project}:${languageFilter}:${showHidden}:${languageScanCache?.resultVersion ?? -1}`
-    : `${project}:all:${showHidden}`;
+    ? `${scopeKey}:${languageFilter}:${showHidden}:${languageScanCache?.resultVersion ?? -1}`
+    : `${scopeKey}:all:${showHidden}`;
   const renderedLiveTreeIds = useMemo(
     () => collectExplorerLanguageTreeIds(visibleNodes),
     [visibleNodes],
@@ -556,22 +785,83 @@ export function FileTree({
     return d.children;
   }, []);
 
+  const handleToggleDir = useCallback(
+    (node: NodeApi<FsArborNode>) => {
+      const isCurrentlyOpen = treeRef.current?.isOpen(node.data.id) ?? node.isOpen;
+      const willOpen = !isCurrentlyOpen;
+
+      setFolderOpen(scopeKey, node.data.id, willOpen);
+
+      if (willOpen) {
+        treeRef.current?.open(node.data.id);
+        if (!isLanguageMode && node.data.children === null) {
+          void effectiveLoadChildren(node.data.id)
+            .then(() => {
+              const currentIsOpen =
+                useExplorerTreeStore.getState().openMapByTarget[scopeKey]?.[node.data.id];
+              if (currentIsOpen) {
+                treeRef.current?.open(node.data.id);
+              }
+            })
+            .catch(() => {
+              prunePath(scopeKey, node.data.id);
+            });
+        }
+      } else {
+        treeRef.current?.close(node.data.id);
+      }
+    },
+    [isLanguageMode, effectiveLoadChildren, prunePath, scopeKey, setFolderOpen],
+  );
+
   function handleActivate(node: NodeApi<FsArborNode>) {
     if (isLoadingSentinel(node.data.id)) return;
     if (node.data.kind === "file") {
       onFileOpen?.(node.data);
     } else {
-      if (!isLanguageMode && node.data.children === null) {
-        void loadChildren(node.data.id).catch(() => {
-          prunePath(scopeKey, node.data.id);
-        });
-      }
-      node.toggle();
+      handleToggleDir(node);
     }
   }
 
+  const RowRenderer = useCallback(
+    ({ node, innerRef, attrs, children }: RowRendererProps<FsArborNode>) => {
+      return (
+        <div
+          {...attrs}
+          ref={innerRef}
+          onFocus={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey) {
+              node.isSelected ? node.deselect() : node.selectMulti();
+            } else if (e.shiftKey) {
+              node.selectContiguous();
+            } else {
+              node.select();
+              if (node.data.kind === "dir") {
+                handleToggleDir(node);
+              } else if (isLanguageMode && node.data.kind === "file") {
+                onFileOpen?.(node.data);
+              }
+            }
+          }}
+          onDoubleClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (isLoadingSentinel(node.data.id)) return;
+            if (node.data.kind === "file") {
+              onFileOpen?.(node.data);
+            }
+          }}
+        >
+          {children}
+        </div>
+      );
+    },
+    [handleToggleDir, onFileOpen],
+  );
+
   function handleCopyAbsolutePath(node: FsArborNode) {
-    if (!isRenderedLiveNode(node)) return;
+    if (isLanguageMode || isLoadingSentinel(node.id)) return;
     const { absolutePath } = buildTreeCopyPaths({
       projectRoot,
       subPath: path,
@@ -581,7 +871,7 @@ export function FileTree({
   }
 
   function handleCopyRelativePath(node: FsArborNode) {
-    if (!isRenderedLiveNode(node)) return;
+    if (isLanguageMode || isLoadingSentinel(node.id)) return;
     const { relativePath } = buildTreeCopyPaths({
       projectRoot,
       subPath: path,
@@ -642,7 +932,7 @@ export function FileTree({
   }
 
   function handleRenameStart(node: FsArborNode) {
-    if (!isRenderedLiveNode(node)) return;
+    if (isLanguageMode || isLoadingSentinel(node.id)) return;
     setRenaming(false);
     setRenameValue(node.name);
     setRename({ path: node.id, currentName: node.name });
@@ -659,7 +949,7 @@ export function FileTree({
     if (
       renaming ||
       isLanguageMode ||
-      (rename && !renderedLiveTreeIds.has(rename.path))
+      (rename && isLoadingSentinel(rename.path))
     ) {
       return;
     }
@@ -687,7 +977,7 @@ export function FileTree({
   }
 
   function getContextNodes(node: NodeApi<FsArborNode>): FsArborNode[] {
-    if (!isRenderedLiveNode(node.data)) return [];
+    if (isLanguageMode || isLoadingSentinel(node.data.id)) return [];
     const selectedNodes = (
       treeRef.current as
         | (TreeApi<FsArborNode> & { selectedNodes?: NodeApi<FsArborNode>[] })
@@ -697,13 +987,13 @@ export function FileTree({
       ? selectedNodes.map((selected) => selected.data)
       : [node.data];
     return normalizeOperationNodes(nodes).filter((candidate) =>
-      renderedLiveTreeIds.has(candidate.id),
+      !isLoadingSentinel(candidate.id),
     );
   }
 
   function handleDeleteStart(nodes: FsArborNode[]) {
     if (isLanguageMode) return;
-    const liveNodes = nodes.filter(isRenderedLiveNode);
+    const liveNodes = nodes.filter((n) => !isLoadingSentinel(n.id));
     if (liveNodes.length === 0) return;
     setDeleteState({
       nodes: liveNodes,
@@ -750,7 +1040,7 @@ export function FileTree({
   }
 
   function handleDownload(node: FsArborNode) {
-    if (!isRenderedLiveNode(node) || node.kind !== "file") return;
+    if (isLanguageMode || isLoadingSentinel(node.id) || node.kind !== "file") return;
     if (pendingDownloadsRef.current.has(node.id)) return;
     pendingDownloadsRef.current.add(node.id);
     void ops
@@ -762,7 +1052,7 @@ export function FileTree({
   }
 
   function handleUploadHere(node: FsArborNode) {
-    if (!isRenderedLiveNode(node)) return;
+    if (isLanguageMode || isLoadingSentinel(node.id)) return;
     setUploadDir(node.kind === "dir" ? node.id : parentDir(node.id));
     fileInputRef.current?.click();
   }
@@ -847,20 +1137,74 @@ export function FileTree({
   }, []);
 
   useEffect(() => {
-    if (!onOpenTerminal) return;
     function onKeyDown(e: KeyboardEvent) {
+      if (!containerRef.current?.contains(document.activeElement)) return;
       if (
         e.shiftKey &&
         e.key === "Enter" &&
-        containerRef.current?.contains(document.activeElement)
+        onOpenTerminal
       ) {
         e.preventDefault();
-        onOpenTerminal!();
+        onOpenTerminal();
+        return;
+      }
+      if (
+        !e.shiftKey &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        e.key === "Enter" &&
+        !rename &&
+        !renaming &&
+        !newItemDialog
+      ) {
+        const focused = treeRef.current?.focusedNode;
+        if (focused && !isLoadingSentinel(focused.data.id)) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (focused.data.kind === "file") {
+            onFileOpen?.(focused.data);
+          } else {
+            handleToggleDir(focused);
+          }
+        }
       }
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onOpenTerminal]);
+  }, [
+    handleToggleDir,
+    newItemDialog,
+    onFileOpen,
+    onOpenTerminal,
+    rename,
+    renaming,
+  ]);
+
+  if (isProjectsAll && projects.length === 0) {
+    return (
+      <div
+        data-testid="no-marked-projects"
+        className={cn(
+          "flex flex-col items-center justify-center h-full p-4 text-center text-xs text-[var(--color-text-muted)] gap-2 select-none",
+          className,
+        )}
+      >
+        <Folder className="h-8 w-8 text-[var(--color-text-muted)] opacity-40" />
+        <span className="font-medium text-[var(--color-text)]">No marked projects</span>
+        {onReturnToWorkspace && (
+          <button
+            type="button"
+            data-testid="return-to-workspace-btn"
+            onClick={onReturnToWorkspace}
+            className="mt-2 px-3 py-1 rounded bg-[var(--color-primary)] text-white text-xs font-medium hover:opacity-90 transition-opacity"
+          >
+            Return to Workspace
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <>
@@ -964,26 +1308,31 @@ export function FileTree({
             Filter Explorer by language
           </label>
           <div className="flex items-center gap-1.5">
-            <select
-              id={languageFilterId}
-              aria-label="Filter Explorer by language"
+            <Select
               value={languageFilter}
-              onChange={(event) => {
-                const next = event.target.value;
+              onValueChange={(next) => {
                 if (!isExplorerLanguageFilter(next)) return;
                 clearTreeSelection();
                 saveDebounced({ explorerLanguageFilter: next });
               }}
-              className="h-7 min-w-0 flex-1 rounded-sm border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 text-xs text-[var(--color-text)] outline-none transition-colors focus-visible:border-[var(--color-primary)] focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
             >
-              {(
-                Object.keys(LANGUAGE_FILTER_LABELS) as ExplorerLanguageFilter[]
-              ).map((value) => (
-                <option key={value} value={value}>
-                  {LANGUAGE_FILTER_LABELS[value]}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger
+                id={languageFilterId}
+                aria-label="Filter Explorer by language"
+                className="h-7 min-w-0 flex-1 rounded-sm border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 text-xs text-[var(--color-text)] outline-none transition-colors"
+              >
+                <SelectValue placeholder="All" />
+              </SelectTrigger>
+              <SelectContent>
+                {(
+                  Object.keys(LANGUAGE_FILTER_LABELS) as ExplorerLanguageFilter[]
+                ).map((value) => (
+                  <SelectItem key={value} value={value} className="text-xs">
+                    {LANGUAGE_FILTER_LABELS[value]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {isLanguageMode && (
               <button
                 type="button"
@@ -1071,7 +1420,7 @@ export function FileTree({
                 No {LANGUAGE_FILTER_LABELS[languageFilter]} files found.
               </div>
             )}
-          {(!isLanguageMode ? data : languageScanCache?.result) && (
+          {(!isLanguageMode ? (isProjectsAll ? allProjectNodes : data) : languageScanCache?.result) && (
             <Tree<FsArborNode>
               key={treeKey}
               ref={treeRef}
@@ -1081,21 +1430,26 @@ export function FileTree({
               initialOpenState={isLanguageMode ? undefined : openMap}
               onToggle={(id) => {
                 if (isLanguageMode || isLoadingSentinel(id)) return;
-                const isOpen = treeRef.current?.isOpen(id) ?? false;
-                setFolderOpen(scopeKey, id, isOpen);
-                if (isOpen) {
-                  const node = treeRef.current?.get(id);
-                  if (
-                    node?.data.kind === "dir" &&
-                    node.data.children === null
-                  ) {
-                    void loadChildren(id).catch(() => {
-                      prunePath(scopeKey, id);
-                    });
+                const node = treeRef.current?.get(id);
+                if (node?.data.kind === "dir") {
+                  const isOpen = treeRef.current?.isOpen(id) ?? false;
+                  setFolderOpen(scopeKey, id, isOpen);
+                  if (isOpen && node.data.children === null) {
+                    void effectiveLoadChildren(id)
+                      .then(() => {
+                        const currentIsOpen =
+                          useExplorerTreeStore.getState().openMapByTarget[scopeKey]?.[id];
+                        if (currentIsOpen) {
+                          treeRef.current?.open(id);
+                        }
+                      })
+                      .catch(() => {
+                        prunePath(scopeKey, id);
+                      });
                   }
                 }
               }}
-              onActivate={handleActivate}
+              renderRow={RowRenderer}
               onMove={isLanguageMode ? undefined : handleMove}
               disableDrag={(node) =>
                 isLanguageMode || isLoadingSentinel(node.id)
@@ -1119,16 +1473,25 @@ export function FileTree({
               width={treeBodyWidth || undefined}
             >
               {(props) => {
+                const isDir = props.node.data.kind === "dir";
+                const normId = props.node.data.id.replace(/^\.\//, "").replace(/^\/+|\/+$/g, "");
+                const matchedProject = isDir ? projectPathMap.get(normId) : undefined;
+                const isMarked = Boolean(matchedProject);
+
                 const node = (
                   <NodeRenderer
                     {...props}
+                    isProject={isMarked}
                     gitState={gitIndex.files.get(props.node.data.id)}
                     hasChangedDescendant={gitIndex.changedDirs.has(
                       props.node.data.id,
                     )}
+                    onFileOpen={onFileOpen}
+                    onToggleDir={handleToggleDir}
+                    isLanguageMode={isLanguageMode}
                     onOpenDiff={(state) =>
                       openDiff(
-                        requestTarget,
+                        projectTargetInput,
                         state.path,
                         state.status,
                         state.additions,
@@ -1143,7 +1506,8 @@ export function FileTree({
                 if (isLanguageMode) return node;
                 return (
                   <TreeContextMenu
-                    isDir={props.node.data.kind === "dir"}
+                    isDir={isDir}
+                    isMarkedProject={isMarked}
                     isHtml={
                       props.node.data.kind === "file" &&
                       props.node.data.size < 5 * 1024 * 1024 &&
@@ -1165,6 +1529,20 @@ export function FileTree({
                     }
                     onDownload={() => handleDownload(props.node.data)}
                     onUpload={() => handleUploadHere(props.node.data)}
+                    onOpenTerminalHere={
+                      onOpenTerminal
+                        ? () => onOpenTerminal(props.node.data.id)
+                        : undefined
+                    }
+                    onMarkProject={() =>
+                      setMarkDialog({ open: true, folderPath: props.node.data.id })
+                    }
+                    onUnmarkProject={() =>
+                      setUnmarkDialog({
+                        open: true,
+                        projectName: matchedProject?.name ?? props.node.data.name,
+                      })
+                    }
                   >
                     {node}
                   </TreeContextMenu>
@@ -1241,10 +1619,31 @@ export function FileTree({
 
       {encUploadOpen && (
         <EncryptedUploadDialog
-          project={project}
-          target={target}
+          project={isWorkspaceMode ? "" : targetProject}
+          target={target && "project" in target ? (target as ProjectTargetRef) : undefined}
           dir={uploadDir}
           onClose={() => setEncUploadOpen(false)}
+        />
+      )}
+
+      {markDialog?.open && (
+        <MarkProjectDialog
+          open={markDialog.open}
+          folderPath={markDialog.folderPath}
+          target={requestTarget as FsTargetRef}
+          profileId={(requestTarget as FsTargetRef).profileId}
+          onCancel={() => setMarkDialog(null)}
+          onSuccess={() => setMarkDialog(null)}
+        />
+      )}
+
+      {unmarkDialog?.open && (
+        <UnmarkProjectDialog
+          open={unmarkDialog.open}
+          projectName={unmarkDialog.projectName}
+          profileId={(requestTarget as FsTargetRef).profileId}
+          onCancel={() => setUnmarkDialog(null)}
+          onSuccess={() => setUnmarkDialog(null)}
         />
       )}
     </>

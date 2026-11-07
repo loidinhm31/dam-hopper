@@ -93,7 +93,7 @@ describe("VideoPreview", () => {
     expect(player?.hasAttribute("playsinline")).toBe(true);
     expect(player?.getAttribute("crossorigin")).toBe("use-credentials");
     expect(issueVideoTicket).toHaveBeenCalledWith(
-      "demo",
+      { kind: "project", project: "demo", profileId: "", worktreePath: null },
       "clips/demo.webm",
       "playback",
       expect.any(AbortSignal),
@@ -119,7 +119,10 @@ describe("VideoPreview", () => {
     );
     await act(async () => button?.click());
 
-    expect(startVideoDownload).toHaveBeenCalledWith("demo", "clips/demo.webm");
+    expect(startVideoDownload).toHaveBeenCalledWith(
+      { kind: "project", project: "demo", profileId: "", worktreePath: null },
+      "clips/demo.webm",
+    );
     expect(document.querySelector("video")?.getAttribute("src")).toContain(
       "playback-token",
     );

@@ -10,12 +10,17 @@ import {
 import { cn } from "@/lib/utils.js";
 import { HostResourceInfoRow } from "./HostResourceDiagnosisRows.js";
 
-interface Props {
+export interface HostResourceIncidentDetailsProps {
   snapshot: HostResourceSnapshotV1;
   alerts: HostResourceAlertIncident[];
+  highlightIncidentId?: string | null;
 }
 
-export function HostResourceIncidentDetails({ snapshot, alerts }: Props) {
+export function HostResourceIncidentDetails({
+  snapshot,
+  alerts,
+  highlightIncidentId = null,
+}: HostResourceIncidentDetailsProps) {
   const alert = snapshot.alert;
   return (
     <div className="space-y-3">
@@ -67,24 +72,31 @@ export function HostResourceIncidentDetails({ snapshot, alerts }: Props) {
             Current resource incidents
           </p>
           <ul className="space-y-1.5">
-            {snapshot.currentAlerts.slice(0, 5).map((incident) => (
-              <li
-                key={incident.incidentId}
-                className="min-w-0 space-y-0.5 text-[10px]"
-              >
-                <p
+            {snapshot.currentAlerts.map((incident) => {
+              const isHighlighted = incident.incidentId === highlightIncidentId;
+              return (
+                <li
+                  key={incident.incidentId}
                   className={cn(
-                    "min-w-0 [overflow-wrap:anywhere] font-medium",
-                    severityClass(incident.severity),
+                    "min-w-0 space-y-0.5 text-[10px]",
+                    isHighlighted && "ring-2 ring-[var(--color-primary)] bg-[var(--color-primary)]/10 p-1.5 rounded",
                   )}
                 >
-                  {formatAlertState(incident.state)} · {incident.scope}
-                </p>
-                <p className="min-w-0 [overflow-wrap:anywhere] text-[var(--color-text-muted)]">
-                  Evidence: {formatResourceEvidence(incident)}
-                </p>
-              </li>
-            ))}
+                  <p
+                    className={cn(
+                      "min-w-0 [overflow-wrap:anywhere] font-medium",
+                      severityClass(incident.severity),
+                    )}
+                  >
+                    {formatAlertState(incident.state)} · {incident.scope}
+                    {isHighlighted && " (Inspected Incident)"}
+                  </p>
+                  <p className="min-w-0 [overflow-wrap:anywhere] text-[var(--color-text-muted)]">
+                    Evidence: {formatResourceEvidence(incident)}
+                  </p>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}

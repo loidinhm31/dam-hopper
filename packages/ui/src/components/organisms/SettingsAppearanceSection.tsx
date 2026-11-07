@@ -10,17 +10,21 @@ import {
   SelectValue,
 } from "@/components/ui/Select.js";
 import { useSettingsStore } from "@/stores/settings.js";
-import { useAndroidChromeInputPolicy } from "@/contexts/AndroidChromeInputPolicyContext.js";
 import {
   clearHistory,
   isHistoryEnabled,
   setHistoryEnabled,
 } from "@/lib/command-history.js";
-import { isCognitoModeStyle } from "@/lib/ui-config.js";
+import { isCognitoModeStyle, isDockPosition } from "@/lib/ui-config.js";
+import { useLockScreenStore } from "@/stores/lock-screen.js";
+import { PinSetupDialog, type PinDialogMode } from "@/os/PinSetupDialog.js";
+import { cn } from "@/lib/utils.js";
 export function SettingsAppearanceSection() {
   const [historyEnabled, setHistoryEnabledState] = useState(isHistoryEnabled);
-  const { isAndroidChromeNativeInputSuppressed } =
-    useAndroidChromeInputPolicy();
+  const [pinDialogOpen, setPinDialogOpen] = useState(false);
+  const [pinDialogMode, setPinDialogMode] = useState<PinDialogMode>("setup");
+  const hasPin = useLockScreenStore((s) => s.hasPin);
+  const lock = useLockScreenStore((s) => s.lock);
   const {
     systemFontSize,
     editorFontSize,
@@ -32,11 +36,15 @@ export function SettingsAppearanceSection() {
     terminalAutoSwitchProjectEnabled,
     terminalScrollStep,
     explorerShowHidden,
-    mobileCustomKeyboardEnabled,
-    mobileCustomKeyboardFontSize,
-    mobileCustomKeyboardPadding,
-    mobileCustomKeyboardRowGap,
     cognitoModeStyle,
+    defaultWindowPlacement,
+    dockPosition,
+    dockPadding,
+    dockItemSpacing,
+    dockOuterSpacing,
+    dockRadius,
+    cursorTheme,
+    sourceUnset,
     saveDebounced,
   } = useSettingsStore();
 
@@ -92,6 +100,27 @@ export function SettingsAppearanceSection() {
 
       <div className="border-t border-[var(--color-border)]" />
 
+      <SettingRow
+        title="Default window placement"
+        description="Choose whether new windows open as floating panels or tiled grid panes"
+      >
+        <Select
+          value={defaultWindowPlacement ?? "float"}
+          onValueChange={(val: "float" | "tile") =>
+            saveDebounced({ defaultWindowPlacement: val })
+          }
+        >
+          <SelectTrigger className="w-32" data-testid="default-window-placement-select">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="float">Float</SelectItem>
+            <SelectItem value="tile">Tile</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
       <SettingRow
         title="Show hidden files"
         description="Show dotfiles and hidden entries in the project explorer"
@@ -213,72 +242,6 @@ export function SettingsAppearanceSection() {
       <div className="border-t border-[var(--color-border)]" />
 
       <SettingRow
-        title="Custom mobile terminal keyboard"
-        description={
-          isAndroidChromeNativeInputSuppressed
-            ? "Forced on Android Chrome because native text entry is unavailable; this setting is controlled by the platform policy."
-            : "Use the compact in-app keyboard instead of opening the device keyboard"
-        }
-      >
-        <Switch
-          checked={
-            isAndroidChromeNativeInputSuppressed || mobileCustomKeyboardEnabled
-          }
-          disabled={isAndroidChromeNativeInputSuppressed}
-          ariaLabel="Enable custom mobile terminal keyboard"
-          onCheckedChange={(checked) => {
-            if (!isAndroidChromeNativeInputSuppressed) {
-              saveDebounced({ mobileCustomKeyboardEnabled: checked });
-            }
-          }}
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
-        title="Mobile keyboard font size"
-        description="Range: 9-18 px"
-      >
-        <NumberStepper
-          value={mobileCustomKeyboardFontSize}
-          min={9}
-          max={18}
-          onChange={(value) =>
-            saveDebounced({ mobileCustomKeyboardFontSize: value })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow title="Mobile keyboard padding" description="Range: 2-14 px">
-        <NumberStepper
-          value={mobileCustomKeyboardPadding}
-          min={2}
-          max={14}
-          onChange={(value) =>
-            saveDebounced({ mobileCustomKeyboardPadding: value })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow title="Mobile keyboard row gap" description="Range: 2-12 px">
-        <NumberStepper
-          value={mobileCustomKeyboardRowGap}
-          min={2}
-          max={12}
-          onChange={(value) =>
-            saveDebounced({ mobileCustomKeyboardRowGap: value })
-          }
-        />
-      </SettingRow>
-
-      <div className="border-t border-[var(--color-border)]" />
-
-      <SettingRow
         title="Cognito Mode style"
         description="Choose the visual privacy mask appearance. Background work, notifications, and audio continue while masked."
       >
@@ -299,6 +262,223 @@ export function SettingsAppearanceSection() {
           </SelectContent>
         </Select>
       </SettingRow>
+
+      {sourceUnset && (
+        <div
+          role="status"
+          className="rounded border border-[var(--color-warning)] bg-[var(--color-warning)]/10 p-2 text-xs text-[var(--color-warning)]"
+        >
+          No preference source connected. Preferences are kept in local snapshot until a profile connects.
+        </div>
+      )}
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Dock position"
+        description="Screen edge placement for the application dock"
+      >
+        <Select
+          value={dockPosition ?? "left"}
+          onValueChange={(value) => {
+            if (isDockPosition(value)) {
+              saveDebounced({ dockPosition: value });
+            }
+          }}
+        >
+          <SelectTrigger aria-label="Dock position" className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="left">Left</SelectItem>
+            <SelectItem value="right">Right</SelectItem>
+            <SelectItem value="top">Top</SelectItem>
+            <SelectItem value="bottom">Bottom</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Dock padding"
+        description="Internal padding of the floating dock (0–16 px)"
+      >
+        <NumberStepper
+          value={dockPadding ?? 8}
+          min={0}
+          max={16}
+          label="dock padding"
+          onChange={(v) => saveDebounced({ dockPadding: v })}
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Dock item spacing"
+        description="Spacing between dock app icons (0–12 px)"
+      >
+        <NumberStepper
+          value={dockItemSpacing ?? 6}
+          min={0}
+          max={12}
+          label="dock item spacing"
+          onChange={(v) => saveDebounced({ dockItemSpacing: v })}
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Dock outer spacing"
+        description="Outer gutter margin around the floating dock (0–24 px)"
+      >
+        <NumberStepper
+          value={dockOuterSpacing ?? 12}
+          min={0}
+          max={24}
+          label="dock outer spacing"
+          onChange={(v) => saveDebounced({ dockOuterSpacing: v })}
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Dock corner radius"
+        description="Corner curvature radius of the floating dock container (0–28 px)"
+      >
+        <NumberStepper
+          value={dockRadius ?? 18}
+          min={0}
+          max={28}
+          label="dock radius"
+          onChange={(v) => saveDebounced({ dockRadius: v })}
+        />
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Cursor theme"
+        description="Use system default pointer or custom themed OS desktop cursor"
+      >
+        <Select
+          value={cursorTheme ?? "system"}
+          onValueChange={(val: "system" | "theme") =>
+            saveDebounced({ cursorTheme: val })
+          }
+        >
+          <SelectTrigger aria-label="Cursor theme" className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="system">System</SelectItem>
+            <SelectItem value="theme">Theme</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingRow>
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Screen Lock PIN"
+        description="Require a 4–8 digit numeric PIN to lock the DamHopper OS workspace in this browser. Stored locally; not a replacement for server authentication."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            data-testid="settings-pin-status-badge"
+            className={cn(
+              "rounded px-2 py-0.5 text-[10px] font-mono font-semibold uppercase",
+              hasPin
+                ? "bg-[var(--color-success)]/15 text-[var(--color-success)] border border-[var(--color-success)]/30"
+                : "bg-[var(--color-surface-2)] text-[var(--color-text-muted)] border border-[var(--color-border)]",
+            )}
+          >
+            {hasPin ? "PIN Active" : "Not Set"}
+          </span>
+
+          {hasPin ? (
+            <>
+              <button
+                type="button"
+                data-testid="settings-lock-now-button"
+                onClick={() => lock()}
+                className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface)] transition-colors"
+              >
+                Lock Now
+              </button>
+              <button
+                type="button"
+                data-testid="settings-change-pin-button"
+                onClick={() => {
+                  setPinDialogMode("change");
+                  setPinDialogOpen(true);
+                }}
+                className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface)] transition-colors"
+              >
+                Change PIN…
+              </button>
+              <button
+                type="button"
+                data-testid="settings-remove-pin-button"
+                onClick={() => {
+                  setPinDialogMode("remove");
+                  setPinDialogOpen(true);
+                }}
+                className="rounded border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-2.5 py-1 text-xs text-[var(--color-danger)] hover:bg-[var(--color-danger)]/20 transition-colors"
+              >
+                Remove PIN…
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              data-testid="settings-setup-pin-button"
+              onClick={() => {
+                setPinDialogMode("setup");
+                setPinDialogOpen(true);
+              }}
+              className="rounded border border-[var(--color-primary)]/40 bg-[var(--color-primary)]/15 px-3 py-1 text-xs font-medium text-[var(--color-primary)] hover:bg-[var(--color-primary)]/25 transition-colors"
+            >
+              Set Up PIN…
+            </button>
+          )}
+        </div>
+      </SettingRow>
+
+      <div className="border-t border-[var(--color-border)]" />
+
+      <SettingRow
+        title="Reset appearance"
+        description="Reset dock layout and cursor style to defaults. Dock pins remain stored locally."
+      >
+        <button
+          type="button"
+          onClick={() =>
+            saveDebounced({
+              dockPosition: "left",
+              dockPadding: 8,
+              dockItemSpacing: 6,
+              dockOuterSpacing: 12,
+              dockRadius: 18,
+              cursorTheme: "system",
+            })
+          }
+          className="rounded border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+        >
+          Reset appearance defaults
+        </button>
+      </SettingRow>
+
+      <p className="text-xs text-[var(--color-text-muted)] mt-2">
+        Note: Dock layout and cursor style are workbench preferences saved to the server configuration. Dock app pins are stored locally in this browser.
+      </p>
+      <PinSetupDialog
+        open={pinDialogOpen}
+        onOpenChange={setPinDialogOpen}
+        mode={pinDialogMode}
+      />
     </section>
   );
 }

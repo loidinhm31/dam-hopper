@@ -174,8 +174,12 @@ describe("shortcuts", () => {
     expect(validateCognitoModeShortcut("Alt+KeyB")).toBeNull();
     expect(validateCognitoModeShortcut("Mod+Shift+KeyB")).toBeNull();
 
-    expect(validateCognitoModeShortcut("")).toBe("Invalid shortcut");
-    expect(validateCognitoModeShortcut("   ")).toBe("Invalid shortcut");
+    expect(validateCognitoModeShortcut("")).toBe(
+      "Cognito mode shortcut cannot be unbound",
+    );
+    expect(validateCognitoModeShortcut("   ")).toBe(
+      "Cognito mode shortcut cannot be unbound",
+    );
     expect(validateCognitoModeShortcut("DoubleShift")).toBe(
       "Cognito mode requires a keyboard shortcut",
     );
@@ -202,5 +206,14 @@ describe("shortcuts", () => {
     expect(normalizeCognitoModeShortcut("ShiftLeft")).toBe(
       DEFAULT_COGNITO_MODE_SHORTCUT,
     );
+  });
+
+  it("supports nullable shortcuts for display, formatting, validation, and matching", () => {
+    expect(validateShortcut(null)).toBeNull();
+    expect(validateShortcut("")).toBeNull();
+    expect(displayShortcut(null)).toBe("Unbound");
+    expect(displayShortcut(undefined)).toBe("Unbound");
+    expect(matchesKeyboardShortcut(null, key({ code: "KeyF", ctrlKey: true }))).toBe(false);
+    expect(matchesWheelShortcut(null, { ctrlKey: true, metaKey: false, altKey: false, shiftKey: false })).toBe(false);
   });
 });

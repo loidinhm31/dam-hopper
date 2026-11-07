@@ -32,7 +32,7 @@ global connection switch.
 
 ### Manual creation
 
-1. Open **Server Connections** from the top-nav connection button.
+1. Open **Server Connections** from the OS TopBar menu ("Manage Profiles…") or Settings.
 2. Select **Add Server Connection**.
 3. Enter a display name, normalized HTTP(S) URL, and authentication type.
 4. For Basic authentication, enter the username and login credentials when
@@ -71,7 +71,7 @@ Actions are profile-scoped:
 - **Remove** revokes that profile's media when possible, removes the local
   profile and connection state, and does not delete data from the remote server.
 
-The top-nav connection button summarizes all profile runtimes. It shows
+The OS TopBar connection indicator summarizes all profile runtimes. It shows
 `No connections` when none are configured, the profile name when exactly one
 profile is configured, and a connected/total count when multiple profiles are
 present. Focus, route changes, and project selection do not reconnect or
@@ -179,40 +179,12 @@ authentication failures. After the key loads, only failed targets are retried;
 successful targets are retained and are not replayed. A changed connection
 generation cancels the retry.
 
-## Native Forwarding Scopes
+## Native Forwarding Scopes (Retired in Phase 02)
 
-On Windows desktop, each saved server profile has an independent native SSH
-forwarding scope. Two connected profiles can keep forwarding concurrently, even
-when they contain equal imported connection or rule IDs. Project selection,
-route changes, Settings focus, and SSH-page focus do not switch or restart a
-scope.
+> **Retirement Notice (Phase 02 / P0a):**
+> The native desktop SSH forwarding subsystem and its UI routes were permanently retired in Phase 02 (P0a) of the AI Dev OS redesign. Route navigation to `/ssh-forwarding` displays retired-feature guidance in the web application. Remote Git-over-SSH operations and credentials remain supported through the Git page and server APIs (see [Git and SSH retry](#git-and-ssh-retry) above).
 
-The native lifecycle is:
-
-1. The desktop host opens one client epoch.
-2. Each profile that needs forwarding opens its own scope and receives a
-   `NativeScopeRef`.
-3. Profile/rule/connection, credential, and trust actions use that scope
-   reference.
-4. Disconnect, profile removal, or explicit scope close tears down only that
-   profile's live workers, connections, listeners, challenges, and session
-   credentials.
-5. A profile deletion can purge retained native data only after the profile list
-   is confirmed absent and browser storage is available.
-
-Network loss enters bounded reconnect handling; it does not delete the profile
-or close its scope. A new client epoch, native app shutdown, or Windows process
-exit is the global teardown boundary. Native SSH forwards bind local
-`127.0.0.1` ports, and a port already used by another active scope is rejected.
-
-Native SSH forwarding is unavailable in browser, Android, iOS, Linux, and macOS
-hosts; none receives a fallback Tauri call or alternate transport. Native
-Browser Debug is separate and keeps the explicit Browser target owner from
-[Agent Store, Ports, and Browser Architecture](./architecture/agent-store-ports-and-browser.md). It is not selected by the
-active SSH scope or by project focus.
-
-See [Native SSH Forwarding Architecture](./architecture/native-ssh-forwarding.md)
-for the IPC, counter, persistence, and Windows qualification contract.
+The former desktop SSH forwarding lifecycle, IPC command surface, and credential storage model were retired with the Tauri native host.
 ## Integration and Qualification Gate
 
 Integrated qualification covers the web workbench and Linux-hosted shared behavior
@@ -304,8 +276,8 @@ In a multi-profile environment, different pages resolve API and WebSocket endpoi
 
 - **Workspace (`/workspace`)**: Project-scoped. Terminals, editor tabs, file arbor, search, and diagnostics route to the server owning the selected workspace project (`selectedProject.profileId`).
 - **Git (`/git`)**: Aggregated multi-profile repository list. The page displays repositories from all connected profiles with profile badges for disambiguation. Selecting a project routes all Git operations (log, branch, status, roots, local changes, diffs, push) to that project's profile, and synchronizes selection to the workspace store. Bulk fetch and pull operations are partitioned per profile and executed sequentially to ensure clean SSH credential retry handling without cross-server leakage.
-- **Settings (`/settings`)**: Server administration (workspace config, global defaults, usage insights, and cache/workspace maintenance) operates against the explicitly selected **Settings Target Server** (`settingsProfileId`).
-- **Agent Store (`/agent-store`) & Usage (`/usage`)**: Dedicated on-page server switchers allow managing catalog inventory and token analytics for any connected profile independently of workspace project selection.
+- **Settings (`/settings`)**: Server administration (workspace config, global defaults, and cache/workspace maintenance) operates against the explicitly selected **Settings Target Server** (`settingsProfileId`).
+- **Agent Store (`/agent-store`)**: A dedicated on-page server switcher allows managing catalog inventory for any connected profile independently of workspace project selection.
 
 ## Host resources and health delivery across profiles
 

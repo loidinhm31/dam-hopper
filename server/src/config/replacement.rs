@@ -11,11 +11,6 @@ pub fn validate_protected_config_replacement(
         ));
     }
 
-    if candidate.server.telemetry != current.server.telemetry {
-        return Err(AppError::InvalidInput(
-            "Update telemetry through /api/usage/settings".to_string(),
-        ));
-    }
 
     Ok(())
 }

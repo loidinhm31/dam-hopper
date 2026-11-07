@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::IpAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::system::config::HostResourceMonitorConfig;
 
@@ -216,15 +215,34 @@ pub struct ProjectConfig {
 // Workspace config
 // ──────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct WorkspaceInfo {
+    #[serde(default)]
     pub name: String,
-    #[serde(default = "default_root")]
+    #[serde(default)]
     pub root: String,
 }
 
-fn default_root() -> String {
-    ".".to_string()
+/// Errors encountered when authoritatively resolving and validating a workspace root directory.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum WorkspaceRootError {
+    #[error("UNCONFIGURED_WORKSPACE_ROOT: workspace.root is not configured in config file. Configure a dedicated directory to enable workspace browsing.")]
+    Unconfigured,
+    #[error("UNCONFIGURED_WORKSPACE_ROOT: workspace root does not exist: {0}")]
+    NotFound(PathBuf),
+    #[error("UNCONFIGURED_WORKSPACE_ROOT: workspace root is not a directory: {0}")]
+    NotADirectory(PathBuf),
+    #[error("UNCONFIGURED_WORKSPACE_ROOT: workspace root cannot be canonicalized: {0}")]
+    CanonicalizationFailed(String),
+    #[error("UNCONFIGURED_WORKSPACE_ROOT: workspace root resolves to or contains sensitive directory {0}. Configure a dedicated workspace directory.")]
+    SensitiveDirectory(PathBuf),
+}
+
+impl WorkspaceInfo {
+    /// Authoritatively resolve and validate this workspace root relative to `config_dir`.
+    pub fn resolve_root(&self, config_dir: &Path) -> Result<PathBuf, WorkspaceRootError> {
+        crate::config::parser::resolve_workspace_root(config_dir, &self.root)
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -244,104 +262,6 @@ fn default_session_db_path() -> String {
 
 fn default_session_buffer_ttl_hours() -> u64 {
     24
-}
-
-fn default_telemetry_db_path() -> String {
-    "~/.config/dam-hopper/telemetry.db".to_string()
-}
-fn default_telemetry_detail_retention_days() -> u16 {
-    90
-}
-fn default_telemetry_collector_host() -> String {
-    "127.0.0.1".to_string()
-}
-fn default_telemetry_collector_port() -> u16 {
-    4811
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TelemetryCollectorConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_telemetry_collector_host", alias = "host")]
-    pub host: String,
-    #[serde(default = "default_telemetry_collector_port", alias = "port")]
-    pub port: u16,
-}
-
-impl Default for TelemetryCollectorConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            host: default_telemetry_collector_host(),
-            port: default_telemetry_collector_port(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TelemetryConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Stops new capture while preserving existing aggregate history.
-    #[serde(default)]
-    pub paused: bool,
-    #[serde(default = "default_telemetry_db_path", alias = "db_path")]
-    pub db_path: String,
-    #[serde(
-        default = "default_telemetry_detail_retention_days",
-        alias = "detail_retention_days"
-    )]
-    pub detail_retention_days: u16,
-    #[serde(default, alias = "aggregate_retention_days")]
-    pub aggregate_retention_days: Option<u32>,
-    #[serde(default)]
-    pub collector: TelemetryCollectorConfig,
-}
-
-impl Default for TelemetryConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            paused: false,
-            db_path: default_telemetry_db_path(),
-            detail_retention_days: default_telemetry_detail_retention_days(),
-            aggregate_retention_days: None,
-            collector: TelemetryCollectorConfig::default(),
-        }
-    }
-}
-
-impl TelemetryConfig {
-    pub fn validate(&self) -> Result<(), String> {
-        if self.db_path.trim().is_empty() {
-            return Err("server.telemetry.db_path must not be empty".to_string());
-        }
-        if !(1..=3650).contains(&self.detail_retention_days) {
-            return Err(
-                "server.telemetry.detail_retention_days must be between 1 and 3650".to_string(),
-            );
-        }
-        if self.aggregate_retention_days == Some(0) {
-            return Err(
-                "server.telemetry.aggregate_retention_days must be positive when set".to_string(),
-            );
-        }
-        if self.collector.port == 0 {
-            return Err("server.telemetry.collector.port must be non-zero".to_string());
-        }
-        let host = self.collector.host.parse::<IpAddr>().map_err(|_| {
-            "server.telemetry.collector.host must be a loopback IP address".to_string()
-        })?;
-        if !host.is_loopback() {
-            return Err(
-                "server.telemetry.collector.host must be a loopback IP address".to_string(),
-            );
-        }
-        Ok(())
-    }
 }
 
 // ──────────────────────────────────────────────
@@ -656,8 +576,6 @@ pub struct ServerConfig {
         alias = "session_buffer_ttl_hours"
     )]
     pub session_buffer_ttl_hours: u64,
-    #[serde(default)]
-    pub telemetry: TelemetryConfig,
     #[serde(default, alias = "host_resources")]
     pub host_resources: HostResourceMonitorConfig,
     #[serde(
@@ -692,7 +610,6 @@ pub const fn default_workflow_stale_after_hours() -> u32 {
 
 impl ServerConfig {
     pub fn validate(&self) -> Result<(), String> {
-        self.telemetry.validate()?;
         if !(1..=3650).contains(&self.workflow_event_retention_days) {
             return Err("server.workflow_event_retention_days must be between 1 and 3650".into());
         }
@@ -714,7 +631,6 @@ impl Default for ServerConfig {
         ServerConfig {
             session_db_path: default_session_db_path(),
             session_buffer_ttl_hours: default_session_buffer_ttl_hours(),
-            telemetry: TelemetryConfig::default(),
             host_resources: HostResourceMonitorConfig::default(),
             workflow_event_retention_days: default_workflow_event_retention_days(),
             workflow_deleted_note_retention_days: default_workflow_deleted_note_retention_days(),
@@ -731,6 +647,7 @@ impl Default for ServerConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DamHopperConfigRaw {
+    #[serde(default)]
     pub workspace: WorkspaceInfo,
     pub agent_store: Option<AgentStoreConfig>,
     #[serde(default)]
@@ -739,6 +656,10 @@ pub struct DamHopperConfigRaw {
     pub projects: Vec<ProjectConfigRaw>,
     #[serde(default)]
     pub features: FeaturesConfig,
+    #[serde(default)]
+    pub ui: Option<UiConfig>,
+    pub semantic: Option<toml::Value>,
+    pub workspaces: Option<Vec<KnownWorkspace>>,
 }
 
 // ──────────────────────────────────────────────
@@ -753,20 +674,27 @@ pub struct DamHopperConfig {
     pub server: ServerConfig,
     pub projects: Vec<ProjectConfig>,
     pub features: FeaturesConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui: Option<UiConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspaces: Option<Vec<KnownWorkspace>>,
     /// Absolute path of the config file that was loaded (internal use only).
     #[serde(skip)]
     pub config_path: PathBuf,
+}
+
+impl DamHopperConfig {
+    /// Authoritatively resolve and validate the workspace root relative to the config file directory.
+    pub fn resolve_workspace_root(&self) -> Result<PathBuf, WorkspaceRootError> {
+        let config_dir = self.config_path.parent().unwrap_or_else(|| Path::new("."));
+        self.workspace.resolve_root(config_dir)
+    }
 }
 
 // ──────────────────────────────────────────────
 // Global config
 // ──────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct GlobalDefaults {
-    pub workspace: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -784,32 +712,80 @@ fn default_editor_font_size() -> u16 {
 fn default_editor_zoom_wheel_enabled() -> bool {
     true
 }
-fn default_search_text_shortcut() -> String {
-    "Mod+Shift+KeyF".to_string()
+pub fn deserialize_optional_shortcut<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(s) if s.is_empty() => Ok(None),
+        Some(s) => Ok(Some(s)),
+    }
 }
-fn default_search_filename_shortcut() -> String {
-    "DoubleShift".to_string()
+
+pub fn deserialize_app_shortcuts<'de, D>(
+    deserializer: D,
+) -> Result<std::collections::BTreeMap<String, Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let map: std::collections::BTreeMap<String, Option<String>> =
+        std::collections::BTreeMap::deserialize(deserializer)?;
+    let normalized = map
+        .into_iter()
+        .map(|(k, v)| {
+            let val = match v {
+                Some(s) if s.is_empty() => None,
+                other => other,
+            };
+            (k, val)
+        })
+        .collect();
+    Ok(normalized)
 }
-fn default_terminal_workspace_shortcut() -> String {
-    "Mod+Shift+Backquote".to_string()
+
+fn default_search_text_shortcut() -> Option<String> {
+    Some("Mod+Shift+KeyF".to_string())
 }
-fn default_terminal_file_panel_shortcut() -> String {
-    "Mod+Shift+KeyE".to_string()
+fn default_search_filename_shortcut() -> Option<String> {
+    Some("DoubleShift".to_string())
 }
-fn default_project_panel_shortcut() -> String {
-    "Mod+Shift+KeyZ".to_string()
+fn default_terminal_workspace_shortcut() -> Option<String> {
+    Some("Mod+Shift+Backquote".to_string())
 }
-fn default_reveal_active_file_shortcut() -> String {
-    "Alt+F1".to_string()
+fn default_terminal_file_panel_shortcut() -> Option<String> {
+    Some("Mod+Shift+KeyE".to_string())
 }
-fn default_git_panel_shortcut() -> String {
-    "Mod+Shift+KeyG".to_string()
+fn default_project_panel_shortcut() -> Option<String> {
+    Some("Mod+Shift+KeyZ".to_string())
 }
-fn default_ports_panel_shortcut() -> String {
-    "Mod+Shift+KeyP".to_string()
+fn default_reveal_active_file_shortcut() -> Option<String> {
+    Some("Alt+F1".to_string())
 }
-fn default_fleet_terminal_shortcut() -> String {
-    "Mod+Shift+KeyM".to_string()
+fn default_git_panel_shortcut() -> Option<String> {
+    Some("Mod+Shift+KeyG".to_string())
+}
+fn default_ports_panel_shortcut() -> Option<String> {
+    Some("Mod+Shift+KeyP".to_string())
+}
+fn default_dock_padding() -> f64 {
+    8.0
+}
+fn default_dock_item_spacing() -> f64 {
+    6.0
+}
+fn default_dock_outer_spacing() -> f64 {
+    12.0
+}
+fn default_dock_radius() -> f64 {
+    18.0
+}
+fn default_dock_position() -> String {
+    "left".to_string()
+}
+fn default_cursor_theme() -> String {
+    "system".to_string()
 }
 fn default_mobile_custom_keyboard_font_size() -> u16 {
     11
@@ -828,12 +804,20 @@ fn default_terminal_font_size() -> u16 {
     13
 }
 
-fn default_terminal_font_size_increase_shortcut() -> String {
-    "Ctrl+Alt+Shift+Equal".to_string()
+fn default_terminal_font_size_increase_shortcut() -> Option<String> {
+    Some("Ctrl+Alt+Shift+Equal".to_string())
 }
 
-fn default_terminal_font_size_decrease_shortcut() -> String {
-    "Ctrl+Alt+Minus".to_string()
+fn default_terminal_font_size_decrease_shortcut() -> Option<String> {
+    Some("Ctrl+Alt+Minus".to_string())
+}
+
+fn default_os_palette_shortcut() -> Option<String> {
+    Some("Ctrl+Alt+KeyK".to_string())
+}
+
+fn default_os_cycle_focus_shortcut() -> Option<String> {
+    Some("Ctrl+Alt+Escape".to_string())
 }
 
 fn default_cognito_mode_shortcut() -> String {
@@ -1062,6 +1046,13 @@ pub enum CognitoModeStyle {
     HeavyBlur,
     BlackScreen,
 }
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DefaultWindowPlacement {
+    #[default]
+    Float,
+    Tile,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1083,56 +1074,131 @@ pub struct UiConfig {
     pub editor_zoom_wheel_enabled: bool,
     #[serde(
         default = "default_search_text_shortcut",
-        alias = "search_text_shortcut"
+        alias = "search_text_shortcut",
+        alias = "searchTextShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub search_text_shortcut: String,
+    pub search_text_shortcut: Option<String>,
     #[serde(
         default = "default_search_filename_shortcut",
-        alias = "search_filename_shortcut"
+        alias = "search_filename_shortcut",
+        alias = "searchFilenameShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub search_filename_shortcut: String,
+    pub search_filename_shortcut: Option<String>,
     #[serde(
         default = "default_terminal_workspace_shortcut",
-        alias = "terminal_workspace_shortcut"
+        alias = "terminal_workspace_shortcut",
+        alias = "terminalWorkspaceShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub terminal_workspace_shortcut: String,
+    pub terminal_workspace_shortcut: Option<String>,
     #[serde(
         default = "default_terminal_file_panel_shortcut",
-        alias = "terminal_file_panel_shortcut"
+        alias = "terminal_file_panel_shortcut",
+        alias = "terminalFilePanelShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub terminal_file_panel_shortcut: String,
+    pub terminal_file_panel_shortcut: Option<String>,
     #[serde(
         default = "default_project_panel_shortcut",
-        alias = "project_panel_shortcut"
+        alias = "project_panel_shortcut",
+        alias = "projectPanelShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub project_panel_shortcut: String,
+    pub project_panel_shortcut: Option<String>,
     #[serde(
         default = "default_reveal_active_file_shortcut",
-        alias = "reveal_active_file_shortcut"
+        alias = "reveal_active_file_shortcut",
+        alias = "revealActiveFileShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub reveal_active_file_shortcut: String,
-    #[serde(default = "default_git_panel_shortcut", alias = "git_panel_shortcut")]
-    pub git_panel_shortcut: String,
+    pub reveal_active_file_shortcut: Option<String>,
+    #[serde(
+        default = "default_git_panel_shortcut",
+        alias = "git_panel_shortcut",
+        alias = "gitPanelShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
+    )]
+    pub git_panel_shortcut: Option<String>,
     #[serde(
         default = "default_ports_panel_shortcut",
-        alias = "ports_panel_shortcut"
+        alias = "ports_panel_shortcut",
+        alias = "portsPanelShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub ports_panel_shortcut: String,
-    #[serde(
-        default = "default_fleet_terminal_shortcut",
-        alias = "fleet_terminal_shortcut"
-    )]
-    pub fleet_terminal_shortcut: String,
+    pub ports_panel_shortcut: Option<String>,
     #[serde(
         default = "default_terminal_font_size_increase_shortcut",
-        alias = "terminal_font_size_increase_shortcut"
+        alias = "terminal_font_size_increase_shortcut",
+        alias = "terminalFontSizeIncreaseShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub terminal_font_size_increase_shortcut: String,
+    pub terminal_font_size_increase_shortcut: Option<String>,
     #[serde(
         default = "default_terminal_font_size_decrease_shortcut",
-        alias = "terminal_font_size_decrease_shortcut"
+        alias = "terminal_font_size_decrease_shortcut",
+        alias = "terminalFontSizeDecreaseShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
     )]
-    pub terminal_font_size_decrease_shortcut: String,
+    pub terminal_font_size_decrease_shortcut: Option<String>,
+    #[serde(
+        default = "default_os_palette_shortcut",
+        alias = "os_palette_shortcut",
+        alias = "osPaletteShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
+    )]
+    pub os_palette_shortcut: Option<String>,
+    #[serde(
+        default = "default_os_cycle_focus_shortcut",
+        alias = "os_cycle_focus_shortcut",
+        alias = "osCycleFocusShortcut",
+        deserialize_with = "deserialize_optional_shortcut"
+    )]
+    pub os_cycle_focus_shortcut: Option<String>,
+    #[serde(
+        default = "default_dock_padding",
+        alias = "dock_padding",
+        alias = "dockPadding"
+    )]
+    pub dock_padding: f64,
+    #[serde(
+        default = "default_dock_item_spacing",
+        alias = "dock_item_spacing",
+        alias = "dockItemSpacing"
+    )]
+    pub dock_item_spacing: f64,
+    #[serde(
+        default = "default_dock_outer_spacing",
+        alias = "dock_outer_spacing",
+        alias = "dockOuterSpacing"
+    )]
+    pub dock_outer_spacing: f64,
+    #[serde(
+        default = "default_dock_radius",
+        alias = "dock_radius",
+        alias = "dockRadius"
+    )]
+    pub dock_radius: f64,
+    #[serde(
+        default = "default_dock_position",
+        alias = "dock_position",
+        alias = "dockPosition"
+    )]
+    pub dock_position: String,
+    #[serde(
+        default = "default_cursor_theme",
+        alias = "cursor_theme",
+        alias = "cursorTheme"
+    )]
+    pub cursor_theme: String,
+    #[serde(
+        default,
+        alias = "app_shortcuts",
+        alias = "appShortcuts",
+        deserialize_with = "deserialize_app_shortcuts"
+    )]
+    pub app_shortcuts: std::collections::BTreeMap<String, Option<String>>,
     #[serde(default = "default_true", alias = "terminal_suggestions_enabled")]
     pub terminal_suggestions_enabled: bool,
     #[serde(
@@ -1212,6 +1278,12 @@ pub struct UiConfig {
     pub cognito_mode_shortcut: String,
     #[serde(default, alias = "cognito_mode_style")]
     pub cognito_mode_style: CognitoModeStyle,
+    #[serde(
+        default,
+        alias = "default_window_placement",
+        alias = "defaultWindowPlacement"
+    )]
+    pub default_window_placement: DefaultWindowPlacement,
 }
 
 pub const MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES: usize = 4096;
@@ -1240,7 +1312,6 @@ impl Default for UiConfig {
             reveal_active_file_shortcut: default_reveal_active_file_shortcut(),
             git_panel_shortcut: default_git_panel_shortcut(),
             ports_panel_shortcut: default_ports_panel_shortcut(),
-            fleet_terminal_shortcut: default_fleet_terminal_shortcut(),
             terminal_font_size_increase_shortcut: default_terminal_font_size_increase_shortcut(),
             terminal_font_size_decrease_shortcut: default_terminal_font_size_decrease_shortcut(),
             terminal_suggestions_enabled: true,
@@ -1263,6 +1334,16 @@ impl Default for UiConfig {
             terminal_scroll_step: default_terminal_scroll_step(),
             cognito_mode_shortcut: default_cognito_mode_shortcut(),
             cognito_mode_style: CognitoModeStyle::default(),
+            default_window_placement: DefaultWindowPlacement::default(),
+            os_palette_shortcut: default_os_palette_shortcut(),
+            os_cycle_focus_shortcut: default_os_cycle_focus_shortcut(),
+            dock_padding: default_dock_padding(),
+            dock_item_spacing: default_dock_item_spacing(),
+            dock_outer_spacing: default_dock_outer_spacing(),
+            dock_radius: default_dock_radius(),
+            dock_position: default_dock_position(),
+            cursor_theme: default_cursor_theme(),
+            app_shortcuts: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -1346,12 +1427,46 @@ impl UiConfig {
         }
         Ok(())
     }
-}
 
+    pub fn validate_window_placement(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    pub fn validate_appearance(&self) -> Result<(), String> {
+        if !self.dock_padding.is_finite() || !(0.0..=16.0).contains(&self.dock_padding) {
+            return Err("dock_padding must be finite and between 0 and 16".to_string());
+        }
+        if !self.dock_item_spacing.is_finite() || !(0.0..=12.0).contains(&self.dock_item_spacing) {
+            return Err("dock_item_spacing must be finite and between 0 and 12".to_string());
+        }
+        if !self.dock_outer_spacing.is_finite() || !(0.0..=24.0).contains(&self.dock_outer_spacing) {
+            return Err("dock_outer_spacing must be finite and between 0 and 24".to_string());
+        }
+        if !self.dock_radius.is_finite() || !(0.0..=28.0).contains(&self.dock_radius) {
+            return Err("dock_radius must be finite and between 0 and 28".to_string());
+        }
+        if !["left", "right", "top", "bottom"].contains(&self.dock_position.as_str()) {
+            return Err("dock_position must be one of: 'left', 'right', 'top', 'bottom'".to_string());
+        }
+        if self.cursor_theme != "system" && self.cursor_theme != "theme" {
+            return Err("cursor_theme must be either 'system' or 'theme'".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn validate_cognito_mode_shortcut(&self) -> Result<(), String> {
+        let s = self.cognito_mode_shortcut.trim();
+        if s.is_empty() || s == "DoubleShift" || s == "Mod+Wheel" {
+            return Err("cognito_mode_shortcut must be a valid non-empty keyboard chord".to_string());
+        }
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalConfig {
-    pub defaults: Option<GlobalDefaults>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceInfo>,
     pub workspaces: Option<Vec<KnownWorkspace>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui: Option<UiConfig>,

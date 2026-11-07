@@ -97,7 +97,30 @@ pnpm --filter @dam-hopper/ui exec vitest run src/api/auth-client.test.ts
 pnpm --filter @dam-hopper/ui exec vitest run src/components/organisms/LoginDevicesSection.test.tsx src/components/organisms/ServerSettingsDialog.test.tsx src/components/organisms/login-devices-connections.test.tsx
 pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/login-devices.browser.tsx
 E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e device-login-management/device-login-management.spec.ts
+
+# Feature: AI Dev OS Lifecycle Prototype (Phase 01)
+# 1. Application-shell and /os route gating unit tests (10 tests: /os unauthenticated notice, token/none auth, revocation unmount, Ctrl+` isolation)
+pnpm --filter @dam-hopper/ui exec vitest run src/embed/dam-hopper-app.test.tsx
+# 2. OS logic and pure window operation unit tests (26 tests: input-arbiter, window-ops, persistence, resource-registry)
+pnpm --filter @dam-hopper/ui exec vitest run src/os/
+# 3. Browser component regressions (9 tests: full transition matrix tile/float/max/min/desktop, DOM reference continuity, hidden interval verification, iframe preservation, Cognito isolation)
+pnpm --filter @dam-hopper/ui exec vitest run --config vitest.browser.config.ts browser-tests/os-lifecycle.browser.tsx
+# 4. E2E static typecheck (tsconfig.e2e.json)
+pnpm --filter @dam-hopper/ui test:e2e:typecheck
+# 5. Application E2E journey (unexecuted live qualification gate, review.md PENDING_REVIEW):
+E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e os-lifecycle/os-lifecycle.spec.ts
+
+# Feature: AI Dev OS Root Cutover & Qualification (Phases 08–09)
+# 1. E2E Typecheck
+pnpm --filter @dam-hopper/ui test:e2e:typecheck
+# 2. UI Unit Tests (324 files, 2,996 tests)
+pnpm --filter @dam-hopper/ui test
+# 3. Browser Component Regressions (59 active suites in Chromium)
+pnpm --filter @dam-hopper/ui test:browser --run
+# 4. Root Cutover Application E2E Journey
+E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e os-cutover/os-cutover.spec.ts
 ```
+
 ---
 
 ## 4. Isolated Application Services
@@ -136,24 +159,32 @@ Application E2E tests interact with authentic production binaries rather than sy
 
 Application E2E journeys validate end-to-end user workflows across containerized services:
 
-1. **Privacy Mode Heavy Blur (`packages/ui/e2e/privacy-heavy-blur/privacy-heavy-blur.spec.ts` — A04):**
-   - Navigates through actual `apps/web` entry, switches to `/settings`, configures Heavy Blur.
-   - Returns to `/workspace`, activates Cognito mode via `Control+Alt+KeyB`.
-   - Validates complete viewport coverage, backdrop blur styles (`blur(20px) saturate(140%)`), and accessibility attributes (`aria-hidden="true"`, `inert`).
-   - Verifies input isolation: clicks, typing chords, and terminal inputs do not leak into live editors or terminals.
-   - Tests dismissal and reload retention.
-2. **SQLite Auth Lite Mode (`packages/ui/e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`):**
-   - Starts isolated application services with `authBackend: "sqlite"` (starting no MongoDB container) and seeds an enabled `admin` session via `application_e2e_seed`.
-   - Verifies unauthenticated `GET /api/projects` returns `401`, while bearer-authenticated `GET /api/auth/status` reports `authenticated: true`, `user: "admin"`, `role: "admin"`, and omits `devMode`.
-   - Verifies `POST /api/auth/register` with JSON `{ "username", "password" }` returns `200` `{ "ok": true }` and that subsequent `POST /api/auth/login` for that unapproved account returns `401` with `code: "ACCOUNT_DISABLED"`.
-   - Navigates through `/settings` and `/workspace` and captures full-viewport visual evidence (`E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e e2e/sqlite-auth-lite-mode/sqlite-auth-lite-mode.spec.ts`).
-3. **Device Login Management (`packages/ui/e2e/device-login-management/device-login-management.spec.ts`):**
-   - Starts isolated application services with real backend and seeds initial admin authentication.
-   - Creates secondary same-account sessions and foreign user sessions to verify session isolation.
-   - Verifies `GET /api/auth/sessions` lists active account sessions with untrusted client hint text, current session indicator, and keyset pagination.
-   - Revokes another session and verifies immediate rejection of revoked credentials for protected HTTP and WebSocket endpoints while current session remains authenticated.
-   - Tests self-revocation from Server Settings dialog, confirming local profile credential clearing, no unintended cookie mutation, and draft Save protection.
-   - Captures full-viewport visual evidence across desktop (1440x900) and narrow viewports (320x667). Automated runs initialize `review.md` to `PENDING_HUMAN_REVIEW` pending operator visual inspection.
+1. **OS Root Cutover (`packages/ui/e2e/os-cutover/os-cutover.spec.ts`):**
+   - Serial Playwright journey targeting `/` at 1440x900 viewport against containerized application services.
+   - Verifies root `/` cutover to `OsShell` header, Dock, and Desktop 1 canvas.
+   - Validates legacy route translation (`/workspace`, `/terminals`, `/ide`, `/git`, `/settings`, `/devices`, `/agent-store`) to qualified OS deep links (`open=terminals|git|settings|agent-store|editor`).
+   - Validates zero-network retirement boundary for `/usage` and `/ssh-forwarding` rendering `RemovedRouteScreen` with zero child service/network requests.
+   - Asserts xterm window placement continuity across placement mode transitions (tile, float, max, tray restore).
+   - Colocated governance record `packages/ui/e2e/os-cutover/review.md` records `PENDING_HUMAN_REVIEW` pending operator visual inspection.
+2. **OS Lifecycle (`packages/ui/e2e/os-lifecycle/os-lifecycle.spec.ts`):**
+   - Multi-step serial Playwright journey targeting `/os` at 1440x900 viewport against containerized application services.
+   - Traverses window placement transitions: switches to float mode, maximizes float window, restores float window, minimizes to top bar tray, and restores from tray, asserting DOM identity marker survival at each step.
+   - Validates multi-desktop window moves and Cognito Privacy Mode overlay input isolation.
+   - Colocated governance file `packages/ui/e2e/os-lifecycle/review.md` records `PENDING_HUMAN_REVIEW`.
+3. **OS Launch Recipes (`packages/ui/e2e/os-recipes/os-recipes.spec.ts`):**
+   - Tests declarative launch recipes manager (`RecipesApp`), authoring (`RecipeEditor`), and execution (`LaunchReview`).
+   - Verifies Save subset project/server filtering, excluded-window preview, binary topology pruning, and Web Locks synchronization.
+   - Colocated governance record `packages/ui/e2e/os-recipes/review.md` records `PENDING_HUMAN_REVIEW`.
+4. **OS Session Management (`packages/ui/e2e/os-session-management/os-session-management.spec.ts`):**
+   - Validates guarded terminal process termination (`POST /api/terminal/{id}/terminate`) with manager-lifetime UUID epoch fencing (`X-DamHopper-PTY-Epoch`).
+   - Verifies tri-choice close confirmation dialog, restart cancellation, and ReviewTarget 8-tuple retirement guards.
+   - Colocated governance record `packages/ui/e2e/os-session-management/review.md` records `PENDING_HUMAN_REVIEW`.
+5. **OS Desktop Polish (`packages/ui/e2e/os-desktop-polish/os-desktop-polish.spec.ts`):**
+   - Validates unified action catalog execution (`actions.ts`), floating dock geometry and canonical pins, work-area maximize plane, desktop context menu, and launch safety journal.
+   - Colocated governance record `packages/ui/e2e/os-desktop-polish/review.md` records `PENDING_HUMAN_REVIEW`.
+6. **OS Agent Hub Workspace (`packages/ui/e2e/os-agent-hub-workspace/os-agent-hub-workspace.spec.ts`):**
+   - Validates terminal-first Agent Hub stage (`TraditionalTerminalProjectsDisplay`), collapsible right-sidebar file tree, presentation-based input suppression, and per-profile pin retention.
+   - Colocated governance record `packages/ui/e2e/os-agent-hub-workspace/review.md` records `PENDING_HUMAN_REVIEW`.
 ---
 
 ## 6. Visual Evidence Authenticity & Governance
@@ -237,11 +268,14 @@ The table below records the baseline suite classification from the initial 4-tie
 
 | Category | Suite Count | Declared Tests | Test Type | Status |
 |---|---|---|---|---|
-| UI Unit Tests | ~302 files | 2,305 tests | Vitest jsdom | Active / Required |
-| Browser Component Regressions | 52 suites | 254 tests | Vitest Browser Mode (Chromium, 15173) | Active / Required |
+| UI Unit Tests | 324 files | 2,996 tests | Vitest jsdom | Active / Passed (0 failures) |
+| Browser Component Regressions | 59 active suites (61 files) | 324 tests passed (4 skipped) | Vitest Browser Mode (Chromium, 15173) | Active / Passed (0 failures) |
 | Specialized Backend Component | 1 suite | 5 tests | Vitest Browser Mode (Chromium, 15174) | Active / Required |
-| Application E2E Journeys | 3 baseline suites (+ feature specs) | 3+ tests | Playwright Test (Isolated App + MongoDB or SQLite) | Active / Required |
+| Application E2E Journeys | 6 authored journey suites | 6+ tests | Playwright Test (Isolated App + MongoDB or SQLite) | Active / Types passing; runtime oracles open |
 | E2E Fixture Lifecycle Probes | 1 suite | 7 tests | Playwright Test (Container Lifecycle) | Active / Required |
+| Rust Server Tests | Library + Bins | 1,414 tests passed (1 ignored) | Native `cargo test` | Active / Passed (0 failures) |
+
+*Total Automated Suite (from dated integration report `plans/261101-1738-ai-dev-os-redesign/reports/integration.md`):* 4,735 passed, 4 skipped, 1 ignored, 0 failures across 4,740 test cases (with separate E2E typecheck, lint, and build gates clean). This documentation pass did not rerun runtime qualification. Carried live lifecycle/container oracles (H1/H2) and visual review ledgers remain open release qualification gates.
 
 ### Ranked Integrated Workflow Gaps
 
@@ -252,10 +286,11 @@ The following workflows represent documented gaps in full-application E2E covera
 |---|---|---|---|
 | **P1** | **Docked, Split & Mobile Layouts** | Component tests for traditional splits, floating tools, mobile accessory bar, zoom | Multi-pane drag resizing, combined editor + terminal bounding boxes, orientation shifts. |
 | **P1** | **Multi-Profile & Project Switching** | Store unit tests, target selector component tests, backend qualification scripts | Switching active server profiles and worktrees while terminal sessions and editors are active without state crossover. |
-| **P1** | **Persistent Settings & Full Policy** | Settings usage insights component | End-to-end user configuration of all Settings tabs; full policy editing; login/MFA UI flow qualification. Distinguishes authentic backend REST/disk policy persistence from component-isolated `localStorage` mocks. |
+| **P1** | **Persistent Settings & Full Policy** | Settings page component tests | End-to-end user configuration of all Settings tabs; full policy editing; login/MFA UI flow qualification. Distinguishes authentic backend REST/disk policy persistence from component-isolated `localStorage` mocks. |
 | **P1** | **Terminal & Workflow Continuity** | xterm fit adapter, replay notifications, workflow context tests | Live PTY reconnection, PTY output stream continuity across route transitions, bell notification click navigation. |
 | **P2** | **File Editing & Git Mutations** | Monaco editor wrappers, Git dialog component tests, backend Git tests | In-app file creation, dirty tab preservation, Git commit/squash/push with real conflict dialog resolution. |
 | **P2** | **Media Sessions & Token Revocation** | Explorer image/video ticket fixtures, native ticket issuance | Media ticket expiration, cookie-based token rotation, client-initiated logout and revocation. |
-| **P2** | **Native Desktop Host & WebView2** | Tauri Rust tests, SSH-forward E2E, native smoke scripts | Visual qualification of Tauri window decorations, native menu interactions, and platform-specific dialogs. |
+| **P2** | **Native Desktop Host & WebView2 (Retired)** | Historical Tauri Rust tests, SSH-forward E2E, native smoke scripts | Retired under Phase 02 (P0a); desktop Tauri host and desktop SSH forwarding removed. |
+| **P1** | **AI Dev OS Lifecycle Prototype** | Unit tests in `src/os/`, route tests in `dam-hopper-app.test.tsx`, component tests in `os-lifecycle.browser.tsx`, authored E2E spec in `os-lifecycle.spec.ts` | Live PTY stream continuity across reparenting, zero attach/replay counters, live Monaco undo/model preservation, and behavioral Cognito isolation under active daemon container (Task 4 carried to Phase 09). |
 
 *Note: Historical manual qualifications and targeted component mounts must not be conflated with automated full-application Playwright journeys.*

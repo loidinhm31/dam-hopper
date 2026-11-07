@@ -32,69 +32,16 @@ Dam Hopper uses an extensible IDE-style Tool Window system, inspired by IntelliJ
 - Close functionality
 - Optional maximize/restore toggle (`maximizable`, `isMaximized`, and `onToggleMaximize` props) sits left of the close button, provides accessible "Maximize panel"/"Restore panel" labels, and appears only on bottom tool panels.
 
-### Integration in IdeShell
+### OS Desktop Integration & Legacy Shell Retirement
 
-**Location:** `packages/ui/src/components/templates/IdeShell.tsx`
+Following Phase 08 root cutover, the monolithic legacy shell wrappers (`IdeShell`, `WorkspacePage`, `TerminalWorkspaceShell`, `MobileWorkspaceShell`, `TopNav`, `AppLayout`) were permanently retired and deleted.
 
-The `IdeShell` orchestrates the system:
-
-```tsx
-<IdeShell>
-  <ActivityBar tools={toolDefinitions} activeId={activeId} />
-  {activeTool && <ToolPanel tool={activeTool} />}
-  <MainArea />
-</IdeShell>
-```
-
-### Bottom Panel Maximize Toggle
-
-The bottom tool panels (Terminal/Git/Ports — `position:"bottom"` tools) expose an IntelliJ-style maximize/restore toggle. When maximized, the bottom panel expands to cover the entire top area (explorer, source-control, editor, and right-top panels are hidden via `display:none`), while the activity bars stay visible so tools remain switchable. The state is **session-only** (not persisted): closing the maximized bottom tool, or switching workspace mode, resets it. The maximize is implemented as sibling-only CSS class flips in `IdeShell` — the terminal keep-alive element stays in the same React tree position, so no PTY is remounted or duplicated on toggle. Layout decisions are centralized in the pure `resolveBottomPanelLayout` helper (`packages/ui/src/lib/ide-shell-layout.ts`) so the maximize/restore/reset-on-close contract is unit-testable under the SSR test harness. Maximizing also unselects any active top tools on both sides (the activity bar no longer highlights them while the bottom panel covers the top area); selecting a top tool from the activity bar again — or triggering a reveal-active-file request — restores the normal layout. The maximize/top-tool state transitions are extracted into pure `resolveMaximizeToggle` / `resolveTopToolToggle` helpers for SSR unit testing.
-
-### Workspace Mode Shell
-
-**Location:** `packages/ui/src/components/pages/WorkspacePage.tsx`
-
-**Purpose:** Owns the persisted workspace mode for the main workspace shell.
-
-**Behavior:**
-
-- Stores `workspaceMode` in `localStorage` key `dam-hopper:workspace-mode`.
-- Valid values: `ide` and `terminal`; fallback is `ide`.
-- Passes optional mode props through `IdeShell` to `TopNav`.
-- `TopNav` renders a compact IDE/Terminal toggle only when mode props are supplied.
-- `IdeShell` keeps the mode contract optional, so existing callers without mode props render unchanged.
-- Uses `terminalWorkspaceShortcut` from UI config for the global mode toggle.
-- Default binding is `Mod+Shift+Backquote`.
-- Uses `gitPanelShortcut`, `projectPanelShortcut`, `portsPanelShortcut`, and
-  `fleetTerminalShortcut` for keyboard access to the Git, Project, Ports, and
-  Fleet Terminal tools in IDE and Terminal modes. Defaults are
-  `Mod+Shift+KeyG`, `Mod+Shift+KeyZ`, `Mod+Shift+KeyP`, and `Mod+Shift+KeyM`.
-- Those four shortcuts toggle their target and keep the target group exclusive;
-  xterm custom key handlers suppress the bindings before PTY input.
-- In terminal mode, `WorkspacePage` renders a full-height terminal workspace below the top nav.
-- The same terminal manager state is reused across mode switches, so PTY lifecycle is not duplicated.
-- Terminal panes refit when switching modes or when the Fleet Terminal rail changes size/collapse state.
-- Compact view swaps to `MobileWorkspaceShell`, which shows one surface at a time with a safe-area-aware floating **Panels** selector. IDE compact surfaces are Explorer, Search, Editor, Terminal, Browser, Git, and Project; terminal compact surfaces are Terminal, Fleet, Ports, Browser, Git, and Project. The selector uses the existing Radix Select focus and dismissal behavior; inactive surfaces stay mounted but hidden/inert so terminal, editor, and Browser state survives switching. Its placement accounts for safe-area insets and short terminal viewports; the compact trigger can be dragged within the viewport without changing its session-only position contract, while a normal tap still opens the selector. The normal compact shell omits the redundant companion header, while optional toolbar actions use a slim single-line row. Wide layouts continue using the existing `IdeShell` and `TerminalWorkspaceShell` desktop shells unchanged.
-- On wide screens, Browser opens inside the Terminal tool beside its active terminal. Compact layouts retain Browser as a separate surface. It does not create a PTY.
-
-**Persistence keys:**
-
-- `dam-hopper:workspace-mode` stores the active shell mode (`ide` or `terminal`).
-
-### Terminal Workspace Shell
-
-**Location:** `packages/ui/src/components/templates/TerminalWorkspaceShell.tsx`
-
-**Purpose:** Wraps the terminal-mode workspace layout.
-
-**Behavior:**
-
-- Renders the selected Files, Git, Project, Ports, or Fleet Terminal panel as a floating overlay in terminal mode. The Project panel reuses the same target-aware Project content as the IDE Project tool, including its Worktrees disclosure and project/worktree selection state.
-- The floating panel matches the Explorer interaction model: it can be dragged or resized within the terminal workspace.
-- Files and tool overlays share a base `z-index` of `20`; activating either panel raises it to `25`, while higher-priority global overlays such as Browser/debug capture remain above them.
-- Git, Project, Ports, and Fleet controls are mutually exclusive. Re-selecting the active Project control closes the floating tool; selecting another control replaces it. Browser is not a floating tool; it is rendered by the active terminal pane.
-- Keeps the main terminal area full-height below the top nav.
-
+In DamHopper OS, terminal workspaces and tool panels operate as independent, windowed applications within `OsShell`:
+- **Windowed Application Adapters (`packages/ui/src/os/apps/`):** Terminals (`TerminalsApp`), editor (`EditorApp`), Git operations (`GitApp`), ports and tunnels (`PortsTunnelsApp`), and files (`FilesApp`) run as separate windows within the hybrid tiling + float desktop window manager (`TileTree<T>`).
+- **Root Keep-Alive Reparenting (`OsResourceHost`):** Live xterm terminal instances and Monaco editor instances are owned by root keepalive hosts (`TerminalKeepAliveHost`, `MonacoKeepAliveHost`) inside `OsResourceHost`. Moving windows between tiled slots, floating frames, or different desktops imperatively attaches DOM nodes to visible slots without unmounting or re-creating PTY sessions.
+- **Zero Placement Attach/Replay Invariant (F2):** Repositioning or docking an existing terminal window preserves the identical xterm DOM instance with zero re-attachment, zero scrollback replays, and zero terminal resets. Reconnects are strictly bounded to actual network reconnects.
+- **Generic Terminal Input Policy (`terminal-input-policy.ts`):** Web-mobile virtual keyboards and coarse-pointer layout hooks are retired. Stdin suppression is enforced generically via `syncTerminalInputSuppression`, disabling xterm stdin and unfocusing the hidden textarea across Cognito privacy mode, disconnected profiles, and modal focus traps.
+- **Guarded Session Termination:** Terminal closing evaluates live vs. dead processes, offering guarded OS process termination via atomic `POST /api/terminal/{id}/terminate` with manager-lifetime UUID epoch fencing (`X-DamHopper-PTY-Epoch`).
 ### Browser Debug Tool
 
 **Locations:** `packages/ui/src/components/organisms/BrowserDebugPanel.tsx`, `packages/ui/src/components/organisms/BrowserDebugKeepAliveHost.tsx`, `packages/ui/src/hooks/use-browser-debug.ts`
@@ -105,24 +52,9 @@ The iframe is hosted by a singleton `BrowserDebugKeepAliveHost` outside the cond
 
 The panel renders bridge status, a live address bar, Back/Forward/Reload controls, a bounded local console, picker controls, and bounded selection metadata. Successfully loaded browser targets are retained as 12 local-only recent-address suggestions in the address input; saved entries contain only origin and path (never credentials, query strings, or hashes), are deduplicated, and are revalidated before each load. The bridge reports full same-origin paths after document loads, History API changes, browser back/forward, and hash changes, so the address bar tracks the actual iframe location. Navigation and console forwarding require an extension built for the exact DamHopper parent origin; they are unavailable to generic loopback parents. Console data is bounded, redacted for common credentials, rendered as text, retained only in the browser session, and never included in terminal artifacts. It does not execute page commands or expose raw HTML, cookies, storage, credentials, or other browser secrets. In wide Terminal and IDE mode, the Browser is a resizable sibling of the focused terminal; that ready terminal is selected automatically for artifact preparation, and a prepared artifact remains bound to it through review/insertion. The compact Browser surface retains its explicit live-terminal chooser. When a selection exists, capture controls can request a browser-tab capture from an explicit user gesture, crop the selected region locally, or accept a PNG/JPEG file or pasted image. Manual JPEG input is converted to PNG locally because the authenticated artifact endpoint accepts PNG only. Capture is optional: denial, unsupported APIs, wrong-surface selection, or crop failure leave semantic selection available. Images remain local until the explicit artifact attach action; closing the Browser surface stops every capture track but intentionally does not unload the iframe.
 
-The native Tauri host preserves this UI contract with a Rust-owned child WebView
-instead of the singleton iframe and extension setup. Its controller keeps one
-browsing context while changing bounds or visibility, invalidates selection and
-capture state on navigation-generation changes, and uses profile-scoped storage.
-The extension setup below applies only to the web/browser host; native clients
-use the embedded bridge asset.
+The former desktop Tauri child WebView host was permanently retired in Phase 02 (P0a). `BrowserDebugKeepAliveHost` collapsed to its standard web iframe path across all platforms.
 
-Both native and web hosts expose Responsive and Custom viewport controls.
-Custom width and height are whole CSS-pixel values bounded to 160–4096. The
-top-bar `+` probe and the symmetric stepper buttons change both dimensions by
-16px, with state persisted in browser-local storage under a platform-scoped
-key. Keyboard shortcuts are intentionally not part of this feature. A custom
-stage may overflow and scroll; the native child and fallback iframe both use
-stage-aware remeasurement. The native child receives the complete requested
-viewport rectangle so responsive layout keeps the selected width and height;
-only the fallback iframe is clipped to the visible stage intersection. This
-does not resize the main window; main-window resizing is a separate native
-shell concern.
+The web host exposes Responsive and Custom viewport controls. Custom width and height are whole CSS-pixel values bounded to 160–4096. The top-bar `+` probe and the symmetric stepper buttons change both dimensions by 16px, with state persisted in browser-local storage under a platform-scoped key. Keyboard shortcuts are intentionally not part of this feature. A custom stage may overflow and scroll with stage-aware remeasurement.
 
 #### Browser Debug extension
 
@@ -144,39 +76,10 @@ The iframe still must be embeddable: target `X-Frame-Options` or restrictive
 `Content-Security-Policy: frame-ancestors` can reject the preview before the
 extension runs.
 
-### Native SSH forwarding host
+### Native SSH forwarding host (Retired in Phase 02)
 
-**Locations:** `apps/native/src/native-ssh-forward-host.ts`,
-`packages/ui/src/lib/ssh-forward-host.ts`,
-`packages/ui/src/contexts/SshForwardHostContext.tsx`,
-`packages/ui/src/hooks/use-ssh-forward.ts`
-
-The native host is constructed only for enabled Windows desktop support. It
-opens one client context, stores a `ScopeHandle` per server-profile scope, and
-passes an explicit `NativeScopeRef` with every snapshot, connection, rule,
-credential, and trust operation. Mutations serialize per scope; equal IDs in
-different scopes remain independent. The host validates exact DTO keys, UUIDs,
-counters, timestamps, identity, scope generation, and revisions before state
-enters React.
-
-`SshForwardScopeBridge` derives native scope IDs from the saved profile list,
-calls `reconcileKnownScopes` when that list changes, and purges a deleted scope
-only after profile absence and available storage are confirmed. `useSshForward`
-can consume an explicit scope reference or open the requested scope through the
-host. Project focus, route changes, Settings focus, and SSH-page focus do not
-switch native scope. Browser and mobile hosts render the shared UI without an
-SSH-forward host.
-
-`ssh-forward:changed` is a bounded refetch hint. It must match the current
-desktop/manager/client context, activation token, scope, generation, and
-numeric revisions before a scoped snapshot is requested; events never patch
-React state directly.
-
-Native Browser Debug is independent: `NativeBrowserDebugHost.setTarget` receives
-the `BrowserDebugTarget` with explicit `owner`, creates one
-`browser-debug` child, and rejects stale owner/origin/session/generation relay
-messages. It must not infer Browser ownership from the most recently opened SSH
-scope or active project.
+> **Retirement Notice (Phase 02 / P0a):**
+> The native Windows desktop SSH forwarding host (`apps/native/src/native-ssh-forward-host.ts`), UI contexts (`SshForwardHostContext.tsx`), hooks (`use-ssh-forward.ts`), and contract libraries (`ssh-forward-host.ts`) were deleted in Phase 02 (P0a). Route navigation to `/ssh-forwarding` displays retired-feature guidance in the web application. Remote Git-over-SSH authentication remains supported through server APIs and UI retry helpers.
 
 ### Multi Terminal Display
 
@@ -189,99 +92,13 @@ scope or active project.
 - Reuses existing mounted session state from the terminal manager.
 - Does not create a second PTY lifecycle for terminal-mode rendering.
 - Refits visible panes when the workspace shell layout changes.
-- Threads the global `activeSessionId` through `SplitLayout` into each
-  `PaneContainer`. The active pane renders one host-local floating
-  `MobileTerminalAccessoryBar` inside its terminal output host, before any
-  browser split; it is never mounted over the whole split surface or once per
-  pane.
+- Threads the global `activeSessionId` through `SplitLayout` into each `PaneContainer`.
 
-### Floating Terminal Keyboard Controls
+### Terminal Input Policy & Accessory Controls (Phase 08 Cutover)
 
-**Locations:**
-
-- `packages/ui/src/components/organisms/MobileTerminalAccessoryBar.tsx`
-- `packages/ui/src/components/organisms/TerminalAccessoryControls.tsx`
-- `packages/ui/src/components/organisms/TerminalFloatingControlShell.tsx`
-- `packages/ui/src/components/organisms/TerminalRuntimeOutput.tsx`
-- `packages/ui/src/components/organisms/TerminalScrollButtons.tsx`
-- `packages/ui/src/components/organisms/PaneContainer.tsx`
-- `packages/ui/src/components/organisms/SplitLayout.tsx`
-
-**Behavior:**
-
-- Keys and Type are host-local, absolute `z-10` overlays within each positioned
-  terminal output surface. The group uses the same translucent surface and
-  dismissal conventions as the scroll controls, with a raised lower-right
-  anchor at `3rem + var(--safe-area-bottom, 0px)` (48px plus the safe-area
-  inset) and the existing right safe-area handling.
-- TerminalScrollButtons shares the terminal output footer's positioned
-  containing block. In the closed state it keeps the 48px bottom baseline,
-  `6.25rem` accessory reservation, and 8px gap. When an accessory panel opens,
-  the scroll trigger and Keys/Type shell lift above that in-flow panel; short
-  viewports switch the trigger and shell to adjacent horizontal lanes instead
-  of stacking them vertically.
-- The scroll rail toggle opens a four-action group for jumping to the top or
-  bottom and moving by the configured terminal scroll step. Escape or a
-  pointerdown outside the controls closes the group, and the trigger maintains
-  its `aria-expanded`/`aria-controls` linkage.
-- Pointerdown cancellation and touchstart propagation guards cover the toggle
-  and all four actions: they prevent pointer focus and host bubbling, blur a
-  focused `.xterm-helper-textarea`, and preserve click and keyboard activation.
-  Coarse-pointer taps therefore do not hand focus back to xterm and reopen the
-  Android IME.
-- Terminal Keys exposes Esc, Tab, Ctrl+C (shown as ^C), Enter, PgUp, PgDn, Up,
-  Down, Left, and Right in matching visual and keyboard order.
-- Custom Type defaults to a five-row US 60%-style physical layout with the
-  existing arrow cluster, duplicate modifier keys, `Fn`, and `Win`. On compact
-  coarse-pointer surfaces it switches to a minimized alpha layout: one
-  `Shift`, `Ctrl`, and `Alt`, no arrow/`Fn`/`Win` keys, and `Enter` in the
-  navigation row. Terminal Keys continues to expose the removed arrow actions
-  and can remain open alongside Type.
-- Expanded special keys and custom/native Type input stay in the existing local
-  component state and continue writing through the active session's
-  authenticated terminal transport. The native Type input remains focusable;
-  control presses prevent xterm focus and stop host propagation. Escape and
-  outside pointer dismissal close open panels and Escape restores the invoking
-  trigger focus.
-- Rendering the group is independent from native-input suppression. Android
-  policy and the existing compact/coarse/custom-keyboard policy still control
-  xterm/native input behavior; showing desktop controls alone never suppresses
-  xterm input.
-- The custom keyboard is selected when Android suppression is active or when
-  `mobileCustomKeyboardEnabled` is enabled; otherwise Type uses the focusable
-  native input, including on fine-pointer desktop surfaces.
-- Every custom key keeps a 44px minimum height, responsive 14px-to-44px
-  width, 4px-to-8px horizontal gap, and accessible title/ARIA label. The full
-  layout remains five rows and uses the existing width-responsive 60% geometry.
-  The minimized layout keeps word characters on four alpha/navigation rows and
-  moves digits and punctuation to a three-row `123` sublayout. Its panel clips
-  horizontal overflow instead of creating a page or panel scroll track.
-- Shift changes the visible number/symbol labels to the character that will be
-  sent. Ctrl letter chords are announced as `Ctrl+X`; Alt/Meta combinations
-  include their active modifier prefix. Both layouts grow rows to fill the
-  available width and stay centered without horizontal scrolling.
-
-- Expanded content remains a full-width, trailing in-flow panel with
-  `overflow-x-hidden overflow-y-auto` and
-  `max-height: min(20rem, calc(100dvh - 6rem - var(--safe-area-bottom, 0px)))`.
-  The Keys/Type shell moves above the panel when it opens. At short viewport
-  heights, Keys/Type and the scroll trigger use a horizontal lane so all three
-  44px controls remain reachable; an opened scroll rail occupies the adjacent
-  compact lane. Safe-area padding accounts for viewport insets, while flex
-  sizing keeps the panel within the positioned host. The outer terminal surface
-  stays fixed while the flex output host yields available height without
-  collapsing.
-- Terminal compact shells leave the bottom safe-area inset to the terminal
-  accessory controls rather than reserving it again on the terminal root;
-  non-terminal compact workspace modes retain root safe-area padding.
-
-**Verification/status:**
-
-- Focused UI unit coverage for the accessory controls passed: 27 tests across
-  five files.
-- The `packages/ui` TypeScript build passed.
-- Direct Chromium accessory-browser coverage passed all 10 checks.
-
+> **Retirement Notice (Phase 08):**
+> Web-mobile virtual keyboard modules (`MobileTerminalAccessoryBar.tsx`, `MobileTerminalCustomKeyboard.tsx`, `TerminalFloatingControlShell.tsx`, `android-chrome-input-policy.ts`, and coarse-pointer layout hooks) were permanently deleted in Phase 08.
+> Terminal stdin suppression is now enforced generically via `syncTerminalInputSuppression` (`packages/ui/src/lib/terminal-input-policy.ts`), synchronizing xterm's hidden textarea (`inputMode = "none"`, `tabIndex = -1`, `blur()`) and `disableStdin = true` across Cognito Privacy Mode, disconnected server profiles, and modal focus traps. `TerminalScrollButtons` and `TerminalAccessoryControls` provide non-intrusive navigation without virtual keyboard overlays.
 ### Resize Handle Hook
 
 **Location:** `packages/ui/src/hooks/use-resize-handle.ts`
@@ -432,7 +249,7 @@ interface TerminalPanelProps {
 
 **Data flow:** `usePorts()` scopes port/tunnel snapshots, incarnation fences, events, and captured actions to profile/generation. Detected rows retain `sessionId` for confirmed terminal Kill; tunnel-only rows remain origin untracked with URL/Stop but no invented terminal action. Origin or PTY loss never stops an explicit tunnel.
 
-**Terminal workspace:** The same `PortsPanel` is available in a floating Terminal workspace overlay through its configurable shortcut, so detected ports and tunnel actions remain available without switching back to IDE mode.
+**OS Desktop:** In DamHopper OS, `PortsTunnelsApp` (`packages/ui/src/os/apps/PortsTunnelsApp.tsx`) embeds `PortsPanel` as an independent windowed application inside `OsShell`.
 
 ### TunnelReminderBanner
 
@@ -472,8 +289,7 @@ interface TerminalPanelProps {
 
 **Runtime verification notes:**
 
-- Manual verification is still required for xterm reparenting, focus retention, resize/refit timing, and PTY reuse across IDE/Terminal mode switches.
-- Automated coverage currently proves shortcut normalization, workspace mode persistence, and pure docking-tree transitions.
+- In DamHopper OS, `OsResourceHost` owns `TerminalKeepAliveHost`, preserving live xterm DOM instances with zero-placement attach/replay/reset (F2 invariant) across docking, tiling, floating, and desktop switches.
 
 ## Git Workspace Panel
 
@@ -482,7 +298,7 @@ interface TerminalPanelProps {
 **Purpose:** Primary Git workspace view for branch management, history browsing, and local change review.
 
 
-> **Git Conflict Resolution:** For interactive 3-way merge conflict resolution across terminal and IDE workspaces, see the floating [ConflictResolverPanel](./workbench.md#floating-git-conflict-resolver-panel), which mounts above workspace shells with unified panel stacking, scoped keyboard arbitration, and responsive narrow layout.
+> **Git Conflict Resolution:** For interactive 3-way merge conflict resolution, see the floating [ConflictResolverPanel](./workbench.md#floating-git-conflict-resolver-panel), which mounts inside `ConflictResolverApp` or as an OS floating frame governed by OS frame authority (`OS_RESOLVER_PANEL_TOPMOST_Z_INDEX = 30`).
 ### WorkspaceGitPanel
 
 **Location:** `packages/ui/src/components/organisms/WorkspaceGitPanel.tsx`
@@ -663,7 +479,7 @@ snapshot.
 - **Cascading child auto-hydration:** When mounting with persisted open folders, `FileTree` scans for open folders with unloaded children (`children === null`) and automatically triggers `loadChildren(id)`. If loading fails (e.g. directory deleted externally), `prunePath` cleans up the invalid path.
 - **Path mutation synchronization:** Renames and Drag-and-Drop moves invoke `renamePath(scopeKey, oldPath, newPath)` to update exact folder keys and all descendant path prefixes; deletions call `prunePath(scopeKey, path)` to clear the folder and its subtree.
 
-**Terminal mode:** The floating Files panel defaults to its Explorer left-pane tab each time it opens and adds a sibling Changes tab. Closing it unmounts its content, so it reopens in Explorer rather than retaining a prior Changes selection. Explorer continues to render `FileTree` with its Git status badges; Changes reuses `ChangedFilesList` for local stage/unstage, discard, commit, and diff-opening actions. The separate floating Git panel remains the surface for branch, history, and remote operations.
+**OS Applications:** In DamHopper OS, `FilesApp` and `ChangesApp` operate as distinct windowed applications with independent state. `FilesApp` renders `FileTree` with Git status badges; `ChangesApp` manages `ChangedFilesList` and `DiffViewer` for local stage/unstage, discard, and diff review.
 
 ### Editor viewState persistence
 
