@@ -60,6 +60,7 @@ export function LockScreenOverlay({
 
   // Trailing release guard refs
   const trailingGuardInstalledRef = useRef<boolean>(false);
+  const trailingGuardCleanupRef = useRef<(() => void) | null>(null);
 
   // Derive effective cooldown based on timestamp deadline
   const isEffectiveCooldown = Boolean(cooldownUntil && cooldownUntil > now);
@@ -69,10 +70,9 @@ export function LockScreenOverlay({
       : 0;
 
   const removeTrailingGuard = useCallback(() => {
-    if (trailingGuardInstalledRef.current && typeof window !== "undefined") {
-      window.removeEventListener("keydown", onTrailingKeyDown, true);
-      window.removeEventListener("keyup", onTrailingKeyUp, true);
-      window.removeEventListener("blur", onTrailingBlur, true);
+    if (trailingGuardInstalledRef.current) {
+      trailingGuardCleanupRef.current?.();
+      trailingGuardCleanupRef.current = null;
       trailingGuardInstalledRef.current = false;
     }
   }, []);
@@ -110,6 +110,11 @@ export function LockScreenOverlay({
       window.addEventListener("keyup", onTrailingKeyUp, true);
       window.addEventListener("blur", onTrailingBlur, true);
       trailingGuardInstalledRef.current = true;
+      trailingGuardCleanupRef.current = () => {
+        window.removeEventListener("keydown", onTrailingKeyDown, true);
+        window.removeEventListener("keyup", onTrailingKeyUp, true);
+        window.removeEventListener("blur", onTrailingBlur, true);
+      };
     }
   }, [onTrailingKeyDown, onTrailingKeyUp, onTrailingBlur]);
 
@@ -509,8 +514,7 @@ export function LockScreenOverlay({
   const dateFormatted = formatLockDate(currentTime);
 
   const keyPadDisabled =
-    isEffectiveCooldown || inFlightRef.current || isVerifying || isDismissing;
-
+    isEffectiveCooldown || isVerifying || isDismissing;
   return createPortal(
     <div
       ref={overlayRef}

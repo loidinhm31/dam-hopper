@@ -1460,24 +1460,41 @@ describe("TraditionalTerminalProjectsNavigator", () => {
       });
     });
 
-    it("forwards disclosure state and toggle action to workspace rows", async () => {
-      const onToggleDisclosure = vi.fn();
-      const disclosedGroupIds = new Set([group.id]);
-
+    it("forwards disclosure state to workspace rows for inactive projects", async () => {
+      // Initially not disclosed and inactive
       renderNavigator({
         groups: [group],
-        disclosedGroupIds,
-        onToggleDisclosure,
+        activeGroupId: "other-group",
+        disclosedGroupIds: new Set(),
       });
 
-      const disclosureBtn = container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Collapse demo files"]',
-      )!;
-      expect(disclosureBtn).not.toBeNull();
-      expect(disclosureBtn.getAttribute("aria-expanded")).toBe("true");
+      expect(
+        container.querySelector('[role="combobox"][aria-label^="Worktree for demo"]'),
+      ).toBeNull();
+      expect(container.querySelector('[aria-label^="Commit 1234567"]')).toBeNull();
 
-      act(() => disclosureBtn.click());
-      expect(onToggleDisclosure).toHaveBeenCalledWith(group.id);
+      // Render with disclosedGroupIds containing group.id
+      renderNavigator({
+        groups: [group],
+        activeGroupId: "other-group",
+        disclosedGroupIds: new Set([group.id]),
+      });
+
+      expect(
+        container.querySelector('[role="combobox"][aria-label^="Worktree for demo"]'),
+      ).not.toBeNull();
+      expect(container.querySelector('[aria-label^="Commit 1234567"]')).not.toBeNull();
+
+      // Render again without disclosure
+      renderNavigator({
+        groups: [group],
+        activeGroupId: "other-group",
+        disclosedGroupIds: new Set(),
+      });
+
+      expect(
+        container.querySelector('[role="combobox"][aria-label^="Worktree for demo"]'),
+      ).toBeNull();
     });
 
     it("renders [+] in row and forwards onNewTerminalInGroup", async () => {

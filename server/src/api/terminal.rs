@@ -14,11 +14,11 @@ use tracing::warn;
 use crate::config::schema::{RestartPolicy, DEFAULT_RESTART_MAX_RETRIES};
 use crate::error::AppError;
 use crate::pty::manager::PtyCreateOpts;
-use crate::state::AppState;
 use crate::pty::manager::{
     GuardedTerminationError, GuardedTerminationOutcome, TerminalInventoryState,
 };
 use crate::pty::SessionMeta;
+use crate::state::AppState;
 use crate::workspace_target::{
     target_path_is_within, target_path_relative, FilesystemTargetRef, ProjectTargetRef,
     ResolvedProjectTarget, WorkspaceTargetError,
@@ -151,7 +151,12 @@ pub async fn create_session(
                 ));
             }
             sandbox.check_identity().map_err(AppError::Fs)?;
-            (None, canonical_cwd.to_string_lossy().into_owned(), None, None)
+            (
+                None,
+                canonical_cwd.to_string_lossy().into_owned(),
+                None,
+                None,
+            )
         }
         Some(FilesystemTargetRef::Project(p)) => {
             let target = resolve_terminal_target(&state, Some(&p.project), p.worktree_path).await?;
@@ -163,7 +168,9 @@ pub async fn create_session(
             (target, cwd, project_name, canonical_worktree_path)
         }
         None => {
-            let target = resolve_terminal_target(&state, requested_project.as_deref(), requested_worktree).await?;
+            let target =
+                resolve_terminal_target(&state, requested_project.as_deref(), requested_worktree)
+                    .await?;
             let cwd = resolve_terminal_cwd(&state, target.as_ref(), requested_cwd).await?;
             let canonical_worktree_path = target.as_ref().and_then(|resolved| {
                 (!resolved.is_root()).then(|| resolved.target_path().to_string_lossy().into_owned())
@@ -604,7 +611,10 @@ pub async fn terminate_session(
         }
     };
 
-    match state.pty_manager.request_termination(&id, &expected_epoch, expected_incarnation) {
+    match state
+        .pty_manager
+        .request_termination(&id, &expected_epoch, expected_incarnation)
+    {
         Ok(GuardedTerminationOutcome::TerminationRequested) => (
             StatusCode::ACCEPTED,
             Json(serde_json::json!({
@@ -859,8 +869,7 @@ mod tests {
     #[test]
     fn windows_default_terminal_cwd_is_an_existing_directory() {
         let cwd = default_untargeted_terminal_cwd()
-            .unwrap_or_else(|error| panic!("Windows cwd fallback: {}", error.0));
-
+            .unwrap_or_else(|error| panic!("Windows cwd fallback: {}", error));
         assert!(Path::new(&cwd).is_dir());
         assert_ne!(cwd, "/tmp");
     }

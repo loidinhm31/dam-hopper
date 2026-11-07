@@ -1,6 +1,5 @@
 use super::{
     discovery::{detect_project_type, discover_projects},
-
     global::{
         add_known_workspace_at, list_known_workspaces_at, read_global_config_at,
         remove_known_workspace_at, write_global_config_at,
@@ -9,8 +8,8 @@ use super::{
     presets::{get_effective_command, get_preset},
     resolve::{resolve_startup_config, ConfigResolutionInput, ConfigSource},
     schema::{
-        CognitoModeStyle, CommandKind, ExplorerLanguageFilter, GlobalConfig, KnownWorkspace, ProjectType,
-        RestartPolicy, TerminalAgentNotificationSoundPattern, UiConfig,
+        CognitoModeStyle, CommandKind, ExplorerLanguageFilter, GlobalConfig, KnownWorkspace,
+        ProjectType, RestartPolicy, TerminalAgentNotificationSoundPattern, UiConfig,
         MAX_HOST_RESOURCE_PINNED_MOUNT_BYTES,
     },
 };
@@ -19,7 +18,10 @@ use super::{
 fn test_global_env_path() {
     let env_path = super::global_env_path();
     assert!(env_path.ends_with(".env"));
-    assert_eq!(env_path.parent(), Some(super::dam_hopper_config_dir().as_path()));
+    assert_eq!(
+        env_path.parent(),
+        Some(super::dam_hopper_config_dir().as_path())
+    );
 }
 
 #[test]
@@ -654,6 +656,8 @@ fn write_config_escapes_native_windows_absolute_project_paths() {
             health_check_url: None,
         }],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
 
@@ -716,6 +720,8 @@ fn config_roundtrip_preserves_unc_project_paths() {
             health_check_url: None,
         }],
         features: FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
         config_path: config_path.clone(),
     };
 
@@ -869,11 +875,18 @@ health_check_url = "http://localhost:8080/health"
 fn single_config_parses_default_window_placement() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
-    std::fs::write(&config_path, "[workspace]\nname = \"x\"\n\n[ui]\ndefault_window_placement = \"tile\"\n").unwrap();
+    std::fs::write(
+        &config_path,
+        "[workspace]\nname = \"x\"\n\n[ui]\ndefault_window_placement = \"tile\"\n",
+    )
+    .unwrap();
 
     let config = read_config(&config_path).unwrap();
     let ui = config.ui.unwrap();
-    assert_eq!(ui.default_window_placement, super::schema::DefaultWindowPlacement::Tile);
+    assert_eq!(
+        ui.default_window_placement,
+        super::schema::DefaultWindowPlacement::Tile
+    );
 }
 
 // ──────────────────────────────────────────────
@@ -1013,9 +1026,18 @@ fn resolve_explicit_config_path_uses_exact_file() {
     let registry = dir.path().join("custom-config.toml");
     let ws_dir = dir.path().join("workspace");
     std::fs::create_dir_all(&ws_dir).unwrap();
-    std::fs::write(&registry, format!("[workspace]\nname = \"explicit\"\nroot = \"{}\"\n", ws_dir.display())).unwrap();
+    std::fs::write(
+        &registry,
+        format!(
+            "[workspace]\nname = \"explicit\"\nroot = \"{}\"\n",
+            ws_dir.display()
+        ),
+    )
+    .unwrap();
 
-    let resolution = resolve_startup_config(ConfigResolutionInput::from_explicit(Some(registry.clone()))).unwrap();
+    let resolution =
+        resolve_startup_config(ConfigResolutionInput::from_explicit(Some(registry.clone())))
+            .unwrap();
 
     assert_eq!(resolution.source, ConfigSource::ExplicitConfig);
     assert_eq!(resolution.config.workspace.name, "explicit");
@@ -1023,7 +1045,10 @@ fn resolve_explicit_config_path_uses_exact_file() {
         resolution.config.config_path,
         dunce::canonicalize(&registry).unwrap()
     );
-    assert_eq!(resolution.workspace_dir, dunce::canonicalize(&ws_dir).unwrap());
+    assert_eq!(
+        resolution.workspace_dir,
+        dunce::canonicalize(&ws_dir).unwrap()
+    );
 }
 
 #[test]
@@ -1042,10 +1067,21 @@ fn resolve_startup_config_independent_of_cwd() {
     let registry = dir.path().join("explicit-config.toml");
     let ws_dir = dir.path().join("explicit-ws");
     std::fs::create_dir_all(&ws_dir).unwrap();
-    std::fs::write(&registry, format!("[workspace]\nname = \"isolated\"\nroot = \"{}\"\n", ws_dir.display())).unwrap();
+    std::fs::write(
+        &registry,
+        format!(
+            "[workspace]\nname = \"isolated\"\nroot = \"{}\"\n",
+            ws_dir.display()
+        ),
+    )
+    .unwrap();
 
-    let resolution = resolve_startup_config(ConfigResolutionInput::from_explicit(Some(registry))).unwrap();
-    assert_eq!(resolution.workspace_dir, dunce::canonicalize(&ws_dir).unwrap());
+    let resolution =
+        resolve_startup_config(ConfigResolutionInput::from_explicit(Some(registry))).unwrap();
+    assert_eq!(
+        resolution.workspace_dir,
+        dunce::canonicalize(&ws_dir).unwrap()
+    );
     assert_eq!(resolution.config.workspace.name, "isolated");
 }
 
@@ -1054,7 +1090,8 @@ fn resolve_startup_config_missing_file_starts_empty_unconfigured() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("nonexistent-config.toml");
 
-    let resolution = resolve_startup_config(ConfigResolutionInput::from_explicit(Some(missing))).unwrap();
+    let resolution =
+        resolve_startup_config(ConfigResolutionInput::from_explicit(Some(missing))).unwrap();
     assert_eq!(resolution.source, ConfigSource::EmptyFallback);
     assert_eq!(resolution.workspace_dir, std::path::PathBuf::new());
     assert!(resolution.config.workspace.root.is_empty());
@@ -1084,8 +1121,14 @@ model = "custom-embeddings"
 
     let reloaded_str = std::fs::read_to_string(&config_path).unwrap();
     assert!(reloaded_str.contains("renamed-workspace"));
-    assert!(reloaded_str.contains("[semantic]"), "semantic section must be preserved");
-    assert!(reloaded_str.contains("custom-embeddings"), "unmodeled key must be preserved");
+    assert!(
+        reloaded_str.contains("[semantic]"),
+        "semantic section must be preserved"
+    );
+    assert!(
+        reloaded_str.contains("custom-embeddings"),
+        "unmodeled key must be preserved"
+    );
     assert!(reloaded_str.contains("default_window_placement = \"tile\""));
 }
 
@@ -1219,8 +1262,14 @@ fn ui_config_defaults() {
     assert!(ui.editor_zoom_wheel_enabled);
     assert_eq!(ui.search_text_shortcut.as_deref(), Some("Mod+Shift+KeyF"));
     assert_eq!(ui.search_filename_shortcut.as_deref(), Some("DoubleShift"));
-    assert_eq!(ui.terminal_workspace_shortcut.as_deref(), Some("Mod+Shift+Backquote"));
-    assert_eq!(ui.terminal_file_panel_shortcut.as_deref(), Some("Mod+Shift+KeyE"));
+    assert_eq!(
+        ui.terminal_workspace_shortcut.as_deref(),
+        Some("Mod+Shift+Backquote")
+    );
+    assert_eq!(
+        ui.terminal_file_panel_shortcut.as_deref(),
+        Some("Mod+Shift+KeyE")
+    );
     assert_eq!(ui.project_panel_shortcut.as_deref(), Some("Mod+Shift+KeyZ"));
     assert_eq!(ui.reveal_active_file_shortcut.as_deref(), Some("Alt+F1"));
     assert_eq!(ui.git_panel_shortcut.as_deref(), Some("Mod+Shift+KeyG"));
@@ -1229,9 +1278,15 @@ fn ui_config_defaults() {
         ui.terminal_font_size_increase_shortcut.as_deref(),
         Some("Ctrl+Alt+Shift+Equal")
     );
-    assert_eq!(ui.terminal_font_size_decrease_shortcut.as_deref(), Some("Ctrl+Alt+Minus"));
+    assert_eq!(
+        ui.terminal_font_size_decrease_shortcut.as_deref(),
+        Some("Ctrl+Alt+Minus")
+    );
     assert_eq!(ui.os_palette_shortcut.as_deref(), Some("Ctrl+Alt+KeyK"));
-    assert_eq!(ui.os_cycle_focus_shortcut.as_deref(), Some("Ctrl+Alt+Escape"));
+    assert_eq!(
+        ui.os_cycle_focus_shortcut.as_deref(),
+        Some("Ctrl+Alt+Escape")
+    );
     assert_eq!(ui.dock_padding, 8.0);
     assert_eq!(ui.dock_item_spacing, 6.0);
     assert_eq!(ui.dock_outer_spacing, 12.0);
@@ -1374,10 +1429,7 @@ fn ui_config_serde_roundtrip() {
         json["cognitoModeShortcut"],
         serde_json::json!("Mod+Alt+KeyB")
     );
-    assert_eq!(
-        json["cognitoModeStyle"],
-        serde_json::json!("heavy-blur")
-    );
+    assert_eq!(json["cognitoModeStyle"], serde_json::json!("heavy-blur"));
     assert!(json.get("cognito_mode_shortcut").is_none());
     assert!(json.get("cognito_mode_style").is_none());
 
@@ -1410,20 +1462,34 @@ fn ui_config_serde_roundtrip() {
         ui.terminal_font_size_increase_shortcut.as_deref(),
         Some("Ctrl+Alt+Shift+Equal")
     );
-    assert_eq!(ui.terminal_font_size_decrease_shortcut.as_deref(), Some("Ctrl+Alt+Minus"));
+    assert_eq!(
+        ui.terminal_font_size_decrease_shortcut.as_deref(),
+        Some("Ctrl+Alt+Minus")
+    );
     assert!(!ui.editor_zoom_wheel_enabled);
     assert_eq!(ui.search_text_shortcut.as_deref(), Some("Ctrl+Alt+KeyS"));
     assert_eq!(ui.search_filename_shortcut.as_deref(), Some("Ctrl+KeyP"));
-    assert_eq!(ui.terminal_workspace_shortcut.as_deref(), Some("Ctrl+Shift+Backquote"));
-    assert_eq!(ui.terminal_file_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyE"));
-    assert_eq!(ui.project_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyZ"));
+    assert_eq!(
+        ui.terminal_workspace_shortcut.as_deref(),
+        Some("Ctrl+Shift+Backquote")
+    );
+    assert_eq!(
+        ui.terminal_file_panel_shortcut.as_deref(),
+        Some("Ctrl+Shift+KeyE")
+    );
+    assert_eq!(
+        ui.project_panel_shortcut.as_deref(),
+        Some("Ctrl+Shift+KeyZ")
+    );
     assert_eq!(ui.reveal_active_file_shortcut.as_deref(), Some("Alt+F1"));
     assert_eq!(ui.git_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyG"));
     assert_eq!(ui.ports_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyP"));
     assert_eq!(ui.dock_padding, 10.0);
     assert_eq!(ui.cursor_theme, "theme");
     assert_eq!(
-        ui.app_shortcuts.get("app.editor.open").and_then(|v| v.as_deref()),
+        ui.app_shortcuts
+            .get("app.editor.open")
+            .and_then(|v| v.as_deref()),
         Some("Mod+KeyE")
     );
     assert!(ui.terminal_agent_notifications.agents.codex.enabled);
@@ -1489,9 +1555,18 @@ mobile_custom_keyboard_row_gap = 6
     let ui = loaded.ui.unwrap();
     assert_eq!(ui.search_text_shortcut.as_deref(), Some("Ctrl+Shift+KeyF"));
     assert_eq!(ui.search_filename_shortcut.as_deref(), Some("Ctrl+KeyP"));
-    assert_eq!(ui.terminal_workspace_shortcut.as_deref(), Some("Ctrl+Shift+Backquote"));
-    assert_eq!(ui.terminal_file_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyE"));
-    assert_eq!(ui.project_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyZ"));
+    assert_eq!(
+        ui.terminal_workspace_shortcut.as_deref(),
+        Some("Ctrl+Shift+Backquote")
+    );
+    assert_eq!(
+        ui.terminal_file_panel_shortcut.as_deref(),
+        Some("Ctrl+Shift+KeyE")
+    );
+    assert_eq!(
+        ui.project_panel_shortcut.as_deref(),
+        Some("Ctrl+Shift+KeyZ")
+    );
     assert_eq!(ui.reveal_active_file_shortcut.as_deref(), Some("Alt+F1"));
     assert_eq!(ui.git_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyG"));
     assert_eq!(ui.ports_panel_shortcut.as_deref(), Some("Ctrl+Shift+KeyP"));
@@ -1526,7 +1601,11 @@ fn global_config_without_ui_section_parses_ok() {
     // Older config files without [ui] must continue to load.
     let dir = tempfile::tempdir().unwrap();
     let cfg_path = dir.path().join("config.toml");
-    std::fs::write(&cfg_path, "[workspace]\nname = \"ws\"\nroot = \"/tmp/ws\"\n").unwrap();
+    std::fs::write(
+        &cfg_path,
+        "[workspace]\nname = \"ws\"\nroot = \"/tmp/ws\"\n",
+    )
+    .unwrap();
 
     let loaded = read_global_config_at(&cfg_path).unwrap().unwrap();
     assert!(loaded.ui.is_none());
@@ -1903,10 +1982,7 @@ fn ui_config_serde_aliases_cognito_mode() {
     for key in ["cognito_mode_shortcut", "cognitoModeShortcut"] {
         let toml = format!("[ui]\n{key} = \"Ctrl+Alt+KeyK\"\n");
         let loaded: GlobalConfig = toml::from_str(&toml).unwrap();
-        assert_eq!(
-            loaded.ui.unwrap().cognito_mode_shortcut,
-            "Ctrl+Alt+KeyK"
-        );
+        assert_eq!(loaded.ui.unwrap().cognito_mode_shortcut, "Ctrl+Alt+KeyK");
     }
 
     for key in ["cognito_mode_style", "cognitoModeStyle"] {
@@ -2156,9 +2232,11 @@ fn session_changes_enabled_schema_serialization_and_toml() {
     assert!(json.get("session_changes_enabled").is_none());
 
     // 3. Deserializes from both camelCase and snake_case
-    let parsed_camel: super::schema::ServerConfig = serde_json::from_str(r#"{"sessionChangesEnabled": true}"#).unwrap();
+    let parsed_camel: super::schema::ServerConfig =
+        serde_json::from_str(r#"{"sessionChangesEnabled": true}"#).unwrap();
     assert!(parsed_camel.session_changes_enabled);
-    let parsed_snake: super::schema::ServerConfig = serde_json::from_str(r#"{"session_changes_enabled": true}"#).unwrap();
+    let parsed_snake: super::schema::ServerConfig =
+        serde_json::from_str(r#"{"session_changes_enabled": true}"#).unwrap();
     assert!(parsed_snake.session_changes_enabled);
     let parsed_default: super::schema::ServerConfig = serde_json::from_str(r#"{}"#).unwrap();
     assert!(!parsed_default.session_changes_enabled);
