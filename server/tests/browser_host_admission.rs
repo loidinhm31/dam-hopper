@@ -42,20 +42,22 @@ fn create_test_state(workspace_root: PathBuf, no_auth: bool) -> AppState {
     let (event_sink, _rx) = BroadcastEventSink::new(512);
     let pty_manager = PtySessionManager::new(Arc::new(event_sink.clone()));
 
+    let mut server_config = dam_hopper_server::config::ServerConfig::default();
+    server_config.browser.enabled = true;
+
     let config = DamHopperConfig {
         workspace: WorkspaceInfo {
             name: "test-workspace".into(),
             root: workspace_root.display().to_string(),
         },
         agent_store: None,
-        server: dam_hopper_server::config::ServerConfig::default(),
+        server: server_config,
         projects: vec![],
         features: FeaturesConfig::default(),
         ui: None,
         workspaces: None,
         config_path: workspace_root.join("dam-hopper.toml"),
     };
-
     let global_config = GlobalConfig::default();
     let store_path = workspace_root.join(".dam-hopper/agent-store");
     let agent_store = AgentStoreService::new(store_path);
@@ -64,7 +66,7 @@ fn create_test_state(workspace_root: PathBuf, no_auth: bool) -> AppState {
     let diagnostics = DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));
 
     let state = AppState::new(
-        workspace_root,
+        workspace_root.clone(),
         config,
         global_config,
         pty_manager,
@@ -81,6 +83,15 @@ fn create_test_state(workspace_root: PathBuf, no_auth: bool) -> AppState {
     )
     .expect("create test AppState");
 
+    *state.browser_host._test_mock_handle.write() = Some(dam_hopper_server::browser_host::manager::BrowserInstanceHandle {
+        subject: "test-user".to_string(),
+        is_dev: false,
+        pid: 1234,
+        ws_endpoint: "ws://127.0.0.1:9222/devtools/browser/mock".to_string(),
+        browser_incarnation: "test-incarnation".to_string(),
+        profile_epoch: 1,
+        user_data_dir: workspace_root.join("mock-user-data"),
+    });
     if let Some(v) = old_rust_env {
         std::env::set_var("RUST_ENV", v);
     }

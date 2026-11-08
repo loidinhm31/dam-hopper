@@ -16,9 +16,17 @@ export interface QualificationServerInfo {
   readonly expectedToken: string;
   readonly browserPid: number;
   readonly childPid?: number;
+  readonly siblingToken?: string;
+  readonly mode?: string;
   readonly cleanup: () => Promise<void>;
   readonly assertHealthy: () => void;
   readonly failurePromise: Promise<Error>;
+}
+
+export interface LaunchQualificationOptions {
+  token?: string;
+  mode?: "phase01" | "production-gateway";
+  allowedOrigin?: string;
 }
 
 export function isProcessAlive(pid: number): boolean {
@@ -360,16 +368,35 @@ export async function prebuildQualificationExample(): Promise<string> {
  */
 export async function launchQualificationServer(
   executablePath: string,
-  token = "test-qualification-token-secret"
+  tokenOrOptions: string | LaunchQualificationOptions = "test-qualification-token-secret",
+  explicitMode?: "phase01" | "production-gateway"
 ): Promise<QualificationServerInfo> {
+  const token =
+    typeof tokenOrOptions === "string"
+      ? tokenOrOptions
+      : (tokenOrOptions.token ?? "test-qualification-token-secret");
+  const mode =
+    typeof tokenOrOptions === "object" && tokenOrOptions.mode
+      ? tokenOrOptions.mode
+      : (explicitMode ?? "phase01");
+  const allowedOrigin =
+    typeof tokenOrOptions === "object" ? tokenOrOptions.allowedOrigin : undefined;
   const { promise, resolve, reject } = Promise.withResolvers<QualificationServerInfo>();
 
   const isUnix = process.platform !== "win32";
+  const browserExec =
+    process.env.DAM_HOPPER_BROWSER_EXECUTABLE ||
+    ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"].find((p) =>
+      fs.existsSync(p)
+    );
   const child: ChildProcess = spawn(executablePath, [], {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
       DAM_HOPPER_QUALIFICATION_TOKEN: token,
+      DAM_HOPPER_QUALIFICATION_MODE: mode,
+      ...(allowedOrigin ? { DAM_HOPPER_QUALIFICATION_ALLOWED_ORIGIN: allowedOrigin } : {}),
+      ...(browserExec ? { DAM_HOPPER_BROWSER_EXECUTABLE: browserExec } : {}),
     },
     stdio: ["pipe", "pipe", "pipe"],
     detached: isUnix,
@@ -461,9 +488,11 @@ export async function launchQualificationServer(
                 port: data.port,
                 httpUrl: data.httpUrl,
                 wsUrl: data.wsUrl,
-                expectedToken: data.expectedToken,
+                expectedToken: data.expectedToken ?? token,
                 browserPid: data.browserPid,
                 childPid: child.pid,
+                siblingToken: typeof data.siblingToken === "string" ? data.siblingToken : undefined,
+                mode: typeof data.mode === "string" ? data.mode : undefined,
                 cleanup,
                 assertHealthy,
                 failurePromise: failureDeferred.promise,

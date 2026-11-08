@@ -213,6 +213,8 @@ async fn test_shutdown_timeout_leaves_recoverable_tombstone_and_never_reports_de
         created_at_unix_ms: now_unix_ms(),
         updated_at_unix_ms: now_unix_ms(),
         error: Some("shutdown watchdog interrupted reset".to_string()),
+        process_pid: None,
+        process_pgid: None,
     };
     profile.save_tombstone(&tombstone).unwrap();
 

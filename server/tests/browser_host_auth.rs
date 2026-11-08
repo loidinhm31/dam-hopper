@@ -147,9 +147,29 @@ async fn test_rest_issue_ticket_and_consume() {
         .with_auth_service(Arc::new(auth_service));
     let app = build_router_with_origins(state, vec![]);
 
+    let (sess_dto, _) = dam_hopper_server::api::browser_host::global_session_registry()
+        .create_or_idempotent_get(
+            "admin-ticket-tester",
+            false,
+            "inc-1",
+            1,
+            &dam_hopper_server::browser_host::session::CreateSessionRequest {
+                creation_key: uuid::Uuid::new_v4().to_string(),
+                url: "about:blank".into(),
+                viewport: dam_hopper_server::browser_host::session::ViewportRequest {
+                    width: 1280,
+                    height: 900,
+                    dpr: 1.0,
+                },
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+
     let issue_req = json!({
         "purpose": "media",
-        "browserSessionId": "sess-uuid-1",
+        "browserSessionId": sess_dto.browser_session_id,
         "viewerId": "viewer-uuid-1",
         "subscriptionEpoch": "sub-epoch-1",
         "browserIncarnation": "inc-1",
@@ -184,7 +204,7 @@ async fn test_rest_issue_ticket_and_consume() {
         .expect("consume should succeed");
 
     assert_eq!(consumed.principal, "admin-ticket-tester");
-    assert_eq!(consumed.browser_session_id.as_deref(), Some("sess-uuid-1"));
+    assert_eq!(consumed.browser_session_id.as_deref(), Some(sess_dto.browser_session_id.as_str()));
     assert_eq!(consumed.viewer_id.as_deref(), Some("viewer-uuid-1"));
     assert_eq!(consumed.subscription_epoch.as_deref(), Some("sub-epoch-1"));
 

@@ -157,7 +157,7 @@ struct PairedSlot {
 pub struct AttachmentManager {
     tickets: Arc<RwLock<HashMap<[u8; 32], StoredTicket>>>, // sha256 -> ticket
     active_connections: Arc<RwLock<HashMap<Uuid, ActiveAttachment>>>,
-    pairs: Arc<RwLock<HashMap<(String, String), PairedSlot>>>, // (viewer_id, subscription_epoch) -> slot
+    pairs: Arc<RwLock<HashMap<(String, String, String, String), PairedSlot>>>, // (principal, session_id, viewer_id, subscription_epoch) -> slot
     global_ticket_count: Arc<AtomicUsize>,
     supervisor_started: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -329,11 +329,10 @@ impl AttachmentManager {
         }
 
         if let Some(expected_orig) = &stored.expected_origin {
-            let actual = actual_origin.unwrap_or_default().trim_end_matches('/');
-            let expected = expected_orig.trim_end_matches('/');
-            if !actual.eq_ignore_ascii_case(expected) {
+            let actual = actual_origin.unwrap_or_default();
+            if actual != expected_orig {
                 return Err(AttachmentError::OriginMismatch {
-                    expected: expected.to_string(),
+                    expected: expected_orig.clone(),
                     actual: actual.to_string(),
                 });
             }
@@ -364,16 +363,16 @@ impl AttachmentManager {
         let mut cancel_token = CancellationToken::new();
         // For Media or Control, pair them under (viewer_id, subscription_epoch)
         if admitted.purpose == AttachmentPurpose::Media || admitted.purpose == AttachmentPurpose::Control {
+            let principal = admitted.principal.clone();
+            let session_id = admitted.browser_session_id.as_deref().unwrap_or_default().to_string();
             let viewer_id = admitted.viewer_id.as_deref().unwrap_or_default().to_string();
             let sub_epoch = admitted.subscription_epoch.as_deref().unwrap_or_default().to_string();
-            let pair_key = (viewer_id, sub_epoch);
-
+            let pair_key = (principal, session_id, viewer_id, sub_epoch);
             let mut pairs = self.pairs.write().await;
             let now = Instant::now();
 
-            // Prune expired pairs (older than 30s or first connected > 15s ago without mate)
             pairs.retain(|_, slot| {
-                if now.duration_since(slot.created_at) > TICKET_TTL {
+                if !(slot.media_connected && slot.control_connected) && now.duration_since(slot.created_at) > TICKET_TTL {
                     slot.cancel_token.cancel();
                     return false;
                 }
@@ -451,9 +450,9 @@ impl AttachmentManager {
         let mut conns = self.active_connections.write().await;
         if let Some(conn) = conns.remove(&connection_id) {
             conn.cancel_token.cancel();
-            if let (Some(viewer_id), Some(sub_epoch)) = (conn.viewer_id, conn.subscription_epoch) {
+            if let (Some(session_id), Some(viewer_id), Some(sub_epoch)) = (conn.browser_session_id, conn.viewer_id.as_ref(), conn.subscription_epoch.as_ref()) {
                 let mut pairs = self.pairs.write().await;
-                if let Some(slot) = pairs.remove(&(viewer_id, sub_epoch)) {
+                if let Some(slot) = pairs.remove(&(conn.principal.clone(), session_id, viewer_id.clone(), sub_epoch.clone())) {
                     slot.cancel_token.cancel();
                 }
             }
@@ -513,7 +512,7 @@ impl AttachmentManager {
     }
 
     /// Starts the background auth supervisor loop.
-    pub fn start_supervisor(self: Arc<Self>, state: AppState) {
+    pub fn start_supervisor(&'static self, state: AppState) {
         if self.supervisor_started.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
             return;
         }

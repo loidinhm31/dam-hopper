@@ -156,7 +156,7 @@ impl From<InputError> for Response {
     }
 }
 
-async fn authenticate_browser_caller(
+pub(crate) async fn authenticate_browser_caller(
     state: &AppState,
     headers: &HeaderMap,
     connect: Option<&Extension<ConnectInfo<SocketAddr>>>,
@@ -181,17 +181,48 @@ async fn authenticate_browser_caller(
 
         if let Some(token) = token_opt {
             if let Some(claims) = crate::auth::model::AuthClaims::decode(&token, &state.jwt_secret) {
-                let exp_dt = chrono::DateTime::from_timestamp(claims.exp as i64, 0)
-                    .unwrap_or_else(chrono::Utc::now);
-                resolved_actor = Some(AuthenticatedActor::with_session(
-                    claims.sub,
-                    Some(claims.exp),
-                    claims.sid,
-                    claims.auth_version,
-                    claims.credential_version,
-                    exp_dt,
-                    crate::auth::model::UserRole::User,
-                ));
+                match state.auth_service.evaluate_claims(&claims).await {
+                    crate::auth::model::AuthDecision::Authenticated { session, user } => {
+                        let expires_at = crate::auth::model::bson_to_chrono(session.expires_at);
+                        let mfa_verified_at = crate::auth::model::bson_to_chrono(session.mfa_verified_at);
+                        let effective_deadline = crate::auth::compute_mfa_due_at(mfa_verified_at, expires_at);
+                        resolved_actor = Some(AuthenticatedActor::with_session(
+                            user.username.clone(),
+                            Some(expires_at.timestamp() as usize),
+                            session.id.clone(),
+                            session.auth_version,
+                            session.credential_version,
+                            effective_deadline,
+                            user.role,
+                        ));
+                    }
+                    crate::auth::model::AuthDecision::MfaRequired { .. } => {
+                        return Err(browser_error_response(
+                            StatusCode::UNAUTHORIZED,
+                            "mfaRequired",
+                            "MFA verification required",
+                        ));
+                    }
+                    crate::auth::model::AuthDecision::FullLoginRequired { reason } => {
+                        let (status, kind) = if reason.contains("disabled") {
+                            (StatusCode::FORBIDDEN, "accountDisabled")
+                        } else {
+                            (StatusCode::UNAUTHORIZED, "invalidSession")
+                        };
+                        return Err(browser_error_response(
+                            status,
+                            kind,
+                            &format!("authentication required: {reason}"),
+                        ));
+                    }
+                    crate::auth::model::AuthDecision::Unavailable { reason } => {
+                        return Err(browser_error_response(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "authUnavailable",
+                            &format!("auth service unavailable: {reason}"),
+                        ));
+                    }
+                }
             }
         }
     }
@@ -295,16 +326,11 @@ pub async fn create_session(
     {
         Ok(handle) => (handle.browser_incarnation, handle.profile_epoch),
         Err(err) => {
-            // If browser binary not found in test harness, use synthetic fallback incarnation
-            if state.browser_host.config().executable_path.is_none() {
-                ("test-incarnation".to_string(), 1)
-            } else {
-                return browser_error_response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "browserUnavailable",
-                    &err.to_string(),
-                );
-            }
+            return browser_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "browserUnavailable",
+                &err.to_string(),
+            );
         }
     };
 
@@ -975,7 +1001,15 @@ pub async fn issue_attachment_ticket(
         Ok(adm) => adm,
         Err(resp) => return resp,
     };
-
+    if let Some(sid) = &body.browser_session_id {
+        if global_session_registry().get_session(sid, &admission.principal).await.is_err() {
+            return browser_error_response(
+                StatusCode::NOT_FOUND,
+                "sessionNotFound",
+                "session not found or foreign principal",
+            );
+        }
+    }
     let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
 
     match global_attachment_manager()
@@ -1092,3 +1126,7 @@ pub async fn get_profile_reset_status(
         }),
     )
 }
+
+pub use crate::browser_host::cdp_gateway::{
+    cdp_ws_handler, cdp_ws_handler_target, get_cdp_json_alias, get_cdp_list, get_cdp_version,
+};

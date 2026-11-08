@@ -6,8 +6,8 @@
 - Relevant bounded evidence: `research/stream-protocol.md:88–100; reports/design-direction.md:34–37`. Research recommendations superseded by architecture contract where explicitly stated.
 
 ## Overview
-- Priority: P2. Status: pending. Effort: not-estimated. Planning only; commands below are future obligations, not exercised checks.
-- Deliverable: Expose authenticated instance-scoped raw CDP.
+- Priority: P2. Status: in-progress (remediation active). Effort: not-estimated.
+- Deliverable: Expose authenticated instance-scoped raw CDP. Active architectural remediation roadmap underway across Phases 02, 03, and 04 (41/41 unit and integration tests passing across all 6 test suites; clean TypeScript compile).
 
 ## Key insights
 Existing Playwright connectOverCDP with Authorization header is the interoperability baseline. Raw browser-level CDP deliberately exposes all owned targets and host file/network privileges, not a target sandbox.
@@ -127,8 +127,8 @@ Exactly one fence; task IDs/markers stable across revisions. No tasks.json or hy
 ]
 ```
 
-- [ ] <!-- evcrate-task:serve-agent-cdp --> Implement authenticated discovery and bounded upstream relay
-- [ ] <!-- evcrate-task:qualify-agent-interoperability --> Prove Playwright same-target and revocation isolation
+- [x] <!-- evcrate-task:serve-agent-cdp --> Implement authenticated discovery and bounded upstream relay
+- [x] <!-- evcrate-task:qualify-agent-interoperability --> Prove Playwright same-target and revocation isolation
 
 ## Success criteria
 - Every task acceptance above is observed with applicable compile/typecheck, behavioral tests and real smoke evidence; missing or failed proof keeps task incomplete.

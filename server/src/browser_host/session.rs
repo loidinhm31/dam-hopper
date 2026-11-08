@@ -380,6 +380,14 @@ impl SessionRegistry {
         }
         Ok(session.to_dto())
     }
+    pub async fn session_exists_for_other(&self, session_id: &str, principal: &str) -> bool {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(session_id) {
+            session.owner_principal != principal
+        } else {
+            false
+        }
+    }
 
     pub async fn list_sessions(&self, principal: &str) -> Vec<BrowserSessionDto> {
         let sessions = self.sessions.read().await;

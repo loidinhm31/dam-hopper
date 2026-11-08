@@ -177,10 +177,14 @@ pub fn map_fraction_to_css_coords(
         return Err(InputError::InvalidFraction { u, v });
     }
 
-    if geometry.css_width <= 0.0 || geometry.css_height <= 0.0 {
+    if geometry.css_width <= 0.0
+        || geometry.css_height <= 0.0
+        || !geometry.css_width.is_finite()
+        || !geometry.css_height.is_finite()
+        || !geometry.offset_top.is_finite()
+    {
         return Err(InputError::GeometryUnavailable);
     }
-
     let x = u * geometry.css_width;
     let y = v * geometry.css_height + geometry.offset_top;
 

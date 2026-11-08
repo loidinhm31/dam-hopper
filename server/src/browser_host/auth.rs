@@ -33,6 +33,7 @@ pub enum BrowserAuthError {
     AccountDisabled(String),
     SessionRevoked(String),
     SessionExpired(String),
+    OriginForbidden(String),
     StorageUnavailable(String),
 }
 
@@ -42,7 +43,7 @@ impl BrowserAuthError {
             Self::Unauthorized(_) | Self::SessionRevoked(_) | Self::SessionExpired(_) => {
                 StatusCode::UNAUTHORIZED
             }
-            Self::AdminRequired(_) | Self::DevBypassDenied(_) | Self::AccountDisabled(_) => {
+            Self::AdminRequired(_) | Self::DevBypassDenied(_) | Self::AccountDisabled(_) | Self::OriginForbidden(_) => {
                 StatusCode::FORBIDDEN
             }
             Self::StorageUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
@@ -57,6 +58,7 @@ impl BrowserAuthError {
             Self::AccountDisabled(_) => "accountDisabled",
             Self::SessionRevoked(_) => "sessionRevoked",
             Self::SessionExpired(_) => "sessionExpired",
+            Self::OriginForbidden(_) => "originForbidden",
             Self::StorageUnavailable(_) => "authUnavailable",
         }
     }
@@ -71,11 +73,11 @@ impl fmt::Display for BrowserAuthError {
             Self::AccountDisabled(msg) => write!(f, "account disabled: {msg}"),
             Self::SessionRevoked(msg) => write!(f, "session revoked: {msg}"),
             Self::SessionExpired(msg) => write!(f, "session expired: {msg}"),
+            Self::OriginForbidden(msg) => write!(f, "origin forbidden: {msg}"),
             Self::StorageUnavailable(msg) => write!(f, "auth storage unavailable: {msg}"),
         }
     }
 }
-
 impl std::error::Error for BrowserAuthError {}
 
 impl IntoResponse for BrowserAuthError {
@@ -124,18 +126,19 @@ pub async fn evaluate_browser_admission(
             ));
         }
 
-        // Validate Origin header if present
+        // Validate Origin header if present (single header only)
+        if headers.get_all(header::ORIGIN).iter().count() > 1 {
+            return Err(BrowserAuthError::OriginForbidden("multiple Origin headers not allowed".to_string()));
+        }
         if let Some(origin_val) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
-            let origin_trimmed = origin_val.trim_end_matches('/');
-            let matched = state.cors_origins.iter().any(|allowed| {
-                let allowed_trimmed = allowed.trim_end_matches('/');
-                allowed_trimmed.eq_ignore_ascii_case(origin_trimmed)
-            });
+            if origin_val == "null" || origin_val.ends_with('/') || origin_val.contains(',') {
+                warn!(origin = origin_val, "Browser dev bypass rejected: malformed Origin");
+                return Err(BrowserAuthError::DevBypassDenied("malformed Origin header".to_string()));
+            }
 
-            // If not found in cors_origins, also check common local dev origins if list is empty
+            let matched = state.cors_origins.iter().any(|allowed| allowed == origin_val);
             let allowed_fallback = state.cors_origins.is_empty()
-                && (origin_trimmed.eq_ignore_ascii_case("http://127.0.0.1:5173")
-                    || origin_trimmed.eq_ignore_ascii_case("http://localhost:5173"));
+                && (origin_val == "http://127.0.0.1:5173" || origin_val == "http://localhost:5173");
 
             if !matched && !allowed_fallback {
                 warn!(origin = origin_val, "Browser dev bypass rejected: unapproved Origin");
@@ -155,7 +158,23 @@ pub async fn evaluate_browser_admission(
         });
     }
 
-    // Production mode validation
+    // Production mode validation (single header only)
+    if headers.get_all(header::ORIGIN).iter().count() > 1 {
+        return Err(BrowserAuthError::OriginForbidden("multiple Origin headers not allowed".to_string()));
+    }
+    if let Some(origin_val) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+        if origin_val == "null" || origin_val.ends_with('/') || origin_val.contains(',') {
+            return Err(BrowserAuthError::OriginForbidden("malformed Origin header".to_string()));
+        }
+        let matched = state.cors_origins.iter().any(|allowed| allowed == origin_val);
+        if !matched && !state.cors_origins.is_empty() {
+            warn!(origin = origin_val, "Browser admission rejected: unapproved Origin");
+            return Err(BrowserAuthError::OriginForbidden(format!(
+                "Origin '{origin_val}' does not match configured web origin"
+            )));
+        }
+    }
+
     let Some(actor) = actor else {
         return Err(BrowserAuthError::Unauthorized(
             "authentication is required to access browser host".to_string(),
@@ -336,6 +355,10 @@ pub async fn verify_live_admission(
                             ));
                         }
                     }
+                } else if admission.session_id.is_some() {
+                    return Err(BrowserAuthError::SessionRevoked(
+                        "session was deleted from store".to_string(),
+                    ));
                 }
             }
             Ok(Ok((None, _))) => {
@@ -366,6 +389,10 @@ pub async fn verify_live_admission(
                 "user was demoted from Admin role".to_string(),
             ));
         }
+    } else {
+        return Err(BrowserAuthError::StorageUnavailable(
+            "no auth store or mock backend available for live validation".to_string(),
+        ));
     }
 
     Ok(())

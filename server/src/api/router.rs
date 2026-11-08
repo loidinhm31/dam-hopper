@@ -592,6 +592,7 @@ pub fn build_router_with_web_dir_and_origins(
             state.clone(),
             resource_events::global_admission_layer,
         ));
+    crate::api::browser_host::global_attachment_manager().start_supervisor(state.clone());
     let browser_host_routes = Router::new()
         .route("/api/browser/capabilities", get(browser_host::get_capabilities))
         .route(
@@ -665,6 +666,42 @@ pub fn build_router_with_web_dir_and_origins(
         .route(
             "/api/browser/profile/reset/{operationId}",
             get(browser_host::get_profile_reset_status),
+        )
+        .route(
+            "/api/browser/cdp/json/version",
+            get(browser_host::get_cdp_version),
+        )
+        .route(
+            "/api/browser/cdp/json/version/",
+            get(browser_host::get_cdp_version),
+        )
+        .route(
+            "/api/browser/cdp/json/list",
+            get(browser_host::get_cdp_list),
+        )
+        .route(
+            "/api/browser/cdp/json/list/",
+            get(browser_host::get_cdp_list),
+        )
+        .route(
+            "/api/browser/cdp/json",
+            get(browser_host::get_cdp_json_alias),
+        )
+        .route(
+            "/api/browser/cdp/json/",
+            get(browser_host::get_cdp_json_alias),
+        )
+        .route(
+            "/api/browser/cdp/ws",
+            get(browser_host::cdp_ws_handler),
+        )
+        .route(
+            "/api/browser/cdp/ws/{target_id}",
+            get(browser_host::cdp_ws_handler_target),
+        )
+        .route(
+            "/api/browser/cdp",
+            get(browser_host::cdp_ws_handler),
         )
         .layer(RequestBodyLimitLayer::new(64 * 1024));
 

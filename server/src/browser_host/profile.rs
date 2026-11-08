@@ -49,6 +49,9 @@ pub struct ManagerMetadata {
     pub updated_at_unix_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_reset_operation_id: Option<String>,
+    pub process_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_pgid: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +73,9 @@ pub struct ResetTombstone {
     pub created_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
     pub error: Option<String>,
+    pub process_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_pgid: Option<i32>,
 }
 
 pub fn now_unix_ms() -> u64 {
@@ -298,6 +304,8 @@ impl ManagedProfile {
                 browser_incarnation: None,
                 updated_at_unix_ms: now_unix_ms(),
                 last_reset_operation_id: None,
+                process_pid: None,
+                process_pgid: None,
             };
             self.save_metadata(&meta)?;
             Ok(meta)

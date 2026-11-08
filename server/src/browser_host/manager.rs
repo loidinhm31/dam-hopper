@@ -106,6 +106,7 @@ struct InnerInstance {
     active_viewers: usize,
     active_raw_cdp: usize,
     _held_lock: Option<ProfileLock>,
+    deletion_worker: Option<tokio::task::JoinHandle<Result<(), ProfileError>>>,
 }
 
 pub struct BrowserHostManager {
@@ -121,6 +122,8 @@ pub struct BrowserHostManager {
     pub _simulated_reset_kill_failure: Arc<AtomicBool>,
     #[doc(hidden)]
     pub _simulated_reset_delete_failure: Arc<AtomicBool>,
+    #[doc(hidden)]
+    pub _test_mock_handle: Arc<parking_lot::RwLock<Option<BrowserInstanceHandle>>>,
 }
 
 impl BrowserHostManager {
@@ -146,6 +149,7 @@ impl BrowserHostManager {
             _cancellation_token: cancellation_token,
             _simulated_reset_kill_failure: Arc::new(AtomicBool::new(false)),
             _simulated_reset_delete_failure: Arc::new(AtomicBool::new(false)),
+            _test_mock_handle: Arc::new(parking_lot::RwLock::new(None)),
         }
     }
 
@@ -192,6 +196,7 @@ impl BrowserHostManager {
             active_viewers: 0,
             active_raw_cdp: 0,
             _held_lock: None,
+            deletion_worker: None,
         }));
 
         map.insert(key, inst.clone());
@@ -239,6 +244,9 @@ impl BrowserHostManager {
             return Err(ManagerError::Disabled("browser host is disabled in configuration".to_string()));
         }
 
+        if let Some(mock) = self._test_mock_handle.read().clone() {
+            return Ok(mock);
+        }
         let inst_arc = self.get_or_create_instance_inner(subject, is_dev).await?;
         let mut inst = inst_arc.lock().await;
 
@@ -250,75 +258,104 @@ impl BrowserHostManager {
 
         // Reconnect: check if existing process is running and alive
         if inst.state == InstanceLifecycleState::Running {
-            if let Some(proc) = inst.process.as_ref() {
-                // Check if alive
-                let pid = proc.pid();
-                let is_alive = {
-                    #[cfg(unix)]
-                    {
-                        use nix::sys::signal::kill;
-                        use nix::unistd::Pid;
-                        kill(Pid::from_raw(pid as i32), None).is_ok()
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        false
-                    }
-                };
-
+            if let Some(mut proc) = inst.process.take() {
+                let is_alive = proc.try_is_alive();
                 if is_alive {
+                    let pid = proc.pid();
+                    let ws_endpoint = proc.ws_endpoint().to_string();
+                    inst.process = Some(proc);
                     return Ok(BrowserInstanceHandle {
                         subject: subject.to_string(),
                         is_dev,
                         pid,
-                        ws_endpoint: proc.ws_endpoint().to_string(),
+                        ws_endpoint,
                         browser_incarnation: inst.browser_incarnation.clone().unwrap_or_default(),
                         profile_epoch: inst.profile_epoch,
                         user_data_dir: inst.profile.user_data_dir().to_path_buf(),
                     });
                 } else {
-                    warn!(pid, "managed browser process died unexpectedly, marking targets lost");
-                    inst.process = None;
-                    inst.state = InstanceLifecycleState::Dormant;
+                    warn!(pid = proc.pid(), "managed browser process died unexpectedly, terminating group and marking targets lost");
+                    let term_res = proc.terminate().await;
                     inst.active_targets.clear();
                     inst.active_viewers = 0;
                     inst.active_raw_cdp = 0;
-                    inst._held_lock = None;
                     self.global_process_count.fetch_sub(1, Ordering::SeqCst);
+                    if let Err(e) = term_res {
+                        warn!(pid = proc.pid(), error = %e, "process group cleanup unproven after crash");
+                        inst.state = InstanceLifecycleState::CleanupPending;
+                        let tombstone = ResetTombstone {
+                            operation_id: format!("crash-{}", uuid::Uuid::new_v4()),
+                            target_profile_epoch: inst.profile_epoch,
+                            stage: ResetStage::Failed,
+                            created_at_unix_ms: now_unix_ms(),
+                            updated_at_unix_ms: now_unix_ms(),
+                            error: Some(format!("process group containment unproven: {e}")),
+                            process_pid: Some(proc.pid()),
+                            #[cfg(unix)]
+                            process_pgid: Some(proc.pgid()),
+                            #[cfg(not(unix))]
+                            process_pgid: None,
+                        };
+                        let _ = inst.profile.save_tombstone(&tombstone);
+                        return Err(ManagerError::CleanupPending(format!("process group containment unproven: {e}")));
+                    }
+                    inst.state = InstanceLifecycleState::Dormant;
+                    inst._held_lock = None;
                 }
             }
         }
 
-        // Enforce global capacity
-        let current_procs = self.global_process_count.load(Ordering::SeqCst);
-        if current_procs >= self.config.budgets.max_processes {
-            return Err(ManagerError::Busy(format!(
-                "global browser process capacity reached ({current_procs}/{})",
-                self.config.budgets.max_processes
-            )));
+        // Enforce global capacity with atomic reservation
+        let max_procs = self.config.budgets.max_processes;
+        let mut curr = self.global_process_count.load(Ordering::SeqCst);
+        loop {
+            if curr >= max_procs {
+                return Err(ManagerError::Busy(format!(
+                    "global browser process capacity reached ({curr}/{max_procs})"
+                )));
+            }
+            match self.global_process_count.compare_exchange_weak(
+                curr,
+                curr + 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => break,
+                Err(actual) => curr = actual,
+            }
         }
 
         // Acquire exclusive lock for profile
-        let lock = inst.profile.lock_with_timeout(DEFAULT_LOCK_TIMEOUT).await?;
+        let lock = match inst.profile.lock_with_timeout(DEFAULT_LOCK_TIMEOUT).await {
+            Ok(l) => l,
+            Err(e) => {
+                self.global_process_count.fetch_sub(1, Ordering::SeqCst);
+                return Err(e.into());
+            }
+        };
         inst.state = InstanceLifecycleState::Starting;
 
         // Ensure user-data directory exists with 0700 permissions
-        inst.profile.ensure_user_data_dir()?;
-
+        if let Err(e) = inst.profile.ensure_user_data_dir() {
+            self.global_process_count.fetch_sub(1, Ordering::SeqCst);
+            inst.state = InstanceLifecycleState::Dormant;
+            return Err(e.into());
+        }
         let mut launch_config = BrowserLaunchConfig::new(inst.profile.user_data_dir().to_path_buf());
         launch_config.executable_path = self.config.executable_path.clone();
         launch_config.headless = true;
 
         info!(subject, is_dev, "launching supervised browser process");
         let process_res = timeout(DEFAULT_START_TIMEOUT, BrowserProcess::launch(launch_config)).await;
-
-        let process = match process_res {
+        let mut process = match process_res {
             Ok(Ok(p)) => p,
             Ok(Err(err)) => {
+                self.global_process_count.fetch_sub(1, Ordering::SeqCst);
                 inst.state = InstanceLifecycleState::Dormant;
                 return Err(ManagerError::Process(err));
             }
             Err(_) => {
+                self.global_process_count.fetch_sub(1, Ordering::SeqCst);
                 inst.state = InstanceLifecycleState::Dormant;
                 return Err(ManagerError::Timeout("browser process failed to start within 15s".to_string()));
             }
@@ -328,17 +365,34 @@ impl BrowserHostManager {
         let pid = process.pid();
         let ws_endpoint = process.ws_endpoint().to_string();
 
-        let mut meta = inst.profile.load_or_init_metadata()?;
+        #[cfg(unix)]
+        let pgid = process.pgid();
+        let mut meta = match inst.profile.load_or_init_metadata() {
+            Ok(m) => m,
+            Err(e) => {
+                self.global_process_count.fetch_sub(1, Ordering::SeqCst);
+                let _ = process.terminate().await;
+                inst.state = InstanceLifecycleState::Dormant;
+                return Err(e.into());
+            }
+        };
         meta.browser_incarnation = Some(incarnation.clone());
+        meta.process_pid = Some(pid);
+        #[cfg(unix)]
+        {
+            meta.process_pgid = Some(pgid);
+        }
         meta.updated_at_unix_ms = now_unix_ms();
-        inst.profile.save_metadata(&meta)?;
-
+        if let Err(e) = inst.profile.save_metadata(&meta) {
+            self.global_process_count.fetch_sub(1, Ordering::SeqCst);
+            let _ = process.terminate().await;
+            inst.state = InstanceLifecycleState::Dormant;
+            return Err(e.into());
+        }
         inst.process = Some(process);
         inst.browser_incarnation = Some(incarnation.clone());
         inst.state = InstanceLifecycleState::Running;
         inst._held_lock = Some(lock);
-
-        self.global_process_count.fetch_add(1, Ordering::SeqCst);
 
         Ok(BrowserInstanceHandle {
             subject: subject.to_string(),
@@ -412,16 +466,19 @@ impl BrowserHostManager {
     ) -> Result<ResetOutcome, ManagerError> {
         let inst_arc = self.get_or_create_instance_inner(subject, is_dev).await?;
         let mut inst = inst_arc.lock().await;
-        let lock = match inst._held_lock.take() {
-            Some(existing) => existing,
-            None => inst.profile.lock_with_timeout(DEFAULT_LOCK_TIMEOUT).await?,
-        };
+        let had_held_lock = inst._held_lock.is_some();
+        if !had_held_lock {
+            inst._held_lock = Some(inst.profile.lock_with_timeout(DEFAULT_LOCK_TIMEOUT).await?);
+        }
 
         let mut meta = inst.profile.load_or_init_metadata()?;
 
         // Check if this operation already completed successfully (idempotent duplicate)
         if meta.last_reset_operation_id.as_deref() == Some(operation_id) {
             info!(operation_id, "idempotent query of already-completed profile reset");
+            if !had_held_lock && inst.state == InstanceLifecycleState::Dormant {
+                inst._held_lock = None;
+            }
             return Ok(ResetOutcome::Completed {
                 operation_id: operation_id.to_string(),
                 new_profile_epoch: meta.profile_epoch,
@@ -433,6 +490,9 @@ impl BrowserHostManager {
             if existing.operation_id == operation_id {
                 info!(operation_id, "resuming incomplete/failed profile reset");
                 let epoch = existing.target_profile_epoch;
+                meta.profile_epoch = epoch;
+                inst.profile_epoch = epoch;
+                let _ = inst.profile.save_metadata(&meta);
                 (existing, epoch, true)
             } else {
                 return Err(ManagerError::CleanupPending(format!(
@@ -443,6 +503,9 @@ impl BrowserHostManager {
         } else {
             // Validate expected profile epoch
             if meta.profile_epoch != expected_profile_epoch {
+                if !had_held_lock && inst.state == InstanceLifecycleState::Dormant {
+                    inst._held_lock = None;
+                }
                 return Err(ManagerError::StaleEpoch {
                     expected: expected_profile_epoch,
                     actual: meta.profile_epoch,
@@ -459,6 +522,8 @@ impl BrowserHostManager {
                 created_at_unix_ms: now_unix_ms(),
                 updated_at_unix_ms: now_unix_ms(),
                 error: None,
+                process_pid: meta.process_pid,
+                process_pgid: meta.process_pgid,
             };
             inst.profile.save_tombstone(&tombstone)?;
 
@@ -518,6 +583,53 @@ impl BrowserHostManager {
                     });
                 }
             }
+        } else if let Some(pgid) = tombstone.process_pgid.or(meta.process_pgid) {
+            // Reconcile unmanaged prior process group after restart
+            if pgid <= 1 {
+                tombstone.stage = ResetStage::Failed;
+                tombstone.error = Some(format!("invalid non-positive PGID {pgid}"));
+                let _ = inst.profile.save_tombstone(&tombstone);
+                inst.state = InstanceLifecycleState::CleanupPending;
+                return Ok(ResetOutcome::CleanupPending {
+                    operation_id: operation_id.to_string(),
+                    profile_epoch: new_epoch,
+                    reason: format!("invalid non-positive PGID {pgid}"),
+                });
+            }
+            #[cfg(unix)]
+            {
+                use nix::sys::signal::killpg;
+                use nix::unistd::Pid;
+                let pg = Pid::from_raw(pgid);
+                match killpg(pg, None) {
+                    Err(nix::errno::Errno::ESRCH) => {
+                        // Group is already extinct! Proven gone.
+                    }
+                    Ok(()) => {
+                        // Group is still alive on restart; ownership unverified without daemon handle
+                        tombstone.stage = ResetStage::Failed;
+                        tombstone.error = Some(format!("prior browser process group {pgid} still active on restart; unverified ownership"));
+                        let _ = inst.profile.save_tombstone(&tombstone);
+                        inst.state = InstanceLifecycleState::CleanupPending;
+                        return Ok(ResetOutcome::CleanupPending {
+                            operation_id: operation_id.to_string(),
+                            profile_epoch: new_epoch,
+                            reason: format!("prior browser process group {pgid} still active on restart; unverified ownership"),
+                        });
+                    }
+                    Err(e) => {
+                        tombstone.stage = ResetStage::Failed;
+                        tombstone.error = Some(format!("OS probe error on PGID {pgid}: {e}"));
+                        let _ = inst.profile.save_tombstone(&tombstone);
+                        inst.state = InstanceLifecycleState::CleanupPending;
+                        return Ok(ResetOutcome::CleanupPending {
+                            operation_id: operation_id.to_string(),
+                            profile_epoch: new_epoch,
+                            reason: format!("OS probe error on PGID {pgid}: {e}"),
+                        });
+                    }
+                }
+            }
         }
 
         // Step 6: Delete user-data/ within 10s
@@ -537,13 +649,12 @@ impl BrowserHostManager {
                 reason: "simulated user-data deletion failure".to_string(),
             });
         }
+        let mut handle = inst.deletion_worker.take().unwrap_or_else(|| {
+            let profile_clone = inst.profile.clone();
+            tokio::task::spawn_blocking(move || profile_clone.delete_user_data())
+        });
 
-        let profile_clone = inst.profile.clone();
-        let del_res = timeout(
-            DEFAULT_DELETE_TIMEOUT,
-            tokio::task::spawn_blocking(move || profile_clone.delete_user_data()),
-        )
-        .await;
+        let del_res = timeout(DEFAULT_DELETE_TIMEOUT, &mut handle).await;
 
         match del_res {
             Ok(Ok(Ok(()))) => {}
@@ -570,6 +681,7 @@ impl BrowserHostManager {
                 });
             }
             Err(_) => {
+                inst.deletion_worker = Some(handle);
                 tombstone.stage = ResetStage::Failed;
                 tombstone.error = Some("user-data deletion timed out after 10s".to_string());
                 let _ = inst.profile.save_tombstone(&tombstone);
@@ -601,14 +713,16 @@ impl BrowserHostManager {
 
         // Step 8: Clear tombstone and finish
         meta.last_reset_operation_id = Some(operation_id.to_string());
+        meta.process_pid = None;
+        meta.process_pgid = None;
         let _ = inst.profile.save_metadata(&meta);
         inst.profile.clear_tombstone()?;
         inst.state = InstanceLifecycleState::Dormant;
         inst.active_targets.clear();
         inst.active_viewers = 0;
         inst.active_raw_cdp = 0;
-        drop(lock);
-
+        inst.deletion_worker = None;
+        inst._held_lock = None;
         info!(subject, is_dev, operation_id, new_epoch, "browser profile reset completed successfully");
 
         Ok(ResetOutcome::Completed {
@@ -628,13 +742,65 @@ impl BrowserHostManager {
         for inst_arc in instances {
             let mut inst = inst_arc.lock().await;
             if let Some(mut proc) = inst.process.take() {
-                let _ = timeout(DEFAULT_TERMINATE_TIMEOUT, proc.terminate()).await;
+                let term_res = timeout(DEFAULT_TERMINATE_TIMEOUT, proc.terminate()).await;
+                if let Ok(Err(e)) = term_res {
+                    warn!(error = %e, "process termination unproven during server shutdown");
+                    let tombstone = ResetTombstone {
+                        operation_id: format!("shutdown-{}", uuid::Uuid::new_v4()),
+                        target_profile_epoch: inst.profile_epoch,
+                        stage: ResetStage::Failed,
+                        created_at_unix_ms: now_unix_ms(),
+                        updated_at_unix_ms: now_unix_ms(),
+                        error: Some(format!("shutdown containment unproven: {e}")),
+                        process_pid: Some(proc.pid()),
+                        #[cfg(unix)]
+                        process_pgid: Some(proc.pgid()),
+                        #[cfg(not(unix))]
+                        process_pgid: None,
+                    };
+                    let _ = inst.profile.save_tombstone(&tombstone);
+                    inst.state = InstanceLifecycleState::CleanupPending;
+                } else if term_res.is_err() {
+                    warn!("process termination timed out during server shutdown");
+                    let tombstone = ResetTombstone {
+                        operation_id: format!("shutdown-{}", uuid::Uuid::new_v4()),
+                        target_profile_epoch: inst.profile_epoch,
+                        stage: ResetStage::Failed,
+                        created_at_unix_ms: now_unix_ms(),
+                        updated_at_unix_ms: now_unix_ms(),
+                        error: Some("shutdown containment timed out".to_string()),
+                        process_pid: Some(proc.pid()),
+                        #[cfg(unix)]
+                        process_pgid: Some(proc.pgid()),
+                        #[cfg(not(unix))]
+                        process_pgid: None,
+                    };
+                    let _ = inst.profile.save_tombstone(&tombstone);
+                    inst.state = InstanceLifecycleState::CleanupPending;
+                } else {
+                    inst.state = InstanceLifecycleState::Dormant;
+                }
             }
-            inst.state = InstanceLifecycleState::Dormant;
             inst.active_targets.clear();
             inst.active_viewers = 0;
             inst.active_raw_cdp = 0;
         }
         self.global_process_count.store(0, Ordering::SeqCst);
+    }
+
+    pub async fn register_agent_cdp(&self, subject: &str, is_dev: bool) {
+        if let Ok(inst_arc) = self.get_or_create_instance_inner(subject, is_dev).await {
+            let mut inst = inst_arc.lock().await;
+            inst.active_raw_cdp += 1;
+            self._global_raw_cdp_count.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    pub async fn unregister_agent_cdp(&self, subject: &str, is_dev: bool) {
+        if let Ok(inst_arc) = self.get_or_create_instance_inner(subject, is_dev).await {
+            let mut inst = inst_arc.lock().await;
+            inst.active_raw_cdp = inst.active_raw_cdp.saturating_sub(1);
+            self._global_raw_cdp_count.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }

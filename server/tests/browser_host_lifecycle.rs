@@ -126,6 +126,8 @@ fn test_reset_tombstone_lifecycle() {
         created_at_unix_ms: now_unix_ms(),
         updated_at_unix_ms: now_unix_ms(),
         error: Some("test error".to_string()),
+        process_pid: None,
+        process_pgid: None,
     };
 
     profile.save_tombstone(&tombstone).unwrap();
@@ -173,6 +175,8 @@ async fn test_manager_capabilities_dto() {
         created_at_unix_ms: now_unix_ms(),
         updated_at_unix_ms: now_unix_ms(),
         error: Some("prior failure".to_string()),
+        process_pid: None,
+        process_pgid: None,
     };
     profile.save_tombstone(&tombstone).unwrap();
 

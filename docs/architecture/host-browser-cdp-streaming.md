@@ -1,7 +1,7 @@
 # Host Browser CDP Streaming Architecture
 
 **Authority:** Backend Subsystem (`server/src/browser_host/`, `server/examples/browser_host_qualification.rs`)  
-**Status:** Pre-Product Adapter, Supervised Principal Profiles, Admission Control & Leased Input (Phase 01 Qualified on Linux x86_64; Phase 02 Approved; Phase 03 Verified & Completed)
+**Status:** Supervised Principal Profiles, Admission Control, Leased Input & Raw CDP Gateway (Phases 01–04 Work-in-Progress Architectural Remediation Under Roadmap; Completion Claims Unverified)
 
 This specification defines the architectural contracts, process containment boundaries, bounded CDP actor lifecycle, and binary wire framing for the Host Browser CDP Streaming subsystem.
 
@@ -72,6 +72,8 @@ Process management (`server/src/browser_host/process.rs`) supervises Chromium ex
 - **Bidirectional Death-Pipe Watcher:** Uses an anonymous POSIX pipe between supervisor and child watcher. Supervisor process termination automatically drops the write-end of the pipe; the watcher receives `EOF` on `death_r` and executes `killpg` against the process group, terminating all orphaned renderer, GPU, and utility processes immediately.
 - **Dual-Stage Liveness Verification:** `live_members(pgid)` verifies termination via both `killpg(pgid, 0)` kernel probe and `/proc` process-tree scanning.
 - **Graceful Shutdown Protocol:** Sends `SIGTERM` with a 3-second grace period (`SHUTDOWN_GRACE_PERIOD_SECS`), followed by `SIGKILL` if processes survive.
+- **Non-Positive PGID Rejection:** During unmanaged prior process group cleanup (e.g. after daemon restart or crash recovery), any stored `process_pgid <= 1` (where `0` represents the current process group, `-1` all processes, and `1` init/systemd) is rejected fail-closed. Tombstone stage transitions to `ResetStage::Failed`, error records `invalid non-positive PGID {pgid}`, and the instance transitions to `InstanceLifecycleState::CleanupPending`, refusing to signal host or init processes.
+- **Durable Containment Fencing:** Process group containment is proven before completing process launch or profile wipe. If `live_members(pgid) > 0` survives the 3-second `SIGTERM` grace period and 2-second `SIGKILL` proof deadline, the process error is recorded in an atomic `reset.json` tombstone and the profile enters `CleanupPending`. On server restart, `load_tombstone` recovers this state and fences subsequent launch attempts until resolved.
 
 ### Endpoint Discovery and Loopback Validation
 
@@ -120,14 +122,66 @@ Streaming frames from the server to viewers use the atomic `BHJF` binary envelop
 - **Offset Bounds:** Absolute offsets $\le 10,000,000$ CSS px.
 - **Payload Consistency:** Declared header `width` and `height` must match JPEG SOF0/SOF2 marker dimensions exactly.
 
-## 5. Dual Bearer Auth & Proxy Relay (`browser_host_qualification.rs`)
+## 5. Authenticated Agent CDP Gateway & Upstream Relay (`cdp_gateway.rs`)
 
-The qualification test harness demonstrates authenticated CDP discovery and proxy relay:
+The production CDP Gateway (`server/src/browser_host/cdp_gateway.rs`) exposes authenticated raw Chrome DevTools Protocol access to external automation clients (e.g. Playwright via `connectOverCDP`):
 
-- **Exact Single Origin Policy:** Origin-bearing HTTP/WS requests must match the approved Origin byte-for-byte. Missing Origin headers are permitted for native bearer-authenticated agent clients (e.g. Playwright). Foreign, duplicate, or `null` origins are rejected with HTTP 403 Forbidden.
-- **Dual Bearer Authentication:** Validates `Authorization: Bearer <token>` on both discovery (`/json/version`, `/json/list`) and WebSocket upgrade routes.
-- **Bounded Proxy Relay:** Proxy sockets enforce a maximum 4 MiB message size and bounded 5-second per-write deadlines in both directions, with mutual teardown on read/write failure or timeout.
+### Discovery Endpoint Rewriting
 
+CDP discovery routes (`GET /api/browser/cdp/json/version`, `GET /api/browser/cdp/json/list`, and `GET /api/browser/cdp/json`) authenticate callers and proxy metadata from the running Chromium instance:
+- **Gateway WS Base Resolution:** Rewrites internal `webSocketDebuggerUrl` and `devtoolsFrontendUrl` to public gateway WebSocket endpoints (`/api/browser/cdp/ws` or `/api/browser/cdp/ws/{target_id}`). The public URL is derived strictly from `DAM_HOPPER_PUBLIC_SERVER_ORIGIN` or the direct `Host` header. Forwarded headers (`X-Forwarded-Host`, `X-Forwarded-For`) are ignored to prevent URL poisoning.
+- **Endpoint Sanitization:** Internal loopback DevTools ports (e.g. `127.0.0.1:xxxxx`) are stripped from frontend URLs before returning to callers.
+- **Payload Bounds:** Discovery target list payloads from Chromium are strictly bounded to 256 KiB; oversized responses fail closed with HTTP 502 Bad Gateway.
+
+### Exact Single Origin Policy
+
+Origin validation enforces strict single-origin invariants (`validate_cdp_origin`):
+1. **Single Header Enforcement:** Multiple `Origin` headers (`headers.get_all(header::ORIGIN).iter().count() > 1`) fail closed with HTTP 403 Forbidden (`kind: "forbiddenOrigin"`).
+2. **Format Sanitation:** Origins equal to `"null"`, ending in a trailing slash (`/`), or containing commas (`,`) fail closed with HTTP 403 Forbidden.
+3. **Allowlist Matching:** Evaluates byte-for-byte exact equality against `server.cors_origins` and `browser.allowed_dev_origins`.
+4. **Origin-less Requests:** Permitted strictly for clients presenting bearer credentials (`Authorization: Bearer <token>`) or loopback development bypass. Origin-less requests without bearer authentication fail closed with HTTP 403 Forbidden.
+5. **Oracle Mitigation:** Discovery endpoints evaluate caller authentication before validating Origin headers; unauthenticated requests fail with HTTP 401 Unauthorized, preventing unauthenticated origin enumeration or probing.
+
+### Canonical Claims Evaluation & MFA Integration
+
+Browser host admission integrates directly with the canonical authentication service (`authenticate_browser_caller` in `api/browser_host.rs`):
+- Decodes `AuthClaims` from Bearer tokens or cookies and executes `state.auth_service.evaluate_claims(&claims)`.
+- Enforces multi-factor authentication requirements: computes effective session deadlines via `crate::auth::compute_mfa_due_at(mfa_verified_at, expires_at)`.
+- `AuthDecision::MfaRequired` returns HTTP 401 Unauthorized (`kind: "mfaRequired"`).
+- `AuthDecision::FullLoginRequired` returns HTTP 401 (`kind: "invalidSession"`) or HTTP 403 (`kind: "accountDisabled"`).
+- `AuthDecision::Unavailable` returns HTTP 503 Service Unavailable (`kind: "authUnavailable"`).
+- Revalidates active session in the database: `revoked_at.is_none()`, `auth_version` and `credential_version` match user records, and caller holds the enabled `Admin` role (`UserRole::Admin`).
+
+### Server-Derived Capability Tickets & Subprotocol Upgrade
+
+Clients connecting without Bearer headers may authenticate using single-use capability tickets:
+- Issued exclusively via server endpoint `POST /api/browser/attachments` with `purpose: "agentCdp"`.
+- 256-bit random entropy from `rand::rngs::OsRng`, URL-safe unpadded Base64 encoded; server stores only the 32-byte SHA-256 hash in memory.
+- Expiration: 30 seconds (`TICKET_TTL`), clipped to caller auth session deadline.
+- Redeemed via WebSocket subprotocol: `Sec-WebSocket-Protocol: damhopper.browser.cdp.v1, damhopper.ticket.<base64url>`.
+- Single-use atomic consumption: consumed ticket is removed immediately from the ticket store.
+- Validates that running instance `browserIncarnation` and `profileEpoch` match the ticket.
+
+### Foreign Session Checks
+
+Every session retrieval, mutation, navigation, or control operation verifies ownership:
+- If the target session ID exists but is owned by another principal, the lookup returns `SessionError::NotFound` (HTTP 404 `kind: "sessionNotFound"`), indistinguishable from a non-existent session.
+- Prevents cross-principal session presence discovery, ID enumeration, or information leakage.
+
+### Bounded Upstream Relay & Concurrency Bounds
+
+- **Concurrency Ceiling:** Max 2 concurrent agent CDP connections globally by default (`DEFAULT_MAX_AGENT_CDP_CONNECTIONS = 2`), guarded by `Semaphore`. Admissions when saturated return HTTP 429 Too Many Requests (`kind: "browserBusy"`).
+- **Dedicated Upstream Per Agent:** Each agent WebSocket connection spawns a dedicated, unshared upstream WebSocket client to Chromium's DevTools endpoint with a 5-second connection deadline (`UPSTREAM_CONNECT_TIMEOUT = 5s`). No multiplexing through internal screencast actors.
+- **Framing & Write Bounds:** Bounded to 4 MiB frame and message caps (`MAX_WS_MESSAGE_BYTES = 4_194_304`). Outgoing socket writes enforce a 5-second deadline (`WRITE_DEADLINE = 5s`).
+
+### Live Auth Cancellation Racing with Socket Writes & Fast Teardown
+
+Long-running CDP relays do not rely solely on initial handshake authentication:
+1. **Continuous Auth Supervisor:** Spawns a background task running every 5 seconds (`LIVE_CHECK_INTERVAL`) with a 2-second database timeout (`LIVE_CHECK_TIMEOUT`) calling `verify_live_admission`.
+2. **Live Demotion & Revocation:** Detects account disabling, demotion from Admin role, session revocation, or credential/auth version increments.
+3. **Cancellation Racing with Writes (`write_with_cancel`):** Outgoing socket writes wrap send futures with `write_with_cancel`, which uses `tokio::select!` to race the write future against an auth cancellation receiver channel (`auth_abort_rx`). If auth is revoked while a socket write is stalled or in progress, the write is aborted immediately without waiting for the 5-second write deadline.
+4. **Fast Teardown:** If aborted due to auth failure (`aborted_by_auth == true`), the relay skips the cooperative 500ms WebSocket close handshake (`close(None)`), dropping client and upstream sockets immediately to prevent data leakage.
+5. **Instance Authority Warning:** Attaching to the raw CDP gateway grants instance-wide authority, bypassing cooperative input leases and target fences. The connection registers with the manager (`register_agent_cdp`) and logs an authoritative security warning.
 ## 6. Configuration Schema & Admission Budgets (`config.rs`)
 
 The browser host subsystem is configured under `[server.browser]` in `config.toml` (with legacy top-level `[browser]` mapped transparently into `server.browser`).
@@ -203,6 +257,7 @@ Profiles are organized under `<profile_root>/` by namespace and hashed subject:
 - **Non-User-Controlled Paths:** Principal directories use 64-char lowercase SHA-256 hashes of the principal subject, preventing path traversal attacks.
 - **Strict POSIX Permissions:** Principal directories and parent namespace directories are created with mode `0700` (`rwx------`). Metadata and tombstone files use mode `0600` (`rw-------`). Symbolic links for profile roots are forbidden.
 - **Advisory OS Lock (`ProfileLock`):** Holds open `manager.lock` via non-blocking `flock(fd, LOCK_EX | LOCK_NB)` on Unix. Released automatically on drop (`LOCK_UN`). Lock wait timeout is bounded to 5 seconds (`DEFAULT_LOCK_TIMEOUT`). The lock file inode is preserved across profile resets.
+- **Profile Lock Retention Across Resets:** Exclusive OS advisory `flock` (`manager.lock`) is retained across resets and restarts on a stable file inode directly in the principal directory (`<profile_root>/<namespace>/<sha256(subject)>/manager.lock`). The lock file itself is never deleted during profile reset or credential wipe (only `user-data/` is purged and recreated), preventing file lock races, directory unlinking races, or concurrent process spawns during teardown.
 
 ### Metadata Schema (`manager.json`)
 
@@ -362,10 +417,17 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Admission & Network Policy | **PASS** | Admin live role checks, dev loopback/Origin bypass, scheme/metadata filtering |
 | Single-Use Capability Tickets | **PASS** | 256-bit OsRng, SHA-256 memory store, 30s TTL, single-use atomic consume, pair matching |
 | Leased Input Queue & Releases | **PASS** | 30s lease, 128-record queue, contiguous inputSeq, stuck key auto-release, aspect-fit mapping |
+| Agent CDP Gateway & Relay | **IMPLEMENTED (UNVERIFIED)** | Observed implementation: authenticated discovery rewriting, dedicated upstream relay, 4 MiB frame/message cap, 5s write timeout, exact Origin enforcement, live auth cancellation racing with writes, fast close frame skip. Finalization approval absent; end-to-end multi-client qualification unverified. |
 | Native Browser Zoom | **UNVERIFIED** | Unreachable via standard CDP in headless Chromium 157; `inputTrusted: false` enforced |
 | Windows Containment | **FAIL-CLOSED** | Windows Job Object containment unqualified; non-Unix launch returns `ContainmentUnavailable` |
 
-*Cycle 2 Verification:* 39 tests passing across Phase 03 suites (`browser_host_admission`, `browser_host_auth`, `browser_host_input`), building on 221 passed Phase 02 tests.
+### Open Blockers and Roadmap Status
+
+- **Finalization Approval Absent:** The user did not grant finalization approval; the operator selected "Execute remediation roadmap". Remediation and phase completion remain work-in-progress and unverified.
+- **Observed Implementation vs Full Qualification:** Unit and integration test suites pass in local environments (`browser_host_gateway`, `browser_host_lifecycle`, `browser_host_shutdown`), but full system qualification across concurrent human viewers, screencast streaming producers (Phase 05), decoder UI (Phase 06), and production container load (Phase 09) remains an open blocker.
+- **Teardown Timing Under Congestion:** While `write_with_cancel` races auth cancellation against in-flight writes, actual kernel socket buffer draining and upstream termination remain subject to OS scheduler scheduling and network latency; immediate teardown is bounded by local runtime aborts, not an absolute wall-clock guarantee.
+- **Windows Platform Boundary:** Windows process containment remains unimplemented and fails closed with `ContainmentUnavailable`.
+- **Native Engine Zoom:** Headless Chromium zoom cannot be verified via standard CDP without layout distortion; non-unit zoom geometry remains flagged `inputTrusted: false`.
 
 ## 16. Source Map
 
@@ -384,6 +446,7 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Session Registry & Target Epochs | `server/src/browser_host/session.rs` |
 | Navigation & HTTP Network Policy | `server/src/browser_host/network_policy.rs` |
 | Browser Host REST API Handlers | `server/src/api/browser_host.rs` |
+| Agent CDP Gateway & Upstream Relay | `server/src/browser_host/cdp_gateway.rs` |
 | Module Exports | `server/src/browser_host/mod.rs` |
 | Qualification Example Harness | `server/examples/browser_host_qualification.rs` |
 | Adapter & Protocol Test Suite | `server/tests/browser_host_adapter.rs` |
@@ -394,5 +457,7 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Admission & REST Test Suite | `server/tests/browser_host_admission.rs` |
 | Capability Ticket & Live Auth Test Suite | `server/tests/browser_host_auth.rs` |
 | Leased Input Queue Test Suite | `server/tests/browser_host_input.rs` |
+| Agent CDP Gateway Test Suite | `server/tests/browser_host_gateway.rs` |
 | E2E Qualification Harness Fixture | `packages/ui/e2e/fixtures/browser-host-qualification.ts` |
 | Playwright Compatibility Spec | `packages/ui/e2e/os-host-browser/compatibility.spec.ts` |
+| Agent CDP Qualification Spec | `packages/ui/e2e/os-host-browser/agent.spec.ts` |

@@ -75,6 +75,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let auth_token = std::env::var("DAM_HOPPER_QUALIFICATION_TOKEN")
         .unwrap_or_else(|_| "test-qualification-token-secret".to_string());
 
+    let mode = std::env::var("DAM_HOPPER_QUALIFICATION_MODE")
+        .unwrap_or_else(|_| "phase01".to_string());
+
+    if mode == "production-gateway" {
+        return run_production_gateway(auth_token).await;
+    }
+
     let exec = find_browser_executable(None)?;
     let tmp = tempdir()?;
     let mut config = BrowserLaunchConfig::new(tmp.path().join("qual-user-data"));
@@ -608,4 +615,327 @@ fn validate_origin(headers: &HeaderMap, allowed_origin: &str) -> Result<(), Stat
         (Some(origin), None) if origin.as_bytes() == allowed_origin.as_bytes() => Ok(()),
         _ => Err(StatusCode::FORBIDDEN),
     }
+}
+
+async fn run_production_gateway(
+    _auth_token: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let exec = find_browser_executable(None)?;
+    let tmp = tempdir()?;
+    let workspace_root = tmp.path().to_path_buf();
+    let jwt_secret = "qual-secret-jwt-key-32-bytes-long!!!".to_string();
+
+    let (event_sink, _rx) = dam_hopper_server::pty::BroadcastEventSink::new(512);
+    let pty_manager = dam_hopper_server::pty::PtySessionManager::new(Arc::new(event_sink.clone()));
+
+    let config = dam_hopper_server::config::DamHopperConfig {
+        workspace: dam_hopper_server::config::WorkspaceInfo {
+            name: "qual-workspace".into(),
+            root: workspace_root.display().to_string(),
+        },
+        agent_store: None,
+        server: dam_hopper_server::config::ServerConfig {
+            session_db_path: workspace_root.join("sessions.db").display().to_string(),
+            browser: dam_hopper_server::browser_host::config::BrowserHostConfig {
+                enabled: true,
+                executable_path: Some(exec.clone()),
+                profile_root: Some(workspace_root.join("browser-profiles")),
+                budgets: dam_hopper_server::browser_host::config::BrowserBudgetsConfig {
+                    max_raw_cdp_connections: 2,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        projects: vec![],
+        features: dam_hopper_server::config::FeaturesConfig::default(),
+        ui: None,
+        workspaces: None,
+        config_path: workspace_root.join("dam-hopper.toml"),
+    };
+    let global_config = dam_hopper_server::config::GlobalConfig::default();
+    let agent_store = dam_hopper_server::agent_store::AgentStoreService::new(workspace_root.join(".dam-hopper/agent-store"));
+    let fs = dam_hopper_server::fs::FsSubsystem::new(vec![]);
+    let tunnel_manager = dam_hopper_server::tunnel::TunnelSessionManager::new(
+        Arc::new(event_sink.clone()),
+        Arc::new(dam_hopper_server::tunnel::CloudflaredDriver),
+    );
+    let diagnostics = dam_hopper_server::diagnostics::DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));
+    let opaque_setup = dam_hopper_server::crypto::load_or_create_server_setup()?;
+
+    let mut app_state = dam_hopper_server::state::AppState::new(
+        workspace_root.clone(),
+        config,
+        global_config,
+        pty_manager,
+        agent_store,
+        event_sink,
+        jwt_secret.clone(),
+        fs,
+        None,
+        false,
+        tunnel_manager,
+        None,
+        opaque_setup,
+        diagnostics,
+    )?;
+
+    let db_path = workspace_root.join("auth.db");
+    let store = dam_hopper_server::auth::AuthStore::open_sqlite(&db_path).await?;
+    let auth_service = Arc::new(dam_hopper_server::auth::AuthService::with_system_clock(
+        Some(store.clone()),
+        None,
+    ));
+    app_state = app_state.with_auth_service(auth_service);
+
+    let now = chrono::Utc::now();
+    let exp = now + chrono::Duration::days(30);
+
+    let user1 = dam_hopper_server::auth::model::UserRecord {
+        id: None,
+        username: "admin".to_string(),
+        password_hash: "mock_hash".to_string(),
+        role: dam_hopper_server::auth::model::UserRole::Admin,
+        is_enabled: true,
+        auth_version: 1,
+        mfa: None,
+        mfa_attempt_window_started_at: None,
+        mfa_attempt_count: 0,
+        mfa_blocked_until: None,
+    };
+    store.create_user(user1).await?;
+
+    let session1 = dam_hopper_server::auth::model::AuthSession {
+        id: "admin-session-1".to_string(),
+        username: "admin".to_string(),
+        auth_version: 1,
+        credential_version: 1,
+        issued_at: dam_hopper_server::auth::model::chrono_to_bson(now),
+        expires_at: dam_hopper_server::auth::model::chrono_to_bson(exp),
+        mfa_verified_at: dam_hopper_server::auth::model::chrono_to_bson(now),
+        revoked_at: None,
+        user_agent: None,
+    };
+    store.create_session(session1).await?;
+
+    let claims1 = dam_hopper_server::auth::model::AuthClaims {
+        v: dam_hopper_server::auth::policy::AUTH_PROTOCOL_VERSION,
+        sub: "admin".to_string(),
+        sid: "admin-session-1".to_string(),
+        auth_version: 1,
+        credential_version: 1,
+        iat: now.timestamp() as usize,
+        exp: exp.timestamp() as usize,
+    };
+    let token1 = claims1.encode(&jwt_secret)?;
+
+    let user2 = dam_hopper_server::auth::model::UserRecord {
+        id: None,
+        username: "agent_user".to_string(),
+        password_hash: "mock_hash".to_string(),
+        role: dam_hopper_server::auth::model::UserRole::Admin,
+        is_enabled: true,
+        auth_version: 1,
+        mfa: None,
+        mfa_attempt_window_started_at: None,
+        mfa_attempt_count: 0,
+        mfa_blocked_until: None,
+    };
+    store.create_user(user2).await?;
+
+    let session2 = dam_hopper_server::auth::model::AuthSession {
+        id: "admin-session-2".to_string(),
+        username: "admin".to_string(),
+        auth_version: 1,
+        credential_version: 1,
+        issued_at: dam_hopper_server::auth::model::chrono_to_bson(now),
+        expires_at: dam_hopper_server::auth::model::chrono_to_bson(exp),
+        mfa_verified_at: dam_hopper_server::auth::model::chrono_to_bson(now),
+        revoked_at: None,
+        user_agent: None,
+    };
+    store.create_session(session2).await?;
+
+    let claims2 = dam_hopper_server::auth::model::AuthClaims {
+        v: dam_hopper_server::auth::policy::AUTH_PROTOCOL_VERSION,
+        sub: "admin".to_string(),
+        sid: "admin-session-2".to_string(),
+        auth_version: 1,
+        credential_version: 1,
+        iat: now.timestamp() as usize,
+        exp: exp.timestamp() as usize,
+    };
+    let token2 = claims2.encode(&jwt_secret)?;
+
+    let handle = app_state
+        .browser_host
+        .ensure_running("admin", false)
+        .await?;
+    let browser_ws = handle.ws_endpoint.clone();
+    let browser_pid = handle.pid;
+
+    let internal_client = match CdpClient::connect(&browser_ws).await {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eprintln!("[Qualification Fixture] Warning: internal CdpClient connect failed: {e}");
+            None
+        }
+    };
+
+    let mut initial_actor_info = None;
+    if let Some(ic) = internal_client {
+        match setup_internal_session(ic).await {
+            Ok(info) => initial_actor_info = Some(info),
+            Err(e) => {
+                eprintln!("[Qualification Fixture] Warning: setup_internal_session failed: {e}")
+            }
+        }
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let local_addr = listener.local_addr()?;
+    let port = local_addr.port();
+
+    let allowed_origin = std::env::var("DAM_HOPPER_QUALIFICATION_ALLOWED_ORIGIN")
+        .unwrap_or_else(|_| format!("http://127.0.0.1:{port}"));
+    let origins = dam_hopper_server::api::router::parse_cors_origins(Some(&allowed_origin))
+        .unwrap_or_default();
+
+    let internal_session_arc = Arc::new(Mutex::new(initial_actor_info));
+
+    #[derive(Clone)]
+    struct QualProdState {
+        store: dam_hopper_server::auth::AuthStore,
+        db_path: std::path::PathBuf,
+        internal_session: Arc<Mutex<Option<InternalActorInfo>>>,
+    }
+
+    let qual_state = QualProdState {
+        store: store.clone(),
+        db_path: db_path.clone(),
+        internal_session: internal_session_arc.clone(),
+    };
+
+    let qual_routes = Router::new()
+        .route(
+            "/api/qualification/status",
+            get(|State(qs): State<QualProdState>| async move {
+                let int_status = qs.internal_session.lock().await;
+                let (frames_received, terminal_error) = match &*int_status {
+                    Some(info) => (
+                        info.frames_received.load(Ordering::SeqCst),
+                        info.terminal_error.lock().clone(),
+                    ),
+                    None => (0, None),
+                };
+                Json(json!({
+                    "qualificationReady": true,
+                    "mode": "production-gateway",
+                    "internalSessionFrames": frames_received,
+                    "internalSessionError": terminal_error,
+                }))
+            }),
+        )
+        .route(
+            "/api/qualification/internal_session",
+            get(|State(qs): State<QualProdState>| async move {
+                let guard = qs.internal_session.lock().await;
+                let info = guard.as_ref().ok_or(StatusCode::NOT_FOUND)?;
+                Ok::<_, StatusCode>(Json(json!({
+                    "active": true,
+                    "targetId": info.target_id,
+                    "sessionId": info.session_id,
+                    "framesReceived": info.frames_received.load(Ordering::SeqCst),
+                    "terminalError": *info.terminal_error.lock(),
+                })))
+            }),
+        )
+        .route(
+            "/api/qualification/internal_session/poke",
+            post(|State(qs): State<QualProdState>| async move {
+                let guard = qs.internal_session.lock().await;
+                let info = guard.as_ref().ok_or(StatusCode::NOT_FOUND)?;
+                let sid = &info.session_id;
+                let _ = info.client.send_command(
+                    "Runtime.evaluate",
+                    Some(json!({
+                        "expression": "document.body.style.backgroundColor = document.body.style.backgroundColor === 'red' ? 'blue' : 'red'; 1",
+                        "returnByValue": true
+                    })),
+                    Some(sid),
+                ).await;
+                Ok::<_, StatusCode>(Json(json!({ "ok": true })))
+            }),
+        )
+        .route(
+            "/api/qualification/revoke_session",
+            post(|State(qs): State<QualProdState>, Json(body): Json<serde_json::Value>| async move {
+                let session_id = body.get("sessionId").and_then(|v| v.as_str()).unwrap_or("admin-session-2");
+                let now = chrono::Utc::now();
+                let _ = qs.store.revoke_session(session_id, now).await;
+                StatusCode::OK
+            }),
+        )
+        .route(
+            "/api/qualification/demote_user",
+            post(|State(qs): State<QualProdState>, Json(body): Json<serde_json::Value>| async move {
+                let username = body.get("username").and_then(|v| v.as_str()).unwrap_or("agent_user");
+                if let Ok(conn) = rusqlite::Connection::open(&qs.db_path) {
+                    let _ = conn.execute(
+                        "UPDATE auth_users SET role = 'user' WHERE username = ?1",
+                        [username],
+                    );
+                }
+                StatusCode::OK
+            }),
+        )
+        .with_state(qual_state);
+
+    let app = dam_hopper_server::api::router::build_router_with_origins(app_state.clone(), origins)
+        .merge(qual_routes);
+
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let ready_json = json!({
+        "qualificationReady": true,
+        "port": port,
+        "httpUrl": format!("http://127.0.0.1:{port}"),
+        "wsUrl": format!("ws://127.0.0.1:{port}/api/browser/cdp/ws"),
+        "expectedToken": token1,
+        "siblingToken": token2,
+        "browserPid": browser_pid,
+        "mode": "production-gateway",
+    });
+
+    println!("{}", serde_json::to_string(&ready_json)?);
+
+    let mut stdin = tokio::io::stdin();
+    let mut buf = [0u8; 1024];
+
+    #[cfg(unix)]
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!("[Qualification Fixture] Received Ctrl+C, shutting down");
+        }
+        _ = stdin.read(&mut buf) => {
+            eprintln!("[Qualification Fixture] Stdin closed, shutting down");
+        }
+        _ = async {
+            #[cfg(unix)]
+            { sigterm.recv().await; }
+            #[cfg(not(unix))]
+            { std::future::pending::<()>().await; }
+        } => {
+            eprintln!("[Qualification Fixture] Received SIGTERM, shutting down");
+        }
+    }
+
+    app_state.browser_host.shutdown_all().await;
+    eprintln!("[Qualification Fixture] Production gateway shutdown cleanly");
+    Ok(())
 }

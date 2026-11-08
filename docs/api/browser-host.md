@@ -14,13 +14,13 @@ All successful and error responses from `/api/browser/*` set `Cache-Control: no-
 
 ### Production Admission Rules
 
-1. **Authentication Requirement:** The request must provide a valid bearer token in the `Authorization: Bearer <token>` header or `damhopper_auth` cookie.
-2. **Enabled Account Check:** Live database lookup verifies that the user account exists and `is_enabled == true`.
-3. **Admin Role Requirement:** The user must possess the `Admin` role (`UserRole::Admin`). Non-admin users (`UserRole::User`) receive HTTP 403 Forbidden with `kind: "adminRequired"`.
-4. **Session Integrity:** If a session ID is present, the session must exist, must not be revoked (`revoked_at.is_none()`), and its `auth_version` and `credential_version` must match both the token claims and user database record.
-5. **Session Deadline:** Caller `effective_deadline` is enforced against the current server time. Expired tokens receive HTTP 401 Unauthorized with `kind: "sessionExpired"`.
-6. **Continuous Live Verification:** Active streaming connections and long-lived attachments undergo live verification every 5 seconds (`LIVE_CHECK_INTERVAL`) with a strict 2-second database timeout (`LIVE_CHECK_TIMEOUT`). If an admin is demoted, an account is disabled, or a session is revoked, connections are terminated immediately via `CancellationToken`.
-
+1. **Authentication Requirement & Canonical Claims:** The request must provide a valid bearer token in `Authorization: Bearer <token>` or `damhopper_auth` cookie. Token claims are decoded and verified via `state.auth_service.evaluate_claims(&claims)`.
+2. **MFA Enforcement & Deadlines:** MFA verification is evaluated via `crate::auth::compute_mfa_due_at(mfa_verified_at, expires_at)`. If pending, returns HTTP 401 Unauthorized with `kind: "mfaRequired"`. If expired or invalid, returns HTTP 401 with `kind: "sessionExpired"` or `kind: "invalidSession"`.
+3. **Enabled Account & Admin Role Check:** Live database lookup verifies that the user account exists, `is_enabled == true`, and holds the enabled `Admin` role (`UserRole::Admin`). Non-admin users (`UserRole::User`) receive HTTP 403 Forbidden with `kind: "adminRequired"`. Disabled accounts receive HTTP 403 with `kind: "accountDisabled"`.
+4. **Session Integrity:** If a session ID is present, the session must exist, must not be revoked (`revoked_at.is_none()`), and its `auth_version` and `credential_version` must match both token claims and user database records.
+5. **Exact Single Origin Enforcement:** Multiple `Origin` headers (`get_all(ORIGIN).count() > 1`) fail closed with HTTP 403 Forbidden (`kind: "forbiddenOrigin"`). Origins containing `"null"`, ending with a trailing slash (`/`), or containing commas (`,`) fail closed with HTTP 403. Values must match byte-for-byte against configured `server.cors_origins` or `browser.allowed_dev_origins`. Origin-less requests are permitted strictly for clients presenting `Authorization: Bearer <token>`.
+6. **Foreign Session Isolation:** Requesting, mutating, or closing a session owned by another principal returns HTTP 404 Not Found with `kind: "sessionNotFound"`, indistinguishable from a non-existent session, preventing cross-tenant existence probing.
+7. **Continuous Live Verification:** Active streaming connections and long-lived attachments undergo live verification every 5 seconds (`LIVE_CHECK_INTERVAL`) with a strict 2-second database timeout (`LIVE_CHECK_TIMEOUT`). If an admin is demoted, an account is disabled, or a session is revoked, connections are terminated immediately via `CancellationToken`.
 ### Development Mode Bypass (`--no-auth`)
 
 When the server runs in `--no-auth` mode (`state.no_auth == true`):
@@ -70,6 +70,10 @@ All errors return JSON with HTTP status $\ge 400$:
 | 429 Too Many Requests | `queueOverflow` | Input queue limit exceeded (128 records or 256 KiB) |
 | 503 Service Unavailable | `authUnavailable` | Database unavailable during admission check or live check timeout (2s) |
 | 503 Service Unavailable | `inputUnavailable` | Viewport geometry not yet available for coordinate mapping |
+| 401 Unauthorized | `mfaRequired` | MFA verification required before accessing browser host |
+| 401 Unauthorized | `invalidSession` | Session revoked, deleted, or claims version mismatch |
+| 403 Forbidden | `forbiddenOrigin` | Origin header not in approved allowlist, multiple headers, null, or trailing slash |
+| 429 Too Many Requests | `browserBusy` | Global process or concurrent agent CDP connection ceiling reached (capacity is 2) |
 
 ---
 
@@ -480,6 +484,62 @@ Queries the status of an ongoing or completed reset operation.
   "profileEpoch": 2
 }
 ```
+### GET /api/browser/cdp/json/version
+
+Returns browser DevTools version metadata for the calling principal. Automatically launches or attaches to the principal's browser process via `ensure_running`.
+
+- **Rewritten Debugger URL:** `webSocketDebuggerUrl` is rewritten to `{gateway_ws_base}/api/browser/cdp/ws`.
+- **Origin Validation:** Enforces single approved Origin byte-for-byte; unauthenticated requests fail with HTTP 401 first to prevent Origin probing.
+
+**Response (200 OK):**
+```json
+{
+  "Browser": "Chrome/157.0.8103.38",
+  "Protocol-Version": "1.3",
+  "User-Agent": "Mozilla/5.0 ...",
+  "V8-Version": "12.0.0.0",
+  "WebKit-Version": "537.36 ...",
+  "webSocketDebuggerUrl": "ws://127.0.0.1:4801/api/browser/cdp/ws"
+}
+```
+
+### GET /api/browser/cdp/json/list (and /api/browser/cdp/json)
+
+Lists all active DevTools targets for the calling principal's browser instance.
+
+- **URL Rewriting:** `webSocketDebuggerUrl` is rewritten to `{gateway_ws_base}/api/browser/cdp/ws/{target_id}`.
+- **Frontend Sanitization:** `devtoolsFrontendUrl` loopback DevTools ports are replaced with the sanitized public gateway host.
+- **Payload Bounds:** Chromium target list response is bounded to 256 KiB.
+
+**Response (200 OK):**
+```json
+[
+  {
+    "description": "",
+    "devtoolsFrontendUrl": "/devtools/inspector.html?ws=127.0.0.1:4801/api/browser/cdp/ws/PAGE-UUID",
+    "id": "PAGE-UUID",
+    "title": "DamHopper",
+    "type": "page",
+    "url": "http://127.0.0.1:5173/",
+    "webSocketDebuggerUrl": "ws://127.0.0.1:4801/api/browser/cdp/ws/PAGE-UUID"
+  }
+]
+```
+
+### GET /api/browser/cdp/ws (and /api/browser/cdp)
+
+WebSocket upgrade route for raw CDP access to the browser instance root DevTools target.
+
+- **Authentication:** Evaluates Bearer token in `Authorization` header, auth cookie, or single-use capability ticket in `Sec-WebSocket-Protocol: damhopper.ticket.<base64url>`.
+- **Subprotocol:** Client may optionally request subprotocol `damhopper.browser.cdp.v1`.
+- **Concurrency Limit:** Max 2 concurrent agent CDP connections globally (`DEFAULT_MAX_AGENT_CDP_CONNECTIONS`). Excess connections return HTTP 429 `kind: "browserBusy"`.
+
+### GET /api/browser/cdp/ws/{target_id}
+
+WebSocket upgrade route for raw CDP access to a specific target `{target_id}` (`1..128` ASCII alphanumeric, `-`, `_`).
+
+- Connects dedicated upstream WebSocket to `ws://127.0.0.1:{chrome_port}/devtools/page/{target_id}`.
+
 ---
 
 ## 3. Single-Use Capability Tickets (`AttachmentManager`)
@@ -572,3 +632,30 @@ URLs submitted to `POST /api/browser/sessions` and `POST /api/browser/sessions/{
   - Cloud metadata endpoints are blocked: AWS/Azure/OpenStack (`169.254.169.254`), Alibaba Cloud (`100.100.100.200`), Google Cloud (`metadata.google.internal`), and IPv6 metadata (`fd00:ec2::254`).
   - IPv6 unique local (`fc00::/7`) and link-local (`fe80::/10`) are blocked.
 - **Development Origin Restriction:** In development mode (`is_dev == true`), general internet destinations are blocked; navigation is restricted to loopback (`127.0.0.1`, `localhost`) and origins listed in `allowed_origins`.
+
+---
+
+## 6. Authenticated Agent CDP Gateway (`cdp_gateway.rs`)
+
+The raw CDP gateway provides direct, authenticated Chrome DevTools Protocol access for automation agents (such as Playwright):
+
+### Upstream Relay Bounds
+
+- **Dedicated Connection:** Each agent connection establishes a dedicated, unshared upstream WebSocket client to Chromium's DevTools loopback port with a 5-second connection deadline (`UPSTREAM_CONNECT_TIMEOUT = 5s`).
+- **Message & Frame Limits:** Max 4 MiB per message and frame (`MAX_WS_MESSAGE_BYTES = 4_194_304`).
+- **Write Deadline:** 5-second timeout per message write (`WRITE_DEADLINE = 5s`).
+- **Concurrency:** Default global capacity of 2 concurrent agent connections (`DEFAULT_MAX_AGENT_CDP_CONNECTIONS = 2`).
+
+### Live Auth Cancellation Racing with Socket Writes
+
+1. **Live Supervisor:** An independent task runs every 5 seconds (`LIVE_CHECK_INTERVAL`) with a 2-second database timeout (`LIVE_CHECK_TIMEOUT`) calling `verify_live_admission`.
+2. **Revocation & Demotion:** If the user account is disabled, the user is demoted from `Admin`, the session is revoked, or the auth deadline is reached, the supervisor signals an abort channel.
+3. **Racing with In-Flight Writes (`write_with_cancel`):** Outgoing socket writes wrap send operations with `write_with_cancel`, racing the write future against the abort channel via `tokio::select!`. If auth is revoked while a write is stalled, the write is aborted immediately without blocking for the 5-second deadline.
+4. **Fast Teardown:** When aborted due to auth failure (`aborted_by_auth == true`), the relay skips the standard 500ms cooperative WebSocket close frame exchange and drops both client and upstream sockets immediately.
+
+### Instance Authority & Lease Bypass Warning
+
+Raw CDP operates at instance-level authority:
+- Agents attached to the raw CDP gateway bypass cooperative input leases and target fences.
+- An agent can inspect all pages, manipulate browser settings, and access host resources accessible to Chromium.
+- Upon connection, the gateway registers the connection with `state.browser_host.register_agent_cdp` and logs an authoritative security warning.

@@ -614,10 +614,26 @@ impl BrowserProcess {
     pub fn pid(&self) -> u32 {
         self.pid
     }
+    #[cfg(unix)]
+    pub fn pgid(&self) -> i32 {
+        self.pgid
+    }
 
     pub fn user_data_dir(&self) -> &Path {
         &self.user_data_dir
     }
+    pub fn try_is_alive(&mut self) -> bool {
+        if let Some(child) = self.child.as_mut() {
+            match child.try_wait() {
+                Ok(None) => true,
+                Ok(Some(_)) => false,
+                Err(_) => false,
+            }
+        } else {
+            false
+        }
+    }
+
 
     /// Terminate browser and wait for all descendants in the process group to exit.
     pub async fn terminate(&mut self) -> Result<(), ProcessError> {
