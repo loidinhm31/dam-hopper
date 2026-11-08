@@ -109,6 +109,14 @@ import dev.damhopper.nativeapp.features.terminal.stepTerminalFontSize
 import dev.damhopper.nativeapp.features.terminal.terminalGeometry
 import dev.damhopper.nativeapp.features.terminal.terminalLineHeightSp
 import dev.damhopper.nativeapp.features.terminal.TerminalDisplaySnapshot
+import dev.damhopper.nativeapp.features.terminal.TerminalQualifiedKey
+import dev.damhopper.nativeapp.features.terminal.CapturedTerminationTarget
+import dev.damhopper.nativeapp.features.terminal.TerminalCloseGuard
+import dev.damhopper.nativeapp.features.terminal.evaluateCloseGuard
+import dev.damhopper.nativeapp.features.terminal.AccessoryCollapseMode
+import dev.damhopper.nativeapp.features.terminal.resolveAccessoryCollapseMode
+import dev.damhopper.nativeapp.features.terminal.calculateTerminalViewportHeight
+import dev.damhopper.nativeapp.features.terminal.calculateTerminalVisibleRows
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import dev.damhopper.nativeapp.ui.theme.JetBrainsMonoFontFamily
 import kotlin.coroutines.cancellation.CancellationException
@@ -126,6 +134,7 @@ import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInstanceKey
 import dev.damhopper.nativeapp.features.terminal.TerminalAgentsInventoryReceipt
 import dev.damhopper.nativeapp.features.terminal.TerminalAgentsRefreshReason
 import dev.damhopper.nativeapp.features.terminal.TerminalAgentsRuntimeKey
+import dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord
 import dev.damhopper.nativeapp.ui.components.TerminalAgentsContext
 import dev.damhopper.nativeapp.ui.components.TerminalAgentsSidebarHost
 import dev.damhopper.nativeapp.ui.components.TerminalAgentsSidebarOverlay
@@ -168,7 +177,7 @@ internal fun installCurrentControllerBinding(
     }
 
     controller.setRawInputSink { bytes ->
-        if (!isBindingCurrent()) return@setRawInputSink
+        if (!isBindingCurrent() || !isInputEligible()) return@setRawInputSink
         val capturedCmd = lastSubmittedCommandText()
         val item = QueuedWrite(
             sessionId = controller.sessionId,
@@ -285,6 +294,9 @@ fun ProjectTerminalScreen(
     agents: TerminalAgentsContext? = null,
     /** Reports the OR of this screen's own local modals/popups to the root (owner-token source). */
     onLocalCoverChanged: (Boolean) -> Unit = {},
+    onNavigateToFiles: (() -> Unit)? = null,
+    onNavigateToEditor: (() -> Unit)? = null,
+    onNavigateToGit: (() -> Unit)? = null,
 ) {
     // Resolve authoritative connection reference
     val connectionRef = terminalRepo?.apiClient?.connection
@@ -327,12 +339,25 @@ fun ProjectTerminalScreen(
 
     var showCreateDialog by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
     var showDiagnosticsDialog by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
-    var sessionToKill by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
+    var targetForCloseDialog by remember(terminalRepo, connectionKey) { mutableStateOf<CapturedTerminationTarget?>(null) }
+    var showHiddenSessionsDialog by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
+    var fallbackHiddenSessions by remember(terminalRepo, connectionKey) { mutableStateOf(setOf<String>()) }
     var requiredRefusal by remember(terminalRepo, connectionKey, requiredTerminalInstance) { mutableStateOf<String?>(null) }
     var appliedInventoryRuntime by remember(terminalRepo, connectionKey) { mutableStateOf<TerminalAgentsRuntimeKey?>(null) }
     var appliedInventoryTicket by remember(terminalRepo, connectionKey) { mutableStateOf<Long?>(null) }
     var lastAgentsRuntime by remember(terminalRepo, connectionKey) { mutableStateOf<TerminalAgentsRuntimeKey?>(null) }
     var uiErrorBanner by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
+    var fallbackUncertainCreates by remember(terminalRepo, connectionKey) { mutableStateOf<List<UncertainCreateRecord>>(emptyList()) }
+    val pendingTerminationIds = remember(terminalRepo, connectionKey) { mutableStateMapOf<String, Boolean>() }
+    LaunchedEffect(terminalRepo, connectionRef) {
+        val records = terminalRepo?.preferencesStore?.loadUncertainCreateRecords()?.filter {
+            it.profileId == connectionRef.profileId &&
+                (it.project == null || it.project == projectName)
+        }.orEmpty()
+        retainedState?.syncUncertainCreates(records)
+        fallbackUncertainCreates = records
+    }
+
     var attachError by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
     var isDestructiveOpInProgress by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
     var isSyncFailure by remember(terminalRepo, connectionKey) { mutableStateOf(false) }
@@ -454,10 +479,13 @@ fun ProjectTerminalScreen(
     }
 
     fun isEligibleForInput(sessionId: String): Boolean {
+        if (pendingTerminationIds[sessionId] == true) return false
+        if (destroyingSessionIds[sessionId] == true) return false
         if (retainedState != null) {
             return retainedState.isInputAllowedForSession(sessionId)
         }
-        return (sessionId == activeSessionId && destroyingSessionIds[sessionId] != true)
+        val isHidden = fallbackHiddenSessions.contains(sessionId)
+        return (sessionId == activeSessionId && !isHidden)
     }
 
     fun bumpActiveSessionEpoch() {
@@ -481,11 +509,15 @@ fun ProjectTerminalScreen(
     var lastSubmittedCommandText by remember(terminalRepo, connectionKey) { mutableStateOf<String?>(null) }
 
     fun isSessionForProject(session: TerminalSessionDetailed): Boolean {
-        return session.project == projectName
+        return session.project == projectName && session.worktreePath == worktreePath
     }
 
     fun isSessionSelectable(session: TerminalSessionDetailed): Boolean {
-        return isSessionForProject(session) && destroyingSessionIds[session.id] != true
+        if (!isSessionForProject(session)) return false
+        if (destroyingSessionIds[session.id] == true) return false
+        val isHidden = retainedState?.hiddenSessions?.any { it.matchesSession(connectionRef.profileId, session) }
+            ?: fallbackHiddenSessions.contains(session.id)
+        return !isHidden
     }
 
     fun removeSessionLocal(id: String) {
@@ -692,6 +724,16 @@ fun ProjectTerminalScreen(
             val vanishedIds = controllers.keys.filter { it !in projectIds }
             vanishedIds.forEach { removeSessionLocal(it) }
 
+            val records = terminalRepo?.preferencesStore?.loadUncertainCreateRecords()?.filter {
+                it.profileId == connectionRef.profileId &&
+                    (it.project == null || it.project == projectName)
+            }.orEmpty()
+            retainedState?.syncUncertainCreates(records)
+            fallbackUncertainCreates = records
+            for (s in detailed) {
+                if (!s.alive) pendingTerminationIds.remove(s.id)
+            }
+
             // Validate selectable sessions
             val selectable = detailed.filter { isSessionSelectable(it) }
 
@@ -723,7 +765,7 @@ fun ProjectTerminalScreen(
                         val requested = initialSessionId?.takeIf { initId -> selectable.any { it.id == initId } }
                         if (requested != null && (currentActive == null || currentActive != requested)) {
                             selectSession(requested)
-                        } else if (currentActive == null || selectable.none { it.id == currentActive }) {
+                        } else if (currentActive == null) {
                             selectSession(selectable.firstOrNull()?.id)
                         }
                     }
@@ -818,7 +860,14 @@ fun ProjectTerminalScreen(
         }
     }
 
-    val eligibleSessions = remember(sessions, projectName, destroyingSessionIds.size) {
+    val eligibleSessions = remember(
+        sessions,
+        projectName,
+        destroyingSessionIds.size,
+        retainedState?.hiddenSessions?.size,
+        fallbackHiddenSessions,
+        activeSessionEpoch,
+    ) {
         sessions.filter { isSessionSelectable(it) }
     }
 
@@ -991,7 +1040,7 @@ fun ProjectTerminalScreen(
 
     // Cover reporting: this screen's local modals are ONE source (owner token); disposal clears only this source.
     val coverOwner = remember { Any() }
-    val localModalOpen = showCreateDialog || showDiagnosticsDialog || sessionToKill != null
+    val localModalOpen = showCreateDialog || showDiagnosticsDialog || targetForCloseDialog != null || showHiddenSessionsDialog
     val agentsHost = agents?.host
     val currentOnLocalCoverChanged by rememberUpdatedState(onLocalCoverChanged)
     SideEffect {
@@ -1015,8 +1064,26 @@ fun ProjectTerminalScreen(
     val pinned = agents != null && agents.host.pinned == true
     val pinnedOpen = agents != null && agents.host.open && pinned
     val startPadding = if (pinnedOpen) TERMINAL_AGENTS_PINNED_WIDTH + 1.dp else 0.dp
+    val screenScope = rememberCoroutineScope()
 
-    Box(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        val totalAvailableHeightPx = with(density) { maxHeight.toPx() }
+        val terminalLineHeightPx = with(density) { terminalLineHeightSp(terminalFontSize).sp.toPx() }
+        val accMetrics = accessoryMetrics(prefs)
+        val singleRowAccPx = with(density) { (48.dp + accMetrics.gapDp.dp).toPx() }
+        val doubleRowAccPx = with(density) { ((48.dp * 2) + (accMetrics.gapDp.dp * 2)).toPx() }
+        val stableChromePx = with(density) { 104.dp.toPx() }
+        val budgetForTerminalAndAccessory = (totalAvailableHeightPx - stableChromePx).coerceAtLeast(0f)
+        val accessoryCollapseMode = remember(budgetForTerminalAndAccessory, terminalLineHeightPx, singleRowAccPx, doubleRowAccPx) {
+            resolveAccessoryCollapseMode(
+                contentHeightPx = budgetForTerminalAndAccessory,
+                lineHeightPx = terminalLineHeightPx,
+                singleRowAccessoryHeightPx = singleRowAccPx,
+                doubleRowAccessoryHeightPx = doubleRowAccPx,
+                minTerminalRows = 3,
+            )
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -1035,6 +1102,9 @@ fun ProjectTerminalScreen(
                     onShowDiagnostics = { showDiagnosticsDialog = true },
                     onShowCreate = { showCreateDialog = true },
                     agents = agents,
+                    onNavigateToFiles = onNavigateToFiles,
+                    onNavigateToEditor = onNavigateToEditor,
+                    onNavigateToGit = onNavigateToGit,
                 )
             } else {
                 TerminalSubHeader(
@@ -1048,14 +1118,89 @@ fun ProjectTerminalScreen(
                 )
             }
 
+            val visibleSessions = remember(eligibleSessions, retainedState?.hiddenSessions?.size, fallbackHiddenSessions) {
+                eligibleSessions.filter { s ->
+                    (retainedState?.isSessionHidden(s) != true) && !fallbackHiddenSessions.contains(s.id)
+                }
+            }
+            val currentHiddenCount = (retainedState?.hiddenSessions?.count { it.profileId == connectionRef?.profileId } ?: 0) + fallbackHiddenSessions.size
+
             TerminalSessionTabs(
-                sessions = eligibleSessions,
+                sessions = visibleSessions,
                 activeSessionId = activeSessionId,
                 onSelectSession = { selectSession(it) },
-                onKillSession = { sessionToKill = it },
+                onCloseSession = { s ->
+                    val isPinned = retainedState?.isSessionPinned(s) == true
+                    val ctrl = controllers[s.id]
+                    targetForCloseDialog = CapturedTerminationTarget(
+                        profileId = connectionRef?.profileId.orEmpty(),
+                        connectionGeneration = connectionRef?.generation ?: 0L,
+                        terminalId = s.id,
+                        project = s.project ?: projectName,
+                        worktreePath = s.worktreePath,
+                        serverPtyEpoch = s.serverPtyEpoch,
+                        incarnationExact = s.incarnationExact,
+                        isPinned = isPinned,
+                        isAlive = s.alive,
+                        willRestart = ctrl?.willRestart == true,
+                        isDestructiveOpInProgress = isDestructiveOpInProgress,
+                    )
+                },
+                hiddenSessionsCount = currentHiddenCount,
+                onShowHiddenSessions = { showHiddenSessionsDialog = true },
+                onPinSession = { s -> retainedState?.pinSession(s) },
+                onUnpinSession = { s -> retainedState?.unpinSession(s) },
+                isSessionPinned = { s -> retainedState?.isSessionPinned(s) == true },
                 wsState = terminalWsState,
                 controllers = controllers,
             )
+
+            // Truthful uncertain create notices (no Launch Again, Check status only)
+            val currentProfile = connectionRef?.profileId.orEmpty()
+            val currentUncertainCreates = if (retainedState != null) {
+                retainedState.uncertainCreates.filter { rec ->
+                    rec.profileId == currentProfile && (rec.project == null || rec.project == projectName)
+                }
+            } else {
+                fallbackUncertainCreates.filter { rec ->
+                    rec.profileId == currentProfile && (rec.project == null || rec.project == projectName)
+                }
+            }
+            if (currentUncertainCreates.isNotEmpty()) {
+                currentUncertainCreates.forEach { record ->
+                    val pres = TerminalConnectionPresentation.resolveCreateStatusPresentation(record)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(DamHopperColors.Warning.copy(alpha = 0.2f))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = pres.label,
+                                color = DamHopperColors.Warning,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                text = pres.explanation,
+                                color = DamHopperColors.TextPrimary,
+                                fontSize = 11.sp,
+                            )
+                        }
+                        if (pres.canCheckStatus) {
+                            TextButton(
+                                onClick = { screenScope.launch { refreshSessions() } },
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                            ) {
+                                Text("Check status", color = DamHopperColors.Primary)
+                            }
+                        }
+                    }
+                }
+            }
 
         // Exact manual-activation refusal: the required terminal is missing/restarted; never another terminal.
         requiredRefusal?.let { refusal ->
@@ -1217,103 +1362,62 @@ fun ProjectTerminalScreen(
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Restart",
+                        text = "Close View",
                         color = DamHopperColors.Primary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier
+                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                             .clip(RoundedCornerShape(4.dp))
                             .clickable {
-                                if (isDestructiveOpInProgress) return@clickable
                                 val targetId = activeSessionId ?: return@clickable
-                                val oldSession = sessions.find { it.id == targetId }
-                                val cmd = oldSession?.command ?: "sh"
-                                val name = oldSession?.name
-                                ownerScope.launch {
-                                    isDestructiveOpInProgress = true
-                                    destroyingSessionIds[targetId] = true
-                                    controllers[targetId]?.isPanelActive = false
-                                    bumpActiveSessionEpoch()
-                                    try {
-                                        val expectedEpoch = oldSession?.serverPtyEpoch
-                                        val expectedIncarnation = oldSession?.incarnationExact ?: oldSession?.incarnation?.toString()
-                                        if (expectedEpoch.isNullOrBlank() || !TerminateSessionRequest.isValidEpoch(expectedEpoch) ||
-                                            expectedIncarnation.isNullOrBlank() || !TerminateSessionRequest.isValidIncarnation(expectedIncarnation)
-                                        ) {
-                                            uiErrorBanner = "Cannot restart: missing verified server PTY epoch"
-                                            return@launch
-                                        }
-                                        val termOutcome = withContext(Dispatchers.Default) {
-                                            terminalRepo.terminateSession(
-                                                id = targetId,
-                                                expectedServerEpoch = expectedEpoch,
-                                                expectedIncarnation = expectedIncarnation,
-                                            )
-                                        }
-                                        if (!termOutcome.requested && !termOutcome.restartCancelled) {
-                                            uiErrorBanner = "Restart refused by server (${termOutcome.statusCode}): ${termOutcome.message ?: "refused"}"
-                                            return@launch
-                                        }
-                                        if (termOutcome.requested) {
-                                            uiErrorBanner = "Termination requested; awaiting process exit before restart"
-                                            refreshSessions()
-                                            return@launch
-                                        }
-                                        removeSessionLocal(targetId)
-                                        sessions = sessions.filter { it.id != targetId }
-                                        val next = sessions.filter { isSessionSelectable(it) }.firstOrNull()?.id
-                                        if (activeSessionId == targetId) {
-                                            selectSession(next)
-                                        }
-                                        val newId = withContext(Dispatchers.Default) {
-                                            val id = "term-${Clock.System.now().toEpochMilliseconds()}"
-                                            terminalRepo.createSession(
-                                                CreateSessionRequest(
-                                                    id = id,
-                                                    command = cmd,
-                                                    name = name,
-                                                    project = projectName
-                                                )
-                                            )
-                                            id
-                                        }
-                                        pendingReconciliationId = newId
-                                        refreshSessions()
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (e: Exception) {
-                                        uiErrorBanner = "Restart failed: ${e.message ?: "remote error"}"
-                                    } finally {
-                                        destroyingSessionIds.remove(targetId)
-                                        isDestructiveOpInProgress = false
-                                        val syncSuccess = refreshSessions()
-                                        if (!syncSuccess && activeSessionId == targetId) {
-                                            controllers[targetId]?.isPanelActive = isEligibleForInput(targetId)
-                                        }
-                                    }
+                                val targetSession = sessions.find { it.id == targetId }
+                                val isPinned = if (targetSession != null) {
+                                    retainedState?.isSessionPinned(targetSession) == true
+                                } else {
+                                    retainedState?.pinnedSessions?.any { it.profileId == connectionRef.profileId && it.terminalId == targetId } == true
+                                }
+                                if (isPinned) {
+                                    uiErrorBanner = "Cannot close pinned session; unpin first."
+                                    return@clickable
+                                }
+                                if (targetSession != null) {
+                                    retainedState?.hideSession(targetSession)
+                                } else {
+                                    retainedState?.hideSessionById(targetId)
                                 }
                             }
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                     Text(
-                        text = "Remove",
+                        text = "End Session",
                         color = DamHopperColors.Error,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier
+                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                             .clip(RoundedCornerShape(4.dp))
                             .clickable {
-                                if (isDestructiveOpInProgress) return@clickable
                                 val targetId = activeSessionId ?: return@clickable
-                                // Local close hides qualified view only: zero server mutation
-                                removeSessionLocal(targetId)
-                                sessions = sessions.filter { it.id != targetId }
-                                val next = sessions.filter { isSessionSelectable(it) }.firstOrNull()?.id
-                                if (activeSessionId == targetId) {
-                                    selectSession(next)
+                                val targetSession = sessions.find { it.id == targetId }
+                                if (targetSession != null) {
+                                    val isPinned = retainedState?.isSessionPinned(targetSession) == true
+                                    targetForCloseDialog = CapturedTerminationTarget(
+                                        profileId = connectionRef?.profileId.orEmpty(),
+                                        connectionGeneration = connectionRef?.generation ?: 0L,
+                                        terminalId = targetSession.id,
+                                        project = targetSession.project ?: projectName,
+                                        worktreePath = targetSession.worktreePath,
+                                        serverPtyEpoch = targetSession.serverPtyEpoch,
+                                        incarnationExact = targetSession.incarnationExact,
+                                        isPinned = isPinned,
+                                        isAlive = false,
+                                        willRestart = activeController?.willRestart == true,
+                                        isDestructiveOpInProgress = isDestructiveOpInProgress,
+                                    )
                                 }
                             }
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
             }
@@ -1502,8 +1606,20 @@ fun ProjectTerminalScreen(
                         color = DamHopperColors.TextSecondary,
                         fontSize = 14.sp
                     )
+                    val hiddenCount = retainedState?.hiddenSessions?.count { it.profileId == connectionRef?.profileId } ?: 0
+                    if (hiddenCount > 0) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = { showHiddenSessionsDialog = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.SurfaceVariant),
+                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                        ) {
+                            Text("Reopen Hidden Session ($hiddenCount)", color = DamHopperColors.TextPrimary)
+                        }
+                    }
                     Spacer(modifier = Modifier.height(12.dp))
                     Button(
+                        enabled = currentUncertainCreates.isEmpty(),
                         onClick = {
                             ownerScope.launch {
                                 try {
@@ -1514,7 +1630,8 @@ fun ProjectTerminalScreen(
                                                 id = id,
                                                 command = "sh",
                                                 name = "$projectName Shell",
-                                                project = projectName
+                                                project = projectName,
+                                                worktreePath = worktreePath,
                                             )
                                         )
                                         id
@@ -1525,6 +1642,14 @@ fun ProjectTerminalScreen(
                                     throw e
                                 } catch (e: Exception) {
                                     uiErrorBanner = "Failed to start terminal: ${e.message}"
+                                } finally {
+                                    val records = terminalRepo.preferencesStore?.loadUncertainCreateRecords()?.filter {
+                                        it.profileId == connectionRef.profileId &&
+                                            (it.project == null || it.project == projectName) &&
+                                            (it.worktreePath == null || it.worktreePath == worktreePath)
+                                    }.orEmpty()
+                                    retainedState?.syncUncertainCreates(records)
+                                    fallbackUncertainCreates = records
                                 }
                             }
                         },
@@ -1591,6 +1716,7 @@ fun ProjectTerminalScreen(
                 ctrlLatched = ctrlLatched,
                 altLatched = altLatched,
                 shiftLatched = shiftLatched,
+                collapseMode = accessoryCollapseMode,
                 onAccessoryAction = { action ->
                     if (action is AccessoryAction.Scroll) {
                         scrollTerminal(action.direction)
@@ -1613,7 +1739,7 @@ fun ProjectTerminalScreen(
     }
 
 
-    if (connectionRef != null) {
+    if (connectionRef != null && !covered) {
         TerminalDialogs(
             showDiagnosticsDialog = showDiagnosticsDialog,
             onDismissDiagnostics = { showDiagnosticsDialog = false },
@@ -1625,7 +1751,7 @@ fun ProjectTerminalScreen(
                         val newId = withContext(Dispatchers.Default) {
                             val id = "term-${Clock.System.now().toEpochMilliseconds()}"
                             terminalRepo?.createSession(
-                                CreateSessionRequest(id = id, command = cmd, name = name, project = projectName)
+                                CreateSessionRequest(id = id, command = cmd, name = name, project = projectName, worktreePath = worktreePath)
                             )
                             id
                         }
@@ -1635,66 +1761,147 @@ fun ProjectTerminalScreen(
                         throw e
                     } catch (e: Exception) {
                         uiErrorBanner = "Failed to create session: ${e.message}"
+                    } finally {
+                        val records = terminalRepo?.preferencesStore?.loadUncertainCreateRecords()?.filter {
+                            it.profileId == connectionRef.profileId &&
+                                (it.project == null || it.project == projectName) &&
+                                (it.worktreePath == null || it.worktreePath == worktreePath)
+                        }.orEmpty()
+                        retainedState?.syncUncertainCreates(records)
+                        fallbackUncertainCreates = records
                     }
                 }
             },
-            sessionToKill = sessionToKill,
-            onDismissKill = { sessionToKill = null },
-            onConfirmKill = { targetId ->
+            targetForCloseDialog = targetForCloseDialog,
+            onDismissCloseDialog = { targetForCloseDialog = null },
+            onCloseViewLocally = { target ->
+                targetForCloseDialog = null
+                val targetSession = sessions.find {
+                    it.id == target.terminalId &&
+                    it.incarnationExact == target.incarnationExact &&
+                    it.serverPtyEpoch == target.serverPtyEpoch
+                }
+                if (targetSession == null) {
+                    uiErrorBanner = "Cannot close view: session was replaced or restarted"
+                    return@TerminalDialogs
+                }
+                if (retainedState?.isSessionPinned(targetSession) == true) {
+                    uiErrorBanner = "Cannot close pinned session; unpin first"
+                    return@TerminalDialogs
+                }
+                if (retainedState != null) {
+                    retainedState.hideSession(targetSession)
+                } else {
+                    fallbackHiddenSessions = fallbackHiddenSessions + target.terminalId
+                    selectSession(eligibleSessions.firstOrNull { it.id != target.terminalId && !fallbackHiddenSessions.contains(it.id) }?.id)
+                }
+            },
+            onEndSessionDestructively = { target ->
                 if (isDestructiveOpInProgress) return@TerminalDialogs
-                val targetSession = sessions.find { it.id == targetId }
-                val expectedEpoch = targetSession?.serverPtyEpoch
-                val expectedIncarnation = targetSession?.incarnationExact ?: targetSession?.incarnation?.toString()
+                val currentConn = connectionRef
+                if (currentConn == null || currentConn.profileId != target.profileId || currentConn.generation != target.connectionGeneration) {
+                    uiErrorBanner = "Cannot end session: connection authority changed"
+                    targetForCloseDialog = null
+                    return@TerminalDialogs
+                }
+                val targetSession = sessions.find {
+                    it.id == target.terminalId &&
+                    it.incarnationExact == target.incarnationExact &&
+                    it.serverPtyEpoch == target.serverPtyEpoch
+                }
+                if (targetSession == null) {
+                    uiErrorBanner = "Cannot end session: session was replaced or restarted"
+                    targetForCloseDialog = null
+                    return@TerminalDialogs
+                }
+                if (retainedState?.isSessionPinned(targetSession) == true) {
+                    uiErrorBanner = "Cannot end pinned session; unpin first"
+                    targetForCloseDialog = null
+                    return@TerminalDialogs
+                }
+                val expectedEpoch = target.serverPtyEpoch
+                val expectedIncarnation = target.incarnationExact
                 if (expectedEpoch.isNullOrBlank() || !TerminateSessionRequest.isValidEpoch(expectedEpoch) ||
                     expectedIncarnation.isNullOrBlank() || !TerminateSessionRequest.isValidIncarnation(expectedIncarnation)
                 ) {
                     uiErrorBanner = "Cannot end session: missing verified server PTY epoch"
-                    sessionToKill = null
+                    targetForCloseDialog = null
                     return@TerminalDialogs
                 }
-                sessionToKill = null
+                targetForCloseDialog = null
                 ownerScope.launch {
                     isDestructiveOpInProgress = true
-                    destroyingSessionIds[targetId] = true
-                    controllers[targetId]?.isPanelActive = false
+                    destroyingSessionIds[target.terminalId] = true
+                    controllers[target.terminalId]?.isPanelActive = false
                     bumpActiveSessionEpoch()
                     try {
                         val termOutcome = withContext(Dispatchers.Default) {
                             terminalRepo?.terminateSession(
-                                id = targetId,
+                                id = target.terminalId,
                                 expectedServerEpoch = expectedEpoch,
                                 expectedIncarnation = expectedIncarnation,
                             )
                         }
-                        if (termOutcome == null || (!termOutcome.requested && !termOutcome.restartCancelled)) {
-                            val code = termOutcome?.statusCode ?: 0
-                            uiErrorBanner = "End session refused ($code): ${termOutcome?.message ?: "refused"}"
-                        } else if (termOutcome.requested) {
-                            uiErrorBanner = "Termination requested; awaiting process exit"
-                            controllers[targetId]?.isPanelActive = false
-                            destroyingSessionIds.remove(targetId)
-                            refreshSessions()
-                        } else if (termOutcome.restartCancelled) {
-                            removeSessionLocal(targetId)
-                            sessions = sessions.filter { it.id != targetId }
-                            val next = sessions.filter { isSessionSelectable(it) }.firstOrNull()?.id
-                            if (activeSessionId == targetId) {
-                                selectSession(next)
+                        if (termOutcome != null) {
+                            val presentation = TerminalConnectionPresentation.resolveTerminationOutcomePresentation(termOutcome)
+                            uiErrorBanner = presentation.description
+                            if (presentation.isPending) {
+                                pendingTerminationIds[target.terminalId] = true
+                            }
+                            if (presentation.isRefused) {
+                                destroyingSessionIds.remove(target.terminalId)
+                                pendingTerminationIds.remove(target.terminalId)
                             }
                         }
+                        refreshSessions()
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        uiErrorBanner = "Failed to remove session: ${e.message}"
+                        uiErrorBanner = "Failed to terminate session: ${e.message}"
                     } finally {
-                        destroyingSessionIds.remove(targetId)
+                        destroyingSessionIds.remove(target.terminalId)
                         isDestructiveOpInProgress = false
                         val syncSuccess = refreshSessions()
-                        if (!syncSuccess && activeSessionId == targetId) {
-                            controllers[targetId]?.isPanelActive = isEligibleForInput(targetId)
+                        if (!syncSuccess && activeSessionId == target.terminalId) {
+                            controllers[target.terminalId]?.isPanelActive = isEligibleForInput(target.terminalId)
                         }
                     }
                 }
+            },
+            onUnpinSession = { target ->
+                val targetSession = sessions.find {
+                    it.id == target.terminalId &&
+                    it.incarnationExact == target.incarnationExact &&
+                    it.serverPtyEpoch == target.serverPtyEpoch
+                }
+                if (targetSession != null) {
+                    retainedState?.unpinSession(targetSession)
+                    targetForCloseDialog = target.copy(isPinned = false)
+                } else {
+                    uiErrorBanner = "Cannot unpin session: session was replaced or restarted"
+                }
+            },
+            showHiddenSessionsDialog = showHiddenSessionsDialog,
+            onDismissHiddenSessionsDialog = { showHiddenSessionsDialog = false },
+            hiddenSessions = retainedState?.hiddenSessions?.filter { it.profileId == connectionRef.profileId }
+                ?: sessions.filter { fallbackHiddenSessions.contains(it.id) }.map {
+                    TerminalQualifiedKey(
+                        profileId = connectionRef.profileId,
+                        project = it.project ?: projectName,
+                        worktreePath = it.worktreePath,
+                        terminalId = it.id,
+                        serverPtyEpoch = it.serverPtyEpoch,
+                        incarnation = it.incarnation,
+                    )
+                },
+            onReopenHiddenSession = { key ->
+                if (retainedState != null) {
+                    retainedState.reopenSession(key, sessions)
+                } else {
+                    fallbackHiddenSessions = fallbackHiddenSessions - key.terminalId
+                    selectSession(key.terminalId)
+                }
+                showHiddenSessionsDialog = false
             },
             connectionRef = connectionRef,
             activeSessionId = activeSessionId,
@@ -1772,6 +1979,9 @@ private fun TerminalTopHeader(
     onShowCreate: () -> Unit,
     agents: TerminalAgentsContext?,
     modifier: Modifier = Modifier,
+    onNavigateToFiles: (() -> Unit)? = null,
+    onNavigateToEditor: (() -> Unit)? = null,
+    onNavigateToGit: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -1788,11 +1998,12 @@ private fun TerminalTopHeader(
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             modifier = Modifier
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .clickable(enabled = agents?.host?.compactSheetOpen != true) {
                     onBackToProjects()
                 }
-                .padding(horizontal = 6.dp, vertical = 4.dp)
+                .padding(horizontal = 6.dp, vertical = 8.dp)
         )
 
         Text(
@@ -1802,12 +2013,45 @@ private fun TerminalTopHeader(
             fontWeight = FontWeight.Bold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(0.35f)
+            modifier = Modifier.weight(0.3f)
         )
+
+        // Direct capability chrome (Terminal, Files, Editor, Git)
+        if (onNavigateToFiles != null || onNavigateToEditor != null || onNavigateToGit != null) {
+            Row(
+                modifier = Modifier.weight(0.4f, fill = false).horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                listOf(
+                    Triple("Terminal", true, null),
+                    Triple("Files", false, onNavigateToFiles),
+                    Triple("Editor", false, onNavigateToEditor),
+                    Triple("Git", false, onNavigateToGit),
+                ).forEach { (cap, isSelected, nav) ->
+                    Box(
+                        modifier = Modifier
+                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(if (isSelected) DamHopperColors.PrimaryVariant else DamHopperColors.SurfaceVariant)
+                            .clickable(enabled = nav != null) { nav?.invoke() }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = cap,
+                            color = if (isSelected) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+        }
 
         Row(
             modifier = Modifier
-                .weight(0.65f, fill = false)
+                .weight(0.3f, fill = false)
                 .horizontalScroll(rememberScrollState()),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1818,7 +2062,7 @@ private fun TerminalTopHeader(
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier
-                    .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(DamHopperColors.SurfaceVariant)
                     .semantics { contentDescription = "Decrease terminal font size" }
@@ -1844,7 +2088,7 @@ private fun TerminalTopHeader(
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier
-                    .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(DamHopperColors.SurfaceVariant)
                     .semantics { contentDescription = "Increase terminal font size" }
@@ -1862,6 +2106,7 @@ private fun TerminalTopHeader(
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(DamHopperColors.SurfaceVariant)
                     .clickable { onShowDiagnostics() }
@@ -1874,6 +2119,7 @@ private fun TerminalTopHeader(
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(DamHopperColors.SurfaceVariant)
                     .clickable { onShowCreate() }
@@ -1909,7 +2155,7 @@ private fun TerminalSubHeader(
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier
-                .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .background(DamHopperColors.SurfaceVariant)
                 .semantics { contentDescription = "Decrease terminal font size" }
@@ -1935,7 +2181,7 @@ private fun TerminalSubHeader(
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier
-                .sizeIn(minWidth = 32.dp, minHeight = 32.dp)
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .background(DamHopperColors.SurfaceVariant)
                 .semantics { contentDescription = "Increase terminal font size" }
@@ -1953,6 +2199,7 @@ private fun TerminalSubHeader(
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .background(DamHopperColors.SurfaceVariant)
                 .clickable { onShowDiagnostics() }
@@ -1965,6 +2212,7 @@ private fun TerminalSubHeader(
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .background(DamHopperColors.SurfaceVariant)
                 .clickable { onShowCreate() }
@@ -1972,18 +2220,22 @@ private fun TerminalSubHeader(
         )
     }
 }
-
 @Composable
 private fun TerminalSessionTabs(
     sessions: List<TerminalSessionDetailed>,
     activeSessionId: String?,
     onSelectSession: (String) -> Unit,
-    onKillSession: (String) -> Unit,
+    onCloseSession: (TerminalSessionDetailed) -> Unit,
+    hiddenSessionsCount: Int = 0,
+    onShowHiddenSessions: () -> Unit = {},
+    onPinSession: ((TerminalSessionDetailed) -> Unit)? = null,
+    onUnpinSession: ((TerminalSessionDetailed) -> Unit)? = null,
+    isSessionPinned: ((TerminalSessionDetailed) -> Boolean)? = null,
     modifier: Modifier = Modifier,
     wsState: WsState? = null,
     controllers: Map<String, TerminalSessionController> = emptyMap(),
 ) {
-    if (sessions.isEmpty()) return
+    if (sessions.isEmpty() && hiddenSessionsCount == 0) return
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -1997,6 +2249,7 @@ private fun TerminalSessionTabs(
             val isSelected = session.id == activeSessionId
             val ctrl = controllers[session.id]
             val isStreamReady = ctrl?.isReplayCompleted == true
+            val isPinned = isSessionPinned?.invoke(session) == true
             val tabStatus = TerminalConnectionPresentation.resolveTabStatus(
                 wsState = wsState,
                 isSessionAlive = session.alive,
@@ -2008,6 +2261,7 @@ private fun TerminalSessionTabs(
                 modifier = Modifier
                     .clip(RoundedCornerShape(4.dp))
                     .background(if (isSelected) DamHopperColors.PrimaryVariant else DamHopperColors.Surface)
+                    .sizeIn(minHeight = 48.dp)
                     .clickable { onSelectSession(session.id) }
                     .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -2028,16 +2282,63 @@ private fun TerminalSessionTabs(
                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                 )
                 if (isSelected) {
-                    Text(
-                        text = "✕",
-                        color = DamHopperColors.TextSecondary,
-                        fontSize = 11.sp,
+                    Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(2.dp))
-                            .clickable { onKillSession(session.id) }
-                            .padding(horizontal = 2.dp)
-                    )
+                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                            .clickable {
+                                if (isPinned) onUnpinSession?.invoke(session) else onPinSession?.invoke(session)
+                            }
+                            .semantics { contentDescription = if (isPinned) "Pinned session; tap to unpin" else "Pin session" },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(text = if (isPinned) "📌" else "📍", fontSize = 13.sp)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { onCloseSession(session) }
+                            .semantics { contentDescription = "Close or end session ${session.displayName}" },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "✕",
+                            color = DamHopperColors.TextSecondary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                } else if (isPinned) {
+                    Box(
+                        modifier = Modifier
+                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                            .clickable { onUnpinSession?.invoke(session) }
+                            .semantics { contentDescription = "Pinned session; tap to unpin" },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(text = "📌", fontSize = 13.sp)
+                    }
                 }
+            }
+        }
+
+        if (hiddenSessionsCount > 0) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(DamHopperColors.Surface)
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .clickable { onShowHiddenSessions() }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "Hidden ($hiddenSessionsCount) ▾",
+                    color = DamHopperColors.Primary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
         }
     }
@@ -2052,6 +2353,7 @@ private fun TerminalAccessoryBar(
     shiftLatched: Boolean,
     onAccessoryAction: (AccessoryAction) -> Unit,
     modifier: Modifier = Modifier,
+    collapseMode: AccessoryCollapseMode = AccessoryCollapseMode.EXPANDED,
 ) {
     NativeAccessoryKeyboard(
         enabled = prefs.mobileCustomKeyboardEnabled,
@@ -2063,6 +2365,7 @@ private fun TerminalAccessoryBar(
         shiftLatched = shiftLatched,
         scrollButtonsEnabled = prefs.terminalScrollButtonsEnabled,
         scrollStep = clampTerminalScrollStep(prefs.terminalScrollStep),
+        collapseMode = collapseMode,
         onAction = onAccessoryAction,
         modifier = modifier,
     )
@@ -2075,9 +2378,15 @@ private fun TerminalDialogs(
     showCreateDialog: Boolean,
     onDismissCreate: () -> Unit,
     onCreateSession: (command: String, name: String?) -> Unit,
-    sessionToKill: String?,
-    onDismissKill: () -> Unit,
-    onConfirmKill: (String) -> Unit,
+    targetForCloseDialog: CapturedTerminationTarget?,
+    onDismissCloseDialog: () -> Unit,
+    onCloseViewLocally: (CapturedTerminationTarget) -> Unit,
+    onEndSessionDestructively: (CapturedTerminationTarget) -> Unit,
+    onUnpinSession: (CapturedTerminationTarget) -> Unit,
+    showHiddenSessionsDialog: Boolean,
+    onDismissHiddenSessionsDialog: () -> Unit,
+    hiddenSessions: List<TerminalQualifiedKey>,
+    onReopenHiddenSession: (TerminalQualifiedKey) -> Unit,
     connectionRef: ConnectionRef,
     activeSessionId: String?,
 ) {
@@ -2121,35 +2430,144 @@ private fun TerminalDialogs(
                         val finalName = if (nameText.isNotBlank()) nameText else null
                         onCreateSession(finalCmd, finalName)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary)
+                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary),
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                 ) {
                     Text("Create")
                 }
             },
             dismissButton = {
-                TextButton(onClick = onDismissCreate) {
+                TextButton(
+                    onClick = onDismissCreate,
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                ) {
                     Text("Cancel")
                 }
             }
         )
     }
 
-    if (sessionToKill != null) {
+    if (targetForCloseDialog != null) {
+        val cancelFocusRequester = remember { FocusRequester() }
+        LaunchedEffect(targetForCloseDialog) {
+            cancelFocusRequester.requestFocus()
+        }
         AlertDialog(
-            onDismissRequest = onDismissKill,
-            title = { Text("Close Terminal Session", color = DamHopperColors.TextPrimary) },
-            text = { Text("Are you sure you want to close and remove this terminal session?") },
+            onDismissRequest = onDismissCloseDialog,
+            title = { Text("Terminal Session: ${targetForCloseDialog.terminalId}", color = DamHopperColors.TextPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (targetForCloseDialog.isPinned) {
+                        Text(
+                            text = "This session is pinned. Pinned sessions cannot be closed or ended until explicitly unpinned.",
+                            color = DamHopperColors.Warning,
+                            fontSize = 13.sp,
+                        )
+                        Button(
+                            onClick = { onUnpinSession(targetForCloseDialog) },
+                            colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.SurfaceVariant),
+                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                        ) {
+                            Text("Unpin Session", color = DamHopperColors.TextPrimary)
+                        }
+                    } else {
+                        Text(
+                            text = "Choose an action for this terminal session:",
+                            color = DamHopperColors.TextPrimary,
+                            fontSize = 13.sp,
+                        )
+                        if (targetForCloseDialog.destructiveDisabledReason != null) {
+                            Text(
+                                text = "Destructive termination unavailable: ${targetForCloseDialog.destructiveDisabledReason}",
+                                color = DamHopperColors.Warning,
+                                fontSize = 11.sp,
+                            )
+                        }
+                    }
+                }
+            },
             confirmButton = {
-                Button(
-                    onClick = { onConfirmKill(sessionToKill) },
-                    colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Error)
-                ) {
-                    Text("Close Session")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { onCloseViewLocally(targetForCloseDialog) },
+                        enabled = targetForCloseDialog.canCloseViewLocally,
+                        colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Primary),
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                    ) {
+                        Text("Close View (local only)")
+                    }
+                    Button(
+                        onClick = { onEndSessionDestructively(targetForCloseDialog) },
+                        enabled = targetForCloseDialog.canEndSessionDestructively,
+                        colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Error),
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                    ) {
+                        Text(if (targetForCloseDialog.willRestart) "Cancel Restart" else "End Session")
+                    }
                 }
             },
             dismissButton = {
-                TextButton(onClick = onDismissKill) {
+                TextButton(
+                    onClick = onDismissCloseDialog,
+                    modifier = Modifier
+                        .focusRequester(cancelFocusRequester)
+                        .sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                ) {
                     Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showHiddenSessionsDialog) {
+        AlertDialog(
+            onDismissRequest = onDismissHiddenSessionsDialog,
+            title = { Text("Hidden Terminal Sessions", color = DamHopperColors.TextPrimary) },
+            text = {
+                if (hiddenSessions.isEmpty()) {
+                    Text("No hidden terminal sessions.", color = DamHopperColors.TextSecondary)
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        itemsIndexed(hiddenSessions) { _, key ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(DamHopperColors.SurfaceVariant, RoundedCornerShape(4.dp))
+                                    .padding(8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = key.terminalId,
+                                        color = DamHopperColors.TextPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                    )
+                                    Text(
+                                        text = "Incarnation ${key.incarnation}",
+                                        color = DamHopperColors.TextSecondary,
+                                        fontSize = 11.sp,
+                                    )
+                                }
+                                Button(
+                                    onClick = { onReopenHiddenSession(key) },
+                                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                                ) {
+                                    Text("Reopen")
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(
+                    onClick = onDismissHiddenSessionsDialog,
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                ) {
+                    Text("Close")
                 }
             }
         )

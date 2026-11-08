@@ -187,7 +187,7 @@ class TerminalAgentsActivationCoordinatorTest {
         val row = projector.rows(inventory.snapshotInput(mapOf(a.id to "A", b.id to "B")).input).single()
 
         val flow = AppFlowNavigation(
-            AppFlowState(stage = AppFlowStage.TERMINAL, activeProfileId = a.id, activeProject = "other", activeSessionId = "x"),
+            AppFlowState(stage = AppFlowStage.HUB, activeProfileId = a.id, activeProject = "other", activeSessionId = "x"),
         )
         val selection = RecordingSelection { flow }
         val activation = TerminalAgentsActivationCoordinator(
@@ -225,7 +225,7 @@ class TerminalAgentsActivationCoordinatorTest {
         assertEquals(TerminalAgentsActivationResult.Committed, receipt.result)
         assertEquals(env.profileB.id, profiles.activeProfileId.value)
         val state = env.flow.state.value
-        assertEquals(AppFlowStage.TERMINAL, state.stage)
+        assertEquals(AppFlowStage.HUB, state.stage)
         assertEquals(env.profileB.id, state.activeProfileId)
         assertEquals("proj", state.activeProject)
         assertEquals("term-1", state.activeSessionId)

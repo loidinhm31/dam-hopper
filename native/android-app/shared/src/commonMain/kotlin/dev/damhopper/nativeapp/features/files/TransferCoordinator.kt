@@ -69,6 +69,8 @@ class TransferCoordinator(
             reqId = beginReqId,
             uploadId = uploadId,
             target = ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath),
+            project = target.project,
+            worktreePath = target.worktreePath,
             dir = dir,
             filename = filename,
             len = totalBytes.toULong(),

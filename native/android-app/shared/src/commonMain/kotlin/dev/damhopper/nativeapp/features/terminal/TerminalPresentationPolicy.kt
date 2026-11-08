@@ -1,6 +1,7 @@
 package dev.damhopper.nativeapp.features.terminal
 
 import dev.damhopper.nativeapp.features.settings.WorkbenchPreferences
+import kotlinx.serialization.Serializable
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
@@ -78,4 +79,130 @@ internal fun pinchedTerminalFontSize(startFontSizeSp: Int, zoomFactor: Float): I
         WorkbenchPreferences.FONT_MAX.toDouble(),
     )
     return WorkbenchPreferences.clampFont(scaled.roundToInt())
+}
+
+/**
+ * Exact qualified identity of a terminal session across profiles, projects, worktrees,
+ * PTY manager epochs and incarnations.
+ */
+@Serializable
+data class TerminalQualifiedKey(
+    val profileId: String,
+    val project: String?,
+    val worktreePath: String? = null,
+    val terminalId: String,
+    val serverPtyEpoch: String? = null,
+    val incarnation: ULong = 0uL,
+) {
+    fun matchesSession(currentProfileId: String, session: TerminalSessionDetailed): Boolean {
+        return this.profileId == currentProfileId &&
+            this.terminalId == session.id &&
+            this.project == session.project &&
+            this.worktreePath == session.worktreePath &&
+            this.incarnation == session.incarnation &&
+            (this.serverPtyEpoch == null || session.serverPtyEpoch == null || this.serverPtyEpoch == session.serverPtyEpoch)
+    }
+}
+
+/**
+ * Captured termination target frozen when opening the close dialog.
+ * Prevents ambient / raw-ID fallback and re-validates authority and syntax.
+ */
+data class CapturedTerminationTarget(
+    val profileId: String,
+    val connectionGeneration: Long,
+    val terminalId: String,
+    val project: String? = null,
+    val worktreePath: String? = null,
+    val serverPtyEpoch: String? = null,
+    val incarnationExact: String? = null,
+    val isPinned: Boolean = false,
+    val isAlive: Boolean = true,
+    val willRestart: Boolean = false,
+    val isDestructiveOpInProgress: Boolean = false,
+) {
+    val isValidEpoch: Boolean = !serverPtyEpoch.isNullOrBlank() && TerminateSessionRequest.isValidEpoch(serverPtyEpoch)
+    val isValidIncarnation: Boolean = !incarnationExact.isNullOrBlank() && TerminateSessionRequest.isValidIncarnation(incarnationExact)
+    val isProtocolSupported: Boolean = isValidEpoch && isValidIncarnation
+
+    val canCloseViewLocally: Boolean = !isPinned
+    val canEndSessionDestructively: Boolean = !isPinned && isProtocolSupported && !isDestructiveOpInProgress
+
+    val destructiveDisabledReason: String? = when {
+        isPinned -> "Cannot close or end pinned session; unpin first."
+        isDestructiveOpInProgress -> "Destructive operation already in progress."
+        !isValidEpoch -> "Cannot end session: missing verified server PTY epoch"
+        !isValidIncarnation -> "Cannot end session: missing verified server PTY incarnation"
+        else -> null
+    }
+}
+
+data class TerminalCloseGuard(
+    val isPinned: Boolean,
+    val canCloseViewLocally: Boolean,
+    val canEndSessionDestructively: Boolean,
+    val destructiveDisabledReason: String?,
+)
+
+fun evaluateCloseGuard(target: CapturedTerminationTarget): TerminalCloseGuard =
+    TerminalCloseGuard(
+        isPinned = target.isPinned,
+        canCloseViewLocally = target.canCloseViewLocally,
+        canEndSessionDestructively = target.canEndSessionDestructively,
+        destructiveDisabledReason = target.destructiveDisabledReason,
+    )
+
+enum class AccessoryCollapseMode {
+    EXPANDED,
+    COLLAPSED_SINGLE_ROW,
+    HIDDEN,
+}
+
+fun resolveAccessoryCollapseMode(
+    contentHeightPx: Float,
+    lineHeightPx: Float,
+    singleRowAccessoryHeightPx: Float,
+    doubleRowAccessoryHeightPx: Float,
+    minTerminalRows: Int = 3,
+): AccessoryCollapseMode {
+    if (!contentHeightPx.isFinite() || contentHeightPx <= 0f) return AccessoryCollapseMode.HIDDEN
+    val safeLineHeight = if (lineHeightPx.isFinite() && lineHeightPx > 0f) lineHeightPx else 30f
+    val heightForDouble = (minTerminalRows * safeLineHeight) + doubleRowAccessoryHeightPx
+    val heightForSingle = (minTerminalRows * safeLineHeight) + singleRowAccessoryHeightPx
+    return when {
+        contentHeightPx >= heightForDouble -> AccessoryCollapseMode.EXPANDED
+        contentHeightPx >= heightForSingle -> AccessoryCollapseMode.COLLAPSED_SINGLE_ROW
+        else -> AccessoryCollapseMode.HIDDEN
+    }
+}
+
+fun calculateTerminalViewportHeight(
+    usableHeightPx: Float,
+    actualChromeHeightPx: Float,
+    accessoryHeightPx: Float,
+    bannerHeightPx: Float,
+): Float = (usableHeightPx - actualChromeHeightPx - accessoryHeightPx - bannerHeightPx).coerceAtLeast(0f)
+
+fun calculateTerminalVisibleRows(
+    terminalHeightPx: Float,
+    lineHeightPx: Float,
+): Int {
+    if (!lineHeightPx.isFinite() || lineHeightPx <= 0f) return 1
+    return floor(terminalHeightPx.coerceAtLeast(0f) / lineHeightPx).toInt().coerceAtLeast(1)
+}
+
+fun canDismissWorkspace(
+    isInventoryAuthoritativeLoaded: Boolean,
+    isConnected: Boolean,
+    liveSessions: List<TerminalSessionDetailed>,
+    hiddenSessions: List<TerminalQualifiedKey>,
+    restartPendingTerminalIds: Set<String>,
+    pendingCreateIntents: List<UncertainCreateRecord>,
+): Boolean {
+    if (!isInventoryAuthoritativeLoaded || !isConnected) return false
+    val liveCount = liveSessions.size
+    val hiddenCount = hiddenSessions.size
+    val restartCount = restartPendingTerminalIds.size
+    val pendingCreateCount = pendingCreateIntents.size
+    return (liveCount + hiddenCount + restartCount + pendingCreateCount) == 0
 }

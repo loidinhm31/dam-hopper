@@ -54,6 +54,7 @@ fun GlobalSettingsView(
     var message by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var pendingRemoval by remember { mutableStateOf<Pair<KnownWorkspace, HostMutationTicket>?>(null) }
+    var showConfirmRootDialog by remember { mutableStateOf(false) }
 
     suspend fun reloadRegistry() {
         val repo = workspaceRepository ?: return
@@ -143,11 +144,7 @@ fun GlobalSettingsView(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         enabled = editor != null && defaultDraft.isNotBlank() && defaults?.busy != true,
-                        onClick = {
-                            scope.launch {
-                                message = editor!!.setGlobalDefaultWorkspace(defaultDraft).describe("Setting the workspace root")
-                            }
-                        },
+                        onClick = { showConfirmRootDialog = true },
                     ) { Text("Set root") }
                 }
                 Text(
@@ -228,6 +225,18 @@ fun GlobalSettingsView(
             }
         }
         message?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (showConfirmRootDialog && editor != null) {
+            ConfirmRootChangeDialog(
+                targetRoot = defaultDraft,
+                onConfirm = {
+                    showConfirmRootDialog = false
+                    scope.launch {
+                        message = editor.setGlobalDefaultWorkspace(defaultDraft, confirmed = true).describe("Setting the workspace root")
+                    }
+                },
+                onDismiss = { showConfirmRootDialog = false }
+            )
+        }
     }
 }
 

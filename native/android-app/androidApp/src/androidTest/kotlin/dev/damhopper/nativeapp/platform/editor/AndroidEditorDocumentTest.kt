@@ -177,4 +177,70 @@ class AndroidEditorDocumentTest {
 
         doc.close()
     }
+
+    @Test
+    fun testLateOldDetachCannotDamageSuccessorReceiptOrViewState() {
+        val doc = AndroidEditorDocument(
+            id = testDocId("LateDetach.java"),
+            initialText = "line 1\nline 2\nline 3\n",
+            initialMtime = 1000L
+        )
+
+        ActivityScenario.launch(ComponentActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                val editor1 = CodeEditor(activity)
+                val viewToken1 = doc.acquireViewLease("surface-1")
+                doc.attachEditor(editor1, useJavaSyntax = false, leaseToken = viewToken1)
+                editor1.setSelectionRegion(0, 2, 0, 4, false)
+
+                // Reattachment / successor mounts
+                val editor2 = CodeEditor(activity)
+                val viewToken2 = doc.acquireViewLease("surface-2")
+                doc.attachEditor(editor2, useJavaSyntax = false, leaseToken = viewToken2)
+                editor2.setSelectionRegion(2, 1, 2, 5, false)
+
+                // Set sentinel view state representing active successor
+                doc.captureViewState(dev.damhopper.nativeapp.features.editor.DocumentViewState(cursorLine = 99))
+
+                // Late old detach occurs from superseded editor1
+                doc.detachEditor(editor1, viewToken1)
+                doc.releaseViewLease(viewToken1)
+
+                // Successor editor2 must NOT have its view state overwritten!
+                assertEquals(99, doc.viewState.value.cursorLine, "Late old detach must not overwrite successor view state")
+                assertFalse(doc.isClosed, "Late old detach must never close document")
+
+                // Clean detach from active editor2 updates viewState
+                doc.detachEditor(editor2, viewToken2)
+                doc.releaseViewLease(viewToken2)
+                assertEquals(2, doc.viewState.value.cursorLine)
+            }
+            doc.close()
+        }
+    }
+
+    @Test
+    fun testViewLeasesAndSaveTrackingControlDisposal() {
+        val doc = AndroidEditorDocument(
+            id = testDocId("LeaseTest.java"),
+            initialText = "content",
+            initialMtime = 1000L
+        )
+
+        val aliasToken = doc.acquireAliasLease("alias-1")
+        val viewToken = doc.acquireViewLease("surface-1")
+        assertFalse(doc.canDispose)
+
+        doc.releaseAliasLease(aliasToken)
+        assertFalse(doc.canDispose, "Cannot dispose while view lease held")
+
+        val saveRelease = doc.beginSaveTracking()
+        doc.releaseViewLease(viewToken)
+        assertFalse(doc.canDispose, "Cannot dispose while save in flight")
+
+        saveRelease.invoke()
+        assertTrue(doc.canDispose, "Can dispose when all leases and save tracking released")
+
+        doc.close()
+    }
 }

@@ -10,6 +10,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import java.net.InetSocketAddress
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -127,5 +129,126 @@ class GitFocusedIntegrationTest {
         assertNull(runtime.changes.activeScope)
         assertNull(runtime.branches.activeScope)
         assertNull(runtime.history.activeScope)
+    }
+
+    @Test
+    fun testUnregisteredProjectTargetHasZeroGitDispatch() = runTest {
+        val requestCount = java.util.concurrent.atomic.AtomicInteger(0)
+        server!!.createContext("/api/git") { exchange ->
+            requestCount.incrementAndGet()
+            exchange.sendResponseHeaders(200, 2)
+            exchange.responseBody.use { it.write("[]".toByteArray()) }
+        }
+
+        val unmarkedOwner = WorkspaceFileOwner(
+            profileId = "test-prof",
+            baseUrl = "http://127.0.0.1:$serverPort",
+            accountUser = "test-account",
+            project = "workspace",
+            worktreePath = null,
+        )
+
+        val runtime = createRuntime(this, unmarkedOwner)
+        assertFalse(runtime.isRegisteredProjectTarget)
+        assertNull(runtime.scope.value)
+        assertNull(runtime.changes.activeScope)
+        assertNull(runtime.branches.activeScope)
+        assertNull(runtime.history.activeScope)
+        assertNull(runtime.worktrees.activeScope)
+
+        // refresh must result in zero Git network dispatch
+        runtime.refresh(GitRefreshReason.ENTRY)
+        testScheduler.runCurrent()
+        assertEquals(0, requestCount.get(), "Unmarked workspace target must have zero Git dispatch on refresh")
+
+        // Direct controller calls must also produce zero dispatch due to cleared scope
+        runtime.changes.refreshChanges()
+        runtime.branches.refreshBranches()
+        runtime.worktrees.refreshWorktrees()
+        runtime.history.loadHistory()
+        testScheduler.runCurrent()
+        assertEquals(0, requestCount.get(), "Direct controller calls on unregistered target must produce zero dispatch")
+    }
+
+    @Test
+    fun testSelectRootRefusesUnknownVcsRootWithoutScopeDrift() = runTest {
+        server!!.createContext("/api/git/focused-proj/roots") { exchange ->
+            val json = """[{"rootId":"root-primary","path":".","kind":"primary"}]"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/git/focused-proj/status") { exchange ->
+            val json = """{"staged":[],"unstaged":[],"untracked":[]}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/git/focused-proj/branches") { exchange ->
+            val json = """[{"name":"main","isCurrent":true,"isLocal":true}]"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/git/focused-proj/worktrees") { exchange ->
+            val json = """[]"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/git/focused-proj/log") { exchange ->
+            val json = """{"entries":[],"hasMore":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+
+        val runtime = createRuntime(this)
+        runtime.refresh(GitRefreshReason.ENTRY)
+        val startTime = System.currentTimeMillis()
+        while (runtime.selectedRootId.value == null && System.currentTimeMillis() - startTime < 3000) {
+            Thread.sleep(50)
+            testScheduler.runCurrent()
+        }
+
+        assertEquals("root-primary", runtime.selectedRootId.value)
+        assertEquals(".", runtime.scope.value?.root)
+
+        // Selecting non-existent root must be refused without scope change or fallback
+        runtime.selectRoot("non-existent-submodule")
+        assertEquals("root-primary", runtime.selectedRootId.value)
+        assertEquals(".", runtime.scope.value?.root)
+    }
+
+    @Test
+    fun testUnknownMutationOutcomePreservesUncertaintyWithoutSuccessRefresh() = runTest {
+        val requestCount = java.util.concurrent.atomic.AtomicInteger(0)
+        server!!.createContext("/api/git/focused-proj") { exchange ->
+            requestCount.incrementAndGet()
+            exchange.sendResponseHeaders(200, 2)
+            exchange.responseBody.use { it.write("[]".toByteArray()) }
+        }
+
+        val runtime = createRuntime(this)
+        val initialRequestCount = requestCount.get()
+
+        val unknownEvent = GitMutationEvent(
+            scope = runtime.scope.value!!,
+            impact = GitMutationImpact.FILES,
+            kind = GitOutcomeKind.UNKNOWN,
+            paths = listOf("file.kt"),
+            message = "Uncertain transport failure",
+        )
+        // Outcome handler must NOT trigger refresh on UNKNOWN
+        runtime.onMutationOutcome(unknownEvent)
+        testScheduler.runCurrent()
+        assertEquals(initialRequestCount, requestCount.get(), "UNKNOWN outcome must not trigger refresh")
+
+        val rejectedEvent = GitMutationEvent(
+            scope = runtime.scope.value!!,
+            impact = GitMutationImpact.FILES,
+            kind = GitOutcomeKind.REJECTED,
+            paths = listOf("file.kt"),
+            message = "Safety guard rejected mutation",
+        )
+        // Outcome handler must NOT trigger refresh on REJECTED
+        runtime.onMutationOutcome(rejectedEvent)
+        testScheduler.runCurrent()
+        assertEquals(initialRequestCount, requestCount.get(), "REJECTED outcome must not trigger refresh")
     }
 }

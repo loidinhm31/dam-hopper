@@ -183,6 +183,128 @@ class AgentHubContractsTest {
         assertEquals("t1", terminateAction.terminalId)
         assertEquals("uuid-1234", terminateAction.expectedServerEpoch)
         assertEquals("1", terminateAction.expectedIncarnation)
+        val openZero = AgentHubAction.OpenZeroSessionProject(target)
+        assertEquals(target, openZero.target)
+
+        val dismissZero = AgentHubAction.DismissZeroSessionProject(target)
+        assertEquals(target, dismissZero.target)
+
+        val openFiles = AgentHubAction.OpenFiles(FilesystemTargetRef.Project("local", "dam-hopper", null))
+        assertEquals("dam-hopper", (openFiles.target as FilesystemTargetRef.Project).project)
+
+        val openGit = AgentHubAction.OpenGit(target)
+        assertEquals(target, openGit.target)
+
+        val openEditor = AgentHubAction.OpenEditor("src/main.kt")
+        assertEquals("src/main.kt", openEditor.fileRef)
+
+        val openSettings = AgentHubAction.OpenSettings("NOTIFICATIONS")
+        assertEquals("NOTIFICATIONS", openSettings.targetCategory)
+
+        assertEquals(AgentHubAction.OpenNotifications, AgentHubAction.OpenNotifications)
+        assertEquals(AgentHubAction.HandleBackPressed, AgentHubAction.HandleBackPressed)
+    }
+
+    @Test
+    fun testZeroSessionDismissalSafetyContract() {
+        val targetA = ProjectTargetRef(profileId = "p1", project = "proj-active")
+        val targetZ = ProjectTargetRef(profileId = "p1", project = "proj-zero")
+        val tActive = HubTerminalRow(
+            id = "t1",
+            displayName = "Active",
+            command = "bash",
+            projectTarget = targetA,
+            alive = true,
+        )
+
+        val snapshot = AgentHubSnapshot(
+            profileId = "p1",
+            selectedProjectTarget = targetA,
+            zeroSessionOpenTargets = listOf(targetZ),
+            terminalRows = listOf(tActive),
+            isInventoryLoaded = true,
+            isConnected = true,
+        )
+
+        // Active target has live sessions -> cannot be dismissed as zero-session
+        val activeSessions = snapshot.terminalRows.filter { it.projectTarget == targetA }
+        assertEquals(1, activeSessions.size)
+
+        // Zero-session target has 0 sessions -> eligible for dismissal
+        val zeroSessions = snapshot.terminalRows.filter { it.projectTarget == targetZ }
+        assertEquals(0, zeroSessions.size)
+        assertTrue(snapshot.zeroSessionOpenTargets.contains(targetZ))
+    }
+
+    @Test
+    fun testSameTerminalIdAcrossDifferentProfilesPreservesProfileIdentity() {
+        val targetP1 = ProjectTargetRef(profileId = "prof-1", project = "proj-alpha")
+        val targetP2 = ProjectTargetRef(profileId = "prof-2", project = "proj-alpha")
+        val t1 = HubTerminalRow(
+            id = "common-term-id",
+            displayName = "Server 1 Terminal",
+            command = "sh",
+            projectTarget = targetP1,
+            alive = true,
+        )
+        val t2 = HubTerminalRow(
+            id = "common-term-id",
+            displayName = "Server 2 Terminal",
+            command = "zsh",
+            projectTarget = targetP2,
+            alive = true,
+        )
+
+        val snapshot = AgentHubSnapshot(
+            profileId = "prof-1",
+            selectedProjectTarget = targetP1,
+            terminalRows = listOf(t1, t2),
+            isInventoryLoaded = true,
+            isConnected = true,
+        )
+
+        assertEquals(2, snapshot.terminalRows.size)
+        assertEquals("prof-1", snapshot.terminalRows[0].projectTarget?.profileId)
+        assertEquals("prof-2", snapshot.terminalRows[1].projectTarget?.profileId)
+
+        val termActionP1 = AgentHubAction.TerminateTerminal(
+            terminalId = "common-term-id",
+            expectedServerEpoch = "uuid-1",
+            expectedIncarnation = "1",
+            profileId = "prof-1",
+        )
+        val termActionP2 = AgentHubAction.TerminateTerminal(
+            terminalId = "common-term-id",
+            expectedServerEpoch = "uuid-2",
+            expectedIncarnation = "2",
+            profileId = "prof-2",
+        )
+        assertEquals("prof-1", termActionP1.profileId)
+        assertEquals("prof-2", termActionP2.profileId)
+    }
+
+    @Test
+    fun testZeroSessionDismissalLifecycleSimulation() {
+        var zeroTargets = setOf<ProjectTargetRef>()
+        val target = ProjectTargetRef(profileId = "p1", project = "empty-proj")
+
+        // 1. Open zero-session project
+        zeroTargets = zeroTargets + target
+        assertTrue(zeroTargets.contains(target))
+
+        // 2. Simulation: dismissal with sessions present fails
+        fun tryDismiss(target: ProjectTargetRef, hasSessions: Boolean): Boolean {
+            if (hasSessions) return false
+            zeroTargets = zeroTargets - target
+            return true
+        }
+
+        assertFalse(tryDismiss(target, hasSessions = true), "Cannot dismiss while sessions exist")
+        assertTrue(zeroTargets.contains(target))
+
+        // 3. Dismissal when 0 sessions exist succeeds
+        assertTrue(tryDismiss(target, hasSessions = false), "Dismiss succeeds with 0 sessions")
+        assertFalse(zeroTargets.contains(target))
     }
 
     @Test

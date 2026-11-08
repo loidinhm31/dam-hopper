@@ -11,6 +11,9 @@ import dev.damhopper.nativeapp.features.settings.decodeNativePreferences
 import dev.damhopper.nativeapp.features.settings.encodeNativePreferences
 import dev.damhopper.nativeapp.features.settings.encodeSourceTargetState
 import dev.damhopper.nativeapp.features.settings.migrateSourceSnapshot
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonElement
 
 /**
@@ -38,9 +41,14 @@ class AndroidPreferencesStore(
     private var sourceTarget: SettingsSourceTargetState = SettingsSourceTargetState()
     private var sourceTargetError: String? = null
     private var uncertainCreateError: String? = null
+    private val _uncertainCreatesFlow = MutableStateFlow<List<dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord>>(emptyList())
+    val uncertainCreatesFlow: StateFlow<List<dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord>> = _uncertainCreatesFlow.asStateFlow()
     init {
         loadPreferencesFromDisk()
         loadSourceTargetFromDisk()
+        try {
+            _uncertainCreatesFlow.value = loadUncertainCreateRecords()
+        } catch (_: Throwable) {}
     }
 
     private fun loadPreferencesFromDisk() {
@@ -158,6 +166,7 @@ class AndroidPreferencesStore(
             )
             val success = prefs.edit().putString(KEY_UNCERTAIN_CREATES, encoded).commit()
             check(success) { "Failed to durably commit uncertain create record to disk" }
+            _uncertainCreatesFlow.value = current
         }
     }
 
@@ -171,6 +180,7 @@ class AndroidPreferencesStore(
             )
             val success = prefs.edit().putString(KEY_UNCERTAIN_CREATES, encoded).commit()
             check(success) { "Failed to durably commit removal of uncertain create record to disk" }
+            _uncertainCreatesFlow.value = current
         }
     }
 

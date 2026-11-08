@@ -34,9 +34,9 @@ class AgentSettingsNavigationTest {
         override fun currentSnapshot(profileId: String): SettingsBinding? = null
     }
 
-    private fun terminalFlow() = AppFlowNavigation(
+    private fun hubFlow() = AppFlowNavigation(
         AppFlowState(
-            stage = AppFlowStage.TERMINAL,
+            stage = AppFlowStage.HUB,
             activeProfileId = "B",
             activeProject = "proj",
             activeSessionId = "term-1",
@@ -57,11 +57,11 @@ class AgentSettingsNavigationTest {
                 ),
             )
             val repository = SettingsRepository(store, noResolver, scope, debounceMillis = 20L, invalidateRuntime = {})
-            val nav = terminalFlow()
+            val nav = hubFlow()
             val before = nav.state.value
 
             repository.setSettingsTarget("B")
-            nav.openAgentSettings(SettingsOrigin(AppFlowStage.TERMINAL, panel = "TERMINAL", sessionId = "term-1"), "B")
+            nav.openAgentSettings(SettingsOrigin(AppFlowStage.HUB, panel = "TERMINAL", sessionId = "term-1"), "B")
 
             assertEquals("B", repository.sourceTargetState.value.settingsProfileId, "the selected target is B")
             assertEquals("A", repository.sourceTargetState.value.preferencesProfileId, "source A is untouched")
@@ -87,7 +87,7 @@ class AgentSettingsNavigationTest {
     fun mismatchedTargetServicesStayBlockedUntilSelectedTargetAndExactOwnerMatch() {
         val connection = ConnectionRef("B", 2L)
         val overlay = SettingsOverlay(
-            origin = SettingsOrigin(AppFlowStage.TERMINAL),
+            origin = SettingsOrigin(AppFlowStage.HUB),
             subSection = "HOST",
             hostSection = "AGENTS",
             targetProfileId = "B",

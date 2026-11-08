@@ -17,10 +17,18 @@ import dev.damhopper.nativeapp.core.lifecycle.LifecycleCoordinator
  */
 class AndroidLifecycleCoordinator(
     val coordinator: LifecycleCoordinator = LifecycleCoordinator(),
+    val activityToken: Any? = null,
     private val onDetach: (() -> Unit)? = null,
     private val onResumed: (() -> Unit)? = null,
     private val isChangingConfigurations: (() -> Boolean)? = null,
 ) : DefaultLifecycleObserver {
+
+    constructor(
+        coordinator: LifecycleCoordinator = LifecycleCoordinator(),
+        onDetach: (() -> Unit)?,
+        onResumed: (() -> Unit)? = null,
+        isChangingConfigurations: (() -> Boolean)? = null,
+    ) : this(coordinator, null, onDetach, onResumed, isChangingConfigurations)
 
     override fun onStart(owner: LifecycleOwner) {
         coordinator.onAppForeground()

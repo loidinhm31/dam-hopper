@@ -137,3 +137,35 @@ fun DiagnosticsExportConfirmDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+/** Destructive confirmation before changing workspace root. */
+@Composable
+fun ConfirmRootChangeDialog(
+    targetRoot: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Change workspace root?", color = MaterialTheme.colorScheme.error) },
+        text = {
+            Column {
+                Text("Selected target root: $targetRoot", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Changing the workspace root terminates all running remote terminal processes (PTYs) on this server. " +
+                        "This operation cannot be undone automatically.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("Confirm & Switch", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}

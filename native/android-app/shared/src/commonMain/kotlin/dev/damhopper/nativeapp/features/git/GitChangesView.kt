@@ -22,6 +22,9 @@ fun GitChangesView(
     onOpenFileDiff: (String) -> Unit = {},
     onUndoLastCommit: (() -> Unit)? = null,
     onMutationSuccess: () -> Unit = {},
+    onOpenRecoveryTerminal: (() -> Unit)? = null,
+    operationStatus: GitOperationStatus? = null,
+    conflictSummary: GitConflictSummary? = null,
     modifier: Modifier = Modifier,
 ) {
     val staged by controller.stagedFiles.collectAsState()
@@ -60,11 +63,84 @@ fun GitChangesView(
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
             ) { Text("Refresh", fontSize = 12.sp, color = DamHopperColors.TextPrimary) }
         }
+        if (operationStatus != null && operationStatus.operation.isNotBlank() && operationStatus.operation != "none") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Warning.copy(alpha = 0.2f))
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                val reason = if (!operationStatus.stoppedReason.isNullOrBlank()) " (${operationStatus.stoppedReason})" else ""
+                Text(
+                    text = "Git operation '${operationStatus.operation}' in progress$reason. Resolve in Terminal CLI.",
+                    style = DamHopperTypography.bodySmall,
+                    color = DamHopperColors.Warning,
+                    modifier = Modifier.weight(1f)
+                )
+                if (onOpenRecoveryTerminal != null) {
+                    TextButton(onClick = onOpenRecoveryTerminal) {
+                        Text("Open Terminal", fontSize = 11.sp, color = DamHopperColors.Primary)
+                    }
+                }
+            }
+        }
+
+        if (conflictSummary != null && conflictSummary.entries.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Error.copy(alpha = 0.15f))
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Conflicts detected (${conflictSummary.entries.size} files). Resolve in Terminal CLI.",
+                    style = DamHopperTypography.bodySmall,
+                    color = DamHopperColors.Error,
+                    modifier = Modifier.weight(1f)
+                )
+                if (onOpenRecoveryTerminal != null) {
+                    TextButton(onClick = onOpenRecoveryTerminal) {
+                        Text("Open Terminal", fontSize = 11.sp, color = DamHopperColors.Primary)
+                    }
+                }
+            }
+        }
+
+        val unmergedEntries = remember(staged, unstaged) {
+            (staged + unstaged).filter {
+                it.status == "conflict" || it.status == "unmerged" || it.status == "U" || it.status == "AA" || it.status == "UU"
+            }.distinctBy { it.path }
+        }
+        if ((conflictSummary == null || conflictSummary.entries.isEmpty()) && unmergedEntries.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Warning.copy(alpha = 0.2f))
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Unmerged working tree changes (${unmergedEntries.size} files). Resolve in Terminal CLI.",
+                    style = DamHopperTypography.bodySmall,
+                    color = DamHopperColors.Warning,
+                    modifier = Modifier.weight(1f)
+                )
+                if (onOpenRecoveryTerminal != null) {
+                    TextButton(onClick = onOpenRecoveryTerminal) {
+                        Text("Open Terminal", fontSize = 11.sp, color = DamHopperColors.Primary)
+                    }
+                }
+            }
+        }
 
         if (error != null) {
             Text(text = error!!, color = DamHopperColors.Error, style = DamHopperTypography.bodySmall, modifier = Modifier.padding(8.dp))
         }
-
         LazyColumn(modifier = Modifier.weight(1f).padding(horizontal = 8.dp)) {
             item {
                 Text("Staged Changes (${staged.size})", style = DamHopperTypography.labelSmall, color = DamHopperColors.Success, modifier = Modifier.padding(vertical = 4.dp))

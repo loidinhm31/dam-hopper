@@ -28,7 +28,7 @@ class EditorTabSaveCoordinator(
             target = tab.target,
             path = tab.path,
             submittedContent = submittedText,
-            expectedMtime = tab.mtime,
+            expectedMtime = session.serverMtime ?: tab.mtime,
             encryptedRequested = tab.encryptedSessionRequired,
             reservationToken = reservationToken,
             submittedRevision = snapshot.revision,

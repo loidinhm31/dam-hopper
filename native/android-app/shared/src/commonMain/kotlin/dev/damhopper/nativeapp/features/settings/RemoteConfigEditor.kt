@@ -98,6 +98,9 @@ class RemoteConfigEditor(
 
     private var nextRowId = 1L
     private var originals: Map<Long, JsonObject> = emptyMap()
+    private var originalServices: Map<Long, JsonObject> = emptyMap()
+    private var originalTerminals: Map<Long, JsonObject> = emptyMap()
+    private var originalCommands: Map<Long, JsonElement> = emptyMap()
 
     fun newRowId(): Long = nextRowId++
 
@@ -154,7 +157,17 @@ class RemoteConfigEditor(
         } else {
             val workspace = ((global["workspace"] as? JsonObject)?.get("root") as? JsonPrimitive)
                 ?.takeIf { it.isString }?.content
-            _defaults.update { it.copy(workspace = workspace, loaded = true, error = null) }
+            if (workspace.isNullOrBlank()) {
+                _defaults.update {
+                    it.copy(
+                        workspace = null,
+                        loaded = true,
+                        error = "Workspace root is unconfigured; no defaults.workspace fallback.",
+                    )
+                }
+            } else {
+                _defaults.update { it.copy(workspace = workspace, loaded = true, error = null) }
+            }
             true
         }
     } catch (ce: CancellationException) {
@@ -180,7 +193,7 @@ class RemoteConfigEditor(
         val config = current.config ?: return
         val updated = transform(config)
         val root = parseRoot(_state.value.draftConfigJson) ?: return
-        val json = applyStructured(root, updated, originals).toString()
+        val json = applyStructured(root, updated, originals, originalServices, originalTerminals).toString()
         _state.update { it.copy(draftConfigJson = json, isDirty = isDirtyJson(it.baseConfigJson, json)) }
         _structured.value = StructuredConfigState(
             config = updated,
@@ -296,8 +309,23 @@ class RemoteConfigEditor(
      * Replaces the whole config (PUT) with the validated draft. A conflict must be resolved first unless
      * [overwriteConflict] is an explicit user choice.
      */
-    suspend fun saveFullConfig(overwriteConflict: Boolean = false): SettingsOutcome<Unit> {
+    fun hasRootChange(): Boolean {
+        val baseRoot = parseRoot(_state.value.baseConfigJson)?.let { (it["workspace"] as? JsonObject)?.string("root") }
+        val draftRoot = parseRoot(_state.value.draftConfigJson)?.let { (it["workspace"] as? JsonObject)?.string("root") }
+        return baseRoot != null && draftRoot != null && baseRoot != draftRoot
+    }
+
+    fun targetRoot(): String? = parseRoot(_state.value.draftConfigJson)?.let { (it["workspace"] as? JsonObject)?.string("root") }
+
+    suspend fun saveFullConfig(
+        overwriteConflict: Boolean = false,
+        confirmRootChange: Boolean = false,
+        departureGuard: (suspend () -> Boolean)? = null,
+    ): SettingsOutcome<Unit> {
         val draft = _state.value.draftConfigJson
+        val baseRoot = parseRoot(_state.value.baseConfigJson)?.let { (it["workspace"] as? JsonObject)?.string("root") }
+        val draftRoot = parseRoot(draft)?.let { (it["workspace"] as? JsonObject)?.string("root") }
+        val changesRoot = baseRoot != null && draftRoot != null && baseRoot != draftRoot
         return guardedMutation(
             preflight = {
                 val s = _state.value
@@ -309,17 +337,40 @@ class RemoteConfigEditor(
                         SettingsOutcome.NotSubmitted(_structured.value.parseError!!)
                     _structured.value.issues.isNotEmpty() ->
                         SettingsOutcome.NotSubmitted("Fix the highlighted fields before saving.")
+                    changesRoot && !confirmRootChange ->
+                        SettingsOutcome.NotSubmitted("Saving config with a changed workspace root terminates remote PTYs; explicit confirmation required.")
                     else -> null
                 }
             },
             publish = { outcome ->
                 if (outcome is SettingsOutcome.Confirmed) {
+                    val currentDraft = _state.value.draftConfigJson
                     _state.update {
-                        it.copy(baseConfigJson = draft, isDirty = false, hasConflict = false, conflictingServerJson = null)
+                        it.copy(
+                            baseConfigJson = draft,
+                            isDirty = isDirtyJson(draft, currentDraft),
+                            hasConflict = false,
+                            conflictingServerJson = null,
+                        )
+                    }
+                    if (changesRoot && draftRoot != null) {
+                        _defaults.update { it.copy(workspace = draftRoot, loaded = true, error = null) }
                     }
                 }
             },
-        ) { guard -> repository.updateFullConfig(draft!!, guard) }
+        ) { guard ->
+            if (changesRoot && departureGuard != null) {
+                val proceed = try {
+                    departureGuard()
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (_: Exception) {
+                    false
+                }
+                if (!proceed) return@guardedMutation false
+            }
+            repository.updateFullConfig(draft!!, guard)
+        }
     }
 
     /**
@@ -372,11 +423,47 @@ class RemoteConfigEditor(
     }
 
     /** Sets `[workspace].root` on the target in config.toml (via POST /api/global-config/workspace). */
-    suspend fun setGlobalDefaultWorkspace(path: String): SettingsOutcome<Unit> {
+    suspend fun setGlobalDefaultWorkspace(
+        path: String,
+        confirmed: Boolean = false,
+        departureGuard: (suspend () -> Boolean)? = null,
+    ): SettingsOutcome<Unit> {
         val trimmed = path.trim()
         if (trimmed.isEmpty()) return SettingsOutcome.NotSubmitted("The path is blank.")
+        if (!confirmed) {
+            return SettingsOutcome.NotSubmitted(
+                "Changing workspace root terminates remote PTYs and live terminal sessions; user confirmation is required.",
+            )
+        }
+        if (_state.value.isDirty) {
+            return SettingsOutcome.NotSubmitted(
+                "Unsaved configuration changes exist. Save or discard draft before switching workspace root.",
+            )
+        }
+        if (departureGuard != null) {
+            val proceed = try {
+                departureGuard()
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                return SettingsOutcome.NotSubmitted("Dirty-state guard check failed: ${e.message}")
+            }
+            if (!proceed) {
+                return SettingsOutcome.NotSubmitted("Workspace root switch was cancelled by dirty-state guard.")
+            }
+        }
         return mutateWorkspaceRoot(trimmed)
     }
+
+    /**
+     * Explicit root switch operation. Clearly distinguished from an Open Project picker:
+     * changes the target's authoritative `[workspace].root` and warns of remote PTY termination.
+     */
+    suspend fun switchWorkspaceRoot(
+        path: String,
+        confirmed: Boolean,
+        departureGuard: (suspend () -> Boolean)? = null,
+    ): SettingsOutcome<Unit> = setGlobalDefaultWorkspace(path, confirmed, departureGuard)
 
     private suspend fun mutateWorkspaceRoot(path: String): SettingsOutcome<Unit> {
         _defaults.update { it.copy(busy = true) }
@@ -386,6 +473,27 @@ class RemoteConfigEditor(
                 publish = { outcome ->
                     if (outcome is SettingsOutcome.Confirmed) {
                         _defaults.update { it.copy(workspace = path, loaded = true, error = null) }
+                        val base = parseRoot(_state.value.baseConfigJson)
+                        if (base != null) {
+                            val ws = (base["workspace"] as? JsonObject) ?: JsonObject(emptyMap())
+                            val newWs = JsonObject(ws + ("root" to JsonPrimitive(path)))
+                            val newBase = JsonObject(base + ("workspace" to newWs)).toString()
+                            val currentDraft = _state.value.draftConfigJson
+                            val wasDirty = _state.value.isDirty
+                            if (!wasDirty) {
+                                _state.update { it.copy(baseConfigJson = newBase, draftConfigJson = newBase, isDirty = false) }
+                                reparse(newBase)
+                            } else {
+                                _state.update {
+                                    it.copy(
+                                        baseConfigJson = newBase,
+                                        hasConflict = true,
+                                        conflictingServerJson = newBase,
+                                        isDirty = isDirtyJson(newBase, currentDraft),
+                                    )
+                                }
+                            }
+                        }
                     }
                 },
             ) { guard -> repository.updateGlobalWorkspace(path, guard = guard) }
@@ -407,6 +515,9 @@ class RemoteConfigEditor(
             return
         }
         val savedOriginals = HashMap<Long, JsonObject>()
+        val savedServices = HashMap<Long, JsonObject>()
+        val savedTerminals = HashMap<Long, JsonObject>()
+        val savedCommands = HashMap<Long, JsonElement>()
         val names = HashMap<Long, String?>()
         val projects = projectsOf(root).map { obj ->
             val rowId = newRowId()
@@ -421,18 +532,26 @@ class RemoteConfigEditor(
                 tags = (obj["tags"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                     .map { ConfigTag(newRowId(), it) },
                 services = (obj["services"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map { s ->
+                    val sRowId = newRowId()
+                    savedServices[sRowId] = s
                     ConfigService(
-                        newRowId(),
+                        sRowId,
                         s.string("name") ?: "",
                         s.string("buildCommand") ?: s.string("build_command") ?: "",
                         s.string("runCommand") ?: s.string("run_command") ?: "",
                     )
                 },
                 commands = (obj["commands"] as? JsonObject).orEmpty().entries
-                    .mapNotNull { (k, v) -> (v as? JsonPrimitive)?.contentOrNull?.let { ConfigCommand(newRowId(), k, it) } },
+                    .mapNotNull { (k, v) ->
+                        val cRowId = newRowId()
+                        savedCommands[cRowId] = v
+                        (v as? JsonPrimitive)?.contentOrNull?.let { ConfigCommand(cRowId, k, it) }
+                    },
                 terminals = (obj["terminals"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map { t ->
+                    val tRowId = newRowId()
+                    savedTerminals[tRowId] = t
                     ConfigTerminalProfile(
-                        newRowId(), t.string("name") ?: "", t.string("command") ?: "", t.string("cwd") ?: "",
+                        tRowId, t.string("name") ?: "", t.string("command") ?: "", t.string("cwd") ?: "",
                     )
                 },
             )
@@ -444,18 +563,21 @@ class RemoteConfigEditor(
             projects = projects,
         )
         originals = savedOriginals
+        originalServices = savedServices
+        originalTerminals = savedTerminals
+        originalCommands = savedCommands
         _structured.value = StructuredConfigState(config, validateStructuredConfig(config), null, names)
     }
 }
 
 // ---- pure helpers (internal for tests) ----
 
-private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+internal fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 private fun projectsOf(root: JsonObject): List<JsonObject> =
     (root["projects"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
 
-private fun parseRoot(json: String?): JsonObject? = json?.let {
+internal fun parseRoot(json: String?): JsonObject? = json?.let {
     try {
         ProtocolJson.parseToJsonElement(it) as? JsonObject
     } catch (_: Exception) {
@@ -475,6 +597,7 @@ private fun isDirtyJson(base: String?, draft: String?): Boolean {
 internal fun validateStructuredConfig(config: StructuredConfig): List<ConfigValidationIssue> {
     val issues = ArrayList<ConfigValidationIssue>()
     if (config.workspaceName.isBlank()) issues += ConfigValidationIssue(null, "workspace.name", "Workspace name is required.")
+    if (config.workspaceRoot.isBlank()) issues += ConfigValidationIssue(null, "workspace.root", "Workspace root is unconfigured; no defaults.workspace fallback.")
     val seenProjects = HashSet<String>()
     config.projects.forEach { p ->
         if (p.name.isBlank()) {
@@ -514,14 +637,30 @@ internal fun validateStructuredConfig(config: StructuredConfig): List<ConfigVali
 }
 
 /** Applies [config] over [root], preserving every unknown workspace/project/root key. */
-internal fun applyStructured(root: JsonObject, config: StructuredConfig, originals: Map<Long, JsonObject>): JsonObject {
+internal fun applyStructured(
+    root: JsonObject,
+    config: StructuredConfig,
+    originals: Map<Long, JsonObject>,
+    services: Map<Long, JsonObject> = emptyMap(),
+    terminals: Map<Long, JsonObject> = emptyMap(),
+): JsonObject {
     val workspace = (root["workspace"] as? JsonObject) ?: JsonObject(emptyMap())
-    val newWorkspace = JsonObject(workspace + ("name" to JsonPrimitive(config.workspaceName)))
-    val projects = JsonArray(config.projects.map { projectToJson(it, originals[it.rowId]) })
+    val newWorkspace = JsonObject(
+        workspace + mapOf(
+            "name" to JsonPrimitive(config.workspaceName),
+            "root" to JsonPrimitive(config.workspaceRoot),
+        ),
+    )
+    val projects = JsonArray(config.projects.map { projectToJson(it, originals[it.rowId], services, terminals) })
     return JsonObject(root + mapOf("workspace" to newWorkspace, "projects" to projects))
 }
 
-private fun projectToJson(p: ConfigProject, original: JsonObject?): JsonObject {
+private fun projectToJson(
+    p: ConfigProject,
+    original: JsonObject?,
+    services: Map<Long, JsonObject> = emptyMap(),
+    terminals: Map<Long, JsonObject> = emptyMap(),
+): JsonObject {
     val fields = LinkedHashMap<String, JsonElement>(original ?: emptyMap())
     fields.remove("env_file")
     fields["name"] = JsonPrimitive(p.name)
@@ -534,10 +673,13 @@ private fun projectToJson(p: ConfigProject, original: JsonObject?): JsonObject {
     } else {
         fields["services"] = JsonArray(
             p.services.map { s ->
-                val entry = LinkedHashMap<String, JsonElement>()
+                val orig = services[s.rowId] ?: emptyMap()
+                val entry = LinkedHashMap<String, JsonElement>(orig)
+                entry.remove("build_command")
+                entry.remove("run_command")
                 entry["name"] = JsonPrimitive(s.name)
-                if (s.buildCommand.isNotBlank()) entry["buildCommand"] = JsonPrimitive(s.buildCommand)
-                if (s.runCommand.isNotBlank()) entry["runCommand"] = JsonPrimitive(s.runCommand)
+                if (s.buildCommand.isNotBlank()) entry["buildCommand"] = JsonPrimitive(s.buildCommand) else entry.remove("buildCommand")
+                if (s.runCommand.isNotBlank()) entry["runCommand"] = JsonPrimitive(s.runCommand) else entry.remove("runCommand")
                 JsonObject(entry)
             },
         )
@@ -545,14 +687,24 @@ private fun projectToJson(p: ConfigProject, original: JsonObject?): JsonObject {
     if (p.commands.isEmpty()) {
         fields.remove("commands")
     } else {
-        fields["commands"] = JsonObject(p.commands.associate { it.name to JsonPrimitive(it.command) })
+        val origMap = (original?.get("commands") as? JsonObject).orEmpty()
+        val entry = LinkedHashMap<String, JsonElement>(origMap)
+        p.commands.forEach { c -> entry[c.name] = JsonPrimitive(c.command) }
+        fields["commands"] = JsonObject(entry)
     }
-    fields["terminals"] = JsonArray(
-        p.terminals.map { t ->
-            JsonObject(
-                mapOf("name" to JsonPrimitive(t.name), "command" to JsonPrimitive(t.command), "cwd" to JsonPrimitive(t.cwd)),
-            )
-        },
-    )
+    if (p.terminals.isEmpty()) {
+        fields.remove("terminals")
+    } else {
+        fields["terminals"] = JsonArray(
+            p.terminals.map { t ->
+                val orig = terminals[t.rowId] ?: emptyMap()
+                val entry = LinkedHashMap<String, JsonElement>(orig)
+                entry["name"] = JsonPrimitive(t.name)
+                entry["command"] = JsonPrimitive(t.command)
+                entry["cwd"] = JsonPrimitive(t.cwd)
+                JsonObject(entry)
+            },
+        )
+    }
     return JsonObject(fields)
 }

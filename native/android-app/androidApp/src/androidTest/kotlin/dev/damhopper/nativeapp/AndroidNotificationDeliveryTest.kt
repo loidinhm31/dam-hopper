@@ -70,6 +70,11 @@ class AndroidNotificationDeliveryTest {
         revision: Long = 1L,
         event: String = "evt-1",
         silent: Boolean = false,
+        socketInstanceId: String? = null,
+        project: String? = "proj-1",
+        worktreePath: String? = "/path/to/work",
+        publicTitle: String = AndroidNotificationSink.DEFAULT_PUBLIC_TITLE,
+        publicBody: String = AndroidNotificationSink.DEFAULT_PUBLIC_BODY,
     ): AppNotification {
         val key = NotificationKey.of("proc-test", profile, generation, 7L, terminal, incarnation, "sess-1", "omp", revision, event)
         val target = NotificationTarget(
@@ -82,10 +87,22 @@ class AndroidNotificationDeliveryTest {
             processInstanceId = "proc-test",
             endpoint = "https://host",
             accountId = "acct",
+            project = project,
+            worktreePath = worktreePath,
             agentSessionId = "sess-1",
             agentKind = "omp",
+            socketInstanceId = socketInstanceId,
         )
-        return AppNotification(key, NotificationChannelId.TERMINAL_ATTENTION, target, "OMP needs attention", "Approval requested", silent)
+        return AppNotification(
+            key = key,
+            channel = NotificationChannelId.TERMINAL_ATTENTION,
+            target = target,
+            title = "OMP needs attention",
+            body = "Approval requested",
+            silent = silent,
+            publicTitle = publicTitle,
+            publicBody = publicBody,
+        )
     }
 
     private fun ensurePostingAllowed() {
@@ -205,16 +222,36 @@ class AndroidNotificationDeliveryTest {
 
     @Test
     fun publicVersionIsGenericAndPrivateTextStaysPrivate() {
-        val built = sink.buildNotification(terminalNote())
+        val sensitive = terminalNote(
+            publicTitle = "LEAK_CMD: git push origin main",
+            publicBody = "LEAK_CREDS: gh_secret_token_12345",
+        ).copy(
+            title = "PRIVATE_COMMAND: rm -rf /workspace --token=top-secret",
+            body = "PRIVATE_PATH: /home/user/.ssh/id_rsa /etc/shadow",
+        )
+        val built = sink.buildNotification(sensitive)
         assertEquals(Notification.VISIBILITY_PRIVATE, built.visibility)
-        assertEquals("OMP needs attention", built.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString())
-        assertEquals("Approval requested", built.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString())
+        assertEquals("PRIVATE_COMMAND: rm -rf /workspace --token=top-secret", built.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString())
+        assertEquals("PRIVATE_PATH: /home/user/.ssh/id_rsa /etc/shadow", built.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString())
         val public = assertNotNull(built.publicVersion)
         val publicTitle = public.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
         val publicText = public.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+        assertEquals(AndroidNotificationSink.DEFAULT_PUBLIC_TITLE, publicTitle)
+        assertEquals(AndroidNotificationSink.DEFAULT_PUBLIC_BODY, publicText)
         assertEquals("DamHopper", publicTitle)
         assertEquals("Attention required", publicText)
-        assertFalse(publicTitle.orEmpty().contains("OMP") || publicText.orEmpty().contains("Approval"))
+        assertEquals(Notification.VISIBILITY_PUBLIC, public.visibility)
+
+        // Strict privacy boundary: public strings must NEVER contain any sensitive command, path or token
+        val forbidden = listOf("LEAK", "git", "secret", "rm -rf", "ssh", "id_rsa", "shadow", "PRIVATE", "token")
+        for (token in forbidden) {
+            assertFalse(publicTitle.orEmpty().contains(token), "publicTitle leaked: $token")
+            assertFalse(publicText.orEmpty().contains(token), "publicText leaked: $token")
+        }
+        // Public extras must not contain private target routing keys
+        assertNull(public.extras.getString(AndroidNotificationSink.EXTRA_TARGET_PROFILE_ID))
+        assertNull(public.extras.getString(AndroidNotificationSink.EXTRA_TARGET_TERMINAL_ID))
+        assertNull(public.extras.getString(AndroidNotificationSink.EXTRA_NOTIFICATION_KEY))
         assertEquals(NotificationChannelId.TERMINAL_ATTENTION.id, built.channelId)
     }
 
@@ -322,25 +359,121 @@ class AndroidNotificationDeliveryTest {
     @Test
     fun audioHonorsFiniteVolumeSerializesPlaybackAndReleasesOnStopAndClose() {
         val audio = AndroidNotificationAudio()
-        for (bad in listOf(Double.NaN, Double.POSITIVE_INFINITY, -0.1, 1.01, 0.0)) {
-            audio.play("default", bad)
-            assertEquals(0, audio.activeTrackCount, "volume $bad must play nothing")
+        try {
+            for (bad in listOf(Double.NaN, Double.POSITIVE_INFINITY, -0.1, 1.01, 0.0)) {
+                audio.play("default", bad)
+                assertEquals(0, audio.activeTrackCount, "volume $bad must play nothing")
+            }
+            audio.play("not-a-pattern", 0.5)
+            assertEquals(0, audio.activeTrackCount)
+
+            audio.play("two-tone", 0.3)
+            assumeTrue("no audio output available on this device", audio.activeTrackCount == 1)
+            audio.play("urgent", 1.0) // a second chime replaces, never overlaps
+            assertEquals(1, audio.activeTrackCount)
+            audio.stop()
+            assertEquals(0, audio.activeTrackCount)
+            audio.stop() // idempotent
+
+            audio.play("soft", 0.5)
+            audio.close()
+            assertEquals(0, audio.activeTrackCount)
+            audio.play("default", 0.5) // ignored after final teardown
+            assertEquals(0, audio.activeTrackCount)
+        } finally {
+            audio.close()
         }
-        audio.play("not-a-pattern", 0.5)
-        assertEquals(0, audio.activeTrackCount)
+    }
 
-        audio.play("two-tone", 0.3)
-        assumeTrue("no audio output available on this device", audio.activeTrackCount == 1)
-        audio.play("urgent", 1.0) // a second chime replaces, never overlaps
-        assertEquals(1, audio.activeTrackCount)
-        audio.stop()
-        assertEquals(0, audio.activeTrackCount)
-        audio.stop() // idempotent
+    @Test
+    fun socketInstanceIdRoundtripsAndEnforcesSemanticCanonicalKeyRequirement() {
+        val note = terminalNote(
+            socketInstanceId = "socket-instance-42",
+            project = "test-project",
+            worktreePath = "/ws/repo",
+        )
+        val intent = sink.contentIntent(note)
+        val click = assertNotNull(AndroidNotificationSink.decodeClick(intent))
+        assertEquals("socket-instance-42", click.target.socketInstanceId)
+        assertEquals("test-project", click.target.project)
+        assertEquals("/ws/repo", click.target.worktreePath)
+        assertEquals("https://host", click.target.endpoint)
+        assertEquals("acct", click.target.accountId)
+        assertEquals("sess-1", click.target.agentSessionId)
+        assertEquals("omp", click.target.agentKind)
+        assertEquals(note.target, click.target)
 
-        audio.play("soft", 0.5)
-        audio.close()
-        assertEquals(0, audio.activeTrackCount)
-        audio.play("default", 0.5) // ignored after final teardown
-        assertEquals(0, audio.activeTrackCount)
+        // A caller-chosen non-canonical key with socketInstanceId set is rejected as an illegal semantic target
+        val forgedTarget = NotificationTarget(profileId = "profile-A", generation = 1L, socketInstanceId = "socket-42")
+        val forged = AppNotification("transfer-1", NotificationChannelId.TRANSFERS, forgedTarget, "title", "body")
+        assertNull(AndroidNotificationSink.decodeClick(sink.contentIntent(forged)))
+    }
+
+    @Test
+    fun distinctReportingForPermissionAppBlockedAndChannelBlocked() {
+        val platform = AndroidNotificationPlatform(context)
+        platform.refreshStatus()
+        val status = platform.status.value
+
+        assertNotNull(status.permission)
+        assertEquals(NotificationChannelId.entries.toSet(), status.channels.keys)
+
+        // Verify all 3 channels in NotificationManager have VISIBILITY_PRIVATE and expected importance
+        val terminalChannel = assertNotNull(manager.getNotificationChannel(NotificationChannelId.TERMINAL_ATTENTION.id))
+        assertEquals(Notification.VISIBILITY_PRIVATE, terminalChannel.lockscreenVisibility)
+        assertEquals(NotificationManager.IMPORTANCE_HIGH, terminalChannel.importance)
+
+        val transfersChannel = assertNotNull(manager.getNotificationChannel(NotificationChannelId.TRANSFERS.id))
+        assertEquals(Notification.VISIBILITY_PRIVATE, transfersChannel.lockscreenVisibility)
+        assertEquals(NotificationManager.IMPORTANCE_LOW, transfersChannel.importance)
+
+        val idleChannel = assertNotNull(manager.getNotificationChannel(NotificationChannelId.IDLE_SUSPEND.id))
+        assertEquals(Notification.VISIBILITY_PRIVATE, idleChannel.lockscreenVisibility)
+        assertEquals(NotificationManager.IMPORTANCE_HIGH, idleChannel.importance)
+
+        // Status channels reflect manager channel state exactly
+        val terminalStatus = assertNotNull(status.channels[NotificationChannelId.TERMINAL_ATTENTION])
+        assertEquals(terminalChannel.importance == NotificationManager.IMPORTANCE_NONE, terminalStatus.blocked)
+        assertEquals(terminalChannel.sound != null && terminalChannel.importance >= NotificationManager.IMPORTANCE_DEFAULT, terminalStatus.soundConfigured)
+    }
+
+    @Test
+    fun settingsIntentsTargetCorrectActionAndPackages() {
+        val platform = AndroidNotificationPlatform(context)
+        val channelIntent = platform.channelSettingsIntent(NotificationChannelId.TERMINAL_ATTENTION)
+        assertEquals(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS, channelIntent.action)
+        assertEquals(context.packageName, channelIntent.getStringExtra(android.provider.Settings.EXTRA_APP_PACKAGE))
+        assertEquals(NotificationChannelId.TERMINAL_ATTENTION.id, channelIntent.getStringExtra(android.provider.Settings.EXTRA_CHANNEL_ID))
+
+        val appIntent = platform.appNotificationSettingsIntent()
+        assertEquals(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS, appIntent.action)
+        assertEquals(context.packageName, appIntent.getStringExtra(android.provider.Settings.EXTRA_APP_PACKAGE))
+    }
+
+    @Test
+    fun requestPermissionWithoutBoundLauncherDoesNotSetRequestedFlag() {
+        val platform = AndroidNotificationPlatform(context)
+        platform.unbindLaunchers()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            val initialStatus = platform.status.value.permission
+            platform.requestPermission()
+            if (initialStatus == NotificationPermissionState.NOT_REQUESTED) {
+                assertEquals(NotificationPermissionState.NOT_REQUESTED, platform.status.value.permission)
+            }
+        }
+    }
+
+    @Test
+    fun blockedChannelOrDisabledPostingReturnsFalseWithoutCrashing() {
+        val note = terminalNote()
+        if (!sink.areNotificationsEnabled()) {
+            assertFalse(sink.postNotification(note))
+        }
+        val terminalChannel = manager.getNotificationChannel(NotificationChannelId.TERMINAL_ATTENTION.id)
+        if (terminalChannel != null && terminalChannel.importance == NotificationManager.IMPORTANCE_NONE) {
+            assertFalse(sink.postNotification(note))
+        }
     }
 }

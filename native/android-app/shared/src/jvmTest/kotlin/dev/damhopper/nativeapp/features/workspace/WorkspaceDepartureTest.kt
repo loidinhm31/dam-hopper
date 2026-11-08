@@ -156,7 +156,7 @@ class WorkspaceDepartureTest {
         val nav = AppFlowNavigation()
         nav.onProfileAuthenticated("prof-dep")
         nav.selectProject("guarded-proj")
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
 
         // Install departure guard hook (as ProjectWorkspaceScreen does)
         nav.departureGuard = { request ->
@@ -188,7 +188,7 @@ class WorkspaceDepartureTest {
 
         val handled = nav.handleBackPress()
         assertTrue(handled)
-        assertEquals(AppFlowStage.PROJECT_LIST, nav.state.value.stage)
+        assertEquals(AppFlowStage.PROFILE_LOGIN, nav.state.value.stage)
         assertNull(state.pendingDeparture.value)
     }
 
@@ -205,7 +205,7 @@ class WorkspaceDepartureTest {
         val handled = nav.handleBackPress()
         assertTrue(handled)
         // Navigation intercepted: remains in TERMINAL/WORKSPACE
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
 
         val pending = state.pendingDeparture.value
         assertNotNull(pending)
@@ -227,7 +227,7 @@ class WorkspaceDepartureTest {
         // User cancels
         state.clearPendingDeparture()
         assertNull(state.pendingDeparture.value)
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
         assertTrue(state.hasDirtyDocuments())
     }
 
@@ -245,7 +245,7 @@ class WorkspaceDepartureTest {
         state.completePendingDeparture(pending)
         pending.onConfirmed()
 
-        assertEquals(AppFlowStage.PROJECT_LIST, nav.state.value.stage)
+        assertEquals(AppFlowStage.PROFILE_LOGIN, nav.state.value.stage)
     }
 
     @Test
@@ -264,7 +264,7 @@ class WorkspaceDepartureTest {
         assertTrue(outcome !is FileOperationOutcome.Confirmed)
 
         // Departure blocked: still at TERMINAL, draft preserved
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
         assertTrue(state.hasDirtyDocuments())
         assertTrue(doc.isDirty.value)
     }
@@ -287,7 +287,7 @@ class WorkspaceDepartureTest {
         // Verification check during departure commit
         val revisionsMatch = (initialRev == currentRev)
         assertFalse(revisionsMatch, "Revision mismatch must abort departure")
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
     }
 
     @Test
@@ -354,7 +354,7 @@ class WorkspaceDepartureTest {
         // Exercise production departure commit transaction
         val committed = state.commitDepartureSave(departure)
         assertFalse(committed, "Intervening edit must fail the production departure commit transaction")
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
     }
 
     private fun leave(state: ProjectWorkspaceState, log: MutableList<String>, tag: String = "") =

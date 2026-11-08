@@ -4,6 +4,7 @@ package dev.damhopper.nativeapp.features.editor
 
 import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.features.files.FileRepository
+import dev.damhopper.nativeapp.features.files.FileIdentityDto
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 

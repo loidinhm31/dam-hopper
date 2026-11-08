@@ -5,16 +5,20 @@ import dev.damhopper.nativeapp.core.model.ConnectionRef
 
 /**
  * Stages of the core mobile application flow:
- * Profile Login -> List of Projects -> Terminal / Focused Workspace.
+ * Profile Login -> Agent Hub (with nested Open Project picker and Terminal/Files/Editor/Git capabilities).
  */
 enum class AppFlowStage {
     PROFILE_LOGIN,
+    HUB,
+    @Deprecated("Legacy linear stage superseded by HUB in Phase 07")
     PROJECT_LIST,
+    @Deprecated("Legacy linear stage superseded by HUB in Phase 07")
     TERMINAL;
 
     companion object {
-        val WORKSPACE = TERMINAL
-        val FOCUSED_WORKSPACE = TERMINAL
+        val AGENT_HUB = HUB
+        val WORKSPACE = HUB
+        val FOCUSED_WORKSPACE = HUB
     }
 }
 
@@ -76,6 +80,7 @@ data class AppFlowState(
     val activeWorktreePath: String? = null,
     val settings: SettingsOverlay? = null,
     val notificationsOpen: Boolean = false,
+    val projectPickerOpen: Boolean = false,
     val notificationRouteActive: Boolean = false,
     val requiredTerminalInstance: TerminalAgentsInstanceKey? = null,
 )

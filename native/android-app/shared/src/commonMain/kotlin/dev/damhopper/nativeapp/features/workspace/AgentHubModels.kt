@@ -75,18 +75,19 @@ sealed class AgentHubAction {
     data class SelectProjectTarget(val target: ProjectTargetRef?) : AgentHubAction()
     data class OpenZeroSessionProject(val target: ProjectTargetRef) : AgentHubAction()
     data class DismissZeroSessionProject(val target: ProjectTargetRef) : AgentHubAction()
-    data class SelectTerminal(val terminalId: String) : AgentHubAction()
+    data class SelectTerminal(val terminalId: String, val profileId: ProfileId? = null) : AgentHubAction()
     data class CreateTerminalIntent(val target: ProjectTargetRef?, val command: String? = null) : AgentHubAction()
-    data class HideTerminal(val terminalId: String) : AgentHubAction() // Local Close View, NOT remote kill
-    data class ReopenTerminal(val terminalId: String) : AgentHubAction()
-    data class PinTerminal(val terminalId: String, val pinned: Boolean) : AgentHubAction()
+    data class HideTerminal(val terminalId: String, val profileId: ProfileId? = null) : AgentHubAction() // Local Close View, NOT remote kill
+    data class ReopenTerminal(val terminalId: String, val profileId: ProfileId? = null) : AgentHubAction()
+    data class PinTerminal(val terminalId: String, val pinned: Boolean, val profileId: ProfileId? = null) : AgentHubAction()
     data class TerminateTerminal(
         val terminalId: String,
         val expectedServerEpoch: String,
         val expectedIncarnation: String,
+        val profileId: ProfileId? = null,
     ) : AgentHubAction() // Guarded POST /api/terminal/:id/terminate
     data class OpenFiles(val target: FilesystemTargetRef) : AgentHubAction()
-    data class OpenEditor(val fileRef: String) : AgentHubAction()
+    data class OpenEditor(val fileRef: String, val target: FilesystemTargetRef? = null) : AgentHubAction()
     data class OpenGit(val target: ProjectTargetRef) : AgentHubAction()
     data class OpenSettings(val targetCategory: String? = null) : AgentHubAction()
     object OpenNotifications : AgentHubAction()

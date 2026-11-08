@@ -1,0 +1,59 @@
+{
+  "taskId": "integrate-retained-lifetimes",
+  "phase": "P07",
+  "wave": "W09",
+  "status": "verification_scoped",
+  "timestamp": "2026-11-08T01:10:00Z",
+  "compilation": [
+    {
+      "command": "cmd.exe /c gradlew.bat :shared:compileKotlinJvm",
+      "exitCode": 0,
+      "status": "success"
+    },
+    {
+      "command": "cmd.exe /c gradlew.bat :androidApp:compileDebugKotlin",
+      "exitCode": 0,
+      "status": "success"
+    },
+    {
+      "command": "cmd.exe /c gradlew.bat :shared:compileTestKotlinJvm",
+      "exitCode": 0,
+      "status": "success"
+    },
+    {
+      "command": "cmd.exe /c gradlew.bat :androidApp:compileDebugUnitTestKotlin",
+      "exitCode": 0,
+      "status": "success"
+    },
+    {
+      "command": "cmd.exe /c gradlew.bat :androidApp:compileDebugAndroidTestKotlin",
+      "exitCode": 0,
+      "status": "success"
+    }
+  ],
+  "testExecution": [
+    {
+      "task": ":shared:jvmTest",
+      "total": 1044,
+      "passed": 1044,
+      "failed": 0
+    },
+    {
+      "task": ":androidApp:testDebugUnitTest",
+      "total": 255,
+      "passed": 255,
+      "failed": 0
+    }
+  ],
+  "verifiedBehaviors": [
+    "Canonical document registry hoisted in NativeWorkspaceViewModel scoped by CanonicalHolderScope",
+    "Different endpoints, accounts, or epochs never share canonical document authority",
+    "Zero alias/view/dirty/save disposal guard preserves document across dual-order alias closures",
+    "Late old Activity detachment does not clear successor Activity launchers or view leases",
+    "Reactive uncertain create records persisted and block replacement creates until settled",
+    "Authority retirement revokes saves while preserving dirty drafts and undo stack for authorized rebind"
+  ],
+  "pendingQualification": [
+    "Device TalkBack, IME, and physical rotation qualification (P08 / W10-W12)"
+  ]
+}

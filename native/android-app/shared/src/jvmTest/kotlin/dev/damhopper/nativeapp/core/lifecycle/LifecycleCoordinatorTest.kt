@@ -95,4 +95,39 @@ class LifecycleCoordinatorTest {
         coordinator.onAppForeground()
         assertEquals(1, goodListener.foregroundCalls)
     }
+
+    @Test
+    fun testRegisterWhileForegroundImmediatelyNotifies() {
+        val coordinator = LifecycleCoordinator()
+        coordinator.onAppForeground()
+        assertEquals(LifecycleState.FOREGROUND, coordinator.state.value)
+
+        val listener = TestListener()
+        coordinator.register(listener)
+        assertEquals(1, listener.foregroundCalls, "Registering while foreground must immediately invoke onForeground")
+    }
+
+    @Test
+    fun testBackgroundAndDestroyDispatchFaultTolerance() {
+        val coordinator = LifecycleCoordinator()
+        val badListener = object : LifecycleAware {
+            override fun onForeground() {}
+            override fun onBackground() = throw RuntimeException("Background fault")
+            override fun onOwnerRetired(profileId: String) = throw RuntimeException("Retire fault")
+            override fun onDestroy() = throw RuntimeException("Destroy fault")
+        }
+        val goodListener = TestListener()
+        coordinator.register(badListener)
+        coordinator.register(goodListener)
+
+        coordinator.onAppForeground()
+        coordinator.onAppBackground()
+        assertEquals(1, goodListener.backgroundCalls)
+
+        coordinator.onProfileRetired("prof-xyz")
+        assertEquals("prof-xyz", goodListener.retiredProfile)
+
+        coordinator.onDestroy()
+        assertTrue(goodListener.destroyed)
+    }
 }

@@ -7,12 +7,29 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import dev.damhopper.nativeapp.features.workspace.AgentHubActionPort
+import dev.damhopper.nativeapp.features.workspace.AgentHubSnapshotPort
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -111,7 +128,7 @@ import kotlin.time.TimeSource
  * constructs Settings, notification or history services itself, so they survive rotation and route changes and
  * exist exactly once per process-retained owner.
  */
-interface RetainedRootServices {
+interface RetainedRootServices : AgentHubSnapshotPort, AgentHubActionPort {
     val settingsRepository: SettingsRepository
     val privacyController: PrivacyController
     val settingsScreenServices: StateFlow<SettingsScreenServices>
@@ -522,27 +539,41 @@ private fun RootContent(
     val languageNotice by (services?.settingsRepository?.languageFilterMigrationNotice ?: remember { MutableStateFlow<String?>(null) }).collectAsState()
     var searchMode by remember { mutableStateOf<WorkspaceSearchMode?>(null) }
     var shortcutNotice by remember { mutableStateOf<String?>(null) }
+    val hubSnapshot by (services?.hubSnapshot ?: remember { MutableStateFlow(dev.damhopper.nativeapp.features.workspace.AgentHubSnapshot()) }).collectAsState()
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    LaunchedEffect(settingsOpen, masked, activeWorkspaceState) {
-        activeWorkspaceState?.setInputSuspended(settingsOpen || masked)
-        if (settingsOpen || masked) {
+    LaunchedEffect(settingsOpen, masked, flowState.projectPickerOpen, flowState.notificationsOpen, activeWorkspaceState) {
+        val covered = settingsOpen || masked || flowState.projectPickerOpen || flowState.notificationsOpen
+        activeWorkspaceState?.setInputSuspended(covered)
+        if (covered) {
             keyboardController?.hide()
             focusManager.clearFocus(force = true)
         }
     }
     LaunchedEffect(activeWorkspaceState) { searchMode = null }
 
+    // Capability -> Terminal back unwinding: when active panel is not TERMINAL, Back switches back to Terminal
+    val currentPanel by (activeWorkspaceState?.activePanel ?: remember { MutableStateFlow(WorkspacePanel.TERMINAL) }).collectAsState()
+    DisposableEffect(navigation, activeWorkspaceState, currentPanel) {
+        val ws = activeWorkspaceState
+        val unregister = if (ws != null && currentPanel != WorkspacePanel.TERMINAL) {
+            navigation.registerBackInterceptor {
+                ws.selectPanel(WorkspacePanel.TERMINAL)
+                true
+            }
+        } else null
+        onDispose { unregister?.invoke() }
+    }
+
     // ONE effective cover, derived synchronously in composition from the owned sources: privacy, Settings, search,
-    // pending departure + the host-owned local terminal modals, sidebar popup and compact Agents.
+    // project picker modal, pending departure + the host-owned local terminal modals, sidebar popup and compact Agents.
     val departurePending by remember(activeWorkspaceState) {
         activeWorkspaceState?.pendingDeparture ?: MutableStateFlow<WorkspaceDepartureIntent?>(null)
     }.collectAsState()
-    val externalCover = masked || settingsOpen || searchMode != null || departurePending != null
+    val externalCover = masked || settingsOpen || searchMode != null || departurePending != null || flowState.projectPickerOpen || flowState.notificationsOpen
     SideEffect { agentsHost.setExternalCover(externalCover) }
     val effectiveCover = externalCover || agentsHost.localCover || agentsHost.popupVisible || agentsHost.compactSheetOpen
-
     // Search owns Back dismissal while open.
     DisposableEffect(navigation, searchMode) {
         val unregister = if (searchMode != null) {
@@ -568,7 +599,7 @@ private fun RootContent(
     }
     // The Agents host only exists on the Terminal stage: leaving it can never strand a cover without its surface.
     LaunchedEffect(flowState.stage) {
-        if (flowState.stage != AppFlowStage.TERMINAL && flowState.stage != AppFlowStage.PROJECT_LIST) agentsHost.close()
+        if (flowState.stage != AppFlowStage.HUB && flowState.stage != AppFlowStage.TERMINAL && flowState.stage != AppFlowStage.PROJECT_LIST) agentsHost.close()
     }
 
     // Back returns to the captured origin: restore the workspace panel the user left (state itself never moved).
@@ -685,7 +716,7 @@ private fun RootContent(
         // A compact Agents sheet consumes search/panel/Projects shortcuts: nothing routes under it.
         if (agentsSheetConsumesShortcut(agentsHost.compactSheetOpen, action)) return true
         val ws = activeWorkspaceState
-        val inWorkspace = flowState.stage == AppFlowStage.TERMINAL && ws != null
+        val inWorkspace = (flowState.stage == AppFlowStage.HUB || flowState.stage == AppFlowStage.TERMINAL) && ws != null
         return when (action) {
             ShortcutAction.SEARCH_TEXT -> inWorkspace.also { if (it) searchMode = WorkspaceSearchMode.TEXT }
             ShortcutAction.SEARCH_FILENAME -> inWorkspace.also { if (it) searchMode = WorkspaceSearchMode.FILENAME }
@@ -697,7 +728,10 @@ private fun RootContent(
                     if (path != null) ws.fileTreeState.revealPath(path)
                 }
             }
-            ShortcutAction.PROJECT_PANEL -> (flowState.stage == AppFlowStage.TERMINAL).also { if (it) navigation.handleBackPress() }
+            ShortcutAction.PROJECT_PANEL -> {
+                navigation.openProjectPicker()
+                true
+            }
             ShortcutAction.TERMINAL_FONT_INCREASE -> {
                 prefAccess.update { it.copy(terminalFontSize = stepTerminalFontSize(it.terminalFontSize, 1)) }
                 true
@@ -729,7 +763,7 @@ private fun RootContent(
         val gate = ShortcutGate(
             routeId = "${flowState.stage}|$activeProfileId|$selectedProj|${activeWorkspaceState?.activePanel?.value}",
             focused = windowFocused,
-            blocked = settingsOpen,
+            blocked = settingsOpen || flowState.projectPickerOpen,
             masked = masked,
             capturing = false,
             editableFocused = isEditing || isComposing,
@@ -803,64 +837,20 @@ private fun RootContent(
                             )
                         }
 
-                        AppFlowStage.PROJECT_LIST -> {
-                            if (agentsContext != null) {
-                                TerminalAgentsSidebarHost(
-                                    agents = agentsContext,
-                                    active = null,
-                                    modifier = Modifier.fillMaxSize(),
-                                ) {
-                                    ProjectListScreen(
-                                        profileName = currentProfile?.name ?: "Server",
-                                        serverUrl = currentProfile?.baseUrl,
-                                        workspaceRepository = workspaceRepo,
-                                        onNavigateProfiles = {
-                                            navigation.navigateToProfiles()
-                                        },
-                                        onSelectProject = { projectName ->
-                                            targetStore.selectTarget(
-                                                profileId = activeProfileId,
-                                                workspaceConfigPath = null,
-                                                project = projectName,
-                                                worktreePath = null,
-                                            )
-                                            navigation.selectProject(projectName)
-                                        },
-                                        headerEntries = headerEntries,
-                                        agents = agentsContext,
-                                        modifier = Modifier.fillMaxSize(),
-                                    )
-                                }
-                            } else {
-                                ProjectListScreen(
-                                    profileName = currentProfile?.name ?: "Server",
-                                    serverUrl = currentProfile?.baseUrl,
-                                    workspaceRepository = workspaceRepo,
-                                    onNavigateProfiles = {
-                                        navigation.navigateToProfiles()
-                                    },
-                                    onSelectProject = { projectName ->
-                                        targetStore.selectTarget(
-                                            profileId = activeProfileId,
-                                            workspaceConfigPath = null,
-                                            project = projectName,
-                                            worktreePath = null,
-                                        )
-                                        navigation.selectProject(projectName)
-                                    },
-                                    headerEntries = headerEntries,
-                                    agents = null,
-                                    modifier = Modifier.fillMaxSize(),
-                                )
-                            }
-                        }
-
-                        AppFlowStage.TERMINAL -> {
+                        AppFlowStage.HUB, AppFlowStage.TERMINAL, AppFlowStage.PROJECT_LIST -> {
                             val proj = flowState.activeProject
                             if (proj.isNullOrBlank()) {
-                                LaunchedEffect(Unit) {
-                                    navigation.handleBackPress()
-                                }
+                                AgentHubEmptyRoot(
+                                    profileName = currentProfile?.name ?: "Server",
+                                    serverUrl = currentProfile?.baseUrl,
+                                    headerEntries = headerEntries,
+                                    agents = agentsContext,
+                                    hubSnapshot = hubSnapshot,
+                                    onAction = { action -> scope.launch { services?.dispatchAction(action) } },
+                                    onOpenProject = { navigation.openProjectPicker() },
+                                    onOpenSettings = { navigation.openSettings(captureOrigin()) },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
                             } else if (activeWorkspaceState != null) {
                                 ProjectWorkspaceScreen(
                                     projectName = proj,
@@ -904,7 +894,8 @@ private fun RootContent(
                     val mode = searchMode
                     val ws = activeWorkspaceState
                     val client = apiClient
-                    if (mode != null && ws != null && client != null && flowState.stage == AppFlowStage.TERMINAL && !settingsOpen) {
+                    val inWorkspace = (flowState.stage == AppFlowStage.HUB || flowState.stage == AppFlowStage.TERMINAL) && !settingsOpen
+                    if (mode != null && ws != null && client != null && inWorkspace) {
                         val search = remember { SearchRepository() }
                         WorkspaceSearchView(
                             mode = mode,
@@ -1002,11 +993,48 @@ private fun RootContent(
                                 modifier = Modifier.weight(1f),
                             )
                         }
-                        }
                     }
                 }
+                    if (flowState.projectPickerOpen && !masked) {
+                        AgentHubProjectPickerModal(
+                            profileName = currentProfile?.name ?: "Server",
+                            serverUrl = currentProfile?.baseUrl,
+                            workspaceRepo = workspaceRepo,
+                            onClose = { navigation.closeProjectPicker() },
+                            onSelectProject = { projectName ->
+                                val targetRef = ProjectTargetRef(
+                                    profileId = activeProfileId,
+                                    project = projectName,
+                                    worktreePath = null,
+                                )
+                                scope.launch {
+                                    navigation.requestWorkspaceTarget(
+                                        target = targetRef,
+                                        revalidate = {
+                                            val profId = targetRef.profileId.orEmpty()
+                                            profileRepository.registry.getCurrentConnection(profId) != null
+                                        },
+                                        onCommitted = {
+                                            targetStore.selectTarget(
+                                                profileId = activeProfileId,
+                                                workspaceConfigPath = null,
+                                                project = projectName,
+                                                worktreePath = null,
+                                            )
+                                            navigation.closeProjectPicker()
+                                        }
+                                    )
+                                }
+                            },
+                            onNavigateProfiles = {
+                                navigation.closeProjectPicker()
+                                navigation.navigateToProfiles()
+                            },
+                        )
+                    }
             }
         }
+    }
     }
 
     if (privacyController != null) {
@@ -1036,3 +1064,376 @@ private val AGENTS_SHEET_SUPPRESSED_SHORTCUTS: Set<ShortcutAction> = setOf(
  */
 internal fun agentsSheetConsumesShortcut(compactSheetOpen: Boolean, action: ShortcutAction): Boolean =
     compactSheetOpen && action in AGENTS_SHEET_SUPPRESSED_SHORTCUTS
+
+@Composable
+private fun HubCapabilityTab(
+    label: String,
+    isSelected: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit = {},
+    contentDescription: String? = null,
+) {
+    val bg = if (isSelected) DamHopperColors.Primary else DamHopperColors.SurfaceVariant
+    val textColor = if (isSelected) DamHopperColors.Background else if (enabled) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary.copy(alpha = 0.5f)
+    Box(
+        modifier = Modifier
+            .sizeIn(minWidth = 48.dp, minHeight = 36.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(bg)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .semantics { contentDescription?.let { this.contentDescription = it } },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = textColor,
+            fontSize = 13.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+        )
+    }
+}
+
+@Composable
+private fun AgentHubEmptyRoot(
+    profileName: String,
+    serverUrl: String?,
+    headerEntries: HeaderEntries?,
+    agents: TerminalAgentsContext?,
+    hubSnapshot: dev.damhopper.nativeapp.features.workspace.AgentHubSnapshot = dev.damhopper.nativeapp.features.workspace.AgentHubSnapshot(),
+    onAction: (dev.damhopper.nativeapp.features.workspace.AgentHubAction) -> Unit = {},
+    onOpenProject: () -> Unit,
+    onOpenSettings: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val content: @Composable () -> Unit = {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(DamHopperColors.Background),
+        ) {
+            // Row 1 & 2: Adaptive two-row chrome
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DamHopperColors.Surface)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                // Row 1: Brand title + Open Project button + Header entries (Alerts, Settings)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "Agent Hub",
+                        color = DamHopperColors.TextPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.semantics { heading() },
+                    )
+                    Box(
+                        modifier = Modifier
+                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .border(BorderStroke(1.dp, DamHopperColors.Border), RoundedCornerShape(6.dp))
+                            .background(DamHopperColors.SurfaceVariant.copy(alpha = 0.7f))
+                            .clickable(onClick = onOpenProject)
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "+ Open Project",
+                            color = DamHopperColors.Primary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    headerEntries?.let { HeaderEntryButtons(it) }
+                }
+
+                // Row 2: Capabilities bar (Terminal, Files, Editor, Git) horizontally scrollable
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    HubCapabilityTab(
+                        label = "Terminal",
+                        isSelected = true,
+                        onClick = { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.CreateTerminalIntent(hubSnapshot.selectedProjectTarget)) },
+                    )
+                    HubCapabilityTab(
+                        label = "Files",
+                        isSelected = false,
+                        enabled = true,
+                        onClick = {
+                            val target = hubSnapshot.selectedProjectTarget
+                            if (target != null) {
+                                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenFiles(FilesystemTargetRef.Project(profileId = target.profileId, project = target.project, worktreePath = target.worktreePath)))
+                            } else {
+                                onOpenProject()
+                            }
+                        },
+                    )
+                    HubCapabilityTab(
+                        label = "Editor",
+                        isSelected = false,
+                        enabled = true,
+                        onClick = {
+                            val target = hubSnapshot.selectedProjectTarget
+                            if (target != null) {
+                                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenFiles(FilesystemTargetRef.Project(profileId = target.profileId, project = target.project, worktreePath = target.worktreePath)))
+                            } else {
+                                onOpenProject()
+                            }
+                        },
+                    )
+                    HubCapabilityTab(
+                        label = "Git",
+                        isSelected = false,
+                        enabled = true,
+                        onClick = {
+                            val target = hubSnapshot.selectedProjectTarget
+                            if (target != null) {
+                                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenGit(target))
+                            } else {
+                                onOpenProject()
+                            }
+                        },
+                    )
+            }
+            }
+
+            if (hubSnapshot.terminalRows.isNotEmpty() || hubSnapshot.zeroSessionOpenTargets.isNotEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (hubSnapshot.pinnedTerminals.isNotEmpty()) {
+                        Text("Pinned Terminals", color = DamHopperColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        hubSnapshot.pinnedTerminals.forEach { row ->
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .sizeIn(minHeight = 48.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(DamHopperColors.Surface)
+                                    .border(1.dp, DamHopperColors.Border, RoundedCornerShape(6.dp))
+                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(row.id, row.projectTarget?.profileId)) }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                Text("${row.projectTarget?.project.orEmpty()}: ${row.displayName}", color = DamHopperColors.TextPrimary, fontSize = 14.sp)
+                            }
+                        }
+                    }
+                    if (hubSnapshot.activeTerminals.isNotEmpty()) {
+                        Text("Active Terminals", color = DamHopperColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        hubSnapshot.activeTerminals.forEach { row ->
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .sizeIn(minHeight = 48.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(DamHopperColors.Surface)
+                                    .border(1.dp, DamHopperColors.Border, RoundedCornerShape(6.dp))
+                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(row.id, row.projectTarget?.profileId)) }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                Text("${row.projectTarget?.project.orEmpty()}: ${row.displayName}", color = DamHopperColors.TextPrimary, fontSize = 14.sp)
+                            }
+                        }
+                    }
+                    if (hubSnapshot.zeroSessionOpenTargets.isNotEmpty()) {
+                        Text("Open Projects (0 sessions)", color = DamHopperColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        hubSnapshot.zeroSessionOpenTargets.forEach { target ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .sizeIn(minHeight = 48.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(DamHopperColors.Surface)
+                                    .border(1.dp, DamHopperColors.Border, RoundedCornerShape(6.dp))
+                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectProjectTarget(target)) }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(target.project, color = DamHopperColors.TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                                Box(
+                                    modifier = Modifier
+                                        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                                        .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.DismissZeroSessionProject(target)) },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text("✕", color = DamHopperColors.TextSecondary, fontSize = 14.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier
+                            .sizeIn(maxWidth = 440.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(DamHopperColors.Surface)
+                            .border(1.dp, DamHopperColors.Border, RoundedCornerShape(8.dp))
+                            .padding(24.dp),
+                    ) {
+                        Text(
+                            text = "Connected to $profileName",
+                            color = DamHopperColors.TextPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        serverUrl?.let {
+                            Text(
+                                text = it,
+                                color = DamHopperColors.TextSecondary,
+                                fontSize = 12.sp,
+                            )
+                        }
+                        Text(
+                            text = "No project is currently open. Select a project to view terminal sessions, browse files, edit code, and manage Git repositories.",
+                            color = DamHopperColors.TextSecondary,
+                            fontSize = 13.sp,
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(DamHopperColors.Primary)
+                                    .clickable(onClick = onOpenProject)
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "Open Project",
+                                    color = DamHopperColors.Background,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .border(1.dp, DamHopperColors.Border, RoundedCornerShape(6.dp))
+                                    .background(DamHopperColors.SurfaceVariant)
+                                    .clickable(onClick = onOpenSettings)
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "Settings",
+                                    color = DamHopperColors.TextPrimary,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (agents != null) {
+        TerminalAgentsSidebarHost(
+            agents = agents,
+            active = null,
+            modifier = modifier,
+            content = content,
+        )
+    } else {
+        Box(modifier = modifier) { content() }
+    }
+}
+
+@Composable
+private fun AgentHubProjectPickerModal(
+    profileName: String,
+    serverUrl: String?,
+    workspaceRepo: WorkspaceRepository?,
+    onClose: () -> Unit,
+    onSelectProject: (String) -> Unit,
+    onNavigateProfiles: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(DamHopperColors.Background.copy(alpha = 0.95f))
+                .padding(16.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Open Project",
+                        color = DamHopperColors.TextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Box(
+                        modifier = Modifier
+                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable(onClick = onClose)
+                            .padding(8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "✕ Close",
+                            color = DamHopperColors.Primary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+                ProjectListScreen(
+                    profileName = profileName,
+                    serverUrl = serverUrl,
+                    workspaceRepository = workspaceRepo,
+                    onNavigateProfiles = onNavigateProfiles,
+                    onSelectProject = onSelectProject,
+                    headerEntries = null,
+                    agents = null,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
+            }
+        }
+    }
+}

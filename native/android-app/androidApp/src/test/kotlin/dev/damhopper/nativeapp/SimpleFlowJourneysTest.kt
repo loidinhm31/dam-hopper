@@ -5,6 +5,7 @@ import dev.damhopper.nativeapp.ui.flow.AppFlowStage
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -52,33 +53,42 @@ class SimpleFlowJourneysTest {
     }
 
     @Test
-    fun testCompleteSimpleFlowNavigationCycle() {
+    fun testCompleteHubFlowNavigationCycle() {
         val nav = AppFlowNavigation()
 
         // 1. App starts at Profile Login
         assertEquals(AppFlowStage.PROFILE_LOGIN, nav.state.value.stage)
         assertFalse(nav.handleBackPress())
 
-        // 2. User logs in to profile -> advances to Project List
+        // 2. User logs in to profile -> advances directly to Agent Hub
         nav.onProfileAuthenticated("prof-local")
-        assertEquals(AppFlowStage.PROJECT_LIST, nav.state.value.stage)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
         assertEquals("prof-local", nav.state.value.activeProfileId)
+        assertNull(nav.state.value.activeProject)
 
-        // 3. User selects a project -> advances to Terminal
+        // 3. User opens nested project picker and selects a project
+        nav.openProjectPicker()
+        assertTrue(nav.state.value.projectPickerOpen)
+        assertTrue(nav.handleBackPress(), "Back closes nested project picker")
+        assertFalse(nav.state.value.projectPickerOpen)
+
         nav.selectProject("dam-hopper")
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
         assertEquals("dam-hopper", nav.state.value.activeProject)
 
-        // 4. In Terminal, selecting a session
+        // 4. In Hub, selecting a session
         nav.selectSession("term-1")
         assertEquals("term-1", nav.state.value.activeSessionId)
 
-        // 5. Back from Terminal returns to Project List without losing active project
+        // 5. Back precedence: capability -> terminal
+        var capabilityBackHandled = false
+        val unregister = nav.registerBackInterceptor { capabilityBackHandled = true; true }
         assertTrue(nav.handleBackPress())
-        assertEquals(AppFlowStage.PROJECT_LIST, nav.state.value.stage)
-        assertEquals("dam-hopper", nav.state.value.activeProject)
+        assertTrue(capabilityBackHandled)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
+        unregister()
 
-        // 6. Back from Project List returns to Profile Login
+        // 6. Back from Hub root proceeds to departure (PROFILE_LOGIN) without implicit logout
         assertTrue(nav.handleBackPress())
         assertEquals(AppFlowStage.PROFILE_LOGIN, nav.state.value.stage)
 
@@ -143,13 +153,13 @@ class SimpleFlowJourneysTest {
         nav.selectProject("dam-hopper")
         nav.selectSession("term-1")
 
-        nav.openSettings(dev.damhopper.nativeapp.ui.flow.SettingsOrigin(AppFlowStage.TERMINAL, panel = "EDITOR", sessionId = "term-1"))
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        nav.openSettings(dev.damhopper.nativeapp.ui.flow.SettingsOrigin(AppFlowStage.HUB, panel = "EDITOR", sessionId = "term-1"))
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
         assertEquals("term-1", nav.state.value.activeSessionId)
 
         assertTrue(nav.handleBackPress(), "Back closes Settings first")
         assertEquals(null, nav.state.value.settings)
-        assertEquals(AppFlowStage.TERMINAL, nav.state.value.stage)
+        assertEquals(AppFlowStage.HUB, nav.state.value.stage)
         assertEquals("dam-hopper", nav.state.value.activeProject)
     }
 

@@ -14,17 +14,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 /**
- * State machine managing the linear core mobile navigation flow:
- * [AppFlowStage.PROFILE_LOGIN] -> [AppFlowStage.PROJECT_LIST] -> [AppFlowStage.TERMINAL]
+ * State machine managing the Agent Hub mobile navigation flow:
+ * [AppFlowStage.PROFILE_LOGIN] -> [AppFlowStage.HUB]
  *
- * Provides atomic back-press unwinding and selection state tracking. Settings is a retained **overlay** with a
- * captured [SettingsOrigin] (see [openSettings]/[closeSettings]), not a second navigation system: it never changes
- * the stage, the selected project or the active session, and Back closes it before any stage unwinding.
+ * The Hub hosts nested Open Project picker, capability navigation (Terminal/Files/Editor/Git),
+ * and retained Settings overlay/notifications feed with atomic back-press unwinding and selection state tracking.
  *
  * Note on state retention: navigation transitions preserve existing selection fields
  * ([AppFlowState.activeProfileId], [AppFlowState.activeProject], [AppFlowState.activeSessionId])
  * unless explicitly modified by navigation methods. Any transition that changes the stage drops the Settings
- * overlay and the inline feed, because their captured origin would no longer exist.
+ * overlay, the inline feed, and any open project picker modal.
  */
 class AppFlowNavigation(
     initialState: AppFlowState = AppFlowState(),
@@ -47,9 +46,13 @@ class AppFlowNavigation(
         sessionId: String?,
         worktreePath: String? = null
     ) {
+        val resolvedStage = when (stage) {
+            AppFlowStage.PROJECT_LIST, AppFlowStage.TERMINAL -> AppFlowStage.HUB
+            else -> stage
+        }
         _state.update {
             it.copy(
-                stage = stage,
+                stage = resolvedStage,
                 activeProfileId = profileId,
                 activeProject = project,
                 activeSessionId = sessionId,
@@ -169,6 +172,14 @@ class AppFlowNavigation(
         _state.update { if (it.notificationsOpen) it.copy(notificationsOpen = false) else it }
     }
 
+    fun openProjectPicker() {
+        _state.update { it.copy(projectPickerOpen = true, notificationsOpen = false) }
+    }
+
+    fun closeProjectPicker() {
+        _state.update { if (it.projectPickerOpen) it.copy(projectPickerOpen = false) else it }
+    }
+
     /**
      * Navigates back to the profile authentication stage.
      */
@@ -188,6 +199,7 @@ class AppFlowNavigation(
                 activeSessionId = null,
                 settings = null,
                 notificationsOpen = false,
+                projectPickerOpen = false,
                 requiredTerminalInstance = null,
             )
         }
@@ -204,13 +216,14 @@ class AppFlowNavigation(
         _state.update { current ->
             val profileChanged = current.activeProfileId != profileId
             current.copy(
-                stage = AppFlowStage.PROJECT_LIST,
+                stage = AppFlowStage.HUB,
                 activeProfileId = profileId,
                 activeProject = if (profileChanged) null else current.activeProject,
                 activeSessionId = if (profileChanged) null else current.activeSessionId,
                 activeWorktreePath = if (profileChanged) null else current.activeWorktreePath,
                 settings = null,
                 notificationsOpen = false,
+                projectPickerOpen = false,
                 requiredTerminalInstance = null,
             )
         }
@@ -222,25 +235,30 @@ class AppFlowNavigation(
      *
      * @param projectName Selected project name or workspace path.
      */
-    fun selectProject(projectName: String) {
+    fun selectProject(projectName: String?, worktreePath: String? = null, profileId: String? = null) {
         ordinaryNavigationRequested()
         val guard = departureGuard
-        if (guard != null && guard(DepartureRequest(AppFlowStage.TERMINAL, { directSelectProject(projectName) }, {}))) {
+        val targetProfile = profileId ?: _state.value.activeProfileId
+        if (guard != null && !isSameWorkspace(targetProfile.orEmpty(), projectName.orEmpty(), worktreePath) &&
+            guard(DepartureRequest(AppFlowStage.HUB, { directSelectProject(projectName, worktreePath, targetProfile) }, {}))) {
             return
         }
-        directSelectProject(projectName)
+        directSelectProject(projectName, worktreePath, targetProfile)
     }
 
-    private fun directSelectProject(projectName: String) {
+    private fun directSelectProject(projectName: String?, worktreePath: String? = null, profileId: String? = null) {
         _state.update { current ->
-            val projectChanged = current.activeProject != projectName
+            val targetProf = profileId ?: current.activeProfileId
+            val projectChanged = current.activeProject != projectName || current.activeWorktreePath != worktreePath || current.activeProfileId != targetProf
             current.copy(
-                stage = AppFlowStage.TERMINAL,
+                stage = AppFlowStage.HUB,
+                activeProfileId = targetProf,
                 activeProject = projectName,
+                activeWorktreePath = worktreePath,
                 activeSessionId = if (projectChanged) null else current.activeSessionId,
-                activeWorktreePath = if (projectChanged) null else current.activeWorktreePath,
                 settings = null,
                 notificationsOpen = false,
+                projectPickerOpen = false,
                 requiredTerminalInstance = null,
             )
         }
@@ -270,12 +288,13 @@ class AppFlowNavigation(
         ordinaryNavigationRequested()
         _state.update { current ->
             current.copy(
-                stage = if (current.activeProfileId != null) AppFlowStage.PROJECT_LIST else AppFlowStage.PROFILE_LOGIN,
+                stage = if (current.activeProfileId != null) AppFlowStage.HUB else AppFlowStage.PROFILE_LOGIN,
                 activeProject = null,
                 activeSessionId = null,
                 activeWorktreePath = null,
                 settings = null,
                 notificationsOpen = false,
+                projectPickerOpen = false,
                 requiredTerminalInstance = null,
             )
         }
@@ -333,7 +352,7 @@ class AppFlowNavigation(
     ): TerminalRouteGate {
         if (isSameWorkspace(route.profileId, route.project, route.worktreePath)) return TerminalRouteGate.PROCEED
         val guard = departureGuard ?: return TerminalRouteGate.PROCEED
-        return if (guard(DepartureRequest(AppFlowStage.TERMINAL, onProceed, onCancelled))) {
+        return if (guard(DepartureRequest(AppFlowStage.HUB, onProceed, onCancelled))) {
             TerminalRouteGate.DEFERRED
         } else {
             TerminalRouteGate.PROCEED
@@ -359,7 +378,7 @@ class AppFlowNavigation(
                     }
                     _state.update { current ->
                         current.copy(
-                             stage = AppFlowStage.TERMINAL,
+                             stage = AppFlowStage.HUB,
                              activeProfileId = profileId,
                              activeProject = target.project,
                              activeWorktreePath = target.worktreePath,
@@ -367,6 +386,7 @@ class AppFlowNavigation(
                              requiredTerminalInstance = null,
                              settings = null,
                              notificationsOpen = false,
+                             projectPickerOpen = false,
                          )
                      }
                      onCommitted()
@@ -407,7 +427,8 @@ class AppFlowNavigation(
 
     private fun isSameWorkspace(profileId: String, project: String, worktreePath: String?): Boolean {
         val current = _state.value
-        return current.stage == AppFlowStage.TERMINAL && current.activeProfileId == profileId &&
+        val isHubStage = current.stage == AppFlowStage.HUB || current.stage == AppFlowStage.TERMINAL
+        return isHubStage && current.activeProfileId == profileId &&
             current.activeProject == project &&
             WorkspaceFileOwner.normalizeWorktree(current.activeWorktreePath) == WorkspaceFileOwner.normalizeWorktree(worktreePath)
     }
@@ -422,13 +443,14 @@ class AppFlowNavigation(
     ) {
         _state.update {
             it.copy(
-                stage = AppFlowStage.TERMINAL,
+                stage = AppFlowStage.HUB,
                 activeProfileId = profileId,
                 activeProject = project,
                 activeWorktreePath = worktreePath,
                 activeSessionId = sessionId,
                 settings = null,
                 notificationsOpen = false,
+                projectPickerOpen = false,
                 notificationRouteActive = notificationRouteActive,
                 requiredTerminalInstance = required,
             )
@@ -451,6 +473,10 @@ class AppFlowNavigation(
      */
     fun handleBackPress(): Boolean {
         val snapshot = _state.value
+        if (snapshot.projectPickerOpen) {
+            closeProjectPicker()
+            return true
+        }
         if (snapshot.settings != null) {
             closeSettings()
             return true
@@ -465,6 +491,7 @@ class AppFlowNavigation(
         }
         val current = _state.value
         val targetStage = when (current.stage) {
+            AppFlowStage.HUB -> AppFlowStage.PROFILE_LOGIN
             AppFlowStage.TERMINAL -> AppFlowStage.PROJECT_LIST
             AppFlowStage.PROJECT_LIST -> AppFlowStage.PROFILE_LOGIN
             AppFlowStage.PROFILE_LOGIN -> null
@@ -485,13 +512,14 @@ class AppFlowNavigation(
                 stage = targetStage,
                 settings = null,
                 notificationsOpen = false,
+                projectPickerOpen = false,
                 requiredTerminalInstance = null,
             )
         }
         return true
     }
 
-    private companion object {
+    companion object {
         const val AGENT_SETTINGS_SUB_SECTION = "HOST"
         const val AGENT_SETTINGS_HOST_SECTION = "AGENTS"
     }

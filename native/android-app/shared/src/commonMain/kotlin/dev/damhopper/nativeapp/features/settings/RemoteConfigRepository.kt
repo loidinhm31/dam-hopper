@@ -95,25 +95,6 @@ class RemoteConfigRepository(
         return confirmedFlag(text, "updated") || confirmedFlag(text, "ok")
     }
 
-    /**
-     * Replaces the global `defaults` object (it does not touch the known-workspace registry).
-     * Set sends exactly `{"defaults":{"workspace":path}}`; Clear (`workspace == null`) sends exactly
-     * `{"defaults":{}}`.
-     */
-    suspend fun updateGlobalDefaults(workspace: String?, guard: RequestAdmissionGuard): Boolean {
-        require(workspace == null || workspace.isNotBlank()) { "Default workspace path is blank" }
-        val body = buildJsonObject {
-            put(
-                "defaults",
-                buildJsonObject {
-                    if (workspace != null) put("workspace", workspace)
-                },
-            )
-        }.toString()
-        val text = apiClient.postJson("/api/global-config/defaults", body, guard)
-        return confirmedFlag(text, "updated")
-    }
-
     /** True only for a JSON object whose [key] is the boolean `true`; malformed bodies throw. */
     private fun confirmedFlag(responseText: String, key: String): Boolean {
         val obj = ProtocolJson.decodeFromString(JsonObject.serializer(), responseText)

@@ -1,0 +1,52 @@
+{
+  "taskId": "preserve-focused-git-safety",
+  "phase": "P06",
+  "wave": "W07",
+  "status": "verification_scoped",
+  "timestamp": "2026-11-07T22:05:00Z",
+  "compilation": [
+    {
+      "command": "cmd.exe /c gradlew.bat :shared:compileKotlinJvm",
+      "exitCode": 0,
+      "status": "success"
+    }
+  ],
+  "testsDemonstrated": [
+    {
+      "suite": "dev.damhopper.nativeapp.features.workspace.GitWorkspaceSafetyTest",
+      "total": 12,
+      "passed": 12,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.git.GitFocusedIntegrationTest",
+      "total": 7,
+      "passed": 7,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.git.GitWorkspaceNavigationTest",
+      "total": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.git.GitSyncWorktreeSafetyTest",
+      "total": 7,
+      "passed": 7,
+      "failed": 0
+    }
+  ],
+  "verifiedBehaviors": [
+    "Unregistered project target has zero Git dispatch",
+    "Active, hidden, restart-pending, and uncertain PTYs block worktree switch and branch deletion",
+    "Dirty alias documents block worktree transitions",
+    "Secondary VCS root fetch/pull refused before request",
+    "Unknown mutation outcome preserves uncertainty without success refresh",
+    "Active worktree removal switches away before deletion"
+  ],
+  "pendingVerification": [
+    "Combined Android compilation with active integration changes",
+    "P08 disposable runtime Git CLI smoke"
+  ]
+}

@@ -12,7 +12,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -737,6 +740,146 @@ class SettingsRepositoryTest {
         assertFalse(authority.isCurrent(otherAccount))
         repository.setSettingsTarget(null)
         assertNull(authority.guardFor(binding.owner))
+    }
+
+    @Test
+    fun importAndExportPreserveRawTomlContentAndUnrelatedSections() = runBlocking {
+        resolver.connect("T")
+        val repository = repo()
+        repository.setSettingsTarget("T")
+        val op = assertNotNull(repository.captureOperation(SettingsScope.SETTINGS_TARGET))
+
+        val richToml = """
+            # Preserved server configuration with comments and unknown sections
+            [workspace]
+            name = "my-workspace"
+            root = "/srv/damhopper/repo"
+            web_custom_field = "keep_me"
+
+            [server]
+            port = 4803
+            experimental_opt_in = true
+
+            [[projects]]
+            name = "frontend"
+            path = "apps/web"
+            type = "pnpm"
+
+            [custom_tool_section]
+            plugin_key = "secret_plugin_setting"
+        """.trimIndent()
+
+        server.route("/api/settings/export/workspace.toml") { _ -> 200 to richToml }
+        val exportResult = repository.exportWorkspaceToml(op)
+        assertTrue(exportResult is SettingsOutcome.Confirmed)
+        val exportedText = exportResult.value.decodeToString()
+        assertEquals(richToml, exportedText, "export preserves comments and all unknown sections")
+
+        val importOutcome = repository.importWorkspaceToml(op, richToml.encodeToByteArray())
+        assertTrue(importOutcome is SettingsOutcome.Confirmed)
+        val lastPost = server.posts("/api/settings/import/workspace.toml").last()
+        assertEquals(richToml, lastPost.body, "import sends raw byte content unchanged")
+    }
+
+    @Test
+    fun safImportAndExportOutcomeKindsAreKeptDistinct() = runBlocking {
+        resolver.connect("T")
+        val repository = repo()
+        repository.setSettingsTarget("T")
+
+        val fakePort = object : SettingsDocumentPort {
+            val flow = MutableSharedFlow<SettingsDocumentResult>(extraBufferCapacity = 16)
+            override val results: SharedFlow<SettingsDocumentResult> = flow.asSharedFlow()
+            val created = CopyOnWriteArrayList<Triple<SettingsOperation, String, ByteArray>>()
+            val opened = CopyOnWriteArrayList<SettingsOperation>()
+            override fun openToml(operation: SettingsOperation) { opened += operation }
+            override fun createDocument(operation: SettingsOperation, name: String, mime: String, bytes: ByteArray) {
+                created += Triple(operation, name, bytes)
+            }
+        }
+
+        val workflow = SettingsDocumentWorkflow(repository, fakePort, scope)
+        val op = assertNotNull(repository.captureOperation(SettingsScope.SETTINGS_TARGET))
+
+        // 1. Export TOML triggers port.createDocument:
+        server.route("/api/settings/export/workspace.toml") { _ -> 200 to "[workspace]\nroot = \"/srv/export\"" }
+        workflow.exportToml(op)
+        awaitCondition("port.createDocument called") { fakePort.created.isNotEmpty() }
+        assertEquals("config.toml", fakePort.created.single().second)
+
+        // Cancelled export:
+        fakePort.flow.emit(SettingsDocumentResult(op, SettingsDocumentKind.CREATE_TOML, bytes = null, saved = false, cancelled = true, error = null))
+        awaitCondition("export cancelled recorded") { workflow.state.value.lastOutcomeKind == SettingsOutcomeKind.NOT_SUBMITTED }
+        assertFalse(workflow.state.value.messageIsError)
+
+        // 2. Import TOML triggers port.openToml:
+        val op2 = assertNotNull(repository.captureOperation(SettingsScope.SETTINGS_TARGET))
+        workflow.importToml(op2)
+        awaitCondition("port.openToml called") { fakePort.opened.isNotEmpty() }
+
+        // Cancelled file choice:
+        fakePort.flow.emit(SettingsDocumentResult(op2, SettingsDocumentKind.OPEN_TOML, bytes = null, saved = false, cancelled = true, error = null))
+        awaitCondition("open cancelled recorded") { workflow.state.value.lastOutcomeKind == SettingsOutcomeKind.NOT_SUBMITTED }
+
+        // Open file succeeds and extracts root:
+        val op3 = assertNotNull(repository.captureOperation(SettingsScope.SETTINGS_TARGET))
+        workflow.importToml(op3)
+        val tomlBytes = "[workspace]\nname = \"imported\"\nroot = \"/srv/new-root\"\n".encodeToByteArray()
+        fakePort.flow.emit(SettingsDocumentResult(op3, SettingsDocumentKind.OPEN_TOML, bytes = tomlBytes, saved = false, cancelled = false, error = null))
+        awaitCondition("awaitingImport set") { workflow.state.value.awaitingImport != null }
+        val pending = workflow.state.value.awaitingImport!!
+        assertEquals("/srv/new-root", pending.targetRoot)
+
+        // 3. User cancels import in confirmation dialog:
+        workflow.cancelImport()
+        assertNull(workflow.state.value.awaitingImport)
+        assertEquals(SettingsOutcomeKind.NOT_SUBMITTED, workflow.state.value.lastOutcomeKind)
+
+        // 4. Dirty-state guard cancels import:
+        val op4 = assertNotNull(repository.captureOperation(SettingsScope.SETTINGS_TARGET))
+        workflow.importToml(op4)
+        fakePort.flow.emit(SettingsDocumentResult(op4, SettingsDocumentKind.OPEN_TOML, bytes = tomlBytes, saved = false, cancelled = false, error = null))
+        awaitCondition("awaitingImport set again") { workflow.state.value.awaitingImport != null }
+        workflow.confirmImport(departureGuard = { false })
+        awaitCondition("dirty guard cancelled recorded") { workflow.state.value.lastOutcomeKind == SettingsOutcomeKind.NOT_SUBMITTED }
+
+        // 5. Confirmed import succeeds:
+        val op5 = assertNotNull(repository.captureOperation(SettingsScope.SETTINGS_TARGET))
+        workflow.importToml(op5)
+        fakePort.flow.emit(SettingsDocumentResult(op5, SettingsDocumentKind.OPEN_TOML, bytes = tomlBytes, saved = false, cancelled = false, error = null))
+        awaitCondition("awaitingImport ready for confirm") { workflow.state.value.awaitingImport != null }
+        workflow.confirmImport(departureGuard = { true })
+        awaitCondition("import confirmed") { workflow.state.value.lastOutcomeKind == SettingsOutcomeKind.CONFIRMED }
+        assertNotNull(workflow.state.value.lastImport)
+
+        // 6. Unknown result on unacknowledged 500 error is never automatically retried:
+        server.route("/api/settings/import/workspace.toml") { _ -> 500 to """{"error":"internal"}""" }
+        val postsBefore = server.posts("/api/settings/import/workspace.toml").size
+        val op6 = assertNotNull(repository.captureOperation(SettingsScope.SETTINGS_TARGET))
+        workflow.importToml(op6)
+        fakePort.flow.emit(SettingsDocumentResult(op6, SettingsDocumentKind.OPEN_TOML, bytes = tomlBytes, saved = false, cancelled = false, error = null))
+        awaitCondition("awaitingImport ready for unknown test") { workflow.state.value.awaitingImport != null }
+        workflow.confirmImport()
+        awaitCondition("import unknown recorded") { workflow.state.value.lastOutcomeKind == SettingsOutcomeKind.UNKNOWN }
+        assertEquals(postsBefore + 1, server.posts("/api/settings/import/workspace.toml").size, "must not retry uncertain import")
+    }
+
+    @Test
+    fun extractWorkspaceRootFromTomlHandlesVariousFormats() {
+        assertEquals(
+            "/srv/project",
+            extractWorkspaceRootFromToml("[workspace]\nroot = \"/srv/project\""),
+        )
+        assertEquals(
+            "/var/data",
+            extractWorkspaceRootFromToml("# comment\n[workspace]\nname = 'test'\nroot = '/var/data'"),
+        )
+        // Other sections must not be mistaken for workspace root:
+        assertNull(
+            extractWorkspaceRootFromToml("[server]\nroot = \"/etc/server\"\n[other]\nroot = \"/tmp\""),
+        )
+        assertNull(extractWorkspaceRootFromToml(""))
+        assertNull(extractWorkspaceRootFromToml("[workspace]\nname = \"no-root\""))
     }
 }
 

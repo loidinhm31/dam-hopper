@@ -1,30 +1,30 @@
 ---
 title: "Native Android Agent Hub redesign"
-description: "Adapt native Android to current Agent Hub, filesystem, session, Settings and notification semantics without adopting the full OS. P01-P02 accepted with known limitations; W05 feature checkpoint approved with known unresolved findings by explicit user approval."
-status: in-progress
+description: "Adapt native Android to current Agent Hub, filesystem, session, Settings and notification semantics without adopting the full OS. P01-P08 completed with noted issues by user approval; automated gates passed (1,299 / 1,299 passed across 142 suites); device gate BLOCKED_PENDING_DEVICE; live multi-server gate DEFERRED_PENDING_CONTAINER_RUNTIME."
+status: completed-with-noted-issues
 priority: P1
 effort: 158h
 branch: feat/ai-os-redesign
 tags: [android, refactor, api, frontend, security]
 created: 2026-11-07
-checkpoint: "wave-05-approved-with-noted-issues"
+checkpoint: "completed-with-noted-issues"
 ---
 # Native Android Agent Hub redesign
 
 ## Outcome and boundary
-Secure Profile Login -> Agent Hub by default; globally reachable retained Settings/Notifications; nested Terminal/Files/Editor/focused Git. Match current web concepts/semantics, not desktops/windows/docks/Recipes or dormant 12-panel activation. Reuse current KMP/Compose/retained owners; no new runtime, poller, scheduler, flags or dependencies. P01/P02 implementation accepted with known limitations; Wave 5 (W05: four first feature tasks across P03–P06) checkpoint approved strictly with known unresolved findings by explicit user approval; subsequent feature waves W06/W07, root integration P07, and qualification gates remain open.
+Secure Profile Login -> Agent Hub by default; globally reachable retained Settings/Notifications; nested Terminal/Files/Editor/focused Git. Match current web concepts/semantics, not desktops/windows/docks/Recipes or dormant 12-panel activation. Reuse current KMP/Compose/retained owners; no new runtime, poller, scheduler, flags or dependencies. All phases P01–P08 administratively closed with noted issues following 3 code review cycles and explicit user approval (technical acceptance and release qualification remain open); 1,299 / 1,299 automated unit/integration tests passed across 142 suites; device qualification BLOCKED_PENDING_DEVICE; live multi-server qualification DEFERRED_PENDING_CONTAINER_RUNTIME.
 
-## Phases (P01–P02 accepted with known limitations, P03–P06 in progress with W05 checkpoint approved with known unresolved findings by explicit user approval, W06–W13 pending; 36h completed effort / 158h total)
+## Phases (P01–P08 completed with noted issues by user approval; 158h completed effort / 158h total)
 | Phase | Status | Effort | Owner/group | Detail |
 |---|---|---:|---|---|
 | P01 Contracts | Completed (accepted with known limitations by user approval) | 8h | Contract01 / S-1 | [Schemas and settled ports](phase-01-shared-contracts.md) |
 | P02 Atomic cutover | Completed (accepted with known limitations by user approval) | 28h | Api02 / S-2 | [All current serializers and callers](phase-02-atomic-api-cutover.md) |
-| P03 Hub/terminal | In progress (W05 checkpoint approved with known unresolved findings by explicit user approval; W06 pending) | 22h | Feature03 / G-A | [Navigator and terminal presentation](phase-03-hub-terminal-presentation.md) |
-| P04 Settings | In progress (W05 checkpoint approved with known unresolved findings by explicit user approval; W06 pending) | 16h | Feature04 / G-A | [Scopes, preferences and config](phase-04-settings-ui-preferences.md) |
-| P05 Notifications | In progress (W05 checkpoint approved with known unresolved findings by explicit user approval; W06 pending) | 16h | Feature05 / G-A | [Feed and Android delivery](phase-05-notifications-feed-platform.md) |
-| P06 Codebase | In progress (W05 checkpoint approved with known unresolved findings by explicit user approval; W06/W07 pending) | 24h | Feature06 / G-A | [Files, native editor and focused Git](phase-06-codebase-files-editor-git.md) |
-| P07 Integration | Pending (W08–W09) | 24h | Integration07 / S-3 | [Active root and retained lifecycle](phase-07-root-lifecycle-integration.md) |
-| P08 Qualification | Pending (W10–W13) | 20h | Qualification08 / S-4 | [Coherent checks then docs/handoff](phase-08-qualification-docs-handoff.md) |
+| P03 Hub/terminal | Completed (approved with noted issues by user approval) | 22h | Feature03 / G-A | [Navigator and terminal presentation](phase-03-hub-terminal-presentation.md) |
+| P04 Settings | Completed (approved with noted issues by user approval) | 16h | Feature04 / G-A | [Scopes, preferences and config](phase-04-settings-ui-preferences.md) |
+| P05 Notifications | Completed (approved with noted issues by user approval) | 16h | Feature05 / G-A | [Feed and Android delivery](phase-05-notifications-feed-platform.md) |
+| P06 Codebase | Completed (approved with noted issues by user approval) | 24h | Feature06 / G-A | [Files, native editor and focused Git](phase-06-codebase-files-editor-git.md) |
+| P07 Integration | Completed (approved with noted issues by user approval) | 24h | Integration07 / S-3 | [Active root and retained lifecycle](phase-07-root-lifecycle-integration.md) |
+| P08 Qualification | Completed (automated gates passed; device qualification BLOCKED_PENDING_DEVICE; live multi-server gate DEFERRED_PENDING_CONTAINER_RUNTIME) | 20h | Qualification08 / S-4 | [Coherent checks then docs/handoff](phase-08-qualification-docs-handoff.md) |
 
 ## Dependency DAG and eligible groups
 ```mermaid
@@ -81,34 +81,41 @@ Only G-A has concurrent writers: W01 contract alone; W02/03/04 each atomic API t
 3. **Blanket 4xx-clearing**: All HTTP 4xx responses are treated as definitive refusal.
 4. **202 lifecycle uncertainty**: Complete refresh, input suppression, and selection retention vs selectable lifetime behavior during pending termination remain unverified.
 
-### Wave 5 (P03–P06 first feature tasks) evidence & review cycle 3
-- **Reviewer Technical Assessment**: Independent reviewer output artifact ([Cycle 3 review](reports/code-review-cycle3-wave05.md)) assessed the implementation as "incorrect" (confidence 0.98; static code review across P03–P06; no builds or tests run by reviewer) with score 5/10 (3 critical issues, 7 warnings). Prior fixes were reported present by static review rather than independently verified.
-- **User Authorization & Disposition**: Following Cycle 3 review, the user was prompted and explicitly authorized: "Approve with noted issues", admitting the Wave 5 checkpoint strictly as **approved with known unresolved findings**. User approval accepts the checkpoint for wave progression but does NOT overturn the technical findings, does NOT declare the features technically qualified or release-ready, and does NOT claim safety invariants are verified.
-- **Demonstrated Verification Evidence (Main/Coordinator-Reported Execution Record)**:
-  - Compilation: `:shared:compileKotlinJvm` (exit 0); `:androidApp:compileDebugKotlin` (exit 0).
-  - Selected Unit Tests: Passing runs across assigned JVM test classes under `:shared:jvmTest` (172 unit test runs passed); passing runs across assigned Android unit test classes under `:androidApp:testDebugUnitTest` (26 unit test runs passed).
-  - **Scope Boundary**: Passing status is demonstrated for selected JVM and Android unit-test classes and compilation targets only. This does NOT claim full test suite coverage, instrumentation (`androidTest`) compilation/execution, or end-to-end device qualification.
+### Final Integrated Qualification & Code Review Cycle 3
+- **Review Record & Attribution**: Independent reviewer output artifact ([Cycle 3 review](reports/code-review-cycle3-wave05.md) and [Final Cycle 3 review](../reports/code-review-261108-0225-android-agent-hub-redesign-cycle-3.md)):
+  - **Reviewer Technical Disposition**: **Changes requested** (score 5/10; 7 critical findings, 7 warnings; static code review across P01–P08 contracts C-01 through C-08; no builds, tests, or device runs executed by reviewer).
+  - **Administrative Closure**: **Approved with noted issues** by explicit user authorization. Technical acceptance, device verification, and release qualification remain open; passing automated suites do not overturn reviewed correctness, contract, or privacy findings.
+- **Exact Automated Test Verification (Reported Evidence)**:
+  - **1,299 / 1,299 unit & integration tests reported PASSED across 142 suites** (0 failures, 0 errors, 0 skipped; forced rerun in [tester report](../reports/full-suite-tester-261108-0035-android-agent-hub-redesign.md) and [integrated qualification report](reports/integrated-automated-qualification.md)):
+    - Multiplatform Core Unit & Integration Suite (`:shared:jvmTest`): **1,044 / 1,044 tests PASSED** across 111 suites.
+    - Android Application Unit Suite (`:androidApp:testDebugUnitTest`): **255 / 255 tests PASSED** across 31 suites.
+  - Packaging (`:androidApp:assembleDebug`): **BUILD SUCCESSFUL** (debug APK produced).
+  - Instrumented Test Compilation (`:androidApp:compileDebugAndroidTestKotlin`): **BUILD SUCCESSFUL** (0 compilation errors; prior `ProfileId` string constructor defect in `TerminalAgentsSidebarTest.kt` resolved; instrumented test execution on device remains unexecuted).
+  - Disposable Git Workspace Fixture Oracle (`git-workspace-fixture.mjs --self-test`): **12 / 12 assertions PASSED** (0 failures).
+- **P08 Qualification Status**:
+  - Automated test and compilation gates: **PASSED**.
+  - Connected device qualification (`GATE-C`): **BLOCKED_PENDING_DEVICE** (0 connected Android physical devices or emulators observed via `adb.exe devices`).
+  - Live multi-server qualification: **DEFERRED_PENDING_CONTAINER_RUNTIME** (dual-server runtime on ports 4804/4805 deferred to dedicated containerized environment because host-shared Windows OPAQUE storage is not isolated by `XDG_CONFIG_HOME`).
 
-### Known Wave 5 residual risks (disclosed for downstream waves W06–W07, P07, & P08)
-1. **[Critical] Workspace browsing UI render crash**: `FileMutationCoordinator.isPathUnresolved()` calls throwing owner getter on Workspace target (`FileMutationCoordinator.kt:142-144`), crashing Compose rendering. (Target: W06 / P07).
-2. **[Critical] Ungated workspace context-menu transfers**: `FileScreens.kt:447` leaves upload/download callbacks enabled on workspace browsing; `MainActivity` consumers use `fileTreeState.target` writing into previous project. (Target: W06 / P07).
-3. **[Critical] Instrumentation test constructor defect**: `TerminalAgentsSidebarTest.kt:749-750, 884-885` invalid `ProfileId("p1")` constructor call blocks `androidTest` compilation. (Target: P08 qualification / W10–W13).
-4. **[Warning] WorkbenchScreen local fileTreeState desync**: Picker updates `gitWorkspace.fileTreeState`, but `filesContent` renders separate local `fileTreeState` (`WorkbenchScreen.kt:1012-1015`). (Target: P07 root integration / W08).
-5. **[Warning] Folder matching by name instead of qualified path**: Registered projects matched by basename instead of canonical path (`FileScreens.kt:442-446`), causing unmark/open misrouting. (Target: W06 / P07).
-6. **[Warning] Transport failure misclassification**: `ApiRequestError(status = 0)` classified as `Rejected` rather than `Unknown` (`FileMutationCoordinator.kt:549-551, 590-592`), allowing unsafe retries. (Target: W06 / P07).
-7. **[Warning] Directory loading failure unfenced**: Overwrites target error/loading state upon late workspace failure after switching back to project (`FileTreeState.kt:385`). (Target: W06 / P07).
-8. **[Warning] Hub navigator loading/notice state dropped**: Host adapter supplies only `agentsUiState`, dropping top-level notices/loading indicators (`TerminalAgentsSidebarHost.kt:325-327`). (Target: P07 root integration / W08).
-9. **[Warning] Hub navigator Open Project action unconnected**: Navigator receives empty callbacks/roster, leaving Open Project button inert (`TerminalAgentsSidebarHost.kt:328-332`). (Target: P07 root integration / W08).
-10. **[Warning] Coordinator notification refusal silence**: Notice updates missing outside routing callback; missing-record/concurrent refusals discard results without user feedback (`NativeWorkspaceViewModel.kt:1545-1554`). (Target: P07 root integration / W08).
+### Noted Issues & Residual Technical Debt (Cycle 3 Code Review)
+1. **[Critical C-01] Rendered Hub actions contract routing**: Terminal click owner lookup searches only within `selectedProject`, failing to route row's exact project/worktree/profile; projectless Files/Editor remain unavailable (`DamHopperMobileApp.kt`, `NativeWorkspaceViewModel.kt`).
+2. **[Critical C-02] Manufactured canonical identity**: Editable reads still accept missing or invalid server identity fallback (`EditorContentLoader.kt`, `EditorTabsState.kt`).
+3. **[Critical C-03] Reconnection document reauthorization**: Reconnection clears `_isAuthorityRetired` without re-verifying fresh canonical baseline against server workspace (`ProjectWorkspaceState.kt`, `NativeWorkspaceViewModel.kt`).
+4. **[Critical C-04] Exact-document disposal on final discard**: Dirty documents rejected by `canDispose` predicate during explicit discard and reload replacement (`EditorTabsState.kt`, `AndroidEditorDocument.kt`).
+5. **[Critical C-05] Dirty-departure dialog privacy masking**: Dirty departure `AlertDialog` branches mount in separate unmasked windows outside in-content Cognito privacy overlay (`ProjectWorkspaceScreen.kt`, `DamHopperMobileApp.kt`).
+6. **[Critical C-07] Notification commit authority caching**: Post-consent notification commits re-read cached reducer state rather than fresh server inventory, dropping exact incarnation (`NativeWorkspaceViewModel.kt`, `AppFlowNavigation.kt`).
+7. **[Critical C-08] Target commit owner revalidation**: Post-consent project target selection validates connection presence rather than matching captured logical owner/generation (`NativeWorkspaceViewModel.kt`).
+8. **[Warning W-01] Unqualified Hub presentation state**: Raw session IDs used in pin/hidden sets across profiles (`AgentHubModels.kt`, `NativeWorkspaceViewModel.kt`).
+9. **[Warning W-02] Uncertain-create admission gaps**: Timestamp intent IDs used instead of UUIDs; all 4xx responses clear uncertainty (`TerminalRepository.kt`).
+10. **[Warning W-03] Inferred termination support**: Version header advertisement not required before enabling End Session UI (`TerminalPresentationPolicy.kt`).
+11. **[Warning W-04] Command rename/delete reconciliation**: Merging remote config preserves obsolete original represented keys (`RemoteConfigEditor.kt`).
+12. **[Warning W-05] Duplicate upload target selectors**: `FsUploadBegin` sends nested target plus flat selectors (`TransferCoordinator.kt`).
+13. **[Warning W-06] Redundant document serialization**: Reconstructing session and reading mtime serializes buffers repeatedly (`EditorSession.kt`, `EditorTabsState.kt`).
+14. **[Warning W-07] Qualification documentation labeling**: Historical mock/oracle tests labeled as live disposable runtime in earlier reports.
 
-## Validation summary and execution risks
-Validated 2026-11-07: two genuine questions; user confirmed adaptive navigator and all already-connected profiles, without saved-profile auto-connect/keepalive. No unresolved product design questions. Secure login -> main Hub retained; C1/C8 supersede previous navigation rules only as specified.
-
-### Preserved open future qualification gates
-1. **Live Windows termination**: Server exercises HTTP 500 signal-dispatch failure on live daemon (HTTP 409 conflict refusal verified; successful live termination on Windows remains a future device/daemon qualification gate).
-2. **Android process-death recovery**: Recovery of persistent uncertain-create reservation barrier across actual OS process restart remains an open device qualification gate.
-3. **Smoke storage isolation and cleanup**: Complete test isolation and teardown cleanup on persistent storage fixtures.
-4. **202 lifecycle behavior**: Refresh and input suppression vs selectable lifetime behavior during pending termination.
-5. **Instrumentation (`androidTest`) compilation**: Fix `TerminalAgentsSidebarTest.kt` string constructor compilation error to allow instrumented testing on device/emulator.
-6. **Downstream waves and integration**: Downstream feature waves W06–W13, root integration P07, and qualification P08 remain pending with all safety invariants, full test suites, and instrumentation compilation strictly open.
-7. **Release qualification gates**: Physical device (API 29 / API 33+), phone/tablet adaptive layout, IME, TalkBack, human verification, WS retirement, and authenticated/isolated crypto-fixture evidence remain future release gates, not completed implementation or release acceptance.
+### Preserved Open Future Qualification Gates
+1. **Physical Device Qualification (`GATE-C`)**: Execution on physical ARM64 device (API 29 and API 33+) verifying phone/tablet adaptive layout, soft keyboard IME, TalkBack accessibility, and visual presentation.
+2. **Connected Instrumented Journeys**: Running `AgentHubRootJourneys`, `RetainedWorkspaceLifecycleTest`, `NativeEditorExplorerJourneys`, and `AndroidNotificationDeliveryTest` on connected hardware.
+3. **Live Multi-Server Isolation**: Dual-server runtime verification (ports 4804/4805) under containerized isolated crypto storage (Windows OPAQUE dirs).
+4. **Live Windows PTY Termination**: Verification of signal-dispatch and HTTP 202/500 handling on live Windows server daemons.
+5. **Android OS Process-Death Recovery**: Persistent reservation barrier validation across real OS process termination and restart.

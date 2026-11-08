@@ -122,7 +122,6 @@ class EditorRepository(
         val effectiveOwner = dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(fileRepository.owner, target)
         val acquiredToken = fileRepository.arbiter.tryReserveSave(effectiveOwner, id.relativePath)
             ?: return FileOperationOutcome.NotSubmitted("Path '${id.relativePath}' is currently reserved by another file operation")
-
         try {
             val snapshot = doc.snapshotForSave()
             val content = snapshot.utf8Bytes.decodeToString()

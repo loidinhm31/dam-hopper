@@ -35,6 +35,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 private class TestWorkspaceWsConnection(
@@ -66,6 +67,7 @@ private class TestWorkspaceWsConnection(
                 mtime = 10L,
                 size = 25uL,
                 data = kotlin.io.encoding.Base64.encode("fun main() = println()\n".encodeToByteArray()),
+                fileIdentity = ServerMsg.FileIdentity("ws-1", 1L, "/Main.kt"),
             )
             else -> ServerMsg.FsOpResult(reqId = reqId, ok = true)
         }
@@ -88,12 +90,14 @@ class ProjectWorkspaceStateTest {
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":25,"mtime":10,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":25,"mtime":10,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/Main.kt"}}"""
+            exchange.responseHeaders.set("X-File-Identity", """{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/Main.kt"}""")
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "fun main() = println()\n"
+            exchange.responseHeaders.set("X-File-Identity", """{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/Main.kt"}""")
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }
@@ -111,6 +115,8 @@ class ProjectWorkspaceStateTest {
         profileId: String = "prof-test",
         user: String = "alice",
         project: String = "demo-proj",
+        epoch: Long? = null,
+        registry: dev.damhopper.nativeapp.features.editor.CanonicalDocumentRegistry? = null,
     ): ProjectWorkspaceState {
         val conn = ConnectionRef(profileId, 1L)
         val baseUrl = "http://127.0.0.1:$serverPort"
@@ -120,6 +126,7 @@ class ProjectWorkspaceStateTest {
             accountUser = user,
             project = project,
             worktreePath = null,
+            workspaceEpoch = epoch,
         )
         val target = owner.toProjectTargetRef()
         val arbiter = FileOperationArbiter()
@@ -136,6 +143,7 @@ class ProjectWorkspaceStateTest {
             editorRepository = editorRepo,
             documentFactory = docFactory,
             coroutineScope = testScope,
+            registry = registry,
         )
     }
 
@@ -317,5 +325,81 @@ class ProjectWorkspaceStateTest {
         assertTrue(doc.canDispose)
         doc.close()
         assertTrue(doc.isClosed)
+    }
+
+    @Test
+    fun testOneFileSharesNativeBufferAcrossWorkspacesInSameOwner() = runTest {
+        val sharedRegistry = dev.damhopper.nativeapp.features.editor.CanonicalDocumentRegistry(TestEditorDocumentFactory())
+        val ws1 = createWorkspaceState(project = "demo-proj", registry = sharedRegistry)
+        val ws2 = createWorkspaceState(project = "demo-proj", registry = sharedRegistry)
+
+        ws1.editorTabsState.openTab(ws1.target, "Main.kt")
+        ws2.editorTabsState.openTab(ws2.target, "Main.kt")
+
+        val tab1 = ws1.editorTabsState.activeTab!!
+        val tab2 = ws2.editorTabsState.activeTab!!
+
+        val session1 = ws1.editorTabsState.getSession(tab1.key)!!
+        val session2 = ws2.editorTabsState.getSession(tab2.key)!!
+
+        assertSame(session1.document, session2.document, "Cross-workspace aliases must share canonical document")
+
+        session1.setText("fun main() = println(\"hello\")\n")
+        assertTrue(session1.isDirty)
+        assertTrue(session2.isDirty)
+        assertEquals("fun main() = println(\"hello\")\n", session2.getText())
+
+        // Close Workspace 1: Workspace 2 survives with dirty edits
+        ws1.close()
+        assertTrue(ws1.isAuthorityRetired.value)
+        assertFalse(session2.document.isClosed, "Closing ws1 must not close document used by ws2")
+        assertTrue(session2.isDirty)
+        assertEquals("fun main() = println(\"hello\")\n", session2.getText())
+
+        session2.undo()
+        assertEquals("fun main() = println()\n", session2.getText())
+        assertFalse(session2.isDirty)
+    }
+
+    @Test
+    fun testAuthorityRetirementRetainsDraftsAndDisablesStaleSaves() = runTest {
+        val ws = createWorkspaceState(project = "demo-proj", epoch = 10L)
+        ws.editorTabsState.openTab(ws.target, "Main.kt")
+        val tab = ws.editorTabsState.activeTab!!
+        val session = ws.editorTabsState.getSession(tab.key)!!
+
+        session.setText("draft content\n")
+        assertTrue(session.isDirty)
+
+        // Revoke authority (auth loss or disconnect)
+        ws.revokeAuthority()
+        assertTrue(ws.isAuthorityRetired.value)
+
+        // In-memory drafts and undo chains are retained!
+        assertEquals(1, ws.editorTabsState.tabs.value.size)
+        assertEquals("draft content\n", session.getText())
+        assertTrue(session.isDirty)
+
+        // Saves are disabled while authority is retired
+        assertFalse(session.isInputPermitted)
+        val saveRes = ws.editorTabsState.saveTab(tab.key)
+        assertTrue(saveRes is dev.damhopper.nativeapp.features.editor.EditorSaveResult.Error)
+
+        // Rebind with mismatched epoch refuses adoption
+        val mismatchedOwner = ws.owner.copy(workspaceEpoch = 999L)
+        val rebindEpochMismatch = ws.rebindAuthority(mismatchedOwner, ConnectionRef("prof-test", 2L))
+        assertFalse(rebindEpochMismatch, "Mismatched epoch must reject rebind")
+
+        // Rebind with mismatched account user refuses adoption
+        val mismatchedUser = ws.owner.copy(accountUser = "bob")
+        val rebindUserMismatch = ws.rebindAuthority(mismatchedUser, ConnectionRef("prof-test", 2L))
+        assertFalse(rebindUserMismatch, "Mismatched user must reject rebind")
+
+        // Exact authorized identity rebind succeeds
+        val freshConn = ConnectionRef("prof-test", 2L)
+        val rebindExact = ws.rebindAuthority(ws.owner, freshConn)
+        assertTrue(rebindExact, "Exact authorized owner permits rebind")
+        assertFalse(ws.isAuthorityRetired.value)
+        assertTrue(session.isInputPermitted)
     }
 }

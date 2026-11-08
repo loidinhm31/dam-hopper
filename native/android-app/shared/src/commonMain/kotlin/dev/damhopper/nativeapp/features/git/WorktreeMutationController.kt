@@ -204,21 +204,28 @@ class WorktreeMutationController(
                     }
                 }
 
-                val guardResult = host.withMutationGuard(scope, impact, listOf(current.path)) {
-                    repository.branchWorktree.removeWorktree(scope.project, current.path, force)
+                // Explicitly validate post-switch authority before mutation
+                val postSwitchScope = activeScope ?: scope
+                if (postSwitchScope.project != scope.project || postSwitchScope.generation != scope.generation) {
+                    onResult(Result.failure(IllegalStateException("Operation scope changed or was invalidated during worktree removal")))
+                    return@launch
+                }
+
+                val guardResult = host.withMutationGuard(postSwitchScope, impact, listOf(current.path)) {
+                    repository.branchWorktree.removeWorktree(postSwitchScope.project, current.path, force)
                 }
                 if (guardResult.isSuccess) {
                     val ok = guardResult.getOrThrow()
                     host.onMutationOutcome(
                         GitMutationEvent(
-                            scope = scope,
+                            scope = postSwitchScope,
                             impact = impact,
                             kind = if (ok) GitOutcomeKind.SUCCEEDED else GitOutcomeKind.REJECTED,
                             paths = listOf(current.path),
                             message = if (ok) null else "Failed to remove worktree",
                         )
                     )
-                    if (ok && scope.matches(activeScope)) {
+                    if (ok && postSwitchScope.matches(activeScope)) {
                         refreshWorktrees()
                     }
                     onResult(Result.success(ok))
@@ -226,7 +233,7 @@ class WorktreeMutationController(
                     val t = guardResult.exceptionOrNull()
                     host.onMutationOutcome(
                         GitMutationEvent(
-                            scope = scope,
+                            scope = postSwitchScope,
                             impact = impact,
                             kind = GitOutcomeKind.REJECTED,
                             paths = listOf(current.path),

@@ -30,8 +30,15 @@ class TestEditorDocument(
     private val undoStack: ArrayDeque<String> = ArrayDeque()
     private val redoStack: ArrayDeque<String> = ArrayDeque()
     private var currentUndoBytes: Long = 0L
-    var fileIdentity: FileIdentityDto? = null
-    var canonicalPath: String? = null
+    override var fileIdentity: FileIdentityDto? = null
+    override var canonicalPath: String? = null
+
+    private var leaseSeq: Long = 0L
+    private val _inFlightSaveCount = MutableStateFlow(0)
+    val inFlightSaveCount: StateFlow<Int> = _inFlightSaveCount.asStateFlow()
+    private var activeEditor: Any? = null
+    private var activeViewReceipt: Any? = null
+    private var activeViewToken: ViewLeaseToken? = null
 
     private val _activeAliasLeases = MutableStateFlow<Set<AliasLeaseToken>>(emptySet())
     override val activeAliasLeases: StateFlow<Set<AliasLeaseToken>> = _activeAliasLeases.asStateFlow()
@@ -40,11 +47,26 @@ class TestEditorDocument(
     override val activeViewLeases: StateFlow<Set<ViewLeaseToken>> = _activeViewLeases.asStateFlow()
 
     override val canDispose: Boolean
-        get() = _activeAliasLeases.value.isEmpty() && _activeViewLeases.value.isEmpty() && !_isDirty.value
+        get() = _activeAliasLeases.value.isEmpty() &&
+                _activeViewLeases.value.isEmpty() &&
+                !_isDirty.value &&
+                _inFlightSaveCount.value == 0
+
+    fun beginSaveTracking(): () -> Unit {
+        _inFlightSaveCount.value++
+        var released = false
+        return {
+            if (!released) {
+                released = true
+                _inFlightSaveCount.value = maxOf(0, _inFlightSaveCount.value - 1)
+            }
+        }
+    }
 
     override fun acquireAliasLease(aliasId: String): AliasLeaseToken {
         checkNotClosed()
-        val token = AliasLeaseToken("alias-$aliasId", aliasId, _revision.value)
+        val seq = ++leaseSeq
+        val token = AliasLeaseToken("alias-${id.owner.profileId.orEmpty()}-$aliasId-$seq", aliasId, _revision.value)
         _activeAliasLeases.value = _activeAliasLeases.value + token
         return token
     }
@@ -55,13 +77,39 @@ class TestEditorDocument(
 
     override fun acquireViewLease(surfaceId: String): ViewLeaseToken {
         checkNotClosed()
-        val token = ViewLeaseToken("view-$surfaceId", surfaceId)
+        val seq = ++leaseSeq
+        val token = ViewLeaseToken("view-${id.owner.profileId.orEmpty()}-$surfaceId-$seq", surfaceId)
         _activeViewLeases.value = _activeViewLeases.value + token
         return token
     }
 
     override fun releaseViewLease(token: ViewLeaseToken) {
         _activeViewLeases.value = _activeViewLeases.value - token
+    }
+
+    fun attachTestEditor(editor: Any, token: ViewLeaseToken? = null) {
+        checkNotClosed()
+        if (activeEditor != null && activeEditor !== editor) {
+            activeViewReceipt = null
+        }
+        activeEditor = editor
+        activeViewToken = token
+        activeViewReceipt = "receipt-$editor"
+    }
+
+    fun hasActiveReceipt(editor: Any): Boolean =
+        activeEditor === editor && activeViewReceipt == "receipt-$editor"
+
+    fun detachTestEditor(editor: Any, token: ViewLeaseToken? = null, capturedViewState: DocumentViewState? = null) {
+        if (activeEditor === editor) {
+            if (capturedViewState != null) {
+                _viewState.value = capturedViewState
+            }
+            activeEditor = null
+            activeViewReceipt = null
+            activeViewToken = null
+        }
+        // Late old detach from superseded editor does not damage active successor
     }
 
     private val _revision = MutableStateFlow(1L)

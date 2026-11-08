@@ -22,6 +22,8 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -86,6 +88,7 @@ class TerminalAgentsSidebarTest {
 
     @get:Rule
     val rule = createComposeRule()
+    private val compose get() = rule
 
     private val ui = mutableStateOf(emptyUiState())
     private val mode = mutableStateOf(TerminalAgentsSidebarMode.PINNED)
@@ -746,8 +749,8 @@ class TerminalAgentsSidebarTest {
 
     @Test
     fun agentHubNavigatorRendersSelectableProjectRowAndSiblingControls() {
-        val targetActive = ProjectTargetRef(profileId = ProfileId("p1"), project = "alpha")
-        val targetZero = ProjectTargetRef(profileId = ProfileId("p1"), project = "beta")
+        val targetActive = ProjectTargetRef(profileId = "p1", project = "alpha")
+        val targetZero = ProjectTargetRef(profileId = "p1", project = "beta")
 
         val projectActive = AgentHubProjectRowState(
             target = targetActive,
@@ -793,7 +796,7 @@ class TerminalAgentsSidebarTest {
                 AgentHubNavigator(
                     state = AgentHubNavigatorUiState(
                         projects = listOf(projectActive, projectZero),
-                        agentsUiState = fixtureUiState(projection = fixtureProjection()),
+                        agentsUiState = emptyUiState(),
                     ),
                     mode = AgentHubNavigatorMode.RAIL,
                     callbacks = callbacks,
@@ -826,8 +829,8 @@ class TerminalAgentsSidebarTest {
         // 5. Verify sibling create button meets >=48dp bounds
         val createActiveTag = "${AGENT_HUB_CREATE_BUTTON_TAG_PREFIX}p1:alpha"
         compose.onNodeWithTag(createActiveTag)
-            .assertTouchHeightIsAtLeast(48.dp)
-            .assertTouchWidthIsAtLeast(48.dp)
+            .assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp)
             .assertIsEnabled()
             .performClick()
         assertEquals(targetActive, createTarget)
@@ -836,12 +839,12 @@ class TerminalAgentsSidebarTest {
         val dismissActiveTag = "${AGENT_HUB_DISMISS_BUTTON_TAG_PREFIX}p1:alpha"
         val dismissZeroTag = "${AGENT_HUB_DISMISS_BUTTON_TAG_PREFIX}p1:beta"
         compose.onNodeWithTag(dismissActiveTag)
-            .assertTouchHeightIsAtLeast(48.dp)
-            .assertTouchWidthIsAtLeast(48.dp)
+            .assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp)
             .assertIsNotEnabled()
         compose.onNodeWithTag(dismissZeroTag)
-            .assertTouchHeightIsAtLeast(48.dp)
-            .assertTouchWidthIsAtLeast(48.dp)
+            .assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp)
             .assertIsEnabled()
             .performClick()
         assertEquals(targetZero, dismissedTarget)
@@ -867,7 +870,7 @@ class TerminalAgentsSidebarTest {
                 AgentHubNavigatorModal(
                     state = AgentHubNavigatorUiState(
                         projects = emptyList(),
-                        agentsUiState = fixtureUiState(projection = fixtureProjection()),
+                        agentsUiState = emptyUiState(),
                     ),
                     callbacks = callbacks,
                 )
@@ -881,8 +884,8 @@ class TerminalAgentsSidebarTest {
 
     @Test
     fun agentHubNavigatorDisambiguatesMultiProfileProjects() {
-        val p1 = ProfileId("prod")
-        val p2 = ProfileId("dev")
+        val p1 = "prod"
+        val p2 = "dev"
         val targetProd = ProjectTargetRef(profileId = p1, project = "dam-hopper")
         val targetDev = ProjectTargetRef(profileId = p2, project = "dam-hopper")
 
@@ -907,7 +910,7 @@ class TerminalAgentsSidebarTest {
                 AgentHubNavigator(
                     state = AgentHubNavigatorUiState(
                         projects = listOf(rowProd, rowDev),
-                        agentsUiState = fixtureUiState(projection = fixtureProjection()),
+                        agentsUiState = emptyUiState(),
                         showProfileBadges = true,
                     ),
                     mode = AgentHubNavigatorMode.RAIL,

@@ -1,0 +1,52 @@
+{
+  "taskId": "preserve-settings-documents",
+  "phase": "P04",
+  "wave": "W06",
+  "status": "approved_with_noted_issues",
+  "timestamp": "2026-11-07T21:40:00Z",
+  "compilation": [
+    {
+      "command": "cmd.exe /c gradlew.bat :shared:compileKotlinJvm",
+      "exitCode": 0,
+      "status": "success"
+    },
+    {
+      "command": "cmd.exe /c gradlew.bat :androidApp:compileDebugKotlin",
+      "exitCode": 0,
+      "status": "success"
+    }
+  ],
+  "testsDemonstrated": [
+    {
+      "suite": "dev.damhopper.nativeapp.features.settings.RemoteConfigEditorTest",
+      "total": 15,
+      "passed": 15,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.settings.SettingsDiagnosticsTest",
+      "total": 9,
+      "passed": 9,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.settings.SettingsRepositoryTest",
+      "total": 31,
+      "passed": 31,
+      "failed": 0
+    }
+  ],
+  "verifiedBehaviors": [
+    "Unconfigured workspace root produces explicit error without defaults.workspace fallback",
+    "Root-changing operation requires explicit confirmation and cannot masquerade as open project",
+    "Import and export preserve raw TOML content and unrelated sections",
+    "SAF import and export outcome kinds kept strictly distinct",
+    "Diagnostic redaction sanitizes tokens, credentials, passwords, and ticket paths"
+  ],
+  "reviewProvenance": {
+    "cycle": 3,
+    "score": 6,
+    "userDisposition": "approved_with_noted_issues",
+    "reportFile": "plans/reports/code-review-261107-2123-wave06-cycle3.md"
+  }
+}

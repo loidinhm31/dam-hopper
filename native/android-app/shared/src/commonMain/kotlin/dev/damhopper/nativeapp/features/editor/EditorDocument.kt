@@ -128,6 +128,12 @@ interface EditorDocument {
     val isReadOnly: StateFlow<Boolean>
     val viewState: StateFlow<DocumentViewState>
     val events: Flow<DocumentEvent>
+    var fileIdentity: FileIdentityDto?
+        get() = null
+        set(_) {}
+    var canonicalPath: String?
+        get() = null
+        set(_) {}
 
     fun applyEdit(startLine: Int, startCol: Int, endLine: Int, endCol: Int, replacement: String, sourceToken: String? = null)
     fun rekey(newPath: String)

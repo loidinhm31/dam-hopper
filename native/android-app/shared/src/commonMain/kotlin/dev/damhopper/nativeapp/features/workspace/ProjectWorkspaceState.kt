@@ -172,6 +172,11 @@ class ProjectWorkspaceState(
         isEditorSidebarOpen.value = open
     }
 
+    private val _inputSuspended = MutableStateFlow(false)
+
+    /** True while Settings/history/privacy covers the workspace: widget input is hidden, nothing is closed. */
+    val isInputSuspended: StateFlow<Boolean> = _inputSuspended.asStateFlow()
+
     private val _pendingDeparture = MutableStateFlow<WorkspaceDepartureIntent?>(null)
     val pendingDeparture: StateFlow<WorkspaceDepartureIntent?> = _pendingDeparture.asStateFlow()
 
@@ -458,8 +463,7 @@ class ProjectWorkspaceState(
     }
 
     private fun updateInputGate() {
-        val isEligible = _isForeground.value && !_isAuthorityRetired.value
-        // Authority allows saves across panels when authorized
+        val isEligible = _isForeground.value && !_isAuthorityRetired.value && !_inputSuspended.value
         editorTabsState.isInputAllowed = { isEligible }
     }
 
@@ -468,11 +472,6 @@ class ProjectWorkspaceState(
             _activePanel.value == WorkspacePanel.EDITOR
     }
 
-    private val _inputSuspended = MutableStateFlow(false)
-
-    /** True while Settings/history/privacy covers the workspace: widget input is hidden, nothing is closed. */
-    val isInputSuspended: StateFlow<Boolean> = _inputSuspended.asStateFlow()
-
     /**
      * Hides terminal and editor widget input behind Settings (or another cover) without closing dirty documents,
      * undo history, PTYs or the sidebar; lifting it restores exactly the previous state.
@@ -480,6 +479,7 @@ class ProjectWorkspaceState(
     fun setInputSuspended(suspended: Boolean) {
         _inputSuspended.value = suspended
         terminalState?.setInputSuspended(suspended)
+        updateInputGate()
     }
 
     /** The one reactive preference truth this workspace's consumers (terminal font, files, editor) read. */
@@ -542,11 +542,13 @@ class ProjectWorkspaceState(
             commandHistory: ObservableCommandHistory? = null,
             historyOwner: SettingsOwner? = null,
             preferencesStore: PreferencesStore? = null,
+            registry: dev.damhopper.nativeapp.features.editor.CanonicalDocumentRegistry? = null,
         ): ProjectWorkspaceState {
             val tabsState = EditorTabsState(
                 profileId = owner.profileId ?: "default",
                 editorRepository = editorRepository,
                 documentFactory = documentFactory,
+                registry = registry ?: dev.damhopper.nativeapp.features.editor.CanonicalDocumentRegistry(documentFactory),
             )
             val treeState = FileTreeState(
                 target = target,

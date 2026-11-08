@@ -26,7 +26,7 @@ class EditorSaveRaceTest {
     @AfterTest
     fun tearDown() { server?.stop(0) }
 
-    private fun createTabsState(project: String = "demo"): EditorTabsState {
+    private fun createTabsState(project: String = "demo", registry: CanonicalDocumentRegistry? = null): EditorTabsState {
         val conn = ConnectionRef("p1", 1L)
         val client = ApiClient(conn, "http://127.0.0.1:$serverPort", { "test-token" })
         val ws = WsConnection(conn, "http://127.0.0.1:$serverPort", { "test-token" })
@@ -38,7 +38,9 @@ class EditorSaveRaceTest {
         )
         val fileRepo = FileRepository(owner, client, ws)
         val editorRepo = EditorRepository(fileRepo, profileId = "p1")
-        return EditorTabsState("p1", editorRepo, documentFactory = TestEditorDocumentFactory())
+        val factory = TestEditorDocumentFactory()
+        val effRegistry = registry ?: CanonicalDocumentRegistry(factory)
+        return EditorTabsState("p1", editorRepo, documentFactory = factory, registry = effRegistry)
     }
 
     @Test
@@ -282,5 +284,145 @@ class EditorSaveRaceTest {
         // Reservation remains quarantined; no automatic retry
         assertTrue(state.editorRepository.fileRepository.arbiter.isPathReserved(state.editorRepository.fileRepository.owner, "conflict-unknown.txt"))
         assertTrue(session.isDirty)
+    }
+
+    @Test
+    fun testSavePropagatesAuthoritativeMtimeToAliases() = runTest {
+        var currentServerMtime = 100L
+        val identityHeader = """{"workspaceId":"ws-save","workspaceEpoch":1,"canonicalPath":"/data/Shared.kt"}"""
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":20,"mtime":$currentServerMtime,"mime":"text/plain","isBinary":false}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val text = "initial content\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
+            exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(text.toByteArray()) }
+        }
+        val submittedExpectedMtimes = mutableListOf<Long>()
+        server!!.createContext("/api/fs/write") { exchange ->
+            val body = exchange.requestBody.readBytes().decodeToString()
+            val mtimeParam = if (body.contains("\"expectedMtime\":")) {
+                body.substringAfter("\"expectedMtime\":").substringBefore(",").substringBefore("}").trim().toLongOrNull()
+            } else null
+            if (mtimeParam != null) {
+                submittedExpectedMtimes.add(mtimeParam)
+            }
+            currentServerMtime += 50L
+            val json = """{"ok":true,"mtime":$currentServerMtime}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+
+        val registry = CanonicalDocumentRegistry(TestEditorDocumentFactory())
+        val state1 = createTabsState(project = "demo", registry = registry)
+        val state2 = createTabsState(project = "demo", registry = registry)
+
+        val target1 = ProjectTargetRef(project = "demo")
+        val target2 = ProjectTargetRef(project = "demo")
+
+        state1.openTab(target1, "Shared.kt")
+        val tab1Key = state1.activeTab!!.key
+        state2.openTab(target2, "nested/Shared.kt")
+        val tab2Key = state2.activeTab!!.key
+
+        val session1 = state1.getSession(tab1Key)!!
+        val session2 = state2.getSession(tab2Key)!!
+        assertSame(session1.document, session2.document)
+
+        // Edit via Tab 1 and save
+        session1.setText("tab 1 edit\n")
+        val snapshot1 = session1.snapshotSave()!!
+        session1.completeSave(150L, snapshot1)
+
+        // Both tabs must observe updated mtime 150L
+        assertEquals(150L, session1.serverMtime)
+        assertEquals(150L, session2.serverMtime, "Alias tab 2 must observe updated server mtime from save 1")
+        assertFalse(session1.isDirty)
+        assertFalse(session2.isDirty)
+
+        // Edit via Tab 2 and save -> submits expectedMtime = 150L
+        session2.setText("tab 2 edit\n")
+        val snapshot2 = session2.snapshotSave()!!
+        assertEquals(150L, snapshot2.mtime, "Save 2 must submit updated 150L expectedMtime")
+        session2.completeSave(200L, snapshot2)
+        assertEquals(200L, session1.serverMtime)
+        assertEquals(200L, session2.serverMtime)
+    }
+
+    @Test
+    fun testConcurrentSaveOnSameCanonicalDocumentRejectedAsBusy() = runTest {
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":20,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val text = "hello\n"
+            exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(text.toByteArray()) }
+        }
+
+        val registry = CanonicalDocumentRegistry(TestEditorDocumentFactory())
+        val state = createTabsState(project = "demo", registry = registry)
+
+        val target1 = ProjectTargetRef(project = "demo")
+        val target2 = ProjectTargetRef(project = "demo", worktreePath = "alias-wt")
+
+        state.openTab(target1, "File.kt")
+        val key1 = state.activeTab!!.key
+        state.openTab(target2, "File.kt")
+        val key2 = state.activeTab!!.key
+
+        val cKey = state.resolveCanonicalKey(state.activeTab!!)
+        registry.tryBeginSave(cKey) // mark save in progress on canonical document
+
+        // Tab 2 save attempt rejected as busy
+        val saveResult = state.saveTab(key2)
+        assertTrue(saveResult is EditorSaveResult.Error)
+        assertEquals("Save already in flight for canonical document", saveResult.message)
+
+        registry.completeSave(cKey)
+    }
+
+    @Test
+    fun testCasFailurePreservesOriginalDirtyBufferAndUndo() = runTest {
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":20,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val text = "original text\n"
+            exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(text.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/write") { exchange ->
+            val conflictJson = """{"ok":false,"error":"CAS_CONFLICT","message":"Remote mtime changed"}"""
+            exchange.sendResponseHeaders(409, conflictJson.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(conflictJson.toByteArray()) }
+        }
+
+        val state = createTabsState(project = "demo")
+        val target = ProjectTargetRef(project = "demo")
+        state.openTab(target, "ConflictFile.kt")
+        val key = state.activeTab!!.key
+        val session = state.getSession(key)!!
+
+        session.setText("uncommitted local changes\n")
+        assertTrue(session.isDirty)
+
+        session.abortSave()
+        // Original dirty buffer and undo history must remain intact!
+        assertEquals("uncommitted local changes\n", session.getText())
+        assertTrue(session.isDirty, "Session must remain dirty on CAS failure")
+        assertTrue(session.canUndo(), "Session must retain undo history on CAS failure")
+
+        session.undo()
+        assertEquals("original text\n", session.getText())
+        assertFalse(session.isDirty)
     }
 }
