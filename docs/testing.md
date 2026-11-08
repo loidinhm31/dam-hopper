@@ -119,6 +119,18 @@ pnpm --filter @dam-hopper/ui test
 pnpm --filter @dam-hopper/ui test:browser --run
 # 4. Root Cutover Application E2E Journey
 E2E_CAPTURE=1 pnpm --filter @dam-hopper/ui test:e2e os-cutover/os-cutover.spec.ts
+
+# Feature: Host Browser CDP Streaming Primitives (Phase 01 Qualification)
+# 1. Adapter and protocol unit tests (framing, geometry, command budget, actor routing)
+cargo test --manifest-path server/Cargo.toml --test browser_host_adapter
+# 2. Process containment unit tests (executable discovery, allowlist, death-pipe, DevToolsActivePort corroboration)
+cargo test --manifest-path server/Cargo.toml --test browser_host_process
+# 3. Real-engine compatibility and visual marker geometry tests (requires DAM_HOPPER_BROWSER_EXECUTABLE)
+cargo test --manifest-path server/Cargo.toml --test browser_host_compatibility
+# 4. Colocated backend unit tests (cdp, command_budget, process, protocol)
+cargo test --manifest-path server/Cargo.toml browser_host::
+# 5. Playwright E2E compatibility suite with qualification server prebuild
+pnpm --filter @dam-hopper/ui exec playwright test e2e/os-host-browser/compatibility.spec.ts
 ```
 
 ---

@@ -10,9 +10,9 @@ use tokio_tungstenite::tungstenite::Message;
 
 use dam_hopper_server::browser_host::cdp::{CdpClient, CdpError};
 use dam_hopper_server::browser_host::protocol::{
-    pack_bhjf_frame, unpack_bhjf_frame, validate_decimal_sequence, ProtocolError, TargetFrameHeader,
-    TargetGeometry, BHJF_MAGIC, MAX_COMMAND_BYTES, MAX_PENDING_COMMANDS, MAX_WRITER_QUEUE_MESSAGES,
-    MAX_WS_MESSAGE_BYTES,
+    pack_bhjf_frame, unpack_bhjf_frame, validate_decimal_sequence, ProtocolError,
+    TargetFrameHeader, TargetGeometry, BHJF_MAGIC, MAX_COMMAND_BYTES, MAX_PENDING_COMMANDS,
+    MAX_WRITER_QUEUE_MESSAGES, MAX_WS_MESSAGE_BYTES,
 };
 
 /// Helper to generate a minimal valid JPEG buffer with SOF0 marker
@@ -21,11 +21,16 @@ fn create_test_jpeg(width: u16, height: u16) -> Vec<u8> {
     // SOI
     buf.extend_from_slice(&[0xFF, 0xD8]);
     // APP0
-    buf.extend_from_slice(&[0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00]);
+    buf.extend_from_slice(&[
+        0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00,
+        0x01, 0x00, 0x00,
+    ]);
     // SOF0: len=11, precision=8, height:2, width:2, components=3
     let (h_b1, h_b2) = ((height >> 8) as u8, (height & 0xFF) as u8);
     let (w_b1, w_b2) = ((width >> 8) as u8, (width & 0xFF) as u8);
-    buf.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 0x08, h_b1, h_b2, w_b1, w_b2, 0x03, 0x01, 0x11, 0x00]);
+    buf.extend_from_slice(&[
+        0xFF, 0xC0, 0x00, 0x0B, 0x08, h_b1, h_b2, w_b1, w_b2, 0x03, 0x01, 0x11, 0x00,
+    ]);
     // EOI
     buf.extend_from_slice(&[0xFF, 0xD9]);
     buf
@@ -61,12 +66,20 @@ fn sample_header(width: u32, height: u32) -> TargetFrameHeader {
 fn test_decimal_sequence_validation() {
     assert_eq!(validate_decimal_sequence("epoch", "1").unwrap(), 1);
     assert_eq!(validate_decimal_sequence("epoch", "10").unwrap(), 10);
-    assert_eq!(validate_decimal_sequence("epoch", "18446744073709551615").unwrap(), u64::MAX);
+    assert_eq!(
+        validate_decimal_sequence("epoch", "18446744073709551615").unwrap(),
+        u64::MAX
+    );
 
     // Counters are canonical positive decimals: zero, leading zeros, signs, whitespace,
     // non-ASCII digits and empty strings are all rejected.
-    for bad in ["", "0", "00", "01", "-1", "+1", "12a", " 1", "1 ", "1.0", "１２"] {
-        assert!(validate_decimal_sequence("epoch", bad).is_err(), "{bad:?} must be rejected");
+    for bad in [
+        "", "0", "00", "01", "-1", "+1", "12a", " 1", "1 ", "1.0", "１２",
+    ] {
+        assert!(
+            validate_decimal_sequence("epoch", bad).is_err(),
+            "{bad:?} must be rejected"
+        );
     }
     // Overflow u64::MAX and 21-digit values
     assert!(validate_decimal_sequence("epoch", "18446744073709551616").is_err());
@@ -122,21 +135,33 @@ fn test_bhjf_rejects_malformed_framing() {
 
     // 1. Corrupted magic
     packed[0] = b'X';
-    assert!(matches!(unpack_bhjf_frame(&packed), Err(ProtocolError::InvalidMagic(_))));
+    assert!(matches!(
+        unpack_bhjf_frame(&packed),
+        Err(ProtocolError::InvalidMagic(_))
+    ));
     packed[0] = b'B';
 
     // 2. Unsupported version
     packed[4] = 2;
-    assert!(matches!(unpack_bhjf_frame(&packed), Err(ProtocolError::UnsupportedVersion(2))));
+    assert!(matches!(
+        unpack_bhjf_frame(&packed),
+        Err(ProtocolError::UnsupportedVersion(2))
+    ));
     packed[4] = 1;
 
     // 3. Nonzero flags
     packed[5] = 1;
-    assert!(matches!(unpack_bhjf_frame(&packed), Err(ProtocolError::UnsupportedFlags(1))));
+    assert!(matches!(
+        unpack_bhjf_frame(&packed),
+        Err(ProtocolError::UnsupportedFlags(1))
+    ));
     packed[5] = 0;
 
     // 4. Truncated
-    assert!(matches!(unpack_bhjf_frame(&packed[..10]), Err(ProtocolError::MessageTooShort { .. })));
+    assert!(matches!(
+        unpack_bhjf_frame(&packed[..10]),
+        Err(ProtocolError::MessageTooShort { .. })
+    ));
 }
 
 #[test]
@@ -159,25 +184,43 @@ fn test_geometry_limits() {
 #[test]
 fn test_geometry_css_viewport_ceilings() {
     let mut header = sample_header(1920, 1080);
-    header.validate().expect("documented maximum viewport is valid");
+    header
+        .validate()
+        .expect("documented maximum viewport is valid");
 
     header.geometry.css_width = 1920.5;
-    assert!(matches!(header.validate(), Err(ProtocolError::InvalidGeometry(_))));
+    assert!(matches!(
+        header.validate(),
+        Err(ProtocolError::InvalidGeometry(_))
+    ));
     header.geometry.css_width = 1920.0;
 
     header.geometry.css_height = 1081.0;
-    assert!(matches!(header.validate(), Err(ProtocolError::InvalidGeometry(_))));
+    assert!(matches!(
+        header.validate(),
+        Err(ProtocolError::InvalidGeometry(_))
+    ));
     header.geometry.css_height = 10_000_000.0; // old offset-sized ceiling no longer passes
-    assert!(matches!(header.validate(), Err(ProtocolError::InvalidGeometry(_))));
+    assert!(matches!(
+        header.validate(),
+        Err(ProtocolError::InvalidGeometry(_))
+    ));
     header.geometry.css_height = 0.0;
-    assert!(matches!(header.validate(), Err(ProtocolError::InvalidGeometry(_))));
+    assert!(matches!(
+        header.validate(),
+        Err(ProtocolError::InvalidGeometry(_))
+    ));
 }
 
 // -----------------------------------------------------------------------------
 // Bounded CDP Actor Integration Tests over local mock WebSocket
 // -----------------------------------------------------------------------------
 
-async fn start_mock_cdp_server() -> (SocketAddr, tokio::sync::mpsc::Sender<Message>, tokio::sync::mpsc::Receiver<Message>) {
+async fn start_mock_cdp_server() -> (
+    SocketAddr,
+    tokio::sync::mpsc::Sender<Message>,
+    tokio::sync::mpsc::Receiver<Message>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -220,7 +263,9 @@ async fn start_mock_cdp_server() -> (SocketAddr, tokio::sync::mpsc::Sender<Messa
 async fn test_cdp_command_dispatch_and_response() {
     let (addr, server_tx, mut server_rx) = start_mock_cdp_server().await;
     let ws_url = format!("ws://{addr}");
-    let client = CdpClient::connect(&ws_url).await.expect("client connect failed");
+    let client = CdpClient::connect(&ws_url)
+        .await
+        .expect("client connect failed");
 
     // Spawn server response handler
     tokio::spawn(async move {
@@ -237,11 +282,17 @@ async fn test_cdp_command_dispatch_and_response() {
                     "protocolVersion": "1.3"
                 }
             });
-            server_tx.send(Message::Text(resp.to_string().into())).await.unwrap();
+            server_tx
+                .send(Message::Text(resp.to_string().into()))
+                .await
+                .unwrap();
         }
     });
 
-    let res = client.send_command("Browser.getVersion", None, None).await.expect("command failed");
+    let res = client
+        .send_command("Browser.getVersion", None, None)
+        .await
+        .expect("command failed");
     assert_eq!(res["product"], "Chrome/157.0.0.0");
     assert_eq!(res["protocolVersion"], "1.3");
 }
@@ -250,7 +301,9 @@ async fn test_cdp_command_dispatch_and_response() {
 async fn test_cdp_pending_commands_bound_enforcement() {
     let (addr, _server_tx, mut server_rx) = start_mock_cdp_server().await;
     let ws_url = format!("ws://{addr}");
-    let client = CdpClient::connect(&ws_url).await.expect("client connect failed");
+    let client = CdpClient::connect(&ws_url)
+        .await
+        .expect("client connect failed");
 
     // Fill the 64-command total bound with unanswered commands, in waves no larger than the
     // 32-message writer queue; each wave is confirmed written (in flight) before the next.
@@ -286,7 +339,9 @@ async fn test_cdp_pending_commands_bound_enforcement() {
 async fn test_cdp_command_too_large_rejection() {
     let (addr, _server_tx, _server_rx) = start_mock_cdp_server().await;
     let ws_url = format!("ws://{addr}");
-    let client = CdpClient::connect(&ws_url).await.expect("client connect failed");
+    let client = CdpClient::connect(&ws_url)
+        .await
+        .expect("client connect failed");
 
     // Command payload larger than 64 KiB
     let big_data = "x".repeat(MAX_COMMAND_BYTES + 100);
@@ -304,9 +359,11 @@ async fn test_cdp_command_too_large_rejection() {
 
 #[tokio::test]
 async fn test_cdp_unknown_event_ignore_counter() {
-    let (addr, server_tx, _server_rx) = start_mock_cdp_server().await;
+    let (addr, server_tx, mut server_rx) = start_mock_cdp_server().await;
     let ws_url = format!("ws://{addr}");
-    let client = CdpClient::connect(&ws_url).await.expect("client connect failed");
+    let client = CdpClient::connect(&ws_url)
+        .await
+        .expect("client connect failed");
 
     // Send 50 unknown events from browser
     for i in 0..50 {
@@ -314,24 +371,60 @@ async fn test_cdp_unknown_event_ignore_counter() {
             "method": format!("UnknownDomain.event_{i}"),
             "params": { "data": i }
         });
-        server_tx.send(Message::Text(event.to_string().into())).await.unwrap();
+        server_tx
+            .send(Message::Text(event.to_string().into()))
+            .await
+            .unwrap();
     }
 
-    timeout(Duration::from_secs(2), async {
-        while client.stats().unknown_events_count.load(std::sync::atomic::Ordering::Relaxed) < 50 {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    })
-    .await
-    .expect("actor did not count all unknown events");
-    assert_eq!(client.stats().unknown_events_count.load(std::sync::atomic::Ordering::Relaxed), 50);
+    // Ordered response barrier: put a command in flight. Because WebSocket framing
+    // and actor message processing are strictly FIFO, completing this barrier command
+    // guarantees all preceding 50 unknown events were processed by the actor.
+    let barrier = {
+        let c = client.clone();
+        tokio::spawn(async move { c.send_command("Target.getTargets", None, None).await })
+    };
+    let barrier_req = timeout(Duration::from_secs(2), server_rx.recv())
+        .await
+        .expect("barrier command never reached mock server")
+        .expect("mock server closed");
+    let req_val: serde_json::Value = match barrier_req {
+        Message::Text(t) => serde_json::from_str(&t).expect("valid request JSON"),
+        _ => panic!("expected text request"),
+    };
+    let req_id = req_val["id"].as_i64().expect("command id");
+
+    server_tx
+        .send(Message::Text(
+            json!({ "id": req_id, "result": { "targetInfos": [] } })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+
+    let res = timeout(Duration::from_secs(2), barrier)
+        .await
+        .expect("barrier command timed out")
+        .unwrap()
+        .expect("barrier command failed");
+    assert!(res["targetInfos"].is_array());
+    assert_eq!(
+        client
+            .stats()
+            .unknown_events_count
+            .load(std::sync::atomic::Ordering::Relaxed),
+        50
+    );
 }
 
 #[tokio::test]
 async fn test_cdp_screencast_frame_routing() {
     let (addr, server_tx, _server_rx) = start_mock_cdp_server().await;
     let ws_url = format!("ws://{addr}");
-    let client = CdpClient::connect(&ws_url).await.expect("client connect failed");
+    let client = CdpClient::connect(&ws_url)
+        .await
+        .expect("client connect failed");
 
     let mut rx = client.subscribe_screencast();
 
@@ -353,9 +446,15 @@ async fn test_cdp_screencast_frame_routing() {
         }
     });
 
-    server_tx.send(Message::Text(frame_event.to_string().into())).await.unwrap();
+    server_tx
+        .send(Message::Text(frame_event.to_string().into()))
+        .await
+        .unwrap();
 
-    let received = timeout(Duration::from_millis(500), rx.recv()).await.expect("timeout").expect("recv failed");
+    let received = timeout(Duration::from_millis(500), rx.recv())
+        .await
+        .expect("timeout")
+        .expect("recv failed");
     assert_eq!(received.session_id, "target-session-123");
     assert_eq!(received.frame_session_id, 42);
     assert_eq!(received.data_base64, "aGVsbG8=");
@@ -365,7 +464,9 @@ async fn test_cdp_screencast_frame_routing() {
 async fn test_cdp_oversized_incoming_message_closes_actor() {
     let (addr, server_tx, mut server_rx) = start_mock_cdp_server().await;
     let ws_url = format!("ws://{addr}");
-    let client = CdpClient::connect(&ws_url).await.expect("client connect failed");
+    let client = CdpClient::connect(&ws_url)
+        .await
+        .expect("client connect failed");
 
     // Put a command in flight and confirm the peer received it before the oversized frame.
     let pending = {
@@ -379,22 +480,33 @@ async fn test_cdp_oversized_incoming_message_closes_actor() {
 
     // Send message exceeding 4 MiB
     let big_payload = "a".repeat(MAX_WS_MESSAGE_BYTES + 1024);
-    server_tx.send(Message::Text(big_payload.into())).await.unwrap();
+    server_tx
+        .send(Message::Text(big_payload.into()))
+        .await
+        .unwrap();
 
     // The in-flight command must terminate promptly with a connection-level failure (not wait
     // for its 10s deadline); transport-level oversize may surface as Transport or MessageTooLarge.
-    let res = timeout(Duration::from_secs(5), pending).await.expect("pending command hung").unwrap();
+    let res = timeout(Duration::from_secs(5), pending)
+        .await
+        .expect("pending command hung")
+        .unwrap();
     assert!(
         matches!(
             res,
-            Err(CdpError::Transport(_)) | Err(CdpError::MessageTooLarge { .. }) | Err(CdpError::ConnectionClosed)
+            Err(CdpError::Transport(_))
+                | Err(CdpError::MessageTooLarge { .. })
+                | Err(CdpError::ConnectionClosed)
         ),
         "unexpected result {res:?}"
     );
 
     // Subsequent command fails with ConnectionClosed because the actor shut down.
     let res = client.send_command("Browser.getVersion", None, None).await;
-    assert!(matches!(res, Err(CdpError::ConnectionClosed)), "got {res:?}");
+    assert!(
+        matches!(res, Err(CdpError::ConnectionClosed)),
+        "got {res:?}"
+    );
 }
 
 #[test]
@@ -409,9 +521,16 @@ fn test_media_control_camel_case_json_fixtures() {
         "frameSeq": "100"
     }"#;
 
-    let control: MediaClientControl = serde_json::from_str(ack_json).expect("deserialize frameAck failed");
+    let control: MediaClientControl =
+        serde_json::from_str(ack_json).expect("deserialize frameAck failed");
     match control {
-        MediaClientControl::FrameAck { subscription_epoch, producer_run, viewport_epoch, frame_seq, reason } => {
+        MediaClientControl::FrameAck {
+            subscription_epoch,
+            producer_run,
+            viewport_epoch,
+            frame_seq,
+            reason,
+        } => {
             assert_eq!(subscription_epoch, "11111111-2222-3333-4444-555555555555");
             assert_eq!(producer_run, "66666666-7777-8888-9999-000000000000");
             assert_eq!(viewport_epoch, "1");
@@ -429,7 +548,8 @@ fn test_media_control_camel_case_json_fixtures() {
         "frameSeq": "100",
         "reason": "replaced"
     }"#;
-    let discarded: MediaClientControl = serde_json::from_str(discarded_json).expect("deserialize frameDiscarded failed");
+    let discarded: MediaClientControl =
+        serde_json::from_str(discarded_json).expect("deserialize frameDiscarded failed");
     match discarded {
         MediaClientControl::FrameDiscarded { reason, .. } => {
             assert_eq!(reason, Some(DiscardReason::Replaced));
@@ -448,14 +568,19 @@ fn test_media_control_camel_case_json_fixtures() {
 async fn test_cdp_actor_id_only_response_rejected() {
     let (addr, server_tx, mut server_rx) = start_mock_cdp_server().await;
     let ws_url = format!("ws://{addr}");
-    let client = CdpClient::connect(&ws_url).await.expect("client connect failed");
+    let client = CdpClient::connect(&ws_url)
+        .await
+        .expect("client connect failed");
 
     tokio::spawn(async move {
         if let Some(Message::Text(cmd_text)) = server_rx.recv().await {
             let parsed: serde_json::Value = serde_json::from_str(&cmd_text).unwrap();
             let id = parsed["id"].as_u64().unwrap();
             let malformed = json!({ "id": id });
-            server_tx.send(Message::Text(malformed.to_string().into())).await.unwrap();
+            server_tx
+                .send(Message::Text(malformed.to_string().into()))
+                .await
+                .unwrap();
         }
     });
 
@@ -494,21 +619,61 @@ fn reply_first_then_ok(
 async fn test_cdp_routeable_error_envelopes_fail_owner_immediately() {
     // (reply, expect protocol error)
     let cases: Vec<(&str, fn(u64) -> serde_json::Value, bool)> = vec![
-        ("valid protocol error", |id| json!({"id": id, "error": {"code": -32000, "message": "nope"}}), true),
-        ("string error code", |id| json!({"id": id, "error": {"code": "bad", "message": "x"}}), false),
-        ("error not an object", |id| json!({"id": id, "error": "boom"}), false),
-        ("error as positional array", |id| json!({"id": id, "error": [-32000, "nope"]}), false),
-        ("result not an object", |id| json!({"id": id, "result": [1, 2]}), false),
-        ("result and error both", |id| json!({"id": id, "result": {}, "error": {"code": 1, "message": "m"}}), false),
-        ("result with explicit null error", |id| json!({"id": id, "result": {}, "error": null}), false),
-        ("explicit null result", |id| json!({"id": id, "result": null}), false),
-        ("null error alone", |id| json!({"id": id, "error": null}), false),
+        (
+            "valid protocol error",
+            |id| json!({"id": id, "error": {"code": -32000, "message": "nope"}}),
+            true,
+        ),
+        (
+            "string error code",
+            |id| json!({"id": id, "error": {"code": "bad", "message": "x"}}),
+            false,
+        ),
+        (
+            "error not an object",
+            |id| json!({"id": id, "error": "boom"}),
+            false,
+        ),
+        (
+            "error as positional array",
+            |id| json!({"id": id, "error": [-32000, "nope"]}),
+            false,
+        ),
+        (
+            "result not an object",
+            |id| json!({"id": id, "result": [1, 2]}),
+            false,
+        ),
+        (
+            "result and error both",
+            |id| json!({"id": id, "result": {}, "error": {"code": 1, "message": "m"}}),
+            false,
+        ),
+        (
+            "result with explicit null error",
+            |id| json!({"id": id, "result": {}, "error": null}),
+            false,
+        ),
+        (
+            "explicit null result",
+            |id| json!({"id": id, "result": null}),
+            false,
+        ),
+        (
+            "null error alone",
+            |id| json!({"id": id, "error": null}),
+            false,
+        ),
     ];
 
     for (name, build, expect_protocol) in cases {
         let (addr, server_tx, server_rx) = start_mock_cdp_server().await;
-        let client = CdpClient::connect(&format!("ws://{addr}")).await.expect("client connect failed");
-        reply_first_then_ok(server_rx, server_tx, move |id| Message::Text(build(id).to_string().into()));
+        let client = CdpClient::connect(&format!("ws://{addr}"))
+            .await
+            .expect("client connect failed");
+        reply_first_then_ok(server_rx, server_tx, move |id| {
+            Message::Text(build(id).to_string().into())
+        });
 
         let started = tokio::time::Instant::now();
         let res = client.send_command("Test.envelope", None, None).await;
@@ -517,9 +682,15 @@ async fn test_cdp_routeable_error_envelopes_fail_owner_immediately() {
             "{name}: owner must fail immediately, not time out"
         );
         if expect_protocol {
-            assert!(matches!(res, Err(CdpError::Protocol { code: -32000, .. })), "{name}: {res:?}");
+            assert!(
+                matches!(res, Err(CdpError::Protocol { code: -32000, .. })),
+                "{name}: {res:?}"
+            );
         } else {
-            assert!(matches!(res, Err(CdpError::MalformedResponse(_))), "{name}: {res:?}");
+            assert!(
+                matches!(res, Err(CdpError::MalformedResponse(_))),
+                "{name}: {res:?}"
+            );
         }
 
         // A routeable bad response fails only its owner; the connection stays usable.
@@ -535,11 +706,21 @@ async fn test_cdp_unrouteable_framing_closes_actor_and_fails_pending() {
     let bad_frames: Vec<(&str, fn(u64) -> Message)> = vec![
         ("invalid json", |_| Message::Text("{not json".into())),
         ("json array", |_| Message::Text("[1,2,3]".into())),
-        ("no id and no method", |_| Message::Text(r#"{"result":{}}"#.into())),
-        ("non-integer id", |_| Message::Text(r#"{"id":"abc","result":{}}"#.into())),
-        ("non-string method", |_| Message::Text(r#"{"method":42}"#.into())),
-        ("null id", |_| Message::Text(r#"{"id":null,"result":{}}"#.into())),
-        ("null method", |_| Message::Text(r#"{"method":null}"#.into())),
+        ("no id and no method", |_| {
+            Message::Text(r#"{"result":{}}"#.into())
+        }),
+        ("non-integer id", |_| {
+            Message::Text(r#"{"id":"abc","result":{}}"#.into())
+        }),
+        ("non-string method", |_| {
+            Message::Text(r#"{"method":42}"#.into())
+        }),
+        ("null id", |_| {
+            Message::Text(r#"{"id":null,"result":{}}"#.into())
+        }),
+        ("null method", |_| {
+            Message::Text(r#"{"method":null}"#.into())
+        }),
         ("screencast frame without session id", |_| {
             Message::Text(r#"{"method":"Page.screencastFrame","params":{"data":"aA==","sessionId":1,"metadata":{}}}"#.into())
         }),
@@ -558,28 +739,43 @@ async fn test_cdp_unrouteable_framing_closes_actor_and_fails_pending() {
                 r#"{"method":"Page.screencastFrame","sessionId":"s","params":{"data":5,"sessionId":1,"metadata":{}}}"#.into(),
             )
         }),
-        ("binary not utf8", |_| Message::Binary(vec![0xFF, 0xFE, 0xFD].into())),
+        ("binary not utf8", |_| {
+            Message::Binary(vec![0xFF, 0xFE, 0xFD].into())
+        }),
     ];
 
     for (name, build) in bad_frames {
         let (addr, server_tx, server_rx) = start_mock_cdp_server().await;
-        let client = CdpClient::connect(&format!("ws://{addr}")).await.expect("client connect failed");
+        let client = CdpClient::connect(&format!("ws://{addr}"))
+            .await
+            .expect("client connect failed");
         reply_first_then_ok(server_rx, server_tx, move |id| build(id));
 
         let started = tokio::time::Instant::now();
         let res = client.send_command("Test.pending", None, None).await;
-        assert!(started.elapsed() < Duration::from_secs(2), "{name}: must not wait for deadline");
-        assert!(matches!(res, Err(CdpError::MalformedResponse(_))), "{name}: pending owner got {res:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{name}: must not wait for deadline"
+        );
+        assert!(
+            matches!(res, Err(CdpError::MalformedResponse(_))),
+            "{name}: pending owner got {res:?}"
+        );
 
         let after = client.send_command("Test.after", None, None).await;
-        assert!(matches!(after, Err(CdpError::ConnectionClosed)), "{name}: actor must be closed, got {after:?}");
+        assert!(
+            matches!(after, Err(CdpError::ConnectionClosed)),
+            "{name}: actor must be closed, got {after:?}"
+        );
     }
 }
 
 #[tokio::test]
 async fn test_cdp_byte_budget_shared_across_queued_and_inflight_commands() {
     let (addr, _server_tx, mut server_rx) = start_mock_cdp_server().await;
-    let client = CdpClient::connect(&format!("ws://{addr}")).await.expect("client connect failed");
+    let client = CdpClient::connect(&format!("ws://{addr}"))
+        .await
+        .expect("client connect failed");
 
     // Unanswered ~60 KB commands in waves small enough for the writer to drain between waves:
     // admitted commands become in-flight and must keep their bytes reserved, so the 2 MiB budget
@@ -592,7 +788,12 @@ async fn test_cdp_byte_budget_shared_across_queued_and_inflight_commands() {
         for _ in 0..20 {
             let c = client.clone();
             handles.push(tokio::spawn(async move {
-                c.send_command("Test.big", Some(json!({ "payload": "x".repeat(PAYLOAD) })), None).await
+                c.send_command(
+                    "Test.big",
+                    Some(json!({ "payload": "x".repeat(PAYLOAD) })),
+                    None,
+                )
+                .await
             }));
         }
         // A wave settles when every caller was rejected or admitted and every admitted command
@@ -601,7 +802,11 @@ async fn test_cdp_byte_budget_shared_across_queued_and_inflight_commands() {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let rejected = handles.iter().filter(|h| h.is_finished()).count();
-                let admitted = client.stats().total_commands_sent.load(std::sync::atomic::Ordering::Relaxed) as usize;
+                let admitted = client
+                    .stats()
+                    .total_commands_sent
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    as usize;
                 if rejected + admitted == spawned && received == admitted {
                     break;
                 }
@@ -610,7 +815,7 @@ async fn test_cdp_byte_budget_shared_across_queued_and_inflight_commands() {
                         msg.expect("mock server closed");
                         received += 1;
                     }
-                    _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                    _ = tokio::task::yield_now() => {}
                 }
             }
         })
@@ -619,10 +824,22 @@ async fn test_cdp_byte_budget_shared_across_queued_and_inflight_commands() {
     }
 
     let admitted = handles.iter().filter(|h| !h.is_finished()).count();
-    assert!(admitted * PAYLOAD <= BUDGET, "admitted {admitted} commands exceed the 2 MiB budget");
-    assert!((admitted + 1) * (PAYLOAD + 200) > BUDGET, "budget under-used: only {admitted} admitted");
-    assert!(admitted < MAX_PENDING_COMMANDS, "byte budget must bind before the command cap");
-    let peak = client.stats().peak_queued_bytes.load(std::sync::atomic::Ordering::Relaxed) as usize;
+    assert!(
+        admitted * PAYLOAD <= BUDGET,
+        "admitted {admitted} commands exceed the 2 MiB budget"
+    );
+    assert!(
+        (admitted + 1) * (PAYLOAD + 200) > BUDGET,
+        "budget under-used: only {admitted} admitted"
+    );
+    assert!(
+        admitted < MAX_PENDING_COMMANDS,
+        "byte budget must bind before the command cap"
+    );
+    let peak = client
+        .stats()
+        .peak_queued_bytes
+        .load(std::sync::atomic::Ordering::Relaxed) as usize;
     assert!(peak <= BUDGET, "peak reserved bytes {peak} exceeds 2 MiB");
     assert!(peak >= admitted * PAYLOAD);
 

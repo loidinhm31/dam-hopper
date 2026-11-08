@@ -19,10 +19,10 @@ Planning only; no implementation approval, hydration or product verification. Ca
 - Logout offers keep Browser data / confirmed clear shared Browser data / Cancel, with NO preselected choice (user-confirmed V1). Both logout branches call server revoke-FIRST; missing/stale reset consent returns200 retained/resetRequired; expiry/revoke retains profile.
 - Raw CDP is privileged instance authority, not target/egress/local-user isolation. No full-media/sidecar/nativeAndroid scope or iframe fallback.
 
-## Phases (all pending; effort not estimated)
+## Phases (effort not estimated)
 | # | Phase | Status |
 |---|---|---|
-| 01 | [Qualify adapter and freeze contracts](phase-01-compatibility-contracts.md) | in_progress (partially qualified, blocked; Cycle 3 approved 8/10, remaining gates blocked) |
+| 01 | [Qualify adapter and freeze contracts](phase-01-compatibility-contracts.md) | DONE (2026-11-08) |
 | 02 | [Configure and supervise principal profiles](phase-02-managed-lifecycle.md) | pending |
 | 03 | [Authorize sessions attachments and ordered input](phase-03-admission-control.md) | pending |
 | 04 | [Expose authenticated instance-scoped raw CDP](phase-04-agent-cdp-gateway.md) | pending |
@@ -32,6 +32,8 @@ Planning only; no implementation approval, hydration or product verification. Ca
 | 08 | [Secure selection artifacts and confirmed logout reset](phase-08-selection-credential-reset.md) | pending |
 | 09 | [Qualify full app security platforms and efficiency](phase-09-integrated-qualification.md) | pending |
 | 10 | [Reconcile documentation and controlled rollout evidence](phase-10-documentation-rollout.md) | pending |
+
+Phase 01 marked DONE per user approval (2026-11-08); adapter, process primitives, and Linux qualification verified (62/62 tests passing across 6 targets, code review score 9/10). Native Windows containment remains fail-closed (`ContainmentUnavailable`) and native browser zoom remains UNVERIFIED (`inputTrusted: false`) per contract §8.
 
 ## Contracts and execution
 - [Exact architecture/wire/lifecycle/limits](architecture-contracts.md), [acceptance matrix](acceptance-matrix.md), [task-derived ownership](execution-ownership.md).

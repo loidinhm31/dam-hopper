@@ -191,6 +191,7 @@ procfs = { version = "0.17", default-features = false }
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
+zune-jpeg = "=0.5.15"
 
 [profile.release]
 opt-level = 3

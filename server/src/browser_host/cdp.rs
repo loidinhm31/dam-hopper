@@ -59,7 +59,9 @@ pub enum CdpError {
 impl fmt::Display for CdpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::CommandTimeout => write!(f, "CDP command timed out after {COMMAND_TIMEOUT_SECS}s"),
+            Self::CommandTimeout => {
+                write!(f, "CDP command timed out after {COMMAND_TIMEOUT_SECS}s")
+            }
             Self::TooManyPendingCommands { current, max } => {
                 write!(f, "too many pending commands: {current} >= {max}")
             }
@@ -70,7 +72,10 @@ impl fmt::Display for CdpError {
                 write!(f, "command too large: {size} bytes > {max} bytes")
             }
             Self::MessageTooLarge { size, max } => {
-                write!(f, "incoming WS message too large: {size} bytes > {max} bytes")
+                write!(
+                    f,
+                    "incoming WS message too large: {size} bytes > {max} bytes"
+                )
             }
             Self::ConnectionClosed => write!(f, "CDP connection closed"),
             Self::MalformedResponse(msg) => write!(f, "malformed CDP response: {msg}"),
@@ -183,7 +188,9 @@ impl io::Write for BudgetedWriter<'_> {
         }
         match self.reservation.grow(data.len()) {
             Ok(total) => {
-                self.stats.peak_queued_bytes.fetch_max(total as u64, Ordering::Relaxed);
+                self.stats
+                    .peak_queued_bytes
+                    .fetch_max(total as u64, Ordering::Relaxed);
             }
             Err(err) => {
                 self.failure = Some(err);
@@ -215,9 +222,10 @@ impl CdpClient {
         config.max_message_size = Some(MAX_WS_MESSAGE_BYTES);
         config.max_frame_size = Some(MAX_WS_MESSAGE_BYTES);
 
-        let (ws_stream, _) = tokio_tungstenite::connect_async_with_config(ws_url, Some(config), false)
-            .await
-            .map_err(|e| CdpError::Transport(e.to_string()))?;
+        let (ws_stream, _) =
+            tokio_tungstenite::connect_async_with_config(ws_url, Some(config), false)
+                .await
+                .map_err(|e| CdpError::Transport(e.to_string()))?;
 
         Ok(Self::from_ws_stream(ws_stream))
     }
@@ -261,7 +269,9 @@ impl CdpClient {
         &self.stats
     }
 
-    pub fn subscribe_screencast(&self) -> tokio::sync::broadcast::Receiver<Arc<ScreencastFrameData>> {
+    pub fn subscribe_screencast(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<Arc<ScreencastFrameData>> {
         self.screencast_rx_broadcast.subscribe()
     }
 
@@ -305,8 +315,8 @@ impl CdpClient {
                 .take()
                 .unwrap_or_else(|| CdpError::Deserialization(err.to_string())));
         }
-        let json = String::from_utf8(writer.buf)
-            .map_err(|e| CdpError::Deserialization(e.to_string()))?;
+        let json =
+            String::from_utf8(writer.buf).map_err(|e| CdpError::Deserialization(e.to_string()))?;
 
         let (sender, receiver) = oneshot::channel();
         let deadline = Instant::now() + Duration::from_secs(COMMAND_TIMEOUT_SECS);
@@ -329,7 +339,9 @@ impl CdpClient {
             });
         }
 
-        self.stats.total_commands_sent.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .total_commands_sent
+            .fetch_add(1, Ordering::Relaxed);
 
         tokio::select! {
             res = receiver => {
@@ -361,9 +373,14 @@ impl CdpClient {
         session_id: &str,
         frame_session_id: i64,
     ) -> Result<(), CdpError> {
-        let ack_params = chromiumoxide_cdp::cdp::browser_protocol::page::ScreencastFrameAckParams::new(frame_session_id);
+        let ack_params =
+            chromiumoxide_cdp::cdp::browser_protocol::page::ScreencastFrameAckParams::new(
+                frame_session_id,
+            );
         let _ = self.send_typed(ack_params, Some(session_id)).await?;
-        self.stats.screencast_frames_acked.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .screencast_frames_acked
+            .fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
@@ -508,7 +525,9 @@ where
                 max: MAX_WS_MESSAGE_BYTES,
             });
         }
-        let text = text.ok_or_else(|| CdpError::MalformedResponse("binary frame is not valid UTF-8".to_string()))?;
+        let text = text.ok_or_else(|| {
+            CdpError::MalformedResponse("binary frame is not valid UTF-8".to_string())
+        })?;
         self.handle_incoming_text(text)
     }
 
@@ -518,7 +537,9 @@ where
     fn handle_incoming_text(&mut self, text: &str) -> Result<(), CdpError> {
         // serde derives also accept JSON arrays positionally; a CDP message is always an object.
         if !text.trim_start().starts_with('{') {
-            return Err(CdpError::MalformedResponse("frame is not a JSON object".to_string()));
+            return Err(CdpError::MalformedResponse(
+                "frame is not a JSON object".to_string(),
+            ));
         }
         let env: IncomingEnvelope = serde_json::from_str(text)
             .map_err(|e| CdpError::MalformedResponse(format!("unparseable frame: {e}")))?;
@@ -528,7 +549,11 @@ where
             let id = id_val
                 .as_u64()
                 .and_then(|n| usize::try_from(n).ok())
-                .ok_or_else(|| CdpError::MalformedResponse("response id is not an unsigned integer".to_string()))?;
+                .ok_or_else(|| {
+                    CdpError::MalformedResponse(
+                        "response id is not an unsigned integer".to_string(),
+                    )
+                })?;
             // Unknown id: owner already timed out or was cancelled; nothing to fail.
             if let Some(pending) = self.pending_commands.remove(&id) {
                 let _ = pending.sender.send(response_outcome(env.result, env.error));
@@ -543,7 +568,9 @@ where
             }
             Some(Value::String(_)) => {
                 // Ignore unknown event with bounded counter; no queue allocation
-                self.stats.unknown_events_count.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .unknown_events_count
+                    .fetch_add(1, Ordering::Relaxed);
                 Ok(())
             }
             _ => Err(CdpError::MalformedResponse(
@@ -561,7 +588,8 @@ where
         session_id: Option<Value>,
         params: Option<Value>,
     ) -> Result<(), CdpError> {
-        let malformed = |what: &str| CdpError::MalformedResponse(format!("Page.screencastFrame: {what}"));
+        let malformed =
+            |what: &str| CdpError::MalformedResponse(format!("Page.screencastFrame: {what}"));
         let Some(Value::String(session_id)) = session_id else {
             return Err(malformed("missing string sessionId"));
         };
@@ -578,8 +606,14 @@ where
             return Err(malformed("params.metadata is not an object"));
         };
         for key in SCREENCAST_METADATA_NUMBERS {
-            if !metadata.get(key).and_then(Value::as_f64).is_some_and(f64::is_finite) {
-                return Err(malformed(&format!("params.metadata.{key} is not a finite number")));
+            if !metadata
+                .get(key)
+                .and_then(Value::as_f64)
+                .is_some_and(f64::is_finite)
+            {
+                return Err(malformed(&format!(
+                    "params.metadata.{key} is not a finite number"
+                )));
             }
         }
         let frame = Arc::new(ScreencastFrameData {
@@ -588,7 +622,9 @@ where
             data_base64,
             metadata,
         });
-        self.stats.screencast_frames_received.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .screencast_frames_received
+            .fetch_add(1, Ordering::Relaxed);
         let _ = self.screencast_tx.send(frame);
         Ok(())
     }
@@ -639,11 +675,17 @@ fn response_outcome(result: Option<Value>, error: Option<Value>) -> Result<Value
                 code: e.code,
                 message: e.message,
             }),
-            Err(e) => Err(CdpError::MalformedResponse(format!("invalid error envelope: {e}"))),
+            Err(e) => Err(CdpError::MalformedResponse(format!(
+                "invalid error envelope: {e}"
+            ))),
         },
-        (None, Some(_)) => Err(CdpError::MalformedResponse("error is not an object".to_string())),
+        (None, Some(_)) => Err(CdpError::MalformedResponse(
+            "error is not an object".to_string(),
+        )),
         (Some(res @ Value::Object(_)), None) => Ok(res),
-        (Some(_), None) => Err(CdpError::MalformedResponse("result is not an object".to_string())),
+        (Some(_), None) => Err(CdpError::MalformedResponse(
+            "result is not an object".to_string(),
+        )),
         (Some(_), Some(_)) => Err(CdpError::MalformedResponse(
             "response carries both result and error".to_string(),
         )),
@@ -656,10 +698,10 @@ fn response_outcome(result: Option<Value>, error: Option<Value>) -> Result<Value
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
     use futures_util::{Sink, Stream};
-
+    use std::pin::Pin;
+    use std::sync::atomic::AtomicBool;
+    use std::task::{Context, Poll};
     struct MockChannelWs {
         tx: mpsc::Sender<Message>,
         rx: mpsc::Receiver<Result<Message, tokio_tungstenite::tungstenite::Error>>,
@@ -674,17 +716,26 @@ mod tests {
 
     impl Sink<Message> for MockChannelWs {
         type Error = tokio_tungstenite::tungstenite::Error;
-        fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
         fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
             let _ = self.tx.try_send(item);
             Ok(())
         }
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
-        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
     }
@@ -699,28 +750,37 @@ mod tests {
 
         let (sent_tx, mut sent_rx) = mpsc::channel::<Message>(10);
         let (_in_tx, in_rx) = mpsc::channel(10);
-        let ws_stream = MockChannelWs { tx: sent_tx, rx: in_rx };
+        let ws_stream = MockChannelWs {
+            tx: sent_tx,
+            rx: in_rx,
+        };
 
         // 1. Enqueue a command whose caller dropped the receiver (caller cancelled)
         let (sender1, receiver1) = oneshot::channel();
         drop(receiver1); // caller abandoned
-        command_tx.send(ActorMessage::SendCommand {
-            id: 1,
-            json: r#"{"id":1,"method":"Test.abandoned"}"#.to_string(),
-            reservation: budget.reserve_slot().unwrap(),
-            sender: sender1,
-            deadline: Instant::now() + Duration::from_secs(10),
-        }).await.unwrap();
+        command_tx
+            .send(ActorMessage::SendCommand {
+                id: 1,
+                json: r#"{"id":1,"method":"Test.abandoned"}"#.to_string(),
+                reservation: budget.reserve_slot().unwrap(),
+                sender: sender1,
+                deadline: Instant::now() + Duration::from_secs(10),
+            })
+            .await
+            .unwrap();
 
         // 2. Enqueue a valid command whose caller is listening
         let (sender2, _receiver2) = oneshot::channel();
-        command_tx.send(ActorMessage::SendCommand {
-            id: 2,
-            json: r#"{"id":2,"method":"Test.valid"}"#.to_string(),
-            reservation: budget.reserve_slot().unwrap(),
-            sender: sender2,
-            deadline: Instant::now() + Duration::from_secs(10),
-        }).await.unwrap();
+        command_tx
+            .send(ActorMessage::SendCommand {
+                id: 2,
+                json: r#"{"id":2,"method":"Test.valid"}"#.to_string(),
+                reservation: budget.reserve_slot().unwrap(),
+                sender: sender2,
+                deadline: Instant::now() + Duration::from_secs(10),
+            })
+            .await
+            .unwrap();
 
         // 3. Spawn actor
         let actor = CdpActor {
@@ -743,11 +803,20 @@ mod tests {
             Message::Text(t) => t,
             _ => panic!("expected text message"),
         };
-        assert!(text.contains("Test.valid"), "expected Test.valid, got: {text}");
-        assert!(!text.contains("Test.abandoned"), "Test.abandoned should have been skipped!");
+        assert!(
+            text.contains("Test.valid"),
+            "expected Test.valid, got: {text}"
+        );
+        assert!(
+            !text.contains("Test.abandoned"),
+            "Test.abandoned should have been skipped!"
+        );
 
         // The skipped command's reservation is released on dequeue; only the in-flight one remains.
-        assert!(budget.reserve_slot().is_ok(), "cancelled command leaked its slot");
+        assert!(
+            budget.reserve_slot().is_ok(),
+            "cancelled command leaked its slot"
+        );
     }
 
     /// Sink whose writes never complete, modelling a stalled peer/writer. `entered` is
@@ -765,17 +834,26 @@ mod tests {
 
     impl Sink<Message> for StalledWs {
         type Error = tokio_tungstenite::tungstenite::Error;
-        fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
             self.entered.notify_one();
             Poll::Pending
         }
         fn start_send(self: Pin<&mut Self>, _item: Message) -> Result<(), Self::Error> {
             Ok(())
         }
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
             Poll::Pending
         }
-        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
             Poll::Pending
         }
     }
@@ -794,7 +872,9 @@ mod tests {
     #[tokio::test]
     async fn test_stalled_writer_saturation_then_close_releases_everything() {
         let entered = Arc::new(Notify::new());
-        let client = CdpClient::from_ws_stream(StalledWs { entered: entered.clone() });
+        let client = CdpClient::from_ws_stream(StalledWs {
+            entered: entered.clone(),
+        });
 
         // The first command enters the actor's write and stalls there.
         let first = {
@@ -810,38 +890,58 @@ mod tests {
         let mut handles = Vec::new();
         for _ in 0..100 {
             let c = client.clone();
-            handles.push(tokio::spawn(async move { c.send_command("Test.stalled", None, None).await }));
+            handles.push(tokio::spawn(async move {
+                c.send_command("Test.stalled", None, None).await
+            }));
         }
         let rejected_expected = 100 - MAX_WRITER_QUEUE_MESSAGES;
-        eventually(|| handles.iter().filter(|h| h.is_finished()).count() == rejected_expected).await;
-        assert!(!first.is_finished(), "in-flight stalled write must still be pending");
+        eventually(|| handles.iter().filter(|h| h.is_finished()).count() == rejected_expected)
+            .await;
+        assert!(
+            !first.is_finished(),
+            "in-flight stalled write must still be pending"
+        );
         let in_use = client.budget.bytes_in_use();
-        assert!(in_use > 0 && in_use <= (MAX_WRITER_QUEUE_MESSAGES + 1) * 64, "reserved bytes {in_use}");
+        assert!(
+            in_use > 0 && in_use <= (MAX_WRITER_QUEUE_MESSAGES + 1) * 64,
+            "reserved bytes {in_use}"
+        );
 
         // close() must cancel the stalled write and release every queued + in-flight reservation.
         client.close().await;
-        let first_res = tokio::time::timeout(Duration::from_secs(1), first).await.expect("first hung").unwrap();
+        let first_res = tokio::time::timeout(Duration::from_secs(1), first)
+            .await
+            .expect("first hung")
+            .unwrap();
         assert_eq!(first_res, Err(CdpError::ConnectionClosed));
         for h in handles {
-            let res = tokio::time::timeout(Duration::from_secs(1), h).await.expect("caller hung").unwrap();
+            let res = tokio::time::timeout(Duration::from_secs(1), h)
+                .await
+                .expect("caller hung")
+                .unwrap();
             assert!(
-                matches!(res, Err(CdpError::WriterQueueFull { .. }) | Err(CdpError::ConnectionClosed)),
+                matches!(
+                    res,
+                    Err(CdpError::WriterQueueFull { .. }) | Err(CdpError::ConnectionClosed)
+                ),
                 "unexpected result {res:?}"
             );
         }
         eventually(|| client.budget.bytes_in_use() == 0).await;
-        assert!(client.budget.reserve_slot().is_ok());
+        assert_all_slots_reusable(&client);
     }
 
     #[tokio::test]
     async fn test_oversized_command_rejected_before_budget_is_retained() {
-        let client = CdpClient::from_ws_stream(StalledWs { entered: Arc::new(Notify::new()) });
+        let client = CdpClient::from_ws_stream(StalledWs {
+            entered: Arc::new(Notify::new()),
+        });
         let big = serde_json::json!({ "payload": "x".repeat(MAX_COMMAND_BYTES + 100) });
         let res = client.send_command("Test.large", Some(big), None).await;
         assert!(matches!(res, Err(CdpError::CommandTooLarge { .. })));
         // The failed attempt released everything it reserved while serializing.
         assert_eq!(client.budget.bytes_in_use(), 0);
-        assert!(client.budget.reserve_slot().is_ok());
+        assert_all_slots_reusable(&client);
     }
 
     fn mock_client() -> (
@@ -851,7 +951,14 @@ mod tests {
     ) {
         let (sent_tx, sent_rx) = mpsc::channel::<Message>(MAX_PENDING_COMMANDS);
         let (in_tx, in_rx) = mpsc::channel(8);
-        (CdpClient::from_ws_stream(MockChannelWs { tx: sent_tx, rx: in_rx }), sent_rx, in_tx)
+        (
+            CdpClient::from_ws_stream(MockChannelWs {
+                tx: sent_tx,
+                rx: in_rx,
+            }),
+            sent_rx,
+            in_tx,
+        )
     }
 
     #[tokio::test(start_paused = true)]
@@ -859,10 +966,13 @@ mod tests {
         let (client, mut sent_rx, _in_tx) = mock_client();
         let res = client.send_command("Test.never_answered", None, None).await;
         assert_eq!(res, Err(CdpError::CommandTimeout));
-        assert!(sent_rx.recv().await.is_some(), "command must have been written");
+        assert!(
+            sent_rx.recv().await.is_some(),
+            "command must have been written"
+        );
         // The deadline sweep, not the response path, frees the slot and bytes.
         eventually(|| client.budget.bytes_in_use() == 0).await;
-        assert!(client.budget.reserve_slot().is_ok());
+        assert_all_slots_reusable(&client);
     }
 
     #[tokio::test(start_paused = true)]
@@ -872,10 +982,14 @@ mod tests {
             let c = client.clone();
             tokio::spawn(async move { c.send_command("Test.cancelled", None, None).await })
         };
-        assert!(sent_rx.recv().await.is_some(), "command must be in flight before cancelling");
+        assert!(
+            sent_rx.recv().await.is_some(),
+            "command must be in flight before cancelling"
+        );
         assert!(client.budget.bytes_in_use() > 0);
         caller.abort();
         eventually(|| client.budget.bytes_in_use() == 0).await;
+        assert_all_slots_reusable(&client);
     }
 
     #[tokio::test(start_paused = true)]
@@ -889,5 +1003,122 @@ mod tests {
         drop(in_tx); // peer closes: stream ends
         assert_eq!(caller.await.unwrap(), Err(CdpError::ConnectionClosed));
         eventually(|| client.budget.bytes_in_use() == 0).await;
+        assert_all_slots_reusable(&client);
+    }
+
+    fn assert_all_slots_reusable(client: &CdpClient) {
+        let mut slots = Vec::new();
+        for _ in 0..MAX_PENDING_COMMANDS {
+            slots.push(
+                client
+                    .budget
+                    .reserve_slot()
+                    .expect("all 64 slots must be reusable"),
+            );
+        }
+        assert!(matches!(
+            client.budget.reserve_slot(),
+            Err(CdpError::TooManyPendingCommands {
+                current: 64,
+                max: 64
+            })
+        ));
+        let per_slot_bytes = 2_097_152 / MAX_PENDING_COMMANDS;
+        for s in slots.iter_mut() {
+            s.grow(per_slot_bytes)
+                .expect("budget bytes must be reusable");
+        }
+        assert_eq!(
+            client.budget.bytes_in_use(),
+            per_slot_bytes * MAX_PENDING_COMMANDS
+        );
+        drop(slots);
+        assert_eq!(client.budget.bytes_in_use(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_slot_saturation_never_invokes_serializer() {
+        let client = CdpClient::from_ws_stream(StalledWs {
+            entered: Arc::new(Notify::new()),
+        });
+        let mut reservations = Vec::new();
+        for _ in 0..MAX_PENDING_COMMANDS {
+            reservations.push(
+                client
+                    .budget
+                    .reserve_slot()
+                    .expect("slot reserve should succeed"),
+            );
+        }
+        assert!(matches!(
+            client.budget.reserve_slot(),
+            Err(CdpError::TooManyPendingCommands {
+                current: 64,
+                max: 64
+            })
+        ));
+
+        let invoked = Arc::new(AtomicBool::new(false));
+        struct SpySerialize(Arc<AtomicBool>);
+        impl Serialize for SpySerialize {
+            fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+                self.0.store(true, Ordering::SeqCst);
+                Err(serde::ser::Error::custom("should never be serialized"))
+            }
+        }
+
+        let res = client
+            .dispatch("Test.probe", Some(&SpySerialize(invoked.clone())), None)
+            .await;
+        assert!(matches!(
+            res,
+            Err(CdpError::TooManyPendingCommands {
+                current: 64,
+                max: 64
+            })
+        ));
+        assert!(
+            !invoked.load(Ordering::SeqCst),
+            "custom serializer must never be invoked at slot saturation"
+        );
+        drop(reservations);
+        assert_all_slots_reusable(&client);
+    }
+
+    #[tokio::test]
+    async fn test_successful_response_makes_all_slots_and_bytes_reusable() {
+        let (client, mut sent_rx, in_tx) = mock_client();
+        let cmd_task = {
+            let c = client.clone();
+            tokio::spawn(async move {
+                c.send_command(
+                    "Test.successful",
+                    Some(serde_json::json!({ "arg": "val" })),
+                    None,
+                )
+                .await
+            })
+        };
+        let sent_msg = sent_rx.recv().await.expect("command should reach writer");
+        let wire: serde_json::Value = match sent_msg {
+            Message::Text(t) => serde_json::from_str(&t).expect("valid json wire"),
+            _ => panic!("expected text message"),
+        };
+        let id = wire["id"].as_i64().expect("command id");
+
+        let response = serde_json::json!({
+            "id": id,
+            "result": { "status": "ok" }
+        });
+        in_tx
+            .send(Ok(Message::Text(response.to_string().into())))
+            .await
+            .expect("send response");
+
+        let res = cmd_task.await.unwrap().expect("command should succeed");
+        assert_eq!(res["status"], "ok");
+
+        eventually(|| client.budget.bytes_in_use() == 0).await;
+        assert_all_slots_reusable(&client);
     }
 }

@@ -62,7 +62,9 @@ impl CommandBudget {
     fn try_reserve_bytes(&self, additional: usize) -> Result<usize, CdpError> {
         let mut current = self.bytes.load(Ordering::Acquire);
         loop {
-            let next = current.checked_add(additional).filter(|n| *n <= self.max_bytes);
+            let next = current
+                .checked_add(additional)
+                .filter(|n| *n <= self.max_bytes);
             let Some(next) = next else {
                 return Err(CdpError::WriterQueueFull {
                     messages: self.slots.load(Ordering::Acquire),
@@ -126,15 +128,36 @@ mod tests {
         ));
 
         assert_eq!(a.grow(60).unwrap(), 60);
-        assert!(matches!(b.grow(41), Err(CdpError::WriterQueueFull { bytes: 60, .. })));
+        assert!(matches!(
+            b.grow(41),
+            Err(CdpError::WriterQueueFull { bytes: 60, .. })
+        ));
         // Failed growth must not leak a partial reservation.
         assert_eq!(b.reserved_bytes(), 0);
         assert_eq!(b.grow(40).unwrap(), 100);
 
         drop(a);
         assert_eq!(budget.bytes_in_use(), 40);
-        assert!(budget.reserve_slot().is_ok());
+        let c = budget.reserve_slot().unwrap();
+        assert!(budget.reserve_slot().is_err());
+        drop(c);
         drop(b);
+        assert_eq!(budget.bytes_in_use(), 0);
+
+        // After dropping all reservations, prove ALL slots can be simultaneously held
+        // and full byte budget reused.
+        let mut all = Vec::new();
+        for _ in 0..2 {
+            all.push(budget.reserve_slot().unwrap());
+        }
+        assert!(matches!(
+            budget.reserve_slot(),
+            Err(CdpError::TooManyPendingCommands { current: 2, max: 2 })
+        ));
+        all[0].grow(50).unwrap();
+        all[1].grow(50).unwrap();
+        assert_eq!(budget.bytes_in_use(), 100);
+        drop(all);
         assert_eq!(budget.bytes_in_use(), 0);
     }
 }

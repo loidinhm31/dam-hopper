@@ -23,7 +23,7 @@ flowchart LR
 ### Code Boundaries
 
 - `server/src/api/` registers protected HTTP, REST-backed client operations, and authenticated WebSocket routes. `server/src/state.rs` contains shared application state.
-- `server/src/` domains include `auth`, `config`, `crypto`, `fs`, `git`, `pty`, `workflow`, `agent_status`, `agent_store`, `session_changes`, `idle_suspend`, `linux_release`, `port_forward`, and `tunnel`.
+- `server/src/` domains include `auth`, `config`, `crypto`, `fs`, `git`, `pty`, `workflow`, `agent_status`, `agent_store`, `session_changes`, `browser_host`, `idle_suspend`, `linux_release`, `port_forward`, and `tunnel`.
 - `packages/ui/src/` owns the shared React application, owner-bound API clients, transports, query keys, stores, and feature components (canonical entry `packages/ui/src/embed/dam-hopper-app.tsx`).
 - `apps/web/` is the Vite browser host; the former Tauri 2 desktop host `apps/native/` was removed in Phase 02. `packages/shared/` contains shared utilities; `packages/browser-bridge/` contains browser-debug runtime protocol v1.
 - `native/android-app/` is the native Android workbench implementation using Kotlin Multiplatform (`:shared` for core models, connection registry, and live transports; `:androidApp` for Jetpack Compose UI, `MainActivity`, and Android platform OkHttp network factory).
@@ -477,6 +477,10 @@ Ephemeral Cloudflared quick tunnels (`server/src/tunnel/`) isolate subprocesses 
 
 Tunnels are explicitly started port forwards, independent of detected PTY ownership and origin-listener lifetime. Port loss, terminal exit/removal, and ownership replacement do not terminate Cloudflared or reset the tunnel's PID, URL, ID, or start time. Explicit Stop, connector termination/startup failure, and DamHopper shutdown remain terminal; no automatic restart or cross-server-restart restoration. A Tokio monotonic creation deadline marks required `reminderDue: boolean` at three hours and emits one `tunnel:reminder` event. REST retains due state for reload/reconnect catch-up. Shared web UI provides profile-qualified URL, port, Dismiss, and captured-owner Stop, without expiry; sessionStorage dismissal survives reload/reconnect in that browser session. Current-generation events cancel superseded list queries before patch/reconciliation. Undetected origins remain visible as untracked, not falsely listening. A replacement service binding the same port is public until Stop; an offline origin normally returns 502, and Quick Tunnel hostnames do not survive connector recreation.
 
+
+### Host Browser CDP Streaming Subsystem (Phase 01 Primitives)
+
+Candidate headless Chromium process supervision and bounded CDP streaming primitives (`server/src/browser_host/`). The subsystem enforces fail-closed process containment (death-pipe watcher, process groups, and strict argument allowlisting; non-Unix fails closed with `ContainmentUnavailable`), single-connection bounded WebSocket actor with shared RAII command budget (max 64 commands, 2 MiB logical length, 32-message writer queue), and atomic binary wire framing (`BHJF` v1). See [Host Browser CDP Streaming Architecture](./architecture/host-browser-cdp-streaming.md).
 ## Native Desktop & Platform Boundaries (Retired in Phase 02)
 
 The desktop Tauri host (`apps/native`), native Windows local SSH port forwarding subsystem, and related UI components were permanently retired in Phase 02 (P0a) of the AI Dev OS redesign.
