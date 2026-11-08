@@ -44,7 +44,9 @@ tokio = { version = "1", features = ["full", "test-util"] }
 parking_lot = "0.12"
 lru = "0.12"
 futures-util = "0.3"
+bytes = "1"
 tower = "0.5"
+url = "2"
 tower-http = { version = "0.6", features = ["cors", "fs", "limit"] }
 
 # Serialization
@@ -170,6 +172,11 @@ bcrypt = "0.19.0"
 rpassword = "7"
 jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 totp-rs = { version = "6.0", default-features = false, features = ["std", "gen_secret", "otpauth", "zeroize"] }
+
+# Browser host CDP types and bounded WebSocket transport
+chromiumoxide_cdp = "=0.9.1"
+chromiumoxide_types = "=0.9.1"
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "handshake"] }
 [target.'cfg(unix)'.dependencies]
 # SIGTERM for graceful child process shutdown
 nix = { version = "0.29", features = ["signal", "process"] }
@@ -183,7 +190,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 procfs = { version = "0.17", default-features = false }
 
 [dev-dependencies]
-tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
 
 [profile.release]
 opt-level = 3

@@ -7,7 +7,7 @@ These standards describe the current Rust backend, shared React UI, and profile-
 | Path | Responsibility |
 | --- | --- |
 | `server/src/api/` | Axum route registration, handlers, auth, and WebSocket/API transport |
-| `server/src/{auth,config,crypto,fs,git,pty,workflow,agent_status,session_changes}/` | Backend domain boundaries and services |
+| `server/src/{auth,config,crypto,fs,git,pty,workflow,agent_status,session_changes,browser_host}/` | Backend domain boundaries, services, and candidate browser host primitives |
 | `server/src/state.rs` | Shared server `AppState` and service ownership |
 | `packages/ui/src/api/` | Owner-bound API clients, connections, DTOs, transports, and query keys |
 | `packages/ui/src/components/`, `hooks/`, `stores/`, `lib/`, `os/` | Shared React UI, OS window management, and client-side domain behavior |
