@@ -60,6 +60,19 @@ class RemoteConfigRepository(
         val text = apiClient.postJson("/api/global-config/ui", preferences.toUiRequestBody(), guard)
         return confirmedFlag(text, "updated")
     }
+    /**
+     * Updates the server-global [workspace] root (and optional name) in config.toml.
+     * Posts {"root": root} or {"root": root, "name": name} to /api/global-config/workspace.
+     */
+    suspend fun updateGlobalWorkspace(root: String, name: String? = null, guard: RequestAdmissionGuard): Boolean {
+        require(root.isNotBlank()) { "Workspace root path is blank" }
+        val body = buildJsonObject {
+            put("root", root)
+            if (name != null) put("name", name)
+        }.toString()
+        val text = apiClient.postJson("/api/global-config/workspace", body, guard)
+        return confirmedFlag(text, "updated") || confirmedFlag(text, "ok")
+    }
 
     /**
      * Posts a sparse UI patch where null values explicitly unbind keys (POST /api/global-config/ui).
@@ -80,19 +93,6 @@ class RemoteConfigRepository(
         }.toString()
         val text = apiClient.postJson("/api/global-config/ui", body, guard)
         return confirmedFlag(text, "updated")
-    }
-    /**
-     * Updates the server-global [workspace] root (and optional name) in config.toml.
-     * Posts {"root": root} or {"root": root, "name": name} to /api/global-config/workspace.
-     */
-    suspend fun updateGlobalWorkspace(root: String, name: String? = null, guard: RequestAdmissionGuard): Boolean {
-        require(root.isNotBlank()) { "Workspace root path is blank" }
-        val body = buildJsonObject {
-            put("root", root)
-            if (name != null) put("name", name)
-        }.toString()
-        val text = apiClient.postJson("/api/global-config/workspace", body, guard)
-        return confirmedFlag(text, "updated") || confirmedFlag(text, "ok")
     }
 
     /** True only for a JSON object whose [key] is the boolean `true`; malformed bodies throw. */
