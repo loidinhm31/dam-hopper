@@ -5,3 +5,8 @@ pub mod profile;
 mod command_budget;
 pub mod process;
 pub mod protocol;
+pub mod attachments;
+pub mod auth;
+pub mod input;
+pub mod network_policy;
+pub mod session;

@@ -6,8 +6,8 @@
 - Relevant bounded evidence: `reports/backend-boundaries.md:7–25; reports/design-direction.md:29–37,49–52,61`. Research recommendations superseded by architecture contract where explicitly stated.
 
 ## Overview
-- Priority: P2. Status: pending. Effort: not-estimated. Planning only; commands below are future obligations, not exercised checks.
-- Deliverable: Authorize sessions attachments and ordered input.
+- Priority: P2. Status: DONE (2026-11-08). Effort: not-estimated.
+- Deliverable: Authorize sessions attachments and ordered input. Review completed in plans/reports/code-review-261108-2055-phase-03-authorization-input.md (Cycle 1) and plans/reports/code-review-261108-2117-phase-03-cycle-2.md (Cycle 2 - Approved; Score: 9.8/10; 86 tests passed [39 focused Phase 03 tests across 5 targets + 52 regression tests across 5 targets, 2 ignored]). Ready to proceed to Phase 04.
 
 ## Key insights
 Existing /ws revalidates sessions every5s with2s DB timeout; Browser must additionally evaluate current enabled Admin role. Dev actor is User: exception is Browser-local and requires actual listener, peer and Origin checks.
@@ -186,9 +186,9 @@ Exactly one fence; task IDs/markers stable across revisions. No tasks.json or hy
 ]
 ```
 
-- [ ] <!-- evcrate-task:authorize-browser-sessions --> Implement admin admission and idempotent target REST
-- [ ] <!-- evcrate-task:bind-browser-attachments --> Implement purpose tickets and independent live-auth cancellation
-- [ ] <!-- evcrate-task:dispatch-leased-input --> Implement bounded reliable input and authoritative viewport
+- [x] <!-- evcrate-task:authorize-browser-sessions --> Implement admin admission and idempotent target REST
+- [x] <!-- evcrate-task:bind-browser-attachments --> Implement purpose tickets and independent live-auth cancellation
+- [x] <!-- evcrate-task:dispatch-leased-input --> Implement bounded reliable input and authoritative viewport
 
 ## Success criteria
 - Every task acceptance above is observed with applicable compile/typecheck, behavioral tests and real smoke evidence; missing or failed proof keeps task incomplete.
@@ -204,8 +204,13 @@ Live auth checks use current account role, never cached UI role. Body/session ID
 - Do not store/log bearer/tickets/raw loopback endpoints, real site credentials or sensitive page/selection payload in diagnostics/evidence.
 
 ## Next steps
-Frozen contracts/auth open phase04 and phase06; phase05 follows phase04 because its module/router writers are shared. Phase05 and06 writable sets are disjoint.
-- Parent owns independent plan review/optional validation and implementation permission. This phase text neither executes tasks nor supplies approval.
-
+1. Cycle 2 remediation verified and signed off:
+   - `network_policy.rs`: `localhost` and bracketed IPv6 `[::1]` denied in production mode unless explicitly allowed project origins.
+   - `input.rs`: Added `drain_inputs` and `pop_next_input` to `SessionInputManager`; clipped `renew_lease` to `effective_deadline`.
+   - `attachments.rs`: Preserved `auth_version`, `credential_version`, and `effective_deadline` on `ActiveAttachment`; added atomic `supervisor_started` guard; removed dead code `created_at`.
+   - `session.rs`: Admission rejects rather than evicts when idempotency capacity is reached.
+   - `api/browser_host.rs`: Removed input managers on session deletion and profile reset; invalidated cached selection on session navigation.
+2. All Phase 03 integration and regression test suites passing (39 tests total).
+3. Advance to Phase 04: Host Browser CDP multiplexing and frame transport gateway.
 ## Unresolved questions
 - No additional product interview here. Exact compatibility/platform/performance and human observations remain future gates where applicable; their absence is not a pass.

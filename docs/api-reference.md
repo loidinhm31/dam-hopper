@@ -23,6 +23,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 | [WebSocket](./api/websocket.md) | WebSocket endpoint and event/message contract |
 | [Session changes review](#session-changes-review-api) | Read-only session changes status, files, file diff, and private tool-event capture endpoints |
 | [Terminal inventory and termination](#terminal-inventory-and-guarded-termination-api) | Additive inventory headers/fields and guarded termination protocol |
+| [Host browser CDP streaming](./api/browser-host.md) | Admission security model, REST routes (/api/browser/*), capability tickets, leased input |
 
 ## Authentication
 
@@ -220,6 +221,10 @@ Ordinary launched terminal views in the UI do not initially possess captured des
 4. **Originating Incarnation:** Canonical positive u64 string and/or safe positive integer with mutual consistency, strictly matching `row.incarnationExact`.
 
 If any of these 4 criteria is missing or mismatched, destructive actions ("End Session", "Cancel Restart") remain disabled with an explanatory reason ("End session is unavailable: connection disconnected, legacy headerless server, or unverified session identity"), failing closed without ambient epoch promotion, while preserving safe presentation "Close View".
+
+## Host Browser CDP Streaming
+
+See the [Host browser CDP streaming API reference](./api/browser-host.md). Covers live Admin admission verification, `--no-auth` dev bypass loopback/Origin checks, REST routes (`GET/POST /api/browser/sessions`, `/navigate`, `/history`, `/reload`, `/viewport`, `/dialog`, `/selection/*`, `/find`, `/selected-text`), single-use capability tickets (`POST /api/browser/attachments`), cooperative 30s control leases with reliable input queue semantics (128 records / 256 KiB), and network destination policies. Architectural boundaries and binary wire framing are detailed in the [Host Browser CDP Streaming Architecture](./architecture/host-browser-cdp-streaming.md).
 
 ## Retired plugin API anchors
 

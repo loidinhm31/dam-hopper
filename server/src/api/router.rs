@@ -28,7 +28,7 @@ const GIT_BLAME_MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 use crate::state::AppState;
 
 use super::{
-    agent_import, agent_memory, agent_status, agent_store, auth, auth_mfa, browser_debug, commands,
+    agent_import, agent_memory, agent_status, agent_store, auth, auth_mfa, browser_debug, browser_host, commands,
     config, diagnostics, fs as fs_api, fs_image, fs_video, git, git_blame, git_diff, host_actions,
     idle_suspend, media_session, plans as plans_api, port_forward as port_forward_api,
     resource_events, session_changes, settings, ssh, system, terminal, tunnel, workflow,
@@ -592,10 +592,87 @@ pub fn build_router_with_web_dir_and_origins(
             state.clone(),
             resource_events::global_admission_layer,
         ));
+    let browser_host_routes = Router::new()
+        .route("/api/browser/capabilities", get(browser_host::get_capabilities))
+        .route(
+            "/api/browser/sessions",
+            get(browser_host::list_sessions).post(browser_host::create_session),
+        )
+        .route(
+            "/api/browser/sessions/{id}",
+            get(browser_host::get_session).delete(browser_host::delete_session),
+        )
+        .route(
+            "/api/browser/sessions/{id}/navigate",
+            post(browser_host::navigate_session),
+        )
+        .route(
+            "/api/browser/sessions/{id}/history",
+            post(browser_host::history_session),
+        )
+        .route(
+            "/api/browser/sessions/{id}/reload",
+            post(browser_host::reload_session),
+        )
+        .route(
+            "/api/browser/sessions/{id}/viewport",
+            put(browser_host::update_viewport),
+        )
+        .route(
+            "/api/browser/sessions/{id}/control/acquire",
+            post(browser_host::acquire_control),
+        )
+        .route(
+            "/api/browser/sessions/{id}/control/renew",
+            post(browser_host::renew_control),
+        )
+        .route(
+            "/api/browser/sessions/{id}/control/release",
+            post(browser_host::release_control),
+        )
+        .route(
+            "/api/browser/sessions/{id}/dialog",
+            post(browser_host::handle_dialog),
+        )
+        .route(
+            "/api/browser/sessions/{id}/selection/start",
+            post(browser_host::start_selection),
+        )
+        .route(
+            "/api/browser/sessions/{id}/selection/cancel",
+            post(browser_host::cancel_selection),
+        )
+        .route(
+            "/api/browser/sessions/{id}/selection/artifacts",
+            post(browser_host::create_selection_artifacts),
+        )
+        .route(
+            "/api/browser/sessions/{id}/find",
+            post(browser_host::find_in_page),
+        )
+        .route(
+            "/api/browser/sessions/{id}/selected-text",
+            get(browser_host::get_selected_text),
+        )
+        .route(
+            "/api/browser/attachments",
+            post(browser_host::issue_attachment_ticket),
+        )
+        .route(
+            "/api/browser/profile/reset",
+            post(browser_host::reset_profile),
+        )
+        .route(
+            "/api/browser/profile/reset/{operationId}",
+            get(browser_host::get_profile_reset_status),
+        )
+        .layer(RequestBodyLimitLayer::new(64 * 1024));
+
     let router = Router::new()
         .merge(public)
         .merge(protected)
         .merge(device_sessions)
+        .merge(browser_host_routes)
         .merge(ide_routes)
         .merge(video_stream)
         .merge(image_stream)
@@ -717,6 +794,8 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
         HeaderName::from_static("x-damhopper-termination-version");
     const X_DAM_HOPPER_PTY_EPOCH: HeaderName =
         HeaderName::from_static("x-damhopper-pty-epoch");
+    const X_BROWSER_LEASE: HeaderName =
+        HeaderName::from_static("x-browser-lease");
     let headers = [
         AUTHORIZATION,
         CONTENT_TYPE,
@@ -729,6 +808,7 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
         PRAGMA,
         X_EXPECTED_SHA256,
         X_EXPECTED_SECURITY_REVISION,
+        X_BROWSER_LEASE,
     ];
     let exposed_headers = [
         ACCEPT_RANGES,
@@ -743,6 +823,7 @@ fn build_cors(allowed_origins: &[HeaderValue]) -> CorsLayer {
         X_CONTENT_TYPE_OPTIONS,
         X_DAM_HOPPER_TERMINATION_VERSION,
         X_DAM_HOPPER_PTY_EPOCH,
+        X_BROWSER_LEASE,
     ];
     CorsLayer::new()
         .allow_origin(allowed_origins.to_vec())

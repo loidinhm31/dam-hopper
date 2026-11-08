@@ -1,0 +1,574 @@
+# Host Browser CDP Streaming API
+
+REST routes, admission security model, single-use capability tickets, and leased input queue semantics for the Host Browser CDP Streaming subsystem (`server/src/browser_host/`, `server/src/api/browser_host.rs`).
+
+For process containment, supervisory death pipes, and binary wire framing (BHJF v1), see the [Host Browser CDP Streaming Architecture](../architecture/host-browser-cdp-streaming.md).
+
+---
+
+## 1. Admission Security Model
+
+All `/api/browser/*` routes require caller admission through `evaluate_browser_admission`. The handler strictly rejects ambiguous credentials, unapproved origins, and unauthorized roles.
+
+All successful and error responses from `/api/browser/*` set `Cache-Control: no-store`.
+
+### Production Admission Rules
+
+1. **Authentication Requirement:** The request must provide a valid bearer token in the `Authorization: Bearer <token>` header or `damhopper_auth` cookie.
+2. **Enabled Account Check:** Live database lookup verifies that the user account exists and `is_enabled == true`.
+3. **Admin Role Requirement:** The user must possess the `Admin` role (`UserRole::Admin`). Non-admin users (`UserRole::User`) receive HTTP 403 Forbidden with `kind: "adminRequired"`.
+4. **Session Integrity:** If a session ID is present, the session must exist, must not be revoked (`revoked_at.is_none()`), and its `auth_version` and `credential_version` must match both the token claims and user database record.
+5. **Session Deadline:** Caller `effective_deadline` is enforced against the current server time. Expired tokens receive HTTP 401 Unauthorized with `kind: "sessionExpired"`.
+6. **Continuous Live Verification:** Active streaming connections and long-lived attachments undergo live verification every 5 seconds (`LIVE_CHECK_INTERVAL`) with a strict 2-second database timeout (`LIVE_CHECK_TIMEOUT`). If an admin is demoted, an account is disabled, or a session is revoked, connections are terminated immediately via `CancellationToken`.
+
+### Development Mode Bypass (`--no-auth`)
+
+When the server runs in `--no-auth` mode (`state.no_auth == true`):
+1. **Peer IP Loopback:** The connecting peer IP address must be a loopback address (`127.0.0.1` or `::1`). Non-loopback peers fail closed with HTTP 403 `kind: "devBypassDenied"`.
+2. **Forwarded Headers Ignored:** Headers such as `X-Forwarded-For` or `X-Real-IP` are explicitly ignored; only the physical socket address (`ConnectInfo<SocketAddr>`) is evaluated.
+3. **Origin Validation:** If an `Origin` header is present, it must match an entry in `server.cors_origins` or the default local Vite dev server (`http://127.0.0.1:5173`, `http://localhost:5173`). Unapproved origins receive HTTP 403 `kind: "devBypassDenied"`.
+4. **Native Origin-less Requests:** Loopback requests without an `Origin` header (such as local CLI tools or automated agents) are permitted.
+5. **Assigned Principal:** Admitted requests receive principal `"dev-user"` with `is_dev: true`.
+
+### Error Response Schema
+
+All errors return JSON with HTTP status $\ge 400$:
+
+```json
+{
+  "error": "human-readable description",
+  "kind": "errorKindIdentifier"
+}
+```
+
+| HTTP Status | Error Kind | Description |
+| --- | --- | --- |
+| 400 Bad Request | `invalidInput` | Missing or malformed parameters; oversized payload |
+| 400 Bad Request | `policyViolation` | URL violates network policy or contains credentials |
+| 400 Bad Request | `purposeMismatch` | Ticket purpose does not match requested attachment endpoint |
+| 400 Bad Request | `sequenceViolation` | Input sequence gap or stale sequence counter |
+| 400 Bad Request | `invalidCoordinates` | Image fractions $u$ or $v$ outside range `0.0..=1.0` or non-finite |
+| 400 Bad Request | `payloadTooLarge` | Insert text exceeds 4096 bytes or find query exceeds 256 characters |
+| 401 Unauthorized | `unauthorized` | Missing bearer credentials or user not found |
+| 401 Unauthorized | `sessionRevoked` | Session was revoked or auth version was incremented |
+| 401 Unauthorized | `sessionExpired` | Session deadline has elapsed |
+| 401 Unauthorized | `ticketNotFound` | Capability ticket not found or already consumed (single-use) |
+| 401 Unauthorized | `ticketExpired` | Capability ticket 30s TTL expired |
+| 403 Forbidden | `forbidden` | Session belongs to another principal |
+| 403 Forbidden | `adminRequired` | Caller lacks the required Admin role |
+| 403 Forbidden | `devBypassDenied` | Non-loopback peer or unapproved Origin in `--no-auth` mode |
+| 403 Forbidden | `accountDisabled` | User account is administratively disabled |
+| 403 Forbidden | `originMismatch` | Ticket redeemed from an origin different from issuance origin |
+| 403 Forbidden | `leaseNotFound` | No active control lease held for this session |
+| 403 Forbidden | `leaseExpired` | Control lease has expired (30s TTL elapsed) |
+| 403 Forbidden | `notLeaseHolder` | Caller lease token does not match active lease holder |
+| 404 Not Found | `sessionNotFound` | Browser session ID does not exist |
+| 409 Conflict | `sessionConflict` | Conflicting session operation or state mismatch |
+| 409 Conflict | `leaseConflict` | Control lease currently held by another active viewer |
+| 429 Too Many Requests | `browserBusy` | Principal or global process limit reached |
+| 429 Too Many Requests | `ticketCapacityExceeded` | Unconsumed ticket limit reached (16 principal / 64 global) |
+| 429 Too Many Requests | `queueOverflow` | Input queue limit exceeded (128 records or 256 KiB) |
+| 503 Service Unavailable | `authUnavailable` | Database unavailable during admission check or live check timeout (2s) |
+| 503 Service Unavailable | `inputUnavailable` | Viewport geometry not yet available for coordinate mapping |
+
+---
+
+## 2. Browser Host REST Endpoints
+
+All endpoints are prefixed with `/api/browser`. Request bodies are capped at 64 KiB.
+
+### GET /api/browser/capabilities
+
+Returns the browser host capability summary for the calling principal.
+
+**Response (200 OK):**
+```json
+{
+  "available": true,
+  "reason": null,
+  "processBudget": {
+    "maxProcesses": 1,
+    "maxTargetsPerProcess": 2,
+    "maxViewersPerTarget": 4,
+    "maxRawCdpConnections": 2,
+    "memoryCeilingBytes": 1073741824
+  },
+  "profileEpoch": "1",
+  "browserIncarnation": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "allowedTargetOrigins": ["http://127.0.0.1:5173", "http://localhost:5173"],
+  "deniedDestinations": ["169.254.169.254", "metadata.google.internal"]
+}
+```
+
+### GET /api/browser/sessions
+
+Lists all active browser sessions owned by the authenticated principal.
+
+**Response (200 OK):** Array of `BrowserSessionDto` objects.
+
+### POST /api/browser/sessions
+
+Creates or recovers a browser session. Requires an idempotent `creationKey`.
+
+**Request Body:**
+```json
+{
+  "creationKey": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "url": "http://127.0.0.1:5173",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "dpr": 1.0
+  }
+}
+```
+
+- `creationKey`: Non-empty client-provided UUID or idempotency string. Idempotency records are cached in-memory per principal up to 128 records for 10 minutes (`IDEMPOTENCY_TTL`). Retrying with the same key returns the existing session with HTTP 200 OK.
+- `url`: Validated against network policy (see Section 5).
+- `viewport`: Clamped to `width` $\in [64, 1920]$, `height` $\in [64, 1080]$, `dpr` $\in [1.0, 3.0]$.
+- Target Capacity: Capped at `DEFAULT_MAX_TARGETS` (default 2). Excess creates return HTTP 429 `kind: "browserBusy"`.
+
+**Response (201 Created or 200 OK):** `BrowserSessionDto`.
+
+### GET /api/browser/sessions/{id}
+
+Retrieves current metadata, viewport epoch, navigation revision, active lease, and active dialog for session `{id}`.
+
+**Response (200 OK):**
+```json
+{
+  "browserSessionId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "browserIncarnation": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "profileEpoch": "1",
+  "navigationRevision": "1",
+  "viewportEpoch": "1",
+  "url": "http://127.0.0.1:5173/",
+  "title": "DamHopper",
+  "status": "running",
+  "geometry": {
+    "cssWidth": 1280.0,
+    "cssHeight": 720.0,
+    "dpr": 1.0,
+    "scale": 1.0,
+    "offsetTop": 0.0,
+    "scrollOffsetX": 0.0,
+    "scrollOffsetY": 0.0
+  },
+  "inputAvailable": true,
+  "unavailableReason": null,
+  "dialog": null,
+  "lease": {
+    "viewerId": "viewer-uuid-1",
+    "holderKind": "human",
+    "expiresAtUnixMs": 1794142800000
+  },
+  "popupBlocked": false
+}
+```
+
+### DELETE /api/browser/sessions/{id}
+
+Closes session `{id}`. Releases any held control lease, generates input release events, removes the session from the registry, and cleans up input queues.
+
+**Response:** 204 No Content.
+
+### POST /api/browser/sessions/{id}/navigate
+
+Navigates the session to a new URL.
+
+**Request Body:**
+```json
+{
+  "url": "http://127.0.0.1:5173/dashboard",
+  "navigationRevision": 1
+}
+```
+
+- Clears the session's selected-text buffer.
+- Increments `navigationRevision`.
+- Evaluates destination URL against network policy.
+
+**Response (200 OK):** Updated `BrowserSessionDto`.
+
+### POST /api/browser/sessions/{id}/history
+
+Navigates back or forward in history.
+
+**Request Body:**
+```json
+{
+  "direction": "back",
+  "navigationRevision": 2
+}
+```
+
+- `direction`: `"back"` or `"forward"`.
+- Increments `navigationRevision`.
+
+**Response (200 OK):** Updated `BrowserSessionDto`.
+
+### POST /api/browser/sessions/{id}/reload
+
+Reloads the current target.
+
+**Request Body:**
+```json
+{
+  "navigationRevision": 3
+}
+```
+
+**Response (200 OK):** Updated `BrowserSessionDto`.
+
+### PUT /api/browser/sessions/{id}/viewport
+
+Mutates target viewport dimensions and device pixel ratio.
+
+**Request Body:**
+```json
+{
+  "leaseToken": "lease-token-uuid",
+  "viewportEpoch": 1,
+  "width": 1440,
+  "height": 900,
+  "dpr": 2.0
+}
+```
+
+- If a control lease is active, the caller must supply a valid `leaseToken` matching the active lease holder.
+- Increments `viewportEpoch`.
+
+**Response (200 OK):** Updated `BrowserSessionDto`.
+
+### POST /api/browser/sessions/{id}/control/acquire
+
+Acquires exclusive cooperative control of the session for input dispatch and viewport modification.
+
+**Request Body:**
+```json
+{
+  "viewerId": "viewer-uuid-1",
+  "holderKind": "human"
+}
+```
+
+- `holderKind`: `"human"` or `"agent"`.
+- Lease duration: 30 seconds (`LEASE_TTL`).
+- If another viewer holds an active non-expired lease, returns HTTP 409 Conflict with `kind: "leaseConflict"`.
+
+**Response (200 OK):**
+```json
+{
+  "leaseToken": "uuid-v4-lease-token",
+  "expiresAtUnixMs": 1794142830000
+}
+```
+
+### POST /api/browser/sessions/{id}/control/renew
+
+Renews an active control lease held by the caller before expiry.
+
+**Request Body:**
+```json
+{
+  "leaseToken": "uuid-v4-lease-token"
+}
+```
+
+- Extends expiry by 30 seconds, clipped by the caller's auth session deadline.
+
+**Response (200 OK):**
+```json
+{
+  "leaseToken": "uuid-v4-lease-token",
+  "expiresAtUnixMs": 1794142860000
+}
+```
+
+### POST /api/browser/sessions/{id}/control/release
+
+Explicitly surrenders the control lease.
+
+**Request Body:**
+```json
+{
+  "leaseToken": "uuid-v4-lease-token"
+}
+```
+
+- Generates synthetic release events for any currently held mouse buttons and keyboard keys to prevent stuck state in Chromium.
+- Revokes the lease in the input manager and session registry.
+
+**Response:** 204 No Content.
+
+### POST /api/browser/sessions/{id}/dialog
+
+Handles a JavaScript modal dialog (`alert`, `confirm`, `prompt`, `beforeunload`).
+
+**Request Body:**
+```json
+{
+  "leaseToken": "uuid-v4-lease-token",
+  "dialogId": "dialog-uuid",
+  "accept": true,
+  "promptText": "optional user input"
+}
+```
+
+- Validates that caller holds the active control lease.
+
+**Response (200 OK):**
+```json
+{
+  "dialogId": "dialog-uuid",
+  "status": "handled"
+}
+```
+
+### POST /api/browser/sessions/{id}/selection/start
+
+Enables element selection mode for browser debugging.
+
+**Request Body:**
+```json
+{
+  "leaseToken": "uuid-v4-lease-token",
+  "navigationRevision": 1
+}
+```
+
+**Response (200 OK):** `{ "selectionActive": true, "navigationRevision": 1 }`.
+
+### POST /api/browser/sessions/{id}/selection/cancel
+
+Cancels active element selection mode.
+
+**Request Body:**
+```json
+{
+  "leaseToken": "uuid-v4-lease-token",
+  "navigationRevision": 1
+}
+```
+
+**Response (200 OK):** `{ "selectionActive": false, "navigationRevision": 1 }`.
+
+### POST /api/browser/sessions/{id}/selection/artifacts
+
+Creates a browser debug artifact from the currently selected DOM element.
+
+**Request Body:**
+```json
+{
+  "selectionRevision": 1,
+  "terminalId": "terminal-uuid",
+  "terminalIncarnation": "incarnation-uuid"
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "artifactId": "browser-sel-3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "selectionRevision": 1,
+  "terminalId": "terminal-uuid"
+}
+```
+
+### POST /api/browser/sessions/{id}/find
+
+Searches for text in the page.
+
+**Request Body:**
+```json
+{
+  "leaseToken": "uuid-v4-lease-token",
+  "query": "search query",
+  "forward": true
+}
+```
+
+- Query length is capped at 256 characters (`MAX_FIND_QUERY_CHARS`). Oversized queries return HTTP 400 `kind: "payloadTooLarge"`.
+
+**Response (200 OK):**
+```json
+{
+  "query": "search query",
+  "matchCount": 1
+}
+```
+
+### GET /api/browser/sessions/{id}/selected-text
+
+Reads the current selected text buffer.
+
+- **Required Header:** `X-Browser-Lease: <lease-token>`.
+- The `X-Browser-Lease` header is explicitly exposed in server CORS configurations for approved origins.
+- Returns HTTP 403 `kind: "notLeaseHolder"` if header is missing or does not match active lease holder.
+
+**Response (200 OK):**
+```json
+{
+  "text": "Selected text string"
+}
+```
+
+### POST /api/browser/attachments
+
+Issues a cryptographically secure, single-use capability ticket for WebSocket streaming attachment.
+
+**Request Body:**
+```json
+{
+  "purpose": "media",
+  "browserSessionId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "viewerId": "viewer-uuid-1",
+  "subscriptionEpoch": "1",
+  "browserIncarnation": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "profileEpoch": 1
+}
+```
+
+- `purpose`: `"media"`, `"control"`, or `"agentCdp"`.
+- For `"media"` and `"control"`, `browserSessionId`, `viewerId`, and `subscriptionEpoch` are strictly required.
+- Single-use capability tickets expire after 30 seconds (`TICKET_TTL = 30s`), clipped to the caller's auth session deadline.
+- Unconsumed tickets are capped at 16 per principal and 64 globally.
+
+**Response (200 OK):**
+```json
+{
+  "ticket": "43-character-url-safe-base64-random-token",
+  "expiresAtUnixMs": 1794142830000
+}
+```
+
+### POST /api/browser/profile/reset
+
+Triggers a durable, idempotent profile reset. Purges `user-data/` while maintaining advisory file lock exclusivity.
+
+**Request Body:**
+```json
+{
+  "operationId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "expectedProfileEpoch": 1,
+  "confirmed": true
+}
+```
+
+- `confirmed: true` is strictly required. Omitting it returns HTTP 400 `kind: "confirmationRequired"`.
+- Upon invocation, automatically cancels all active WebSocket attachments and clears input managers for the calling principal.
+- Advances `profileEpoch`.
+
+**Response (200 OK):**
+```json
+{
+  "operationId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "status": "completed",
+  "profileEpoch": 2
+}
+```
+
+### GET /api/browser/profile/reset/{operationId}
+
+Queries the status of an ongoing or completed reset operation.
+
+**Response (200 OK):**
+```json
+{
+  "operationId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "status": "completed",
+  "profileEpoch": 2
+}
+```
+---
+
+## 3. Single-Use Capability Tickets (`AttachmentManager`)
+
+WebSocket attachments for media frames, control channels, and agent CDP debugging connect using short-lived capability tickets rather than long-lived tokens:
+
+```mermaid
+flowchart TD
+    Client["Client / Viewer"] -->|POST /api/browser/attachments| API["Browser Host API"]
+    API -->|Generate 256-bit OsRng| Token["Random Ticket Token"]
+    API -->|Store SHA-256 Hash| Store["Memory Ticket Store"]
+    API -->|Return Token| Client
+    Client -->|WS Connect ?ticket=...| WS["WebSocket Upgrade Handler"]
+    WS -->|Atomic remove by SHA-256| Store
+    Store -- Success --> Upgrade["Admit Connection & Pair Sockets"]
+    Store -- Missing/Consumed --> Deny["Close 4401 ticketNotFound"]
+```
+
+### Ticket Invariants
+
+1. **Entropy & Encoding:** Tickets are 256-bit (32-byte) random values from `rand::rngs::OsRng`, URL-safe unpadded Base64 encoded (`URL_SAFE_NO_PAD`).
+2. **SHA-256 Hash Storage:** The server computes `sha256(raw_bytes)` and stores only the 32-byte hash in memory. Raw ticket tokens are never stored, logged, or serialized.
+3. **Atomic Single-Use Consumption:** During WebSocket upgrade, `consume_ticket` atomically removes the ticket hash from the in-memory map. Replay attempts fail immediately with HTTP 401 `ticketNotFound`.
+4. **Binding Constraints:** The ticket strictly binds:
+   - Purpose (`media`, `control`, `agentCdp`)
+   - Principal and `is_dev` mode
+   - Auth session ID, `auth_version`, `credential_version`, and `effective_deadline`
+   - `profileEpoch` and `browserIncarnation`
+   - `browserSessionId`, `viewerId`, and `subscriptionEpoch`
+   - Issuing `Origin` header (must match redeeming request origin)
+5. **Media & Control Pairing (`PairedSlot`):**
+   - Media and Control connections must be issued with matching `viewerId` and `subscriptionEpoch`.
+   - The first arriving socket enters a `PairedSlot` waiting for its matching partner.
+   - If the second socket does not connect within 15 seconds (`PAIR_WAIT_TIMEOUT`), the slot is evicted and both sockets are cancelled.
+6. **Live Cancellation Supervisor:**
+   - Active attachments share a `CancellationToken`.
+   - The auth supervisor runs every 5 seconds with a 2-second timeout.
+   - On account disable, Admin demotion, session revocation, or credential version increment, the cancellation token triggers immediate socket abort.
+
+---
+
+## 4. Leased Input Queue & Coordinate Transformation (`SessionInputManager`)
+
+User input is routed exclusively through the active control lease holder:
+
+### Cooperative Lease Semantics
+
+- **Lease Duration:** 30 seconds (`LEASE_TTL = Duration::from_secs(30)`).
+- **Renewal Window:** 5 seconds (`LEASE_RENEWAL_WINDOW = Duration::from_secs(5)`).
+- **Single Active Holder:** Only one viewer (`holderKind: "human" | "agent"`) may hold control per session.
+- **Fail-Safe Release:** When a lease is released, expires, or drops due to connection loss, `HeldInputState::generate_release_events` automatically generates synthetic `PointerUp` and `KeyUp` events for all currently held buttons and keys, preventing stuck input in the browser.
+
+### Reliable Input Queue
+
+- **Capacity Bounds:** Max 128 reliable records (`MAX_RELIABLE_RECORDS`), max 256 KiB payload bytes (`MAX_RELIABLE_BYTES`).
+- **Contiguous Input Sequence (`inputSeq`):** Decimal `u64` sequence string. The manager validates `inputSeq == last_processed_seq + 1`:
+  - Sequence gap (`inputSeq > expected`): Returns HTTP 400 `sequenceViolation`, flushes queue, releases held inputs, and revokes lease.
+  - Stale sequence (`inputSeq <= last_processed_seq`): Dropped as stale with HTTP 400 `sequenceViolation`.
+- **Event Coalescing:** Consecutive `PointerMove` and `Wheel` events are coalesced between ordering barriers (`PointerDown`, `PointerUp`, `KeyDown`, `KeyUp`, `InsertText`).
+
+### Coordinate Transformation (`map_fraction_to_css_coords`)
+
+Input coordinates are received as aspect-fit normalized image fractions:
+- $u \in [0.0, 1.0]$: Horizontal position fraction.
+- $v \in [0.0, 1.0]$: Vertical position fraction.
+
+Transformation formula:
+$$\begin{aligned}
+x &= u \times \text{css\_width} \\
+y &= v \times \text{css\_height} + \text{offset\_top}
+\end{aligned}$$
+
+- **Strict Invariants:**
+  - $u$ and $v$ must be finite and within `0.0..=1.0`; violations return `InputError::InvalidFraction`.
+  - Missing geometry or dimensions $\le 0$ return `InputError::GeometryUnavailable` (HTTP 503 `inputUnavailable`).
+  - Viewport scroll offsets (`scrollOffsetX`, `scrollOffsetY`) are metadata and are **not** added to mouse coordinates.
+  - Device pixel ratio (`dpr`) rescales screencast images only; layout coordinates operate directly in CSS pixels and are never multiplied twice.
+
+---
+
+## 5. Navigation & HTTP Network Policy (`network_policy.rs`)
+
+URLs submitted to `POST /api/browser/sessions` and `POST /api/browser/sessions/{id}/navigate` undergo strict policy validation:
+
+- **Length Bounds:** Maximum URL length 4096 bytes (`MAX_URL_BYTES`); maximum page title 512 bytes (`MAX_TITLE_BYTES`).
+- **Scheme Allowlist:** Strictly `http`, `https`, and `about:blank`. All other schemes (`file:`, `javascript:`, `chrome:`, `data:`) are rejected.
+- **Credentials Forbidden:** URLs containing embedded username or password fields (e.g. `https://actor:token@domain.example`) are rejected.
+- **Production Private & Metadata IP Blocking:**
+  - IPv4 loopback (`127.0.0.0/8`), private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local (`169.254.0.0/16`), broadcast, and documentation ranges are blocked.
+  - Cloud metadata endpoints are blocked: AWS/Azure/OpenStack (`169.254.169.254`), Alibaba Cloud (`100.100.100.200`), Google Cloud (`metadata.google.internal`), and IPv6 metadata (`fd00:ec2::254`).
+  - IPv6 unique local (`fc00::/7`) and link-local (`fe80::/10`) are blocked.
+- **Development Origin Restriction:** In development mode (`is_dev == true`), general internet destinations are blocked; navigation is restricted to loopback (`127.0.0.1`, `localhost`) and origins listed in `allowed_origins`.
