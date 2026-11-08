@@ -1,0 +1,316 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 844" fill="none" role="img" aria-labelledby="wf-compact-title wf-compact-desc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12">
+  <title id="wf-compact-title">DamHopper Android Agent Hub First Page - Compact Phone Layout (&lt;600dp)</title>
+  <desc id="wf-compact-desc">Mobile-first landing screen for Android phones featuring Top Bar with Context Pill and Urgency Counters, Left Agents Drawer Toggle, Right Files Drawer Toggle, Project Search and + Open Project action, Project Cards with Live Terminals and Agent Badges, and Quick Action Triggers.</desc>
+  <style>
+    .bg { fill: #0D1117; }
+    .surface { fill: #161B22; }
+    .surface-2 { fill: #21262D; }
+    .border { stroke: #30363D; stroke-width: 1; }
+    .border-accent { stroke: #58A6FF; stroke-width: 1.5; }
+    .border-warning { stroke: #D29922; stroke-width: 1; }
+    .text-primary { fill: #F0F6FC; }
+    .text-secondary { fill: #8B949E; }
+    .text-accent { fill: #58A6FF; }
+    .text-success { fill: #3FB950; }
+    .text-warning { fill: #D29922; }
+    .text-error { fill: #F85149; }
+    .badge-bg { fill: #21262D; }
+    .badge-accent-bg { fill: rgba(31, 111, 235, 0.25); }
+    .badge-warning-bg { fill: rgba(210, 153, 34, 0.2); }
+    .badge-success-bg { fill: rgba(63, 185, 80, 0.2); }
+    .mono { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  </style>
+
+  <!-- 0. SCREEN CANVAS -->
+  <rect class="bg" width="390" height="844" rx="36" />
+  <rect class="border" width="390" height="844" rx="36" fill="none" stroke-width="2" />
+
+  <!-- STATUS BAR (0..28) -->
+  <g id="status-bar">
+    <text class="text-primary" x="24" y="20" font-weight="600" font-size="13">09:41</text>
+    <!-- Dynamic island / camera notch pill -->
+    <rect class="surface-2" x="145" y="8" width="100" height="18" rx="9" />
+    <circle fill="#0D1117" cx="225" cy="17" r="4" />
+    <!-- Icons right -->
+    <path d="M336 12h8v8h-8z" fill="#8B949E" />
+    <path d="M352 11h14v10h-14z" stroke="#8B949E" stroke-width="1.2" fill="none" rx="2" />
+    <rect x="354" y="13" width="9" height="6" fill="#3FB950" rx="1" />
+  </g>
+
+  <!-- 1. TOP HEADER BAR (28..84, height 56px) -->
+  <g id="header-bar">
+    <rect class="surface" x="0" y="28" width="390" height="56" />
+    <line class="border" x1="0" y1="84" x2="390" y2="84" />
+
+    <!-- Left Toggle: Agents Drawer [☰ !1] (Touch target 48x48: x=8, y=32) -->
+    <rect class="surface-2" x="8" y="32" width="58" height="48" rx="8" />
+    <rect class="border-warning" x="8" y="32" width="58" height="48" rx="8" fill="none" />
+    <!-- Hamburger icon -->
+    <line x1="16" y1="48" x2="28" y2="48" stroke="#F0F6FC" stroke-width="2" stroke-linecap="round" />
+    <line x1="16" y1="56" x2="28" y2="56" stroke="#F0F6FC" stroke-width="2" stroke-linecap="round" />
+    <line x1="16" y1="64" x2="28" y2="64" stroke="#F0F6FC" stroke-width="2" stroke-linecap="round" />
+    <!-- Agents attention badge -->
+    <circle cx="48" cy="46" r="8" fill="#D29922" />
+    <text x="45" y="50" fill="#0D1117" font-weight="bold" font-size="11">!</text>
+    <text class="text-warning" x="38" y="68" font-size="9" font-weight="bold">AGENTS</text>
+
+    <!-- Center Context Pill (Touch target / display) -->
+    <g transform="translate(74, 36)">
+      <rect class="surface-2" width="190" height="40" rx="6" />
+      <rect class="border" width="190" height="40" rx="6" fill="none" />
+      <!-- Online dot -->
+      <circle cx="12" cy="14" r="3.5" fill="#3FB950" />
+      <text class="text-primary" x="22" y="17" font-weight="600" font-size="11">local-dev</text>
+      <!-- Sub-label -->
+      <text class="text-secondary mono" x="12" y="31" font-size="9.5">127.0.0.1:4803</text>
+      <!-- Dev badge -->
+      <rect class="badge-accent-bg" x="144" y="8" width="38" height="15" rx="3" />
+      <text class="text-accent" x="150" y="19" font-size="8.5" font-weight="bold">DEV</text>
+    </g>
+
+    <!-- Right Actions: Files Drawer Toggle + Settings -->
+    <!-- Files Drawer Toggle (x=272, y=32, 54x48) -->
+    <rect class="surface-2" x="272" y="32" width="54" height="48" rx="8" />
+    <rect class="border" x="272" y="32" width="54" height="48" rx="8" fill="none" />
+    <!-- Folder icon -->
+    <path d="M288 44h8l3 3h13v15h-24z" fill="none" stroke="#58A6FF" stroke-width="1.5" stroke-linejoin="round" />
+    <text class="text-accent" x="286" y="70" font-size="8.5" font-weight="bold">FILES</text>
+
+    <!-- Settings (x=334, y=32, 48x48) -->
+    <rect class="surface-2" x="334" y="32" width="48" height="48" rx="8" />
+    <rect class="border" x="334" y="32" width="48" height="48" rx="8" fill="none" />
+    <!-- Gear icon -->
+    <circle cx="358" cy="56" r="6" stroke="#8B949E" stroke-width="1.5" fill="none" />
+    <path d="M358 47v3 M358 62v3 M349 56h3 M364 56h3" stroke="#8B949E" stroke-width="1.5" />
+  </g>
+
+  <!-- 2. QUICK STATUS TICKER BAR (84..122, height 38px) -->
+  <g id="status-counters">
+    <rect class="surface-2" x="0" y="84" width="390" height="38" />
+    <line class="border" x1="0" y1="122" x2="390" y2="122" />
+
+    <!-- Needs attention counter -->
+    <rect class="badge-warning-bg" x="12" y="91" width="98" height="24" rx="12" />
+    <text class="text-warning" x="22" y="107" font-weight="bold" font-size="11">! 1</text>
+    <text class="text-warning" x="42" y="107" font-size="10.5">Attention</text>
+
+    <!-- Working counter -->
+    <rect class="badge-success-bg" x="116" y="91" width="94" height="24" rx="12" />
+    <circle cx="127" cy="103" r="3.5" fill="#3FB950" />
+    <text class="text-success" x="135" y="107" font-weight="bold" font-size="11">2</text>
+    <text class="text-success" x="148" y="107" font-size="10.5">Working</text>
+
+    <!-- Idle counter -->
+    <rect class="surface" x="216" y="91" width="76" height="24" rx="12" />
+    <circle cx="227" cy="103" r="3.5" fill="none" stroke="#8B949E" stroke-width="1.2" />
+    <text class="text-secondary" x="235" y="107" font-weight="bold" font-size="11">1</text>
+    <text class="text-secondary" x="248" y="107" font-size="10.5">Idle</text>
+
+    <!-- Total Projects pill -->
+    <text class="text-secondary" x="306" y="107" font-size="10.5">3 Projects</text>
+  </g>
+
+  <!-- 3. SEARCH & OPEN ACTIONS ROW (126..180) -->
+  <g id="search-action-row">
+    <!-- Search Input Box (48dp height: 130..178) -->
+    <rect class="surface" x="12" y="130" width="224" height="46" rx="8" />
+    <rect class="border" x="12" y="130" width="224" height="46" rx="8" fill="none" />
+    <!-- Search Magnifier -->
+    <circle cx="28" cy="153" r="5" stroke="#8B949E" stroke-width="1.5" fill="none" />
+    <line x1="32" y1="157" x2="37" y2="162" stroke="#8B949E" stroke-width="1.5" />
+    <text class="text-secondary" x="44" y="157" font-size="12">Filter projects...</text>
+
+    <!-- + Open Project Button (48dp height) -->
+    <rect fill="#1F6FEB" x="242" y="130" width="136" height="46" rx="8" />
+    <text fill="#FFFFFF" x="254" y="158" font-weight="bold" font-size="12.5">+ Open Project</text>
+  </g>
+
+  <!-- SECTION TITLE -->
+  <text class="text-secondary" x="14" y="196" font-size="10" font-weight="bold" letter-spacing="0.5">PROJECT WORKSPACES (3)</text>
+
+  <!-- 4. PROJECT CARDS (LazyColumn Stage: 204..760) -->
+
+  <!-- CARD 1: dam-hopper (ACTIVE / SELECTED) -->
+  <g id="project-card-1" transform="translate(12, 204)">
+    <rect class="surface" width="366" height="172" rx="10" />
+    <rect class="border-accent" width="366" height="172" rx="10" fill="none" />
+
+    <!-- Active Indicator Bar Left -->
+    <path d="M0 10 Q0 0 10 0 L10 172 Q0 172 0 162 Z" fill="#58A6FF" />
+
+    <!-- Card Header Row -->
+    <g transform="translate(16, 14)">
+      <!-- Selected Indicator Chip -->
+      <rect fill="#1F6FEB" x="0" y="0" width="76" height="18" rx="4" />
+      <text fill="#FFFFFF" x="6" y="13" font-size="9" font-weight="bold">● SELECTED</text>
+
+      <!-- Project Name -->
+      <text class="text-primary" x="84" y="15" font-weight="bold" font-size="15">dam-hopper</text>
+
+      <!-- Profile Tag -->
+      <rect class="badge-bg" x="260" y="0" width="68" height="18" rx="4" />
+      <rect class="border" x="260" y="0" width="68" height="18" rx="4" fill="none" />
+      <text class="text-secondary" x="268" y="13" font-size="9.5">local-dev</text>
+    </g>
+
+    <!-- Worktree & Git Row -->
+    <g transform="translate(16, 44)">
+      <!-- Branch Chip -->
+      <rect class="surface-2" x="0" y="0" width="136" height="20" rx="4" />
+      <text class="text-accent mono" x="6" y="14">⎇ wt: main (root)</text>
+      <!-- Commit Chip -->
+      <rect class="surface-2" x="142" y="0" width="70" height="20" rx="4" />
+      <text class="text-secondary mono" x="148" y="14">#a91f20c</text>
+    </g>
+
+    <!-- Live Sessions & Agents Badges -->
+    <g transform="translate(16, 72)">
+      <!-- Terminal Badge -->
+      <rect class="surface-2" x="0" y="0" width="102" height="22" rx="4" />
+      <text class="text-primary mono" x="8" y="15">&gt;_ 2 Terminals</text>
+      <!-- Running Agents Badge -->
+      <rect class="badge-success-bg" x="108" y="0" width="154" height="22" rx="4" />
+      <circle cx="118" cy="11" r="3.5" fill="#3FB950" />
+      <text class="text-success" x="126" y="15" font-weight="bold" font-size="10.5">● 2 Agents (OMP, Cl)</text>
+    </g>
+
+    <!-- Divider -->
+    <line class="border" x1="16" y1="104" x2="350" y2="104" />
+
+    <!-- Quick Action Triggers (48dp height targets: 114..162) -->
+    <g transform="translate(16, 114)">
+      <!-- [Files (Right Drawer)] -->
+      <rect class="badge-accent-bg" x="0" y="0" width="104" height="44" rx="6" />
+      <rect class="border-accent" x="0" y="0" width="104" height="44" rx="6" fill="none" />
+      <path d="M12 18h6l2 2h10v10h-18z" fill="none" stroke="#58A6FF" stroke-width="1.5" />
+      <text class="text-accent" x="36" y="27" font-weight="bold" font-size="11.5">Files (Tree)</text>
+
+      <!-- [Terminal] -->
+      <rect class="surface-2" x="110" y="0" width="104" height="44" rx="6" />
+      <rect class="border" x="110" y="0" width="104" height="44" rx="6" fill="none" />
+      <text class="text-primary mono" x="122" y="27" font-weight="bold">&gt;_ Term (2)</text>
+
+      <!-- [Git Panel] -->
+      <rect class="surface-2" x="220" y="0" width="114" height="44" rx="6" />
+      <rect class="border" x="220" y="0" width="114" height="44" rx="6" fill="none" />
+      <text class="text-secondary" x="236" y="27" font-weight="bold" font-size="11.5">⎇ Git Panel</text>
+    </g>
+  </g>
+
+  <!-- CARD 2: backend-api (ACTIVE SESSIONS + ATTENTION REQUIRED) -->
+  <g id="project-card-2" transform="translate(12, 386)">
+    <rect class="surface" width="366" height="162" rx="10" />
+    <rect class="border-warning" width="366" height="162" rx="10" fill="none" />
+
+    <!-- Card Header Row -->
+    <g transform="translate(16, 14)">
+      <!-- Attention Dot -->
+      <circle cx="6" cy="10" r="5" fill="#D29922" />
+      <text class="text-primary" x="18" y="15" font-weight="bold" font-size="15">backend-api</text>
+
+      <!-- Profile Tag -->
+      <rect class="badge-bg" x="260" y="0" width="68" height="18" rx="4" />
+      <rect class="border" x="260" y="0" width="68" height="18" rx="4" fill="none" />
+      <text class="text-secondary" x="268" y="13" font-size="9.5">prod-serv</text>
+    </g>
+
+    <!-- Worktree & Git Row -->
+    <g transform="translate(16, 42)">
+      <rect class="surface-2" x="0" y="0" width="128" height="20" rx="4" />
+      <text class="text-secondary mono" x="6" y="14">⎇ wt: auth-v2</text>
+      <rect class="surface-2" x="134" y="0" width="68" height="20" rx="4" />
+      <text class="text-secondary mono" x="140" y="14">#4f8b1c2</text>
+    </g>
+
+    <!-- Live Sessions & Attention Badge -->
+    <g transform="translate(16, 68)">
+      <rect class="surface-2" x="0" y="0" width="94" height="22" rx="4" />
+      <text class="text-primary mono" x="8" y="15">&gt;_ 1 Term</text>
+
+      <rect class="badge-warning-bg" x="100" y="0" width="176" height="22" rx="4" />
+      <text class="text-warning" x="108" y="15" font-weight="bold" font-size="10.5">! Codex: Approval Req</text>
+    </g>
+
+    <!-- Divider -->
+    <line class="border" x1="16" y1="98" x2="350" y2="98" />
+
+    <!-- Quick Actions (48dp height) -->
+    <g transform="translate(16, 106)">
+      <!-- [Select / Tree] -->
+      <rect class="surface-2" x="0" y="0" width="104" height="44" rx="6" />
+      <rect class="border" x="0" y="0" width="104" height="44" rx="6" fill="none" />
+      <text class="text-secondary" x="24" y="27" font-weight="bold" font-size="11.5">📁 Files</text>
+
+      <!-- [Jump to Codex Terminal] -->
+      <rect fill="rgba(210, 153, 34, 0.25)" x="110" y="0" width="138" height="44" rx="6" />
+      <rect stroke="#D29922" stroke-width="1.2" x="110" y="0" width="138" height="44" rx="6" fill="none" />
+      <text class="text-warning mono" x="120" y="27" font-weight="bold">&gt;_ Jump to !1</text>
+
+      <!-- [Git] -->
+      <rect class="surface-2" x="254" y="0" width="80" height="44" rx="6" />
+      <rect class="border" x="254" y="0" width="80" height="44" rx="6" fill="none" />
+      <text class="text-secondary" x="272" y="27" font-weight="bold" font-size="11.5">⎇ Git</text>
+    </g>
+  </g>
+
+  <!-- CARD 3: docs-portal (ZERO-SESSION OPEN TARGET) -->
+  <g id="project-card-3" transform="translate(12, 558)">
+    <rect class="surface" width="366" height="136" rx="10" stroke-dasharray="4 3" />
+    <rect class="border" width="366" height="136" rx="10" fill="none" stroke-dasharray="4 3" />
+
+    <!-- Card Header Row with Dismiss [✕] -->
+    <g transform="translate(16, 14)">
+      <circle cx="6" cy="10" r="4" fill="none" stroke="#8B949E" stroke-width="1.2" />
+      <text class="text-secondary" x="16" y="15" font-weight="bold" font-size="14">docs-portal</text>
+      <text class="text-secondary mono" x="110" y="15" font-size="10">(0 sessions open)</text>
+
+      <!-- Dismiss Button [✕] (Touch target 48x48: x=280..328) -->
+      <rect class="surface-2" x="282" y="-4" width="46" height="34" rx="6" />
+      <rect class="border" x="282" y="-4" width="46" height="34" rx="6" fill="none" />
+      <text class="text-secondary" x="300" y="18" font-size="14" font-weight="bold">✕</text>
+    </g>
+
+    <!-- Path Info -->
+    <g transform="translate(16, 46)">
+      <text class="text-secondary mono" x="0" y="12">path: docs/site · no PTY running</text>
+    </g>
+
+    <!-- Divider -->
+    <line class="border" x1="16" y1="74" x2="350" y2="74" />
+
+    <!-- Quick Action Triggers -->
+    <g transform="translate(16, 82)">
+      <!-- Browse Files in Right Drawer -->
+      <rect class="surface-2" x="0" y="0" width="156" height="42" rx="6" />
+      <rect class="border" x="0" y="0" width="156" height="42" rx="6" fill="none" />
+      <text class="text-secondary" x="24" y="26" font-size="11.5" font-weight="bold">📁 Browse Files</text>
+
+      <!-- + Launch Terminal -->
+      <rect class="badge-accent-bg" x="164" y="0" width="168" height="42" rx="6" />
+      <rect class="border-accent" x="164" y="0" width="168" height="42" rx="6" fill="none" />
+      <text class="text-accent mono" x="180" y="26" font-weight="bold">+ Launch Term</text>
+    </g>
+  </g>
+
+  <!-- 5. BOTTOM DRAWER CALLOUT BANNER (706..782, height 76px) -->
+  <g id="drawer-cues-callout" transform="translate(12, 706)">
+    <rect class="surface-2" width="366" height="74" rx="8" />
+    <rect class="border" width="366" height="74" rx="8" fill="none" />
+
+    <!-- Annotation badge -->
+    <rect fill="#1F6FEB" x="10" y="8" width="148" height="16" rx="3" />
+    <text fill="#FFFFFF" x="14" y="19" font-size="8.5" font-weight="bold">TOUCH ERGONOMICS &amp; DRAWERS</text>
+
+    <text class="text-primary" x="10" y="38" font-size="10.5" font-weight="600">👈 Tap [☰ AGENTS] for Observed Agent Roster Drawer</text>
+    <text class="text-primary" x="10" y="54" font-size="10.5" font-weight="600">👉 Tap [FILES] to open Workspace File Tree Sheet</text>
+    <text class="text-secondary" x="10" y="68" font-size="9">All buttons enforce &gt;=48dp touch targets · Safe from IME refit</text>
+  </g>
+
+  <!-- 6. ANDROID SYSTEM NAVIGATION BAR (800..844) -->
+  <g id="system-nav-bar">
+    <rect class="bg" x="0" y="796" width="390" height="48" />
+    <!-- Android Home Indicator Pill -->
+    <rect class="surface-2" x="125" y="826" width="140" height="5" rx="2.5" />
+  </g>
+
+</svg>

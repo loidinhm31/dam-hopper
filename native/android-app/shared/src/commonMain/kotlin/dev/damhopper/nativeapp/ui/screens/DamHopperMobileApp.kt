@@ -434,7 +434,8 @@ private fun RootContent(
         val profId = activeProfileId
         val prof = currentProfile
         val project = selectedProj
-        if (agentsService != null && flowState.stage == AppFlowStage.TERMINAL && profId != null && prof != null &&
+        val isWorkspaceActive = (flowState.stage == AppFlowStage.HUB || flowState.stage == AppFlowStage.TERMINAL)
+        if (agentsService != null && isWorkspaceActive && profId != null && prof != null &&
             agentsAccount != null && project != null && project.isNotBlank()
         ) {
             agentsService.registerWorkspace(
@@ -454,7 +455,7 @@ private fun RootContent(
     val agentInventories by (agentsService?.inventories ?: remember { MutableStateFlow(emptyMap()) }).collectAsState()
     val currentReceipt = activeProfileId?.let { profId -> agentInventories.values.firstOrNull { it.runtime.connection.profileId == profId } }
 
-    LaunchedEffect(currentReceipt, agentsService, activeProfileId, currentProfile, effectiveAccountUser, currentConn) {
+    LaunchedEffect(currentReceipt, agentsService, activeProfileId, currentProfile, effectiveAccountUser, currentConn, selectedProj, flowState.stage, flowState.activeWorktreePath, activeWorkspaceState) {
         val service = agentsService ?: return@LaunchedEffect
         val receipt = currentReceipt ?: return@LaunchedEffect
         val profId = activeProfileId ?: return@LaunchedEffect
@@ -481,7 +482,10 @@ private fun RootContent(
             val reg = service.registerWorkspace(owner)
             val normWt = WorkspaceFileOwner.normalizeWorktree(worktreePath)
             val activeWt = WorkspaceFileOwner.normalizeWorktree(flowState.activeWorktreePath)
-            if (flowState.stage != AppFlowStage.TERMINAL || project != selectedProj || normWt != activeWt) {
+            val isForegroundTerminalActive = (flowState.stage == AppFlowStage.HUB || flowState.stage == AppFlowStage.TERMINAL) &&
+                project == selectedProj && normWt == activeWt &&
+                (activeWorkspaceState?.activePanel?.value ?: WorkspacePanel.TERMINAL) == WorkspacePanel.TERMINAL
+            if (!isForegroundTerminalActive) {
                 val matchingSessions = receipt.sessions.filter {
                     TerminalAgentsMembership.isTraditionalType(it.sessionType) && it.alive && !it.targetUnavailable &&
                         it.project == project && WorkspaceFileOwner.normalizeWorktree(it.worktreePath) == normWt
@@ -517,9 +521,9 @@ private fun RootContent(
             if (flowState.stage == AppFlowStage.PROFILE_LOGIN) {
                 hasInitialAutoAdvanced = true
                 val lastNav = profileRepository.getLastNavigationState()
-                if (lastNav != null && lastNav.profileId == profId && lastNav.stage == AppFlowStage.TERMINAL.name && lastNav.project != null) {
+                if (lastNav != null && lastNav.profileId == profId && (lastNav.stage == AppFlowStage.HUB.name || lastNav.stage == AppFlowStage.TERMINAL.name) && lastNav.project != null) {
                     navigation.restoreState(
-                        stage = AppFlowStage.TERMINAL,
+                        stage = AppFlowStage.HUB,
                         profileId = profId,
                         project = lastNav.project,
                         sessionId = lastNav.sessionId,
@@ -844,16 +848,39 @@ private fun RootContent(
 
                         AppFlowStage.HUB, AppFlowStage.TERMINAL, AppFlowStage.PROJECT_LIST -> {
                             val proj = flowState.activeProject
-                            if (proj.isNullOrBlank() && (activeWorkspaceState == null || activeWorkspaceState.activePanel.value == WorkspacePanel.TERMINAL)) {
-                                AgentHubEmptyRoot(
-                                    profileName = currentProfile?.name ?: "Server",
-                                    serverUrl = currentProfile?.baseUrl,
-                                    headerEntries = headerEntries,
-                                    agents = agentsContext,
+                            if (proj.isNullOrBlank() && (activeWorkspaceState == null || currentPanel == WorkspacePanel.TERMINAL)) {
+                                AgentHubLandingRoot(
+                                    currentProfile = currentProfile,
                                     hubSnapshot = hubSnapshot,
+                                    agentsContext = agentsContext,
+                                    activeWorkspaceState = activeWorkspaceState,
+                                    workspaceRepo = workspaceRepo,
+                                    apiClient = apiClient,
                                     onAction = { action -> scope.launch { services?.dispatchAction(action) } },
                                     onOpenProject = { navigation.openProjectPicker() },
                                     onOpenSettings = { navigation.openSettings(captureOrigin()) },
+                                    onOpenNotifications = { navigation.toggleNotifications() },
+                                    onSwitchProfile = { navigation.navigateToProfiles() },
+                                    onLaunchTerminal = { target ->
+                                        scope.launch {
+                                            navigation.requestWorkspaceTarget(
+                                                target = target,
+                                                revalidate = { true },
+                                                onCommitted = {},
+                                            )
+                                        }
+                                    },
+                                    onOpenGit = { target ->
+                                        scope.launch {
+                                            navigation.requestWorkspaceTarget(
+                                                target = target,
+                                                revalidate = { true },
+                                                onCommitted = {
+                                                    activeWorkspaceState?.selectPanel(WorkspacePanel.GIT)
+                                                },
+                                            )
+                                        }
+                                    },
                                     modifier = Modifier.fillMaxSize(),
                                 )
                             } else if (activeWorkspaceState != null) {
@@ -1112,281 +1139,299 @@ private fun HubCapabilityTab(
 }
 
 @Composable
-private fun AgentHubEmptyRoot(
-    profileName: String,
-    serverUrl: String?,
-    headerEntries: HeaderEntries?,
-    agents: TerminalAgentsContext?,
-    hubSnapshot: dev.damhopper.nativeapp.features.workspace.AgentHubSnapshot = dev.damhopper.nativeapp.features.workspace.AgentHubSnapshot(),
-    onAction: (dev.damhopper.nativeapp.features.workspace.AgentHubAction) -> Unit = {},
+private fun AgentHubLandingRoot(
+    currentProfile: dev.damhopper.nativeapp.features.profiles.ServerProfile?,
+    hubSnapshot: dev.damhopper.nativeapp.features.workspace.AgentHubSnapshot,
+    agentsContext: TerminalAgentsContext?,
+    activeWorkspaceState: ProjectWorkspaceState?,
+    workspaceRepo: WorkspaceRepository?,
+    apiClient: ApiClient?,
+    onAction: (dev.damhopper.nativeapp.features.workspace.AgentHubAction) -> Unit,
     onOpenProject: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenNotifications: () -> Unit,
+    onSwitchProfile: () -> Unit,
+    onLaunchTerminal: (dev.damhopper.nativeapp.core.model.ProjectTargetRef) -> Unit,
+    onOpenGit: (dev.damhopper.nativeapp.core.model.ProjectTargetRef) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val content: @Composable () -> Unit = {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(DamHopperColors.Background),
-        ) {
-            // Row 1 & 2: Adaptive two-row chrome
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DamHopperColors.Surface)
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                // Row 1: Brand title + Open Project button + Header entries (Alerts, Settings)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        text = "Agent Hub",
-                        color = DamHopperColors.TextPrimary,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.semantics { heading() },
-                    )
-                    Box(
-                        modifier = Modifier
-                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .border(BorderStroke(1.dp, DamHopperColors.Border), RoundedCornerShape(6.dp))
-                            .background(DamHopperColors.SurfaceVariant.copy(alpha = 0.7f))
-                            .clickable(onClick = onOpenProject)
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = "+ Open Project",
-                            color = DamHopperColors.Primary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                    Spacer(Modifier.weight(1f))
-                    headerEntries?.let { HeaderEntryButtons(it) }
-                }
+    val coroutineScope = rememberCoroutineScope()
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedTarget by rememberSaveable { mutableStateOf<dev.damhopper.nativeapp.core.model.ProjectTargetRef?>(null) }
+    var isAgentsDrawerOpen by rememberSaveable { mutableStateOf(false) }
+    var isFilesDrawerOpen by rememberSaveable { mutableStateOf(false) }
+    var isRightFileTreePinned by rememberSaveable { mutableStateOf(true) }
+    var serverProjects by remember(workspaceRepo) { mutableStateOf<List<dev.damhopper.nativeapp.features.workspace.ProjectSummary>>(emptyList()) }
+    var fileNodes by remember(selectedTarget, apiClient) { mutableStateOf<List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState>>(emptyList()) }
+    var fileChanges by remember(selectedTarget, apiClient) { mutableStateOf(dev.damhopper.nativeapp.ui.flow.FileChangeSummaryUiState()) }
+    var isLoadingFiles by remember(selectedTarget, apiClient) { mutableStateOf(false) }
 
-                // Row 2: Capabilities bar (Terminal, Files, Editor, Git) horizontally scrollable
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    HubCapabilityTab(
-                        label = "Terminal",
-                        isSelected = true,
-                        onClick = { /* Terminal capability active */ },
-                    )
-                    HubCapabilityTab(
-                        label = "Files",
-                        isSelected = false,
-                        enabled = true,
-                        onClick = {
-                            val target = hubSnapshot.selectedProjectTarget
-                            if (target != null) {
-                                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenFiles(FilesystemTargetRef.Project(profileId = target.profileId, project = target.project, worktreePath = target.worktreePath)))
-                            } else {
-                                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenFiles(FilesystemTargetRef.Workspace(profileId = hubSnapshot.profileId)))
-                            }
-                        },
-                    )
-                    HubCapabilityTab(
-                        label = "Editor",
-                        isSelected = false,
-                        enabled = true,
-                        onClick = {
-                            val target = hubSnapshot.selectedProjectTarget
-                            if (target != null) {
-                                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenEditor(fileRef = "", target = FilesystemTargetRef.Project(profileId = target.profileId, project = target.project, worktreePath = target.worktreePath)))
-                            } else {
-                                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenEditor(fileRef = "", target = FilesystemTargetRef.Workspace(profileId = hubSnapshot.profileId)))
-                            }
-                        },
-                    )
-                    HubCapabilityTab(
-                        label = "Git",
-                        isSelected = false,
-                        enabled = true,
-                        onClick = {
-                            val target = hubSnapshot.selectedProjectTarget
-                            if (target != null) {
-                                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenGit(target))
-                            } else {
-                                onOpenProject()
-                            }
-                        },
-                    )
-            }
-            }
+    val agentsServiceState = agentsContext?.service?.state?.collectAsState()?.value
 
-            if (hubSnapshot.terminalRows.isNotEmpty() || hubSnapshot.zeroSessionOpenTargets.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    if (hubSnapshot.pinnedTerminals.isNotEmpty()) {
-                        Text("Pinned Terminals", color = DamHopperColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        hubSnapshot.pinnedTerminals.forEach { row ->
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .sizeIn(minHeight = 48.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(DamHopperColors.Surface)
-                                    .border(1.dp, DamHopperColors.Border, RoundedCornerShape(6.dp))
-                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(terminalId = row.id, profileId = row.profileId ?: row.projectTarget?.profileId ?: hubSnapshot.profileId, target = row.projectTarget, incarnationExact = row.incarnationExact)) }
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                contentAlignment = Alignment.CenterStart,
-                            ) {
-                                Text("${row.projectTarget?.project.orEmpty()}: ${row.displayName}", color = DamHopperColors.TextPrimary, fontSize = 14.sp)
-                            }
-                        }
-                    }
-                    if (hubSnapshot.activeTerminals.isNotEmpty()) {
-                        Text("Active Terminals", color = DamHopperColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        hubSnapshot.activeTerminals.forEach { row ->
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .sizeIn(minHeight = 48.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(DamHopperColors.Surface)
-                                    .border(1.dp, DamHopperColors.Border, RoundedCornerShape(6.dp))
-                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(terminalId = row.id, profileId = row.profileId ?: row.projectTarget?.profileId ?: hubSnapshot.profileId, target = row.projectTarget, incarnationExact = row.incarnationExact)) }
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                contentAlignment = Alignment.CenterStart,
-                            ) {
-                                Text("${row.projectTarget?.project.orEmpty()}: ${row.displayName}", color = DamHopperColors.TextPrimary, fontSize = 14.sp)
-                            }
-                        }
-                    }
-                    if (hubSnapshot.zeroSessionOpenTargets.isNotEmpty()) {
-                        Text("Open Projects (0 sessions)", color = DamHopperColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        hubSnapshot.zeroSessionOpenTargets.forEach { target ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .sizeIn(minHeight = 48.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(DamHopperColors.Surface)
-                                    .border(1.dp, DamHopperColors.Border, RoundedCornerShape(6.dp))
-                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectProjectTarget(target)) }
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(target.project, color = DamHopperColors.TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                                Box(
-                                    modifier = Modifier
-                                        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                                        .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.DismissZeroSessionProject(target)) },
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text("✕", color = DamHopperColors.TextSecondary, fontSize = 14.sp)
-                                }
-                            }
-                        }
-                    }
+    LaunchedEffect(workspaceRepo) {
+        if (workspaceRepo != null) {
+            try {
+                val list = workspaceRepo.listProjects()
+                serverProjects = list
+                if (selectedTarget == null && list.isNotEmpty()) {
+                    selectedTarget = dev.damhopper.nativeapp.core.model.ProjectTargetRef(profileId = currentProfile?.id, project = list.first().name)
                 }
-            } else {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                        modifier = Modifier
-                            .sizeIn(maxWidth = 440.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(DamHopperColors.Surface)
-                            .border(1.dp, DamHopperColors.Border, RoundedCornerShape(8.dp))
-                            .padding(24.dp),
-                    ) {
-                        Text(
-                            text = "Connected to $profileName",
-                            color = DamHopperColors.TextPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        serverUrl?.let {
-                            Text(
-                                text = it,
-                                color = DamHopperColors.TextSecondary,
-                                fontSize = 12.sp,
-                            )
-                        }
-                        Text(
-                            text = "No project is currently open. Select a project to view terminal sessions, browse files, edit code, and manage Git repositories.",
-                            color = DamHopperColors.TextSecondary,
-                            fontSize = 13.sp,
-                        )
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(DamHopperColors.Primary)
-                                    .clickable(onClick = onOpenProject)
-                                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = "Open Project",
-                                    color = DamHopperColors.Background,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .border(1.dp, DamHopperColors.Border, RoundedCornerShape(6.dp))
-                                    .background(DamHopperColors.SurfaceVariant)
-                                    .clickable(onClick = onOpenSettings)
-                                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = "Settings",
-                                    color = DamHopperColors.TextPrimary,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                            }
-                        }
-                    }
+            } catch (c: CancellationException) {
+                throw c
+            } catch (_: Exception) {}
+        }
+    }
+
+    LaunchedEffect(selectedTarget, apiClient, serverProjects) {
+        val target = selectedTarget ?: serverProjects.firstOrNull()?.let {
+            dev.damhopper.nativeapp.core.model.ProjectTargetRef(profileId = currentProfile?.id, project = it.name)
+        }
+        val client = apiClient
+        if (target != null && client != null) {
+            isLoadingFiles = true
+            try {
+                val fsText = client.get("/api/fs/list", mapOf("targetType" to "project", "project" to target.project, "path" to "."))
+                val fsList = dev.damhopper.nativeapp.core.transport.ProtocolJson.decodeFromString(
+                    dev.damhopper.nativeapp.features.files.ListResponseDto.serializer(), fsText
+                )
+                fileNodes = fsList.entries.map { entry ->
+                    dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState(
+                        path = entry.name,
+                        name = entry.name,
+                        isDirectory = entry.kind == "dir",
+                    )
                 }
+                val encodedProj = dev.damhopper.nativeapp.core.transport.ApiClient.encodePathSegment(target.project)
+                val diffText = client.get("/api/git/$encodedProj/diff")
+                val diffResponse = dev.damhopper.nativeapp.core.transport.ProtocolJson.decodeFromString(
+                    dev.damhopper.nativeapp.features.git.GitDiffResponse.serializer(), diffText
+                )
+                val staged = diffResponse.entries.filter { it.staged }.map { it.path }
+                val unstaged = diffResponse.entries.filter { !it.staged }.map { it.path }
+                fileChanges = dev.damhopper.nativeapp.ui.flow.FileChangeSummaryUiState(
+                    stagedCount = staged.size,
+                    unstagedCount = unstaged.size,
+                    stagedFiles = staged,
+                    unstagedFiles = unstaged,
+                )
+            } catch (c: CancellationException) {
+                throw c
+            } catch (_: Exception) {}
+            finally {
+                isLoadingFiles = false
             }
         }
     }
 
-    if (agents != null) {
-        TerminalAgentsSidebarHost(
-            agents = agents,
-            active = null,
-            modifier = modifier,
-            content = content,
+    val landingState = remember(
+        currentProfile,
+        hubSnapshot,
+        agentsServiceState,
+        activeWorkspaceState,
+        serverProjects,
+        fileNodes,
+        fileChanges,
+        isLoadingFiles,
+        searchQuery,
+        selectedTarget,
+        isAgentsDrawerOpen,
+        isFilesDrawerOpen,
+        isRightFileTreePinned,
+    ) {
+        dev.damhopper.nativeapp.ui.flow.AgentHubLandingProjection.project(
+            currentProfile = currentProfile,
+            hubSnapshot = hubSnapshot,
+            agentsState = agentsServiceState,
+            activeWorkspaceState = activeWorkspaceState,
+            serverProjects = serverProjects,
+            fileNodes = fileNodes,
+            fileChanges = fileChanges,
+            isLoadingFiles = isLoadingFiles,
+            searchQuery = searchQuery,
+            selectedTarget = selectedTarget,
+            isAgentsDrawerOpen = isAgentsDrawerOpen,
+            isFilesDrawerOpen = isFilesDrawerOpen,
+            isRightFileTreePinned = isRightFileTreePinned,
         )
-    } else {
-        Box(modifier = modifier) { content() }
+    }
+
+    val callbacks = remember(landingState) {
+        object : dev.damhopper.nativeapp.ui.flow.AgentHubLandingCallbacks {
+            override fun onToggleAgentsSidebar() {
+                isAgentsDrawerOpen = !isAgentsDrawerOpen
+            }
+            override fun onToggleFilesSidebar() {
+                isFilesDrawerOpen = !isFilesDrawerOpen
+            }
+            override fun onTogglePinFileTree() {
+                isRightFileTreePinned = !isRightFileTreePinned
+            }
+            override fun onOpenNotifications() {
+                onOpenNotifications()
+            }
+            override fun onOpenSettings() {
+                onOpenSettings()
+            }
+            override fun onSwitchProfile() {
+                onSwitchProfile()
+            }
+            override fun onAgentFilterChange(filter: dev.damhopper.nativeapp.features.terminal.TerminalAgentsFilterSelection) {
+                agentsContext?.service?.setFilter(filter)
+            }
+            override fun onJumpToAgentTerminal(agent: dev.damhopper.nativeapp.ui.flow.AgentGroupItemUiState) {
+                isAgentsDrawerOpen = false
+                val owner = agent.target?.registration?.owner
+                val targetRef = if (owner != null) {
+                    dev.damhopper.nativeapp.core.model.ProjectTargetRef(
+                        profileId = owner.profileId,
+                        project = owner.project,
+                        worktreePath = owner.worktreePath,
+                    )
+                } else {
+                    hubSnapshot.terminalRows.firstOrNull { it.id == agent.targetTerminalId }?.projectTarget
+                }
+                if (agent.target != null) {
+                    coroutineScope.launch {
+                        agentsContext?.service?.activate(agent.target)
+                    }
+                }
+                onAction(
+                    dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(
+                        terminalId = agent.targetTerminalId,
+                        profileId = currentProfile?.id,
+                        target = targetRef,
+                        incarnationExact = agent.incarnationExact.toString(),
+                    ),
+                )
+            }
+            override fun onRefreshAgents() {
+                agentsContext?.refreshAll?.invoke(dev.damhopper.nativeapp.features.terminal.TerminalAgentsRefreshReason.USER_RETRY)
+            }
+            override fun onOpenAgentSettings() {
+                onOpenSettings()
+            }
+            override fun onSearchQueryChange(query: String) {
+                searchQuery = query
+            }
+            override fun onOpenProjectPicker() {
+                onOpenProject()
+            }
+            override fun onSelectProjectForTree(target: dev.damhopper.nativeapp.core.model.ProjectTargetRef) {
+                selectedTarget = target
+                isFilesDrawerOpen = true
+            }
+            override fun onLaunchTerminalInProject(target: dev.damhopper.nativeapp.core.model.ProjectTargetRef) {
+                onLaunchTerminal(target)
+            }
+            override fun onOpenGitForProject(target: dev.damhopper.nativeapp.core.model.ProjectTargetRef) {
+                onOpenGit(target)
+            }
+            override fun onDismissZeroSessionProject(target: dev.damhopper.nativeapp.core.model.ProjectTargetRef) {
+                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.DismissZeroSessionProject(target))
+            }
+            override fun onOpenWorkspaceFiles() {
+                onAction(
+                    dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenFiles(
+                        dev.damhopper.nativeapp.core.model.FilesystemTargetRef.Workspace(profileId = currentProfile?.id),
+                    ),
+                )
+            }
+            override fun onOpenWorkspaceEditor() {
+                onAction(
+                    dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenEditor(
+                        fileRef = "",
+                        target = dev.damhopper.nativeapp.core.model.FilesystemTargetRef.Workspace(profileId = currentProfile?.id),
+                    ),
+                )
+            }
+            override fun onToggleFolder(path: String) {
+                val target = selectedTarget ?: serverProjects.firstOrNull()?.let {
+                    dev.damhopper.nativeapp.core.model.ProjectTargetRef(profileId = currentProfile?.id, project = it.name)
+                }
+                val client = apiClient
+                fileNodes = toggleNode(fileNodes, path, target, client, coroutineScope) { updated ->
+                    fileNodes = updated
+                }
+            }
+            override fun onOpenFileInEditor(target: dev.damhopper.nativeapp.core.model.ProjectTargetRef?, path: String) {
+                val fileTarget = if (target != null) {
+                    dev.damhopper.nativeapp.core.model.FilesystemTargetRef.Project(
+                        profileId = target.profileId,
+                        project = target.project,
+                        worktreePath = target.worktreePath,
+                    )
+                } else {
+                    dev.damhopper.nativeapp.core.model.FilesystemTargetRef.Workspace(profileId = currentProfile?.id)
+                }
+                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenEditor(fileRef = path, target = fileTarget))
+            }
+            override fun onOpenChangesReview(target: dev.damhopper.nativeapp.core.model.ProjectTargetRef) {
+                onOpenGit(target)
+            }
+            override fun onCloseFilesSidebar() {
+                isFilesDrawerOpen = false
+            }
+        }
+    }
+
+    AgentHubLandingScreen(
+        state = landingState,
+        callbacks = callbacks,
+        modifier = modifier,
+    )
+}
+
+private fun toggleNode(
+    nodes: List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState>,
+    path: String,
+    target: dev.damhopper.nativeapp.core.model.ProjectTargetRef?,
+    client: ApiClient?,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onLoaded: (List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState>) -> Unit,
+): List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState> {
+    return nodes.map { node ->
+        if (node.path == path) {
+            val newExpanded = !node.isExpanded
+            if (newExpanded && node.children.isEmpty() && target != null && client != null) {
+                scope.launch {
+                    try {
+                        val fsText = client.get("/api/fs/list", mapOf("targetType" to "project", "project" to target.project, "path" to path))
+                        val fsList = dev.damhopper.nativeapp.core.transport.ProtocolJson.decodeFromString(
+                            dev.damhopper.nativeapp.features.files.ListResponseDto.serializer(), fsText
+                        )
+                        val children = fsList.entries.map { entry ->
+                            dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState(
+                                path = "$path/${entry.name}",
+                                name = entry.name,
+                                isDirectory = entry.kind == "dir",
+                            )
+                        }
+                        onLoaded(setChildren(nodes, path, children))
+                    } catch (_: Exception) {}
+                }
+            }
+            node.copy(isExpanded = newExpanded)
+        } else if (node.isDirectory && path.startsWith(node.path + "/")) {
+            node.copy(children = toggleNode(node.children, path, target, client, scope, onLoaded))
+        } else {
+            node
+        }
+    }
+}
+
+private fun setChildren(
+    nodes: List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState>,
+    path: String,
+    children: List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState>,
+): List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState> {
+    return nodes.map { node ->
+        if (node.path == path) {
+            node.copy(children = children, isExpanded = true)
+        } else if (node.isDirectory && path.startsWith(node.path + "/")) {
+            node.copy(children = setChildren(node.children, path, children))
+        } else {
+            node
+        }
     }
 }
 
