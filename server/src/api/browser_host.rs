@@ -137,6 +137,9 @@ impl From<InputError> for Response {
             InputError::NotLeaseHolder => {
                 browser_error_response(StatusCode::FORBIDDEN, "notLeaseHolder", "caller does not hold control lease")
             }
+            InputError::StaleViewportEpoch { .. } => {
+                browser_error_response(StatusCode::CONFLICT, "staleViewportEpoch", &err.to_string())
+            }
             InputError::SequenceGap { .. } | InputError::StaleSequence { .. } => {
                 browser_error_response(StatusCode::BAD_REQUEST, "sequenceViolation", &err.to_string())
             }

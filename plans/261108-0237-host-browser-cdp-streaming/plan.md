@@ -25,7 +25,7 @@ Planning only; no implementation approval, hydration or product verification. Ca
 | 01 | [Qualify adapter and freeze contracts](phase-01-compatibility-contracts.md) | DONE (2026-11-08) |
 | 02 | [Configure and supervise principal profiles](phase-02-managed-lifecycle.md) | DONE (2026-11-08) |
 | 03 | [Authorize sessions attachments and ordered input](phase-03-admission-control.md) | DONE (2026-11-08) |
-| 04 | [Expose authenticated instance-scoped raw CDP](phase-04-agent-cdp-gateway.md) | in-progress (remediation active) |
+| 04 | [Expose authenticated instance-scoped raw CDP](phase-04-agent-cdp-gateway.md) | DONE (2026-11-09) |
 | 05 | [Stream bounded native JPEG with independent credits](phase-05-producer-fanout.md) | pending |
 | 06 | [Build owner-fenced canvas decoder and Android-web input](phase-06-viewer-client.md) | pending |
 | 07 | [Integrate root Browser lifecycle and retire iframe path](phase-07-os-cutover.md) | pending |
@@ -39,7 +39,7 @@ Phase 02 marked DONE (2026-11-08); principal profile layout, advisory OS locking
 
 Phase 03 marked DONE (2026-11-08); admin admission security model, idempotent session REST routes, single-use purpose capability tickets, independent live-auth supervisor with cancellation, bounded reliable input dispatch queue with coalescing, and network/URL request policy verified (86/86 tests passing across 6 targets: `browser_host_admission` [7/7], `browser_host_auth` [6/6], `browser_host_input` [7/7], `auth_no_auth` [14/14], `auth_device_sessions` [5/5], and lifecycle regressions [52/52, 2 ignored]; code review score 9.8/10 approved with 0 critical and 0 high findings).
 
-Phase 04 currently in-progress under active architectural remediation roadmap (2026-11-09); 41/41 unit and integration tests passing across all 6 test suites (`browser_host_lifecycle` [10/10], `browser_host_shutdown` [3/3], `browser_host_admission` [7/7], `browser_host_auth` [6/6], `browser_host_input` [7/7], `browser_host_gateway` [8/8]) and clean TypeScript compile (`tsc -p tsconfig.e2e.json`, 0 errors). Safety and lifecycle findings tracked in remediation ledger prior to final signoff.
+Phase 04 marked DONE per user approval with noted issues after Cycle 3 (2026-11-09; score 7/10; 57/57 tests and validation gates passing across 5 targets: `browser_host_gateway` [14/14], regressions [33/33 across `lifecycle` 10/10, `shutdown` 3/3, `admission` 7/7, `auth` 6/6, `input` 7/7], `browser_host_qualification` check, TypeScript E2E typecheck clean with 0 errors, and Playwright agent qualification suite `agent.spec.ts` [8/8]). Exposes authenticated discovery rewriting (`/api/browser/cdp/json/version`, `/json/list`), instance-scoped raw CDP WebSocket gateway (`/api/browser/cdp/ws`), dedicated upstream browser relay with bearer-header authentication, exact approved Origin enforcement, concurrent connection limits, independent live-auth cancellation, and Playwright same-target and revocation isolation. Phase 05 unblocked.
 
 ## Contracts and execution
 - [Exact architecture/wire/lifecycle/limits](architecture-contracts.md), [acceptance matrix](acceptance-matrix.md), [task-derived ownership](execution-ownership.md).

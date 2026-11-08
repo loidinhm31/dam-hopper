@@ -6,8 +6,8 @@
 - Relevant bounded evidence: `research/stream-protocol.md:88–100; reports/design-direction.md:34–37`. Research recommendations superseded by architecture contract where explicitly stated.
 
 ## Overview
-- Priority: P2. Status: in-progress (remediation active). Effort: not-estimated.
-- Deliverable: Expose authenticated instance-scoped raw CDP. Active architectural remediation roadmap underway across Phases 02, 03, and 04 (41/41 unit and integration tests passing across all 6 test suites; clean TypeScript compile).
+- Priority: P2. Status: DONE (2026-11-09). Effort: not-estimated.
+- Deliverable: Expose authenticated instance-scoped raw CDP. Marked DONE per user approval with noted issues after Cycle 3 (2026-11-09; score 7/10; 57/57 tests and validation gates passing across 5 targets: `browser_host_gateway` [14/14], regressions [33/33 across `lifecycle` 10/10, `shutdown` 3/3, `admission` 7/7, `auth` 6/6, `input` 7/7], `browser_host_qualification` check, TypeScript E2E typecheck clean with 0 errors, and Playwright agent qualification suite `agent.spec.ts` [8/8]). Ready to proceed to Phase 05; Phase 05 unblocked.
 
 ## Key insights
 Existing Playwright connectOverCDP with Authorization header is the interoperability baseline. Raw browser-level CDP deliberately exposes all owned targets and host file/network privileges, not a target sandbox.
@@ -144,7 +144,7 @@ Treat capability as instance administrator authority. Loopback reachable by loca
 - Do not store/log bearer/tickets/raw loopback endpoints, real site credentials or sensitive page/selection payload in diagnostics/evidence.
 
 ## Next steps
-Phase05 may edit shared module/router files after qualify-agent-interoperability; phase06 remains independently eligible after phase03 using its own isolated component/input harness (no writes to this fixture). Later phase09 full-stream/human failures reopen the originating phase04 task and affected dependents.
+Phase 04 is DONE (2026-11-09). Phase 05 is unblocked. Phase 05 may edit shared module/router files after qualify-agent-interoperability; phase 06 remains independently eligible after phase 03 using its own isolated component/input harness (no writes to this fixture). Later phase 09 full-stream/human failures reopen the originating phase 04 task and affected dependents.
 - Parent owns independent plan review/optional validation and implementation permission. This phase text neither executes tasks nor supplies approval.
 
 ## Unresolved questions

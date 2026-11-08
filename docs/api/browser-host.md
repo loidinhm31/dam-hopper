@@ -73,7 +73,8 @@ All errors return JSON with HTTP status $\ge 400$:
 | 401 Unauthorized | `mfaRequired` | MFA verification required before accessing browser host |
 | 401 Unauthorized | `invalidSession` | Session revoked, deleted, or claims version mismatch |
 | 403 Forbidden | `forbiddenOrigin` | Origin header not in approved allowlist, multiple headers, null, or trailing slash |
-| 429 Too Many Requests | `browserBusy` | Global process or concurrent agent CDP connection ceiling reached (capacity is 2) |
+| 409 Conflict | `staleViewportEpoch` | Managed input rejected due to stale or mismatched viewportEpoch following native geometry mutation |
+| 429 Too Many Requests | `browserBusy` | Global process or concurrent agent CDP connection ceiling reached (`max_raw_cdp_connections`, cap 8) |
 
 ---
 
@@ -488,9 +489,9 @@ Queries the status of an ongoing or completed reset operation.
 
 Returns browser DevTools version metadata for the calling principal. Automatically launches or attaches to the principal's browser process via `ensure_running`.
 
-- **Rewritten Debugger URL:** `webSocketDebuggerUrl` is rewritten to `{gateway_ws_base}/api/browser/cdp/ws`.
-- **Origin Validation:** Enforces single approved Origin byte-for-byte; unauthenticated requests fail with HTTP 401 first to prevent Origin probing.
-
+- **Rewritten Debugger URL:** `webSocketDebuggerUrl` rewrites internal DevTools loopback IP/port (`127.0.0.1:{chrome_port}`) to `{gateway_ws_base}/api/browser/cdp/ws`.
+- **Origin Validation:** Enforces single approved Origin byte-for-byte; unauthenticated requests fail with HTTP 401 first to prevent Origin probing (`dev_fallback` restricted to `--no-auth`).
+- **Payload Bounds:** Chunk-bounded response reading up to 64 KiB ceiling via `read_bounded_bytes`.
 **Response (200 OK):**
 ```json
 {
@@ -507,9 +508,9 @@ Returns browser DevTools version metadata for the calling principal. Automatical
 
 Lists all active DevTools targets for the calling principal's browser instance.
 
-- **URL Rewriting:** `webSocketDebuggerUrl` is rewritten to `{gateway_ws_base}/api/browser/cdp/ws/{target_id}`.
+- **URL Rewriting:** `webSocketDebuggerUrl` rewrites internal DevTools loopback IP/port to `{gateway_ws_base}/api/browser/cdp/ws/{target_id}`.
 - **Frontend Sanitization:** `devtoolsFrontendUrl` loopback DevTools ports are replaced with the sanitized public gateway host.
-- **Payload Bounds:** Chromium target list response is bounded to 256 KiB.
+- **Payload Bounds:** Chunk-bounded response reading up to 256 KiB ceiling via `read_bounded_bytes`.
 
 **Response (200 OK):**
 ```json
@@ -532,7 +533,7 @@ WebSocket upgrade route for raw CDP access to the browser instance root DevTools
 
 - **Authentication:** Evaluates Bearer token in `Authorization` header, auth cookie, or single-use capability ticket in `Sec-WebSocket-Protocol: damhopper.ticket.<base64url>`.
 - **Subprotocol:** Client may optionally request subprotocol `damhopper.browser.cdp.v1`.
-- **Concurrency Limit:** Max 2 concurrent agent CDP connections globally (`DEFAULT_MAX_AGENT_CDP_CONNECTIONS`). Excess connections return HTTP 429 `kind: "browserBusy"`.
+- **Concurrency Limit:** Governed by `budgets.max_raw_cdp_connections` (defaults to 2, hard capacity ceiling `MAX_AGENT_CDP_CAPACITY = 8`). Excess connections return HTTP 429 `kind: "browserBusy"`.
 
 ### GET /api/browser/cdp/ws/{target_id}
 
@@ -617,6 +618,13 @@ y &= v \times \text{css\_height} + \text{offset\_top}
   - Missing geometry or dimensions $\le 0$ return `InputError::GeometryUnavailable` (HTTP 503 `inputUnavailable`).
   - Viewport scroll offsets (`scrollOffsetX`, `scrollOffsetY`) are metadata and are **not** added to mouse coordinates.
   - Device pixel ratio (`dpr`) rescales screencast images only; layout coordinates operate directly in CSS pixels and are never multiplied twice.
+### Viewport Epoch Fencing & Geometry Invalidation
+
+When native CDP commands (such as `Emulation.setDeviceMetricsOverride`) alter viewport dimensions, the session registry advances layout state via `fence_geometry_and_advance_epoch`:
+- **Epoch Advance:** Session layout dimensions are updated and `viewport_epoch` is incremented.
+- **Input Manager Synchronization:** The session's `SessionInputManager` records the new expected epoch via `set_expected_viewport_epoch`.
+- **Stale Input Rejection:** `dispatch_reliable_input` strictly validates `msg.viewport_epoch == expected_epoch`. Any input dispatched with a mismatched or stale epoch fails closed with `InputError::StaleViewportEpoch` (mapped to HTTP 409 Conflict `kind: "staleViewportEpoch"`), immediately clears held keys/buttons, and flushes queued input.
+
 
 ---
 
@@ -644,14 +652,15 @@ The raw CDP gateway provides direct, authenticated Chrome DevTools Protocol acce
 - **Dedicated Connection:** Each agent connection establishes a dedicated, unshared upstream WebSocket client to Chromium's DevTools loopback port with a 5-second connection deadline (`UPSTREAM_CONNECT_TIMEOUT = 5s`).
 - **Message & Frame Limits:** Max 4 MiB per message and frame (`MAX_WS_MESSAGE_BYTES = 4_194_304`).
 - **Write Deadline:** 5-second timeout per message write (`WRITE_DEADLINE = 5s`).
-- **Concurrency:** Default global capacity of 2 concurrent agent connections (`DEFAULT_MAX_AGENT_CDP_CONNECTIONS = 2`).
+- **Concurrency:** Governed dynamically by `config.browser.budgets.max_raw_cdp_connections` (default 2, hard capacity ceiling `MAX_AGENT_CDP_CAPACITY = 8`). Returns HTTP 429 `kind: "browserBusy"` on saturation.
+- **Target Registration:** Gateway monitors upstream target events (`Target.targetCreated`, `Target.targetDestroyed`, `Target.targetInfoChanged`), updating `BrowserHostManager` active targets (bounded to 64 targets, ID $\le 64$ bytes, URL $\le 2048$ bytes).
 
 ### Live Auth Cancellation Racing with Socket Writes
 
 1. **Live Supervisor:** An independent task runs every 5 seconds (`LIVE_CHECK_INTERVAL`) with a 2-second database timeout (`LIVE_CHECK_TIMEOUT`) calling `verify_live_admission`.
 2. **Revocation & Demotion:** If the user account is disabled, the user is demoted from `Admin`, the session is revoked, or the auth deadline is reached, the supervisor signals an abort channel.
-3. **Racing with In-Flight Writes (`write_with_cancel`):** Outgoing socket writes wrap send operations with `write_with_cancel`, racing the write future against the abort channel via `tokio::select!`. If auth is revoked while a write is stalled, the write is aborted immediately without blocking for the 5-second deadline.
-4. **Fast Teardown:** When aborted due to auth failure (`aborted_by_auth == true`), the relay skips the standard 500ms cooperative WebSocket close frame exchange and drops both client and upstream sockets immediately.
+3. **Racing with In-Flight Writes (`write_with_cancel`):** Outgoing socket writes wrap send operations with `write_with_cancel`, racing the write future against both the auth abort channel and a pinned absolute deadline timer (`tokio::time::sleep_until`). If auth is revoked or the deadline expires while a write is stalled, the write is aborted immediately without blocking for the 5-second deadline.
+4. **Fast Teardown & Sibling Isolation:** When aborted due to auth failure (`aborted_by_auth == true`), the relay skips the standard 500ms cooperative WebSocket close frame exchange and drops both client and upstream sockets immediately. Revoking one agent credential closes only its connection; sibling logins and independent native screencast sessions remain intact.
 
 ### Instance Authority & Lease Bypass Warning
 

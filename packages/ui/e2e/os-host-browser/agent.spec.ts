@@ -1,4 +1,4 @@
-import { test, expect, chromium } from "@playwright/test";
+import { test, expect, chromium, type Browser, type Page } from "@playwright/test";
 import * as http from "node:http";
 import type { Socket } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -38,6 +38,20 @@ function rawRequest(
   req.on("error", reject);
   req.end();
   return promise;
+}
+
+/** Finds the Playwright Page whose CDP Target ID strictly equals the expected ID without fallback. */
+async function findPageByExactTargetId(browser: Browser, expectedTargetId: string): Promise<Page> {
+  for (const context of browser.contexts()) {
+    for (const page of context.pages()) {
+      const pageSession = await context.newCDPSession(page);
+      const { targetInfo } = await pageSession.send("Target.getTargetInfo");
+      if (targetInfo.targetId === expectedTargetId) {
+        return page;
+      }
+    }
+  }
+  throw new Error(`Exact target ${expectedTargetId} not found among Playwright pages`);
 }
 
 test.describe("Host Browser Production CDP Gateway — Agent Interoperability Qualification", () => {
@@ -84,6 +98,51 @@ test.describe("Host Browser Production CDP Gateway — Agent Interoperability Qu
     }, true);
     expect(badWs.status).toBe(403);
   });
+  test("rejects Origin-less capability-only upgrade even with a valid ticket", async () => {
+    // 1. Create a managed session to anchor the ticket
+    const createSessionRes = await fetch(`${serverInfo.httpUrl}/api/browser/sessions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serverInfo.expectedToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        creationKey: "11111111-2222-3333-4444-555555555555",
+        url: "http://example.com",
+        viewport: { width: 800, height: 600, dpr: 1 },
+      }),
+    });
+    expect(createSessionRes.ok).toBe(true);
+    const sessionData = await createSessionRes.json();
+
+    // 2. Issue a genuine server-derived capability ticket
+    const ticketRes = await fetch(`${serverInfo.httpUrl}/api/browser/attachments`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serverInfo.expectedToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        purpose: "agentCdp",
+        browserSessionId: sessionData.browserSessionId,
+        browserIncarnation: sessionData.browserIncarnation,
+        profileEpoch: Number(sessionData.profileEpoch),
+      }),
+    });
+    expect(ticketRes.ok).toBe(true);
+    const { ticket } = await ticketRes.json();
+
+    // 3. Attempt WebSocket upgrade with valid ticket but NO Origin and NO Bearer
+    const capRes = await rawRequest(
+      serverInfo.port,
+      "/api/browser/cdp/ws",
+      {
+        "Sec-WebSocket-Protocol": `damhopper.ticket.${ticket}`,
+      },
+      true,
+    );
+    expect(capRes.status).toBe(403);
+  });
 
   test("accepts discovery with valid bearer and rewrites webSocketDebuggerUrl to gateway", async () => {
     const resp = await fetch(`${serverInfo.httpUrl}/api/browser/cdp/json/version`, {
@@ -99,6 +158,12 @@ test.describe("Host Browser Production CDP Gateway — Agent Interoperability Qu
   });
 
   test("proves Playwright connectOverCDP connects to production gateway using Bearer on both paths and mutates target", async () => {
+    const statusResPre = await fetch(`${serverInfo.httpUrl}/api/qualification/internal_session`);
+    expect(statusResPre.ok).toBe(true);
+    const statusPre = await statusResPre.json();
+    const expectedTargetId = statusPre.targetId;
+    const initialFrames = statusPre.framesReceived;
+
     const browser = await chromium.connectOverCDP(`${serverInfo.httpUrl}/api/browser/cdp`, {
       headers: {
         Authorization: `Bearer ${serverInfo.expectedToken}`,
@@ -106,30 +171,59 @@ test.describe("Host Browser Production CDP Gateway — Agent Interoperability Qu
     });
 
     try {
-      const contexts = browser.contexts();
-      expect(contexts.length).toBeGreaterThan(0);
-      const page = contexts[0].pages()[0] ?? (await contexts[0].newPage());
+      // Select the exact page by target ID equality with fixture's ID
+      const page = await findPageByExactTargetId(browser, expectedTargetId);
 
-      await page.setContent("<h1 id='title'>Production Gateway Agent Test</h1>");
+      const uniqueMarker = `Marker-${Date.now()}`;
+      await page.evaluate((marker) => {
+        document.title = marker;
+        document.body.innerHTML = `<h1 id='title'>${marker}</h1>`;
+      }, uniqueMarker);
+
       const titleText = await page.textContent("#title");
-      expect(titleText).toBe("Production Gateway Agent Test");
+      expect(titleText).toBe(uniqueMarker);
+
+      // Verify the independent native session reads the EXACT same DOM marker back
+      const evalRes = await fetch(`${serverInfo.httpUrl}/api/qualification/internal_session/eval`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expression: "document.title" }),
+      });
+      expect(evalRes.ok).toBe(true);
+      const evalData = await evalRes.json();
+      expect(evalData?.result?.value).toBe(uniqueMarker);
 
       const pokeRes = await fetch(`${serverInfo.httpUrl}/api/qualification/internal_session/poke`, {
         method: "POST",
       });
       expect(pokeRes.ok).toBe(true);
 
-      const statusRes = await fetch(`${serverInfo.httpUrl}/api/qualification/internal_session`);
-      expect(statusRes.ok).toBe(true);
-      const statusData = await statusRes.json();
-      expect(statusData.active).toBe(true);
-      expect(statusData.framesReceived).toBeGreaterThan(0);
+      // Poll for strictly increased frame counter on the native screencast session
+      let framesAdvanced = false;
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const statusRes = await fetch(`${serverInfo.httpUrl}/api/qualification/internal_session`);
+        if (statusRes.ok) {
+          const data = await statusRes.json();
+          if (data.framesReceived > initialFrames) {
+            framesAdvanced = true;
+            break;
+          }
+        }
+        await sleep(200);
+      }
+      expect(framesAdvanced, "native screencast session must receive new frames after mutation").toBe(true);
     } finally {
       await browser.close();
     }
   });
 
   test("proves agent Page.disable or stopScreencast cannot stop the independent native session", async () => {
+    const statusResPre = await fetch(`${serverInfo.httpUrl}/api/qualification/internal_session`);
+    expect(statusResPre.ok).toBe(true);
+    const statusPre = await statusResPre.json();
+    const expectedTargetId = statusPre.targetId;
+
     const browser = await chromium.connectOverCDP(`${serverInfo.httpUrl}/api/browser/cdp`, {
       headers: {
         Authorization: `Bearer ${serverInfo.expectedToken}`,
@@ -137,24 +231,40 @@ test.describe("Host Browser Production CDP Gateway — Agent Interoperability Qu
     });
 
     try {
-      const context = browser.contexts()[0];
-      const page = context.pages()[0] ?? (await context.newPage());
+      // Select the exact page by target ID equality with fixture's ID
+      const page = await findPageByExactTargetId(browser, expectedTargetId);
+      const context = page.context();
       const cdpSession = await context.newCDPSession(page);
 
-      try {
-        await cdpSession.send("Page.stopScreencast");
-        await cdpSession.send("Page.disable");
-      } catch {
-        // Ignored if not supported
+      // Execute commands without suppressing errors
+      await cdpSession.send("Page.stopScreencast");
+      await cdpSession.send("Page.disable");
+
+      // Establish baseline strictly AFTER interfering commands execute
+      const postCmdRes = await fetch(`${serverInfo.httpUrl}/api/qualification/internal_session`);
+      expect(postCmdRes.ok).toBe(true);
+      const postCmdData = await postCmdRes.json();
+      const baselineFrames = postCmdData.framesReceived;
+
+      const pokeRes = await fetch(`${serverInfo.httpUrl}/api/qualification/internal_session/poke`, { method: "POST" });
+      expect(pokeRes.ok).toBe(true);
+
+      let framesAdvanced = false;
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const statusRes = await fetch(`${serverInfo.httpUrl}/api/qualification/internal_session`);
+        if (statusRes.ok) {
+          const data = await statusRes.json();
+          expect(data.terminalError).toBeNull();
+          expect(data.active).toBe(true);
+          if (data.framesReceived > baselineFrames) {
+            framesAdvanced = true;
+            break;
+          }
+        }
+        await sleep(200);
       }
-
-      await fetch(`${serverInfo.httpUrl}/api/qualification/internal_session/poke`, { method: "POST" });
-      await sleep(100);
-
-      const statusRes = await fetch(`${serverInfo.httpUrl}/api/qualification/internal_session`);
-      const statusData = await statusRes.json();
-      expect(statusData.active).toBe(true);
-      expect(statusData.terminalError).toBeNull();
+      expect(framesAdvanced, "independent screencast must continue advancing frames despite agent disable/stop").toBe(true);
     } finally {
       await browser.close();
     }

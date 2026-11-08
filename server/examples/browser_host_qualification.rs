@@ -267,9 +267,13 @@ async fn setup_internal_session(
                 Ok(frame) => {
                     if frame.session_id == ack_sid {
                         frames_counter.fetch_add(1, Ordering::SeqCst);
-                        let _ = ack_client
+                        if let Err(e) = ack_client
                             .ack_screencast_frame(&ack_sid, frame.frame_session_id)
-                            .await;
+                            .await
+                        {
+                            *term_err.lock() = Some(format!("screencast ACK failed: {e}"));
+                            break;
+                        }
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
@@ -857,7 +861,7 @@ async fn run_production_gateway(
                 let guard = qs.internal_session.lock().await;
                 let info = guard.as_ref().ok_or(StatusCode::NOT_FOUND)?;
                 let sid = &info.session_id;
-                let _ = info.client.send_command(
+                let res = info.client.send_command(
                     "Runtime.evaluate",
                     Some(json!({
                         "expression": "document.body.style.backgroundColor = document.body.style.backgroundColor === 'red' ? 'blue' : 'red'; 1",
@@ -865,9 +869,35 @@ async fn run_production_gateway(
                     })),
                     Some(sid),
                 ).await;
+                if let Err(e) = res {
+                    eprintln!("[Qualification Fixture] poke send_command failed: {e}");
+                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                }
                 Ok::<_, StatusCode>(Json(json!({ "ok": true })))
-            }),
-        )
+            }))
+        .route(
+            "/api/qualification/internal_session/eval",
+            post(|State(qs): State<QualProdState>, Json(body): Json<serde_json::Value>| async move {
+                let guard = qs.internal_session.lock().await;
+                let info = guard.as_ref().ok_or(StatusCode::NOT_FOUND)?;
+                let sid = &info.session_id;
+                let expr = body.get("expression").and_then(|v| v.as_str()).unwrap_or("document.title");
+                let res = info.client.send_command(
+                    "Runtime.evaluate",
+                    Some(json!({
+                        "expression": expr,
+                        "returnByValue": true
+                    })),
+                    Some(sid),
+                ).await;
+                match res {
+                    Ok(val) => Ok::<_, StatusCode>(Json(val)),
+                    Err(e) => {
+                        eprintln!("[Qualification Fixture] eval failed: {e}");
+                        Err(StatusCode::INTERNAL_SERVER_ERROR)
+                    }
+                }
+            }))
         .route(
             "/api/qualification/revoke_session",
             post(|State(qs): State<QualProdState>, Json(body): Json<serde_json::Value>| async move {

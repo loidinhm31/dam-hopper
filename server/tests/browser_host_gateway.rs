@@ -17,7 +17,12 @@ use dam_hopper_server::auth::model::{chrono_to_bson, AuthClaims, AuthSession, Us
 use dam_hopper_server::auth::policy::AUTH_PROTOCOL_VERSION;
 use dam_hopper_server::auth::AuthService;
 use dam_hopper_server::browser_host::auth::{verify_live_admission, BrowserAdmission};
-use dam_hopper_server::browser_host::cdp_gateway::global_cdp_gateway;
+use dam_hopper_server::api::browser_host::global_session_registry;
+use dam_hopper_server::browser_host::cdp_gateway::{
+    global_cdp_gateway, handle_client_cdp_message, handle_upstream_cdp_message, write_with_cancel,
+    CdpGatewayManager, WriteOutcome,
+};
+use dam_hopper_server::browser_host::session::{CreateSessionRequest, SessionError, ViewportRequest};
 use dam_hopper_server::config::{DamHopperConfig, FeaturesConfig, GlobalConfig, WorkspaceInfo};
 use dam_hopper_server::crypto::DamHopperOpaqueSuite;
 use dam_hopper_server::diagnostics::DiagnosticStore;
@@ -354,4 +359,272 @@ async fn test_live_revocation_detection() {
     };
     let expired_res = verify_live_admission(&state, &expired_adm).await;
     assert!(matches!(expired_res.unwrap_err(), dam_hopper_server::browser_host::auth::BrowserAuthError::SessionExpired(_)));
+}
+
+#[tokio::test]
+async fn test_write_with_cancel_aborts_immediately() {
+    let (abort_tx, mut abort_rx) = tokio::sync::mpsc::channel::<()>(1);
+
+    // Abort signal already sent
+    abort_tx.send(()).await.unwrap();
+
+    let pending_write = async {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        Ok::<(), std::io::Error>(())
+    };
+
+    let (outcome, aborted) = write_with_cancel(pending_write, &mut abort_rx, None).await;
+    assert_eq!(outcome, WriteOutcome::Failed);
+    assert!(aborted, "write_with_cancel should flag aborted == true");
+
+    // Test write_with_cancel deadline elapsed
+    let (_tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+    let long_write = async {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        Ok::<(), std::io::Error>(())
+    };
+    let deadline_at = tokio::time::Instant::now() + std::time::Duration::from_millis(50);
+    let (outcome2, aborted2) = write_with_cancel(long_write, &mut rx, Some(deadline_at)).await;
+    assert_eq!(outcome2, WriteOutcome::DeadlineElapsed);
+    assert!(aborted2, "deadline expiry in write_with_cancel should abort");
+}
+
+#[tokio::test]
+async fn test_capacity_limit_dynamic_budget() {
+    let gateway = CdpGatewayManager::new(8);
+
+    // Limit = 1
+    let permit1 = gateway.try_acquire_with_limit(1).expect("permit 1");
+    let permit2 = gateway.try_acquire_with_limit(1);
+    assert_eq!(permit2.unwrap_err(), StatusCode::TOO_MANY_REQUESTS);
+
+    // Free permit
+    drop(permit1);
+    assert_eq!(gateway.active_connections(), 0);
+
+    // Limit = 3
+    let p1 = gateway.try_acquire_with_limit(3).expect("p1");
+    let p2 = gateway.try_acquire_with_limit(3).expect("p2");
+    let p3 = gateway.try_acquire_with_limit(3).expect("p3");
+    let p4 = gateway.try_acquire_with_limit(3);
+    assert_eq!(p4.unwrap_err(), StatusCode::TOO_MANY_REQUESTS);
+
+    drop(p1);
+    drop(p2);
+    drop(p3);
+    assert_eq!(gateway.active_connections(), 0);
+}
+
+#[tokio::test]
+async fn test_origin_less_capability_only_denied_401() {
+    let tmp = tempdir().unwrap();
+    let state = create_test_state(tmp.path().to_path_buf(), false);
+    let app = build_router_with_origins(state, vec![]);
+
+    // Request without Origin and without Authorization header, only ticket in subprotocol
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/browser/cdp/ws")
+        .header(CONNECTION, "Upgrade")
+        .header(UPGRADE, "websocket")
+        .header(SEC_WEBSOCKET_VERSION, "13")
+        .header(SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==")
+        .header("Sec-WebSocket-Protocol", "damhopper.ticket.invalidfakeentropyfortest")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_native_geometry_mutation_fences_managed_input() {
+    let tmp = tempdir().unwrap();
+    let state = create_test_state(tmp.path().to_path_buf(), false);
+    let registry = global_session_registry();
+
+    let creation_key = uuid::Uuid::new_v4().to_string();
+    let req = CreateSessionRequest {
+        creation_key,
+        url: "http://example.com".to_string(),
+        viewport: ViewportRequest {
+            width: 800,
+            height: 600,
+            dpr: 1.0,
+        },
+    };
+
+    let (session, _) = registry
+        .create_or_idempotent_get("admin-geom-user", false, "inc-1", 1, &req, &[])
+        .await
+        .expect("create session");
+    assert_eq!(session.viewport_epoch, "1");
+
+    // Agent sends native Emulation.setDeviceMetricsOverride
+    let cdp_msg = serde_json::json!({
+        "id": 1,
+        "method": "Emulation.setDeviceMetricsOverride",
+        "params": {
+            "width": 1024,
+            "height": 768,
+            "deviceScaleFactor": 2.0,
+            "mobile": false
+        }
+    })
+    .to_string();
+
+    handle_client_cdp_message(&cdp_msg, "admin-geom-user", false).await;
+
+    // Verify stale epoch 1 input is rejected with Conflict
+    let stale_input_res = registry
+        .update_viewport(&session.browser_session_id, "admin-geom-user", 1, 900, 700, 1.0)
+        .await;
+    assert!(matches!(stale_input_res, Err(SessionError::Conflict(_))), "stale epoch input must fail with Conflict");
+
+    // Verify session epoch has advanced to 2 and geometry updated
+    let updated = registry
+        .get_session(&session.browser_session_id, "admin-geom-user")
+        .await
+        .expect("get session");
+    assert_eq!(updated.viewport_epoch, "2");
+    assert_eq!(updated.geometry.css_width, 1024.0);
+    assert_eq!(updated.geometry.css_height, 768.0);
+    assert_eq!(updated.geometry.dpr, 2.0);
+    assert!(updated.input_available);
+
+    // Verify real SessionInputManager rejects stale epoch with StaleViewportEpoch
+    let input_mgr = dam_hopper_server::browser_host::input::SessionInputManager::new();
+    let (lease_token, _) = input_mgr.acquire_lease("viewer1", "human").await.unwrap();
+    input_mgr.set_expected_viewport_epoch(2).await;
+
+    let stale_msg = dam_hopper_server::browser_host::input::InputMessage {
+        lease_token,
+        browser_session_id: session.browser_session_id.clone(),
+        browser_incarnation: "inc-1".to_string(),
+        profile_epoch: 1,
+        subscription_epoch: "sub-1".to_string(),
+        input_seq: 1,
+        viewport_epoch: 1,
+        event: dam_hopper_server::browser_host::input::InputEvent::KeyDown {
+            key: "A".to_string(),
+            code: "KeyA".to_string(),
+            modifiers: 0,
+        },
+    };
+    let enqueue_res = input_mgr.enqueue_input(stale_msg).await;
+    assert!(
+        matches!(
+            enqueue_res,
+            Err(dam_hopper_server::browser_host::input::InputError::StaleViewportEpoch {
+                expected: 2,
+                actual: 1
+            })
+        ),
+        "stale viewport epoch must be rejected at input manager boundary"
+    );
+
+    // Test clearDeviceMetricsOverride marks input unavailable pending layout reconciliation
+    let clear_msg = serde_json::json!({
+        "method": "Emulation.clearDeviceMetricsOverride"
+    }).to_string();
+    handle_client_cdp_message(&clear_msg, "admin-geom-user", false).await;
+
+    let cleared = registry
+        .get_session(&session.browser_session_id, "admin-geom-user")
+        .await
+        .expect("get cleared session");
+    assert_eq!(cleared.viewport_epoch, "3");
+    assert!(!cleared.input_available, "clearing geometry must disable input pending layout reconciliation");
+}
+
+#[tokio::test]
+async fn test_agent_target_registration_in_manager() {
+    let tmp = tempdir().unwrap();
+    let state = create_test_state(tmp.path().to_path_buf(), false);
+
+    let target_created = serde_json::json!({
+        "method": "Target.targetCreated",
+        "params": {
+            "targetInfo": {
+                "targetId": "target-agent-999",
+                "type": "page",
+                "title": "Agent Target",
+                "url": "http://example.com/target",
+                "attached": true,
+                "canAccessOpener": false
+            }
+        }
+    })
+    .to_string();
+
+    handle_upstream_cdp_message(&target_created, &state, "admin-agent-mgr", false).await;
+
+    let targets = state.browser_host.get_active_targets("admin-agent-mgr", false).await;
+    assert_eq!(targets.get("target-agent-999"), Some(&"http://example.com/target".to_string()));
+
+    // Target destroyed
+    let target_destroyed = serde_json::json!({
+        "method": "Target.targetDestroyed",
+        "params": {
+            "targetId": "target-agent-999"
+        }
+    })
+    .to_string();
+
+    handle_upstream_cdp_message(&target_destroyed, &state, "admin-agent-mgr", false).await;
+
+    let targets_after = state.browser_host.get_active_targets("admin-agent-mgr", false).await;
+    assert!(!targets_after.contains_key("target-agent-999"));
+}
+
+#[tokio::test]
+async fn test_agent_target_bounds_and_capacity_cap() {
+    let tmp = tempdir().unwrap();
+    let state = create_test_state(tmp.path().to_path_buf(), false);
+
+    // 1. Oversized target ID (> 64 chars) rejected
+    let huge_id = "a".repeat(65);
+    let target_huge_id = serde_json::json!({
+        "method": "Target.targetCreated",
+        "params": {
+            "targetInfo": {
+                "targetId": huge_id,
+                "url": "http://example.com"
+            }
+        }
+    }).to_string();
+    handle_upstream_cdp_message(&target_huge_id, &state, "admin-bounds-user", false).await;
+    let targets = state.browser_host.get_active_targets("admin-bounds-user", false).await;
+    assert!(targets.is_empty(), "target with ID > 64 chars must be ignored");
+
+    // 2. Oversized URL (> 2048 chars) rejected
+    let huge_url = format!("http://example.com/{}", "x".repeat(2048));
+    let target_huge_url = serde_json::json!({
+        "method": "Target.targetCreated",
+        "params": {
+            "targetInfo": {
+                "targetId": "valid-id",
+                "url": huge_url
+            }
+        }
+    }).to_string();
+    handle_upstream_cdp_message(&target_huge_url, &state, "admin-bounds-user", false).await;
+    let targets2 = state.browser_host.get_active_targets("admin-bounds-user", false).await;
+    assert!(targets2.is_empty(), "target with URL > 2048 chars must be ignored");
+
+    // 3. 64-entry capacity cap
+    for i in 0..70 {
+        let msg = serde_json::json!({
+            "method": "Target.targetCreated",
+            "params": {
+                "targetInfo": {
+                    "targetId": format!("tid-{i}"),
+                    "url": format!("http://example.com/{i}")
+                }
+            }
+        }).to_string();
+        handle_upstream_cdp_message(&msg, &state, "admin-bounds-user", false).await;
+    }
+    let targets_cap = state.browser_host.get_active_targets("admin-bounds-user", false).await;
+    assert_eq!(targets_cap.len(), 64, "active_targets capacity must be capped at 64");
 }

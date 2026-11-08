@@ -803,4 +803,29 @@ impl BrowserHostManager {
             self._global_raw_cdp_count.fetch_sub(1, Ordering::SeqCst);
         }
     }
+
+    pub async fn register_agent_target(&self, subject: &str, is_dev: bool, target_id: &str, url: &str) {
+        if let Ok(inst_arc) = self.get_or_create_instance_inner(subject, is_dev).await {
+            let mut inst = inst_arc.lock().await;
+            if inst.active_targets.len() < 64 || inst.active_targets.contains_key(target_id) {
+                inst.active_targets.insert(target_id.to_string(), url.to_string());
+            }
+        }
+    }
+
+    pub async fn unregister_agent_target(&self, subject: &str, is_dev: bool, target_id: &str) {
+        if let Ok(inst_arc) = self.get_or_create_instance_inner(subject, is_dev).await {
+            let mut inst = inst_arc.lock().await;
+            inst.active_targets.remove(target_id);
+        }
+    }
+
+    pub async fn get_active_targets(&self, subject: &str, is_dev: bool) -> HashMap<String, String> {
+        if let Ok(inst_arc) = self.get_or_create_instance_inner(subject, is_dev).await {
+            let inst = inst_arc.lock().await;
+            inst.active_targets.clone()
+        } else {
+            HashMap::new()
+        }
+    }
 }

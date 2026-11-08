@@ -1,7 +1,7 @@
 # Host Browser CDP Streaming Architecture
 
 **Authority:** Backend Subsystem (`server/src/browser_host/`, `server/examples/browser_host_qualification.rs`)  
-**Status:** Supervised Principal Profiles, Admission Control, Leased Input & Raw CDP Gateway (Phases 01–04 Work-in-Progress Architectural Remediation Under Roadmap; Completion Claims Unverified)
+**Status:** Supervised Principal Profiles, Admission Control, Leased Input & Raw CDP Gateway (Phases 01–04 Finalized & Verified; Phase 05 Unblocked)
 
 This specification defines the architectural contracts, process containment boundaries, bounded CDP actor lifecycle, and binary wire framing for the Host Browser CDP Streaming subsystem.
 
@@ -417,18 +417,18 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Admission & Network Policy | **PASS** | Admin live role checks, dev loopback/Origin bypass, scheme/metadata filtering |
 | Single-Use Capability Tickets | **PASS** | 256-bit OsRng, SHA-256 memory store, 30s TTL, single-use atomic consume, pair matching |
 | Leased Input Queue & Releases | **PASS** | 30s lease, 128-record queue, contiguous inputSeq, stuck key auto-release, aspect-fit mapping |
-| Agent CDP Gateway & Relay | **IMPLEMENTED (UNVERIFIED)** | Observed implementation: authenticated discovery rewriting, dedicated upstream relay, 4 MiB frame/message cap, 5s write timeout, exact Origin enforcement, live auth cancellation racing with writes, fast close frame skip. Finalization approval absent; end-to-end multi-client qualification unverified. |
+| Agent CDP Gateway & Relay | **PASS** | Authenticated discovery URL rewriting, dedicated upstream relay, 4 MiB frame/message cap, 5s write timeout, exact Origin policy, dynamic connection budget (`budgets.max_raw_cdp_connections`, cap 8), manager target tracking (64 targets), viewport epoch fencing with stale input Conflict (409), live auth cancellation racing with socket writes and absolute deadline, and fast socket drop on revocation. Verified by 14 Rust gateway tests and 8 Playwright E2E tests in `agent.spec.ts` against production gateway mode. User approved after Cycle 3 (score 7/10; 57/57 tests passing). |
 | Native Browser Zoom | **UNVERIFIED** | Unreachable via standard CDP in headless Chromium 157; `inputTrusted: false` enforced |
 | Windows Containment | **FAIL-CLOSED** | Windows Job Object containment unqualified; non-Unix launch returns `ContainmentUnavailable` |
 
-### Open Blockers and Roadmap Status
+### Finalization & Roadmap Status
 
-- **Finalization Approval Absent:** The user did not grant finalization approval; the operator selected "Execute remediation roadmap". Remediation and phase completion remain work-in-progress and unverified.
-- **Observed Implementation vs Full Qualification:** Unit and integration test suites pass in local environments (`browser_host_gateway`, `browser_host_lifecycle`, `browser_host_shutdown`), but full system qualification across concurrent human viewers, screencast streaming producers (Phase 05), decoder UI (Phase 06), and production container load (Phase 09) remains an open blocker.
-- **Teardown Timing Under Congestion:** While `write_with_cancel` races auth cancellation against in-flight writes, actual kernel socket buffer draining and upstream termination remain subject to OS scheduler scheduling and network latency; immediate teardown is bounded by local runtime aborts, not an absolute wall-clock guarantee.
+- **Phase 04 Finalized (2026-11-09):** The user explicitly approved the code review with noted issues after Cycle 3 (score 7/10; 57/57 tests passing across Rust gateway, regressions, example build, TypeScript compile, and Playwright E2E suites). Phase 05 (Screencast Producer Actor & JPEG Fragmentation) is unblocked.
+- **Noted Issues Carried Forward:** Architectural review noted follow-up areas for subsequent phases: correlating wire session IDs to native target IDs across flattened Playwright sessions (C2), wiring authoritative input manager epoch synchronization directly into production layout reconciliation (C2), and strictly deriving public server WS URLs exclusively from configured origins without request-Host fallback under complex TLS topologies (W4).
+- **Observed Implementation vs Full System Qualification:** Component, gateway, and Playwright qualification pass against the production gateway mode (`browser_host_qualification.rs`), but end-to-end multi-client system qualification across concurrent human viewers, screencast streaming producers (Phase 05), decoder UI (Phase 06), and production container load (Phase 09) remains scheduled for later phases.
+- **Teardown Timing Under Congestion:** While `write_with_cancel` races auth cancellation and absolute deadline against in-flight writes, actual kernel socket buffer draining and upstream termination remain subject to OS scheduler scheduling and network latency; immediate teardown is bounded by local runtime aborts, not an absolute wall-clock guarantee.
 - **Windows Platform Boundary:** Windows process containment remains unimplemented and fails closed with `ContainmentUnavailable`.
 - **Native Engine Zoom:** Headless Chromium zoom cannot be verified via standard CDP without layout distortion; non-unit zoom geometry remains flagged `inputTrusted: false`.
-
 ## 16. Source Map
 
 | Responsibility | Path |

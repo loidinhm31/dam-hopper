@@ -634,6 +634,43 @@ impl SessionRegistry {
         }
         self.active_target_count.fetch_sub(closed_count, Ordering::SeqCst);
     }
+    pub async fn fence_geometry_and_advance_epoch(
+        &self,
+        principal: &str,
+        is_dev: bool,
+        target_id: Option<&str>,
+        width: Option<u32>,
+        height: Option<u32>,
+        dpr: Option<f64>,
+    ) {
+        let mut sessions = self.sessions.write().await;
+        for s in sessions.values_mut() {
+            if s.owner_principal == principal && s.is_dev == is_dev {
+                let matches_target = match (target_id, &s.native_target_id) {
+                    (Some(tid), Some(st_id)) => tid == st_id,
+                    (Some(_), None) => false,
+                    (None, _) => true,
+                };
+                if matches_target {
+                    s.viewport_epoch = s.viewport_epoch.saturating_add(1);
+                    if let (Some(w), Some(h)) = (width, height) {
+                        if w > 0 && h > 0 && (dpr.is_none() || dpr.unwrap() > 0.0) {
+                            s.geometry.css_width = w as f64;
+                            s.geometry.css_height = h as f64;
+                            if let Some(d) = dpr {
+                                s.geometry.dpr = d;
+                            }
+                            s.input_available = true;
+                        } else {
+                            s.input_available = false;
+                        }
+                    } else {
+                        s.input_available = false;
+                    }
+                }
+            }
+        }
+    }
 
     pub async fn reset_for_test(&self) {
         let mut sessions = self.sessions.write().await;

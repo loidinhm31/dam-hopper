@@ -123,6 +123,7 @@ pub enum InputError {
     NotLeaseHolder,
     SequenceGap { expected: u64, actual: u64 },
     StaleSequence { current: u64, received: u64 },
+    StaleViewportEpoch { expected: u64, actual: u64 },
     QueueOverflow,
     GeometryUnavailable,
     InvalidFraction { u: f64, v: f64 },
@@ -142,6 +143,9 @@ impl fmt::Display for InputError {
             }
             Self::StaleSequence { current, received } => {
                 write!(f, "stale input sequence: current {current}, received {received}")
+            }
+            Self::StaleViewportEpoch { expected, actual } => {
+                write!(f, "stale input viewportEpoch: expected {expected}, got {actual}")
             }
             Self::QueueOverflow => write!(f, "input queue capacity or byte limit exceeded"),
             Self::GeometryUnavailable => write!(f, "geometry unavailable for coordinate conversion"),
@@ -238,6 +242,7 @@ impl HeldInputState {
 pub struct SessionInputManager {
     lease: Mutex<Option<LeaseState>>,
     last_processed_seq: Mutex<u64>,
+    expected_viewport_epoch: Mutex<Option<u64>>,
     queue: Mutex<VecDeque<InputMessage>>,
     total_queued_bytes: Mutex<usize>,
     held_state: Mutex<HeldInputState>,
@@ -255,6 +260,7 @@ impl SessionInputManager {
         Self {
             lease: Mutex::new(None),
             last_processed_seq: Mutex::new(0),
+            expected_viewport_epoch: Mutex::new(None),
             queue: Mutex::new(VecDeque::new()),
             total_queued_bytes: Mutex::new(0),
             held_state: Mutex::new(HeldInputState::default()),
@@ -298,6 +304,10 @@ impl SessionInputManager {
         *self.last_processed_seq.lock().await = 0;
 
         Ok((lease_token, expires_at_unix_ms))
+    }
+
+    pub async fn set_expected_viewport_epoch(&self, epoch: u64) {
+        *self.expected_viewport_epoch.lock().await = Some(epoch);
     }
 
     /// Renews active lease for current holder, clipping expiry to auth deadline.
@@ -407,6 +417,19 @@ impl SessionInputManager {
             }
             if lease.expires_at <= now {
                 return Err(InputError::LeaseExpired);
+            }
+        }
+
+        // Validate viewport epoch
+        {
+            let expected_epoch_guard = self.expected_viewport_epoch.lock().await;
+            if let Some(expected_epoch) = *expected_epoch_guard {
+                if msg.viewport_epoch != expected_epoch {
+                    return Err(InputError::StaleViewportEpoch {
+                        expected: expected_epoch,
+                        actual: msg.viewport_epoch,
+                    });
+                }
             }
         }
 

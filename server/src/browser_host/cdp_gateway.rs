@@ -30,13 +30,14 @@ use crate::browser_host::protocol::MAX_WS_MESSAGE_BYTES;
 use crate::state::AppState;
 
 pub const DEFAULT_MAX_AGENT_CDP_CONNECTIONS: usize = 2;
+pub const MAX_AGENT_CDP_CAPACITY: usize = 8;
 pub const WRITE_DEADLINE: Duration = Duration::from_secs(5);
 pub const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub const CDP_SUBPROTOCOL: &str = "damhopper.browser.cdp.v1";
 pub const TICKET_SUBPROTOCOL_PREFIX: &str = "damhopper.ticket.";
 
 pub static GLOBAL_CDP_GATEWAY: LazyLock<CdpGatewayManager> =
-    LazyLock::new(|| CdpGatewayManager::new(DEFAULT_MAX_AGENT_CDP_CONNECTIONS));
+    LazyLock::new(|| CdpGatewayManager::new(MAX_AGENT_CDP_CAPACITY));
 
 pub fn global_cdp_gateway() -> &'static CdpGatewayManager {
     &GLOBAL_CDP_GATEWAY
@@ -62,13 +63,24 @@ where
 pub async fn write_with_cancel<F, E>(
     write: F,
     abort_rx: &mut tokio::sync::mpsc::Receiver<()>,
+    deadline_at: Option<tokio::time::Instant>,
 ) -> (WriteOutcome, bool)
 where
     F: Future<Output = Result<(), E>>,
 {
-    tokio::select! {
-        _ = abort_rx.recv() => (WriteOutcome::Failed, true),
-        outcome = write_with_outcome(write) => (outcome, false),
+    let write_fut = write_with_outcome(write);
+    if let Some(dl) = deadline_at {
+        let sleep_fut = tokio::time::sleep_until(dl);
+        tokio::select! {
+            _ = abort_rx.recv() => (WriteOutcome::Failed, true),
+            _ = sleep_fut => (WriteOutcome::DeadlineElapsed, true),
+            outcome = write_fut => (outcome, false),
+        }
+    } else {
+        tokio::select! {
+            _ = abort_rx.recv() => (WriteOutcome::Failed, true),
+            outcome = write_fut => (outcome, false),
+        }
     }
 }
 
@@ -89,17 +101,29 @@ impl CdpGatewayManager {
         self.active_connections.load(Ordering::SeqCst)
     }
 
-    pub fn try_acquire(&self) -> Result<CdpGatewayPermit, StatusCode> {
+    pub fn try_acquire_with_limit(&self, max_allowed: usize) -> Result<CdpGatewayPermit, StatusCode> {
+        let current = self.active_connections.load(Ordering::SeqCst);
+        if current >= max_allowed {
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
         let permit = self
             .semaphore
             .clone()
             .try_acquire_owned()
             .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
-        self.active_connections.fetch_add(1, Ordering::SeqCst);
+        let prev = self.active_connections.fetch_add(1, Ordering::SeqCst);
+        if prev >= max_allowed {
+            self.active_connections.fetch_sub(1, Ordering::SeqCst);
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
         Ok(CdpGatewayPermit {
             _permit: permit,
             counter: self.active_connections.clone(),
         })
+    }
+
+    pub fn try_acquire(&self) -> Result<CdpGatewayPermit, StatusCode> {
+        self.try_acquire_with_limit(DEFAULT_MAX_AGENT_CDP_CONNECTIONS)
     }
 }
 
@@ -206,10 +230,11 @@ pub fn validate_cdp_origin(
                     .iter()
                     .any(|allowed| allowed.as_bytes() == origin_bytes);
 
-            let dev_fallback = (state.cors_origins.is_empty()
-                && state.browser_host.config().allowed_dev_origins.is_empty())
-                && (origin_str.eq_ignore_ascii_case("http://127.0.0.1:5173")
-                    || origin_str.eq_ignore_ascii_case("http://localhost:5173"));
+            let dev_fallback = state.no_auth
+                && (state.cors_origins.is_empty()
+                    && state.browser_host.config().allowed_dev_origins.is_empty())
+                && (origin_str == "http://127.0.0.1:5173"
+                    || origin_str == "http://localhost:5173");
 
             if matched || dev_fallback {
                 Ok(())
@@ -253,6 +278,17 @@ async fn authenticate_and_validate_discovery(
     validate_cdp_origin(headers, state, has_bearer)?;
 
     Ok(admission)
+}
+
+async fn read_bounded_bytes(mut resp: reqwest::Response, max_bytes: usize) -> Result<Vec<u8>, &'static str> {
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|_| "read_failed")? {
+        if buf.len().saturating_add(chunk.len()) > max_bytes {
+            return Err("exceeded_bound");
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
 }
 
 /// GET /api/browser/cdp/json/version and /api/browser/cdp/json/version/
@@ -329,9 +365,9 @@ pub async fn get_cdp_version(
         }
     };
 
-    let bytes = match resp.bytes().await {
-        Ok(b) if b.len() <= 65536 => b,
-        Ok(_) => {
+    let bytes = match read_bounded_bytes(resp, 65536).await {
+        Ok(b) => b,
+        Err("exceeded_bound") => {
             return browser_error_response(
                 StatusCode::BAD_GATEWAY,
                 "badGateway",
@@ -446,9 +482,9 @@ pub async fn get_cdp_list(
         }
     };
 
-    let bytes = match resp.bytes().await {
-        Ok(b) if b.len() <= 262144 => b,
-        Ok(_) => {
+    let bytes = match read_bounded_bytes(resp, 262144).await {
+        Ok(b) => b,
+        Err("exceeded_bound") => {
             return browser_error_response(
                 StatusCode::BAD_GATEWAY,
                 "badGateway",
@@ -619,15 +655,19 @@ async fn cdp_ws_handler_internal(
         return resp;
     }
 
-    // 3. Acquire capacity permit (max 2 agent connections globally by default)
-    let permit = match global_cdp_gateway().try_acquire() {
+    // 3. Acquire capacity permit (governed by config.browser.budgets.max_raw_cdp_connections)
+    let max_connections = state.browser_host.config().budgets.max_raw_cdp_connections;
+    let permit = match global_cdp_gateway().try_acquire_with_limit(max_connections) {
         Ok(p) => p,
         Err(status) => {
-            warn!("CDP gateway busy: maximum concurrent agent connections reached");
+            warn!(
+                max_connections,
+                "CDP gateway busy: maximum concurrent agent connections reached"
+            );
             return browser_error_response(
                 status,
                 "browserBusy",
-                "maximum concurrent agent CDP connections reached (capacity is 2)",
+                &format!("maximum concurrent agent CDP connections reached (capacity is {max_connections})"),
             );
         }
     };
@@ -722,6 +762,16 @@ async fn cdp_ws_handler_internal(
     })
 }
 
+struct AbortOnDrop(Option<tokio::task::JoinHandle<()>>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
+    }
+}
+
 /// Bounded bidirectional upstream WebSocket relay.
 /// Bounds:
 /// - 4 MiB frame cap, 4 MiB message cap.
@@ -740,8 +790,28 @@ async fn relay_agent_cdp_socket(
     ws_config.max_message_size = Some(MAX_WS_MESSAGE_BYTES);
     ws_config.max_frame_size = Some(MAX_WS_MESSAGE_BYTES);
 
+    let (deadline_duration, deadline_instant) = match admission.effective_deadline {
+        Some(dl) => {
+            let now = chrono::Utc::now();
+            if now >= dl {
+                warn!(principal = %admission.principal, "Agent CDP connection rejected: effective deadline already elapsed");
+                let _ = timeout(Duration::from_millis(500), client_ws.send(AxumWsMessage::Close(None))).await;
+                return;
+            }
+            let rem_std = dl.signed_duration_since(now).to_std().unwrap_or(Duration::from_millis(1));
+            let inst = tokio::time::Instant::now() + rem_std;
+            (rem_std, inst)
+        }
+        None => (
+            Duration::from_secs(86400 * 365),
+            tokio::time::Instant::now() + Duration::from_secs(86400 * 365),
+        ),
+    };
+
+    let connect_timeout = deadline_duration.min(UPSTREAM_CONNECT_TIMEOUT);
+
     let upstream_res = timeout(
-        UPSTREAM_CONNECT_TIMEOUT,
+        connect_timeout,
         tokio_tungstenite::connect_async_with_config(&upstream_url, Some(ws_config), false),
     )
     .await;
@@ -786,16 +856,25 @@ async fn relay_agent_cdp_socket(
             }
         }
     });
+    let _watcher_guard = AbortOnDrop(Some(auth_watcher));
 
-    state.browser_host.register_agent_cdp(&admission.principal, admission.is_dev).await;
+    let reg_fut = state.browser_host.register_agent_cdp(&admission.principal, admission.is_dev);
+    tokio::select! {
+        _ = auth_abort_rx.recv() => {
+            warn!(principal = %admission.principal, "Agent CDP connection aborted by auth during registration");
+            let _ = timeout(Duration::from_millis(500), client_ws.send(AxumWsMessage::Close(None))).await;
+            return;
+        }
+        _ = tokio::time::sleep_until(deadline_instant) => {
+            warn!(principal = %admission.principal, "Agent CDP registration timed out: deadline reached");
+            let _ = timeout(Duration::from_millis(500), client_ws.send(AxumWsMessage::Close(None))).await;
+            return;
+        }
+        _ = reg_fut => {}
+    }
 
-    let deadline_duration = admission
-        .effective_deadline
-        .and_then(|dl| dl.signed_duration_since(chrono::Utc::now()).to_std().ok())
-        .unwrap_or(Duration::from_secs(86400 * 365));
-    let deadline_sleep = tokio::time::sleep(deadline_duration);
+    let deadline_sleep = tokio::time::sleep_until(deadline_instant);
     tokio::pin!(deadline_sleep);
-
     let mut aborted_by_auth = false;
     loop {
         tokio::select! {
@@ -811,9 +890,20 @@ async fn relay_agent_cdp_socket(
             client_msg = client_ws.next() => {
                 let (forwarded, aborted) = match client_msg {
                     Some(Ok(AxumWsMessage::Text(t))) => {
+                        let handle_fut = handle_client_cdp_message(t.as_str(), &admission.principal, admission.is_dev);
+                        let aborted_during_handle = tokio::select! {
+                            _ = auth_abort_rx.recv() => true,
+                            _ = tokio::time::sleep_until(deadline_instant) => true,
+                            _ = handle_fut => false,
+                        };
+                        if aborted_during_handle {
+                            aborted_by_auth = true;
+                            break;
+                        }
                         let (outcome, aborted) = write_with_cancel(
                             upstream_ws.send(UpstreamMessage::Text(t.as_str().into())),
                             &mut auth_abort_rx,
+                            Some(deadline_instant),
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -821,6 +911,7 @@ async fn relay_agent_cdp_socket(
                         let (outcome, aborted) = write_with_cancel(
                             upstream_ws.send(UpstreamMessage::Binary(b)),
                             &mut auth_abort_rx,
+                            Some(deadline_instant),
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -828,6 +919,7 @@ async fn relay_agent_cdp_socket(
                         let (outcome, aborted) = write_with_cancel(
                             upstream_ws.send(UpstreamMessage::Ping(p)),
                             &mut auth_abort_rx,
+                            Some(deadline_instant),
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -835,6 +927,7 @@ async fn relay_agent_cdp_socket(
                         let (outcome, aborted) = write_with_cancel(
                             upstream_ws.send(UpstreamMessage::Pong(p)),
                             &mut auth_abort_rx,
+                            Some(deadline_instant),
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -851,9 +944,20 @@ async fn relay_agent_cdp_socket(
             upstream_msg = upstream_ws.next() => {
                 let (forwarded, aborted) = match upstream_msg {
                     Some(Ok(UpstreamMessage::Text(t))) => {
+                        let handle_fut = handle_upstream_cdp_message(t.as_str(), &state, &admission.principal, admission.is_dev);
+                        let aborted_during_handle = tokio::select! {
+                            _ = auth_abort_rx.recv() => true,
+                            _ = tokio::time::sleep_until(deadline_instant) => true,
+                            _ = handle_fut => false,
+                        };
+                        if aborted_during_handle {
+                            aborted_by_auth = true;
+                            break;
+                        }
                         let (outcome, aborted) = write_with_cancel(
                             client_ws.send(AxumWsMessage::Text(t.as_str().into())),
                             &mut auth_abort_rx,
+                            Some(deadline_instant),
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -861,6 +965,7 @@ async fn relay_agent_cdp_socket(
                         let (outcome, aborted) = write_with_cancel(
                             client_ws.send(AxumWsMessage::Binary(b)),
                             &mut auth_abort_rx,
+                            Some(deadline_instant),
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -868,6 +973,7 @@ async fn relay_agent_cdp_socket(
                         let (outcome, aborted) = write_with_cancel(
                             client_ws.send(AxumWsMessage::Ping(p)),
                             &mut auth_abort_rx,
+                            Some(deadline_instant),
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -875,6 +981,7 @@ async fn relay_agent_cdp_socket(
                         let (outcome, aborted) = write_with_cancel(
                             client_ws.send(AxumWsMessage::Pong(p)),
                             &mut auth_abort_rx,
+                            Some(deadline_instant),
                         ).await;
                         (outcome == WriteOutcome::Ok, aborted)
                     }
@@ -891,14 +998,91 @@ async fn relay_agent_cdp_socket(
             }
         }
     }
-    auth_watcher.abort();
 
-    state.browser_host.unregister_agent_cdp(&admission.principal, admission.is_dev).await;
-
-    // Best effort bounded close (skip slow close if aborted due to auth failure)
+    // Fast teardown: drop sockets immediately to cancel physical network transports,
+    // avoiding lock contention delays during manager accounting.
     if !aborted_by_auth {
         let _ = timeout(Duration::from_millis(500), upstream_ws.close(None)).await;
         let _ = timeout(Duration::from_millis(500), client_ws.send(AxumWsMessage::Close(None))).await;
     }
+    drop(upstream_ws);
+    drop(client_ws);
+    drop(_permit); // Free capacity permit immediately before slow manager unregister
+
+    state.browser_host.unregister_agent_cdp(&admission.principal, admission.is_dev).await;
     debug!(principal = %admission.principal, "CDP gateway relay closed");
+}
+
+pub async fn handle_client_cdp_message(msg_str: &str, principal: &str, is_dev: bool) {
+    if !msg_str.contains("\"Emulation.") {
+        return;
+    }
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(msg_str) else {
+        return;
+    };
+
+    if let Some(method) = val.get("method").and_then(|m| m.as_str()) {
+        match method {
+            "Emulation.setDeviceMetricsOverride"
+            | "Emulation.clearDeviceMetricsOverride"
+            | "Emulation.setPageScaleFactor"
+            | "Emulation.setVisibleSize" => {
+                let target_id = val.get("sessionId").or_else(|| val.get("targetId")).and_then(|v| v.as_str());
+                let (w, h, dpr) = if let Some(params) = val.get("params") {
+                    let w = params.get("width").and_then(|v| v.as_u64()).map(|v| v as u32);
+                    let h = params.get("height").and_then(|v| v.as_u64()).map(|v| v as u32);
+                    let dpr = params.get("deviceScaleFactor").and_then(|v| v.as_f64());
+                    (w, h, dpr)
+                } else {
+                    (None, None, None)
+                };
+                crate::api::browser_host::global_session_registry()
+                    .fence_geometry_and_advance_epoch(principal, is_dev, target_id, w, h, dpr)
+                    .await;
+            }
+            _ => {}
+        }
+    }
+}
+
+pub async fn handle_upstream_cdp_message(
+    msg_str: &str,
+    state: &AppState,
+    principal: &str,
+    is_dev: bool,
+) {
+    if !msg_str.contains("\"Target.") {
+        return;
+    }
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(msg_str) else {
+        return;
+    };
+
+    if let Some(method) = val.get("method").and_then(|m| m.as_str()) {
+        match method {
+            "Target.targetCreated" | "Target.targetInfoChanged" => {
+                if let Some(target_info) = val.get("params").and_then(|p| p.get("targetInfo")) {
+                    let target_id = target_info.get("targetId").and_then(|id| id.as_str()).unwrap_or("");
+                    let url = target_info.get("url").and_then(|u| u.as_str()).unwrap_or("");
+                    if !target_id.is_empty() && target_id.len() <= 64 && url.len() <= 2048 {
+                        state
+                            .browser_host
+                            .register_agent_target(principal, is_dev, target_id, url)
+                            .await;
+                    }
+                }
+            }
+            "Target.targetDestroyed" => {
+                if let Some(target_id) = val.get("params").and_then(|p| p.get("targetId")).and_then(|id| id.as_str()) {
+                    if !target_id.is_empty() && target_id.len() <= 64 {
+                        state
+                            .browser_host
+                            .unregister_agent_target(principal, is_dev, target_id)
+                            .await;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
