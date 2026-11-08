@@ -127,6 +127,8 @@ pub struct AppState {
     pub git_blame_cache: Arc<crate::git::blame_cache::BlameBaselineCache>,
     /// Bounded in-memory session changes tracking service.
     pub session_changes: Arc<crate::session_changes::store::SessionChangesService>,
+    /// Browser host manager for supervising principal profiles and browser instances.
+    pub browser_host: Arc<crate::browser_host::manager::BrowserHostManager>,
 }
 
 impl AppState {
@@ -385,6 +387,11 @@ impl AppState {
             crate::session_changes::store::SessionChangesService::new()
                 .map_err(|e| anyhow::anyhow!("Session changes service unavailable: {e}"))?,
         );
+        let browser_host = Arc::new(crate::browser_host::manager::BrowserHostManager::new(
+            config.server.browser.clone(),
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        ));
         fs.reinit_workspace_sandbox(config.resolve_workspace_root().ok());
 
         Ok(Self {
@@ -428,6 +435,7 @@ impl AppState {
             git_blame_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
             git_blame_cache: Arc::new(crate::git::blame_cache::BlameBaselineCache::new()),
             session_changes,
+            browser_host,
         })
     }
     /// Returns the active workspace sandbox, or `Err(FsError::Unavailable)` if unconfigured.

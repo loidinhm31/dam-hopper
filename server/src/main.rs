@@ -1202,6 +1202,7 @@ async fn main() -> anyhow::Result<()> {
     let tunnel_manager_shutdown = state.tunnel_manager.clone();
     let browser_debug_artifacts_shutdown = state.browser_debug_artifacts.clone();
     let browser_debug_artifacts_sweeper = state.browser_debug_artifacts.clone();
+    let browser_host_shutdown = state.browser_host.clone();
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -1286,6 +1287,7 @@ async fn main() -> anyhow::Result<()> {
     // Reap all tunnel children before exit — no orphaned cloudflared processes.
     tunnel_manager_shutdown.dispose_all().await;
     browser_debug_artifacts_shutdown.dispose_all().await;
+    browser_host_shutdown.shutdown_all().await;
     if let Some(collector) = agent_status_collector {
         collector.shutdown();
     }

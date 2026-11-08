@@ -1,7 +1,7 @@
 # Host Browser CDP Streaming Architecture
 
 **Authority:** Backend Subsystem (`server/src/browser_host/`, `server/examples/browser_host_qualification.rs`)  
-**Status:** Pre-Product Adapter and Process Primitives (Phase 01 Qualified on Linux x86_64; Windows Containment Fail-Closed)
+**Status:** Pre-Product Adapter, Supervised Principal Profiles & Process Containment (Phase 01 Qualified on Linux x86_64, Windows Containment Fail-Closed; Phase 02 Approved)
 
 This specification defines the architectural contracts, process containment boundaries, bounded CDP actor lifecycle, and binary wire framing for the Host Browser CDP Streaming subsystem.
 
@@ -128,7 +128,142 @@ The qualification test harness demonstrates authenticated CDP discovery and prox
 - **Dual Bearer Authentication:** Validates `Authorization: Bearer <token>` on both discovery (`/json/version`, `/json/list`) and WebSocket upgrade routes.
 - **Bounded Proxy Relay:** Proxy sockets enforce a maximum 4 MiB message size and bounded 5-second per-write deadlines in both directions, with mutual teardown on read/write failure or timeout.
 
-## 6. Qualification Status & Open Proof Obligations
+## 6. Configuration Schema & Admission Budgets (`config.rs`)
+
+The browser host subsystem is configured under `[server.browser]` in `config.toml` (with legacy top-level `[browser]` mapped transparently into `server.browser`).
+
+### Configuration Model (`BrowserHostConfig`)
+
+| Field | Type | Default | Validation & Semantics |
+| --- | --- | --- | --- |
+| `enabled` | `bool` | `false` | Master enable switch. Defaults to `false` until an executable and origin policy are configured. |
+| `executable_path` | `Option<PathBuf>` | `None` | Path to browser binary. Must be regular file with execute permissions (`mode & 0o111 != 0`) and not world-writable (`mode & 0o002 == 0`). |
+| `profile_root` | `Option<PathBuf>` | `None` | Base directory for principal profiles. Defaults to `~/.config/dam-hopper/browser-profiles`. Must not be a symlink; directory permissions must be strictly mode `0700` (`mode & 0o077 == 0`). |
+| `allowed_target_origins` | `Vec<String>` | `[]` | Approved target page origins. Strictly formatted (`http://` or `https://`, host, optional port; credentials, query, fragment, path segments, and trailing slashes forbidden). |
+| `allowed_asset_origins` | `Vec<String>` | `[]` | Approved asset origins for viewer frames and static resources. Strictly formatted. |
+| `allowed_dev_origins` | `Vec<String>` | `[]` | Approved developer debug origins. Strictly formatted. |
+| `denied_destinations` | `Vec<String>` | Cloud metadata IPs | Blocked destination addresses. Default list: `169.254.169.254`, `fd00:ec2::254`, `metadata.google.internal`, `100.100.100.200`. Formats: IP, IP CIDR, hostname, or `host:port`. |
+| `budgets` | `BrowserBudgetsConfig` | Defaults below | Structured admission bounds and memory limits. |
+
+### Budget Limits (`BrowserBudgetsConfig`)
+
+| Budget Field | Default | Range | Enforcement Mechanism |
+| --- | --- | --- | --- |
+| `max_processes` | `1` | `1 ..= 4` | Capped by global process atomic counter; excess returns `ManagerError::Busy` (HTTP 429) |
+| `max_targets` | `2` | `1 ..= 16` | Maximum concurrent page targets per principal |
+| `max_viewers` | `2` | `1 ..= 16` | Maximum concurrent streaming viewers per target |
+| `max_raw_cdp_connections` | `2` | `1 ..= 8` | Maximum concurrent raw CDP proxy WebSocket connections |
+| `memory_ceiling_bytes` | `134,217,728` (128 MiB) | `33,554,432` (32 MiB) ..= `1,073,741,824` (1 GiB) | Hard memory ceiling checked against worst-case allocation |
+| `jpeg_quality` | `65` | `10 ..= 100` | Screencast JPEG encoding quality |
+| `max_width` | `1280` | `64 ..= 1920` | Maximum capture frame width |
+| `max_height` | `900` | `64 ..= 1080` | Maximum capture frame height |
+| `frame_rate_fps` | `10` | `1 ..= 30` | Maximum screencast capture frame rate |
+
+### Memory Reservation Bounds Calculation
+
+The budget validator enforces an analytical ceiling check:
+$$\text{estimated} = (\text{max\_targets} \times 12.1\text{ MiB}) + (\text{max\_viewers} \times 4.2\text{ MiB}) + (\text{max\_raw\_cdp} \times 8.0\text{ MiB}) \le \text{memory\_ceiling\_bytes}$$
+
+- **Per-Target (~12.1 MiB):** 2 MiB command budget + 4 MiB WS event buffer + 4 MiB candidate buffer + ~2.1 MiB complete BHJF buffer.
+- **Per-Viewer (~4.2 MiB):** 2 outstanding + 1 pending Bytes handles (buffered) + writer queue.
+- **Per-Raw-CDP (8.0 MiB):** 4 MiB frame buffer per direction.
+Configurations exceeding the memory ceiling fail validation with `BrowserConfigError::MemoryCeilingExceeded`.
+
+### Domain Capability Evaluation (`evaluate_capabilities`)
+
+Direct probe evaluating subsystem capabilities without launching Chromium or making network calls:
+- Returns `BrowserCapabilitiesDto` (`protocolVersion: 1`, `available: bool`, `unavailableReason: Option<String>`, `effectiveLimits: BrowserEffectiveLimitsDto`, `engineQualified: bool`, `profileEpoch: String`, `managedProfilePresent: bool`).
+- Reports explicit `unavailableReason` for disabled status, non-Unix platform, missing executable, invalid permissions, overbudget memory ceiling, or active reset tombstone (`CleanupPending`).
+- Never exposes internal loopback debug ports or URLs.
+
+## 7. Principal Profile Directory Layout & Advisory Flock Exclusivity (`profile.rs`)
+
+Principal isolation ensures that different authenticated users never share browser processes, cookies, or user-data directories.
+
+### Filesystem Layout
+
+Profiles are organized under `<profile_root>/` by namespace and hashed subject:
+
+```text
+<profile_root>/
+├── dev/                     # Development namespace (--no-auth mode)
+│   └── <sha256(subject)>/   # 64-character hex hash, mode 0700
+│       ├── manager.lock     # Advisory flock target (stable inode, never deleted)
+│       ├── manager.json     # Metadata record (mode 0600, atomic write)
+│       ├── reset.json       # Durable reset tombstone (mode 0600; active during reset)
+│       └── user-data/       # Chromium user-data directory (mode 0700; deleted on reset)
+└── prod/                    # Production authenticated namespace
+    └── <sha256(subject)>/
+        ├── manager.lock
+        ├── manager.json
+        ├── reset.json
+        └── user-data/
+```
+
+- **Non-User-Controlled Paths:** Principal directories use 64-char lowercase SHA-256 hashes of the principal subject, preventing path traversal attacks.
+- **Strict POSIX Permissions:** Principal directories and parent namespace directories are created with mode `0700` (`rwx------`). Metadata and tombstone files use mode `0600` (`rw-------`). Symbolic links for profile roots are forbidden.
+- **Advisory OS Lock (`ProfileLock`):** Holds open `manager.lock` via non-blocking `flock(fd, LOCK_EX | LOCK_NB)` on Unix. Released automatically on drop (`LOCK_UN`). Lock wait timeout is bounded to 5 seconds (`DEFAULT_LOCK_TIMEOUT`). The lock file inode is preserved across profile resets.
+
+### Metadata Schema (`manager.json`)
+
+Atomic writes via temporary file (`manager.json.tmp.<pid>.<uuid>`) and rename:
+- `subject`: Principal identifier string.
+- `isDev`: Boolean distinguishing `--no-auth` dev mode from authenticated production profiles.
+- `profileEpoch`: Monotonic `u64` counter matching `[1-9][0-9]{0,19}`.
+- `browserIncarnation`: Fresh UUID minted on each process launch; `null` when dormant.
+- `updatedAtUnixMs`: Millisecond Unix timestamp of last update.
+- `lastResetOperationId`: Optional UUID of last successfully completed reset operation (for idempotence).
+
+## 8. Reset Reconciliation & Durable Tombstone Lifecycle (`manager.rs`)
+
+The reset state machine purges user credentials (`user-data/`) and recreates a fresh profile while maintaining process exclusivity and preventing concurrent operations.
+
+### Reset Sequence (`reset_profile`)
+
+1. **Acquire Lock:** Acquires exclusive `ProfileLock` on `manager.lock` (up to 5s timeout).
+2. **Idempotence Check:** If `meta.last_reset_operation_id == Some(operation_id)`, returns `ResetOutcome::Completed` immediately without re-executing.
+3. **Epoch Validation:** Confirms `meta.profile_epoch == expected_profile_epoch`; mismatch returns `ManagerError::StaleEpoch`.
+4. **Advance Epoch & Persist Tombstone:** Increments `profileEpoch`, sets state to `InstanceLifecycleState::Resetting`, and atomically writes `reset.json` tombstone with `stage: ResetStage::Initiated`. Atomically saves `manager.json` with new epoch.
+5. **Terminate Process (Bounded 10s):** Updates tombstone to `stage: ResetStage::Terminating`. If running, terminates browser process via `proc.terminate()` with `DEFAULT_TERMINATE_TIMEOUT = 10s`. Failure or timeout transitions tombstone to `stage: ResetStage::Failed`, enters `InstanceLifecycleState::CleanupPending`, and returns `ResetOutcome::CleanupPending`.
+6. **Delete User Data (Bounded 10s):** Updates tombstone to `stage: ResetStage::DeletingUserData`. Asynchronously deletes `user-data/` with `DEFAULT_DELETE_TIMEOUT = 10s`. Failure or timeout records `stage: ResetStage::Failed`, enters `CleanupPending`, and returns `ResetOutcome::CleanupPending`.
+7. **Recreate User Data:** Updates tombstone to `stage: ResetStage::RecreatingUserData`. Recreates empty `user-data/` directory with mode `0700`.
+8. **Clear Tombstone & Complete:** Records `last_reset_operation_id` in `manager.json`, clears `reset.json`, transitions state to `Dormant`, releases `ProfileLock`, and returns `ResetOutcome::Completed`.
+
+### Tombstone Lifecycle & Crash Reconciliation
+
+| Stage | Trigger / Transition | Failure Behavior |
+| --- | --- | --- |
+| `Initiated` | Reset requested and epoch validated | Atomically written before process termination |
+| `Terminating` | Process termination signaled | 10s timeout; failure sets `Failed` stage and `CleanupPending` |
+| `DeletingUserData` | Process confirmed dead | 10s timeout; failure sets `Failed` stage and `CleanupPending` |
+| `RecreatingUserData` | `user-data/` removed | Directory creation with mode `0700`; failure sets `Failed` stage |
+| `Failed` | Timeout or I/O error during reset | Tombstone retained; profile enters `CleanupPending` |
+
+- **Startup Reconciliation:** When loading an instance, `BrowserHostManager` checks for `reset.json`. If present, the instance enters `CleanupPending`:
+  - `capabilities()` reports `available: false` with reason `"profile cleanup pending from prior failed reset or termination; recovery or confirmed reset required"`.
+  - `ensure_running()` fails closed with `ManagerError::CleanupPending`.
+  - Resuming reset: Invoking `reset_profile` with the matching `operation_id` resumes the interrupted reset under lock.
+
+## 9. Lazy AppState Lifecycle & Graceful Shutdown (`state.rs`, `main.rs`)
+
+### Lazy Manager Integration
+
+`BrowserHostManager` is constructed during `AppState::new` as an `Arc<BrowserHostManager>`:
+- **Zero Startup Spawning:** No browser processes are launched during server initialization or `AppState` creation. Processes are spawned lazily only when `ensure_running()` is explicitly called by browser workflows.
+- **Global Process Capacity Admission:** Managed by an atomic counter `global_process_count` capped at `budgets.max_processes` (default 1). Admissions exceeding capacity fail closed with `ManagerError::Busy` (HTTP 429).
+- **Reconnect Deduplication:** Reconnecting clients reuse the existing alive browser instance handle (`BrowserInstanceHandle { pid, ws_endpoint, browser_incarnation, profile_epoch, user_data_dir }`) without consuming additional process capacity. Stale processes (dead PID) are detected and cleaned up before relaunching.
+
+### Graceful Server Teardown Protocol
+
+During server shutdown (`server/src/main.rs`), `browser_host.shutdown_all().await` executes alongside debug artifact disposal:
+1. Iterates across all active principal instances in `instances` map.
+2. For each running instance, extracts the `BrowserProcess` handle and executes `proc.terminate()` with a bounded 10-second deadline (`DEFAULT_TERMINATE_TIMEOUT`).
+3. Clears in-memory active target maps, viewer counters, and raw CDP connection counters.
+4. Transitions instance lifecycle states to `Dormant`.
+5. Resets `global_process_count` to zero.
+6. **Credential Preservation:** Ordinary shutdown terminates browser processes and cleans up runtime locks, but strictly preserves the `user-data/` directory and persisted profile credentials.
+
+## 10. Qualification Status & Open Proof Obligations
 
 Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) against real Google Chrome 157.0.8103.38:
 
@@ -139,10 +274,16 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Coordinate Mapping | **PASS** | Authoritative marker centroids verified for DPR 1/2, scroll, pageScale, visual offsets |
 | Wire Codec (BHJF) | **PASS** | Roundtrip encode/decode, SOF dimension verification, decimal sequence validation |
 | Dual Bearer Relay | **PASS** | Exact Origin policy, bearer authentication, 2-connection concurrency, 4 MiB frame limit |
+| Configuration & Capabilities | **PASS** | Bounded budgets, origin/destination validation, executable/root permissions, domain DTO |
+| Principal Profile Isolation | **PASS** | Dev/prod separation, 64-hex hashed root, 0700/0600 permissions, advisory flock exclusivity |
+| Reset Reconciliation & Tombstones | **PASS** | Epoch advance, atomic reset.json, 10s terminate/delete timeouts, CleanupPending fencing |
+| Lazy Manager & Graceful Shutdown | **PASS** | Zero startup spawn, reconnect reuse, 10s shutdown reap preserving credentials |
 | Native Browser Zoom | **UNVERIFIED** | Unreachable via standard CDP in headless Chromium 157; `inputTrusted: false` enforced |
 | Windows Containment | **FAIL-CLOSED** | Windows Job Object containment unqualified; non-Unix launch returns `ContainmentUnavailable` |
 
-## 7. Source Map
+*Cycle 2 Verification:* 221 tests passed across 6 test targets (`browser_host_lifecycle`, `browser_host_shutdown`, `auth_no_auth`, `config`, `browser_host_process`, `browser_host_adapter`).
+
+## 11. Source Map
 
 | Responsibility | Path |
 | --- | --- |
@@ -150,10 +291,15 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Atomic Command Budget | `server/src/browser_host/command_budget.rs` |
 | Process Supervisor & Containment | `server/src/browser_host/process.rs` |
 | Binary BHJF Protocol | `server/src/browser_host/protocol.rs` |
+| Configuration & Capability DTO | `server/src/browser_host/config.rs` |
+| Principal Profile & Lock Management | `server/src/browser_host/profile.rs` |
+| Lifecycle Manager & Reset Supervisor | `server/src/browser_host/manager.rs` |
 | Module Exports | `server/src/browser_host/mod.rs` |
 | Qualification Example Harness | `server/examples/browser_host_qualification.rs` |
 | Adapter & Protocol Test Suite | `server/tests/browser_host_adapter.rs` |
 | Process Containment Test Suite | `server/tests/browser_host_process.rs` |
 | Real-Engine Compatibility Test Suite | `server/tests/browser_host_compatibility.rs` |
+| Profile Lifecycle & Reset Test Suite | `server/tests/browser_host_lifecycle.rs` |
+| Graceful Shutdown Test Suite | `server/tests/browser_host_shutdown.rs` |
 | E2E Qualification Harness Fixture | `packages/ui/e2e/fixtures/browser-host-qualification.ts` |
 | Playwright Compatibility Spec | `packages/ui/e2e/os-host-browser/compatibility.spec.ts` |

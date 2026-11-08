@@ -23,7 +23,7 @@ Planning only; no implementation approval, hydration or product verification. Ca
 | # | Phase | Status |
 |---|---|---|
 | 01 | [Qualify adapter and freeze contracts](phase-01-compatibility-contracts.md) | DONE (2026-11-08) |
-| 02 | [Configure and supervise principal profiles](phase-02-managed-lifecycle.md) | pending |
+| 02 | [Configure and supervise principal profiles](phase-02-managed-lifecycle.md) | DONE (2026-11-08) |
 | 03 | [Authorize sessions attachments and ordered input](phase-03-admission-control.md) | pending |
 | 04 | [Expose authenticated instance-scoped raw CDP](phase-04-agent-cdp-gateway.md) | pending |
 | 05 | [Stream bounded native JPEG with independent credits](phase-05-producer-fanout.md) | pending |
@@ -34,6 +34,8 @@ Planning only; no implementation approval, hydration or product verification. Ca
 | 10 | [Reconcile documentation and controlled rollout evidence](phase-10-documentation-rollout.md) | pending |
 
 Phase 01 marked DONE per user approval (2026-11-08); adapter, process primitives, and Linux qualification verified (62/62 tests passing across 6 targets, code review score 9/10). Native Windows containment remains fail-closed (`ContainmentUnavailable`) and native browser zoom remains UNVERIFIED (`inputTrusted: false`) per contract §8.
+
+Phase 02 marked DONE (2026-11-08); principal profile layout, advisory OS locking, reset idempotence, process crash recovery, capabilities evaluation, and graceful shutdown containment verified (221/221 tests passing across 6 targets: `browser_host_lifecycle` [10/10], `browser_host_shutdown` [3/3], `auth_no_auth` [14/14], `config` [157/157], `browser_host_process` [19/19, 2 ignored], `browser_host_adapter` [18/18], code review score 9.6/10 approved with 0 critical and 0 high findings).
 
 ## Contracts and execution
 - [Exact architecture/wire/lifecycle/limits](architecture-contracts.md), [acceptance matrix](acceptance-matrix.md), [task-derived ownership](execution-ownership.md).

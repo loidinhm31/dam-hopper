@@ -950,6 +950,7 @@ fn global_config_writes_snake_case_ui_and_server_keys() {
             workflow_stale_after_hours: 24,
             idle_suspend: Default::default(),
             session_changes_enabled: false,
+            browser: Default::default(),
         },
     };
 
@@ -2274,4 +2275,169 @@ session_changes_enabled = true
 
     let reloaded = read_config(&config_path).unwrap();
     assert!(!reloaded.server.session_changes_enabled);
+}
+
+#[test]
+fn browser_host_config_defaults_and_validation() {
+    use crate::browser_host::config::{
+        evaluate_capabilities, BrowserHostConfig,
+        BROWSER_PROTOCOL_VERSION, DEFAULT_MEMORY_CEILING_BYTES,
+    };
+
+    let default_cfg = BrowserHostConfig::default();
+    assert!(!default_cfg.enabled);
+    assert!(default_cfg.executable_path.is_none());
+    assert!(default_cfg.profile_root.is_none());
+    assert_eq!(default_cfg.budgets.max_processes, 1);
+    assert_eq!(default_cfg.budgets.max_targets, 2);
+    assert_eq!(default_cfg.budgets.max_viewers, 2);
+    assert_eq!(default_cfg.budgets.max_raw_cdp_connections, 2);
+    assert_eq!(default_cfg.budgets.memory_ceiling_bytes, DEFAULT_MEMORY_CEILING_BYTES);
+    assert_eq!(default_cfg.budgets.jpeg_quality, 65);
+    assert_eq!(default_cfg.budgets.max_width, 1280);
+    assert_eq!(default_cfg.budgets.max_height, 900);
+    assert_eq!(default_cfg.budgets.frame_rate_fps, 10);
+    assert!(default_cfg.validate().is_ok());
+
+    // Direct domain capabilities DTO probe (no Chromium spawn)
+    let caps = evaluate_capabilities(&default_cfg, false, 1);
+    assert_eq!(caps.protocol_version, BROWSER_PROTOCOL_VERSION);
+    assert!(!caps.available);
+    assert_eq!(caps.unavailable_reason.as_deref(), Some("browser host disabled in configuration"));
+    assert_eq!(caps.profile_epoch, "1");
+    assert!(!caps.managed_profile_present);
+
+    // Budget bounds validation
+    let mut invalid_budgets = default_cfg.clone();
+    invalid_budgets.budgets.max_processes = 0;
+    assert!(invalid_budgets.validate().is_err());
+
+    let mut invalid_processes = default_cfg.clone();
+    invalid_processes.budgets.max_processes = 5;
+    assert!(invalid_processes.validate().is_err());
+
+    let mut invalid_targets = default_cfg.clone();
+    invalid_targets.budgets.max_targets = 20;
+    assert!(invalid_targets.validate().is_err());
+
+    let mut invalid_ceiling = default_cfg.clone();
+    invalid_ceiling.budgets.memory_ceiling_bytes = 10_000_000; // < 32 MiB
+    assert!(invalid_ceiling.validate().is_err());
+
+    // Overbudget cross-product overflow check against memory ceiling
+    let mut overbudget = default_cfg.clone();
+    overbudget.budgets.max_targets = 16;
+    overbudget.budgets.max_viewers = 16;
+    overbudget.budgets.max_raw_cdp_connections = 8;
+    overbudget.budgets.memory_ceiling_bytes = 33_554_432; // 32 MiB ceiling cannot fit 16*12MB + 16*4MB + 8*8MB
+    assert!(overbudget.validate().is_err());
+
+    // Origin validations
+    assert!(BrowserHostConfig::validate_origin("http://localhost:3000").is_ok());
+    assert!(BrowserHostConfig::validate_origin("https://example.com").is_ok());
+    assert!(BrowserHostConfig::validate_origin("https://example.com:8443").is_ok());
+    // Rejected origins
+    assert!(BrowserHostConfig::validate_origin("http://user:pass@localhost:3000").is_err()); // credentials
+    assert!(BrowserHostConfig::validate_origin("http://localhost:3000/some/path").is_err()); // path
+    assert!(BrowserHostConfig::validate_origin("http://localhost:3000?query=1").is_err());   // query
+    assert!(BrowserHostConfig::validate_origin("http://localhost:3000#fragment").is_err());  // fragment
+    assert!(BrowserHostConfig::validate_origin("ftp://example.com").is_err());               // unsupported scheme
+    assert!(BrowserHostConfig::validate_origin("").is_err());                                // empty
+    assert!(BrowserHostConfig::validate_origin("http://localhost:3000/").is_err());          // trailing slash
+
+    // Denied destinations
+    assert!(BrowserHostConfig::validate_destination("169.254.169.254").is_ok());
+    assert!(BrowserHostConfig::validate_destination("10.0.0.0/8").is_ok());
+    assert!(BrowserHostConfig::validate_destination("metadata.google.internal").is_ok());
+    assert!(BrowserHostConfig::validate_destination("").is_err());
+
+    assert!(BrowserHostConfig::validate_destination("[::1]:8080").is_ok());
+    assert!(BrowserHostConfig::validate_destination("[fd00:ec2::254]:80").is_ok());
+    // Config reload restart requirement check
+    let mut updated_cfg = default_cfg.clone();
+    assert!(!default_cfg.requires_restart(&updated_cfg));
+    updated_cfg.enabled = true;
+    assert!(default_cfg.requires_restart(&updated_cfg));
+
+    // Engine qualified is false when executable is missing
+    let mut missing_exec_cfg = default_cfg.clone();
+    missing_exec_cfg.enabled = true;
+    missing_exec_cfg.executable_path = Some(std::path::PathBuf::from("/nonexistent/bin"));
+    let missing_caps = evaluate_capabilities(&missing_exec_cfg, false, 1);
+    assert!(!missing_caps.available);
+    assert!(!missing_caps.engine_qualified);
+}
+#[test]
+fn browser_host_config_toml_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam-hopper.toml");
+
+    // 1. Configured under [server.browser]
+    std::fs::write(
+        &config_path,
+        r#"
+[workspace]
+name = "browser-test"
+
+[server.browser]
+enabled = false
+allowed_target_origins = ["http://localhost:3000", "https://app.local"]
+allowed_asset_origins = ["http://localhost:3001"]
+allowed_dev_origins = ["http://localhost:5173"]
+
+[server.browser.budgets]
+max_processes = 2
+max_targets = 4
+max_viewers = 4
+max_raw_cdp_connections = 3
+memory_ceiling_bytes = 268435456
+jpeg_quality = 75
+max_width = 1600
+max_height = 1000
+frame_rate_fps = 15
+"#,
+    )
+    .unwrap();
+
+    let cfg = read_config(&config_path).unwrap();
+    let b = &cfg.server.browser;
+    assert!(!b.enabled);
+    assert_eq!(b.allowed_target_origins, vec!["http://localhost:3000", "https://app.local"]);
+    assert_eq!(b.allowed_asset_origins, vec!["http://localhost:3001"]);
+    assert_eq!(b.allowed_dev_origins, vec!["http://localhost:5173"]);
+    assert_eq!(b.budgets.max_processes, 2);
+    assert_eq!(b.budgets.max_targets, 4);
+    assert_eq!(b.budgets.max_viewers, 4);
+    assert_eq!(b.budgets.max_raw_cdp_connections, 3);
+    assert_eq!(b.budgets.memory_ceiling_bytes, 268435456);
+    assert_eq!(b.budgets.jpeg_quality, 75);
+    assert_eq!(b.budgets.max_width, 1600);
+    assert_eq!(b.budgets.max_height, 1000);
+    assert_eq!(b.budgets.frame_rate_fps, 15);
+
+    // Write back and verify TOML contains expected snake_case keys
+    write_config(&config_path, &cfg).unwrap();
+    let written = std::fs::read_to_string(&config_path).unwrap();
+    assert!(written.contains("[server.browser]"));
+    assert!(written.contains("allowed_target_origins"));
+    assert!(written.contains("[server.browser.budgets]"));
+    assert!(written.contains("max_processes = 2"));
+
+    // 2. Also supports top-level [browser] alias in TOML
+    let config_path_top = dir.path().join("dam-hopper-top.toml");
+    std::fs::write(
+        &config_path_top,
+        r#"
+[workspace]
+name = "browser-top-test"
+
+[browser]
+enabled = false
+allowed_target_origins = ["https://example.com"]
+"#,
+    )
+    .unwrap();
+
+    let cfg_top = read_config(&config_path_top).unwrap();
+    assert_eq!(cfg_top.server.browser.allowed_target_origins, vec!["https://example.com"]);
 }

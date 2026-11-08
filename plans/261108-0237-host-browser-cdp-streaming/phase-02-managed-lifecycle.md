@@ -6,8 +6,8 @@
 - Relevant bounded evidence: `reports/backend-boundaries.md:28–34,42–53; reports/design-direction.md:18–27`. Research recommendations superseded by architecture contract where explicitly stated.
 
 ## Overview
-- Priority: P2. Status: pending. Effort: not-estimated. Planning only; commands below are future obligations, not exercised checks.
-- Deliverable: Configure and supervise principal profiles.
+- Priority: P2. Status: DONE (2026-11-08). Effort: not-estimated.
+- Deliverable: Configure and supervise principal profiles. Review completed in plans/reports/code-review-261108-1804-phase-02-principal-profiles.md (Cycle 1) and plans/reports/code-review-261108-1841-phase-02-principal-profiles-cycle-2.md (Cycle 2 - Approved; Score: 9.6/10; 221 tests passed across 6 targets).
 
 ## Key insights
 AppState/startup/shutdown integration is centralized; current shutdown watchdog is10s. Credentials require directory locks, verified process exit and crash tombstones, not Child.kill or PID-age guesses.
@@ -173,9 +173,9 @@ Exactly one fence; task IDs/markers stable across revisions. No tasks.json or hy
 ]
 ```
 
-- [ ] <!-- evcrate-task:configure-browser-host --> Add validated host configuration and capability reasons
-- [ ] <!-- evcrate-task:manage-principal-profiles --> Implement locked profile state and reset reconciliation
-- [ ] <!-- evcrate-task:integrate-host-lifetime --> Wire lazy manager into AppState and graceful shutdown
+- [x] <!-- evcrate-task:configure-browser-host --> Add validated host configuration and capability reasons
+- [x] <!-- evcrate-task:manage-principal-profiles --> Implement locked profile state and reset reconciliation
+- [x] <!-- evcrate-task:integrate-host-lifetime --> Wire lazy manager into AppState and graceful shutdown
 
 ## Success criteria
 - Every task acceptance above is observed with applicable compile/typecheck, behavioral tests and real smoke evidence; missing or failed proof keeps task incomplete.
@@ -191,8 +191,9 @@ OS lock and descendant-proof errors fail closed. Server watchdog timing must be 
 - Do not store/log bearer/tickets/raw loopback endpoints, real site credentials or sensitive page/selection payload in diagnostics/evidence.
 
 ## Next steps
-Phase03 may begin after integrate-host-lifetime. Shared state/main/config writers remain serialized.
-- Parent owns independent plan review/optional validation and implementation permission. This phase text neither executes tasks nor supplies approval.
-
+1. Remediation verified across all cycle 1 critical and high-priority issues: lock handling on reset/crash, reset tombstone idempotence, and shutdown termination timeout.
+2. Cycle 2 tests verified clean: 221 tests passed across 6 targets (`browser_host_lifecycle`, `browser_host_shutdown`, `auth_no_auth`, `config`, `browser_host_process`, `browser_host_adapter`).
+3. Cycle 2 code review approved with score 9.6/10 (0 critical, 0 high findings). Phase 02 is approved and closed.
+4. Advance to Phase 03: Admission control and route registration (`phase-03-admission-control.md`).
 ## Unresolved questions
 - No additional product interview here. Exact compatibility/platform/performance and human observations remain future gates where applicable; their absence is not a pass.

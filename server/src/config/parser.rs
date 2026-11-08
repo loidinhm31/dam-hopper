@@ -45,6 +45,13 @@ pub fn parse_config_str_at_path(
         .as_deref()
         .unwrap_or(&config_dir);
 
+    let mut server = raw.server;
+    if let Some(browser) = raw.browser {
+        if server.browser == Default::default() {
+            server.browser = browser;
+        }
+    }
+
     let projects = raw
         .projects
         .into_iter()
@@ -54,7 +61,7 @@ pub fn parse_config_str_at_path(
     Ok(DamHopperConfig {
         workspace: raw.workspace,
         agent_store: raw.agent_store,
-        server: raw.server,
+        server,
         projects,
         features: raw.features,
         ui: raw.ui,
@@ -64,6 +71,9 @@ pub fn parse_config_str_at_path(
 }
 fn validate_config(raw: &DamHopperConfigRaw) -> Result<(), AppError> {
     raw.server.validate().map_err(AppError::Config)?;
+    if let Some(browser) = &raw.browser {
+        browser.validate().map_err(|e| AppError::Config(format!("browser: {e}")))?;
+    }
     // Unique project names
     let names: Vec<&str> = raw.projects.iter().map(|p| p.name.as_str()).collect();
     let unique: std::collections::HashSet<_> = names.iter().collect();
@@ -584,6 +594,50 @@ pub(crate) fn server_to_toml(server: &super::schema::ServerConfig) -> toml::Valu
             table.insert("agent_executables".to_string(), Value::Array(execs));
         }
         config.insert("idle_suspend".to_string(), Value::Table(table));
+    }
+    if server.browser != Default::default() {
+        let browser = &server.browser;
+        let mut table = toml::map::Map::new();
+        table.insert("enabled".to_string(), Value::Boolean(browser.enabled));
+        if let Some(exec) = &browser.executable_path {
+            table.insert("executable_path".to_string(), Value::String(exec.display().to_string()));
+        }
+        if let Some(root) = &browser.profile_root {
+            table.insert("profile_root".to_string(), Value::String(root.display().to_string()));
+        }
+        if !browser.allowed_target_origins.is_empty() {
+            let origins = browser.allowed_target_origins.iter().cloned().map(Value::String).collect();
+            table.insert("allowed_target_origins".to_string(), Value::Array(origins));
+        }
+        if !browser.allowed_asset_origins.is_empty() {
+            let origins = browser.allowed_asset_origins.iter().cloned().map(Value::String).collect();
+            table.insert("allowed_asset_origins".to_string(), Value::Array(origins));
+        }
+        if !browser.allowed_dev_origins.is_empty() {
+            let origins = browser.allowed_dev_origins.iter().cloned().map(Value::String).collect();
+            table.insert("allowed_dev_origins".to_string(), Value::Array(origins));
+        }
+        let default_denied = crate::browser_host::config::DEFAULT_DENIED_DESTINATIONS;
+        let current_denied: Vec<&str> = browser.denied_destinations.iter().map(|s| s.as_str()).collect();
+        if current_denied != default_denied {
+            let destinations = browser.denied_destinations.iter().cloned().map(Value::String).collect();
+            table.insert("denied_destinations".to_string(), Value::Array(destinations));
+        }
+        if browser.budgets != Default::default() {
+            let b = &browser.budgets;
+            let mut b_table = toml::map::Map::new();
+            b_table.insert("max_processes".to_string(), Value::Integer(b.max_processes as i64));
+            b_table.insert("max_targets".to_string(), Value::Integer(b.max_targets as i64));
+            b_table.insert("max_viewers".to_string(), Value::Integer(b.max_viewers as i64));
+            b_table.insert("max_raw_cdp_connections".to_string(), Value::Integer(b.max_raw_cdp_connections as i64));
+            b_table.insert("memory_ceiling_bytes".to_string(), Value::Integer(b.memory_ceiling_bytes as i64));
+            b_table.insert("jpeg_quality".to_string(), Value::Integer(b.jpeg_quality as i64));
+            b_table.insert("max_width".to_string(), Value::Integer(b.max_width as i64));
+            b_table.insert("max_height".to_string(), Value::Integer(b.max_height as i64));
+            b_table.insert("frame_rate_fps".to_string(), Value::Integer(b.frame_rate_fps as i64));
+            table.insert("budgets".to_string(), Value::Table(b_table));
+        }
+        config.insert("browser".to_string(), Value::Table(table));
     }
     Value::Table(config)
 }

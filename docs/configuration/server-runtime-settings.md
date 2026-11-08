@@ -81,6 +81,50 @@ session_changes_enabled = false
   - On success, invalidates config queries and cancels/removes all `session-changes` queries for that target owner.
   - Surfaces an honest restart notice on enable (`Restart active OMP sessions to load the Session Changes extension`) and actionable errors on failure without optimistic local state.
   - Terminal triggers across desktop `TabBar`, `ActiveTerminalRuntimeDisplay`, and `TerminalAccessoryControls` query `useSessionChangesEnabled(terminalOwner)` and hide/disable when tracking is disabled, loading, or unavailable.
+### Host Browser Configuration
+
+The Host Browser CDP streaming subsystem provides candidate headless Chromium process management and CDP streaming. Configuration is defined under `[server.browser]` and `[server.browser.budgets]` in `config.toml`:
+
+```toml
+[server.browser]
+enabled = false
+executable_path = "/usr/bin/google-chrome" # Path to browser executable (mode 0755 or stricter)
+profile_root = "~/.config/dam-hopper/browser-profiles" # Principal profile root (mode 0700)
+allowed_target_origins = ["http://127.0.0.1:5173"] # Approved target page origins
+allowed_asset_origins = [] # Approved asset origins
+allowed_dev_origins = [] # Approved dev origins
+denied_destinations = ["169.254.169.254", "fd00:ec2::254", "metadata.google.internal", "100.100.100.200"] # Cloud metadata
+
+[server.browser.budgets]
+max_processes = 1 # Global browser process capacity (1..=4)
+max_targets = 2 # Max concurrent page targets per principal (1..=16)
+max_viewers = 2 # Max concurrent viewers per target (1..=16)
+max_raw_cdp_connections = 2 # Max raw CDP proxy connections (1..=8)
+memory_ceiling_bytes = 134217728 # Hard memory ceiling (default 128 MiB, 32 MiB..=1 GiB)
+jpeg_quality = 65 # Screencast JPEG quality (10..=100)
+max_width = 1280 # Capture frame width (64..=1920)
+max_height = 900 # Capture frame height (64..=1080)
+frame_rate_fps = 10 # Capture frame rate (1..=30)
+```
+
+**Configuration Fields:**
+
+| Field | Type | Default | Validation & Rules |
+| --- | --- | --- | --- |
+| `enabled` | bool | `false` | Defaults disabled. Requires valid executable and policy before enabling. |
+| `executable_path` | string/path | `None` | Must be a regular file with execute permissions (`mode & 0o111 != 0`) and not world-writable (`mode & 0o002 == 0`). |
+| `profile_root` | string/path | `None` | Defaults to `~/.config/dam-hopper/browser-profiles`. Must be a directory, not a symlink, with mode `0700` (`mode & 0o077 == 0`). |
+| `allowed_target_origins` | string[] | `[]` | Scheme (`http`/`https`) + host + optional port. Paths, queries, fragments, credentials, and trailing slashes are forbidden. |
+| `allowed_asset_origins` | string[] | `[]` | Approved asset origins. Same strict validation as target origins. |
+| `allowed_dev_origins` | string[] | `[]` | Approved developer debug origins. Same strict validation as target origins. |
+| `denied_destinations` | string[] | Metadata IPs | Blocked destination addresses. Accepts IP, IP CIDR, hostname, or `host:port`. |
+
+**Validation & Operational Constraints:**
+
+- **Memory Ceiling Cross-Product:** Estimated reservation `(max_targets * 12.1 MiB) + (max_viewers * 4.2 MiB) + (max_raw_cdp_connections * 8.0 MiB)` must not exceed `memory_ceiling_bytes`. Overbudget configuration fails validation with `MemoryCeilingExceeded`.
+- **Permissions Enforcement:** Unsafe executable permissions (missing execute bit, world-writable) or profile root permissions (symlink, group/world accessible) fail validation.
+- **Restart Boundaries:** Changes to `enabled`, `executable_path`, `profile_root`, or `budgets.max_processes` require a server restart and do not hot-swap active directories.
+
 ### Deferred host-action scaffolding (inactive)
 
 The current release has no supported host-action configuration or client
