@@ -24,6 +24,7 @@ import { registerEditorSlot } from "../action-dispatch.js";
 import { getActiveMonacoSelectionText } from "@/components/organisms/MonacoHost.js";
 import { getConnectionSnapshot } from "@/api/connections.js";
 
+import { dispatchIntent, createIntent } from "../intents.js";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog.js";
 const MarkdownHost = lazy(() =>
   import("@/components/organisms/MarkdownHost.js").then((m) => ({
@@ -261,6 +262,30 @@ export function EditorApp({ window }: EditorAppProps) {
               const tabKey = editorDiffTabKey(target, filePath);
               useEditorStore.getState().close(tabKey);
               useWindowStore.getState().closeWindow(window.id);
+            }}
+            onLocateFile={(file) => {
+              const effectiveTarget: FsTargetRef = diffTarget
+                ? {
+                    kind: "project",
+                    profileId: diffTarget.profileId ?? "default",
+                    project: diffTarget.project,
+                    worktreePath: diffTarget.worktreePath,
+                  }
+                : {
+                    kind: "project",
+                    profileId: owner.profileId ?? "default",
+                    project: diffProject,
+                  };
+              void dispatchIntent(
+                createIntent("file:reveal", {
+                  profileId: effectiveTarget.profileId ?? "default",
+                  generation: window.ctx.generation ?? 1,
+                  target: effectiveTarget,
+                  projectId: diffProject,
+                  worktreeId: effectiveTarget.worktreePath ?? undefined,
+                  filePath: file,
+                }),
+              );
             }}
           />
         </Suspense>

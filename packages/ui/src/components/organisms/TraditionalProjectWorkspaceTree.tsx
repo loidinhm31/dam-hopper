@@ -6,6 +6,7 @@ import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import type { FsArborNode } from "@/api/fs-types.js";
 import type { IntentPayloadMap } from "@/os/intents.js";
 import type { FsTargetRef, ProjectRef } from "@/api/ownership.js";
+import type { FileTreeRevealRequest } from "@/lib/file-tree-reveal.js";
 import { cn } from "@/lib/utils.js";
 
 export interface TraditionalProjectWorkspaceTreeProps {
@@ -15,6 +16,7 @@ export interface TraditionalProjectWorkspaceTreeProps {
   regionId: string;
   onOpenFile?: (payload: IntentPayloadMap["file:open"]) => void;
   className?: string;
+  revealRequest?: FileTreeRevealRequest | null;
 }
 
 export function TraditionalProjectWorkspaceTree({
@@ -24,6 +26,7 @@ export function TraditionalProjectWorkspaceTree({
   regionId,
   onOpenFile,
   className,
+  revealRequest,
 }: TraditionalProjectWorkspaceTreeProps) {
   const effectiveProfileId = profileId ?? projectRef?.profileId;
   const connectionSnapshot = useConnectionSnapshot(effectiveProfileId ?? "");
@@ -109,6 +112,7 @@ export function TraditionalProjectWorkspaceTree({
             }
             mode="projects"
             onFileOpen={handleFileOpen}
+            revealRequest={revealRequest}
             className="min-h-24 h-full flex-1 overflow-y-auto"
           />
         </EncryptProvider>

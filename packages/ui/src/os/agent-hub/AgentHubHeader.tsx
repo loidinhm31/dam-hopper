@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { Menu, BookOpen, AlertCircle, CircleDot, FolderTree, GitBranch } from "lucide-react";
+import { Menu, BookOpen, AlertCircle, CircleDot, FolderTree, GitBranch, GitCompare } from "lucide-react";
 import { cn } from "@/lib/utils.js";
 import type { TraditionalTerminalProjectGroup } from "@/lib/traditional-terminal-projects.js";
 import type { AgentHubSummary } from "../agent-hub.js";
@@ -15,6 +15,7 @@ export interface AgentHubHeaderProps {
   onToggleFileTree?(): void;
   onOpenRecipes(): void;
   onOpenGit?(): void;
+  onOpenChanges?(): void;
 }
 
 export function AgentHubHeader({
@@ -28,6 +29,7 @@ export function AgentHubHeader({
   onToggleFileTree,
   onOpenRecipes,
   onOpenGit,
+  onOpenChanges,
 }: AgentHubHeaderProps): ReactElement {
   const profileText = selectedGroup
     ? selectedGroup.profileName || selectedGroup.profileId
@@ -44,6 +46,10 @@ export function AgentHubHeader({
   const gitLabel = isGitEnabled
     ? `Open Git panel (${selectedGroup!.projectName})`
     : "Open Git panel (no project selected)";
+  const isChangesEnabled = Boolean(selectedGroup?.projectName);
+  const changesLabel = isChangesEnabled
+    ? `Open Changes panel (${selectedGroup!.projectName})`
+    : "Open Changes panel (no project selected)";
   return (
     <header className="flex h-10 min-h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-xs">
       <div className="flex min-w-0 items-center gap-2">
@@ -121,6 +127,26 @@ export function AgentHubHeader({
           <GitBranch className="h-3.5 w-3.5" aria-hidden="true" />
           <span>Git</span>
         </button>
+        {/* Changes launcher */}
+        {onOpenChanges && (
+          <button
+            type="button"
+            onClick={onOpenChanges}
+            disabled={!isChangesEnabled}
+            aria-label={changesLabel}
+            title={changesLabel}
+            className={cn(
+              "flex items-center gap-1.5 rounded border border-[var(--color-border)] px-2.5 py-1 font-medium transition-colors",
+              !isChangesEnabled
+                ? "cursor-not-allowed bg-[var(--color-surface-2)]/50 text-[var(--color-text-muted)] opacity-60"
+                : "bg-[var(--color-surface-2)] text-[var(--color-text)] hover:bg-[var(--color-surface)]",
+            )}
+          >
+            <GitCompare className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Changes</span>
+          </button>
+        )}
+
 
         {/* Project Files toggle button */}
         {onToggleFileTree && (

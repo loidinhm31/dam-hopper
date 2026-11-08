@@ -130,4 +130,60 @@ describe("useLockScreenStore", () => {
     expect(useLockScreenStore.getState().hasPin).toBe(true);
     expect(useLockScreenStore.getState().isLocked).toBe(true);
   });
+
+  it("successfully sets and unlocks PIN when crypto.subtle is undefined (HTTP insecure context)", async () => {
+    const originalSubtle = globalThis.crypto.subtle;
+    try {
+      // Simulate non-secure context where crypto.subtle is undefined
+      Object.defineProperty(globalThis.crypto, "subtle", {
+        value: undefined,
+        configurable: true,
+      });
+      expect(globalThis.crypto.subtle).toBeUndefined();
+
+      await useLockScreenStore.getState().setPin("9876");
+      useLockScreenStore.getState().lock();
+      expect(useLockScreenStore.getState().isLocked).toBe(true);
+
+      const wrong = await useLockScreenStore.getState().verifyAndUnlock("1234");
+      expect(wrong).toBe(false);
+      expect(useLockScreenStore.getState().isLocked).toBe(true);
+
+      const right = await useLockScreenStore.getState().verifyAndUnlock("9876");
+      expect(right).toBe(true);
+      expect(useLockScreenStore.getState().isLocked).toBe(false);
+    } finally {
+      Object.defineProperty(globalThis.crypto, "subtle", {
+        value: originalSubtle,
+        configurable: true,
+      });
+    }
+  });
+
+  it("correctly unlocks with pre-existing standard PBKDF2 hash record", async () => {
+    // Pre-calculated vector with 100k iterations PBKDF2-HMAC-SHA256:
+    // pin: "1234", salt: "00112233445566778899aabbccddeeff"
+    const salt = "00112233445566778899aabbccddeeff";
+    const expectedHash = await deriveLockHash("1234", salt);
+
+    localStorage.setItem(
+      LOCK_VERIFIER_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        salt,
+        hash: expectedHash,
+        length: 4,
+        updatedAt: Date.now(),
+      }),
+    );
+    localStorage.setItem(LOCK_ACTIVE_STORAGE_KEY, "1");
+
+    useLockScreenStore.getState().init();
+    expect(useLockScreenStore.getState().hasPin).toBe(true);
+    expect(useLockScreenStore.getState().isLocked).toBe(true);
+
+    const unlocked = await useLockScreenStore.getState().verifyAndUnlock("1234");
+    expect(unlocked).toBe(true);
+    expect(useLockScreenStore.getState().isLocked).toBe(false);
+  });
 });

@@ -181,4 +181,130 @@ describe("TraditionalProjectFileChanges", () => {
     root.unmount();
     container.remove();
   });
+  it("supports context menu with Locate in files, Open diff, and Open file", async () => {
+    mockIsLoading = false;
+    mockDiffData = {
+      gitAvailable: true,
+      entries: [
+        {
+          path: "src/locate-me.ts",
+          status: "modified",
+          staged: false,
+          insertions: 3,
+          deletions: 1,
+        },
+        {
+          path: "src/deleted.ts",
+          status: "deleted",
+          staged: false,
+          insertions: 0,
+          deletions: 10,
+        },
+      ],
+    };
+    mockIsError = false;
+
+    const onOpenFile = vi.fn();
+    const onLocateFile = vi.fn();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        createElement(TraditionalProjectFileChanges, {
+          projectName: "demo-project",
+          profileId: "prof-1",
+          onOpenFile,
+          onLocateFile,
+        }),
+      );
+    });
+
+    const items = container.querySelectorAll('[role="listitem"]');
+    expect(items).toHaveLength(2);
+
+    // Open context menu on first item
+    await act(async () => {
+      (items[0] as HTMLElement).dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 50,
+          clientY: 50,
+          button: 2,
+        }),
+      );
+    });
+
+    const menuItems = Array.from(document.body.querySelectorAll('[role="menuitem"]'));
+    const locateItem = menuItems.find((el) => el.textContent?.includes("Locate in files"));
+    const openDiffItem = menuItems.find((el) => el.textContent?.includes("Open diff"));
+    const openFileItem = menuItems.find((el) => el.textContent?.includes("Open file"));
+
+    expect(locateItem).toBeDefined();
+    expect(openDiffItem).toBeDefined();
+    expect(openFileItem).toBeDefined();
+
+    // Click Locate in files
+    await act(async () => {
+      (locateItem as HTMLElement).click();
+    });
+    expect(onLocateFile).toHaveBeenCalledWith("src/locate-me.ts");
+
+    root.unmount();
+    container.remove();
+  });
+
+  it("disables locate and open file in context menu for deleted files", async () => {
+    mockIsLoading = false;
+    mockDiffData = {
+      gitAvailable: true,
+      entries: [
+        {
+          path: "src/removed.ts",
+          status: "deleted",
+          staged: false,
+          insertions: 0,
+          deletions: 5,
+        },
+      ],
+    };
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        createElement(TraditionalProjectFileChanges, {
+          projectName: "demo-project",
+          profileId: "prof-1",
+        }),
+      );
+    });
+
+    const item = container.querySelector('[role="listitem"]')!;
+    await act(async () => {
+      item.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 50,
+          clientY: 50,
+          button: 2,
+        }),
+      );
+    });
+
+    const menuItems = Array.from(document.body.querySelectorAll('[role="menuitem"]'));
+    const locateItem = menuItems.find((el) => el.textContent?.includes("Locate in files"));
+    const openFileItem = menuItems.find((el) => el.textContent?.includes("Open file"));
+    expect(locateItem).toBeDefined();
+    expect(openFileItem).toBeDefined();
+    expect(locateItem?.getAttribute("aria-disabled")).toBe("true");
+    expect(openFileItem?.getAttribute("aria-disabled")).toBe("true");
+    root.unmount();
+    container.remove();
+  });
 });

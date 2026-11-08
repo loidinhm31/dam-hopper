@@ -25,6 +25,7 @@ import { VideoPreview } from "@/components/organisms/VideoPreview.js";
 import { ImagePreview } from "@/components/organisms/ImagePreview.js";
 import { DiffViewer } from "@/components/organisms/DiffViewer.js";
 import { ConflictDialog } from "@/components/organisms/ConflictDialog.js";
+import { dispatchIntent, createIntent } from "@/os/intents.js";
 import { EditorStatusBar } from "@/components/organisms/EditorStatusBar.js";
 import { mimeToLanguage } from "@/lib/mime-to-language.js";
 import { isPreviewOnlyFile } from "@/lib/file-tier.js";
@@ -48,6 +49,7 @@ import {
 import { markProjectTargetUnavailable } from "@/stores/project-target.js";
 import { useConnectionSnapshot } from "@/api/connections.js";
 import type { GitCommitRevealRequest } from "@/lib/git-commit-reveal.js";
+import type { FsTargetRef } from "@/api/ownership.js";
 import {
   EditorTabContextMenu,
   getEditorTabContextMenuItems,
@@ -77,6 +79,7 @@ export interface EditorTabsProps {
   sourceActive?: boolean;
   onRevealGitCommit?: (request: GitCommitRevealRequest) => void;
   onRevealCommit?: (commitHash: string, rootId: string) => void;
+  onLocateFile?: (filePath: string) => void;
 }
 
 export function EditorTabs({
@@ -85,6 +88,7 @@ export function EditorTabs({
   sourceActive = true,
   onRevealGitCommit,
   onRevealCommit: onRevealCommitProp,
+  onLocateFile,
 }: EditorTabsProps) {
   const targetRef = normalizeProjectTarget(
     target ?? project ?? { project: "" },
@@ -540,6 +544,32 @@ export function EditorTabs({
               targetAvailable={activeTab.targetAvailable}
               onTargetUnavailable={handleActiveTargetUnavailable}
               onClose={() => close(activeTab.key)}
+              onLocateFile={(file) => {
+                if (onLocateFile) {
+                  onLocateFile(file);
+                  return;
+                }
+                const targetProfileId =
+                  (activeTab.target.kind === "project" ? activeTab.target.profileId : targetRef.profileId) ?? "default";
+                const targetWorktree =
+                  (activeTab.target.kind === "project" ? activeTab.target.worktreePath : targetRef.worktreePath) ?? undefined;
+                const effectiveTarget: FsTargetRef = {
+                  kind: "project",
+                  profileId: targetProfileId,
+                  project: activeTab.project,
+                  worktreePath: targetWorktree,
+                };
+                void dispatchIntent(
+                  createIntent("file:reveal", {
+                    profileId: targetProfileId,
+                    generation: connectionSnapshot?.owner.generation ?? 1,
+                    target: effectiveTarget,
+                    projectId: activeTab.project,
+                    worktreeId: targetWorktree ?? undefined,
+                    filePath: file,
+                  }),
+                );
+              }}
             />
           ) : activeTab.tier === "large" ? (
             <LargeFileViewer

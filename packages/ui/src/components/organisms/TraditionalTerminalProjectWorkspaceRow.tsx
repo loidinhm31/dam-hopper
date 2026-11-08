@@ -1,6 +1,5 @@
 import { useId, useMemo } from "react";
-import { GitCommit, Plus, X } from "lucide-react";
-import { ProfileBadge } from "@/components/atoms/ProfileBadge.js";
+import { GitCommit, GitBranch, Plus, X } from "lucide-react";
 import { TerminalProjectActivityIndicator } from "@/components/atoms/TerminalActivityIndicator.js";
 import { TraditionalTerminalWorktreeSelect } from "@/components/organisms/TraditionalTerminalWorktreeSelect.js";
 import { useProjectTarget } from "@/hooks/use-project-target.js";
@@ -147,6 +146,12 @@ export function TraditionalTerminalProjectWorkspaceRow({
   const shortHash = commitHash ? commitHash.slice(0, 7) : null;
   const canDismiss = canDismissWorkspace(group);
 
+  const rawBranch =
+    worktreeStatus?.branch?.trim() ||
+    worktree?.branch?.trim() ||
+    (selectedPath == null ? baseGitStatus?.branch?.trim() : null);
+  const branchName = rawBranch && rawBranch.length > 0 ? rawBranch : null;
+
   return (
     <div
       role="presentation"
@@ -197,12 +202,7 @@ export function TraditionalTerminalProjectWorkspaceRow({
             >
               {group.label}
             </span>
-            {touchOptimized && group.profileName && (
-              <ProfileBadge
-                profileId={group.profileId}
-                name={group.profileName}
-              />
-            )}
+
             <span
               className={cn(
                 "ml-auto shrink-0 flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-mono font-medium",
@@ -214,14 +214,7 @@ export function TraditionalTerminalProjectWorkspaceRow({
               {group.terminalTabs.length}
             </span>
           </div>
-          {!touchOptimized && group.profileName && (
-            <div className="order-first flex items-center pl-5">
-              <ProfileBadge
-                profileId={group.profileId}
-                name={group.profileName}
-              />
-            </div>
-          )}
+
         </button>
         {onNewTerminalInGroup ? (
           <button
@@ -268,14 +261,21 @@ export function TraditionalTerminalProjectWorkspaceRow({
               : "flex flex-col gap-1 pl-7 pr-1 pb-1",
           )}
         >
-          <div className="min-w-0 flex-1">
-            <TraditionalTerminalWorktreeSelect
-              projectName={group.projectName}
-              profileId={group.profileId}
-              projectRef={group.projectRef}
-              touchOptimized={touchOptimized}
-            />
-          </div>
+          {branchName ? (
+            <div
+              title={`Branch: ${branchName}`}
+              aria-label={`Branch ${branchName}`}
+              className={cn(
+                "flex items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-[11px] text-[var(--color-text-muted)] bg-[var(--color-surface-2)]/40",
+                touchOptimized ? "shrink-0" : "w-full min-w-0 truncate",
+              )}
+            >
+              <GitBranch className="h-3 w-3 shrink-0 text-[var(--color-primary)]" aria-hidden="true" />
+              <span className="min-w-0 truncate font-semibold text-[var(--color-text)]">
+                {branchName}
+              </span>
+            </div>
+          ) : null}
           {showCommitStatus && shortHash ? (
             <span
               title={
@@ -302,6 +302,14 @@ export function TraditionalTerminalProjectWorkspaceRow({
               ) : null}
             </span>
           ) : null}
+          <div className="min-w-0 flex-1">
+            <TraditionalTerminalWorktreeSelect
+              projectName={group.projectName}
+              profileId={group.profileId}
+              projectRef={group.projectRef}
+              touchOptimized={touchOptimized}
+            />
+          </div>
         </div>
       ) : null}
 

@@ -293,4 +293,57 @@ describe("AgentHubHeader", () => {
       "Toggle files sidebar",
     ]);
   });
+
+  it("renders changes button disabled when no project is selected", () => {
+    act(() => {
+      root?.render(
+        <AgentHubHeader
+          sidebarHidden={false}
+          selectedGroup={null}
+          summary={makeSummary()}
+          onToggleSidebar={() => {}}
+          onOpenRecipes={() => {}}
+          onOpenChanges={() => {}}
+        />,
+      );
+    });
+
+    const changesBtn = container?.querySelector('button[aria-label="Open Changes panel (no project selected)"]') as HTMLButtonElement;
+    expect(changesBtn).not.toBeNull();
+    expect(changesBtn.disabled).toBe(true);
+  });
+
+  it("renders changes button enabled when project is selected and invokes onOpenChanges", () => {
+    const onOpenChanges = vi.fn();
+    const group: TraditionalTerminalProjectGroup = {
+      id: "p1:proj-a",
+      label: "proj-a",
+      projectName: "proj-a",
+      profileId: "p1",
+      terminalTabs: [],
+      mountedSessions: [],
+    };
+
+    act(() => {
+      root?.render(
+        <AgentHubHeader
+          sidebarHidden={false}
+          selectedGroup={group}
+          summary={makeSummary()}
+          onToggleSidebar={() => {}}
+          onOpenRecipes={() => {}}
+          onOpenChanges={onOpenChanges}
+        />,
+      );
+    });
+
+    const changesBtn = container?.querySelector('button[aria-label="Open Changes panel (proj-a)"]') as HTMLButtonElement;
+    expect(changesBtn).not.toBeNull();
+    expect(changesBtn.disabled).toBe(false);
+
+    act(() => {
+      changesBtn.click();
+    });
+    expect(onOpenChanges).toHaveBeenCalledTimes(1);
+  });
 });

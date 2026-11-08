@@ -613,6 +613,9 @@ export function OsShell() {
               intent.payload.fileStatus || "modified",
               0,
               0,
+              undefined,
+              intent.payload.gitRootId,
+              intent.payload.diffPath,
             );
           } else {
             void useEditorStore.getState().open(targetRef, fileNode);
@@ -627,6 +630,9 @@ export function OsShell() {
             intent.payload.fileStatus || "modified",
             0,
             0,
+            undefined,
+            intent.payload.gitRootId,
+            intent.payload.diffPath,
           );
         } else {
           void useEditorStore.getState().open(targetRef, fileNode);
@@ -646,6 +652,8 @@ export function OsShell() {
             mode: placement,
             appState: {
               filePath: intent.payload.filePath,
+              diffPath: intent.payload.diffPath,
+              gitRootId: intent.payload.gitRootId,
               line: intent.payload.line,
               isDiff: intent.payload.isDiff,
               fileStatus: intent.payload.fileStatus,
@@ -1316,7 +1324,19 @@ export function OsShell() {
           intent.payload,
         );
         if (existing) {
-          if (existing.minimized) restoreWindow(existing.id);
+          const state = useWindowStore.getState();
+          if (existing.desktopId !== state.session.activeDesktopId) {
+            switchDesktop(existing.desktopId);
+          }
+          if (existing.minimized) {
+            restoreWindow(existing.id);
+          }
+          if (existing.maximized) {
+            state.toggleMaximizeWindow(existing.id);
+          }
+          if (intent.payload.mode === "float" && existing.mode === "tile") {
+            state.toggleWindowMode(existing.id);
+          }
           focusWindow(existing.id);
           useWindowStore.getState().updateAppState(existing.id, {
             filePath: intent.payload.filePath,
@@ -1325,7 +1345,7 @@ export function OsShell() {
             deletions: intent.payload.deletions,
             gitRootId: intent.payload.gitRootId,
             diffPath: intent.payload.diffPath,
-            activeTab: "diff",
+            activeTab: intent.payload.activeTab ?? (intent.payload.filePath ? "diff" : "changes"),
             deliveryId: generateUUID(),
           });
           return { status: "handled", targetWindowId: existing.id };
@@ -1340,7 +1360,7 @@ export function OsShell() {
             appId: "changes",
             title: manifest?.displayName ?? "Changes",
             ctx: targetCtx,
-            mode: getPlacement(),
+            mode: intent.payload.mode ?? getPlacement(),
             appState: {
               filePath: intent.payload.filePath,
               status: intent.payload.status,
@@ -1348,7 +1368,7 @@ export function OsShell() {
               deletions: intent.payload.deletions,
               gitRootId: intent.payload.gitRootId,
               diffPath: intent.payload.diffPath,
-              activeTab: "diff",
+              activeTab: intent.payload.activeTab ?? (intent.payload.filePath ? "diff" : "changes"),
               deliveryId: generateUUID(),
             },
           },

@@ -52,25 +52,32 @@ test.describe("DamHopper OS Root Cutover, Hub Inventory & Close Guard Journey", 
     await paletteInput.fill("Agent Hub");
     await page.keyboard.press("Enter");
 
-    const agentHub = page.locator("[data-os-agent-hub]").first();
+    const agentHub = page.locator('[data-testid="agent-hub-app"]').first();
     await expect(agentHub).toBeVisible({ timeout: 10_000 });
 
-    // 5. Test Scope Filters: All / Agents / Background
-    const filterAll = agentHub.locator('[data-testid="agent-hub-filter-all"]').first();
-    await expect(filterAll).toBeVisible();
-    await filterAll.click();
+    // 5. Verify Agent Hub workspace header and sidebar toggle
+    const contextPill = agentHub.locator('[data-testid="agent-hub-context-pill"]').first();
+    await expect(contextPill).toBeVisible();
+    const attnCounter = agentHub.locator('[data-testid="agent-hub-attn-counter"]').first();
+    await expect(attnCounter).toBeVisible();
+    const workCounter = agentHub.locator('[data-testid="agent-hub-work-counter"]').first();
+    await expect(workCounter).toBeVisible();
 
-    const filterAgents = agentHub.locator('[data-testid="agent-hub-filter-agents"]').first();
-    await expect(filterAgents).toBeVisible();
-    await filterAgents.click();
+    const sidebarToggleBtn = agentHub.locator('button[aria-label="Toggle projects sidebar"]').first();
+    await expect(sidebarToggleBtn).toBeVisible();
+    await expect(sidebarToggleBtn).toHaveAttribute("aria-expanded", "true");
+    const sidebarNav = agentHub.locator('nav[aria-label="Terminal projects and agents"]').first();
+    await expect(sidebarNav).toBeVisible();
 
-    const filterBackground = agentHub.locator('[data-testid="agent-hub-filter-background"]').first();
-    await expect(filterBackground).toBeVisible();
-    await filterBackground.click();
+    // Collapse sidebar and verify aria-expanded and removal
+    await sidebarToggleBtn.click();
+    await expect(sidebarToggleBtn).toHaveAttribute("aria-expanded", "false");
+    await expect(sidebarNav).toHaveCount(0);
 
-    // Reset back to All
-    await filterAll.click();
-
+    // Restore sidebar
+    await sidebarToggleBtn.click();
+    await expect(sidebarToggleBtn).toHaveAttribute("aria-expanded", "true");
+    await expect(sidebarNav).toBeVisible();
     // 6. Launch a live terminal window from Dock
     const dockTerminalBtn = page.locator("aside[aria-label='Application Dock'] button[title='Terminals']").first();
     await expect(dockTerminalBtn).toBeVisible({ timeout: 10_000 });
@@ -78,6 +85,7 @@ test.describe("DamHopper OS Root Cutover, Hub Inventory & Close Guard Journey", 
 
     const initialFrame = page
       .locator("[data-os-window-frame]")
+      .filter({ hasNot: page.locator('[data-testid="agent-hub-app"]') })
       .filter({ has: page.locator("[data-terminal-container], .xterm") })
       .first();
     await expect(initialFrame).toBeVisible({ timeout: 15_000 });
@@ -119,7 +127,7 @@ test.describe("DamHopper OS Root Cutover, Hub Inventory & Close Guard Journey", 
     const paletteInput = palette.locator('input[aria-label*="Search commands"]');
     await paletteInput.fill("Agent Hub");
     await page.keyboard.press("Enter");
-    const agentHub = page.locator("[data-os-agent-hub]").first();
+    const agentHub = page.locator('[data-testid="agent-hub-app"]').first();
     await expect(agentHub).toBeVisible({ timeout: 10_000 });
 
     const captureCombos = async (stem?: string) => {
@@ -152,6 +160,7 @@ test.describe("DamHopper OS Root Cutover, Hub Inventory & Close Guard Journey", 
     await dockTerminalBtn.click();
     const termFrame = page
       .locator("[data-os-window-frame]")
+      .filter({ hasNot: page.locator('[data-testid="agent-hub-app"]') })
       .filter({ has: page.locator("[data-terminal-container], .xterm") })
       .first();
     await expect(termFrame).toBeVisible({ timeout: 15_000 });

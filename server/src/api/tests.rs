@@ -5404,6 +5404,7 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("document.svg"), b"svg").unwrap();
     std::fs::write(tmp.path().join("document.avif"), b"avif").unwrap();
+    std::fs::write(tmp.path().join("test.png"), b"png").unwrap();
     std::fs::create_dir(tmp.path().join("folder.png")).unwrap();
     let state = make_state_with_project(&tmp);
 
@@ -5462,7 +5463,7 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
     .contains("outside.png"));
 
     let ambiguous = post_json(
-        state,
+        state.clone(),
         "/api/fs/image/tickets",
         serde_json::json!({
             "target": { "type": "workspace" },
@@ -5473,6 +5474,18 @@ async fn image_ticket_issuance_requires_auth_and_rejects_unsafe_inputs() {
     )
     .await;
     assert_eq!(ambiguous.status(), StatusCode::BAD_REQUEST);
+
+    let with_kind = post_json(
+        state,
+        "/api/fs/image/tickets",
+        serde_json::json!({
+            "target": { "kind": "project", "project": "test-project" },
+            "path": "test.png",
+            "mediaClientId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+        }),
+    )
+    .await;
+    assert_eq!(with_kind.status(), StatusCode::CREATED);
 }
 
 #[cfg(unix)]

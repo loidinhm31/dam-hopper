@@ -23,6 +23,7 @@ import {
   Save,
   Loader2,
   AlertTriangle,
+  FolderTree,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils.js";
@@ -58,7 +59,7 @@ function getBoundTransport(targetRef: { profileId?: string }): WsTransport {
   return getAmbientTransport() as WsTransport;
 }
 
-interface DiffViewerProps {
+export interface DiffViewerProps {
   project: string;
   target?: ProjectTargetInput;
   filePath: string;
@@ -71,6 +72,7 @@ interface DiffViewerProps {
   targetAvailable?: boolean;
   onTargetUnavailable?: () => void;
   onClose: () => void;
+  onLocateFile?: (filePath: string) => void;
 }
 
 type SaveState = "idle" | "saving" | "error";
@@ -128,6 +130,7 @@ export function DiffViewer({
   targetAvailable = true,
   onTargetUnavailable,
   onClose,
+  onLocateFile,
 }: DiffViewerProps) {
   const targetRef = normalizeProjectTarget(target ?? projectName);
   const targetKey = projectTargetCacheKey(targetRef);
@@ -676,6 +679,19 @@ export function DiffViewer({
               <AlignJustify className="h-3.5 w-3.5" />
             )}
           </button>
+          {/* Locate file in file tree */}
+          {onLocateFile && (
+            <button
+              type="button"
+              onClick={() => onLocateFile(filePath)}
+              aria-label="Locate file in file tree"
+              title="Locate file in file tree"
+              className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface)] transition-colors"
+            >
+              <FolderTree className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          )}
+
 
           {/* Save — hidden for deleted files or historical commits */}
           {!isDeleted && !commitHash && (
