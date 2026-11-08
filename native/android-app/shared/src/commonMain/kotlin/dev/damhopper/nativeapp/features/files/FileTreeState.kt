@@ -114,7 +114,7 @@ class FileTreeState(
     ) : this(
         target = when (fsTarget) {
             is FilesystemTargetRef.Project -> fsTarget.toProjectTargetRef()
-            is FilesystemTargetRef.Workspace -> ProjectTargetRef(profileId = fsTarget.profileId, project = "workspace")
+            is FilesystemTargetRef.Workspace -> ProjectTargetRef(profileId = fsTarget.profileId, project = "*")
         },
         repository = repository,
         coroutineScope = coroutineScope,
@@ -217,7 +217,6 @@ class FileTreeState(
         if (newTarget is FilesystemTargetRef.Workspace && _languageFilter.value != ExplorerLanguageFilter.ALL) {
             _languageFilter.value = ExplorerLanguageFilter.ALL
         }
-        watchCoordinator.releaseAllExplorerDemands()
         val (projRef, name) = when (newTarget) {
             is FilesystemTargetRef.Workspace -> {
                 target to "Workspace Root"
@@ -227,6 +226,18 @@ class FileTreeState(
                 val label = if (!newTarget.worktreePath.isNullOrBlank()) "${newTarget.project} (${newTarget.worktreePath})" else newTarget.project
                 pRef to label
             }
+        }
+        if (watchCoordinator.target != projRef) {
+            watchCoordinator.dispose()
+            val newCoordinator = FileWatchCoordinator(
+                target = projRef,
+                repository = repository,
+                coroutineScope = coroutineScope,
+            )
+            wireWatchCoordinator(newCoordinator)
+            watchCoordinator = newCoordinator
+        } else {
+            watchCoordinator.releaseAllExplorerDemands()
         }
         _root.value = FileTreeNode(projRef, "", name, isDirectory = true, isExpanded = true)
         _selectedPath.value = null
@@ -306,9 +317,14 @@ class FileTreeState(
         if (newRepo.owner != this.repository.owner) return false
         this.repository = newRepo
         connectionStateJob?.cancel()
+        initialLoadJob?.cancel()
         this.watchCoordinator.dispose()
+        val currentTargetRef = when (val active = _activeBrowsingTarget.value) {
+            is FilesystemTargetRef.Project -> active.toProjectTargetRef()
+            is FilesystemTargetRef.Workspace -> ProjectTargetRef(profileId = active.profileId ?: target.profileId, project = "*")
+        }
         val newCoordinator = FileWatchCoordinator(
-            target = target,
+            target = currentTargetRef,
             repository = newRepo,
             coroutineScope = coroutineScope,
         )
@@ -319,10 +335,11 @@ class FileTreeState(
             observeConnectionState()
         }
         val expanded = collectExpandedPaths(_root.value)
-        coroutineScope.launch {
+        initialLoadJob = coroutineScope.launch {
             for (dir in expanded) {
                 watchCoordinator.acquireExplorerDemand(dir)
             }
+            initTreeAndSubscriptionInternal()
         }
         return true
     }
@@ -405,7 +422,7 @@ class FileTreeState(
             } else {
                 val currentProjectRef = (currentTarget as? FilesystemTargetRef.Project)?.toProjectTargetRef() ?: target
                 watchCoordinator.acquireExplorerDemand("")
-                when (val result = watchCoordinator.fetchDirectoryOrdered("")) {
+                when (val result = watchCoordinator.fetchDirectoryOrdered("", targetOverride = currentProjectRef)) {
                     is OrderedDirectoryListingResult.Published -> {
                         if (capturedGen != browsingTargetGeneration || isDisposed) return
                         _root.value = FileTreeHelpers.updateChildren(_root.value, "", result.entries, currentProjectRef)
@@ -506,7 +523,7 @@ class FileTreeState(
             } else {
                 val currentProjectRef = (currentTarget as? FilesystemTargetRef.Project)?.toProjectTargetRef() ?: target
                 watchCoordinator.acquireExplorerDemand(cleanPath)
-                when (val result = watchCoordinator.fetchDirectoryOrdered(cleanPath)) {
+                when (val result = watchCoordinator.fetchDirectoryOrdered(cleanPath, targetOverride = currentProjectRef)) {
                     is OrderedDirectoryListingResult.Published -> {
                         if (capturedGen != browsingTargetGeneration || isDisposed) return false
                         _root.value = FileTreeHelpers.updateChildren(_root.value, cleanPath, result.entries, currentProjectRef)

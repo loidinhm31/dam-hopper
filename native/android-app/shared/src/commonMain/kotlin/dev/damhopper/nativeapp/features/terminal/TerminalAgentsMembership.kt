@@ -43,7 +43,7 @@ data class TerminalAgentsMembershipResult(
  */
 object TerminalAgentsMembership {
     fun isTraditionalType(type: String): Boolean =
-        type == "traditional" || type == "terminal" || type == "shell" || type == "free"
+        type == "traditional" || type == "terminal" || type == "shell" || type == "free" || type == "unknown" || type.isBlank()
 
     /** Authority revision that no reducer ever holds; fences display-only targets. */
     const val NO_AUTHORITY: Long = -1L
@@ -179,7 +179,6 @@ object TerminalAgentsMembership {
         // can never be mistaken for a current target; successor epoch/authority is never mixed in either.
         val serverEpoch = if (fresh && snapshot.statusBaselineInstalled) snapshot.status.serverEpoch else null
         val authorityRevision = if (fresh) snapshot.statusAuthorityRevision else NO_AUTHORITY
-
         for (session in ordered) {
             if (session.id in workspace.excludedTerminalIds || !qualifies(session, owner)) {
                 continue

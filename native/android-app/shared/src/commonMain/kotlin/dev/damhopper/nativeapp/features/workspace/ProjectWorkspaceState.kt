@@ -30,6 +30,7 @@ import dev.damhopper.nativeapp.ui.screens.PreferenceAccess
 import dev.damhopper.nativeapp.ui.screens.ProjectTerminalState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -91,7 +92,7 @@ class ProjectWorkspaceState(
     val fileTreeState: FileTreeState,
     val fileMutationCoordinator: FileMutationCoordinator,
     val terminalState: ProjectTerminalState? = null,
-    val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Main.immediate),
+    val coroutineScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
     var lifecycleCoordinator: LifecycleCoordinator? = null,
 ) : LifecycleAware {
     var preferencesStore: PreferencesStore? = null
@@ -649,7 +650,7 @@ class ProjectWorkspaceState(
             fileRepository: FileRepository,
             editorRepository: EditorRepository,
             documentFactory: EditorDocumentFactory? = null,
-            coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Main.immediate),
+            coroutineScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
             lifecycleCoordinator: LifecycleCoordinator? = null,
             preferenceAccess: PreferenceAccess? = null,
             commandHistory: ObservableCommandHistory? = null,

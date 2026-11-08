@@ -141,7 +141,7 @@ class FileMutationCoordinator(
     val target: ProjectTargetRef
         get() = when (val active = treeState.activeBrowsingTarget.value) {
             is FilesystemTargetRef.Project -> active.toProjectTargetRef()
-            is FilesystemTargetRef.Workspace -> throw IllegalStateException("Cannot resolve project target while browsing whole workspace")
+            is FilesystemTargetRef.Workspace -> ProjectTargetRef(profileId = active.profileId ?: repository.owner.profileId, project = "*")
         }
 
     val owner: WorkspaceFileOwner

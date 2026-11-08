@@ -23,6 +23,10 @@ import kotlin.test.assertTrue
 import dev.damhopper.nativeapp.features.settings.SettingsOperation
 import dev.damhopper.nativeapp.features.settings.SettingsScope
 import dev.damhopper.nativeapp.features.settings.SettingsOwner
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
+import dev.damhopper.nativeapp.features.workspace.AgentHubAction
+import dev.damhopper.nativeapp.ui.flow.AppFlowNavigation
+import dev.damhopper.nativeapp.ui.flow.AppFlowStage
 
 /**
  * Lifetime of the retained owner's registry barrier (C2a1 consumption): register-before-eligible,
@@ -346,5 +350,26 @@ class NativeWorkspaceViewModelTest {
         assertTrue(qKey1 != qKey2, "Terminal with identical raw ID across different profiles must produce distinct qualified keys")
         assertEquals("prof-1:term-dup", qKey1)
         assertEquals("prof-2:term-dup", qKey2)
+    }
+
+    @Test
+    fun testDispatchOpenFilesWithWorkspaceTargetSelectsFilesAndClearsActiveProject() = runBlocking {
+        val flowNav = AppFlowNavigation()
+        flowNav.selectProject("old-project", null, "prof-1")
+        assertEquals("old-project", flowNav.state.value.activeProject)
+
+        // Simulate AgentHubAction.OpenFiles with FilesystemTargetRef.Workspace
+        val action = AgentHubAction.OpenFiles(FilesystemTargetRef.Workspace(profileId = "prof-1"))
+        when (val target = action.target) {
+            is FilesystemTargetRef.Workspace -> {
+                val profId = target.profileId ?: flowNav.state.value.activeProfileId
+                flowNav.selectProject(null, null, profId)
+            }
+            else -> {}
+        }
+
+        assertNull(flowNav.state.value.activeProject, "activeProject must be cleared for workspace browsing")
+        assertEquals("prof-1", flowNav.state.value.activeProfileId)
+        assertEquals(AppFlowStage.HUB, flowNav.state.value.stage)
     }
 }

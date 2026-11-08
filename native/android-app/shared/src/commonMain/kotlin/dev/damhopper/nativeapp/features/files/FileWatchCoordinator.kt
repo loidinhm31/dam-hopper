@@ -340,7 +340,10 @@ class FileWatchCoordinator(
      * Ensures a single nonrecursive subscription exists for [directoryPath] on the active socket.
      * Enforces subscribe-before-list ordering and deduplicates concurrent callers.
      */
-    suspend fun ensureSubscribed(directoryPath: String): WatchSubscriptionState? {
+    suspend fun ensureSubscribed(
+        directoryPath: String,
+        targetOverride: ProjectTargetRef? = null,
+    ): WatchSubscriptionState? {
         if (isDisposed || isPaused) return null
         val cleanDir = normalizeDirectoryPath(directoryPath)
         val activeSocket = repository.wsConnection.activeSocketRef() ?: return null
@@ -363,6 +366,7 @@ class FileWatchCoordinator(
 
         val sub = invokeSubscribePort(
             cleanDir = cleanDir,
+            targetOverride = targetOverride,
             onSnapshot = {},
             onQualifiedEvent = { qualified ->
                 coroutineScope.launch {
@@ -430,6 +434,7 @@ class FileWatchCoordinator(
 
     private suspend fun invokeSubscribePort(
         cleanDir: String,
+        targetOverride: ProjectTargetRef? = null,
         onSnapshot: (ServerMsg.TreeSnapshot) -> Unit,
         onQualifiedEvent: (QualifiedWatchEvent) -> Unit,
         onOverflow: (subId: ULong, incarnation: Long, message: String) -> Unit,
@@ -440,9 +445,10 @@ class FileWatchCoordinator(
                 onOverflow(0uL, 0L, msg)
             }
         }
-        repository.assertTargetMatchesOwner(target, "subscribeTree")
+        val effectiveTarget = targetOverride ?: target
+        repository.assertTargetMatchesOwner(effectiveTarget, "subscribeTree")
         return fallbackSubscriptionManager.subscribeQualified(
-            target = target,
+            target = effectiveTarget,
             path = cleanDir,
             watchOnly = true,
             onSnapshot = onSnapshot,
@@ -457,8 +463,10 @@ class FileWatchCoordinator(
      */
     suspend fun fetchDirectoryOrdered(
         directoryPath: String,
+        targetOverride: ProjectTargetRef? = null,
         maxRefetchAttempts: Int = 2,
     ): OrderedDirectoryListingResult {
+        val effectiveTarget = targetOverride ?: target
         val cleanDir = normalizeDirectoryPath(directoryPath)
         var attempt = 0
 
@@ -469,7 +477,7 @@ class FileWatchCoordinator(
             val isDemanded = synchronized(stateLock) { demands[cleanDir]?.isDemanded == true }
             if (isDemanded && repository.wsConnection.activeSocketRef() != null) {
                 try {
-                    ensureSubscribed(cleanDir)
+                    ensureSubscribed(cleanDir, targetOverride = effectiveTarget)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Throwable) {
@@ -493,7 +501,7 @@ class FileWatchCoordinator(
             }
 
             val rawEntries = try {
-                repository.listDirectory(target, cleanDir)
+                repository.listDirectory(effectiveTarget, cleanDir)
             } catch (e: CancellationException) {
                 synchronized(stateLock) {
                     directoryStates[cleanDir]?.let {
@@ -587,7 +595,6 @@ class FileWatchCoordinator(
                     )
                 )
             }
-
             when (decision) {
                 is ListingDecision.Superseded -> return OrderedDirectoryListingResult.Superseded
                 is ListingDecision.Publish -> {

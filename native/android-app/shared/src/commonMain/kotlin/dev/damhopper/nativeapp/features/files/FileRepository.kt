@@ -82,7 +82,8 @@ class FileRepository(
             params
         }
         val json = apiClient.get("/api/fs/list", queryParams)
-        return ProtocolJson.decodeFromString(ListResponseDto.serializer(), json).entries
+        val parsed = ProtocolJson.decodeFromString(ListResponseDto.serializer(), json).entries
+        return parsed
     }
 
     /**

@@ -319,4 +319,34 @@ class FileTreeStateTest {
         assertEquals("/var/workspace/worktrees/feature-1", queryParams["worktreePath"])
         state.dispose()
     }
+
+    @Test
+    fun testWorkspaceSecondaryConstructorMapsToWildcardProject() {
+        val repo = createRepository()
+        val wsTarget = FilesystemTargetRef.Workspace(profileId = "test-profile", workspaceEpoch = 42L)
+        val state = FileTreeState(wsTarget, repo)
+
+        assertEquals("test-profile", state.target.profileId)
+        assertEquals("*", state.target.project)
+        assertTrue(state.activeBrowsingTarget.value is FilesystemTargetRef.Workspace)
+        assertEquals(42L, (state.activeBrowsingTarget.value as FilesystemTargetRef.Workspace).workspaceEpoch)
+
+        state.dispose()
+    }
+
+    @Test
+    fun testBrowsingTargetSwitchRebindsWatchCoordinatorTarget() = runTest {
+        val repo = createRepository()
+        val wsTarget = FilesystemTargetRef.Workspace(profileId = "test-profile")
+        val state = FileTreeState(wsTarget, repo)
+        assertEquals("*", state.watchCoordinator.target.project)
+
+        state.updateRegisteredProjects(listOf("demo"))
+        val projTarget = FilesystemTargetRef.Project(profileId = "test-profile", project = "demo")
+        val res = state.selectBrowsingTarget(projTarget)
+
+        assertEquals(TargetBrowseStatus.CONFIGURED, res.status)
+        assertEquals("demo", state.watchCoordinator.target.project)
+        state.dispose()
+    }
 }

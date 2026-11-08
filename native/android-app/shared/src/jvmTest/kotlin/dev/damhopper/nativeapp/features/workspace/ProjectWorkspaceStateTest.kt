@@ -24,6 +24,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -508,5 +509,30 @@ class ProjectWorkspaceStateTest {
         assertTrue(postReauthSave is dev.damhopper.nativeapp.features.editor.EditorSaveResult.Success, "Save must succeed after verified reauthorization")
         assertFalse(session1.isDirty, "Session 1 must be clean after successful save")
         assertFalse(session2.isDirty, "Shared session 2 must be clean after successful save")
+    }
+
+    @Test
+    fun testCoroutineScopeUsesSupervisorJobAndChildFailureDoesNotCancelScope() = runTest {
+        val state = createWorkspaceState()
+        val scope = state.coroutineScope
+        assertTrue(scope.coroutineContext[kotlinx.coroutines.Job] is kotlinx.coroutines.CompletableJob)
+
+        // Launch a failing child coroutine in the workspace scope with an exception handler
+        val handler = kotlinx.coroutines.CoroutineExceptionHandler { _, _ -> }
+        val failingJob = scope.launch(handler) {
+            throw RuntimeException("Child failure simulation")
+        }
+        failingJob.join()
+
+        // Sibling coroutine must still be launchable and active
+        var siblingExecuted = false
+        val siblingJob = scope.launch {
+            siblingExecuted = true
+        }
+        siblingJob.join()
+
+        assertTrue(siblingExecuted, "Sibling coroutine in workspaceScope must execute after child failure")
+        assertTrue(scope.coroutineContext[kotlinx.coroutines.Job]?.isActive == true, "Workspace scope must remain active")
+        state.close()
     }
 }

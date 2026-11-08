@@ -13,6 +13,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 class FileRepositoryTest {
 
@@ -232,5 +233,31 @@ class FileRepositoryTest {
 
         assertTrue(loadResult is dev.damhopper.nativeapp.features.editor.EditorLoadResult.Error)
         assertFalse(loadResult is dev.damhopper.nativeapp.features.editor.EditorLoadResult.Success)
+    }
+
+    @Test
+    fun testListDirectoryWorkspaceRest() = runTest {
+        server!!.createContext("/api/fs/list") { exchange ->
+            val query = exchange.requestURI.query
+            assertTrue(query.contains("targetType=workspace"))
+            assertFalse(query.contains("project="))
+            val json = """{"entries":[{"name":"proj-a","kind":"dir","size":0,"mtime":1712577600,"isSymlink":false},{"name":"global.txt","kind":"file","size":512,"mtime":1712577601,"isSymlink":false}]}"""
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+
+        val wsRepo = createRepository(project = "*")
+        val wsTarget = ProjectTargetRef(project = "*")
+        val entries = wsRepo.listDirectory(wsTarget, "")
+
+        assertEquals(2, entries.size)
+        assertEquals("proj-a", entries[0].name)
+        assertEquals("global.txt", entries[1].name)
+
+        // Strict cross-owner rejection: project-bound repo must reject workspace target
+        val projectRepo = createRepository(project = "demo-proj")
+        assertFailsWith<IllegalArgumentException> {
+            projectRepo.listDirectory(wsTarget, "")
+        }
     }
 }

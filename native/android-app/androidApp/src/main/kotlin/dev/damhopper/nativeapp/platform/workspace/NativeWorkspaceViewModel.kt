@@ -1223,6 +1223,7 @@ class NativeWorkspaceViewModel(
 
     private val _routeNotice = MutableStateFlow<String?>(null)
     override val routeNotice: StateFlow<String?> = _routeNotice.asStateFlow()
+    private var pendingPanelIntent: WorkspacePanel? = null
     private val _settingsServices = MutableStateFlow(SettingsScreenServices())
     override val settingsScreenServices: StateFlow<SettingsScreenServices> = _settingsServices.asStateFlow()
 
@@ -1644,6 +1645,11 @@ class NativeWorkspaceViewModel(
                 )
                 existing.bindGitRuntime(runtime)
             }
+            val panel = pendingPanelIntent
+            if (panel != null && (owner.project == "*" || owner.project == flowNavigation.state.value.activeProject)) {
+                existing.selectPanel(panel)
+                pendingPanelIntent = null
+            }
             return existing
         }
 
@@ -1695,7 +1701,12 @@ class NativeWorkspaceViewModel(
         workspaceStates[owner] = newState
         lifetime.own(apiClient.connection)
         val navState = flowNavigation.state.value
-        if (navState.stage == AppFlowStage.TERMINAL &&
+        val panel = pendingPanelIntent
+        if (panel != null && (owner.project == "*" || owner.project == navState.activeProject)) {
+            newState.selectPanel(panel)
+            pendingPanelIntent = null
+        } else if (
+            (navState.stage == AppFlowStage.TERMINAL || navState.stage == AppFlowStage.HUB) &&
             navState.activeProfileId == target.profileId &&
             navState.activeProject == target.project &&
             navState.activeWorktreePath == target.worktreePath &&
@@ -2104,9 +2115,10 @@ class NativeWorkspaceViewModel(
                     }
                     is FilesystemTargetRef.Workspace -> {
                         val profId = target.profileId ?: flowNavigation.state.value.activeProfileId
+                        pendingPanelIntent = WorkspacePanel.FILES
+                        flowNavigation.selectProject(null, null, profId)
                         val owner = profId?.let { p ->
                             workspaceStates.keys.firstOrNull { it.profileId == p && (it.project == "*" || it.project.isBlank()) }
-                                ?: activeWorkspaceStateOwner(p)
                         }
                         owner?.let {
                             val ws = workspaceStates[it]
@@ -2123,7 +2135,11 @@ class NativeWorkspaceViewModel(
                         flowNavigation.selectProject(target.project, target.worktreePath, target.profileId)
                         target.profileId
                     }
-                    is FilesystemTargetRef.Workspace -> target.profileId
+                    is FilesystemTargetRef.Workspace -> {
+                        pendingPanelIntent = WorkspacePanel.EDITOR
+                        flowNavigation.selectProject(null, null, target.profileId)
+                        target.profileId
+                    }
                     null -> null
                 } ?: flowNavigation.state.value.activeProfileId
                 val owner = profId?.let { p ->
@@ -2133,7 +2149,6 @@ class NativeWorkspaceViewModel(
                                 WorkspaceFileOwner.normalizeWorktree(it.worktreePath) == WorkspaceFileOwner.normalizeWorktree(target.worktreePath)
                         }
                         is FilesystemTargetRef.Workspace -> workspaceStates.keys.firstOrNull { it.profileId == p && (it.project == "*" || it.project.isBlank()) }
-                            ?: activeWorkspaceStateOwner(p)
                         null -> activeWorkspaceStateOwner(p)
                     } ?: activeWorkspaceStateOwner(p)
                 }

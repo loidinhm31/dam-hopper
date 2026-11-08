@@ -282,3 +282,24 @@ All animations honor user operating system preferences via `@media (prefers-redu
 - **Modal Boundaries:** All dialogs (`PinSetupDialog`, `CommandPalette`, `NotificationCenter`) implement `role="dialog"`, `aria-modal="true"`, and automatic focus containment.
 - **Lock Screen ARIA:** Fullscreen overlay defines `role="dialog"` with `aria-label="Screen Locked"`. Keypad buttons have explicit `aria-label` values (`"Digit 1"`, `"Backspace"`, `"Clear PIN"`).
 - **Decorative Elements:** The holographic grid and focal reticle specify `aria-hidden="true"` and `pointer-events-none` to guarantee screen reader transparency.
+
+---
+
+## 7. Native Android Agent Hub Design System & First Page Architecture
+
+### 7.1 Landing Screen Philosophy
+The Android Native client (`native/android-app/`) First Page / Landing Screen establishes a high-density, multi-zone developer workbench directly inspired by DamHopper's web Agent Hub:
+- **Left Agents Zone:** Ambient cross-project agent observation (OMP, Codex, Claude), 7-status filter chips, urgency counters (`!N`, `●N`, `○N`), and direct jump-to-terminal routing.
+- **Center Projects Stage:** Core workspace project cards, Git worktree context (`⎇ wt: branch · #hash`), live terminal counts, zero-session open targets with safe dismissal, and direct capability launch triggers (`[Files]`, `[Terminal]`, `[Git]`).
+- **Right Workspace File Tree Zone:** Contextual file tree and Git file changes overview bound to the selected project, enabling one-tap file opening into `EditorPanelScreen` with canonical `DocumentId` leases.
+
+### 7.2 Form Factor & Breakpoint Rules
+- **Compact Phone (`< 600dp`):** Single active stage. Center stage occupies 100% width. Left Agents Sidebar and Right Workspace File Tree open as modal drawers / bottom sheets with `50%` dark scrim. All interactive controls enforce minimum `48x48dp` touch targets.
+- **Foldable / Landscape (`600–839dp`):** Dual-column layout with a pinned collapsible left navigation rail (`240–280dp`) and center project stage (`weight(1f)`, `>= 360dp`). Right file tree operates as an expandable slide-over side sheet.
+- **Expanded Tablet / DeX (`>= 840dp`):** 3-column hybrid layout (Left Agents 240dp | Center Projects flex 1, ~380-480dp | Right File Tree 280-320dp, collapsible via toggle).
+
+### 7.3 Mandatory Touch & Contrast Invariants
+- **Minimum Touch Target:** Inviolable `48x48dp` for all buttons, tabs, chips, and dismiss icons (`sizeIn(minWidth = 48.dp, minHeight = 48.dp)`).
+- **Safety Gaps:** Minimum `8dp` spacing between adjacent destructive/dismiss actions and primary triggers.
+- **WCAG 2.1 AA Contrast Compliance:** Text contrast exceeds `4.5:1` (Primary Text `#F0F6FC` on Canvas `#0D1117` = `15.8:1`; on Card `#161B22` = `14.2:1`). UI components exceed `3:0:1` (Accent `#58A6FF` on Card = `6.4:1`).
+- **IME Safety:** Pinned top chrome (`56dp` compact / `48dp` expanded) never wraps; virtual keyboard resizes center content smoothly via `WindowInsets.ime`.
