@@ -156,13 +156,13 @@ export function TraditionalTerminalProjectWorkspaceRow({
     <div
       role="presentation"
       className={cn(
-        "group/row relative flex flex-col gap-0.5 px-2 py-1 transition-colors",
+        "group/row relative flex min-w-0 flex-col gap-0.5 px-2 py-1 transition-colors",
         isActive
           ? "workbench-selection"
           : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)]/40",
       )}
     >
-      <div className="flex items-center gap-1">
+      <div className="flex min-w-0 items-center gap-1">
         <button
           id={traditionalTerminalProjectTabId(group.id)}
           ref={(element) => setButtonRef(group.id, element)}
@@ -257,7 +257,7 @@ export function TraditionalTerminalProjectWorkspaceRow({
         <div
           className={cn(
             touchOptimized
-              ? "flex items-center gap-2 pl-7 pr-1 pb-1"
+              ? "flex min-w-0 flex-wrap items-center gap-2 pl-7 pr-1 pb-1"
               : "flex flex-col gap-1 pl-7 pr-1 pb-1",
           )}
         >

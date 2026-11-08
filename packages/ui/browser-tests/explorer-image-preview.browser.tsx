@@ -132,7 +132,7 @@ describe("Explorer image preview in Chromium", () => {
     expect(
       JSON.parse(String((post?.[1] as RequestInit | undefined)?.body)),
     ).toEqual({
-      target: { kind: "project", project: "demo" },
+      target: { type: "project", project: "demo" },
       path: "images/fixture.png",
       mediaClientId: expect.any(String),
     });
