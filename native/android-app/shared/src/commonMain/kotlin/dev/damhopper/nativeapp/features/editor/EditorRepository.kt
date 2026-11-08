@@ -124,14 +124,16 @@ class EditorRepository(
         val cPath = fid?.canonicalPath?.trim()
         val wsEpoch = fid?.workspaceEpoch
         val owner = fileRepository.owner
-        if (owner.workspaceEpoch != null) {
-            if (wsId.isNullOrEmpty() || cPath.isNullOrEmpty() || wsEpoch == null || wsEpoch != owner.workspaceEpoch) {
-                return FileOperationOutcome.NotSubmitted("Document lacks verified canonical identity matching workspace authority (${owner.workspaceEpoch})")
-            }
+        if (fid == null || wsId.isNullOrEmpty() || cPath.isNullOrEmpty() || wsEpoch == null) {
+            return FileOperationOutcome.NotSubmitted("Document lacks verified canonical identity")
+        }
+        if (owner.workspaceEpoch != null && wsEpoch != owner.workspaceEpoch) {
+            return FileOperationOutcome.NotSubmitted("Document lacks verified canonical identity matching workspace authority (${owner.workspaceEpoch})")
         }
         val effectiveOwner = dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(fileRepository.owner, target)
         val acquiredToken = fileRepository.arbiter.tryReserveSave(effectiveOwner, id.relativePath)
             ?: return FileOperationOutcome.NotSubmitted("Path '${id.relativePath}' is currently reserved by another file operation")
+        val releaseSaveTracking = doc.beginSaveTracking()
         try {
             val snapshot = doc.snapshotForSave()
             val content = snapshot.utf8Bytes.decodeToString()
@@ -166,6 +168,7 @@ class EditorRepository(
                 is FileOperationOutcome.NotSubmitted -> FileOperationOutcome.NotSubmitted(outcome.reason, outcome.cause)
             }
         } finally {
+            releaseSaveTracking()
             if (acquiredToken.state == dev.damhopper.nativeapp.features.files.ReservationState.ACTIVE) {
                 try {
                     fileRepository.arbiter.releaseToken(acquiredToken)

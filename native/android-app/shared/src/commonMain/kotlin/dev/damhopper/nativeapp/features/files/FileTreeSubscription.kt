@@ -293,9 +293,14 @@ class TreeSubscriptionManager(
             }
         }
 
+        val serverTarget = if (target.project == "*") {
+            ServerFsTarget(type = "workspace")
+        } else {
+            ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath)
+        }
         val subMsg = ClientMsg.FsSubscribeTree(
             reqId = reqId,
-            target = ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath),
+            target = serverTarget,
             path = normalizedDirPath,
             watchOnly = watchOnly,
         )

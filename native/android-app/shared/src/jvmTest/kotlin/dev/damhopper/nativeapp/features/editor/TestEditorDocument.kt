@@ -52,19 +52,27 @@ class TestEditorDocument(
     override fun markDiscarded() {
         isDiscarded = true
     }
+    override var onDisposalEligible: (() -> Unit)? = null
 
     override val canDispose: Boolean
         get() = _activeAliasLeases.value.isEmpty() &&
                 _activeViewLeases.value.isEmpty() &&
                 (!_isDirty.value || isDiscarded) &&
                 _inFlightSaveCount.value == 0
-    fun beginSaveTracking(): () -> Unit {
+
+    override fun beginSaveTracking(): () -> Unit {
         _inFlightSaveCount.value++
         var released = false
         return {
             if (!released) {
                 released = true
                 _inFlightSaveCount.value = maxOf(0, _inFlightSaveCount.value - 1)
+                if (canDispose) {
+                    onDisposalEligible?.invoke()
+                    if (isDiscarded) {
+                        close()
+                    }
+                }
             }
         }
     }
@@ -79,6 +87,12 @@ class TestEditorDocument(
 
     override fun releaseAliasLease(token: AliasLeaseToken) {
         _activeAliasLeases.value = _activeAliasLeases.value - token
+        if (canDispose) {
+            onDisposalEligible?.invoke()
+            if (isDiscarded) {
+                close()
+            }
+        }
     }
 
     override fun acquireViewLease(surfaceId: String): ViewLeaseToken {
@@ -91,8 +105,11 @@ class TestEditorDocument(
 
     override fun releaseViewLease(token: ViewLeaseToken) {
         _activeViewLeases.value = _activeViewLeases.value - token
-        if (isDiscarded && canDispose) {
-            close()
+        if (canDispose) {
+            onDisposalEligible?.invoke()
+            if (isDiscarded) {
+                close()
+            }
         }
     }
 

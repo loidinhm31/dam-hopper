@@ -197,6 +197,10 @@ interface EditorDocument {
     fun releaseAliasLease(token: AliasLeaseToken) {}
     fun acquireViewLease(surfaceId: String): ViewLeaseToken = ViewLeaseToken(surfaceId, surfaceId)
     fun releaseViewLease(token: ViewLeaseToken) {}
+    fun beginSaveTracking(): () -> Unit = { {} }
+    var onDisposalEligible: (() -> Unit)?
+        get() = null
+        set(_) {}
 }
 /**
  * Factory for creating qualified EditorDocument instances.

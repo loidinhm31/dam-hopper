@@ -65,10 +65,15 @@ class TransferCoordinator(
 
         // 1. Send fs:upload_begin
         val beginReqId = nextReqId()
+        val serverTarget = if (target.project == "*") {
+            ServerFsTarget(type = "workspace")
+        } else {
+            ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath)
+        }
         val beginMsg = ClientMsg.FsUploadBegin(
             reqId = beginReqId,
             uploadId = uploadId,
-            target = ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath),
+            target = serverTarget,
             project = null,
             worktreePath = null,
             dir = dir,
@@ -255,11 +260,16 @@ class TransferCoordinator(
 
         // 1. Send fs:put_begin
         val beginReqId = nextReqId()
+        val serverTarget = if (target.project == "*") {
+            ServerFsTarget(type = "workspace")
+        } else {
+            ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath)
+        }
         val beginMsg = ClientMsg.FsPutBegin(
             reqId = beginReqId,
             uploadId = uploadId,
             sessionId = cryptoSession.sessionId,
-            target = ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath),
+            target = serverTarget,
             dir = dir,
             filename = filename,
             len = envelopeBytes.size.toULong(),

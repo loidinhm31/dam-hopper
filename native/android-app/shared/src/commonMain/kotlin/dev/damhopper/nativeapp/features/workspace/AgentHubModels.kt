@@ -19,6 +19,7 @@ data class HubTerminalRow(
     val displayName: String,
     val command: String,
     val projectTarget: ProjectTargetRef? = null,
+    val profileId: String? = null,
     val incarnation: ULong = 0uL,
     val incarnationExact: String? = null,
     val alive: Boolean = true,

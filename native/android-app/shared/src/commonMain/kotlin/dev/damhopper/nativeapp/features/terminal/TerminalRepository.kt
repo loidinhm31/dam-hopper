@@ -142,8 +142,11 @@ class TerminalRepository(
             val response = apiClient.postJsonWithHeaders("/api/terminal", body)
             val meta = json.decodeFromString<TerminalSessionMeta>(response.body)
             val ptyEpoch = response.header(TERMINATION_HEADER_PTY_EPOCH).orEmpty()
-            if (meta.id != request.id) {
-                throw IllegalStateException("Server returned unexpected terminal ID ${meta.id} for requested ${request.id}")
+            val inc = meta.incarnation
+            val uuidRegex = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+            val isValidUuid = uuidRegex.matches(ptyEpoch.trim())
+            if (meta.id != request.id || !meta.alive || inc <= 0uL || !isValidUuid) {
+                throw IllegalStateException("Server returned incomplete or unverified terminal metadata (id: ${meta.id}, alive: ${meta.alive}, incarnation: $inc, ptyEpoch: '$ptyEpoch') for requested ${request.id}")
             }
             preferencesStore?.removeUncertainCreateRecord(intentId)
             val metaWithEpoch = if (ptyEpoch.isNotBlank()) meta.copy(serverPtyEpoch = ptyEpoch) else meta

@@ -444,4 +444,55 @@ class EditorSaveRaceTest {
         assertEquals("original text\n", session.getText())
         assertFalse(session.isDirty)
     }
+
+    @Test
+    fun testInFlightSaveLeaseProtectsDocumentFromDisposalDuringSurfaceUnmount() = runTest {
+        val identityHeader = """{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/lease-test.txt"}"""
+        server!!.createContext("/api/fs/stat") { exchange ->
+            val json = """{"kind":"file","size":20,"mtime":100,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/lease-test.txt"}}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
+            exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val text = "hello world\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
+            exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(text.toByteArray()) }
+        }
+        val registry = CanonicalDocumentRegistry(TestEditorDocumentFactory())
+        val state = createTabsState(project = "demo", registry = registry)
+        val target = ProjectTargetRef(project = "demo")
+        state.openTab(target, "lease-test.txt")
+        val key = state.activeTab!!.key
+        val session = state.getSession(key)!!
+        val doc = session.document
+
+        // View lease acquired by editor surface
+        val viewToken = doc.acquireViewLease("surface-test")
+        assertFalse(doc.canDispose)
+
+        // Save tracking lease acquired (save in-flight)
+        val releaseSaveTracking = doc.beginSaveTracking()
+        assertFalse(doc.canDispose)
+
+        // Release alias and view lease (simulating tab close / surface unmount)
+        doc.releaseAliasLease(session.aliasLease!!)
+        doc.releaseViewLease(viewToken)
+        doc.markDiscarded()
+
+        // Even though discarded and view lease released, save lease strictly blocks disposal
+        assertFalse(doc.canDispose, "Document must NOT be disposable while save tracking lease is in flight")
+        assertFalse(doc.isClosed, "Document must NOT be closed while save is in flight")
+
+        // Pruning must not close the document while save lease is active
+        val cKey = state.resolveCanonicalKey(state.activeTab!!)
+        registry.pruneDocument(cKey, forceDiscard = true)
+        assertFalse(doc.isClosed, "Registry prune must not close document while save is in flight")
+
+        // Release save tracking lease
+        releaseSaveTracking()
+        assertTrue(doc.canDispose, "Document can dispose once save tracking lease is released")
+        assertTrue(doc.isClosed, "Document closes when final save lease settles")
+    }
 }

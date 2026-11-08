@@ -74,8 +74,12 @@ sealed class FilesystemTargetRef {
     }
 
     companion object {
-        fun fromProjectTargetRef(target: ProjectTargetRef): Project =
-            Project(profileId = target.profileId, project = target.project, worktreePath = target.worktreePath)
+        fun fromProjectTargetRef(target: ProjectTargetRef): FilesystemTargetRef =
+            if (target.project.isBlank() || target.project == "*") {
+                Workspace(profileId = target.profileId)
+            } else {
+                Project(profileId = target.profileId, project = target.project, worktreePath = target.worktreePath)
+            }
     }
 }
 

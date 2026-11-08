@@ -132,7 +132,11 @@ class FileTreeState(
         private set
 
     private val _activeBrowsingTarget = MutableStateFlow<FilesystemTargetRef>(
-        initialFsTarget ?: FilesystemTargetRef.fromProjectTargetRef(target)
+        initialFsTarget ?: if (target.project.isBlank() || target.project == "*") {
+            FilesystemTargetRef.Workspace(workspaceEpoch = repository.owner.workspaceEpoch, profileId = target.profileId)
+        } else {
+            FilesystemTargetRef.fromProjectTargetRef(target)
+        }
     )
     val activeBrowsingTarget: StateFlow<FilesystemTargetRef> = _activeBrowsingTarget.asStateFlow()
 
@@ -143,16 +147,18 @@ class FileTreeState(
     val targetBrowseError: StateFlow<String?> = _targetBrowseError.asStateFlow()
 
     private val _registeredProjects = MutableStateFlow<List<String>>(
-        if (target.project.isNotBlank()) listOf(target.project) else emptyList()
+        if (target.project.isNotBlank() && target.project != "*") listOf(target.project) else emptyList()
     )
     val registeredProjects: StateFlow<List<String>> = _registeredProjects.asStateFlow()
 
     fun updateRegisteredProjects(projects: List<String>) {
         _registeredProjects.value = projects
     }
-    private var lastProjectTarget: FilesystemTargetRef.Project = FilesystemTargetRef.Project(profileId = target.profileId, project = target.project, worktreePath = target.worktreePath)
-    val defaultProjectTarget: FilesystemTargetRef.Project get() = lastProjectTarget
-
+    private var lastProjectTarget: FilesystemTargetRef.Project? =
+        if (target.project.isNotBlank() && target.project != "*") {
+            FilesystemTargetRef.Project(profileId = target.profileId, project = target.project, worktreePath = target.worktreePath)
+        } else null
+    val defaultProjectTarget: FilesystemTargetRef.Project? get() = lastProjectTarget
 
     fun selectBrowsingTarget(newTarget: FilesystemTargetRef): TargetBrowseResult {
         when (newTarget) {

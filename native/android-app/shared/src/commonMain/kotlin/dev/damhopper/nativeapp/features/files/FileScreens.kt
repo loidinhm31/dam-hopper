@@ -347,6 +347,8 @@ fun FilesPanelScreen(
                                                 if (matchingProj != null) {
                                                     val relPath = if (path == matchingProj) "" else path.removePrefix("$matchingProj/")
                                                     onOpenFile(ProjectTargetRef(profileId = t.profileId, project = matchingProj), relPath)
+                                                } else {
+                                                    onOpenFile(ProjectTargetRef(profileId = t.profileId, project = "*"), path)
                                                 }
                                             }
                                         }

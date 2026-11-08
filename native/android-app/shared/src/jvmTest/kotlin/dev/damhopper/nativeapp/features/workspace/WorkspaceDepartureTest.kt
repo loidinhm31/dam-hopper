@@ -89,6 +89,7 @@ private class TestDepartureWsConnection(
                 mtime = 10L,
                 size = 15uL,
                 data = kotlin.io.encoding.Base64.encode("initial text\n".encodeToByteArray()),
+                fileIdentity = ServerMsg.FileIdentity("ws-dep", 1L, "/doc.txt"),
             )
             else -> ServerMsg.FsOpResult(reqId = reqId, ok = true)
         }

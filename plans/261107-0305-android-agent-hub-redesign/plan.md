@@ -1,6 +1,6 @@
 ---
 title: "Native Android Agent Hub redesign"
-description: "Adapt native Android to current Agent Hub, filesystem, session, Settings and notification semantics without adopting the full OS. P01-P08 & Remediation phase completed with noted issues by user approval; automated gates passed (1,300 / 1,300 passed across 142 suites); device gate BLOCKED_PENDING_DEVICE; live multi-server gate DEFERRED_PENDING_CONTAINER_RUNTIME."
+description: "Adapt native Android to current Agent Hub, filesystem, session, Settings and notification semantics without adopting the full OS. P01-P08, Remediation, and Hardening phases completed with noted issues by user approval; automated gates passed (1,305 / 1,305 passed across 142 suites on latest full task rerun); device gate BLOCKED_PENDING_DEVICE; live multi-server gate DEFERRED_PENDING_CONTAINER_RUNTIME."
 status: completed-with-noted-issues
 priority: P1
 effort: 158h
@@ -12,9 +12,9 @@ checkpoint: "completed-with-noted-issues"
 # Native Android Agent Hub redesign
 
 ## Outcome and boundary
-Secure Profile Login -> Agent Hub by default; globally reachable retained Settings/Notifications; nested Terminal/Files/Editor/focused Git. Match current web concepts/semantics, not desktops/windows/docks/Recipes or dormant 12-panel activation. Reuse current KMP/Compose/retained owners; no new runtime, poller, scheduler, flags or dependencies. All phases P01–P08 and Remediation phase administratively closed with noted issues following 6 code review cycles and explicit user approval (technical acceptance and release qualification remain open); 1,300 / 1,300 automated unit/integration tests passed across 142 suites; device qualification BLOCKED_PENDING_DEVICE; live multi-server qualification DEFERRED_PENDING_CONTAINER_RUNTIME.
+Secure Profile Login -> Agent Hub by default; globally reachable retained Settings/Notifications; nested Terminal/Files/Editor/focused Git. Match current web concepts/semantics, not desktops/windows/docks/Recipes or dormant 12-panel activation. Reuse current KMP/Compose/retained owners; no new runtime, poller, scheduler, flags or dependencies. All phases P01–P08, Remediation phase, and Hardening phase administratively accepted with noted issues following 9 code review cycles and explicit user approval on 2026-11-08 (technical acceptance and release qualification remain open); 1,305 / 1,305 automated unit/integration tests passed across 142 suites (100% on latest full task rerun); device qualification BLOCKED_PENDING_DEVICE; live multi-server qualification DEFERRED_PENDING_CONTAINER_RUNTIME.
 
-## Phases (P01–P08 & Remediation completed with noted issues by user approval; 158h planned effort [remediation effort unmeasured])
+## Phases (P01–P08, Remediation & Hardening completed with noted issues by user approval; 158h planned effort [remediation & hardening effort unmeasured])
 | Phase | Status | Effort | Owner/group | Detail |
 |---|---|---:|---|---|
 | P01 Contracts | Completed (accepted with known limitations by user approval) | 8h | Contract01 / S-1 | [Schemas and settled ports](phase-01-shared-contracts.md) |
@@ -26,6 +26,7 @@ Secure Profile Login -> Agent Hub by default; globally reachable retained Settin
 | P07 Integration | Completed (approved with noted issues by user approval) | 24h | Integration07 / S-3 | [Active root and retained lifecycle](phase-07-root-lifecycle-integration.md) |
 | P08 Qualification | Completed (automated gates passed; device qualification BLOCKED_PENDING_DEVICE; live multi-server gate DEFERRED_PENDING_CONTAINER_RUNTIME) | 20h | Qualification08 / S-4 | [Coherent checks then docs/handoff](phase-08-qualification-docs-handoff.md) |
 | Remediation | DONE (approved with noted issues; documentation finalization 2026-11-08 14:15:00 +07:00) | — | Multi-agent remediation & review | [Cycles 4–6 review remediation and full suite validation](#remediation-phase-cycles-4-6) |
+| Hardening | DONE (administrative acceptance with noted issues by user approval on 2026-11-08) | — | Multi-agent hardening & review | [Cycles 7–9 review remediation and full suite validation](#hardening-phase-cycles-7-9) |
 
 ## Dependency DAG and eligible groups
 ```mermaid
@@ -137,7 +138,7 @@ Only G-A has concurrent writers: W01 contract alone; W02/03/04 each atomic API t
   - O(1) mtime getter avoids snapshot allocations (`EditorSession.kt`).
   - Nonblocking cached notification validation in reducer unblocks UI threads before route dispatch (fresh precommit HTTP resolution remains unresolved under C-07).
   - Whole-workspace browsing infrastructure was delivered in contracts/state, but rendered production routing is incomplete (projectless holder still initializes with `ProjectTargetRef("*")` per Cycle 6 C-01).
-- **Noted Issues & Residual Technical Debt (Cycle 6 Code Review)**:
+- **Noted Issues & Residual Technical Debt (Cycle 6 Code Review — Historical Baseline Superseded by Cycle 9)**:
   1. **[Critical C-01] Projectless holder target routing**: Projectless holder initialized with `ProjectTargetRef("*")` instead of explicit workspace target; Hub terminal admission validator checks only connection presence, omitting `action.incarnationExact` consumption and qualified profile routing (`DamHopperMobileApp.kt`, `NativeWorkspaceViewModel.kt`, `ProjectWorkspaceState.kt`).
   2. **[Critical C-02] Missing canonical identity save gate**: Missing/invalid same-read identity still returns editable Normal/Degraded success; repository identity validation bypassed when owner workspace epoch is unknown; tab save/overwrite bypasses `saveDocument` identity checks (`EditorContentLoader.kt`, `EditorTabsState.kt`, `EditorRepository.kt`).
   3. **[Critical C-03] Reconnection canonical baseline revalidation**: Write reauthorization keyed by dirty alias IDs rather than canonical documents; clean retained documents receive no fresh verification on rebind (`ProjectWorkspaceState.kt`, `EditorTabsState.kt`).
@@ -147,6 +148,37 @@ Only G-A has concurrent writers: W01 contract alone; W02/03/04 each atomic API t
   7. **[Warning W-02] Uncertain-create account field unwired**: Production constructor omits `accountUser`; incomplete success with zero incarnation / missing PTY epoch clears reservation (`TerminalRepository.kt`).
   8. **[Warning W-06] Replacement publication metadata loss**: Successor load derives only LARGE/NORMAL, dropping DEGRADED tier and loaded size/mime/mtime; full-buffer copy repeated (`EditorTabsState.kt`, `EditorSession.kt`).
   9. **[Warning W-08] Negative production-boundary coverage**: Production denial paths and boundary conditions unexercised in test suites (`EditorTabsStateTest.kt`, `AgentHubLifecycleTest.kt`).
+
+
+<a id="hardening-phase-cycles-7-9"></a>
+### Hardening Phase (Code Review Cycles 7–9 & Validation)
+- **Status**: **Hardening Phase (Cycles 7–9 remediation): DONE — administrative acceptance with noted issues by explicit user approval on 2026-11-08.** Technical acceptance and release qualification remain explicitly open.
+- **Administrative Closure & Review Attribution**:
+  - Hardening proceeded across three review cycles: Cycle 7 ([Cycle 7 review](../reports/code-review-261108-1453-android-agent-hub-hardening-cycle-7.md), score 5/10), Cycle 8 ([Cycle 8 review](../reports/code-review-261108-1453-android-agent-hub-hardening-cycle-8.md), score 6/10), and authoritative Cycle 9 ([Cycle 9 review](../reports/code-review-261108-1453-android-agent-hub-hardening-cycle-9.md), score 7/10).
+  - **Reviewer Technical Disposition (Cycle 9 Authoritative)**: **Changes requested** (score 7/10; two critical findings [C-01b / Cycle 9 C-01, C-07] and one high-priority finding [H-01] remain open in source; three warnings [W-01, W-02, W-08] and duplicated canonical-denial-authority maintainability warning; static review across 26 tracked files, +900/-266 in `native/android-app`).
+  - **Administrative Closure**: **Administrative acceptance with noted issues** by explicit user approval on 2026-11-08. Technical acceptance, device verification, and release qualification remain open; passing unit test suites do not overturn reviewed correctness, contract, and routing gaps.
+- **Automated Test Verification (Tester-Reported Evidence)**:
+  - Latest full task rerun (`--rerun-tasks`) verified in tester report ([Cycle 3 hardening tester report](../reports/tester-261108-1453-android-agent-hub-hardening-cycle-3.md)): **1,305 / 1,305 tests reported PASSED (100%) across 142 suites** (0 failures, 0 errors, 0 skipped on Attempt 2; prior failed invocation in Attempt 1 retained in record; latest full rerun passed):
+    - Multiplatform Core Unit & Integration Suite (`:shared:jvmTest`): **1,048 / 1,048 tests PASSED** across 111 suites.
+    - Android Application Unit Suite (`:androidApp:testDebugUnitTest`): **257 / 257 tests PASSED** across 31 suites.
+  - Test timing: Gradle build time 67s, tool-measured wall time 68.20s, aggregated XML duration 19.492s.
+  - Passing unit test execution does not establish closure of unresolved architectural or device-boundary findings.
+- **Delivered Hardening Fixes & Source Improvements**:
+  - C-02 identity admission & physical preview tiers: demotion to read-only applies only for `!tier.isReadOnly && fileIdentity == null`; reload applies the same predicate; source preserves IMAGE/VIDEO/BINARY physical tiers; missing-identity write denials maintained; rendered runtime qualification remains open (`EditorContentLoader.kt`, `EditorTabsState.kt`, `EditorRepository.kt`).
+  - C-03 baseline mtime & shared canonical denial: positive exact server mtime baseline reauthorization contract (`doc.serverMtime > 0L && serverMtime == doc.serverMtime` in `ProjectWorkspaceState.kt`); shared canonical registry denial is consulted via `unauthorizedCanonicalKeys` in `CanonicalDocumentRegistry` across tab/overwrite/document ports, while duplicate holder-local denial state remains.
+  - C-04 save tracking leases & retirement settlement: exact-document production save tracking leases (`beginSaveTracking` with `finally` release in `EditorTabSaveCoordinator.kt`, `EditorRepository.kt`); documents trigger `onDisposalEligible` on final lease/save release (`AndroidEditorDocument.kt`); registry installs callbacks for retired entries.
+  - C-01a Projectless workspace holder & serializers: repaired root-file constructor (`FileScreens.kt:345–351`); nonblank wildcard holder lookup and explicit `FilesystemTargetRef.Workspace` named FS wire target serializers (`FilesystemTargetRef.kt`, `FileRepository.kt`, `FsWriteCoordinator.kt`, `TransferCoordinator.kt`).
+  - W-02 create response settlement: matching ID, positive exact ULong incarnation, alive predicate, and UUID-shaped epoch required before reservation settlement; authenticated account bound in constructors (`TerminalRepository.kt`).
+  - W-06 alias metadata preservation: initial `openTab` passes actual load `result.size` and MIME into `SuccessorLoadMetadata` (`EditorTabsState.kt`).
+  - C-07 notification precommit & epoch fencing: monotonic navigation epoch invalidation on settings/workspace requests; notification admission cancels pending Agents work; terminal route rechecks live state after profile persistence.
+- **Noted Issues & Residual Technical Debt (Cycle 9 Authoritative Code Review)**:
+  1. **[Critical C-01b / Cycle 9 C-01] Hub terminal admission & free-terminal profile switching**: Project-row `revalidate` checks only connection presence without checking captured generation, endpoint, authenticated account, socket, current terminal inventory, or incarnation; free terminal rows (`target == null`) mutate a holder for the requested profile without switching flow route or active profile (`NativeWorkspaceViewModel.kt`, `AgentHubModels.kt`, `DamHopperMobileApp.kt`, `AppFlowNavigation.kt`).
+  2. **[Critical C-07] Split notification routing & unspent manual intent**: Newer manual terminal/Agents selections do not advance `notificationRouteEpoch`, allowing suspended notification resolution to overwrite newer manual intent; `selectProfile` publishes active profile before suspending persistence, leaving profile and route non-atomic on failure/cancellation; generic notification branch lacks post-suspension owner/generation revalidation (`NativeWorkspaceViewModel.kt`, `AppFlowNavigation.kt`, `ProfileRepository.kt`).
+  3. **[High H-01] Workspace capability action holder routing**: Workspace `OpenFiles` / `OpenEditor` do not commit the requested Workspace route or clear active project in navigation, mutating hidden holder or falling back to an active project holder with project-bound repository mismatch (`NativeWorkspaceViewModel.kt`, `DamHopperMobileApp.kt`, `FileTreeState.kt`).
+  4. **[Warning W-01] Raw-ID reopen & presentation projections**: Snapshot sets discard profile prefixes; same-profile reopen selects raw ID on active holder without the row's project/socket/incarnation qualification (`NativeWorkspaceViewModel.kt`).
+  5. **[Warning W-02] Uncertain-create omitted alive & optional-store bypass**: Missing `alive` field defaults to `true` on deserialization; nullable `preferencesStore` bypasses persistent reservation check/write (`TerminalModels.kt`, `TerminalRepository.kt`).
+  6. **[Warning W-08] Negative production-boundary coverage**: Real production suspended-save and native surface unmount boundaries remain unexercised in unit tests (`EditorSaveRaceTest.kt`, `EditorTabsStateTest.kt`).
+  7. **[Maintainability] Duplicated canonical denial authority**: Concurrent decision sources between shared canonical registry (`CanonicalDocumentRegistry`) and holder-local denial sets (`unauthorizedCanonicalKeys` vs `unauthorizedDirtyDocIds`).
 
 ### Preserved Open Future Qualification Gates
 1. **Physical Device Qualification (`GATE-C`)**: Execution on physical ARM64 device (API 29 and API 33+) verifying phone/tablet adaptive layout, soft keyboard IME, TalkBack accessibility, and visual presentation.

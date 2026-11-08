@@ -161,6 +161,7 @@ class ProjectWorkspaceState(
 
     /** Retained dirty documents whose save authority is suspended pending fresh canonical verification. */
     val unauthorizedDirtyDocIds = MutableStateFlow<Set<DocumentId>>(emptySet())
+    val unauthorizedCanonicalKeys = MutableStateFlow<Set<String>>(emptySet())
     /** Whether the editor-panel file-tree sidebar is open (split view when wide, slide-over when compact). */
     val isEditorSidebarOpen = MutableStateFlow(false)
 
@@ -185,6 +186,7 @@ class ProjectWorkspaceState(
 
     init {
         editorTabsState.unauthorizedDirtyDocIdsProvider = { unauthorizedDirtyDocIds.value }
+        editorTabsState.unauthorizedCanonicalKeysProvider = { unauthorizedCanonicalKeys.value }
         updateInputGate()
     }
     /**
@@ -283,6 +285,10 @@ class ProjectWorkspaceState(
         gitRuntime?.revoke()
         gitState.invalidateAuthority()
         spendPendingDeparture()
+        editorTabsState.registry.revokeAllAuthority()
+        val allCKeys = editorTabsState.tabs.value.map { editorTabsState.resolveCanonicalKey(it) }.toSet()
+        unauthorizedCanonicalKeys.value = allCKeys
+        unauthorizedDirtyDocIds.value = getDirtyDocumentIds().toSet()
         updateInputGate()
     }
 
@@ -298,6 +304,9 @@ class ProjectWorkspaceState(
             return false
         }
         reauthEpoch++
+        editorTabsState.registry.revokeAllAuthority()
+        val allCKeys = editorTabsState.tabs.value.map { editorTabsState.resolveCanonicalKey(it) }.toSet()
+        unauthorizedCanonicalKeys.value = allCKeys
         val dirtyDocs = getDirtyDocumentIds().toSet()
         if (dirtyDocs.isNotEmpty()) {
             unauthorizedDirtyDocIds.value = dirtyDocs
@@ -326,6 +335,9 @@ class ProjectWorkspaceState(
         reauthEpoch++
         fileRepository = newFileRepo
         editorRepository = newEditorRepo
+        editorTabsState.registry.revokeAllAuthority()
+        val allCKeys = editorTabsState.tabs.value.map { editorTabsState.resolveCanonicalKey(it) }.toSet()
+        unauthorizedCanonicalKeys.value = allCKeys
         val dirtyDocs = getDirtyDocumentIds().toSet()
         if (dirtyDocs.isNotEmpty()) {
             unauthorizedDirtyDocIds.value = dirtyDocs
@@ -336,7 +348,7 @@ class ProjectWorkspaceState(
         editorTabsState.rebindRepository(newEditorRepo)
         fileTreeState.rebindRepository(newFileRepo)
         fileMutationCoordinator.rebindRepository(newFileRepo)
-        terminalState?.rebindTransports(newConnection, dev.damhopper.nativeapp.features.terminal.TerminalRepository(newFileRepo.apiClient, newFileRepo.wsConnection, preferencesStore))
+        terminalState?.rebindTransports(newConnection, dev.damhopper.nativeapp.features.terminal.TerminalRepository(newFileRepo.apiClient, newFileRepo.wsConnection, preferencesStore, accountUser = owner.accountUser))
         if (gitRuntime?.connection != newConnection) {
             gitRuntime?.revoke()
             gitRuntime = null
@@ -347,57 +359,78 @@ class ProjectWorkspaceState(
 
     suspend fun reauthorizeRetainedDocuments(): Boolean {
         val capturedEpoch = reauthEpoch
-        val capturedConn = fileRepository.apiClient.connection
-        val dirtyTabs = editorTabsState.tabs.value.filter { it.isDirty }
-        if (dirtyTabs.isEmpty()) {
-            if (reauthEpoch != capturedEpoch || fileRepository.apiClient.connection != capturedConn || _isAuthorityRetired.value) {
+        val capturedRepo = fileRepository
+        val capturedConn = capturedRepo.apiClient.connection
+        val allTabs = editorTabsState.tabs.value
+        if (allTabs.isEmpty()) {
+            if (reauthEpoch != capturedEpoch || fileRepository !== capturedRepo || fileRepository.apiClient.connection != capturedConn || _isAuthorityRetired.value) {
                 return false
             }
+            unauthorizedCanonicalKeys.value = emptySet()
             unauthorizedDirtyDocIds.value = emptySet()
             updateInputGate()
             return true
         }
         var allMatch = true
-        for (tab in dirtyTabs) {
-            if (reauthEpoch != capturedEpoch || fileRepository.apiClient.connection != capturedConn || _isAuthorityRetired.value) {
+        val distinctTabs = allTabs.distinctBy { editorTabsState.resolveCanonicalKey(it) }
+        for (tab in distinctTabs) {
+            if (reauthEpoch != capturedEpoch || fileRepository !== capturedRepo || fileRepository.apiClient.connection != capturedConn || _isAuthorityRetired.value) {
                 return false
             }
+            val cKey = editorTabsState.resolveCanonicalKey(tab)
             val session = editorTabsState.getSession(tab.key)
             val doc = session?.document
             val origFid = doc?.fileIdentity ?: tab.fileIdentity
-            if (origFid == null) {
+            val origWsId = origFid?.workspaceId?.trim()
+            val origCPath = origFid?.canonicalPath?.trim()
+            val origEpoch = origFid?.workspaceEpoch
+            if (doc == null || origFid == null || origWsId.isNullOrBlank() || origCPath.isNullOrBlank() || origEpoch == null) {
                 allMatch = false
                 continue
             }
             try {
                 val stat = fileRepository.stat(tab.target, tab.path)
-                if (reauthEpoch != capturedEpoch || fileRepository.apiClient.connection != capturedConn || _isAuthorityRetired.value) {
+                if (reauthEpoch != capturedEpoch || fileRepository !== capturedRepo || fileRepository.apiClient.connection != capturedConn || _isAuthorityRetired.value) {
                     return false
                 }
-                val serverFid = stat.fileIdentity ?: stat.fileIdentitySnake
-                if (serverFid == null) {
+                val postSession = editorTabsState.getSession(tab.key)
+                if (postSession?.document !== doc) {
                     allMatch = false
                     continue
                 }
-                val sameWorkspace = serverFid.workspaceId?.trim() == origFid.workspaceId?.trim()
-                val sameEpoch = (serverFid.workspaceEpoch ?: stat.workspaceEpoch) == origFid.workspaceEpoch
-                val samePath = serverFid.canonicalPath?.trim() == origFid.canonicalPath?.trim()
-                if (sameWorkspace && sameEpoch && samePath) {
-                    val docId = editorTabsState.getDocumentId(tab.key)
-                    if (docId != null) {
-                        unauthorizedDirtyDocIds.update { it - docId }
-                    }
+                val serverFid = stat.fileIdentity ?: stat.fileIdentitySnake
+                val serverWsId = serverFid?.workspaceId?.trim()
+                val serverCPath = serverFid?.canonicalPath?.trim()
+                val serverEpoch = serverFid?.workspaceEpoch ?: stat.workspaceEpoch
+                if (serverFid == null || serverWsId.isNullOrBlank() || serverCPath.isNullOrBlank() || serverEpoch == null) {
+                    allMatch = false
+                    continue
+                }
+                val sameWorkspace = serverWsId == origWsId
+                val sameEpoch = serverEpoch == origEpoch
+                val samePath = serverCPath == origCPath
+                val serverMtime = stat.mtime.toLong()
+                val mtimeMatches = doc.serverMtime > 0L && serverMtime == doc.serverMtime
+                if (sameWorkspace && sameEpoch && samePath && mtimeMatches) {
+                    editorTabsState.registry.grantAuthority(cKey)
+                    unauthorizedCanonicalKeys.update { it - cKey }
+                    val docIds = editorTabsState.tabs.value
+                        .filter { editorTabsState.resolveCanonicalKey(it) == cKey }
+                        .mapNotNull { editorTabsState.getDocumentId(it.key) }
+                    unauthorizedDirtyDocIds.update { it - docIds }
                 } else {
                     allMatch = false
                 }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
             } catch (e: Throwable) {
                 allMatch = false
             }
         }
-        if (reauthEpoch != capturedEpoch || fileRepository.apiClient.connection != capturedConn || _isAuthorityRetired.value) {
+        if (reauthEpoch != capturedEpoch || fileRepository !== capturedRepo || fileRepository.apiClient.connection != capturedConn || _isAuthorityRetired.value) {
             return false
         }
-        if (allMatch && unauthorizedDirtyDocIds.value.isEmpty()) {
+        if (allMatch && unauthorizedCanonicalKeys.value.isEmpty()) {
             _isAuthorityRetired.value = false
             updateInputGate()
             return true
@@ -632,6 +665,9 @@ class ProjectWorkspaceState(
             )
             val treeState = FileTreeState(
                 target = target,
+                initialFsTarget = if (target.project.isBlank() || target.project == "*") {
+                    FilesystemTargetRef.Workspace(workspaceEpoch = owner.workspaceEpoch, profileId = target.profileId)
+                } else null,
                 repository = fileRepository,
                 coroutineScope = coroutineScope,
             )

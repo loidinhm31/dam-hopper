@@ -100,6 +100,7 @@ class AppFlowNavigation(
      * overlay never nests and never re-captures a place the user is no longer looking at).
      */
     fun openSettings(origin: SettingsOrigin) {
+        ordinaryNavigationRequested()
         _state.update { current ->
             if (current.settings != null) current
             else current.copy(settings = SettingsOverlay(origin.copy(stage = current.stage)), notificationsOpen = false)
@@ -270,11 +271,11 @@ class AppFlowNavigation(
      *
      * @param sessionId Active terminal session ID, or null to clear.
      */
-    fun selectSession(sessionId: String?) {
+    fun selectSession(sessionId: String?, requiredInstance: TerminalAgentsInstanceKey? = null) {
         _state.update {
             it.copy(
                 activeSessionId = sessionId,
-                requiredTerminalInstance = it.requiredTerminalInstance?.takeIf { required -> required.terminalId == sessionId },
+                requiredTerminalInstance = requiredInstance ?: it.requiredTerminalInstance?.takeIf { required -> required.terminalId == sessionId },
             )
         }
     }
@@ -372,6 +373,7 @@ class AppFlowNavigation(
         revalidate: suspend () -> Boolean = { true },
         onCommitted: () -> Unit = {},
     ): Result<Unit> = suspendCancellableCoroutine { cont ->
+        ordinaryNavigationRequested()
         val profileId = target.profileId ?: _state.value.activeProfileId ?: ""
         val commit = {
             CoroutineScope(cont.context).launch {

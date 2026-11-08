@@ -48,7 +48,16 @@ private class TestWorkspaceWsConnection(
 
     override fun activeSocketRef(): SocketInstanceRef? = currentSocket
 
-    override suspend fun sendOnSocket(expectedSocketRef: SocketInstanceRef, msg: ClientMsg) {}
+    override suspend fun sendOnSocket(expectedSocketRef: SocketInstanceRef, msg: ClientMsg) {
+        if (msg is ClientMsg.FsWriteCommit) {
+            _boundFlow.emit(
+                SocketBoundMessage(
+                    socketRef = expectedSocketRef,
+                    message = ServerMsg.FsWriteResult(writeId = msg.writeId, ok = true, newMtime = 20L)
+                )
+            )
+        }
+    }
 
     @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
     override suspend fun requestOnSocket(
@@ -59,6 +68,7 @@ private class TestWorkspaceWsConnection(
     ): ServerMsg {
         return when (msg) {
             is ClientMsg.FsSubscribeTree -> ServerMsg.TreeSnapshot(reqId = reqId, subId = 1uL)
+            is ClientMsg.FsWriteBegin -> ServerMsg.FsWriteAck(reqId = reqId, writeId = 1uL)
             is ClientMsg.FsRead -> ServerMsg.FsReadResult(
                 reqId = reqId,
                 ok = true,
@@ -428,5 +438,75 @@ class ProjectWorkspaceStateTest {
             ws.unauthorizedDirtyDocIds.value.isEmpty(),
             "Unauthorized document set must be cleared after successful reauthorization"
         )
+    }
+
+    @Test
+    fun testCleanDocumentEditedAfterRebindWithoutServerStatReauthorizationFailsClosed() = runTest {
+        val sharedRegistry = dev.damhopper.nativeapp.features.editor.CanonicalDocumentRegistry(TestEditorDocumentFactory())
+        val ws1 = createWorkspaceState(project = "demo-proj", registry = sharedRegistry, epoch = 1L)
+        val ws2 = createWorkspaceState(project = "demo-proj", registry = sharedRegistry, epoch = 1L)
+
+        ws1.editorTabsState.openTab(ws1.target, "Main.kt")
+        ws2.editorTabsState.openTab(ws2.target, "Main.kt")
+
+        val tab1 = ws1.editorTabsState.activeTab!!
+        val tab2 = ws2.editorTabsState.activeTab!!
+        val session1 = ws1.editorTabsState.getSession(tab1.key)!!
+        val session2 = ws2.editorTabsState.getSession(tab2.key)!!
+
+        // Both tabs share the exact same canonical document
+        assertSame(session1.document, session2.document, "Cross-workspace aliases must share canonical document")
+        assertFalse(session1.isDirty, "Document starts clean")
+        assertFalse(session2.isDirty, "Document starts clean")
+
+        // Revoke and rebind authority on ws1 with fresh connection
+        ws1.revokeAuthority()
+        assertTrue(ws1.isAuthorityRetired.value)
+
+        val freshConn = ConnectionRef("prof-test", 2L)
+        val rebindOk = ws1.rebindAuthority(ws1.owner, freshConn)
+        assertTrue(rebindOk)
+        assertFalse(ws1.isAuthorityRetired.value)
+
+        // Canonical key is unauthorized on ws1 post-rebind even though document was clean at rebind
+        val cKey = ws1.editorTabsState.resolveCanonicalKey(tab1)
+        assertTrue(
+            ws1.unauthorizedCanonicalKeys.value.contains(cKey),
+            "Retained document canonical key must remain unauthorized post-rebind even if clean"
+        )
+
+        // Edit clean document on ws1 (clean-to-dirty transition propagates to shared document)
+        session1.setText("post-rebind dirty edits\n")
+        assertTrue(session1.isDirty)
+        assertTrue(session2.isDirty)
+
+        // Save attempt on ws1 must fail closed because canonical identity has not been verified against new connection
+        val saveRes1 = ws1.editorTabsState.saveTab(tab1.key)
+        assertTrue(saveRes1 is dev.damhopper.nativeapp.features.editor.EditorSaveResult.Error)
+        assertTrue(
+            saveRes1.message.contains("fresh server baseline reauthorization"),
+            "Clean-to-dirty edit post-rebind must fail closed without server stat reauthorization"
+        )
+
+        // Force overwrite on ws1 must also fail closed
+        val overwriteRes1 = ws1.editorTabsState.forceOverwriteTab(tab1.key)
+        assertTrue(overwriteRes1 is dev.damhopper.nativeapp.features.editor.EditorSaveResult.Error)
+        assertTrue(
+            overwriteRes1.message.contains("fresh server baseline reauthorization"),
+            "Force overwrite on unauthorized canonical document must also fail closed"
+        )
+
+        // Reauthorize against fresh server baseline on ws1
+        val reauthOk = ws1.reauthorizeRetainedDocuments()
+        assertTrue(reauthOk, "Reauthorization must succeed when server stat baseline matches")
+        assertTrue(ws1.unauthorizedCanonicalKeys.value.isEmpty())
+        assertTrue(ws1.unauthorizedDirtyDocIds.value.isEmpty())
+        assertFalse(ws1.isAuthorityRetired.value)
+
+        // Post-reauthorization save now succeeds!
+        val postReauthSave = ws1.editorTabsState.saveTab(tab1.key)
+        assertTrue(postReauthSave is dev.damhopper.nativeapp.features.editor.EditorSaveResult.Success, "Save must succeed after verified reauthorization")
+        assertFalse(session1.isDirty, "Session 1 must be clean after successful save")
+        assertFalse(session2.isDirty, "Shared session 2 must be clean after successful save")
     }
 }

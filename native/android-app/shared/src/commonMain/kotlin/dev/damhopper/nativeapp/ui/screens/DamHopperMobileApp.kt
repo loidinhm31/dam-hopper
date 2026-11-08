@@ -270,8 +270,10 @@ private fun RootContent(
     var workspaceRepo by remember { mutableStateOf<WorkspaceRepository?>(null) }
     var terminalRepo by remember { mutableStateOf<TerminalRepository?>(null) }
 
+    val effectiveAccountUser = (currentAuthStatus as? AuthStatus.Authenticated)?.session?.user
+
     // Reconstruct repositories when active profile, its base URL, or generation changes
-    LaunchedEffect(activeProfileId, currentProfile?.baseUrl, currentConn?.generation) {
+    LaunchedEffect(activeProfileId, currentProfile?.baseUrl, currentConn?.generation, effectiveAccountUser) {
         workspaceRepo = null
         terminalRepo = null
         apiClient = null
@@ -291,7 +293,7 @@ private fun RootContent(
                 apiClient = client
                 wsConnection = ws
                 workspaceRepo = WorkspaceRepository(client, targetStore)
-                terminalRepo = TerminalRepository(client, ws, services?.settingsRepository?.preferencesStore)
+                terminalRepo = TerminalRepository(client, ws, services?.settingsRepository?.preferencesStore, accountUser = effectiveAccountUser)
                 // When RetainedRootServices is available, connection lifecycle and recovery are managed
                 // by WsRecoverySupervisor in attachRuntime(). Only standalone preview/tests without services connect directly.
                 if (services == null && ws != null) {
@@ -313,7 +315,6 @@ private fun RootContent(
     }
 
     // Hand the already-created runtime to the retained owner (one collector per runtime, no extra connection).
-    val effectiveAccountUser = (currentAuthStatus as? AuthStatus.Authenticated)?.session?.user
     LaunchedEffect(apiClient, wsConnection, effectiveAccountUser, activeProfileId) {
         val client = apiClient
         val ws = wsConnection
@@ -397,7 +398,7 @@ private fun RootContent(
                     connectionGetter = { client.connection },
                     fileRepositoryGetter = { fileRepo },
                     editorRepositoryGetter = { editorRepo },
-                    terminalRepositoryGetter = { dev.damhopper.nativeapp.features.terminal.TerminalRepository(client, ws, services?.settingsRepository?.preferencesStore) },
+                    terminalRepositoryGetter = { dev.damhopper.nativeapp.features.terminal.TerminalRepository(client, ws, services?.settingsRepository?.preferencesStore, accountUser = accountUser) },
                     workspaceStateGetter = { wsState },
                     retainedDirtyDocsProvider = { requestedOwner ->
                         if (requestedOwner == owner) {
@@ -1244,7 +1245,7 @@ private fun AgentHubEmptyRoot(
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(DamHopperColors.Surface)
                                     .border(1.dp, DamHopperColors.Border, RoundedCornerShape(6.dp))
-                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(terminalId = row.id, profileId = row.projectTarget?.profileId ?: hubSnapshot.profileId, target = row.projectTarget, incarnationExact = row.incarnationExact)) }
+                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(terminalId = row.id, profileId = row.profileId ?: row.projectTarget?.profileId ?: hubSnapshot.profileId, target = row.projectTarget, incarnationExact = row.incarnationExact)) }
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                                 contentAlignment = Alignment.CenterStart,
                             ) {
@@ -1262,7 +1263,7 @@ private fun AgentHubEmptyRoot(
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(DamHopperColors.Surface)
                                     .border(1.dp, DamHopperColors.Border, RoundedCornerShape(6.dp))
-                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(terminalId = row.id, profileId = row.projectTarget?.profileId ?: hubSnapshot.profileId, target = row.projectTarget, incarnationExact = row.incarnationExact)) }
+                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(terminalId = row.id, profileId = row.profileId ?: row.projectTarget?.profileId ?: hubSnapshot.profileId, target = row.projectTarget, incarnationExact = row.incarnationExact)) }
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                                 contentAlignment = Alignment.CenterStart,
                             ) {

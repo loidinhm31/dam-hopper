@@ -76,6 +76,7 @@ private class SafetyTestWsConnection(
             mtime = 10L,
             size = 25uL,
             data = kotlin.io.encoding.Base64.encode("fun main() = println()\n".encodeToByteArray()),
+            fileIdentity = ServerMsg.FileIdentity("ws-git", 1L, "/Main.kt"),
         )
         else -> ServerMsg.FsOpResult(reqId = reqId, ok = true)
     }

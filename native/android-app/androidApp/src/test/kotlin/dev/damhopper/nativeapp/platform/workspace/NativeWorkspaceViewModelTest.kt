@@ -338,4 +338,13 @@ class NativeWorkspaceViewModelTest {
         assertFalse(results.first().cancelled)
         collectJob.cancel()
     }
+
+    @Test
+    fun testQualifiedTerminalKeyPreventsRawIdCollisionAcrossProfiles() {
+        val qKey1 = NativeWorkspaceViewModel.qualifiedTerminalKey("prof-1", "term-dup")
+        val qKey2 = NativeWorkspaceViewModel.qualifiedTerminalKey("prof-2", "term-dup")
+        assertTrue(qKey1 != qKey2, "Terminal with identical raw ID across different profiles must produce distinct qualified keys")
+        assertEquals("prof-1:term-dup", qKey1)
+        assertEquals("prof-2:term-dup", qKey2)
+    }
 }

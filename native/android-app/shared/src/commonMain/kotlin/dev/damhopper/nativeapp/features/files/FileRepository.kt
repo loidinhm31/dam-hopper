@@ -74,8 +74,13 @@ class FileRepository(
     suspend fun listDirectory(target: ProjectTargetRef, relativePath: String = ""): List<DirEntryDto> {
         assertTargetMatchesOwner(target, "listDirectory")
         val cleanPath = if (relativePath.isBlank() || relativePath == ".") "." else dev.damhopper.nativeapp.features.workspace.DocumentId.normalizeRelativePath(relativePath)
-        val queryParams = mutableMapOf("targetType" to "project", "project" to target.project, "path" to cleanPath)
-        target.worktreePath?.let { queryParams["worktreePath"] = it }
+        val queryParams = if (target.project == "*") {
+            mutableMapOf("targetType" to "workspace", "path" to cleanPath)
+        } else {
+            val params = mutableMapOf("targetType" to "project", "project" to target.project, "path" to cleanPath)
+            target.worktreePath?.let { params["worktreePath"] = it }
+            params
+        }
         val json = apiClient.get("/api/fs/list", queryParams)
         return ProtocolJson.decodeFromString(ListResponseDto.serializer(), json).entries
     }
@@ -87,8 +92,13 @@ class FileRepository(
      */
     suspend fun languageFiles(target: ProjectTargetRef): LanguageFilesResponse {
         assertTargetMatchesOwner(target, "languageFiles")
-        val queryParams = mutableMapOf("project" to target.project)
-        target.worktreePath?.let { queryParams["worktreePath"] = it }
+        val queryParams = if (target.project == "*") {
+            mutableMapOf("targetType" to "workspace")
+        } else {
+            val params = mutableMapOf("targetType" to "project", "project" to target.project)
+            target.worktreePath?.let { params["worktreePath"] = it }
+            params
+        }
         val json = apiClient.get("/api/fs/language-files", queryParams)
         return ProtocolJson.decodeFromString(LanguageFilesResponse.serializer(), json)
     }
@@ -96,8 +106,13 @@ class FileRepository(
     suspend fun stat(target: ProjectTargetRef, relativePath: String): FileStatDto {
         assertTargetMatchesOwner(target, "stat")
         val cleanPath = if (relativePath.isBlank() || relativePath == ".") "." else dev.damhopper.nativeapp.features.workspace.DocumentId.normalizeRelativePath(relativePath)
-        val queryParams = mutableMapOf("targetType" to "project", "project" to target.project, "path" to cleanPath)
-        target.worktreePath?.let { queryParams["worktreePath"] = it }
+        val queryParams = if (target.project == "*") {
+            mutableMapOf("targetType" to "workspace", "path" to cleanPath)
+        } else {
+            val params = mutableMapOf("targetType" to "project", "project" to target.project, "path" to cleanPath)
+            target.worktreePath?.let { params["worktreePath"] = it }
+            params
+        }
         val json = apiClient.get("/api/fs/stat", queryParams)
         return ProtocolJson.decodeFromString(FileStatDto.serializer(), json)
     }
@@ -112,9 +127,14 @@ class FileRepository(
         val cleanPath = dev.damhopper.nativeapp.features.workspace.DocumentId.normalizeRelativePath(relativePath)
 
         val reqId = wsConnection.nextReqId()
+        val serverTarget = if (target.project == "*") {
+            ServerFsTarget(type = "workspace", workspaceEpoch = owner.workspaceEpoch)
+        } else {
+            ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath)
+        }
         val readMsg = ClientMsg.FsRead(
             reqId = reqId,
-            target = ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath),
+            target = serverTarget,
             path = cleanPath,
             offset = offset,
             len = len,
@@ -192,8 +212,13 @@ class FileRepository(
         len: ULong?,
         maxBytes: Long,
     ): FsFileReadResult {
-        val queryParams = mutableMapOf("targetType" to "project", "project" to target.project, "path" to cleanPath)
-        target.worktreePath?.let { queryParams["worktreePath"] = it }
+        val queryParams = if (target.project == "*") {
+            mutableMapOf("targetType" to "workspace", "path" to cleanPath)
+        } else {
+            val params = mutableMapOf("targetType" to "project", "project" to target.project, "path" to cleanPath)
+            target.worktreePath?.let { params["worktreePath"] = it }
+            params
+        }
         offset?.let { queryParams["offset"] = it.toString() }
         len?.let { queryParams["len"] = it.toString() }
 
@@ -329,10 +354,15 @@ class FileRepository(
             ?: return FileOperationOutcome.NotSubmitted("WebSocket is not connected")
 
         val reqId = wsConnection.nextReqId()
+        val serverTarget = if (target.project == "*") {
+            ServerFsTarget(type = "workspace", workspaceEpoch = effectiveOwner.workspaceEpoch)
+        } else {
+            ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath)
+        }
         val opMsg = ClientMsg.FsOp(
             reqId = reqId,
             op = op,
-            target = ServerFsTarget(type = "project", project = target.project, worktreePath = target.worktreePath),
+            target = serverTarget,
             path = cleanPath,
             newPath = cleanNewPath,
             forceGit = forceGit,
