@@ -116,6 +116,7 @@ data class CapturedTerminationTarget(
     val worktreePath: String? = null,
     val serverPtyEpoch: String? = null,
     val incarnationExact: String? = null,
+    val terminationVersion: Int? = 1,
     val isPinned: Boolean = false,
     val isAlive: Boolean = true,
     val willRestart: Boolean = false,
@@ -123,7 +124,8 @@ data class CapturedTerminationTarget(
 ) {
     val isValidEpoch: Boolean = !serverPtyEpoch.isNullOrBlank() && TerminateSessionRequest.isValidEpoch(serverPtyEpoch)
     val isValidIncarnation: Boolean = !incarnationExact.isNullOrBlank() && TerminateSessionRequest.isValidIncarnation(incarnationExact)
-    val isProtocolSupported: Boolean = isValidEpoch && isValidIncarnation
+    val isValidVersion: Boolean = terminationVersion == 1
+    val isProtocolSupported: Boolean = isValidVersion && isValidEpoch && isValidIncarnation
 
     val canCloseViewLocally: Boolean = !isPinned
     val canEndSessionDestructively: Boolean = !isPinned && isProtocolSupported && !isDestructiveOpInProgress
@@ -131,6 +133,7 @@ data class CapturedTerminationTarget(
     val destructiveDisabledReason: String? = when {
         isPinned -> "Cannot close or end pinned session; unpin first."
         isDestructiveOpInProgress -> "Destructive operation already in progress."
+        !isValidVersion -> "Cannot end session: unsupported or missing termination protocol version"
         !isValidEpoch -> "Cannot end session: missing verified server PTY epoch"
         !isValidIncarnation -> "Cannot end session: missing verified server PTY incarnation"
         else -> null

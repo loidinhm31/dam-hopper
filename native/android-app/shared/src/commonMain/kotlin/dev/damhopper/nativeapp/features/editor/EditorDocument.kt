@@ -181,10 +181,17 @@ interface EditorDocument {
      */
     fun close()
     val isClosed: Boolean get() = false
+    var isDiscarded: Boolean
+        get() = false
+        set(_) {}
+    fun markDiscarded() {
+        isDiscarded = true
+    }
+    val serverMtime: Long get() = 0L
 
     val activeAliasLeases: StateFlow<Set<AliasLeaseToken>> get() = MutableStateFlow(emptySet())
     val activeViewLeases: StateFlow<Set<ViewLeaseToken>> get() = MutableStateFlow(emptySet())
-    val canDispose: Boolean get() = activeAliasLeases.value.isEmpty() && activeViewLeases.value.isEmpty() && !isDirty.value
+    val canDispose: Boolean get() = activeAliasLeases.value.isEmpty() && activeViewLeases.value.isEmpty() && (!isDirty.value || isDiscarded)
 
     fun acquireAliasLease(aliasId: String): AliasLeaseToken = AliasLeaseToken(aliasId, aliasId, revision.value)
     fun releaseAliasLease(token: AliasLeaseToken) {}

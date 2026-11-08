@@ -286,6 +286,7 @@ fun ProjectTerminalScreen(
     historyOwner: SettingsOwner? = null,
     worktreePath: String? = null,
     inputCovered: Boolean = false,
+    isMaskActive: Boolean = false,
     retainedState: ProjectTerminalState? = null,
     showHeader: Boolean = true,
     /** Exact manual-activation intent: only this ID + incarnation may be selected; never `selectable.firstOrNull()`. */
@@ -1739,7 +1740,7 @@ fun ProjectTerminalScreen(
     }
 
 
-    if (connectionRef != null && !covered) {
+    if (connectionRef != null && !covered && !isMaskActive) {
         TerminalDialogs(
             showDiagnosticsDialog = showDiagnosticsDialog,
             onDismissDiagnostics = { showDiagnosticsDialog = false },

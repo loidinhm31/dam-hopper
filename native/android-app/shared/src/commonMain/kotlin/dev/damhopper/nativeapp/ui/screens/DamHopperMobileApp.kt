@@ -358,18 +358,22 @@ private fun RootContent(
         val prof = currentProfile
         val conn = currentConn
         val accountUser = effectiveAccountUser
-        if (profId != null && prof != null && client != null && ws != null && selectedProj != null &&
+        val effectiveProject = selectedProj ?: "*"
+        if (profId != null && prof != null && client != null && ws != null &&
             conn != null && accountUser != null &&
             client.connection == conn && ws.connection == conn &&
             client.normalizedBaseUrl == WorkspaceFileOwner.normalizeBaseUrl(prof.baseUrl) &&
             ws.baseUrl.trim().trimEnd('/') == WorkspaceFileOwner.normalizeBaseUrl(prof.baseUrl)
         ) {
+            val snapshot = targetStore.getSnapshot(profId, null, effectiveProject)
             val owner = WorkspaceFileOwner(
                 profileId = profId,
                 baseUrl = prof.baseUrl,
                 accountUser = accountUser,
-                project = selectedProj,
+                project = effectiveProject,
                 worktreePath = flowState.activeWorktreePath,
+                workspaceRoot = snapshot.workspaceRoot,
+                workspaceEpoch = snapshot.workspaceEpoch,
             )
             val target = owner.toProjectTargetRef()
             if (workspaceStateProvider != null) {
@@ -839,7 +843,7 @@ private fun RootContent(
 
                         AppFlowStage.HUB, AppFlowStage.TERMINAL, AppFlowStage.PROJECT_LIST -> {
                             val proj = flowState.activeProject
-                            if (proj.isNullOrBlank()) {
+                            if (proj.isNullOrBlank() && (activeWorkspaceState == null || activeWorkspaceState.activePanel.value == WorkspacePanel.TERMINAL)) {
                                 AgentHubEmptyRoot(
                                     profileName = currentProfile?.name ?: "Server",
                                     serverUrl = currentProfile?.baseUrl,
@@ -853,7 +857,7 @@ private fun RootContent(
                                 )
                             } else if (activeWorkspaceState != null) {
                                 ProjectWorkspaceScreen(
-                                    projectName = proj,
+                                    projectName = proj ?: "Workspace",
                                     workspaceState = activeWorkspaceState,
                                     terminalRepo = terminalRepo,
                                     navigation = navigation,
@@ -867,11 +871,12 @@ private fun RootContent(
                                     headerEntries = headerEntries,
                                     requiredTerminalInstance = flowState.requiredTerminalInstance,
                                     agents = agentsContext,
+                                    isMaskActive = masked,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                             } else {
                                 ProjectTerminalScreen(
-                                    projectName = proj,
+                                    projectName = proj ?: "Workspace",
                                     terminalRepo = terminalRepo,
                                     onBackToProjects = {
                                         navigation.handleBackPress()
@@ -883,6 +888,7 @@ private fun RootContent(
                                     profileId = activeProfileId,
                                     preferenceAccess = prefAccess,
                                     inputCovered = settingsOpen || masked || effectiveCover,
+                                    isMaskActive = masked,
                                     requiredTerminalInstance = flowState.requiredTerminalInstance,
                                     agents = agentsContext,
                                     modifier = Modifier.fillMaxSize(),
@@ -1002,17 +1008,27 @@ private fun RootContent(
                             workspaceRepo = workspaceRepo,
                             onClose = { navigation.closeProjectPicker() },
                             onSelectProject = { projectName ->
+                                val profId = activeProfileId.orEmpty()
                                 val targetRef = ProjectTargetRef(
                                     profileId = activeProfileId,
                                     project = projectName,
                                     worktreePath = null,
                                 )
+                                val capturedConn = profileRepository.registry.connectionsState.value[profId]
+                                val capturedProfile = profileRepository.profiles.value.find { it.id == profId }
+                                val capturedAccount = (profileRepository.authStatuses.value[profId] as? AuthStatus.Authenticated)?.session?.user
                                 scope.launch {
                                     navigation.requestWorkspaceTarget(
                                         target = targetRef,
                                         revalidate = {
-                                            val profId = targetRef.profileId.orEmpty()
-                                            profileRepository.registry.getCurrentConnection(profId) != null
+                                            val currentConn = profileRepository.registry.connectionsState.value[profId]
+                                            val currentProfile = profileRepository.profiles.value.find { it.id == profId }
+                                            val currentAccount = (profileRepository.authStatuses.value[profId] as? AuthStatus.Authenticated)?.session?.user
+                                            capturedConn != null && currentConn != null &&
+                                                currentConn.generation == capturedConn.generation &&
+                                                capturedProfile != null && currentProfile != null &&
+                                                currentProfile.baseUrl == capturedProfile.baseUrl &&
+                                                capturedAccount != null && currentAccount == capturedAccount
                                         },
                                         onCommitted = {
                                             targetStore.selectTarget(
@@ -1165,7 +1181,7 @@ private fun AgentHubEmptyRoot(
                     HubCapabilityTab(
                         label = "Terminal",
                         isSelected = true,
-                        onClick = { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.CreateTerminalIntent(hubSnapshot.selectedProjectTarget)) },
+                        onClick = { /* Terminal capability active */ },
                     )
                     HubCapabilityTab(
                         label = "Files",
@@ -1176,7 +1192,7 @@ private fun AgentHubEmptyRoot(
                             if (target != null) {
                                 onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenFiles(FilesystemTargetRef.Project(profileId = target.profileId, project = target.project, worktreePath = target.worktreePath)))
                             } else {
-                                onOpenProject()
+                                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenFiles(FilesystemTargetRef.Workspace(profileId = hubSnapshot.profileId)))
                             }
                         },
                     )
@@ -1187,9 +1203,9 @@ private fun AgentHubEmptyRoot(
                         onClick = {
                             val target = hubSnapshot.selectedProjectTarget
                             if (target != null) {
-                                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenFiles(FilesystemTargetRef.Project(profileId = target.profileId, project = target.project, worktreePath = target.worktreePath)))
+                                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenEditor(fileRef = "", target = FilesystemTargetRef.Project(profileId = target.profileId, project = target.project, worktreePath = target.worktreePath)))
                             } else {
-                                onOpenProject()
+                                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenEditor(fileRef = "", target = FilesystemTargetRef.Workspace(profileId = hubSnapshot.profileId)))
                             }
                         },
                     )
@@ -1228,7 +1244,7 @@ private fun AgentHubEmptyRoot(
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(DamHopperColors.Surface)
                                     .border(1.dp, DamHopperColors.Border, RoundedCornerShape(6.dp))
-                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(row.id, row.projectTarget?.profileId)) }
+                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(terminalId = row.id, profileId = row.projectTarget?.profileId ?: hubSnapshot.profileId, target = row.projectTarget, incarnationExact = row.incarnationExact)) }
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                                 contentAlignment = Alignment.CenterStart,
                             ) {
@@ -1246,7 +1262,7 @@ private fun AgentHubEmptyRoot(
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(DamHopperColors.Surface)
                                     .border(1.dp, DamHopperColors.Border, RoundedCornerShape(6.dp))
-                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(row.id, row.projectTarget?.profileId)) }
+                                    .clickable { onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(terminalId = row.id, profileId = row.projectTarget?.profileId ?: hubSnapshot.profileId, target = row.projectTarget, incarnationExact = row.incarnationExact)) }
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                                 contentAlignment = Alignment.CenterStart,
                             ) {

@@ -86,6 +86,11 @@ class EditorContentLoader(private val fileRepository: FileRepository) {
         if (readResult.isBinary || readResult.textContent == null) {
             return EditorLoadResult.Error("File contains invalid UTF-8 or binary characters and cannot be opened as editable text")
         }
+        val fid = readResult.fileIdentity
+        val wsId = fid?.workspaceId?.trim()
+        val cPath = fid?.canonicalPath?.trim()
+        val wsEpoch = fid?.workspaceEpoch
+        val hasVerifiedIdentity = !wsId.isNullOrEmpty() && !cPath.isNullOrEmpty() && wsEpoch != null && wsEpoch >= 0L
         return EditorLoadResult.Success(
             content = readResult.textContent,
             mtime = readResult.mtime?.toLong() ?: mtime,
@@ -95,8 +100,8 @@ class EditorContentLoader(private val fileRepository: FileRepository) {
             isBinary = false,
             isEof = true,
             bytesRead = readResult.textContent.encodeToByteArray().size,
-            fileIdentity = readResult.fileIdentity,
-            canonicalPath = readResult.fileIdentity?.canonicalPath ?: path,
+            fileIdentity = if (hasVerifiedIdentity) fid else null,
+            canonicalPath = if (hasVerifiedIdentity) fid?.canonicalPath else null,
         )
     }
 }

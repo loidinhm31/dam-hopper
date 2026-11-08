@@ -119,6 +119,16 @@ class EditorRepository(
         if (doc.isReadOnly.value) return FileOperationOutcome.NotSubmitted("Document is read-only")
         val gate = saveGate ?: return FileOperationOutcome.NotSubmitted("No save eligibility gate installed")
         gate(id)?.let { return FileOperationOutcome.NotSubmitted(it) }
+        val fid = doc.fileIdentity
+        val wsId = fid?.workspaceId?.trim()
+        val cPath = fid?.canonicalPath?.trim()
+        val wsEpoch = fid?.workspaceEpoch
+        val owner = fileRepository.owner
+        if (owner.workspaceEpoch != null) {
+            if (wsId.isNullOrEmpty() || cPath.isNullOrEmpty() || wsEpoch == null || wsEpoch != owner.workspaceEpoch) {
+                return FileOperationOutcome.NotSubmitted("Document lacks verified canonical identity matching workspace authority (${owner.workspaceEpoch})")
+            }
+        }
         val effectiveOwner = dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(fileRepository.owner, target)
         val acquiredToken = fileRepository.arbiter.tryReserveSave(effectiveOwner, id.relativePath)
             ?: return FileOperationOutcome.NotSubmitted("Path '${id.relativePath}' is currently reserved by another file operation")

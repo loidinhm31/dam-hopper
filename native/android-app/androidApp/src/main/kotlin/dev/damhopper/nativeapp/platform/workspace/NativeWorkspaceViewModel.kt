@@ -769,6 +769,8 @@ sealed interface NotificationRouteDecision {
         val project: String,
         val worktreePath: String?,
         val terminalId: String,
+        val incarnation: Long? = null,
+        val incarnationExact: String? = null,
     ) : NotificationRouteDecision
 
     data class Refused(val reason: String) : NotificationRouteDecision
@@ -844,7 +846,14 @@ class NotificationRouteResolver(
         }
         // Server fetch finished: the live exactness must still hold before anything may commit.
         checkLive(target)?.let { return NotificationRouteDecision.Refused(it) }
-        return NotificationRouteDecision.OpenTerminal(target.profileId, project, session.worktreePath, terminalId)
+        return NotificationRouteDecision.OpenTerminal(
+            profileId = target.profileId,
+            project = project,
+            worktreePath = session.worktreePath,
+            terminalId = terminalId,
+            incarnation = session.incarnation.toServerSafeLongOrNull() ?: target.incarnation,
+            incarnationExact = session.incarnationExact ?: target.incarnation.toString(),
+        )
     }
 }
 
@@ -1173,6 +1182,9 @@ class NativeWorkspaceViewModel(
     )
     private val routeResolver: NotificationRouteResolver = NotificationRouteResolver(registry, runtimes, ProcessInstance.id)
 
+    private fun qualifiedTerminalKey(profileId: String?, terminalId: String): String =
+        "${profileId.orEmpty()}:$terminalId"
+
     private val _zeroSessionOpenTargets = MutableStateFlow<Set<ProjectTargetRef>>(emptySet())
     private val _pinnedTerminalIds = MutableStateFlow<Set<String>>(emptySet())
     private val _hiddenTerminalIds = MutableStateFlow<Set<String>>(emptySet())
@@ -1196,8 +1208,6 @@ class NativeWorkspaceViewModel(
         return workspaceStates.keys.firstOrNull {
             it.profileId == profId && it.project == proj &&
                 WorkspaceFileOwner.normalizeWorktree(it.worktreePath) == WorkspaceFileOwner.normalizeWorktree(nav.activeWorktreePath)
-        } ?: workspaceStates.keys.firstOrNull {
-            it.profileId == profId
         }
     }
     override val notificationFeed: StateFlow<NotificationFeedState> get() = coordinator.feed
@@ -1290,8 +1300,9 @@ class NativeWorkspaceViewModel(
                         knownTerminalIdsByProfile[profId] = liveIds
                         val staleIds = previousKnown - liveIds
                         if (staleIds.isNotEmpty()) {
-                            _pinnedTerminalIds.update { it - staleIds }
-                            _hiddenTerminalIds.update { it - staleIds }
+                            val staleKeys = staleIds.map { qualifiedTerminalKey(profId, it) }.toSet()
+                            _pinnedTerminalIds.update { it - staleKeys }
+                            _hiddenTerminalIds.update { it - staleKeys }
                         }
                     }
                     val runtime = runtimes.current(profId)
@@ -1313,10 +1324,11 @@ class NativeWorkspaceViewModel(
                                 command = session.command,
                                 projectTarget = targetRef,
                                 incarnation = session.incarnation,
+                                incarnationExact = session.incarnationExact ?: session.incarnation.toString(),
                                 alive = session.alive,
                                 exitCode = session.exitCode,
-                                isPinned = session.id in pins,
-                                isHidden = session.id in hidden,
+                                isPinned = qualifiedTerminalKey(profId, session.id) in pins || session.id in pins,
+                                isHidden = qualifiedTerminalKey(profId, session.id) in hidden || session.id in hidden,
                                 hasPendingAttention = (agent?.attentionRevision ?: 0uL) > 0uL,
                                 agentSession = agent?.let {
                                     HubAgentRow(
@@ -1342,8 +1354,8 @@ class NativeWorkspaceViewModel(
                     selectedProjectTarget = selectedTarget,
                     zeroSessionOpenTargets = zeroTargets.toList(),
                     terminalRows = rows,
-                    pinnedTerminalIds = pins,
-                    hiddenTerminalIds = hidden,
+                    pinnedTerminalIds = pins.map { it.substringAfter(":") }.toSet(),
+                    hiddenTerminalIds = hidden.map { it.substringAfter(":") }.toSet(),
                     pendingCreateIntents = pendingCreates.filter { activeProfId == null || it.profileId == activeProfId },
                     isInventoryLoaded = activeProfId != null && inventories.keys.any { it.connection.profileId == activeProfId && connections[activeProfId] == it.connection },
                     isConnected = (activeProfId?.let { connections.containsKey(it) } ?: false) && hasLiveSocket,
@@ -1588,6 +1600,11 @@ class NativeWorkspaceViewModel(
                 profileId = owner.profileId ?: "",
             )
             existing.rebindTransports(fileRepo, editorRepo, apiClient.connection)
+            if (existing.unauthorizedDirtyDocIds.value.isNotEmpty()) {
+                viewModelScope.launch {
+                    existing.reauthorizeRetainedDocuments()
+                }
+            }
             existing.bindPreferenceConsumers(access, commandHistory, historyOwner)
             existing.terminalState?.syncUncertainCreates(_pendingCreateIntents.value)
             if (existing.gitRuntime == null || existing.gitRuntime?.connection != apiClient.connection) {
@@ -1707,15 +1724,21 @@ class NativeWorkspaceViewModel(
             it.profileId == scope.profileId &&
                 it.project == scope.project &&
                 WorkspaceFileOwner.normalizeWorktree(it.worktreePath) == WorkspaceFileOwner.normalizeWorktree(worktree.path)
-        } ?: WorkspaceFileOwner(
-            profileId = scope.profileId,
-            baseUrl = workspaceStates.keys.firstOrNull { it.profileId == scope.profileId }?.baseUrl ?: "",
-            accountUser = (profileRepository.authStatuses.value[scope.profileId] as? AuthStatus.Authenticated)?.session?.user
-                ?: workspaceStates.keys.firstOrNull { it.profileId == scope.profileId }?.accountUser
-                ?: "authenticated-user",
-            project = scope.project,
-            worktreePath = worktree.path,
-        )
+        } ?: run {
+            val prof = profileRepository.profiles.value.find { it.id == scope.profileId }
+            val snapshot = targetStore.getSnapshot(scope.profileId, null, scope.project)
+            WorkspaceFileOwner(
+                profileId = scope.profileId,
+                baseUrl = prof?.baseUrl ?: workspaceStates.keys.firstOrNull { it.profileId == scope.profileId }?.baseUrl ?: "",
+                accountUser = (profileRepository.authStatuses.value[scope.profileId] as? AuthStatus.Authenticated)?.session?.user
+                    ?: workspaceStates.keys.firstOrNull { it.profileId == scope.profileId }?.accountUser
+                    ?: "authenticated-user",
+                project = scope.project,
+                worktreePath = worktree.path,
+                workspaceRoot = snapshot.workspaceRoot,
+                workspaceEpoch = snapshot.workspaceEpoch,
+            )
+        }
         val dirty = retainedDirtyDocuments(targetOwner)
         if (dirty.isNotEmpty()) {
             blockers.add("Worktree has unsaved editor tabs: ${dirty.joinToString { it.relativePath }}")
@@ -1869,16 +1892,26 @@ class NativeWorkspaceViewModel(
             is AgentHubAction.SelectProjectTarget -> {
                 val target = action.target
                 if (target != null) {
+                    val profId = target.profileId ?: flowNavigation.state.value.activeProfileId.orEmpty()
                     val targetRef = ProjectTargetRef(
-                        profileId = target.profileId ?: flowNavigation.state.value.activeProfileId,
+                        profileId = profId,
                         project = target.project,
                         worktreePath = target.worktreePath,
                     )
+                    val capturedConn = profileRepository.registry.connectionsState.value[profId]
+                    val capturedProfile = profileRepository.profiles.value.find { it.id == profId }
+                    val capturedAccount = (profileRepository.authStatuses.value[profId] as? AuthStatus.Authenticated)?.session?.user
                     flowNavigation.requestWorkspaceTarget(
                         target = targetRef,
                         revalidate = {
-                            val profId = targetRef.profileId.orEmpty()
-                            profileRepository.registry.getCurrentConnection(profId) != null
+                            val currentConn = profileRepository.registry.connectionsState.value[profId]
+                            val currentProfile = profileRepository.profiles.value.find { it.id == profId }
+                            val currentAccount = (profileRepository.authStatuses.value[profId] as? AuthStatus.Authenticated)?.session?.user
+                            capturedConn != null && currentConn != null &&
+                                currentConn.generation == capturedConn.generation &&
+                                capturedProfile != null && currentProfile != null &&
+                                currentProfile.baseUrl == capturedProfile.baseUrl &&
+                                capturedAccount != null && currentAccount == capturedAccount
                         },
                         onCommitted = {
                             targetStore.selectTarget(targetRef.profileId, null, targetRef.project, targetRef.worktreePath)
@@ -1890,16 +1923,26 @@ class NativeWorkspaceViewModel(
             }
             is AgentHubAction.OpenZeroSessionProject -> {
                 val target = action.target
+                val profId = target.profileId ?: flowNavigation.state.value.activeProfileId.orEmpty()
                 val targetRef = ProjectTargetRef(
-                    profileId = target.profileId ?: flowNavigation.state.value.activeProfileId,
+                    profileId = profId,
                     project = target.project,
                     worktreePath = target.worktreePath,
                 )
+                val capturedConn = profileRepository.registry.connectionsState.value[profId]
+                val capturedProfile = profileRepository.profiles.value.find { it.id == profId }
+                val capturedAccount = (profileRepository.authStatuses.value[profId] as? AuthStatus.Authenticated)?.session?.user
                 flowNavigation.requestWorkspaceTarget(
                     target = targetRef,
                     revalidate = {
-                        val profId = targetRef.profileId.orEmpty()
-                        profileRepository.registry.getCurrentConnection(profId) != null
+                        val currentConn = profileRepository.registry.connectionsState.value[profId]
+                        val currentProfile = profileRepository.profiles.value.find { it.id == profId }
+                        val currentAccount = (profileRepository.authStatuses.value[profId] as? AuthStatus.Authenticated)?.session?.user
+                        capturedConn != null && currentConn != null &&
+                            currentConn.generation == capturedConn.generation &&
+                            capturedProfile != null && currentProfile != null &&
+                            currentProfile.baseUrl == capturedProfile.baseUrl &&
+                            capturedAccount != null && currentAccount == capturedAccount
                     },
                     onCommitted = {
                         _zeroSessionOpenTargets.update { it + action.target }
@@ -1919,12 +1962,43 @@ class NativeWorkspaceViewModel(
                 }
             }
             is AgentHubAction.SelectTerminal -> {
-                val profId = action.profileId ?: flowNavigation.state.value.activeProfileId
-                flowNavigation.selectSession(action.terminalId)
-                val owner = profId?.let { p -> activeWorkspaceStateOwner(p) }
-                owner?.let {
-                    workspaceStates[it]?.selectPanel(WorkspacePanel.TERMINAL)
-                    workspaceStates[it]?.terminalState?.selectSession(action.terminalId)
+                val profId = action.profileId ?: action.target?.profileId ?: flowNavigation.state.value.activeProfileId
+                val target = action.target
+                if (target != null && target.project.isNotBlank()) {
+                    val targetRef = ProjectTargetRef(
+                        profileId = profId,
+                        project = target.project,
+                        worktreePath = target.worktreePath,
+                    )
+                    flowNavigation.requestWorkspaceTarget(
+                        target = targetRef,
+                        revalidate = {
+                            val conn = profileRepository.registry.connectionsState.value[profId.orEmpty()]
+                            conn != null
+                        },
+                        onCommitted = {
+                            flowNavigation.selectSession(action.terminalId)
+                            val owner = profId?.let { p ->
+                                workspaceStates.keys.firstOrNull {
+                                    it.profileId == p && it.project == target.project &&
+                                        WorkspaceFileOwner.normalizeWorktree(it.worktreePath) == WorkspaceFileOwner.normalizeWorktree(target.worktreePath)
+                                }
+                            }
+                            owner?.let {
+                                val ws = workspaceStates[it]
+                                ws?.selectPanel(WorkspacePanel.TERMINAL)
+                                ws?.terminalState?.selectSession(action.terminalId)
+                            }
+                        }
+                    )
+                } else {
+                    flowNavigation.selectSession(action.terminalId)
+                    val owner = profId?.let { p -> activeWorkspaceStateOwner(p) }
+                    owner?.let {
+                        val ws = workspaceStates[it]
+                        ws?.selectPanel(WorkspacePanel.TERMINAL)
+                        ws?.terminalState?.selectSession(action.terminalId)
+                    }
                 }
             }
             is AgentHubAction.CreateTerminalIntent -> {
@@ -1955,18 +2029,25 @@ class NativeWorkspaceViewModel(
                 }
             }
             is AgentHubAction.HideTerminal -> {
-                _hiddenTerminalIds.update { it + action.terminalId }
-                if (flowNavigation.state.value.activeSessionId == action.terminalId) {
+                val profId = action.profileId ?: flowNavigation.state.value.activeProfileId.orEmpty()
+                val qKey = qualifiedTerminalKey(profId, action.terminalId)
+                _hiddenTerminalIds.update { it + qKey }
+                if (profId == flowNavigation.state.value.activeProfileId &&
+                    flowNavigation.state.value.activeSessionId == action.terminalId) {
                     flowNavigation.selectSession(null)
                 }
             }
             is AgentHubAction.ReopenTerminal -> {
-                _hiddenTerminalIds.update { it - action.terminalId }
+                val profId = action.profileId ?: flowNavigation.state.value.activeProfileId.orEmpty()
+                val qKey = qualifiedTerminalKey(profId, action.terminalId)
+                _hiddenTerminalIds.update { it - qKey }
                 flowNavigation.selectSession(action.terminalId)
             }
             is AgentHubAction.PinTerminal -> {
+                val profId = action.profileId ?: flowNavigation.state.value.activeProfileId.orEmpty()
+                val qKey = qualifiedTerminalKey(profId, action.terminalId)
                 _pinnedTerminalIds.update {
-                    if (action.pinned) it + action.terminalId else it - action.terminalId
+                    if (action.pinned) it + qKey else it - qKey
                 }
             }
             is AgentHubAction.TerminateTerminal -> {
@@ -1993,22 +2074,40 @@ class NativeWorkspaceViewModel(
                         activeWorkspaceStateOwner(target.profileId)?.let { workspaceStates[it]?.selectPanel(WorkspacePanel.FILES) }
                     }
                     is FilesystemTargetRef.Workspace -> {
-                        activeWorkspaceStateOwner(target.profileId)?.let { workspaceStates[it]?.selectPanel(WorkspacePanel.FILES) }
+                        val profId = target.profileId ?: flowNavigation.state.value.activeProfileId
+                        workspaceStates.keys.firstOrNull { it.profileId == profId }?.let {
+                            workspaceStates[it]?.selectPanel(WorkspacePanel.FILES)
+                        }
                     }
                 }
             }
             is AgentHubAction.OpenEditor -> {
                 val target = action.target
-                if (target is FilesystemTargetRef.Project) {
-                    flowNavigation.selectProject(target.project, target.worktreePath, target.profileId)
+                val profId = when (target) {
+                    is FilesystemTargetRef.Project -> {
+                        flowNavigation.selectProject(target.project, target.worktreePath, target.profileId)
+                        target.profileId
+                    }
+                    is FilesystemTargetRef.Workspace -> target.profileId
+                    null -> null
+                } ?: flowNavigation.state.value.activeProfileId
+                val owner = profId?.let { p ->
+                    when (target) {
+                        is FilesystemTargetRef.Project -> workspaceStates.keys.firstOrNull {
+                            it.profileId == p && it.project == target.project &&
+                                WorkspaceFileOwner.normalizeWorktree(it.worktreePath) == WorkspaceFileOwner.normalizeWorktree(target.worktreePath)
+                        }
+                        is FilesystemTargetRef.Workspace -> workspaceStates.keys.firstOrNull { it.profileId == p }
+                        null -> activeWorkspaceStateOwner(p)
+                    } ?: activeWorkspaceStateOwner(p)
                 }
-                val profId = target?.profileId ?: flowNavigation.state.value.activeProfileId
-                val owner = profId?.let { activeWorkspaceStateOwner(it) }
                 owner?.let {
                     val ws = workspaceStates[it]
                     ws?.selectPanel(WorkspacePanel.EDITOR)
-                    viewModelScope.launch {
-                        ws?.editorTabsState?.openTab(ws.target, action.fileRef)
+                    if (action.fileRef.isNotBlank()) {
+                        viewModelScope.launch {
+                            ws?.editorTabsState?.openTab(ws.target, action.fileRef)
+                        }
                     }
                 }
             }
@@ -2096,29 +2195,37 @@ class NativeWorkspaceViewModel(
                     project = decision.project,
                     worktreePath = decision.worktreePath,
                     sessionId = decision.terminalId,
+                    incarnation = decision.incarnation,
                     revalidate = {
                         routeResolver.checkLive(target) == null
                     },
                     onCommitted = {
-                        val liveStatus = profileRepository.authStatuses.value[decision.profileId] as? AuthStatus.Authenticated
-                        val expectedAccount = liveStatus?.session?.user
-                        if (expectedAccount != null) {
-                            val state = workspaceStates.values.firstOrNull {
-                                it.target.profileId == decision.profileId &&
-                                it.target.project == decision.project &&
-                                it.target.worktreePath == decision.worktreePath &&
-                                it.owner.accountUser == expectedAccount &&
-                                !it.isAuthorityRetired.value
-                            }
-                            state?.selectPanel(WorkspacePanel.TERMINAL)
-                            state?.terminalState?.selectSession(decision.terminalId)
-                        }
                         viewModelScope.launch {
-                            try {
-                                profileRepository.selectProfile(decision.profileId)
-                            } catch (ce: CancellationException) {
-                                throw ce
-                            } catch (_: Throwable) {
+                            val freshDecision = routeResolver.resolve(target)
+                            if (freshDecision is NotificationRouteDecision.OpenTerminal &&
+                                freshDecision.project == decision.project &&
+                                freshDecision.worktreePath == decision.worktreePath &&
+                                freshDecision.terminalId == decision.terminalId
+                            ) {
+                                val liveStatus = profileRepository.authStatuses.value[decision.profileId] as? AuthStatus.Authenticated
+                                val expectedAccount = liveStatus?.session?.user
+                                if (expectedAccount != null) {
+                                    val state = workspaceStates.values.firstOrNull {
+                                        it.target.profileId == decision.profileId &&
+                                        it.target.project == decision.project &&
+                                        it.target.worktreePath == decision.worktreePath &&
+                                        it.owner.accountUser == expectedAccount &&
+                                        !it.isAuthorityRetired.value
+                                    }
+                                    state?.selectPanel(WorkspacePanel.TERMINAL)
+                                    state?.terminalState?.selectSession(decision.terminalId)
+                                }
+                                try {
+                                    profileRepository.selectProfile(decision.profileId)
+                                } catch (ce: CancellationException) {
+                                    throw ce
+                                } catch (_: Throwable) {
+                                }
                             }
                         }
                     },

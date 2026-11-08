@@ -363,7 +363,7 @@ class ProjectWorkspaceStateTest {
 
     @Test
     fun testAuthorityRetirementRetainsDraftsAndDisablesStaleSaves() = runTest {
-        val ws = createWorkspaceState(project = "demo-proj", epoch = 10L)
+        val ws = createWorkspaceState(project = "demo-proj", epoch = 1L)
         ws.editorTabsState.openTab(ws.target, "Main.kt")
         val tab = ws.editorTabsState.activeTab!!
         val session = ws.editorTabsState.getSession(tab.key)!!
@@ -400,6 +400,33 @@ class ProjectWorkspaceStateTest {
         val rebindExact = ws.rebindAuthority(ws.owner, freshConn)
         assertTrue(rebindExact, "Exact authorized owner permits rebind")
         assertFalse(ws.isAuthorityRetired.value)
-        assertTrue(session.isInputPermitted)
+
+        // Retained dirty document must be tracked in unauthorizedDirtyDocIds post-rebind
+        val dirtyDocId = ws.editorTabsState.getDocumentId(tab.key)
+        assertNotNull(dirtyDocId)
+        assertTrue(
+            ws.unauthorizedDirtyDocIds.value.contains(dirtyDocId),
+            "Retained dirty document must remain unauthorized after rebind until fresh server baseline verification"
+        )
+
+        // Actual save attempt MUST be rejected by saveGate
+        val saveAttempt = ws.editorTabsState.saveTab(tab.key)
+        assertTrue(saveAttempt is dev.damhopper.nativeapp.features.editor.EditorSaveResult.Error)
+        assertTrue(
+            saveAttempt.message.contains("fresh server baseline reauthorization"),
+            "Save must be rejected with baseline reauthorization reason"
+        )
+
+        // Document dirty state and undo history remain strictly preserved
+        assertEquals("draft content\n", session.getText())
+        assertTrue(session.isDirty)
+
+        // Reauthorize retained documents against fresh server baseline
+        val reauthOk = ws.reauthorizeRetainedDocuments()
+        assertTrue(reauthOk, "Fresh baseline matching canonical identity must reauthorize documents")
+        assertTrue(
+            ws.unauthorizedDirtyDocIds.value.isEmpty(),
+            "Unauthorized document set must be cleared after successful reauthorization"
+        )
     }
 }

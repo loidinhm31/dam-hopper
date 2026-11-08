@@ -91,13 +91,16 @@ class GitWorkspaceSafetyTest {
     fun setUp() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         serverPort = server!!.address.port
+        val identityHeader = """{"workspaceId":"ws-git","workspaceEpoch":1,"canonicalPath":"/Main.kt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":25,"mtime":10,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":25,"mtime":10,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-git","workspaceEpoch":1,"canonicalPath":"/Main.kt"}}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "fun main() = println()\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }

@@ -20,6 +20,7 @@ data class HubTerminalRow(
     val command: String,
     val projectTarget: ProjectTargetRef? = null,
     val incarnation: ULong = 0uL,
+    val incarnationExact: String? = null,
     val alive: Boolean = true,
     val exitCode: Int? = null,
     val isPinned: Boolean = false,
@@ -75,7 +76,12 @@ sealed class AgentHubAction {
     data class SelectProjectTarget(val target: ProjectTargetRef?) : AgentHubAction()
     data class OpenZeroSessionProject(val target: ProjectTargetRef) : AgentHubAction()
     data class DismissZeroSessionProject(val target: ProjectTargetRef) : AgentHubAction()
-    data class SelectTerminal(val terminalId: String, val profileId: ProfileId? = null) : AgentHubAction()
+    data class SelectTerminal(
+        val terminalId: String,
+        val profileId: ProfileId? = null,
+        val target: ProjectTargetRef? = null,
+        val incarnationExact: String? = null,
+    ) : AgentHubAction()
     data class CreateTerminalIntent(val target: ProjectTargetRef?, val command: String? = null) : AgentHubAction()
     data class HideTerminal(val terminalId: String, val profileId: ProfileId? = null) : AgentHubAction() // Local Close View, NOT remote kill
     data class ReopenTerminal(val terminalId: String, val profileId: ProfileId? = null) : AgentHubAction()

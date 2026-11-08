@@ -1,6 +1,6 @@
 ---
 title: "Native Android Agent Hub redesign"
-description: "Adapt native Android to current Agent Hub, filesystem, session, Settings and notification semantics without adopting the full OS. P01-P08 completed with noted issues by user approval; automated gates passed (1,299 / 1,299 passed across 142 suites); device gate BLOCKED_PENDING_DEVICE; live multi-server gate DEFERRED_PENDING_CONTAINER_RUNTIME."
+description: "Adapt native Android to current Agent Hub, filesystem, session, Settings and notification semantics without adopting the full OS. P01-P08 & Remediation phase completed with noted issues by user approval; automated gates passed (1,300 / 1,300 passed across 142 suites); device gate BLOCKED_PENDING_DEVICE; live multi-server gate DEFERRED_PENDING_CONTAINER_RUNTIME."
 status: completed-with-noted-issues
 priority: P1
 effort: 158h
@@ -12,9 +12,9 @@ checkpoint: "completed-with-noted-issues"
 # Native Android Agent Hub redesign
 
 ## Outcome and boundary
-Secure Profile Login -> Agent Hub by default; globally reachable retained Settings/Notifications; nested Terminal/Files/Editor/focused Git. Match current web concepts/semantics, not desktops/windows/docks/Recipes or dormant 12-panel activation. Reuse current KMP/Compose/retained owners; no new runtime, poller, scheduler, flags or dependencies. All phases P01–P08 administratively closed with noted issues following 3 code review cycles and explicit user approval (technical acceptance and release qualification remain open); 1,299 / 1,299 automated unit/integration tests passed across 142 suites; device qualification BLOCKED_PENDING_DEVICE; live multi-server qualification DEFERRED_PENDING_CONTAINER_RUNTIME.
+Secure Profile Login -> Agent Hub by default; globally reachable retained Settings/Notifications; nested Terminal/Files/Editor/focused Git. Match current web concepts/semantics, not desktops/windows/docks/Recipes or dormant 12-panel activation. Reuse current KMP/Compose/retained owners; no new runtime, poller, scheduler, flags or dependencies. All phases P01–P08 and Remediation phase administratively closed with noted issues following 6 code review cycles and explicit user approval (technical acceptance and release qualification remain open); 1,300 / 1,300 automated unit/integration tests passed across 142 suites; device qualification BLOCKED_PENDING_DEVICE; live multi-server qualification DEFERRED_PENDING_CONTAINER_RUNTIME.
 
-## Phases (P01–P08 completed with noted issues by user approval; 158h completed effort / 158h total)
+## Phases (P01–P08 & Remediation completed with noted issues by user approval; 158h planned effort [remediation effort unmeasured])
 | Phase | Status | Effort | Owner/group | Detail |
 |---|---|---:|---|---|
 | P01 Contracts | Completed (accepted with known limitations by user approval) | 8h | Contract01 / S-1 | [Schemas and settled ports](phase-01-shared-contracts.md) |
@@ -25,6 +25,7 @@ Secure Profile Login -> Agent Hub by default; globally reachable retained Settin
 | P06 Codebase | Completed (approved with noted issues by user approval) | 24h | Feature06 / G-A | [Files, native editor and focused Git](phase-06-codebase-files-editor-git.md) |
 | P07 Integration | Completed (approved with noted issues by user approval) | 24h | Integration07 / S-3 | [Active root and retained lifecycle](phase-07-root-lifecycle-integration.md) |
 | P08 Qualification | Completed (automated gates passed; device qualification BLOCKED_PENDING_DEVICE; live multi-server gate DEFERRED_PENDING_CONTAINER_RUNTIME) | 20h | Qualification08 / S-4 | [Coherent checks then docs/handoff](phase-08-qualification-docs-handoff.md) |
+| Remediation | DONE (approved with noted issues; documentation finalization 2026-11-08 14:15:00 +07:00) | — | Multi-agent remediation & review | [Cycles 4–6 review remediation and full suite validation](#remediation-phase-cycles-4-6) |
 
 ## Dependency DAG and eligible groups
 ```mermaid
@@ -97,7 +98,7 @@ Only G-A has concurrent writers: W01 contract alone; W02/03/04 each atomic API t
   - Connected device qualification (`GATE-C`): **BLOCKED_PENDING_DEVICE** (0 connected Android physical devices or emulators observed via `adb.exe devices`).
   - Live multi-server qualification: **DEFERRED_PENDING_CONTAINER_RUNTIME** (dual-server runtime on ports 4804/4805 deferred to dedicated containerized environment because host-shared Windows OPAQUE storage is not isolated by `XDG_CONFIG_HOME`).
 
-### Noted Issues & Residual Technical Debt (Cycle 3 Code Review)
+### Noted Issues & Residual Technical Debt (Cycle 3 Code Review — Historical Baseline Superseded by Cycle 6)
 1. **[Critical C-01] Rendered Hub actions contract routing**: Terminal click owner lookup searches only within `selectedProject`, failing to route row's exact project/worktree/profile; projectless Files/Editor remain unavailable (`DamHopperMobileApp.kt`, `NativeWorkspaceViewModel.kt`).
 2. **[Critical C-02] Manufactured canonical identity**: Editable reads still accept missing or invalid server identity fallback (`EditorContentLoader.kt`, `EditorTabsState.kt`).
 3. **[Critical C-03] Reconnection document reauthorization**: Reconnection clears `_isAuthorityRetired` without re-verifying fresh canonical baseline against server workspace (`ProjectWorkspaceState.kt`, `NativeWorkspaceViewModel.kt`).
@@ -112,6 +113,40 @@ Only G-A has concurrent writers: W01 contract alone; W02/03/04 each atomic API t
 12. **[Warning W-05] Duplicate upload target selectors**: `FsUploadBegin` sends nested target plus flat selectors (`TransferCoordinator.kt`).
 13. **[Warning W-06] Redundant document serialization**: Reconstructing session and reading mtime serializes buffers repeatedly (`EditorSession.kt`, `EditorTabsState.kt`).
 14. **[Warning W-07] Qualification documentation labeling**: Historical mock/oracle tests labeled as live disposable runtime in earlier reports.
+
+<a id="remediation-phase-cycles-4-6"></a>
+### Remediation Phase (Code Review Cycles 4–6 & Validation)
+- **Status**: **DONE (approved with noted issues by user approval in Step 4; documentation finalization timestamp: 2026-11-08 14:15:00 +07:00)**.
+- **Administrative Closure & Review Attribution**:
+  - Code review remediation proceeded through Cycle 4 ([Cycle 4 review](../reports/code-review-261108-1159-android-agent-hub-remediation-cycle-4.md)), Cycle 5 ([Cycle 5 review](../reports/code-review-261108-1226-android-agent-hub-remediation-cycle-5.md)), and Final Cycle 6 ([Cycle 6 review](../reports/code-review-261108-1231-android-agent-hub-remediation-cycle-6.md)).
+  - **Reviewer Technical Disposition (Cycle 6)**: **Changes requested** (score 6/10; 5 critical issue groups remain partially unresolved [C-01, C-02, C-03, C-04, C-07], 4 warnings [W-01, W-02, W-06, W-08]; static code review across `native/android-app`).
+  - **Administrative Closure**: **Approved with noted issues** by explicit user authorization (Step 4 approval). Technical acceptance and connected release qualification remain open; passing automated suites do not overturn reviewed source correctness and contract gaps.
+- **Automated Test Verification (Tester-Reported Evidence)**:
+  - **1,300 / 1,300 unit & integration tests reported PASSED across 142 suites** (0 failures, 0 errors, 0 skipped; verified in tester report [final-tester-261108-1158-android-agent-hub-remediation.md](../reports/final-tester-261108-1158-android-agent-hub-remediation.md) following clean `--rerun-tasks` execution):
+    - Multiplatform Core Unit & Integration Suite (`:shared:jvmTest`): **1,044 / 1,044 tests PASSED** across 111 suites.
+    - Android Application Unit Suite (`:androidApp:testDebugUnitTest`): **256 / 256 tests PASSED** across 31 suites (added `testDeterministicDeferredDisposalOnFinalDiscardWithOutstandingViewLeases`).
+  - **Historical P08 Build/Packaging Gates** (verified in [integrated qualification report](reports/integrated-automated-qualification.md)): Packaging (`:androidApp:assembleDebug` SUCCESS), Instrumented Test Compilation (`:androidApp:compileDebugAndroidTestKotlin` SUCCESS), and Git Workspace Fixture Oracle (`git-workspace-fixture.mjs --self-test` 12/12 assertions PASSED).
+- **Delivered Remediation Fixes**:
+  - Consent-deferred session mutation repaired: mutation waits for user consent before proceeding, while full owner-qualified admission and exact incarnation consumption remain an open carryover under C-01.
+  - C-05: Suppressed dirty departure dialogs while privacy masked (`ProjectWorkspaceScreen.kt`, `DamHopperMobileApp.kt`).
+  - W-03: Inferred termination support requirements verified.
+  - W-04: Merging remote config preserves command rename/delete reconciliation (`RemoteConfigEditor.kt`).
+  - W-05: Duplicate upload target selectors removed (`TransferCoordinator.kt`).
+  - Reauth ABA/empty-work check improvements with monotonic epoch fencing (`ProjectWorkspaceState.kt`).
+  - Single replacement publication and explicit discard tracking (`EditorTabsState.kt`, `AndroidEditorDocument.kt`).
+  - O(1) mtime getter avoids snapshot allocations (`EditorSession.kt`).
+  - Nonblocking cached notification validation in reducer unblocks UI threads before route dispatch (fresh precommit HTTP resolution remains unresolved under C-07).
+  - Whole-workspace browsing infrastructure was delivered in contracts/state, but rendered production routing is incomplete (projectless holder still initializes with `ProjectTargetRef("*")` per Cycle 6 C-01).
+- **Noted Issues & Residual Technical Debt (Cycle 6 Code Review)**:
+  1. **[Critical C-01] Projectless holder target routing**: Projectless holder initialized with `ProjectTargetRef("*")` instead of explicit workspace target; Hub terminal admission validator checks only connection presence, omitting `action.incarnationExact` consumption and qualified profile routing (`DamHopperMobileApp.kt`, `NativeWorkspaceViewModel.kt`, `ProjectWorkspaceState.kt`).
+  2. **[Critical C-02] Missing canonical identity save gate**: Missing/invalid same-read identity still returns editable Normal/Degraded success; repository identity validation bypassed when owner workspace epoch is unknown; tab save/overwrite bypasses `saveDocument` identity checks (`EditorContentLoader.kt`, `EditorTabsState.kt`, `EditorRepository.kt`).
+  3. **[Critical C-03] Reconnection canonical baseline revalidation**: Write reauthorization keyed by dirty alias IDs rather than canonical documents; clean retained documents receive no fresh verification on rebind (`ProjectWorkspaceState.kt`, `EditorTabsState.kt`).
+  4. **[Critical C-04] Exact-document save lifetime lease**: `beginSaveTracking` has no production caller; forced discard bypasses canonical save lock; production surface release bypasses registry retirement settlement (`EditorTabsState.kt`, `EditorRepository.kt`, `AndroidEditorDocument.kt`, `AndroidEditorSurface.kt`).
+  5. **[Critical C-07] Post-consent notification routing fence**: Route commits prior to fresh HTTP resolution; post-consent check lacks current navigation-intent fence and can supersede newer user navigation (`NativeWorkspaceViewModel.kt`, `AppFlowNavigation.kt`).
+  6. **[Warning W-01] Presentation qualification incomplete**: Reopen selects raw session ID; snapshot sets strip profile qualification (`NativeWorkspaceViewModel.kt`).
+  7. **[Warning W-02] Uncertain-create account field unwired**: Production constructor omits `accountUser`; incomplete success with zero incarnation / missing PTY epoch clears reservation (`TerminalRepository.kt`).
+  8. **[Warning W-06] Replacement publication metadata loss**: Successor load derives only LARGE/NORMAL, dropping DEGRADED tier and loaded size/mime/mtime; full-buffer copy repeated (`EditorTabsState.kt`, `EditorSession.kt`).
+  9. **[Warning W-08] Negative production-boundary coverage**: Production denial paths and boundary conditions unexercised in test suites (`EditorTabsStateTest.kt`, `AgentHubLifecycleTest.kt`).
 
 ### Preserved Open Future Qualification Gates
 1. **Physical Device Qualification (`GATE-C`)**: Execution on physical ARM64 device (API 29 and API 33+) verifying phone/tablet adaptive layout, soft keyboard IME, TalkBack accessibility, and visual presentation.

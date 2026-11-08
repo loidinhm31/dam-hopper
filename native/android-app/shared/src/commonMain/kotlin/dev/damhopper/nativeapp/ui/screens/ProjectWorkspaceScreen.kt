@@ -123,6 +123,7 @@ fun ProjectWorkspaceScreen(
     requiredTerminalInstance: TerminalAgentsInstanceKey? = null,
     /** Retained Agents roster participation of this workspace (null: no Agents sidebar). */
     agents: TerminalAgentsContext? = null,
+    isMaskActive: Boolean = false,
 ) {
     val coroutineScope = rememberCoroutineScope()
     val activePanel by workspaceState.activePanel.collectAsState()
@@ -302,6 +303,7 @@ fun ProjectWorkspaceScreen(
                         onSessionSelected = onSessionSelected,
                         profileId = profileId,
                         preferenceAccess = prefAccess,
+                        isMaskActive = isMaskActive,
                         retainedState = workspaceState.terminalState,
                         requiredTerminalInstance = requiredTerminalInstance,
                         agents = agents,
@@ -468,10 +470,11 @@ fun ProjectWorkspaceScreen(
         }
     }
 
-    // 3. Retained Departure Modal Guard
-    pendingDeparture?.let { departure ->
-        when (departure) {
-            is WorkspaceDepartureIntent.WorkspaceLeave -> {
+    // 3. Retained Departure Modal Guard (suppressed from separate window mounting while privacy mask is active)
+    if (!isMaskActive) {
+        pendingDeparture?.let { departure ->
+            when (departure) {
+                is WorkspaceDepartureIntent.WorkspaceLeave -> {
                 AlertDialog(
                     onDismissRequest = {
                         if (!workspaceState.isSavingDeparture) {
@@ -618,7 +621,7 @@ fun ProjectWorkspaceScreen(
         }
     }
 }
-
+}
 @Composable
 private fun PanelTabButton(
     label: String,

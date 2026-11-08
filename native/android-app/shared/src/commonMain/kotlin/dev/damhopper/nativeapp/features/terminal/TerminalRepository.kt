@@ -27,6 +27,7 @@ class TerminalRepository(
     val apiClient: ApiClient,
     val wsConnection: WsConnection? = null,
     val preferencesStore: PreferencesStore? = null,
+    val accountUser: String? = null,
 ) {
     companion object {
         private val createAdmissionMutex = Mutex()
@@ -46,9 +47,10 @@ class TerminalRepository(
      */
     suspend fun listSessions(): List<TerminalSessionMeta> {
         val response = apiClient.getWithHeaders("/api/terminal")
+        val version = response.header(TERMINATION_HEADER_VERSION)
         val epoch = response.header(TERMINATION_HEADER_PTY_EPOCH)
         val list: List<TerminalSessionMeta> = json.decodeFromString(response.body)
-        return if (epoch != null) list.map { it.copy(serverPtyEpoch = epoch) } else list
+        return if (version == "1" && epoch != null) list.map { it.copy(serverPtyEpoch = epoch) } else list
     }
 
     /**
@@ -56,11 +58,11 @@ class TerminalRepository(
      */
     suspend fun listDetailed(): List<TerminalSessionDetailed> {
         val response = apiClient.getWithHeaders("/api/terminal/detailed")
+        val version = response.header(TERMINATION_HEADER_VERSION)
         val epoch = response.header(TERMINATION_HEADER_PTY_EPOCH)
         val list: List<TerminalSessionDetailed> = json.decodeFromString(response.body)
-        return if (epoch != null) list.map { it.copy(serverPtyEpoch = epoch) } else list
+        return if (version == "1" && epoch != null) list.map { it.copy(serverPtyEpoch = epoch) } else list
     }
-
     /**
      * Spawns a new PTY session via POST /api/terminal.
      */
@@ -107,13 +109,16 @@ class TerminalRepository(
     )
 
     private suspend fun executeGuardedCreate(request: CreateSessionRequest): DecodedCreateResponse {
-        val intentId = "create-${request.id}-${Clock.System.now().toEpochMilliseconds()}"
+        val intentId = dev.damhopper.nativeapp.features.workflow.WorkflowRepository.generateUuid()
         createAdmissionMutex.withLock {
             val pending = preferencesStore?.loadUncertainCreateRecords()?.filter {
                 it.status == UncertainCreateStatus.PENDING &&
                     it.profileId == apiClient.connection.profileId &&
+                    (it.endpoint == null || it.endpoint == apiClient.normalizedBaseUrl) &&
+                    (it.accountUser == null || accountUser == null || it.accountUser == accountUser) &&
                     (it.terminalId == request.id ||
-                     (it.project != null && it.project == request.project && it.worktreePath == request.worktreePath))
+                     (request.project != null && it.project == request.project && it.worktreePath == request.worktreePath) ||
+                     (request.project == null && it.project == null))
             }
             if (!pending.isNullOrEmpty()) {
                 throw IllegalStateException("Unsettled pending terminal create intent '${pending.first().intentId}' exists for project '${request.project ?: request.id}'; replacement blocked")
@@ -127,6 +132,8 @@ class TerminalRepository(
                     worktreePath = request.worktreePath,
                     createdAtEpochMs = Clock.System.now().toEpochMilliseconds(),
                     status = UncertainCreateStatus.PENDING,
+                    endpoint = apiClient.normalizedBaseUrl,
+                    accountUser = accountUser,
                 )
             )
         }
@@ -135,11 +142,14 @@ class TerminalRepository(
             val response = apiClient.postJsonWithHeaders("/api/terminal", body)
             val meta = json.decodeFromString<TerminalSessionMeta>(response.body)
             val ptyEpoch = response.header(TERMINATION_HEADER_PTY_EPOCH).orEmpty()
+            if (meta.id != request.id) {
+                throw IllegalStateException("Server returned unexpected terminal ID ${meta.id} for requested ${request.id}")
+            }
             preferencesStore?.removeUncertainCreateRecord(intentId)
             val metaWithEpoch = if (ptyEpoch.isNotBlank()) meta.copy(serverPtyEpoch = ptyEpoch) else meta
             DecodedCreateResponse(metaWithEpoch, ptyEpoch)
         } catch (e: dev.damhopper.nativeapp.core.transport.ApiRequestError) {
-            if (e.status in 400..499) {
+            if (e.status in listOf(400, 401, 403, 404, 422)) {
                 preferencesStore?.removeUncertainCreateRecord(intentId)
             }
             throw e

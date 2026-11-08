@@ -1,9 +1,9 @@
-# Live Disposable Runtime Qualification Report (W11)
+# Automated Disposable Oracle & Integration Qualification Report (W11)
 
-## Status: VERIFIED_WITH_PREREQUISITES
+## Status: AUTOMATED_ORACLES_PASSED (Disposable Multi-Server Execution Deferred)
 
 **Execution Date:** 2026-11-08  
-**Scope:** Disposable runtime verification across PTY session lifecycle, WebSocket failure handling, and Git workspace operations.
+**Scope:** Automated mock, unit, and oracle verification across PTY session lifecycle, WebSocket failure handling, and Git workspace operations; isolated multi-server live execution deferred to dedicated environment.
 
 ### Executed Checks
 

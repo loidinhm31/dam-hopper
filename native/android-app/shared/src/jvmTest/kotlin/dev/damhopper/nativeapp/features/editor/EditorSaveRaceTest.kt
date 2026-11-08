@@ -35,6 +35,7 @@ class EditorSaveRaceTest {
             baseUrl = "http://127.0.0.1:$serverPort",
             accountUser = "test-user",
             project = project,
+            workspaceEpoch = 1L,
         )
         val fileRepo = FileRepository(owner, client, ws)
         val editorRepo = EditorRepository(fileRepo, profileId = "p1")
@@ -45,13 +46,16 @@ class EditorSaveRaceTest {
 
     @Test
     fun testSaveInFlightInterveningEditsRemainDirty() = runTest {
+        val identityHeader = """{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/main.ts"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/main.ts"}}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "initial content\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }
@@ -113,13 +117,16 @@ class EditorSaveRaceTest {
 
     @Test
     fun testCasConflictPreservesLocalBuffer() = runTest {
+        val identityHeader = """{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/conflict.txt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/conflict.txt"}}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "base text\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }
@@ -141,13 +148,16 @@ class EditorSaveRaceTest {
 
     @Test
     fun testFrozenDocumentBlocksEditsDuringMutation() = runTest {
+        val identityHeader = """{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/frozen.txt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":50,"mtime":100,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/frozen.txt"}}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "original text\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }
@@ -178,13 +188,16 @@ class EditorSaveRaceTest {
 
     @Test
     fun testSaveReconciliationAdoptsSubmittedBaselineAndPreservesNewerEdits() = runTest {
+        val identityHeader = """{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/reconcile.txt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":15,"mtime":200,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":15,"mtime":200,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/reconcile.txt"}}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "submitted text\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }
@@ -239,13 +252,16 @@ class EditorSaveRaceTest {
         val exactByteCount = submittedText.toByteArray().size.toLong()
 
         var readInvoked = false
+        val identityHeader = """{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/conflict-unknown.txt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":$exactByteCount,"mtime":250,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":$exactByteCount,"mtime":250,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/conflict-unknown.txt"}}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             readInvoked = true
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, differentRemoteText.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(differentRemoteText.toByteArray()) }
         }
@@ -390,13 +406,16 @@ class EditorSaveRaceTest {
 
     @Test
     fun testCasFailurePreservesOriginalDirtyBufferAndUndo() = runTest {
+        val identityHeader = """{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/cas-fail.txt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":20,"mtime":100,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":20,"mtime":100,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-1","workspaceEpoch":1,"canonicalPath":"/cas-fail.txt"}}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
         server!!.createContext("/api/fs/read") { exchange ->
             val text = "original text\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(text.toByteArray()) }
         }

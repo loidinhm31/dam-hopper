@@ -218,6 +218,8 @@ data class UncertainCreateRecord(
     val worktreePath: String? = null,
     val createdAtEpochMs: Long,
     val status: UncertainCreateStatus = UncertainCreateStatus.PENDING,
+    val endpoint: String? = null,
+    val accountUser: String? = null,
 )
 
 // ---------------------------------------------------------------------------

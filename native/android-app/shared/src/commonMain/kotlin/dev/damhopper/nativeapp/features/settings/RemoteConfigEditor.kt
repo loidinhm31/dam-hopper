@@ -684,12 +684,18 @@ private fun projectToJson(
             },
         )
     }
+    val origCmds = (original?.get("commands") as? JsonObject).orEmpty()
+    val unrepresentedCmds = origCmds.filter { it.value !is JsonPrimitive }
     if (p.commands.isEmpty()) {
-        fields.remove("commands")
+        if (unrepresentedCmds.isEmpty()) {
+            fields.remove("commands")
+        } else {
+            fields["commands"] = JsonObject(unrepresentedCmds)
+        }
     } else {
-        val origMap = (original?.get("commands") as? JsonObject).orEmpty()
-        val entry = LinkedHashMap<String, JsonElement>(origMap)
-        p.commands.forEach { c -> entry[c.name] = JsonPrimitive(c.command) }
+        val entry = LinkedHashMap<String, JsonElement>()
+        unrepresentedCmds.forEach { (k, v) -> entry[k] = v }
+        p.commands.filter { it.name.isNotBlank() }.forEach { c -> entry[c.name] = JsonPrimitive(c.command) }
         fields["commands"] = JsonObject(entry)
     }
     if (p.terminals.isEmpty()) {

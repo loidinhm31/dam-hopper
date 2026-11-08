@@ -111,10 +111,18 @@ class WorkspaceDepartureTest {
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
         }
+        val identityHeader = """{"workspaceId":"ws-dep","workspaceEpoch":1,"canonicalPath":"/doc.txt"}"""
         server!!.createContext("/api/fs/stat") { exchange ->
-            val json = """{"kind":"file","size":15,"mtime":10,"mime":"text/plain","isBinary":false}"""
+            val json = """{"kind":"file","size":15,"mtime":10,"mime":"text/plain","isBinary":false,"fileIdentity":{"workspaceId":"ws-dep","workspaceEpoch":1,"canonicalPath":"/doc.txt"}}"""
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
             exchange.sendResponseHeaders(200, json.toByteArray().size.toLong())
             exchange.responseBody.use { it.write(json.toByteArray()) }
+        }
+        server!!.createContext("/api/fs/read") { exchange ->
+            val text = "original text\n"
+            exchange.responseHeaders.set("X-File-Identity", identityHeader)
+            exchange.sendResponseHeaders(200, text.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(text.toByteArray()) }
         }
         server!!.start()
         testScope = CoroutineScope(Dispatchers.Unconfined + SupervisorJob())

@@ -311,17 +311,21 @@ class AppFlowNavigation(
         project: String,
         worktreePath: String?,
         sessionId: String?,
+        incarnation: Long? = null,
         revalidate: () -> Boolean = { true },
         onCommitted: () -> Unit = {},
     ): Boolean {
         val commit = {
             if (revalidate()) {
+                val requiredKey = if (sessionId != null && incarnation != null) {
+                    TerminalAgentsInstanceKey(profileId, sessionId, incarnation.toULong())
+                } else null
                 commitRouteState(
                     profileId = profileId,
                     project = project,
                     worktreePath = worktreePath,
                     sessionId = sessionId,
-                    required = null,
+                    required = requiredKey,
                     notificationRouteActive = true,
                 )
                 onCommitted()

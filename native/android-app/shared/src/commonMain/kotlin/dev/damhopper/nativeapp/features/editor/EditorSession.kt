@@ -27,7 +27,7 @@ class EditorSession(
 
     var serverMtime: Long? = initialMtime
         get() {
-            val docMtime = try { document.snapshotForSave().mtime } catch (_: Throwable) { 0L }
+            val docMtime = try { document.serverMtime } catch (_: Throwable) { 0L }
             return if (docMtime > 0L) docMtime else field
         }
         private set

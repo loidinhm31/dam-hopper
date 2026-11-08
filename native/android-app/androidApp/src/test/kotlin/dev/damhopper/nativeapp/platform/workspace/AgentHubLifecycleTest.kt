@@ -367,4 +367,50 @@ class AgentHubLifecycleTest {
         store.removeUncertainCreateRecord("create-uuid-12345")
         assertEquals(0, store.loadUncertainCreateRecords().size)
     }
+
+    @Test
+    fun testDeterministicDeferredDisposalOnFinalDiscardWithOutstandingViewLeases() {
+        val factory = AndroidEditorDocumentFactory()
+        val registry = dev.damhopper.nativeapp.features.editor.CanonicalDocumentRegistry(factory)
+        val owner = WorkspaceFileOwner(
+            profileId = "prof-discard",
+            baseUrl = "https://damhopper.example.com",
+            accountUser = "charlie",
+            project = "discard-proj",
+            workspaceEpoch = 1L,
+        )
+        val docId = DocumentId(owner, "file.kt", 1L)
+        val (doc, _) = registry.getOrCreateDocument(
+            canonicalKey = "canonical://prof-discard/discard-proj/file.kt",
+            fallbackDocId = docId,
+            content = "initial text",
+            mtime = 100L,
+            tier = FileTier.NORMAL,
+            factory = factory,
+        )
+        val aliasToken = registry.acquireAliasLease("canonical://prof-discard/discard-proj/file.kt", "alias-1")
+        assertNotNull(aliasToken)
+        val viewToken = registry.acquireViewLease("canonical://prof-discard/discard-proj/file.kt", "surface-1")
+        assertNotNull(viewToken)
+
+        // Make document dirty
+        (doc as AndroidEditorDocument).applyEdit(1, 1, 1, 1, "dirty edit\n")
+        assertTrue(doc.isDirty.value)
+
+        // Force discard alias: alias is unregistered and pruned
+        registry.releaseAliasLease("canonical://prof-discard/discard-proj/file.kt", aliasToken)
+        registry.pruneDocument("canonical://prof-discard/discard-proj/file.kt", forceDiscard = true)
+
+        // Canonical registry lookup must immediately return null (no resurrection on reopen)
+        assertNull(registry.getDocument("canonical://prof-discard/discard-proj/file.kt"))
+
+        // Because view lease is still active, doc is NOT closed yet, but is marked discarded
+        assertTrue(doc.isDiscarded)
+        assertFalse(doc.isClosed)
+
+        // Now surface releases its view lease -> document deterministically closes
+        registry.releaseViewLease("canonical://prof-discard/discard-proj/file.kt", viewToken)
+        assertTrue(doc.isClosed, "Document must be closed deterministically once view lease settles")
+    }
+
 }

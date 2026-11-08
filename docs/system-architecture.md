@@ -756,7 +756,7 @@ Full architectural contracts, state machine transitions, lock specifications, an
 ## Android Native Client Architecture
 
 <a id="phase-06-sequential-mutation-save-and-identity-integration-2026-10-24"></a>
-**Status:** Core mobile app flow and focused project workspace implemented; connected-device, live-server, and visual qualification remain open. See [Android Native Client Architecture](./architecture/android-native-client.md) and [Android Native Acceptance](./android-native-acceptance.md) for full contracts.
+**Status:** Agent Hub 2-stage flow and capability navigation implemented under Native Android Agent Hub Redesign and Remediation (1,300 unit & integration tests reported passed across 142 suites in dated FinalTester report 2026-11-08; Cycle 6 review score 6/10 approved with noted issues by user authorization; connected-device GATE-C and live-server qualification remain open). See [Android Native Client Architecture](./architecture/android-native-client.md) and [Android Native Acceptance](./android-native-acceptance.md) for full contracts.
 
 ### Architecture and Separation
 
@@ -766,20 +766,19 @@ The native Android client (`native/android-app/`) is an independent Kotlin Multi
 
 ### Core Flow & Navigation Lifecycle
 
-The active application flow exposes three root stages (`AppFlowState`):
+The active application flow exposes a 2-stage mobile root (`AppFlowState`):
 1. **`PROFILE_LOGIN`:** Multi-server profile selection, login, TOTP MFA verification, and enrollment.
-2. **`PROJECT_LIST`:** Workspace project discovery for the authenticated active profile.
-3. **`TERMINAL`:** Hosts a focused workspace (`ProjectWorkspaceScreen`) presenting one active panel at a time (`Terminal`, `Files`, or `Editor`) backed by retained per-owner ViewModel state (`NativeWorkspaceViewModel`).
+2. **`HUB`:** Hosts the Agent Hub (`AppFlowStage.HUB`) with a compact non-wrapping two-row adaptive chrome (rail on wide screens, modal cover on narrow screens). Integrates attached profile observation, project/worktree grouping, zero-session open refs, persistent pins, hidden state, nested capability stages (Terminal, Files, Editor, Git), projectless capability stages (`selectedProj ?: "*"`), verified terminal routing, retained Settings scopes (`This Device`, `Preference Source A`, `Admin Target B`), and a 3-channel attention notification feed.
 
-Navigation departs gracefully using an installed dirty-document departure guard; leaving a focused panel or recreating the Activity on configuration changes does not destroy the remote PTY session. The separate 12-panel workbench subsystem (`WorkbenchScreen`) remains in source for future expansion but is not mounted by the active root flow.
-
+Navigation departs gracefully using an installed dirty-document departure guard; leaving a focused capability or recreating the Activity on configuration changes does not destroy the remote PTY session. The separate 12-panel workbench subsystem (`WorkbenchScreen`) remains in source but is not mounted by the active root flow.
 ### Security, Transport & Invariants
 
 - **Fail-Closed Keystore Storage:** Profile session tokens are stored in Android `EncryptedSharedPreferences` backed by Keystore `MasterKey` AES-256-GCM. Passwords, MFA setup secrets, and challenge tokens are never persisted. App backups and cloud transfers are strictly disabled (`android:allowBackup="false"`).
 - **Network Security Policy:** Release builds prohibit cleartext traffic (`cleartextTrafficPermitted="false"`). Requests construct HTTPS/WSS URLs and reject unauthorized redirects.
 - **Multi-Profile Ownership:** Models `ConnectionRef(profileId, generation)` matching web tuple keys, guarded by `ConnectionRegistry` monotonic generation watermarks to eliminate ABA races.
 - **Remote Backend Authority:** Zero local PTY, local Git, local AI agent execution, or WebView usage in Android client; all operations execute against the remote Axum/Tokio server.
-- **Ephemeral Privacy:** Cognito Mode overlay implements three-layer defense-in-depth input gating across pointer consumption, session dispatch, and platform IME surfaces without persisting ephemeral activation states.
+- **Ephemeral Privacy & Window Containment:** Cognito Mode overlay implements three-layer defense-in-depth input gating across pointer consumption, session dispatch, and platform IME surfaces without persisting ephemeral activation states. Separate `AlertDialog` window mounts (departure guards, termination prompts) are suppressed while the privacy mask is active to prevent unmasked window leakage.
+- **Remediation Invariants:** PTY termination requires validated `X-DamHopper-Termination-Version: 1` alongside epoch and positive u64 `incarnationExact`; uncertain-create records generate UUIDs and bind endpoints/accounts; canonical document replacement holds discarded documents in `retiredDocuments` until all view/alias leases and saves settle; and monotonic `reauthEpoch` and `unauthorizedDirtyDocIds` fence reauthorization.
 
 Comprehensive subsystem contracts across editor tiers, Git repositories, encrypted transfers, media streaming, and qualification criteria are detailed in [Android Native Client Architecture](./architecture/android-native-client.md).
 

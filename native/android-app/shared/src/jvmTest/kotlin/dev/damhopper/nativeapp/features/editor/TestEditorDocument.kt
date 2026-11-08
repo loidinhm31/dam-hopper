@@ -24,7 +24,8 @@ class TestEditorDocument(
 ) : EditorDocument {
 
     private var text: StringBuilder = StringBuilder(initialText)
-    private var serverMtime: Long = initialMtime
+    override var serverMtime: Long = initialMtime
+        private set
     private var savedRevision: Long = 1L
 
     private val undoStack: ArrayDeque<String> = ArrayDeque()
@@ -46,12 +47,17 @@ class TestEditorDocument(
     private val _activeViewLeases = MutableStateFlow<Set<ViewLeaseToken>>(emptySet())
     override val activeViewLeases: StateFlow<Set<ViewLeaseToken>> = _activeViewLeases.asStateFlow()
 
+    override var isDiscarded: Boolean = false
+
+    override fun markDiscarded() {
+        isDiscarded = true
+    }
+
     override val canDispose: Boolean
         get() = _activeAliasLeases.value.isEmpty() &&
                 _activeViewLeases.value.isEmpty() &&
-                !_isDirty.value &&
+                (!_isDirty.value || isDiscarded) &&
                 _inFlightSaveCount.value == 0
-
     fun beginSaveTracking(): () -> Unit {
         _inFlightSaveCount.value++
         var released = false
@@ -85,6 +91,9 @@ class TestEditorDocument(
 
     override fun releaseViewLease(token: ViewLeaseToken) {
         _activeViewLeases.value = _activeViewLeases.value - token
+        if (isDiscarded && canDispose) {
+            close()
+        }
     }
 
     fun attachTestEditor(editor: Any, token: ViewLeaseToken? = null) {

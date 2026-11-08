@@ -50,7 +50,8 @@ class AndroidEditorDocument(
     private var nextRev = 1L
     private var stackIndex = 0
     private var savedRev = 1L
-    private var serverMtime: Long = initialMtime
+    override var serverMtime: Long = initialMtime
+        private set
     private val revStack = ArrayList<Long>().apply { add(1L) }
     private val payloadBytes = ArrayList<Int>().apply { add(0) }
     private var suppressDelta = false
@@ -75,12 +76,17 @@ class AndroidEditorDocument(
     private val _activeViewLeases = MutableStateFlow<Set<ViewLeaseToken>>(emptySet())
     override val activeViewLeases: StateFlow<Set<ViewLeaseToken>> = _activeViewLeases.asStateFlow()
 
+    override var isDiscarded: Boolean = false
+
+    override fun markDiscarded() {
+        isDiscarded = true
+    }
+
     override val canDispose: Boolean
         get() = _activeAliasLeases.value.isEmpty() &&
                 _activeViewLeases.value.isEmpty() &&
-                !_isDirty.value &&
+                (!_isDirty.value || isDiscarded) &&
                 _inFlightSaveCount.value == 0
-
     fun beginSaveTracking(): () -> Unit {
         _inFlightSaveCount.value++
         var released = false
@@ -114,6 +120,9 @@ class AndroidEditorDocument(
 
     override fun releaseViewLease(token: ViewLeaseToken) {
         _activeViewLeases.value = _activeViewLeases.value - token
+        if (isDiscarded && canDispose) {
+            close()
+        }
     }
 
     /** Exact UTF-8 size of the content, maintained incrementally from content listener callbacks. */
