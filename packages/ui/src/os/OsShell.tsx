@@ -679,6 +679,21 @@ export function OsShell() {
         );
         return { status: "handled", targetWindowId: id };
       }),
+      registerIntentHandler("browser:preview", (intent) => {
+        const id = `browser-${generateUUID().slice(0, 8)}`;
+        openWindow(
+          {
+            id,
+            appId: "browser",
+            title: "Browser Preview",
+            ctx: { profileId: intent.payload.profileId },
+            mode: getPlacement(),
+            appState: { url: intent.payload.url },
+          },
+          useWindowStore.getState().session.activeDesktopId,
+        );
+        return { status: "handled", targetWindowId: id };
+      }),
       registerIntentHandler("conflict:resolve", (intent) => {
         const targetCtx: WindowContext = {
           profileId: intent.payload.profileId,

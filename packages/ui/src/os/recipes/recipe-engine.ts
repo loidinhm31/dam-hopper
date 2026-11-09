@@ -247,11 +247,15 @@ export function buildRecipeFromDesktopSubset(
         worktreePath: win.ctx.worktreeId,
       });
     } else {
+      let sanitizedState = win.appState ? { ...win.appState } : undefined;
+      if (win.appId === "browser" && sanitizedState) {
+        sanitizedState = typeof sanitizedState.url === "string" ? { url: sanitizedState.url } : undefined;
+      }
       appSteps.push({
         key: m.stepKey,
         appId: win.appId,
         worktreePath: win.ctx.worktreeId,
-        appState: win.appState ? { ...win.appState } : undefined,
+        appState: sanitizedState,
       });
     }
   }

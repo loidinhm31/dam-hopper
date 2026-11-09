@@ -56,6 +56,8 @@ function sanitizeAppState(
   if (appId === "browser") {
     const projected: Record<string, unknown> = {};
     if (typeof rawState.url === "string") projected.url = rawState.url;
+    if (typeof rawState.sessionId === "string") projected.sessionId = rawState.sessionId;
+    if (typeof rawState.logicalSessionId === "string") projected.logicalSessionId = rawState.logicalSessionId;
     return Object.keys(projected).length > 0 ? projected : undefined;
   }
   if (appId === "files") {

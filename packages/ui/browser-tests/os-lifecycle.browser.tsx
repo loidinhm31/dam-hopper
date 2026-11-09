@@ -229,7 +229,7 @@ describe("OS Lifecycle Component Browser Tests", () => {
     expect(canvas2).not.toBeNull();
   });
 
-  it("preserves live preview iframe and JavaScript state across tile, float, maximize, and desktop switches", async () => {
+  it("preserves live preview streamed canvas and DOM state across tile, float, maximize, minimize, and desktop switches", async () => {
     await renderOsShell();
 
     // Open browser preview window
@@ -244,23 +244,24 @@ describe("OS Lifecycle Component Browser Tests", () => {
       });
     });
 
-    const iframe = document.querySelector(
-      'iframe[data-os-preview-iframe="true"]',
-    ) as HTMLIFrameElement | null;
-    expect(iframe).not.toBeNull();
+    const canvas = document.querySelector(
+      '[data-os-browser-stream-container="win-browser-1"] canvas',
+    ) as HTMLCanvasElement | null;
+    expect(canvas).not.toBeNull();
 
-    if (iframe) {
-      iframe.dataset.domMarker = "same-iframe-node";
+    if (canvas) {
+      canvas.dataset.domMarker = "same-canvas-node";
     }
+
     // 1. Move to float
     await act(async () => {
       useWindowStore.getState().setWindowMode("win-browser-1", "float");
     });
-    const iframeAfterFloat = document.querySelector(
-      'iframe[data-os-preview-iframe="true"]',
-    ) as HTMLIFrameElement | null;
-    expect(iframeAfterFloat).toBe(iframe);
-    expect(iframeAfterFloat?.dataset.domMarker).toBe("same-iframe-node");
+    const canvasAfterFloat = document.querySelector(
+      '[data-os-browser-stream-container="win-browser-1"] canvas',
+    ) as HTMLCanvasElement | null;
+    expect(canvasAfterFloat).toBe(canvas);
+    expect(canvasAfterFloat?.dataset.domMarker).toBe("same-canvas-node");
 
     // 2. Maximize and restore
     await act(async () => {
@@ -269,12 +270,29 @@ describe("OS Lifecycle Component Browser Tests", () => {
     await act(async () => {
       useWindowStore.getState().toggleMaximizeWindow("win-browser-1");
     });
-    const iframeAfterMax = document.querySelector(
-      'iframe[data-os-preview-iframe="true"]',
+    const canvasAfterMax = document.querySelector(
+      '[data-os-browser-stream-container="win-browser-1"] canvas',
     );
-    expect(iframeAfterMax).toBe(iframe);
+    expect(canvasAfterMax).toBe(canvas);
 
-    // 3. Switch to Desktop 2 then back to Desktop 1
+    // 3. Minimize and restore
+    await act(async () => {
+      useWindowStore.getState().minimizeWindow("win-browser-1");
+    });
+    const containerWhileMin = document.querySelector(
+      '[data-os-browser-stream-container="win-browser-1"]',
+    ) as HTMLElement | null;
+    expect(containerWhileMin?.style.visibility).toBe("hidden");
+
+    await act(async () => {
+      useWindowStore.getState().restoreWindow("win-browser-1");
+    });
+    const canvasAfterRestore = document.querySelector(
+      '[data-os-browser-stream-container="win-browser-1"] canvas',
+    );
+    expect(canvasAfterRestore).toBe(canvas);
+
+    // 4. Switch to Desktop 2 then back to Desktop 1
     await act(async () => {
       const state = useWindowStore.getState();
       state.setSession({
@@ -293,9 +311,9 @@ describe("OS Lifecycle Component Browser Tests", () => {
       state.switchDesktop("desktop-2");
     });
 
-    // While on Desktop 2, iframe container is moved offscreen
+    // While on Desktop 2, stream container is moved offscreen/hidden
     const hostContainer = document.querySelector(
-      '[data-os-browser-host-window="win-browser-1"]',
+      '[data-os-browser-stream-container="win-browser-1"]',
     ) as HTMLElement | null;
     expect(hostContainer?.style.visibility).toBe("hidden");
 
@@ -303,14 +321,14 @@ describe("OS Lifecycle Component Browser Tests", () => {
     await act(async () => {
       useWindowStore.getState().switchDesktop("desktop-1");
     });
-    const iframeAfterDesktopSwitch = document.querySelector(
-      'iframe[data-os-preview-iframe="true"]',
-    ) as HTMLIFrameElement | null;
-    expect(iframeAfterDesktopSwitch).toBe(iframe);
-    expect(iframeAfterDesktopSwitch?.dataset.domMarker).toBe("same-iframe-node");
+    const canvasAfterDesktopSwitch = document.querySelector(
+      '[data-os-browser-stream-container="win-browser-1"] canvas',
+    ) as HTMLCanvasElement | null;
+    expect(canvasAfterDesktopSwitch).toBe(canvas);
+    expect(canvasAfterDesktopSwitch?.dataset.domMarker).toBe("same-canvas-node");
   });
 
-  it("isolates input during Cognito privacy mode", async () => {
+  it("isolates input and suppresses stream during Cognito privacy mode", async () => {
     await renderOsShell();
 
     await act(async () => {
@@ -332,15 +350,88 @@ describe("OS Lifecycle Component Browser Tests", () => {
 
     // When Cognito mode is active, the browser host hides/disables pointer events
     const hostContainer = document.querySelector(
-      '[data-os-browser-host-window="win-browser-cog"]',
+      '[data-os-browser-stream-container="win-browser-cog"]',
     ) as HTMLElement | null;
     expect(hostContainer?.style.pointerEvents).toBe("none");
+    expect(hostContainer?.style.visibility).toBe("hidden");
 
     // Deactivate Cognito mode
     await act(async () => {
       useCognitoModeStore.getState().toggle();
     });
     expect(useCognitoModeStore.getState().active).toBe(false);
+    expect(hostContainer?.style.pointerEvents).toBe("auto");
+    expect(hostContainer?.style.visibility).toBe("visible");
+  });
+
+  it("displays actionable unsupported reason banner when browser capability is disabled", async () => {
+    await renderOsShell();
+
+    await act(async () => {
+      useWindowStore.getState().openWindow({
+        id: "win-browser-unsupported",
+        appId: "browser",
+        title: "Browser Preview",
+        ctx: { profileId: "default" },
+        mode: "tile",
+        appState: {
+          url: "http://localhost:5173/unsupported",
+          unsupportedReason: "ContainmentUnavailable",
+        },
+      });
+    });
+
+    const banner = document.querySelector(
+      '[data-testid="browser-unsupported-banner"]',
+    );
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain("ContainmentUnavailable");
+  });
+
+  it("allows two windows to view the same target without resource exclusion", async () => {
+    await renderOsShell();
+
+    await act(async () => {
+      useWindowStore.getState().openWindow({
+        id: "win-browser-a",
+        appId: "browser",
+        title: "Browser A",
+        ctx: { profileId: "default" },
+        mode: "tile",
+        appState: {
+          url: "http://localhost:5173/shared",
+          sessionId: "sess-shared-target",
+        },
+      });
+    });
+
+    await act(async () => {
+      useWindowStore.getState().openWindow({
+        id: "win-browser-b",
+        appId: "browser",
+        title: "Browser B",
+        ctx: { profileId: "default" },
+        mode: "tile",
+        appState: {
+          url: "http://localhost:5173/shared",
+          sessionId: "sess-shared-target",
+        },
+      });
+    });
+
+    // Neither window has claim denied
+    const claimDenied = document.querySelectorAll('[data-os-claim-denied="true"]');
+    expect(claimDenied.length).toBe(0);
+
+    // Both stream containers exist
+    const containerA = document.querySelector(
+      '[data-os-browser-stream-container="win-browser-a"]',
+    );
+    const containerB = document.querySelector(
+      '[data-os-browser-stream-container="win-browser-b"]',
+    );
+    expect(containerA).not.toBeNull();
+    expect(containerB).not.toBeNull();
   });
 
   it("preserves live terminal and editor resource instances across tile, float, maximize, minimize, and desktop moves", async () => {

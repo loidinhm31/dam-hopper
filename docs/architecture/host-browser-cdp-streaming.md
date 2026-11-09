@@ -1,7 +1,7 @@
 # Host Browser CDP Streaming Architecture
 
 **Authority:** Backend Subsystem (`server/src/browser_host/`, `server/examples/browser_host_qualification.rs`)  
-**Status:** Supervised Principal Profiles, Admission Control, Leased Input, Raw CDP Gateway, Screencast Producer & Bounded Media Fanout (Phases 01–05 Finalized & Verified; Phase 06 Unblocked)
+**Status:** Supervised Principal Profiles, Admission Control, Leased Input, Raw CDP Gateway, Screencast Producer, Bounded Media Fanout, Decoder Pipeline & OS Root Lifecycle Cutover (Phases 01–07 Finalized & Verified; Phase 08 Unblocked)
 
 This specification defines the architectural contracts, process containment boundaries, bounded CDP actor lifecycle, and binary wire framing for the Host Browser CDP Streaming subsystem.
 
@@ -546,6 +546,7 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Binary Media Fanout & Credits | **PASS** | Immutable BHJF v1 fanout via Axum `Binary(Bytes)` with zero per-viewer JPEG copies, independent credit governor (max 10 FPS, 2 outstanding + 1 pending), originating socket subscription authority, 30s outstanding timeout, 5s write deadline, pause detaching demand, and max 2 global viewers |
 | Stream Memory Admission | **PASS** | Hard 128 MiB global memory reservation ceiling across ingress, commands, raw gateway, and frames; `TrackedBhjfFrame` shared RAII reservation held until last clone drops; bounded stream diagnostics counters and ring buffer |
 | Viewer Client Decoder & Input | **PASS** | 1-active + 1-pending frame decode governor, captured subscription credit ACKs, synchronous privacy blackening, letterbox coordinate mapping, and IME deduplication. Verified by 60 unit tests, 8 Chromium browser tests, clean UI build, and clean E2E typecheck. User approved after Cycle 3 (score 4/10; technical carryovers C1, C3, W1–W8). |
+| Root Browser Keep-Alive & OS Cutover | **PASS** | Root keepalive host, canvas slot reparenting, viewer-local claims, explicit target close, recipe sanitization, and retired iframe path. Verified by 206 test cases + 2 typecheck suites. User approved after Cycle 2 (score 4/10; technical carryovers W1–W10; unblocks Phase 08). |
 | Native Browser Zoom | **UNVERIFIED** | Unreachable via standard CDP in headless Chromium 157; `inputTrusted: false` enforced |
 | Windows Containment | **FAIL-CLOSED** | Windows Job Object containment unqualified; non-Unix launch returns `ContainmentUnavailable` |
 
@@ -566,6 +567,32 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
   - C3: Release ordering and ambient identity on the leased input stream to prevent command sequence corruption and dropped releases under queue saturation.
   - W1–W8: Input trust fencing against stale geometry, canonical numeric counter precision, exactly-once IME text commit state machine, draw/decode exceptional bitmap cleanup, REST DTO schema alignment, explicit copy/find/touch controls, and half-pair transport teardown bounds.
 
+### Phase 07 Verification Summary
+
+- **Phase 07 Finalized (2026-11-09):** The user explicitly approved the code review with noted issues after Cycle 2 (208/208 validation checks passing across unit, Chromium browser component, package build, and E2E typecheck suites). Phase 08 (Authentication, Client Integration & Artifacts) is unblocked.
+- **Architectural Deliverables:**
+  - **Root Keep-Alive Host (`BrowserStreamKeepAliveHost.tsx`):** Mounted at the top level within `OsResourceHost`. Manages persistent off-screen parked containers (`data-os-browser-parking-host="true"`), transferring container DOM elements between visible window frames and parking slots via `registerBrowserStreamSlot` and `updateBrowserStreamSlot`.
+  - **Viewer-Local Presentation Claims:** Claim key derives from `resourceId: window.id` instead of URL, allowing multiple OS windows to view the same target session simultaneously without collision or claim denial.
+  - **Interactive Controls & Dialog Overlay:** Top toolbar providing Back, Forward, Reload, URL address bar with Enter navigation, Controllable vs View-only indicators with interactive lease acquisition button, short session ID display, and active CDP dialog modals (`BrowserDialogModal`).
+  - **Window Lifecycle Binding:** Explicit window close (`closeWindow(windowId)`) resolves owner connection and dispatches backend target deletion (`closeBrowserSession`) once, preserving sibling and shared target sessions. Placement changes (tile, float, max, min, restore, desktop switch) and component unmount retain canvas DOM continuity without destruction.
+  - **Persistence & Recipe Sanitization:** Persisted session state allows non-secret references (`url`, `sessionId`, `logicalSessionId`) while stripping capability tickets, tokens, and credentials. Recipe schema and engine sanitize browser steps strictly to `{ url }`, guaranteeing that recipe launches spawn independent targets.
+  - **Obsolete Iframe Path Retirement:** Complete removal of `OsBrowserIframe`, `OsBrowserKeepAliveHost`, `browserSlots`, `registerBrowserSlot`, and `updateBrowserSlot` symbols across production and browser test suites.
+- **Test Evidence:**
+  - OS unit & regression tests (124 passed, 0 failed): `src/os/resource-registry.test.ts`, `src/os/deep-links.test.ts`, `src/os/persistence.test.ts`, `src/os/recipes/recipe-source-context.test.ts`, `src/os/recipes/recipe-engine.test.ts`, `src/os/recipes/schema.test.ts`, `src/os/window-ops.test.ts`.
+  - Chromium browser tests (22 passed, 0 failed): `browser-tests/os-lifecycle.browser.tsx`, `browser-tests/os-input-isolation.browser.tsx`, `browser-tests/host-browser-lifecycle.browser.tsx`.
+  - Decoder & client unit tests (60 passed, 0 failed): `src/api/browser-host-client.test.ts`, `src/browser-host/frame-protocol.test.ts`, `src/browser-host/stream-controller.test.ts`, `src/browser-host/input-controller.test.ts`.
+  - TypeScript build & typechecks (2 passed): `pnpm --filter @dam-hopper/ui build` (clean, 0 errors), `pnpm --filter @dam-hopper/ui test:e2e:typecheck` (clean, 0 errors).
+- **Noted Technical Carryovers:** Cycle 2 code review scored 4/10; unresolved carryovers tracked for subsequent phases include:
+  - W1: Authoritative navigation revision wire format (JSON u64 number vs decimal string).
+  - W2: Persisted live target adoption on SPA reload (`listBrowserSessions`/`getBrowserSession` consumption).
+  - W3: Restore ticket demand-fencing and generation-reactivity.
+  - W4: Control lease renewal and deadline tracking across pause/restore.
+  - W5: Shell-modal/document visibility aggregation and deliberate text focus.
+  - W6: Explicit close pending-create and failed-delete ownership finalization.
+  - W7: Popup projection/overflow notification and Radix modal migration.
+  - W8: Connected-boundary behavioral integration test requirements.
+  - W9: React-owned DOM movement vs imperative host portal convention.
+  - W10: Capability and transport error handling in UI.
 ### Finalization & Roadmap Status
 
 - **Phase 04 Finalized (2026-11-09):** The user explicitly approved the code review with noted issues after Cycle 3 (score 7/10; 57/57 tests passing across Rust gateway, regressions, example build, TypeScript compile, and Playwright E2E suites). Phase 05 (Screencast Producer Actor & JPEG Fragmentation) is unblocked.
@@ -625,3 +652,5 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Input Controller Test Suite | `packages/ui/src/browser-host/input-controller.test.ts` |
 | Chromium Decoder Browser Test | `packages/ui/browser-tests/host-browser-decoder.browser.tsx` |
 | Chromium Input Browser Test | `packages/ui/browser-tests/host-browser-input.browser.tsx` |
+| Root Browser Keep-Alive Host | `packages/ui/src/os/BrowserStreamKeepAliveHost.tsx` |
+| Host Browser Lifecycle Browser Test | `packages/ui/browser-tests/host-browser-lifecycle.browser.tsx` |

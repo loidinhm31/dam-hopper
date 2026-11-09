@@ -199,4 +199,43 @@ describe("OS Input Isolation & Cognito Privacy Browser Tests", () => {
       container?.querySelector('[role="dialog"][aria-label="Command Palette"]'),
     ).not.toBeNull();
   });
+
+  it("isolates browser canvas pointer and input events during Cognito privacy mode", async () => {
+    await renderOsShell();
+
+    await act(async () => {
+      useWindowStore.getState().openWindow({
+        id: "win-browser-iso",
+        appId: "browser",
+        title: "Browser Preview",
+        ctx: { profileId: "default" },
+        mode: "tile",
+        appState: { url: "http://localhost:5173/isolated" },
+      });
+    });
+
+    const streamContainer = document.querySelector(
+      '[data-os-browser-stream-container="win-browser-iso"]',
+    ) as HTMLElement | null;
+    expect(streamContainer).not.toBeNull();
+    expect(streamContainer?.style.pointerEvents).toBe("auto");
+
+    // Enable Cognito mode
+    await act(async () => {
+      useCognitoModeStore.getState().toggle();
+    });
+    expect(useCognitoModeStore.getState().active).toBe(true);
+
+    // Canvas pointer events are completely disabled and visibility hidden
+    expect(streamContainer?.style.pointerEvents).toBe("none");
+    expect(streamContainer?.style.visibility).toBe("hidden");
+
+    // Deactivate Cognito mode
+    await act(async () => {
+      useCognitoModeStore.getState().toggle();
+    });
+    expect(useCognitoModeStore.getState().active).toBe(false);
+    expect(streamContainer?.style.pointerEvents).toBe("auto");
+    expect(streamContainer?.style.visibility).toBe("visible");
+  });
 });

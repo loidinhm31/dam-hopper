@@ -40,6 +40,9 @@ import {
   updateFloatBounds,
 } from "./window-ops.js";
 import { settleTerminalLaunch } from "./persistence.js";
+import { closeBrowserSession } from "@/api/browser-host-client.js";
+import { getConnectionSnapshot } from "@/api/connections.js";
+import type { ConnectionRef } from "@/api/ownership.js";
 
 let monotonicFocusCounter = 0;
 const windowFocusTimestamps = new Map<string, number>();
@@ -144,6 +147,21 @@ export const useWindowStore = create<WindowStoreState>((set, get) => ({
         void settleTerminalLaunch(attemptId, {
           kind: "confirmed-not-created",
           reason: "Terminal window closed before dispatch",
+        });
+      }
+    }
+    if (win?.appId === "browser") {
+      const sessionId = win.appState?.sessionId as string | undefined;
+      if (sessionId) {
+        const profileId = win.ctx.profileId;
+        const snap = getConnectionSnapshot(profileId);
+        const owner: ConnectionRef = {
+          profileId,
+          generation: snap?.owner.generation ?? 0,
+        };
+        // Explicit captured window close closes that target once per contract §9 line 138
+        void closeBrowserSession(owner, sessionId).catch((err) => {
+          console.warn("[WindowStore] Failed to close browser target on window close:", err);
         });
       }
     }

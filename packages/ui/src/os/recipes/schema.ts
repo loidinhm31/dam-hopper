@@ -290,10 +290,14 @@ export function validateRecipeV1(raw: unknown): RecipeValidationResult {
         key: String(step.key),
         appId: step.appId as OsAppId,
         worktreePath: step.worktreePath ? String(step.worktreePath) : undefined,
-        appState:
-          typeof step.appState === "object" && step.appState !== null
-            ? (step.appState as Record<string, unknown>)
-            : undefined,
+        appState: (() => {
+          if (typeof step.appState !== "object" || step.appState === null) return undefined;
+          const raw = step.appState as Record<string, unknown>;
+          if (step.appId === "browser") {
+            return typeof raw.url === "string" ? { url: raw.url } : undefined;
+          }
+          return raw;
+        })(),
       });
     }
   }
@@ -424,7 +428,12 @@ export function exportRecipeJson(recipe: RecipeV1): {
       key: s.key,
       appId: s.appId,
       worktreePath: s.worktreePath,
-      appState: s.appState,
+      appState:
+        s.appId === "browser" && s.appState
+          ? typeof s.appState.url === "string"
+            ? { url: s.appState.url }
+            : undefined
+          : s.appState,
     })),
     layout: recipe.layout,
     createdAt: recipe.createdAt,

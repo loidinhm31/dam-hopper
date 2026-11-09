@@ -6,8 +6,8 @@
 - Relevant bounded evidence: `reports/viewer-boundaries.md:6–54; reports/design-direction.md:53–58; current OsResourceHost.tsx:38–75,396–405; persistence.ts:56–60`. Research recommendations superseded by architecture contract where explicitly stated.
 
 ## Overview
-- Priority: P2. Status: pending. Effort: not-estimated. Planning only; commands below are future obligations, not exercised checks.
-- Deliverable: Integrate root Browser lifecycle and retire iframe path.
+- Priority: P2. Status: DONE (2026-11-09). Effort: not-estimated.
+- Deliverable: Integrate root Browser lifecycle and retire iframe path. Marked DONE per user approval with noted issues after Cycle 2 (2026-11-09; score 4/10; 208 validation checks passing across unit [184/184], Chromium browser tests [22/22 across os-lifecycle, os-input-isolation, and host-browser-lifecycle], UI build, and E2E typecheck). Ready to proceed to Phase 08; Phase 08 unblocked. Technical carryovers W1–W10 tracked into Phases 08 and 09.
 
 ## Key insights
 Current slot host keys by URL and resource registry excludes second holder; new sessions must be target identity and presentation claims viewer-local. closeWindow is pure state: explicit resource action belongs in existing execution/store integration, not hidden async mutation in reducer.
@@ -207,9 +207,9 @@ Exactly one fence; task IDs/markers stable across revisions. No tasks.json or hy
 ]
 ```
 
-- [ ] <!-- evcrate-task:integrate-root-browser --> Replace iframe host with root-owned streamed Browser
-- [ ] <!-- evcrate-task:migrate-browser-launch-state --> Migrate all launches persistence and recipes to logical sessions
-- [ ] <!-- evcrate-task:bind-browser-window-policy --> Integrate privacy explicit close popups and dialogs
+- [x] <!-- evcrate-task:integrate-root-browser --> Replace iframe host with root-owned streamed Browser
+- [x] <!-- evcrate-task:migrate-browser-launch-state --> Migrate all launches persistence and recipes to logical sessions
+- [x] <!-- evcrate-task:bind-browser-window-policy --> Integrate privacy explicit close popups and dialogs
 
 ## Success criteria
 - Every task acceptance above is observed with applicable compile/typecheck, behavioral tests and real smoke evidence; missing or failed proof keeps task incomplete.
@@ -225,8 +225,10 @@ No iframe fallback; unsupported engine/protocol displays reason. Privacy clear i
 - Do not store/log bearer/tickets/raw loopback endpoints, real site credentials or sensitive page/selection payload in diagnostics/evidence.
 
 ## Next steps
-Phase08 follows bind-browser-window-policy and exclusively owns shared auth/client/artifact integration. Independent extension and HtmlPreview remain unchanged by intent.
+Phase 07 is DONE (2026-11-09). Phase 08 is unblocked. Phase 08 (Secure selection artifacts and confirmed logout reset) exclusively owns shared auth/client/artifact integration. Independent extension and HtmlPreview remain unchanged by intent.
+- User approved Phase 07 after Cycle 2 (score 4/10; 208 validation checks passing). Technical carryovers for subsequent phases:
+  - **Phase 08 (Secure selection artifacts and confirmed logout reset):** W1 navigation revision JSON string/number wire contract reconciliation across backend and client endpoints; W2 persisted live target adoption/reconciliation via authenticated session listing; W4 lease renewal/release and expiration state handling; W5 document/shell-modal input arbitration and deliberate text proxy focus; W6 pending-create and failed-delete target closure tracking with captured owner finalization; confirmed logout reset flow with no preselected choice.
+  - **Phase 09 (Qualify full app security platforms and efficiency):** W3 restore ticket demand-fencing and generation reactivity; W7 bounded native popup projection and shared Radix dialog modal; W8 connected-boundary behavioral test depth vs real connected backend; W9 imperative portal reparenting convention; W10 capability/transport failure error boundaries; full multi-target soak testing; real physical Android SPA verification (IME virtual keyboard, touch gestures, letterbox mapping); complete end-to-end OS privacy proof; global memory ceiling validation across backend and client.
 - Parent owns independent plan review/optional validation and implementation permission. This phase text neither executes tasks nor supplies approval.
-
 ## Unresolved questions
 - No additional product interview here. Exact compatibility/platform/performance and human observations remain future gates where applicable; their absence is not a pass.

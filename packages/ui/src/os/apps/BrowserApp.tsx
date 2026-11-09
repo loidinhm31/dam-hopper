@@ -1,15 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { OsWindow, ResourceClaimKey } from "../types.js";
 import { useWindowOwner, useWindowContext } from "../window-context.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { useResourceClaim } from "../resource-registry.js";
 import { useWindowStore } from "../window-store.js";
 import {
-  registerBrowserSlot,
-  updateBrowserSlot,
-} from "../OsResourceHost.js";
+  registerBrowserStreamSlot,
+  updateBrowserStreamSlot,
+} from "../BrowserStreamKeepAliveHost.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import { getConnectionSnapshot } from "@/api/connections.js";
+import {
+  acquireBrowserControl,
+  historyBrowser,
+  navigateBrowser,
+  reloadBrowser,
+} from "@/api/browser-host-client.js";
 
 export interface BrowserAppProps {
   window: OsWindow;
@@ -23,7 +29,6 @@ function BrowserTargetChooser({
   owner: ConnectionRef;
 }) {
   const [url, setUrl] = useState("");
-  const [collisionMsg, setCollisionMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleOpen = () => {
@@ -55,27 +60,6 @@ function BrowserTargetChooser({
       return;
     }
     setError(null);
-    setCollisionMsg(null);
-
-    const windows = useWindowStore.getState().session.windows;
-    const collision = Object.values(windows).find(
-      (w) =>
-        w.id !== window.id &&
-        w.appId === "browser" &&
-        w.appState?.url === trimmed &&
-        w.ctx.profileId === owner.profileId,
-    );
-
-    if (collision) {
-      if (collision.minimized) {
-        useWindowStore.getState().restoreWindow(collision.id);
-      }
-      useWindowStore.getState().focusWindow(collision.id);
-      setCollisionMsg(
-        `URL '${trimmed}' is already open in another window. Focused existing window.`,
-      );
-      return;
-    }
 
     useWindowStore.getState().updateAppState(window.id, {
       presentation: { kind: "resource", url: trimmed },
@@ -101,16 +85,6 @@ function BrowserTargetChooser({
         <p className="text-xs text-[var(--color-text-muted)]">
           Enter an HTTP or HTTPS endpoint to preview inside this workspace.
         </p>
-
-        {collisionMsg && (
-          <div
-            role="alert"
-            data-testid="browser-chooser-collision"
-            className="rounded border border-[var(--color-warning)] bg-[var(--color-warning)]/10 p-2.5 text-xs text-[var(--color-warning)]"
-          >
-            {collisionMsg}
-          </div>
-        )}
 
         {error && (
           <div
@@ -171,7 +145,7 @@ export function BrowserApp({ window }: BrowserAppProps) {
   const presentation = window.appState?.presentation as { kind?: string } | undefined;
   const isChooser =
     presentation?.kind === "choose-target" ||
-    (!window.appState?.url && presentation?.kind !== "resource");
+    (!window.appState?.url && !window.appState?.sessionId && presentation?.kind !== "resource");
 
   if (isChooser) {
     return <BrowserTargetChooser window={window} owner={owner} />;
@@ -190,16 +164,29 @@ function BrowserResourceView({
   const slotRef = useRef<HTMLDivElement>(null);
   const context = useWindowContext();
   const isCognitoActive = useCognitoModeStore((state) => state.active);
-  const focusWindow = useWindowStore((state) => state.focusWindow);
   const previewUrl = (window.appState?.url as string | undefined) ?? "";
+  const sessionId = window.appState?.sessionId as string | undefined;
+  const navigationRevision = (window.appState?.navigationRevision as number | string | undefined) ?? 1;
+  const unsupportedReason = window.appState?.unsupportedReason as string | undefined;
+  const isController = Boolean(window.appState?.isController);
+
+  const [addressInput, setAddressInput] = useState(previewUrl);
+
+  // Sync address input with previewUrl when remote navigation updates it
+  useEffect(() => {
+    setAddressInput(previewUrl);
+  }, [previewUrl]);
+
+  // Viewer-local presentation claim: each window has its own claim key,
+  // allowing two windows to view the same target without resource collision.
   const claimKey = useMemo<ResourceClaimKey>(
     () => ({
       resourceKind: "browser",
       profileId: owner.profileId,
       generation: owner.generation,
-      resourceId: previewUrl,
+      resourceId: window.id,
     }),
-    [owner.profileId, owner.generation, previewUrl],
+    [owner.profileId, owner.generation, window.id],
   );
 
   const claimStatus = useResourceClaim(claimKey, window.id);
@@ -210,54 +197,217 @@ function BrowserResourceView({
     context.isActiveDesktop &&
     !isCognitoActive;
 
+  // Register slot with root keep-alive host
   useEffect(() => {
-    if (!claimStatus.success) return;
     const el = slotRef.current;
-    const unregister = registerBrowserSlot(window.id, previewUrl, el, isVisible);
+    const unregister = registerBrowserStreamSlot(window.id, el, isVisible);
     return () => {
       unregister();
     };
-  }, [window.id, previewUrl, claimStatus.success]);
+  }, [window.id, isVisible]);
 
-  useEffect(() => {
-    if (!claimStatus.success) return;
-    updateBrowserSlot(window.id, slotRef.current, isVisible);
-  }, [window.id, isVisible, claimStatus.success]);
+  useLayoutEffect(() => {
+    updateBrowserStreamSlot(window.id, slotRef.current, isVisible);
+  }, [window.id, isVisible]);
 
-  if (!claimStatus.success) {
-    const holderId = claimStatus.existingHolderWindowId ?? "unknown";
-    return (
-      <div
-        data-os-claim-denied="true"
-        data-testid="browser-claim-denied"
-        className="flex flex-col items-center justify-center p-4 text-center h-full bg-[var(--color-surface)] text-xs text-[var(--color-text-muted)] gap-3"
-      >
-        <p>Browser preview is already active in another window ({previewUrl}).</p>
-        <button
-          type="button"
-          onClick={() => focusWindow(holderId)}
-          className="px-3 py-1.5 rounded bg-[var(--color-primary)] text-white text-xs font-medium hover:opacity-90 transition-opacity"
-        >
-          Focus Existing Window
-        </button>
-      </div>
-    );
-  }
+  // Navigation callbacks
+  const handleNavigate = useCallback(async () => {
+    const trimmed = addressInput.trim();
+    if (!trimmed || !sessionId) return;
+    try {
+      const resp = await navigateBrowser(owner, sessionId, {
+        url: trimmed,
+        navigationRevision,
+      });
+      useWindowStore.getState().updateAppState(window.id, {
+        url: resp.url,
+        title: resp.title,
+        navigationRevision: resp.navigationRevision,
+        viewportEpoch: resp.viewportEpoch,
+      });
+    } catch (err) {
+      console.warn("[BrowserApp] Navigate failed:", err);
+    }
+  }, [addressInput, owner, sessionId, navigationRevision, window.id]);
+
+  const handleReload = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const resp = await reloadBrowser(owner, sessionId, { navigationRevision });
+      useWindowStore.getState().updateAppState(window.id, {
+        navigationRevision: resp.navigationRevision,
+        viewportEpoch: resp.viewportEpoch,
+      });
+    } catch (err) {
+      console.warn("[BrowserApp] Reload failed:", err);
+    }
+  }, [owner, sessionId, navigationRevision, window.id]);
+
+  const handleBack = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const resp = await historyBrowser(owner, sessionId, {
+        direction: "back",
+        navigationRevision,
+      });
+      useWindowStore.getState().updateAppState(window.id, {
+        url: resp.url,
+        title: resp.title,
+        navigationRevision: resp.navigationRevision,
+        viewportEpoch: resp.viewportEpoch,
+      });
+    } catch (err) {
+      console.warn("[BrowserApp] History back failed:", err);
+    }
+  }, [owner, sessionId, navigationRevision, window.id]);
+
+  const handleForward = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const resp = await historyBrowser(owner, sessionId, {
+        direction: "forward",
+        navigationRevision,
+      });
+      useWindowStore.getState().updateAppState(window.id, {
+        url: resp.url,
+        title: resp.title,
+        navigationRevision: resp.navigationRevision,
+        viewportEpoch: resp.viewportEpoch,
+      });
+    } catch (err) {
+      console.warn("[BrowserApp] History forward failed:", err);
+    }
+  }, [owner, sessionId, navigationRevision, window.id]);
+
+  const handleAcquireControl = useCallback(async () => {
+    if (!sessionId) return;
+    const activeViewerId = (window.appState?.viewerId as string | undefined) ?? window.id;
+    try {
+      const resp = await acquireBrowserControl(owner, sessionId, {
+        viewerId: activeViewerId,
+        holderKind: "human",
+      });
+      useWindowStore.getState().updateAppState(window.id, {
+        isController: true,
+        leaseToken: resp.leaseToken,
+      });
+    } catch (err) {
+      console.warn("[BrowserApp] Acquire control failed:", err);
+    }
+  }, [owner, sessionId, window.id, window.appState?.viewerId]);
 
   return (
     <div
       data-os-browser-app={window.id}
       data-testid={`browser-app-${window.id}`}
-      className="relative w-full h-full bg-white overflow-hidden flex flex-col"
+      className="relative w-full h-full bg-black overflow-hidden flex flex-col"
     >
-      <div className="flex items-center gap-2 px-2 py-1 bg-[var(--color-surface)] border-b border-[var(--color-border)] text-xs text-[var(--color-text-muted)] font-mono select-none">
-        <span>URL:</span>
-        <span className="truncate text-[var(--color-text)]">{previewUrl}</span>
+      {/* Capability Reason Banner */}
+      {unsupportedReason && (
+        <div
+          role="alert"
+          data-testid="browser-unsupported-banner"
+          className="flex items-center justify-between px-3 py-1.5 bg-red-500/15 border-b border-red-500/30 text-red-400 text-xs select-none"
+        >
+          <span className="font-medium">
+            Browser capability unavailable: {unsupportedReason}
+          </span>
+        </div>
+      )}
+
+      {/* Top Browser Controls Bar */}
+      <div className="flex items-center gap-1.5 px-2 py-1 bg-[var(--color-surface)] border-b border-[var(--color-border)] text-xs text-[var(--color-text)] select-none">
+        <button
+          type="button"
+          data-testid="browser-back-btn"
+          aria-label="Back"
+          onClick={handleBack}
+          disabled={!sessionId}
+          className="p-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-40"
+        >
+          ←
+        </button>
+        <button
+          type="button"
+          data-testid="browser-forward-btn"
+          aria-label="Forward"
+          onClick={handleForward}
+          disabled={!sessionId}
+          className="p-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-40"
+        >
+          →
+        </button>
+        <button
+          type="button"
+          data-testid="browser-reload-btn"
+          aria-label="Reload"
+          onClick={handleReload}
+          disabled={!sessionId}
+          className="p-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-40"
+        >
+          ↻
+        </button>
+
+        {/* URL Address Input */}
+        <div className="flex-1 min-w-0 mx-1">
+          <input
+            type="text"
+            data-testid="browser-address-input"
+            value={addressInput}
+            onChange={(e) => setAddressInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                void handleNavigate();
+              }
+            }}
+            placeholder="http://localhost:5173"
+            className="w-full h-6 rounded border border-[var(--color-border)] bg-[var(--color-input)] px-2 text-xs text-[var(--color-text)] font-mono focus:border-[var(--color-primary)] focus:outline-none"
+          />
+        </div>
+
+        {/* View-only vs Controller Indicator */}
+        {isController ? (
+          <span
+            data-testid="browser-controller-badge"
+            className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-500/20 text-green-400 border border-green-500/30"
+          >
+            Controlling
+          </span>
+        ) : (
+          <div className="flex items-center gap-1">
+            <span
+              data-testid="browser-view-only-badge"
+              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30"
+            >
+              View-only
+            </span>
+            <button
+              type="button"
+              data-testid="browser-take-control-btn"
+              onClick={handleAcquireControl}
+              className="px-2 py-0.5 rounded text-[10px] font-medium bg-[var(--color-surface-2)] hover:bg-[var(--color-surface-3)] text-[var(--color-text)] border border-[var(--color-border)]"
+            >
+              Control
+            </button>
+          </div>
+        )}
+
+        {sessionId && (
+          <span
+            title={`Session ID: ${sessionId}`}
+            className="text-[10px] text-[var(--color-text-muted)] font-mono truncate max-w-[80px]"
+          >
+            {sessionId.slice(0, 8)}
+          </span>
+        )}
       </div>
+
+      {/* Stream Canvas Slot Reparenting Target */}
       <div
         ref={slotRef}
         data-os-browser-slot={window.id}
-        className="flex-1 min-h-0 relative bg-white"
+        data-testid={`browser-slot-${window.id}`}
+        className="flex-1 min-h-0 relative bg-black"
       />
     </div>
   );

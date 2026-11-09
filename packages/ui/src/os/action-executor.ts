@@ -513,15 +513,34 @@ export async function executeAction(
       };
     }
   } else if (appId === "browser") {
-    initialAppState = {
-      presentation: {
-        kind: "choose-target",
-        capturedContext: request.context,
-        ownerGeneration: targetGeneration,
-        destinationDesktopId: activeDesktopId,
-        deliveryToken: generateUUID(),
-      },
-    };
+    let reqUrl: string | undefined;
+    if (request.context && typeof request.context === "object" && "url" in request.context) {
+      const raw = (request.context as Record<string, unknown>).url;
+      if (typeof raw === "string") reqUrl = raw;
+    }
+    if (!reqUrl && typeof request === "object" && "url" in request) {
+      const raw = (request as Record<string, unknown>).url;
+      if (typeof raw === "string") reqUrl = raw;
+    }
+    if (reqUrl) {
+      initialAppState = {
+        presentation: {
+          kind: "resource",
+          url: reqUrl,
+        },
+        url: reqUrl,
+      };
+    } else {
+      initialAppState = {
+        presentation: {
+          kind: "choose-target",
+          capturedContext: request.context,
+          ownerGeneration: targetGeneration,
+          destinationDesktopId: activeDesktopId,
+          deliveryToken: generateUUID(),
+        },
+      };
+    }
   }
 
   state.openWindow(
