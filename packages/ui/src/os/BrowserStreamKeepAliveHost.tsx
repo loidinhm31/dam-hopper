@@ -5,12 +5,16 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useLockScreenStore } from "@/stores/lock-screen.js";
 import { generateUUID } from "../lib/utils.js";
 import { useWindowStore } from "./window-store.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
-import { getConnectionSnapshot } from "@/api/connections.js";
+import {
+  getConnectionSnapshot,
+  useConnectionSnapshot,
+} from "@/api/connections.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { CanvasView } from "../browser-host/canvas-view.js";
 import {
@@ -44,6 +48,78 @@ export interface BrowserStreamSlot {
 
 const slotRegistry = new Map<string, BrowserStreamSlot>();
 const slotListeners = new Set<() => void>();
+
+const fencedBrowserProfiles = new Map<
+  string,
+  { generation: number; reason: string }
+>();
+const fenceListeners = new Set<() => void>();
+
+function subscribeBrowserViewFences(listener: () => void): () => void {
+  fenceListeners.add(listener);
+  return () => {
+    fenceListeners.delete(listener);
+  };
+}
+
+export function isBrowserViewFenced(
+  profileId?: string,
+  generation?: number,
+): boolean {
+  if (!profileId) return false;
+  const entry = fencedBrowserProfiles.get(profileId);
+  if (!entry) return false;
+  return generation === undefined || entry.generation === generation;
+}
+
+export function fenceBrowserViewsForProfile(
+  profileId?: string,
+  reason = "Shared Browser profile reset or logged out",
+  expectedGeneration?: number,
+): void {
+  if (!profileId) return;
+  const gen = getConnectionSnapshot(profileId)?.owner.generation ?? 0;
+  if (expectedGeneration !== undefined && gen !== expectedGeneration) {
+    return;
+  }
+  fencedBrowserProfiles.set(profileId, { generation: gen, reason });
+  const state = useWindowStore.getState();
+  const windows = state.session?.windows ?? {};
+  for (const win of Object.values(windows)) {
+    if (win.appId === "browser" && win.ctx.profileId === profileId) {
+      state.updateAppState(win.id, {
+        sessionId: undefined,
+        leaseToken: undefined,
+        isController: false,
+        browserIncarnation: undefined,
+        unsupportedReason: reason,
+      });
+    }
+  }
+  fenceListeners.forEach((l) => l());
+}
+
+export function clearBrowserViewFenceForProfile(
+  profileId?: string,
+  expectedGeneration?: number,
+): void {
+  if (!profileId || !fencedBrowserProfiles.has(profileId)) return;
+  const gen = getConnectionSnapshot(profileId)?.owner.generation ?? 0;
+  if (expectedGeneration !== undefined && gen !== expectedGeneration) {
+    return;
+  }
+  fencedBrowserProfiles.delete(profileId);
+  const state = useWindowStore.getState();
+  const windows = state.session?.windows ?? {};
+  for (const win of Object.values(windows)) {
+    if (win.appId === "browser" && win.ctx.profileId === profileId) {
+      state.updateAppState(win.id, {
+        unsupportedReason: undefined,
+      });
+    }
+  }
+  fenceListeners.forEach((l) => l());
+}
 
 export function registerBrowserStreamSlot(
   windowId: string,
@@ -195,15 +271,22 @@ function ParkedBrowserStreamItem({
 
   const isCognitoActive = useCognitoModeStore((state) => state.active);
   const isLockScreenActive = useLockScreenStore((state) => state.isLocked);
-  const isSuppressed = isCognitoActive || isLockScreenActive;
-
-  const owner = useMemo<ConnectionRef>(() => {
-    const snap = getConnectionSnapshot(win.ctx.profileId);
-    return {
+  const connSnap = useConnectionSnapshot(win.ctx.profileId);
+  const currentGen = connSnap?.owner.generation ?? 0;
+  const isProfileResetFenced = useSyncExternalStore(
+    subscribeBrowserViewFences,
+    () => isBrowserViewFenced(win.ctx.profileId, currentGen),
+    () => false,
+  );
+  const isSuppressed =
+    isCognitoActive || isLockScreenActive || isProfileResetFenced;
+  const owner = useMemo<ConnectionRef>(
+    () => ({
       profileId: win.ctx.profileId,
-      generation: snap?.owner.generation ?? 0,
-    };
-  }, [win.ctx.profileId]);
+      generation: currentGen,
+    }),
+    [win.ctx.profileId, currentGen],
+  );
 
   // Track slot registration updates
   useEffect(() => {

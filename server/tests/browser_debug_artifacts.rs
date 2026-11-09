@@ -98,6 +98,24 @@ async fn request(
         .await
         .unwrap()
 }
+async fn request_with_cookie(
+    state: AppState,
+    method: &str,
+    path: &str,
+    content_type: Option<&str>,
+    body: Body,
+    cookie: &str,
+) -> axum::response::Response {
+    let mut builder = Request::builder().method(method).uri(path);
+    builder = builder.header("Cookie", cookie);
+    if let Some(content_type) = content_type {
+        builder = builder.header("Content-Type", content_type);
+    }
+    build_router(state)
+        .oneshot(builder.body(body).unwrap())
+        .await
+        .unwrap()
+}
 
 fn selection(terminal_id: &str, incarnation: u64) -> serde_json::Value {
     serde_json::json!({
@@ -600,4 +618,205 @@ fn crc32(bytes: &[u8]) -> u32 {
         }
     }
     !crc
+}
+
+#[tokio::test]
+async fn client_forged_source_or_owner_is_rejected_with_bad_request() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = make_state(&temp);
+    let inc = create_terminal(&state, temp.path());
+
+    // Client attempts to forge "source": "ManagedBrowser"
+    let mut forged_source = selection("shell:browser-debug", inc);
+    forged_source["source"] = serde_json::json!("ManagedBrowser");
+    let res = request(
+        state.clone(),
+        "POST",
+        "/api/browser-debug/artifacts",
+        Some("application/json"),
+        Body::from(forged_source.to_string()),
+        true,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // Client attempts to forge "owner": "admin"
+    let mut forged_owner = selection("shell:browser-debug", inc);
+    forged_owner["owner"] = serde_json::json!("admin");
+    let res = request(
+        state.clone(),
+        "POST",
+        "/api/browser-debug/artifacts",
+        Some("application/json"),
+        Body::from(forged_owner.to_string()),
+        true,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn foreign_actor_cannot_upload_handoff_or_delete_artifact() {
+    use dam_hopper_server::auth::model::{AuthClaims, AuthSession, UserRecord, UserRole};
+    use dam_hopper_server::auth::{AUTH_PROTOCOL_VERSION, MOCK_EXPIRY_SECS};
+
+    let temp = tempfile::tempdir().unwrap();
+    let now = chrono::Utc::now();
+    let exp_chrono = chrono::DateTime::from_timestamp(MOCK_EXPIRY_SECS as i64, 0).unwrap();
+
+    // User 1 (owner)
+    let user1 = UserRecord {
+        id: None,
+        username: "user1".to_string(),
+        password_hash: String::new(),
+        is_enabled: true,
+        role: UserRole::User,
+        auth_version: 0,
+        mfa: None,
+        mfa_attempt_window_started_at: None,
+        mfa_attempt_count: 0,
+        mfa_blocked_until: None,
+    };
+    let session1 = AuthSession {
+        id: "session-user1".to_string(),
+        username: "user1".to_string(),
+        auth_version: 0,
+        credential_version: 0,
+        issued_at: dam_hopper_server::auth::chrono_to_bson(now),
+        expires_at: dam_hopper_server::auth::chrono_to_bson(exp_chrono),
+        mfa_verified_at: dam_hopper_server::auth::chrono_to_bson(now),
+        revoked_at: None,
+        user_agent: None,
+    };
+
+    // User 2 (attacker)
+    let user2 = UserRecord {
+        id: None,
+        username: "user2".to_string(),
+        password_hash: String::new(),
+        is_enabled: true,
+        role: UserRole::User,
+        auth_version: 0,
+        mfa: None,
+        mfa_attempt_window_started_at: None,
+        mfa_attempt_count: 0,
+        mfa_blocked_until: None,
+    };
+    let session2 = AuthSession {
+        id: "session-user2".to_string(),
+        username: "user2".to_string(),
+        auth_version: 0,
+        credential_version: 0,
+        issued_at: dam_hopper_server::auth::chrono_to_bson(now),
+        expires_at: dam_hopper_server::auth::chrono_to_bson(exp_chrono),
+        mfa_verified_at: dam_hopper_server::auth::chrono_to_bson(now),
+        revoked_at: None,
+        user_agent: None,
+    };
+
+    let auth_svc1 = dam_hopper_server::auth::AuthService::new_mock(user1, session1);
+    let state1 = make_state(&temp).with_auth_service(std::sync::Arc::new(auth_svc1));
+    let auth_svc2 = dam_hopper_server::auth::AuthService::new_mock(user2, session2);
+    let state2 = state1.clone().with_auth_service(std::sync::Arc::new(auth_svc2));
+    let inc = create_terminal(&state1, temp.path());
+
+    let claims1 = AuthClaims {
+        v: AUTH_PROTOCOL_VERSION,
+        sub: "user1".to_string(),
+        sid: "session-user1".to_string(),
+        auth_version: 0,
+        credential_version: 0,
+        iat: now.timestamp() as usize,
+        exp: MOCK_EXPIRY_SECS,
+    };
+    let cookie1 = format!("damhopper-auth={}", claims1.encode(TOKEN).unwrap());
+
+    let claims2 = AuthClaims {
+        v: AUTH_PROTOCOL_VERSION,
+        sub: "user2".to_string(),
+        sid: "session-user2".to_string(),
+        auth_version: 0,
+        credential_version: 0,
+        iat: now.timestamp() as usize,
+        exp: MOCK_EXPIRY_SECS,
+    };
+    let cookie2 = format!("damhopper-auth={}", claims2.encode(TOKEN).unwrap());
+
+    // User 1 creates an artifact
+    let created = request_with_cookie(
+        state1.clone(),
+        "POST",
+        "/api/browser-debug/artifacts",
+        Some("application/json"),
+        Body::from(selection("shell:browser-debug", inc).to_string()),
+        &cookie1,
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created_body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let artifact_id = created_body["artifactId"].as_str().unwrap();
+
+    // User 2 attempts to upload PNG -> 404 NOT_FOUND
+    let foreign_upload = request_with_cookie(
+        state2.clone(),
+        "PUT",
+        &format!("/api/browser-debug/artifacts/{artifact_id}/png"),
+        Some("image/png"),
+        Body::from(png()),
+        &cookie2,
+    )
+    .await;
+    assert_eq!(foreign_upload.status(), StatusCode::NOT_FOUND);
+
+    // User 2 attempts to handoff -> 404 NOT_FOUND
+    let foreign_handoff = request_with_cookie(
+        state2.clone(),
+        "POST",
+        &format!("/api/browser-debug/artifacts/{artifact_id}/handoff"),
+        None,
+        Body::empty(),
+        &cookie2,
+    )
+    .await;
+    assert_eq!(foreign_handoff.status(), StatusCode::NOT_FOUND);
+
+    // User 2 attempts to delete -> 404 NOT_FOUND
+    let foreign_delete = request_with_cookie(
+        state2.clone(),
+        "DELETE",
+        &format!("/api/browser-debug/artifacts/{artifact_id}"),
+        None,
+        Body::empty(),
+        &cookie2,
+    )
+    .await;
+    assert_eq!(foreign_delete.status(), StatusCode::NOT_FOUND);
+
+    // User 1 can still upload PNG and handoff
+    let owner_upload = request_with_cookie(
+        state1.clone(),
+        "PUT",
+        &format!("/api/browser-debug/artifacts/{artifact_id}/png"),
+        Some("image/png"),
+        Body::from(png()),
+        &cookie1,
+    )
+    .await;
+    assert_eq!(owner_upload.status(), StatusCode::OK);
+
+    let owner_handoff = request_with_cookie(
+        state1.clone(),
+        "POST",
+        &format!("/api/browser-debug/artifacts/{artifact_id}/handoff"),
+        None,
+        Body::empty(),
+        &cookie1,
+    )
+    .await;
+    assert_eq!(owner_handoff.status(), StatusCode::OK);
 }

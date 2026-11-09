@@ -65,16 +65,21 @@ All errors return JSON with HTTP status $\ge 400$:
 | 404 Not Found | `sessionNotFound` | Browser session ID does not exist |
 | 409 Conflict | `sessionConflict` | Conflicting session operation or state mismatch |
 | 409 Conflict | `leaseConflict` | Control lease currently held by another active viewer |
-| 429 Too Many Requests | `browserBusy` | Principal or global process limit reached |
+| 429 Too Many Requests | `browserBusy` | Principal/global process limit or concurrent agent CDP ceiling (`max_raw_cdp_connections`, cap 8) reached |
 | 429 Too Many Requests | `ticketCapacityExceeded` | Unconsumed ticket limit reached (16 principal / 64 global) |
 | 429 Too Many Requests | `queueOverflow` | Input queue limit exceeded (128 records or 256 KiB) |
 | 503 Service Unavailable | `authUnavailable` | Database unavailable during admission check or live check timeout (2s) |
 | 503 Service Unavailable | `inputUnavailable` | Viewport geometry not yet available for coordinate mapping |
 | 401 Unauthorized | `mfaRequired` | MFA verification required before accessing browser host |
 | 401 Unauthorized | `invalidSession` | Session revoked, deleted, or claims version mismatch |
-| 403 Forbidden | `forbiddenOrigin` | Origin header not in approved allowlist, multiple headers, null, or trailing slash |
-| 409 Conflict | `staleViewportEpoch` | Managed input rejected due to stale or mismatched viewportEpoch following native geometry mutation |
-| 429 Too Many Requests | `browserBusy` | Global process or concurrent agent CDP connection ceiling reached (`max_raw_cdp_connections`, cap 8) |
+| 403 Forbidden | `forbiddenOrigin` | Origin header invalid, disallowed, or missing for CSRF-checked destructive reset |
+| 403 Forbidden | `leaseHeaderRequired` | Missing `X-Browser-Lease` header on `/selected-text` |
+| 400 Bad Request | `confirmationRequired` / `invalidOperationId` | Missing `confirmed: true` or malformed `operationId` (`<= 128` `[A-Za-z0-9_-]`) |
+| 404 Not Found | `operationNotFound` / `terminalNotFound` | Unknown reset `operationId` or absent target PTY |
+| 409 Conflict | `staleViewportEpoch` / `staleEpoch` | Mismatched `viewportEpoch` on input or stale `expectedProfileEpoch` on reset |
+| 409 Conflict | `cleanupPending` / `resetFailed` | Active reset tombstone/worker (includes `operationId` when active) or reset error |
+| 409 Conflict | `conflict` / `noSelection` / `TERMINAL_INCARNATION_MISMATCH` | Stale `navigationRevision`/`selectionRevision`, missing preview, or changed target PTY incarnation |
+| 502 Bad Gateway | `cdpError` | Upstream CDP inspect or screenshot command failed |
 
 ---
 
@@ -137,7 +142,7 @@ Creates or recovers a browser session. Requires an idempotent `creationKey`.
 
 ### GET /api/browser/sessions/{id}
 
-Retrieves current metadata, viewport epoch, navigation revision, active lease, and active dialog for session `{id}`.
+Retrieves current metadata, viewport epoch, navigation revision, active lease, active dialog, and optional current-revision `selection` summary (`{ active, selectionRevision, navigationRevision, preview? }`) for session `{id}`.
 
 **Response (200 OK):**
 ```json
@@ -173,9 +178,9 @@ Retrieves current metadata, viewport epoch, navigation revision, active lease, a
 
 ### DELETE /api/browser/sessions/{id}
 
-Closes session `{id}`. Releases any held control lease, generates input release events, removes the session from the registry, and cleans up input queues.
+Closes session `{id}`. Cleans up selection/watcher state, stops screencast producer, revokes session capability tickets, releases any held control lease, and removes the session and input manager.
 
-**Response:** 204 No Content.
+**Response:** `200 OK` `{ "status": "closed", "browserSessionId": "<id>" }`.
 
 ### POST /api/browser/sessions/{id}/navigate
 
@@ -332,53 +337,24 @@ Handles a JavaScript modal dialog (`alert`, `confirm`, `prompt`, `beforeunload`)
 
 ### POST /api/browser/sessions/{id}/selection/start
 
-Enables element selection mode for browser debugging.
+Enables CDP `Overlay` inspect mode (`mode: "searchForNode"`) or executes one-shot point inspection when `inspectPoint` is supplied (`deny_unknown_fields`, renews active control lease). Returns HTTP `409 Conflict` (`kind: "conflict"`) on `navigationRevision` mismatch or non-`running` session.
 
-**Request Body:**
-```json
-{
-  "leaseToken": "uuid-v4-lease-token",
-  "navigationRevision": 1
-}
-```
-
-**Response (200 OK):** `{ "selectionActive": true, "navigationRevision": 1 }`.
+**Request Body:** `{ "leaseToken": "uuid-v4-lease-token", "navigationRevision": 1, "inspectPoint": { "x": 120, "y": 240 } }` (`navigationRevision` accepts `u64` or decimal string; `inspectPoint` optional).  
+**Response (200 OK):** `{ "selectionActive": true, "navigationRevision": 1, "selectionRevision": 1, "preview": null }` (`preview` is `BrowserSelectionV1` when `inspectPoint` matches a node; omits form values, passwords, raw HTML, and control bytes).
 
 ### POST /api/browser/sessions/{id}/selection/cancel
 
-Cancels active element selection mode.
+Cancels active CDP `Overlay` inspect mode, clears any recorded preview, and force-invalidates unclaimed pending selection artifacts (`deny_unknown_fields`, renews active control lease). Returns HTTP `409` on stale `navigationRevision`.
 
-**Request Body:**
-```json
-{
-  "leaseToken": "uuid-v4-lease-token",
-  "navigationRevision": 1
-}
-```
-
-**Response (200 OK):** `{ "selectionActive": false, "navigationRevision": 1 }`.
+**Request Body:** `{ "leaseToken": "uuid-v4-lease-token", "navigationRevision": 1 }`  
+**Response (200 OK):** `{ "selectionActive": false, "navigationRevision": 1, "selectionRevision": 1 }`.
 
 ### POST /api/browser/sessions/{id}/selection/artifacts
 
-Creates a browser debug artifact from the currently selected DOM element.
+Creates an actor-bound `ManagedBrowser` artifact from the live selection preview and optionally captures a cropped CDP PNG (`<= 4 MiB` at `1.0x` or `0.5x` clip scale; skipped gracefully unless `includePng: true`). Revalidates session status, `navigationRevision`, `selectionRevision`, live Admin admission, and exact `terminalIncarnation` before and after PNG upload (`deny_unknown_fields`).
 
-**Request Body:**
-```json
-{
-  "selectionRevision": 1,
-  "terminalId": "terminal-uuid",
-  "terminalIncarnation": "incarnation-uuid"
-}
-```
-
-**Response (201 Created):**
-```json
-{
-  "artifactId": "browser-sel-3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "selectionRevision": 1,
-  "terminalId": "terminal-uuid"
-}
-```
+**Request Body:** `{ "selectionRevision": 1, "terminalId": "terminal-uuid", "terminalIncarnation": "1", "navigationRevision": 1, "includePng": true }` (`navigationRevision` and `includePng` optional; defaults to attempting PNG capture).  
+**Response (201 Created):** Flattened `BrowserDebugArtifactResponse` (`artifactId`, `terminalId`, `terminalIncarnation`, `expiresAt`, `jsonPath`, `jsonSize`, `jsonSha256`, optional `pngPath`, `pngSize`, `pngSha256`) plus `selectionRevision`, `navigationRevision`, and `selection` (`BrowserSelectionV1`). Note: `GET /api/browser/sessions/{id}` exposes `selection` once recorded, and navigation watchers invalidate selections/pending artifacts on main-frame or same-document CDP navigation.
 
 ### POST /api/browser/sessions/{id}/find
 
@@ -449,42 +425,24 @@ Issues a cryptographically secure, single-use capability ticket for WebSocket st
 
 ### POST /api/browser/profile/reset
 
-Triggers a durable, idempotent profile reset. Purges `user-data/` while maintaining advisory file lock exclusivity.
+Triggers a durable, idempotent profile reset (`deny_unknown_fields`). Enforces live Admin admission, CSRF/Origin validation (`validate_destructive_browser_csrf`: single allowed Origin or explicit Bearer auth), `confirmed: true`, valid `operationId` (`<= 128` `[A-Za-z0-9_-]`), and matching `expectedProfileEpoch`, then rechecks live Admin role under the principal lock before writing `reset.json` and advancing `profileEpoch`.
 
-**Request Body:**
-```json
-{
-  "operationId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "expectedProfileEpoch": 1,
-  "confirmed": true
-}
-```
+- Synchronously fences attachments, sessions, input managers, selection state, and `ManagedBrowser` artifacts, then runs bounded async artifact deletion + CDP/process teardown (10s terminate + 10s `user-data/` delete) inside a manager-owned worker; awaits up to 2s (`DEFAULT_RESET_WAIT_TIMEOUT`) before returning `202 Accepted` `cleanupPending`.
+- Keeps current login active; returns `409` (`staleEpoch`, `cleanupPending` with active `operationId`, or `resetFailed`).
 
-- `confirmed: true` is strictly required. Omitting it returns HTTP 400 `kind: "confirmationRequired"`.
-- Upon invocation, automatically cancels all active WebSocket attachments and clears input managers for the calling principal.
-- Advances `profileEpoch`.
-
-**Response (200 OK):**
-```json
-{
-  "operationId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "status": "completed",
-  "profileEpoch": 2
-}
-```
+**Request Body:** `{ "operationId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "expectedProfileEpoch": 1, "confirmed": true }`  
+**Response (200 OK or 202 Accepted):** `{ "operationId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "status": "completed" | "cleanupPending", "profileEpoch": 2, "newProfileEpoch": 2 }` (`newProfileEpoch` when `"completed"`, `reason` when `"cleanupPending"`).
 
 ### GET /api/browser/profile/reset/{operationId}
 
-Queries the status of an ongoing or completed reset operation.
+Queries status of an active, pending-tombstone, or completed reset operation without creating metadata (`200 OK` with `"completed"` or `"cleanupPending"` payload; `404` `operationNotFound`).
 
-**Response (200 OK):**
-```json
-{
-  "operationId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "status": "completed",
-  "profileEpoch": 2
-}
-```
+### Actor-Bound Debug Artifacts (`/api/browser-debug/artifacts`)
+
+Selection artifacts created via `/api/browser/sessions/{id}/selection/artifacts` are tagged internally with immutable owner subject and `ArtifactSource::ManagedBrowser { principal, profile_epoch, browser_incarnation }`, while public `POST /api/browser-debug/artifacts` (`deny_unknown_fields`) always assigns `ArtifactSource::Cooperative` (see [System Services API](./system-services.md#browser-debug-artifacts) for base payloads).
+- **Live Admission & Demotion:** Every `ManagedBrowser` upload, delete, and `/handoff` checks `BrowserAdmissionAuthority` (enabled Admin or `--no-auth` dev, matching `profileEpoch`, and no active reset tombstone); same-subject Admin demotion or foreign access returns indistinguishable `404`.
+- **Quota & Atomic Handoff:** Bounded to 64 records / 64 MiB globally with cancellation-safe guards (`QuotaReservationGuard`, `UploadReservationGuard`, `PublishedPathCleanupGuard`); `/handoff` holds `acquire_managed_selection_fence` and executes atomic `write_if_incarnation` (reference paths only, never page content) and `revoke_managed_by_principal` purges artifacts on profile reset.
+
 ### GET /api/browser/cdp/json/version
 
 Returns browser DevTools version metadata for the calling principal. Automatically launches or attaches to the principal's browser process via `ensure_running`.
@@ -774,8 +732,9 @@ Frontend client API and stream controller exports (`packages/ui/src/api/browser-
 - `findInBrowserPage(owner, sessionId, req)`: Searches text in page ($\le 256$ chars).
 - `getBrowserSelectedText(owner, sessionId, leaseToken, signal?)`: Retrieves currently selected text ($\le 64$ KiB).
 - `issueAttachmentTicket(owner, req, signal?)`: Mints single-use capability ticket.
-- `resetBrowserProfile(owner, req, signal?)`: Idempotent profile data wipe with tombstone fence.
+- `resetBrowserProfile(owner, req, signal?)` / `getBrowserProfileResetStatus(owner, operationId, signal?)` (+ `*ForOrigin` and `preflightBrowserCapabilitiesForOrigin` helpers): Confirmed profile wipe and pending cleanup status polling.
 - `mintViewerAttachmentTickets(owner, sessionId, incarnation, profileEpoch)`: Atomically mints matching media and control capability tickets and formats WebSocket URLs with ticket subprotocols.
+- `useHostBrowserSelection` (`packages/ui/src/browser-host/selection-controller.ts`), `startHostBrowserSelection`, `cancelHostBrowserSelection`, `createHostSelectionArtifacts`, `handoffHostSelectionArtifact`, `deleteHostSelectionArtifact`, `collectHostTerminalCandidates`: Managed CDP selection preview, 409 nav-sync recovery, and incarnation-checked terminal handoff.
 
 ### Frame Parser & Controllers
 

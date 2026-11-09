@@ -19,6 +19,7 @@ import {
   normalizeServerUrl,
 } from "./server-config.js";
 import { generateUUID } from "../lib/utils.js";
+import { isSecureOrLoopbackOrigin, parsePositiveEpoch } from "./auth-client.js";
 import {
   BrowserHostClientError,
   CONTROL_SUBPROTOCOL,
@@ -44,6 +45,7 @@ import {
   type RenewControlResponse,
   type SetViewportRequest,
 } from "./browser-host-types.js";
+export { BrowserHostClientError } from "./browser-host-types.js";
 
 export interface ViewerAttachmentCredentials {
   owner: ConnectionRef;
@@ -85,13 +87,14 @@ function assertValidConnection(owner: ConnectionRef): ValidatedConnection {
   return { serverUrl, authToken };
 }
 
-async function requestJson<T>(
+export async function requestBrowserHostJson<T>(
   owner: ConnectionRef,
   endpoint: string,
   options: {
     method?: string;
     body?: unknown;
     extraHeaders?: Record<string, string>;
+    credentials?: RequestCredentials;
     signal?: AbortSignal;
   } = {},
 ): Promise<T> {
@@ -113,6 +116,7 @@ async function requestJson<T>(
     method: options.method ?? (options.body !== undefined ? "POST" : "GET"),
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    ...(options.credentials ? { credentials: options.credentials } : {}),
     signal: options.signal,
   });
 
@@ -167,7 +171,7 @@ export async function getBrowserCapabilities(
   owner: ConnectionRef,
   signal?: AbortSignal,
 ): Promise<BrowserCapabilitiesResponse> {
-  return requestJson<BrowserCapabilitiesResponse>(
+  return requestBrowserHostJson<BrowserCapabilitiesResponse>(
     owner,
     "/api/browser/capabilities",
     { signal },
@@ -178,7 +182,7 @@ export async function listBrowserSessions(
   owner: ConnectionRef,
   signal?: AbortSignal,
 ): Promise<BrowserSessionDto[]> {
-  return requestJson<BrowserSessionDto[]>(owner, "/api/browser/sessions", {
+  return requestBrowserHostJson<BrowserSessionDto[]>(owner, "/api/browser/sessions", {
     signal,
   });
 }
@@ -188,7 +192,7 @@ export async function getBrowserSession(
   sessionId: string,
   signal?: AbortSignal,
 ): Promise<BrowserSessionDto> {
-  return requestJson<BrowserSessionDto>(
+  return requestBrowserHostJson<BrowserSessionDto>(
     owner,
     `/api/browser/sessions/${encodeURIComponent(sessionId)}`,
     { signal },
@@ -200,7 +204,7 @@ export async function createBrowserSession(
   req: CreateSessionRequest,
   signal?: AbortSignal,
 ): Promise<BrowserSessionDto> {
-  return requestJson<BrowserSessionDto>(owner, "/api/browser/sessions", {
+  return requestBrowserHostJson<BrowserSessionDto>(owner, "/api/browser/sessions", {
     method: "POST",
     body: req,
     signal,
@@ -212,7 +216,7 @@ export async function closeBrowserSession(
   sessionId: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  await requestJson<void>(
+  await requestBrowserHostJson<void>(
     owner,
     `/api/browser/sessions/${encodeURIComponent(sessionId)}`,
     {
@@ -232,7 +236,7 @@ export async function navigateBrowser(
   req: NavigateRequest,
   signal?: AbortSignal,
 ): Promise<BrowserSessionDto> {
-  return requestJson<BrowserSessionDto>(
+  return requestBrowserHostJson<BrowserSessionDto>(
     owner,
     `/api/browser/sessions/${encodeURIComponent(sessionId)}/navigate`,
     {
@@ -249,7 +253,7 @@ export async function historyBrowser(
   req: HistoryRequest,
   signal?: AbortSignal,
 ): Promise<BrowserSessionDto> {
-  return requestJson<BrowserSessionDto>(
+  return requestBrowserHostJson<BrowserSessionDto>(
     owner,
     `/api/browser/sessions/${encodeURIComponent(sessionId)}/history`,
     {
@@ -266,7 +270,7 @@ export async function reloadBrowser(
   req: ReloadRequest,
   signal?: AbortSignal,
 ): Promise<BrowserSessionDto> {
-  return requestJson<BrowserSessionDto>(
+  return requestBrowserHostJson<BrowserSessionDto>(
     owner,
     `/api/browser/sessions/${encodeURIComponent(sessionId)}/reload`,
     {
@@ -283,7 +287,7 @@ export async function setBrowserViewport(
   req: SetViewportRequest,
   signal?: AbortSignal,
 ): Promise<BrowserSessionDto> {
-  return requestJson<BrowserSessionDto>(
+  return requestBrowserHostJson<BrowserSessionDto>(
     owner,
     `/api/browser/sessions/${encodeURIComponent(sessionId)}/viewport`,
     {
@@ -304,7 +308,7 @@ export async function acquireBrowserControl(
   req: AcquireControlRequest,
   signal?: AbortSignal,
 ): Promise<AcquireControlResponse> {
-  return requestJson<AcquireControlResponse>(
+  return requestBrowserHostJson<AcquireControlResponse>(
     owner,
     `/api/browser/sessions/${encodeURIComponent(sessionId)}/control/acquire`,
     {
@@ -321,7 +325,7 @@ export async function renewBrowserControl(
   req: RenewControlRequest,
   signal?: AbortSignal,
 ): Promise<RenewControlResponse> {
-  return requestJson<RenewControlResponse>(
+  return requestBrowserHostJson<RenewControlResponse>(
     owner,
     `/api/browser/sessions/${encodeURIComponent(sessionId)}/control/renew`,
     {
@@ -338,7 +342,7 @@ export async function releaseBrowserControl(
   req: ReleaseControlRequest,
   signal?: AbortSignal,
 ): Promise<void> {
-  await requestJson<void>(
+  await requestBrowserHostJson<void>(
     owner,
     `/api/browser/sessions/${encodeURIComponent(sessionId)}/control/release`,
     {
@@ -355,7 +359,7 @@ export async function respondBrowserDialog(
   req: DialogResponseRequest,
   signal?: AbortSignal,
 ): Promise<void> {
-  await requestJson<void>(
+  await requestBrowserHostJson<void>(
     owner,
     `/api/browser/sessions/${encodeURIComponent(sessionId)}/dialog`,
     {
@@ -372,7 +376,7 @@ export async function findInBrowserPage(
   req: FindRequest,
   signal?: AbortSignal,
 ): Promise<FindResponse> {
-  return requestJson<FindResponse>(
+  return requestBrowserHostJson<FindResponse>(
     owner,
     `/api/browser/sessions/${encodeURIComponent(sessionId)}/find`,
     {
@@ -389,7 +393,7 @@ export async function getBrowserSelectedText(
   leaseToken: string,
   signal?: AbortSignal,
 ): Promise<{ text: string }> {
-  return requestJson<{ text: string }>(
+  return requestBrowserHostJson<{ text: string }>(
     owner,
     `/api/browser/sessions/${encodeURIComponent(sessionId)}/selected-text`,
     {
@@ -410,23 +414,261 @@ export async function issueAttachmentTicket(
   req: IssueTicketRequest,
   signal?: AbortSignal,
 ): Promise<IssueTicketResponse> {
-  return requestJson<IssueTicketResponse>(owner, "/api/browser/attachments", {
+  return requestBrowserHostJson<IssueTicketResponse>(owner, "/api/browser/attachments", {
     method: "POST",
     body: req,
     signal,
   });
 }
 
+export interface ProfileResetStatusResponse extends ProfileResetResponse {
+  operationId?: string;
+  reason?: string;
+}
+
+export type BrowserResetPreflightResult =
+  | {
+      kind: "admitted";
+      available: boolean;
+      managedProfilePresent: boolean;
+      profileEpoch: number;
+      unavailableReason?: string;
+    }
+  | {
+      kind: "unauthorized" | "forbidden" | "unavailable" | "unreachable";
+      status: number | null;
+      reason: string;
+    };
+
+export interface PendingBrowserResetContext {
+  operationId?: string;
+  profileEpoch?: number;
+  browserResetState?: string;
+  reason?: string;
+}
+
+const pendingBrowserResetByProfile = new Map<string, PendingBrowserResetContext>();
+
+export function setPendingBrowserResetContext(
+  profileId: string | undefined,
+  context: PendingBrowserResetContext | null,
+): void {
+  if (!profileId) return;
+  if (context === null) {
+    pendingBrowserResetByProfile.delete(profileId);
+  } else {
+    pendingBrowserResetByProfile.set(profileId, context);
+  }
+}
+
+export function getPendingBrowserResetContext(
+  profileId: string | undefined,
+): PendingBrowserResetContext | null {
+  if (!profileId) return null;
+  return pendingBrowserResetByProfile.get(profileId) ?? null;
+}
+
+function buildOriginAuthHeaders(
+  baseUrl: string,
+  token?: string | null,
+  includeContentType = false,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Cache-Control": "no-store",
+  };
+  if (includeContentType) {
+    headers["Content-Type"] = "application/json";
+  }
+  if (token && isSecureOrLoopbackOrigin(baseUrl)) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+async function requestOriginJson(
+  baseUrl: string,
+  endpoint: string,
+  token: string | null | undefined,
+  options: { method?: string; body?: unknown; signal?: AbortSignal } = {},
+): Promise<unknown> {
+  const normalized = baseUrl.replace(/\/+$/, "");
+  const res = await fetch(`${normalized}${endpoint}`, {
+    method: options.method ?? (options.body !== undefined ? "POST" : "GET"),
+    headers: buildOriginAuthHeaders(
+      normalized,
+      token,
+      options.body !== undefined,
+    ),
+    ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+    credentials: "include",
+    signal: options.signal,
+  });
+  const raw: unknown =
+    typeof res.json === "function" ? await res.json().catch(() => null) : null;
+  const data =
+    raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  if (!res.ok) {
+    const kind =
+      data && typeof data.kind === "string" ? data.kind : `http_${res.status}`;
+    const message =
+      data && typeof data.error === "string"
+        ? data.error
+        : `HTTP ${res.status} ${res.statusText}`;
+    const opId =
+      data && typeof data.operationId === "string"
+        ? data.operationId
+        : undefined;
+    throw new BrowserHostClientError(message, kind, res.status, opId);
+  }
+  return raw;
+}
+
+export async function preflightBrowserCapabilitiesForOrigin(
+  baseUrl: string,
+  token?: string | null,
+  signal?: AbortSignal,
+): Promise<BrowserResetPreflightResult> {
+  const normalized = baseUrl.replace(/\/+$/, "");
+  let res: Response;
+  try {
+    res = await fetch(`${normalized}/api/browser/capabilities`, {
+      method: "GET",
+      headers: buildOriginAuthHeaders(normalized, token),
+      credentials: "include",
+      signal,
+    });
+  } catch (err) {
+    return {
+      kind: "unreachable",
+      status: null,
+      reason: err instanceof Error ? err.message : "Server unreachable",
+    };
+  }
+
+  const data: unknown =
+    typeof res.json === "function" ? await res.json().catch(() => null) : null;
+  const dataRec =
+    data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+  if (!res.ok) {
+    const errMsg =
+      dataRec && typeof dataRec.error === "string"
+        ? dataRec.error
+        : `HTTP ${res.status}`;
+    if (res.status === 401) {
+      return { kind: "unauthorized", status: 401, reason: errMsg };
+    }
+    if (res.status === 403) {
+      return { kind: "forbidden", status: 403, reason: errMsg };
+    }
+    return { kind: "unavailable", status: res.status, reason: errMsg };
+  }
+
+  const epoch = dataRec ? parsePositiveEpoch(dataRec.profileEpoch) : undefined;
+  if (!dataRec || epoch === undefined) {
+    return {
+      kind: "unavailable",
+      status: res.status,
+      reason: "Browser capability metadata unavailable",
+    };
+  }
+
+  const unavailableReason =
+    typeof dataRec.unavailableReason === "string"
+      ? dataRec.unavailableReason
+      : typeof dataRec.reason === "string"
+        ? dataRec.reason
+        : undefined;
+
+  return {
+    kind: "admitted",
+    available: Boolean(dataRec.available),
+    managedProfilePresent: Boolean(dataRec.managedProfilePresent),
+    profileEpoch: epoch,
+    unavailableReason,
+  };
+}
+
+function parseProfileResetStatus(data: unknown): ProfileResetStatusResponse {
+  const rec =
+    data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  const status =
+    rec.status === "completed" ? "completed" : "cleanupPending";
+  const parsedEpoch = parsePositiveEpoch(rec.profileEpoch) ?? 1;
+  return {
+    status,
+    profileEpoch: parsedEpoch,
+    operationId:
+      typeof rec.operationId === "string" ? rec.operationId : undefined,
+    reason: typeof rec.reason === "string" ? rec.reason : undefined,
+  };
+}
+
 export async function resetBrowserProfile(
   owner: ConnectionRef,
   req: ProfileResetRequest,
   signal?: AbortSignal,
-): Promise<ProfileResetResponse> {
-  return requestJson<ProfileResetResponse>(owner, "/api/browser/profile/reset", {
-    method: "POST",
-    body: req,
+): Promise<ProfileResetStatusResponse> {
+  const { serverUrl, authToken } = assertValidConnection(owner);
+  const res = await resetBrowserProfileForOrigin(serverUrl, authToken, req, signal);
+  if (!isCurrentConnection(owner)) {
+    throw new ConnectionOwnerError(
+      `Connection became stale during request: ${owner.profileId}@${owner.generation}`,
+      "stale",
+    );
+  }
+  return res;
+}
+
+export async function getBrowserProfileResetStatus(
+  owner: ConnectionRef,
+  operationId: string,
+  signal?: AbortSignal,
+): Promise<ProfileResetStatusResponse> {
+  const { serverUrl, authToken } = assertValidConnection(owner);
+  const res = await getBrowserProfileResetStatusForOrigin(
+    serverUrl,
+    authToken,
+    operationId,
     signal,
-  });
+  );
+  if (!isCurrentConnection(owner)) {
+    throw new ConnectionOwnerError(
+      `Connection became stale during request: ${owner.profileId}@${owner.generation}`,
+      "stale",
+    );
+  }
+  return res;
+}
+
+export async function resetBrowserProfileForOrigin(
+  baseUrl: string,
+  token: string | null | undefined,
+  req: ProfileResetRequest,
+  signal?: AbortSignal,
+): Promise<ProfileResetStatusResponse> {
+  const raw = await requestOriginJson(
+    baseUrl,
+    "/api/browser/profile/reset",
+    token,
+    { method: "POST", body: req, signal },
+  );
+  return parseProfileResetStatus(raw);
+}
+
+export async function getBrowserProfileResetStatusForOrigin(
+  baseUrl: string,
+  token: string | null | undefined,
+  operationId: string,
+  signal?: AbortSignal,
+): Promise<ProfileResetStatusResponse> {
+  const raw = await requestOriginJson(
+    baseUrl,
+    `/api/browser/profile/reset/${encodeURIComponent(operationId)}`,
+    token,
+    { method: "GET", signal },
+  );
+  return parseProfileResetStatus(raw);
 }
 
 /**

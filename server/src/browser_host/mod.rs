@@ -14,3 +14,4 @@ pub mod cdp_gateway;
 pub mod screencast;
 pub mod media;
 pub mod diagnostics;
+pub mod selection;

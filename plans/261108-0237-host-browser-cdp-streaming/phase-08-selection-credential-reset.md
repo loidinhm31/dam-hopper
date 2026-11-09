@@ -6,8 +6,8 @@
 - Relevant bounded evidence: `reports/backend-boundaries.md:36–53; reports/design-direction.md:56–60; current browser_debug/store.rs:20–35,56–85; api/auth.rs:613–640; coordinator superseding logout/artifact corrections in architecture-contracts.md`. Research recommendations superseded by architecture contract where explicitly stated.
 
 ## Overview
-- Priority: P2. Status: pending. Effort: not-estimated. Planning only; commands below are future obligations, not exercised checks.
-- Deliverable: Secure selection artifacts and confirmed logout reset.
+- Priority: P2. Status: DONE (2026-11-09). Effort: not-estimated.
+- Deliverable: Secure selection artifacts and confirmed logout reset. Marked DONE per user approval with noted issues after Cycle 3 code review (2026-11-09; score 7/10; 0 critical issues; 237/237 scoped checks passing + 3,718/3,718 full UI unit suite; live-server Playwright E2E `packages/ui/e2e/os-host-browser/selection.spec.ts` typechecked only, container runtime execution deferred to Phase 09). Phase 09 unblocked; 9 warnings W1–W9 (5 High, 4 Medium) tracked as carryovers into Phase 09.
 
 ## Key insights
 Existing artifact endpoints/store have no actor binding; adding host captures without hardening would expose managed content to ordinary users. Same subject after demotion is insufficient: immutable server-set source class must enforce current Browser admission for managed artifacts.
@@ -269,10 +269,12 @@ Exactly one fence; task IDs/markers stable across revisions. No tasks.json or hy
 ]
 ```
 
-- [ ] <!-- evcrate-task:actor-bind-debug-artifacts --> Bind every artifact operation to owner and immutable source class
-- [ ] <!-- evcrate-task:select-cdp-and-handoff --> Implement CDP selection preview and atomic terminal delivery
-- [ ] <!-- evcrate-task:secure-profile-reset-logout --> Implement fully authorized destructive reset and logout ordering
-- [ ] <!-- evcrate-task:migrate-account-logout-ui --> Migrate every active logout caller and explain local profile removal
+- [x] <!-- evcrate-task:actor-bind-debug-artifacts --> Bind every artifact operation to owner and immutable source class
+- [x] <!-- evcrate-task:select-cdp-and-handoff --> Implement CDP selection preview and atomic terminal delivery
+- [x] <!-- evcrate-task:secure-profile-reset-logout --> Implement fully authorized destructive reset and logout ordering
+- [x] <!-- evcrate-task:migrate-account-logout-ui --> Migrate every active logout caller and explain local profile removal
+
+> Completion note (2026-11-09): Marked DONE per user approval after Cycle 3 code review (score 7/10; 0 critical issues; 237/237 scoped Phase 08 checks + 3,718/3,718 full UI unit suite passing; live-server `packages/ui/e2e/os-host-browser/selection.spec.ts` typechecked, container runtime deferred to Phase 09). Carryovers tracked into Phase 09: 5 High (W1 post-fence handoff/entries write race, W2 UI reset token/generation & pre-guard fence/context ordering, W3 nav watcher overflow entry cleanup, W4 missing-credential public logout `sessionRevoked: true`, W5 post-intent `409 resetFailed` + pre-tombstone `last_reset_operation_id` replay) and 4 Medium (W6 5s nav suppression correlation, W7 cleanup quota release before `remove_file`, W8 selection single-flight polling, W9 `ServerProfilesDialog` `isDeleting` guard).
 
 ## Success criteria
 - Every task acceptance above is observed with applicable compile/typecheck, behavioral tests and real smoke evidence; missing or failed proof keeps task incomplete.
@@ -288,7 +290,7 @@ Managed artifacts require current Browser admission even for same-subject demoti
 - Do not store/log bearer/tickets/raw loopback endpoints, real site credentials or sensitive page/selection payload in diagnostics/evidence.
 
 ## Next steps
-Phase09 real-app qualification waits for migrate-account-logout-ui. Shared auth/device-login/extension writers must be reserved and serialized by integration owner.
+Phase 08 is DONE (2026-11-09) per user approval after Cycle 3 code review (score 7/10, 0 critical issues). Phase 09 (Qualify full app security platforms and efficiency) is unblocked and inherits Phase 08 carryovers W1–W9 (5 High: post-fence handoff/entries write race, UI reset token/generation & pre-guard fence/context ordering, nav watcher overflow entry cleanup, missing-credential public logout `sessionRevoked: true`, post-intent `409 resetFailed` + pre-tombstone `last_reset_operation_id` replay; 4 Medium: 5s nav suppression correlation, cleanup quota release before `remove_file`, selection single-flight polling, `ServerProfilesDialog` `isDeleting` guard) plus live-server container runtime execution of `packages/ui/e2e/os-host-browser/selection.spec.ts`. Shared auth/device-login/extension writers remain serialized by the single integration owner.
 - Parent owns independent plan review/optional validation and implementation permission. This phase text neither executes tasks nor supplies approval.
 
 ## Unresolved questions

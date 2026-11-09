@@ -168,6 +168,7 @@ pub struct BrowserSession {
     pub creation_key: String,
     pub lease: Option<SessionLease>,
     pub active_dialog: Option<SessionDialog>,
+    pub pending_api_navigation_at: Option<Instant>,
     pub popup_blocked: bool,
 }
 
@@ -342,6 +343,7 @@ impl SessionRegistry {
             lease: None,
             active_dialog: None,
             popup_blocked: false,
+            pending_api_navigation_at: None,
         };
 
         let dto = session.to_dto();
@@ -612,6 +614,7 @@ impl SessionRegistry {
             lease: None,
             active_dialog: None,
             popup_blocked: false,
+            pending_api_navigation_at: None,
         };
 
         let dto = new_session.to_dto();
@@ -630,6 +633,44 @@ impl SessionRegistry {
             }
             s.title = truncated;
         }
+    }
+    /// Marks that an API-originated navigation (`navigate`/`history`/`reload`) just bumped
+    /// `navigation_revision` and is dispatching CDP navigation, so the immediate CDP
+    /// `Page.frameNavigated` / `Page.navigatedWithinDocument` update synchronizes `url`
+    /// without double-incrementing `navigation_revision`.
+    pub async fn mark_api_navigation_pending(&self, session_id: &str) {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.pending_api_navigation_at = Some(Instant::now());
+        }
+    }
+
+    /// Record an asynchronous renderer-initiated navigation (e.g. link click, History API pushState,
+    /// or fragment change) observed via CDP, bumping `navigation_revision` and updating `url` if valid.
+    pub async fn record_cdp_navigation(
+        &self,
+        session_id: &str,
+        raw_url: Option<&str>,
+        allowed_origins: &[String],
+    ) -> Option<u64> {
+        let mut sessions = self.sessions.write().await;
+        let session = sessions.get_mut(session_id)?;
+        if session.status == SessionStatus::Closed {
+            return None;
+        }
+        let skip_bump = session
+            .pending_api_navigation_at
+            .take()
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(5));
+        if !skip_bump {
+            session.navigation_revision = session.navigation_revision.saturating_add(1);
+        }
+        if let Some(url) = raw_url {
+            if let Ok(parsed) = validate_navigation_url(url, session.is_dev, allowed_origins) {
+                session.url = parsed.to_string();
+            }
+        }
+        Some(session.navigation_revision)
     }
 
     pub async fn close_principal_sessions(&self, principal: &str) {

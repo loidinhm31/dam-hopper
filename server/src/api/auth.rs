@@ -1,12 +1,12 @@
-use axum::extract::Request;
+use axum::extract::{ConnectInfo, Extension, Path, Request, State};
 use axum::{
-    extract::State,
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
 };
 use axum_extra::extract::CookieJar;
+use std::net::SocketAddr;
 use bcrypt::verify;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -610,35 +610,346 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
     }
 }
 
-/// POST /api/auth/logout — clears auth credentials and revokes active session.
+fn deserialize_opt_u64_or_string<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct OptVisitor;
+    impl<'de> serde::de::Visitor<'de> for OptVisitor {
+        type Value = Option<u64>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("null, u64 integer, or canonical decimal string")
+        }
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(Some(v))
+        }
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            u64::try_from(v).map(Some).map_err(|_| E::custom("negative integer"))
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            v.parse::<u64>()
+                .map(Some)
+                .map_err(|_| E::custom("invalid u64 string"))
+        }
+    }
+    deserializer.deserialize_any(OptVisitor)
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LogoutRequestBody {
+    #[serde(default)]
+    browser_reset: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_opt_u64_or_string")]
+    expected_profile_epoch: Option<u64>,
+    #[serde(default)]
+    operation_id: Option<String>,
+    #[serde(default)]
+    confirmed: Option<bool>,
+}
+
+pub(crate) async fn verify_live_admin_for_reset(state: &AppState, principal: &str) -> bool {
+    if let Some(store) = state.auth_service.store() {
+        return matches!(
+            store.get_user(principal).await,
+            Ok(Some(user)) if user.is_enabled && user.role == UserRole::Admin
+        );
+    }
+    if let Some(mock) = state.auth_service.mock_user() {
+        return mock.username == principal && mock.is_enabled && mock.role == UserRole::Admin;
+    }
+    false
+}
+
+/// Targeted device session revoke wrapper: revokes auth session first and tears down matching Browser attachments/held-input without wiping Browser profile.
+pub async fn revoke_device_session_with_browser_cleanup(
+    State(state): State<AppState>,
+    Extension(actor): Extension<AuthenticatedActor>,
+    Extension(mechanism): Extension<CredentialMechanism>,
+    Path(id): Path<String>,
+) -> Response {
+    let resp = super::auth_sessions::revoke(
+        State(state),
+        Extension(actor.clone()),
+        Extension(mechanism),
+        Path(id.clone()),
+    )
+    .await;
+    if resp.status() == StatusCode::NO_CONTENT {
+        super::browser_host::revoke_auth_session_browser_resources(&actor.subject, &id).await;
+    }
+    resp
+}
+
+/// POST /api/auth/logout — clears auth credentials and revokes active session first, then runs confirmed live-Admin Browser reset when explicitly authorized.
 pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Request) -> Response {
     let now = state.auth_service.clock().now();
-    if let Some(token) = extract_token(&request, &jar) {
-        if let Some(claims) = AuthClaims::decode(&token, &state.jwt_secret) {
+    let headers = request.headers().clone();
+    let peer_addr = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0);
+
+    let has_auth_hdr = headers.contains_key(header::AUTHORIZATION);
+    let bearer_tok = extract_bearer_token(&headers).map(str::to_string);
+    let cookie_tok = jar.get(AUTH_COOKIE).map(|c| c.value().to_string());
+    let has_bearer_auth = bearer_tok.is_some();
+    // Strict credential isolation: malformed Authorization header cannot fall back to cookie
+    let admission_token = if has_auth_hdr {
+        bearer_tok.clone()
+    } else {
+        cookie_tok.clone()
+    };
+    let revoke_token = bearer_tok.or(cookie_tok);
+
+    let (parsed_req, body_malformed) = match axum::body::to_bytes(request.into_body(), 16 * 1024).await {
+        Ok(bytes) => {
+            if bytes.trim_ascii().is_empty() {
+                (Some(LogoutRequestBody::default()), false)
+            } else {
+                match serde_json::from_slice::<LogoutRequestBody>(&bytes) {
+                    Ok(req) => (Some(req), false),
+                    Err(_) => (None, true),
+                }
+            }
+        }
+        Err(_) => (None, true),
+    };
+
+    // 1. Capture pre-revocation live Admin admission receipt BEFORE revoking this session
+    let mut live_admission = None;
+    let mut auth_backend_unavailable = false;
+    if !state.no_auth {
+        if let Some(tok) = &admission_token {
+            if let Some(claims) = AuthClaims::decode(tok, &state.jwt_secret) {
+                match state.auth_service.evaluate_claims(&claims).await {
+                    AuthDecision::Authenticated { session, user } => {
+                        let expires_at = bson_to_chrono(session.expires_at);
+                        let mfa_verified_at = bson_to_chrono(session.mfa_verified_at);
+                        let effective_deadline = compute_mfa_due_at(mfa_verified_at, expires_at);
+                        let actor = AuthenticatedActor::with_session(
+                            user.username.clone(),
+                            Some(expires_at.timestamp() as usize),
+                            session.id.clone(),
+                            session.auth_version,
+                            session.credential_version,
+                            effective_deadline,
+                            user.role,
+                        );
+                        if let Ok(adm) = crate::browser_host::auth::evaluate_browser_admission(
+                            &state,
+                            &headers,
+                            peer_addr,
+                            Some(&actor),
+                        )
+                        .await
+                        {
+                            live_admission = Some(adm);
+                        }
+                    }
+                    AuthDecision::Unavailable { .. } => {
+                        auth_backend_unavailable = true;
+                    }
+                    AuthDecision::MfaRequired { .. } | AuthDecision::FullLoginRequired { .. } => {}
+                }
+            }
+        }
+    }
+
+    // 2. ALWAYS preserve idempotent session revocation, media-ticket revocation, and cookie clearing FIRST
+    let mut session_revoke_failed = false;
+    if let Some(tok) = &revoke_token {
+        if let Some(claims) = AuthClaims::decode(tok, &state.jwt_secret) {
             if let Some(store) = state.auth_service.store() {
-                let _ = store.revoke_session(&claims.sid, now).await;
+                if let Err(err) = store.revoke_session(&claims.sid, now).await {
+                    tracing::error!(error = %err, "Failed to revoke auth session during logout");
+                    session_revoke_failed = true;
+                }
             }
             state
                 .media_tickets
                 .revoke_by_actor_or_session(&claims.sub, Some(&claims.sid));
+            super::browser_host::revoke_auth_session_browser_resources(&claims.sub, &claims.sid)
+                .await;
         }
     }
+
+    let revocation_uncertain = session_revoke_failed || (revoke_token.is_some() && auth_backend_unavailable);
+
+    // 3. Evaluate Browser reset / credential status strictly after session revocation
+    let mut payload = serde_json::json!({
+        "ok": true,
+        "token": null,
+        "role": null,
+        "sessionRevoked": !revocation_uncertain,
+        "revocationUncertain": revocation_uncertain,
+        "browserResetState": "unknown",
+        "browserCredentialsRetained": true,
+        "resetRequired": true,
+    });
+    if revocation_uncertain {
+        payload["revocationError"] = serde_json::json!("server session revocation failed or backend unavailable");
+    }
+    if !state.no_auth {
+        if let Some(adm) = live_admission {
+            let has_creds = state
+                .browser_host
+                .has_browser_credentials_or_tombstone(&adm.principal, adm.is_dev)
+                .await;
+            let has_tombstone = state
+                .browser_host
+                .has_active_tombstone(&adm.principal, adm.is_dev)
+                .await;
+            let has_persisted = state
+                .browser_host
+                .has_persisted_profile_state(&adm.principal, adm.is_dev);
+
+            let requested_reset = parsed_req
+                .as_ref()
+                .and_then(|r| r.browser_reset)
+                .unwrap_or(false);
+
+            if body_malformed || !requested_reset {
+                if body_malformed {
+                    payload["browserResetState"] = serde_json::json!(if has_tombstone { "cleanupPending" } else { "retained" });
+                    payload["browserCredentialsRetained"] = serde_json::json!(true);
+                    payload["resetRequired"] = serde_json::json!(true);
+                } else if !has_creds {
+                    payload["browserResetState"] = serde_json::json!("cleared");
+                    payload["browserCredentialsRetained"] = serde_json::json!(false);
+                    payload["resetRequired"] = serde_json::json!(false);
+                } else if has_tombstone {
+                    payload["browserResetState"] = serde_json::json!("cleanupPending");
+                    payload["browserCredentialsRetained"] = serde_json::json!(true);
+                    payload["resetRequired"] = serde_json::json!(true);
+                } else {
+                    payload["browserResetState"] = serde_json::json!("retained");
+                    payload["browserCredentialsRetained"] = serde_json::json!(true);
+                    payload["resetRequired"] = serde_json::json!(true);
+                }
+            } else {
+                // Confirmed reset branch
+                let req = parsed_req.as_ref().expect("checked non-malformed");
+                let csrf_ok = super::browser_host::validate_destructive_browser_csrf(
+                    &state,
+                    &headers,
+                    has_bearer_auth,
+                );
+                let valid_op = req
+                    .operation_id
+                    .as_deref()
+                    .filter(|s| super::browser_host::is_valid_reset_operation_id(s))
+                    .map(str::trim);
+                let confirmed = req.confirmed == Some(true);
+                let expected_epoch = req.expected_profile_epoch;
+                let role_still_ok = if !session_revoke_failed && !auth_backend_unavailable {
+                    verify_live_admin_for_reset(&state, &adm.principal).await
+                } else {
+                    false
+                };
+
+                if !csrf_ok || !confirmed || !role_still_ok || valid_op.is_none() || expected_epoch.is_none() {
+                    payload["browserResetState"] = serde_json::json!(if has_tombstone { "cleanupPending" } else { "retained" });
+                    payload["browserCredentialsRetained"] = serde_json::json!(true);
+                    payload["resetRequired"] = serde_json::json!(true);
+                } else {
+                    let op_id = valid_op.unwrap();
+                    let epoch = expected_epoch.unwrap();
+                    if !has_persisted {
+                        if epoch == 1 && verify_live_admin_for_reset(&state, &adm.principal).await {
+                            super::browser_host::revoke_principal_browser_resources(
+                                &state,
+                                &adm.principal,
+                            )
+                            .await;
+                            payload["browserResetState"] = serde_json::json!("cleared");
+                            payload["browserCredentialsRetained"] = serde_json::json!(false);
+                            payload["resetRequired"] = serde_json::json!(false);
+                        } else {
+                            payload["browserResetState"] = serde_json::json!("retained");
+                            payload["browserCredentialsRetained"] = serde_json::json!(true);
+                            payload["resetRequired"] = serde_json::json!(true);
+                        }
+                    } else {
+                        let recheck_state = state.clone();
+                        let recheck_principal = adm.principal.clone();
+                        let recheck_admin: crate::browser_host::manager::AdminRecheckCallback =
+                            std::sync::Arc::new(move || {
+                                let state = recheck_state.clone();
+                                let principal = recheck_principal.clone();
+                                Box::pin(async move {
+                                    verify_live_admin_for_reset(&state, &principal).await
+                                })
+                            });
+                        let hooks = super::browser_host::make_reset_fence_hooks(
+                            state.clone(),
+                            adm.principal.clone(),
+                            Some(recheck_admin),
+                        );
+                        match state
+                            .browser_host
+                            .reset_profile_with_hooks(
+                                &adm.principal,
+                                adm.is_dev,
+                                op_id,
+                                epoch,
+                                hooks,
+                            )
+                            .await
+                        {
+                            Ok(crate::browser_host::manager::ResetOutcome::Completed {
+                                operation_id,
+                                new_profile_epoch,
+                            }) => {
+                                payload["browserResetState"] = serde_json::json!("cleared");
+                                payload["browserCredentialsRetained"] = serde_json::json!(false);
+                                payload["resetRequired"] = serde_json::json!(false);
+                                payload["operationId"] = serde_json::json!(operation_id);
+                                payload["profileEpoch"] = serde_json::json!(new_profile_epoch);
+                            }
+                            Ok(crate::browser_host::manager::ResetOutcome::CleanupPending {
+                                operation_id,
+                                profile_epoch,
+                                reason,
+                            }) => {
+                                payload["browserResetState"] = serde_json::json!("cleanupPending");
+                                payload["browserCredentialsRetained"] = serde_json::json!(true);
+                                payload["resetRequired"] = serde_json::json!(true);
+                                payload["operationId"] = serde_json::json!(operation_id);
+                                payload["profileEpoch"] = serde_json::json!(profile_epoch);
+                                payload["reason"] = serde_json::json!(reason);
+                            }
+                            Err(crate::browser_host::manager::ManagerError::CleanupPending(reason)) => {
+                                payload["browserResetState"] = serde_json::json!("cleanupPending");
+                                payload["browserCredentialsRetained"] = serde_json::json!(true);
+                                payload["resetRequired"] = serde_json::json!(true);
+                                payload["operationId"] = serde_json::json!(op_id);
+                                payload["reason"] = serde_json::json!(reason);
+                            }
+                            Err(_) => {
+                                payload["browserResetState"] = serde_json::json!("retained");
+                                payload["browserCredentialsRetained"] = serde_json::json!(true);
+                                payload["resetRequired"] = serde_json::json!(true);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let clear = auth_cookie_header("", true);
-    let mut resp = (
-        StatusCode::OK,
-        [(header::SET_COOKIE, clear)],
-        Json(serde_json::json!({
-            "ok": true,
-            "token": null,
-            "role": null
-        })),
-    )
-        .into_response();
+    let mut resp = (StatusCode::OK, [(header::SET_COOKIE, clear)], Json(payload)).into_response();
     resp.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     resp
 }
-
 /// GET /api/auth/status — returns 200 if authenticated, 401 otherwise.
 pub async fn status(State(state): State<AppState>, jar: CookieJar, request: Request) -> Response {
     // Dev mode: always authenticated

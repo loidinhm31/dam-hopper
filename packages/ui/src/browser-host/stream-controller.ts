@@ -11,7 +11,6 @@
  */
 
 import {
-  type DiscardReason,
   type MediaClientControl,
   type ServerControlEvent,
   type TargetFrameHeader,
@@ -92,6 +91,7 @@ export class BrowserStreamController {
 
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastDrawnRect: DrawnRect | null = null;
+  private lastFrameHeader: TargetFrameHeader | null = null;
   private lastCachedBitmap: ImageBitmap | null = null;
   private status: StreamStatus = "idle";
 
@@ -480,18 +480,18 @@ export class BrowserStreamController {
       viewportEpoch: header.viewportEpoch,
       inputTrusted: header.inputTrusted,
     };
+    this.lastFrameHeader = header;
   }
   /**
    * Redraws the last cached frame (e.g. after canvas resize) maintaining aspect fit.
    */
   public redrawCachedFrame(): void {
-    if (this.lastCachedBitmap && this.lastDrawnRect && !this.isPrivacyActive) {
-      this.drawBitmapToCanvas(this.lastCachedBitmap, {
-        width: this.lastDrawnRect.imageWidth,
-        height: this.lastDrawnRect.imageHeight,
-        geometry: this.lastDrawnRect.geometry,
-        viewportEpoch: this.lastDrawnRect.viewportEpoch,
-      } as TargetFrameHeader);
+    if (
+      this.lastCachedBitmap &&
+      this.lastFrameHeader &&
+      !this.isPrivacyActive
+    ) {
+      this.drawBitmapToCanvas(this.lastCachedBitmap, this.lastFrameHeader);
     }
   }
 
@@ -521,7 +521,7 @@ export class BrowserStreamController {
         this.lastCachedBitmap = null;
       }
       this.lastDrawnRect = null;
-
+      this.lastFrameHeader = null;
       // Discard pending frame
       if (this.pending) {
         const p = this.pending;

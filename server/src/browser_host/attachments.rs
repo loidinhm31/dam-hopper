@@ -462,42 +462,83 @@ impl AttachmentManager {
     /// Targeted revocation: revokes connections matching the specified auth_session_id.
     ///
     /// Sibling logins for the same principal remain running!
-    pub async fn revoke_by_auth_session(&self, principal: &str, session_id: &str) {
-        let mut conns = self.active_connections.write().await;
-        conns.retain(|_, c| {
-            if c.principal == principal && c.auth_session_id.as_deref() == Some(session_id) {
-                c.cancel_token.cancel();
-                false
-            } else {
-                true
+    pub async fn revoke_by_auth_session(&self, principal: &str, session_id: &str) -> Vec<(String, String)> {
+        let mut cancelled_pairs: Vec<(String, String, String, String)> = Vec::new();
+        let mut cancelled_viewers: Vec<(String, String)> = Vec::new();
+        {
+            let mut conns = self.active_connections.write().await;
+            conns.retain(|_, c| {
+                if c.principal == principal && c.auth_session_id.as_deref() == Some(session_id) {
+                    c.cancel_token.cancel();
+                    if let (Some(bsid), Some(vid)) = (&c.browser_session_id, &c.viewer_id) {
+                        cancelled_viewers.push((bsid.clone(), vid.clone()));
+                        if let Some(sub) = &c.subscription_epoch {
+                            cancelled_pairs.push((
+                                principal.to_string(),
+                                bsid.clone(),
+                                vid.clone(),
+                                sub.clone(),
+                            ));
+                        }
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+
+        if !cancelled_pairs.is_empty() {
+            let mut pairs = self.pairs.write().await;
+            for key in cancelled_pairs {
+                if let Some(slot) = pairs.remove(&key) {
+                    slot.cancel_token.cancel();
+                }
             }
-        });
+        }
 
         // Invalidate tickets issued for this session
-        let mut tickets = self.tickets.write().await;
-        tickets.retain(|_, t| {
-            !(t.principal == principal && t.auth_session_id.as_deref() == Some(session_id))
-        });
-        self.global_ticket_count.store(tickets.len(), Ordering::SeqCst);
+        {
+            let mut tickets = self.tickets.write().await;
+            tickets.retain(|_, t| {
+                !(t.principal == principal && t.auth_session_id.as_deref() == Some(session_id))
+            });
+            self.global_ticket_count.store(tickets.len(), Ordering::SeqCst);
+        }
+
+        cancelled_viewers
     }
 
     /// Principal-wide revocation (e.g. on profile reset or user disable).
     pub async fn revoke_all_for_principal(&self, principal: &str) {
-        let mut conns = self.active_connections.write().await;
-        conns.retain(|_, c| {
-            if c.principal == principal {
-                c.cancel_token.cancel();
-                false
-            } else {
-                true
-            }
-        });
+        {
+            let mut conns = self.active_connections.write().await;
+            conns.retain(|_, c| {
+                if c.principal == principal {
+                    c.cancel_token.cancel();
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+
+        {
+            let mut pairs = self.pairs.write().await;
+            pairs.retain(|(p, _, _, _), slot| {
+                if p == principal {
+                    slot.cancel_token.cancel();
+                    false
+                } else {
+                    true
+                }
+            });
+        }
 
         let mut tickets = self.tickets.write().await;
         tickets.retain(|_, t| t.principal != principal);
         self.global_ticket_count.store(tickets.len(), Ordering::SeqCst);
     }
-
     /// Revokes connections bound to a browser session when it closes.
     pub async fn revoke_by_browser_session(&self, session_id: &str) {
         let mut conns = self.active_connections.write().await;

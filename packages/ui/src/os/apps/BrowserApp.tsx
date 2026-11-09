@@ -5,18 +5,24 @@ import type { ConnectionRef } from "@/api/ownership.js";
 import { useResourceClaim } from "../resource-registry.js";
 import { useWindowStore } from "../window-store.js";
 import {
+  clearBrowserViewFenceForProfile,
   registerBrowserStreamSlot,
   updateBrowserStreamSlot,
 } from "../BrowserStreamKeepAliveHost.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
-import { getConnectionSnapshot } from "@/api/connections.js";
+import { getApi, getConnectionSnapshot, isCurrentConnection } from "@/api/connections.js";
+import type { SessionInfo } from "@/api/client.js";
 import {
   acquireBrowserControl,
   historyBrowser,
   navigateBrowser,
   reloadBrowser,
 } from "@/api/browser-host-client.js";
-
+import {
+  collectHostTerminalCandidates,
+  useHostBrowserSelection,
+  type HostTerminalCandidate,
+} from "@/browser-host/selection-controller.js";
 export interface BrowserAppProps {
   window: OsWindow;
 }
@@ -60,12 +66,12 @@ function BrowserTargetChooser({
       return;
     }
     setError(null);
+    clearBrowserViewFenceForProfile(owner.profileId);
 
     useWindowStore.getState().updateAppState(window.id, {
       presentation: { kind: "resource", url: trimmed },
       url: trimmed,
     });
-    useWindowStore.getState().focusWindow(window.id);
   };
 
   const handleCancel = () => {
@@ -169,10 +175,12 @@ function BrowserResourceView({
   const navigationRevision = (window.appState?.navigationRevision as number | string | undefined) ?? 1;
   const unsupportedReason = window.appState?.unsupportedReason as string | undefined;
   const isController = Boolean(window.appState?.isController);
+  const leaseToken = window.appState?.leaseToken as string | undefined;
 
   const [addressInput, setAddressInput] = useState(previewUrl);
-
-  // Sync address input with previewUrl when remote navigation updates it
+  const [liveSessions, setLiveSessions] = useState<SessionInfo[]>([]);
+  const [selectedTerminalId, setSelectedTerminalId] = useState<string>("");
+  const windows = useWindowStore((s) => s.session.windows);
   useEffect(() => {
     setAddressInput(previewUrl);
   }, [previewUrl]);
@@ -296,6 +304,91 @@ function BrowserResourceView({
     }
   }, [owner, sessionId, window.id, window.appState?.viewerId]);
 
+  // Discover live terminal candidates for current owner
+  const refreshTerminalCandidates = useCallback(async () => {
+    if (!isCurrentConnection(owner)) return;
+    try {
+      const rows = await getApi(owner).terminal.listDetailed();
+      if (isCurrentConnection(owner) && Array.isArray(rows)) {
+        setLiveSessions(rows);
+      }
+    } catch {
+      // ignore transient inventory lookup failure
+    }
+  }, [owner]);
+
+  const terminalCandidates = useMemo(
+    () => collectHostTerminalCandidates(owner, windows, liveSessions),
+    [owner, windows, liveSessions],
+  );
+
+  useEffect(() => {
+    if (
+      selectedTerminalId &&
+      terminalCandidates.some((t) => t.sessionId === selectedTerminalId && t.ready)
+    ) {
+      return;
+    }
+    const firstReady = terminalCandidates.find((t) => t.ready) ?? terminalCandidates[0];
+    setSelectedTerminalId(firstReady?.sessionId ?? "");
+  }, [terminalCandidates, selectedTerminalId]);
+
+  const selectedTerminal: HostTerminalCandidate | undefined = useMemo(
+    () =>
+      terminalCandidates.find((t) => t.sessionId === selectedTerminalId) ??
+      terminalCandidates[0],
+    [terminalCandidates, selectedTerminalId],
+  );
+
+  const handleNavigationSync = useCallback(
+    (update: { navigationRevision: string; url?: string }) => {
+      if (!isCurrentConnection(owner) || !sessionId) return;
+      const latestWin = useWindowStore.getState().session.windows[window.id];
+      if (!latestWin || latestWin.appState?.sessionId !== sessionId) return;
+      useWindowStore.getState().updateAppState(window.id, {
+        navigationRevision: update.navigationRevision,
+        ...(update.url ? { url: update.url } : {}),
+      });
+    },
+    [owner, sessionId, window.id],
+  );
+  const selection = useHostBrowserSelection({
+    owner,
+    sessionId,
+    navigationRevision,
+    leaseToken,
+    targets: terminalCandidates,
+    onNavigationSync: handleNavigationSync,
+  });
+
+  useEffect(() => {
+    if (selection.selectionActive || selection.preview) {
+      void refreshTerminalCandidates();
+    }
+  }, [
+    selection.selectionActive,
+    selection.preview,
+    selection.error,
+    context.isFocused,
+    windows,
+    refreshTerminalCandidates,
+  ]);
+
+  useEffect(() => {
+    if (!selection.preview || selectedTerminal?.ready) return;
+    const timer = setInterval(() => {
+      void refreshTerminalCandidates();
+    }, 400);
+    return () => clearInterval(timer);
+  }, [selection.preview, selectedTerminal?.ready, refreshTerminalCandidates]);
+
+  const showSelectionPanel = Boolean(
+    selection.selectionActive ||
+      selection.preview ||
+      selection.preparedArtifact ||
+      selection.error ||
+      selection.notice,
+  );
   return (
     <div
       data-os-browser-app={window.id}
@@ -384,12 +477,40 @@ function BrowserResourceView({
             <button
               type="button"
               data-testid="browser-take-control-btn"
+              disabled={!sessionId}
               onClick={handleAcquireControl}
-              className="px-2 py-0.5 rounded text-[10px] font-medium bg-[var(--color-surface-2)] hover:bg-[var(--color-surface-3)] text-[var(--color-text)] border border-[var(--color-border)]"
+              className="px-2 py-0.5 rounded text-[10px] font-medium bg-[var(--color-surface-2)] hover:bg-[var(--color-surface-3)] text-[var(--color-text)] border border-[var(--color-border)] disabled:opacity-40"
             >
               Control
             </button>
           </div>
+        )}
+
+        {sessionId && (
+          <button
+            type="button"
+            data-testid="browser-select-element-btn"
+            disabled={!isController || !leaseToken || selection.pending}
+            onClick={() => {
+              if (selection.selectionActive) {
+                void selection.cancelSelection();
+              } else {
+                void selection.startSelection();
+              }
+            }}
+            title={
+              isController
+                ? "Select DOM element via CDP Overlay"
+                : "Acquire Control first to select elements"
+            }
+            className={`px-2 py-0.5 rounded text-[10px] font-medium border ${
+              selection.selectionActive
+                ? "bg-[var(--color-primary)] text-white border-[var(--color-primary)]"
+                : "bg-[var(--color-surface-2)] hover:bg-[var(--color-surface-3)] text-[var(--color-text)] border-[var(--color-border)]"
+            } disabled:opacity-40`}
+          >
+            {selection.selectionActive ? "Cancel Select" : "Select Element"}
+          </button>
         )}
 
         {sessionId && (
@@ -407,8 +528,160 @@ function BrowserResourceView({
         ref={slotRef}
         data-os-browser-slot={window.id}
         data-testid={`browser-slot-${window.id}`}
+        data-selection-active={selection.selectionActive ? "true" : "false"}
         className="flex-1 min-h-0 relative bg-black"
       />
+
+      {/* CDP Selection Preview & Terminal Handoff Drawer */}
+      {showSelectionPanel && (
+        <div
+          data-testid="browser-selection-panel"
+          className="shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-text)] space-y-2"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-semibold text-[11px] uppercase tracking-wide text-[var(--color-text-muted)]">
+              CDP Selection Preview
+            </div>
+            <button
+              type="button"
+              data-testid="browser-selection-close-btn"
+              onClick={() => void selection.cancelSelection()}
+              className="px-1.5 py-0.5 rounded text-[10px] border border-[var(--color-border)] hover:bg-[var(--color-surface-2)]"
+            >
+              Clear
+            </button>
+          </div>
+
+          {selection.notice && (
+            <p
+              role="status"
+              data-testid="browser-selection-notice"
+              className="text-[11px] text-emerald-400"
+            >
+              {selection.notice}
+            </p>
+          )}
+          {selection.error && (
+            <p
+              role="alert"
+              data-testid="browser-selection-error"
+              className="text-[11px] text-red-400"
+            >
+              {selection.error}
+            </p>
+          )}
+
+          {selection.preview && (
+            <div
+              data-testid="browser-selection-preview-card"
+              className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 space-y-1 font-mono text-[11px]"
+            >
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold text-[var(--color-primary)]">
+                  &lt;{selection.preview.tag}&gt;
+                </span>
+                {selection.preview.role && (
+                  <span className="px-1 rounded bg-[var(--color-surface)] text-[10px]">
+                    role={selection.preview.role}
+                  </span>
+                )}
+                {selection.preview.accessibleName && (
+                  <span className="text-[var(--color-text-muted)] truncate max-w-[200px]">
+                    "{selection.preview.accessibleName}"
+                  </span>
+                )}
+              </div>
+              <div className="text-[10px] text-[var(--color-text-muted)] truncate">
+                {selection.preview.locator}
+              </div>
+              {selection.preview.text && (
+                <div className="text-[10px] text-[var(--color-text)] truncate">
+                  {selection.preview.text}
+                </div>
+              )}
+            </div>
+          )}
+
+          {selection.preview && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <label className="text-[11px] text-[var(--color-text-muted)] flex items-center gap-1.5">
+                Terminal:
+                <select
+                  data-testid="browser-selection-terminal-select"
+                  value={selectedTerminal?.sessionId ?? ""}
+                  onChange={(e) => setSelectedTerminalId(e.target.value)}
+                  disabled={Boolean(selection.preparedArtifact) || selection.pending}
+                  className="rounded border border-[var(--color-border)] bg-[var(--color-input)] px-2 py-0.5 text-[11px] text-[var(--color-text)]"
+                >
+                  {terminalCandidates.length === 0 ? (
+                    <option value="">No active terminals</option>
+                  ) : (
+                    terminalCandidates.map((t) => (
+                      <option key={t.sessionId} value={t.sessionId}>
+                        {t.label} {t.ready ? `(#${t.incarnation})` : `(${t.reason ?? "unavailable"})`}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
+
+              {!selection.preparedArtifact ? (
+                <button
+                  type="button"
+                  data-testid="browser-selection-prepare-btn"
+                  disabled={!selectedTerminal?.ready || selection.pending}
+                  onClick={() => {
+                    if (selectedTerminal) {
+                      void selection.prepareArtifact(selectedTerminal, true);
+                    }
+                  }}
+                  className="px-2.5 py-1 rounded text-[11px] font-medium bg-[var(--color-primary)] text-white disabled:opacity-40"
+                >
+                  Prepare Artifact
+                </button>
+              ) : (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span
+                    data-testid="browser-selection-artifact-ref"
+                    className="font-mono text-[10px] text-[var(--color-text-muted)] max-w-[320px] truncate"
+                    title={selection.preparedArtifact.reference}
+                  >
+                    {selection.preparedArtifact.reference}
+                  </span>
+                  <span
+                    data-testid="browser-selection-artifact-png-status"
+                    className="px-1.5 py-0.5 rounded text-[10px] bg-[var(--color-surface-2)] border border-[var(--color-border)]"
+                  >
+                    {selection.preparedArtifact.artifact.pngPath
+                      ? "PNG attached"
+                      : "JSON only"}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="browser-selection-handoff-btn"
+                    disabled={selection.inserted || selection.pending}
+                    onClick={() => void selection.handoffArtifact()}
+                    className="px-2.5 py-1 rounded text-[11px] font-medium bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-40"
+                  >
+                    {selection.inserted ? "Inserted" : "Insert to Terminal"}
+                  </button>
+                  {!selection.inserted && (
+                    <button
+                      type="button"
+                      data-testid="browser-selection-discard-btn"
+                      disabled={selection.pending}
+                      onClick={() => void selection.discardArtifact()}
+                      className="px-2 py-1 rounded text-[11px] border border-[var(--color-border)] hover:bg-[var(--color-surface-2)]"
+                    >
+                      Discard
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

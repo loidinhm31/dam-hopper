@@ -16,6 +16,8 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, warn};
 
 use super::command_budget::{CommandBudget, CommandReservation};
+use super::diagnostics::{global_memory_controller, MemoryAdmissionController, MemoryReservation};
+use super::network_policy::MAX_URL_BYTES;
 use super::protocol::{
     COMMAND_TIMEOUT_SECS, MAX_COMMAND_BYTES, MAX_PENDING_COMMANDS, MAX_WRITER_QUEUE_BYTES,
     MAX_WRITER_QUEUE_MESSAGES, MAX_WS_MESSAGE_BYTES,
@@ -34,7 +36,8 @@ const SCREENCAST_METADATA_NUMBERS: [&str; 6] = [
 
 /// Per-write deadline for the actor's single writer.
 const WRITE_DEADLINE: Duration = Duration::from_secs(5);
-
+const MAX_EVENT_SESSION_ID_BYTES: usize = 256;
+const MAX_LIFECYCLE_EVENT_SLOTS: usize = 8;
 /// Result of a bounded, close-cancellable WebSocket write.
 enum WriteOutcome {
     Done,
@@ -137,6 +140,27 @@ pub struct ScreencastFrameData {
     pub metadata: Value,
 }
 
+#[derive(Debug, Clone)]
+pub enum CdpLifecycleEvent {
+    FrameNavigated {
+        session_id: Option<String>,
+        is_main_frame: bool,
+        url: Option<String>,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    NavigatedWithinDocument {
+        session_id: Option<String>,
+        url: Option<String>,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    InspectNodeRequested {
+        session_id: Option<String>,
+        backend_node_id: i64,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    Overflow,
+}
+
 struct PendingRequest {
     sender: oneshot::Sender<Result<Value, CdpError>>,
     deadline: Instant,
@@ -212,6 +236,8 @@ pub struct CdpClient {
     close_notify: Arc<Notify>,
     budget: Arc<CommandBudget>,
     screencast_rx_broadcast: tokio::sync::broadcast::Sender<Arc<ScreencastFrameData>>,
+    event_rx_broadcast: tokio::sync::broadcast::Sender<Arc<CdpLifecycleEvent>>,
+    memory_controller: Arc<MemoryAdmissionController>,
     stats: Arc<CdpActorStats>,
 }
 
@@ -239,8 +265,24 @@ impl CdpClient {
             + Unpin
             + 'static,
     {
+        Self::from_ws_stream_with_memory_controller(ws_stream, global_memory_controller().clone())
+    }
+
+    /// Construct a CdpClient using an explicit memory admission controller (for bounded budget tests).
+    pub fn from_ws_stream_with_memory_controller<S>(
+        ws_stream: S,
+        memory_controller: Arc<MemoryAdmissionController>,
+    ) -> Arc<Self>
+    where
+        S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+            + SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error>
+            + Send
+            + Unpin
+            + 'static,
+    {
         let (command_tx, command_rx) = mpsc::channel(MAX_WRITER_QUEUE_MESSAGES);
         let (screencast_tx, _) = tokio::sync::broadcast::channel(2);
+        let (event_tx, _) = tokio::sync::broadcast::channel(MAX_LIFECYCLE_EVENT_SLOTS);
         let stats = Arc::new(CdpActorStats::default());
         let close_notify = Arc::new(Notify::new());
 
@@ -249,6 +291,8 @@ impl CdpClient {
             command_rx,
             close_notify: close_notify.clone(),
             screencast_tx: screencast_tx.clone(),
+            event_tx: event_tx.clone(),
+            memory_controller: memory_controller.clone(),
             pending_commands: HashMap::with_capacity(MAX_PENDING_COMMANDS),
             stats: stats.clone(),
         };
@@ -261,6 +305,8 @@ impl CdpClient {
             close_notify,
             budget: CommandBudget::new(MAX_PENDING_COMMANDS, MAX_WRITER_QUEUE_BYTES),
             screencast_rx_broadcast: screencast_tx,
+            event_rx_broadcast: event_tx,
+            memory_controller,
             stats,
         })
     }
@@ -273,6 +319,16 @@ impl CdpClient {
         &self,
     ) -> tokio::sync::broadcast::Receiver<Arc<ScreencastFrameData>> {
         self.screencast_rx_broadcast.subscribe()
+    }
+
+    pub fn subscribe_events(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<Arc<CdpLifecycleEvent>> {
+        self.event_rx_broadcast.subscribe()
+    }
+
+    pub fn memory_controller(&self) -> &Arc<MemoryAdmissionController> {
+        &self.memory_controller
     }
 
     /// Send a low-level CDP command with method, params, and optional sessionId.
@@ -395,6 +451,8 @@ struct CdpActor<S> {
     command_rx: mpsc::Receiver<ActorMessage>,
     close_notify: Arc<Notify>,
     screencast_tx: tokio::sync::broadcast::Sender<Arc<ScreencastFrameData>>,
+    event_tx: tokio::sync::broadcast::Sender<Arc<CdpLifecycleEvent>>,
+    memory_controller: Arc<MemoryAdmissionController>,
     pending_commands: HashMap<usize, PendingRequest>,
     stats: Arc<CdpActorStats>,
 }
@@ -565,6 +623,86 @@ where
         match env.method {
             Some(Value::String(method)) if method == "Page.screencastFrame" => {
                 self.handle_screencast_frame(env.session_id, env.params)
+            }
+            Some(Value::String(method))
+                if matches!(
+                    method.as_str(),
+                    "Overlay.inspectNodeRequested"
+                        | "Page.frameNavigated"
+                        | "Page.navigatedWithinDocument"
+                ) =>
+            {
+                let session_id = match env.session_id {
+                    Some(Value::String(s)) if s.len() <= MAX_EVENT_SESSION_ID_BYTES => Some(s),
+                    Some(Value::String(_)) => {
+                        let _ = self.event_tx.send(Arc::new(CdpLifecycleEvent::Overflow));
+                        return Ok(());
+                    }
+                    _ => None,
+                };
+                let params = env.params.as_ref();
+                let projected = match method.as_str() {
+                    "Page.frameNavigated" => {
+                        let is_main_frame = params
+                            .and_then(|p| p.pointer("/frame/parentId"))
+                            .is_none();
+                        let url = params
+                            .and_then(|p| p.pointer("/frame/url"))
+                            .and_then(Value::as_str)
+                            .filter(|u| u.len() <= MAX_URL_BYTES)
+                            .map(str::to_string);
+                        let bytes = std::mem::size_of::<CdpLifecycleEvent>()
+                            + session_id.as_ref().map_or(0, String::len)
+                            + url.as_ref().map_or(0, String::len);
+                        match self.memory_controller.try_reserve(bytes) {
+                            Ok(res) => CdpLifecycleEvent::FrameNavigated {
+                                session_id,
+                                is_main_frame,
+                                url,
+                                _reservation: Some(Arc::new(res)),
+                            },
+                            Err(_) => CdpLifecycleEvent::Overflow,
+                        }
+                    }
+                    "Page.navigatedWithinDocument" => {
+                        let url = params
+                            .and_then(|p| p.get("url"))
+                            .and_then(Value::as_str)
+                            .filter(|u| u.len() <= MAX_URL_BYTES)
+                            .map(str::to_string);
+                        let bytes = std::mem::size_of::<CdpLifecycleEvent>()
+                            + session_id.as_ref().map_or(0, String::len)
+                            + url.as_ref().map_or(0, String::len);
+                        match self.memory_controller.try_reserve(bytes) {
+                            Ok(res) => CdpLifecycleEvent::NavigatedWithinDocument {
+                                session_id,
+                                url,
+                                _reservation: Some(Arc::new(res)),
+                            },
+                            Err(_) => CdpLifecycleEvent::Overflow,
+                        }
+                    }
+                    _ => {
+                        let Some(backend_node_id) = params
+                            .and_then(|p| p.get("backendNodeId"))
+                            .and_then(Value::as_i64)
+                        else {
+                            return Ok(());
+                        };
+                        let bytes = std::mem::size_of::<CdpLifecycleEvent>()
+                            + session_id.as_ref().map_or(0, String::len);
+                        match self.memory_controller.try_reserve(bytes) {
+                            Ok(res) => CdpLifecycleEvent::InspectNodeRequested {
+                                session_id,
+                                backend_node_id,
+                                _reservation: Some(Arc::new(res)),
+                            },
+                            Err(_) => CdpLifecycleEvent::Overflow,
+                        }
+                    }
+                };
+                let _ = self.event_tx.send(Arc::new(projected));
+                Ok(())
             }
             Some(Value::String(_)) => {
                 // Ignore unknown event with bounded counter; no queue allocation
@@ -783,12 +921,15 @@ mod tests {
             .unwrap();
 
         // 3. Spawn actor
+        let (event_tx, _) = tokio::sync::broadcast::channel(8);
         let actor = CdpActor {
             ws_stream,
             command_rx,
             close_notify: Arc::new(Notify::new()),
             screencast_tx,
+            event_tx,
             pending_commands: HashMap::with_capacity(MAX_PENDING_COMMANDS),
+            memory_controller: global_memory_controller().clone(),
             stats,
         };
         tokio::spawn(actor.run());
@@ -1120,5 +1261,69 @@ mod tests {
 
         eventually(|| client.budget.bytes_in_use() == 0).await;
         assert_all_slots_reusable(&client);
+    }
+
+    #[tokio::test]
+    async fn test_lifecycle_events_project_bounded_fields_and_overflow_on_budget_exhaustion() {
+        use super::super::diagnostics::MemoryAdmissionController;
+
+        let controller = MemoryAdmissionController::new(256);
+        let (in_tx, in_rx) = mpsc::channel(16);
+        let (sent_tx, _sent_rx) = mpsc::channel(16);
+        let client = CdpClient::from_ws_stream_with_memory_controller(
+            MockChannelWs { tx: sent_tx, rx: in_rx },
+            controller.clone(),
+        );
+        let mut rx = client.subscribe_events();
+
+        // Send a huge 100 KiB arbitrary payload alongside Page.frameNavigated
+        let huge_blob = "x".repeat(100 * 1024);
+        let evt_msg = serde_json::json!({
+            "method": "Page.frameNavigated",
+            "sessionId": "psid-1",
+            "params": {
+                "frame": { "url": "https://example.test/next" },
+                "unusedHugePayload": huge_blob
+            }
+        });
+        in_tx
+            .send(Ok(Message::Text(evt_msg.to_string().into())))
+            .await
+            .unwrap();
+
+        let evt = rx.recv().await.unwrap();
+        match &*evt {
+            CdpLifecycleEvent::FrameNavigated { session_id, is_main_frame, url, .. } => {
+                assert_eq!(session_id.as_deref(), Some("psid-1"));
+                assert!(*is_main_frame);
+                assert_eq!(url.as_deref(), Some("https://example.test/next"));
+            }
+            other => panic!("unexpected projected event: {other:?}"),
+        }
+        // Retained reservation only accounts for small projected fields, never the 100 KiB blob
+        let retained = controller.current_reserved_bytes();
+        assert!(retained > 0 && retained <= 256, "unexpected retained bytes: {retained}");
+
+        // Fill remaining budget and verify subsequent event emits Overflow fail-closed
+        let hold = controller.try_reserve(256 - retained).unwrap();
+        let evt_msg2 = serde_json::json!({
+            "method": "Page.navigatedWithinDocument",
+            "sessionId": "psid-1",
+            "params": { "url": "https://example.test/spa" }
+        });
+        in_tx
+            .send(Ok(Message::Text(evt_msg2.to_string().into())))
+            .await
+            .unwrap();
+
+        let overflow_evt = rx.recv().await.unwrap();
+        assert!(matches!(&*overflow_evt, CdpLifecycleEvent::Overflow));
+
+        drop(hold);
+        drop(evt);
+        drop(overflow_evt);
+        // Force ring slot drop by clearing broadcast channel on client close
+        client.close().await;
+        eventually(|| controller.current_reserved_bytes() == 0).await;
     }
 }

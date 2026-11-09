@@ -75,7 +75,7 @@ pub fn build_router_with_web_dir_and_origins(
         .route("/api/auth/sessions", get(super::auth_sessions::list))
         .route(
             "/api/auth/sessions/{id}",
-            delete(super::auth_sessions::revoke),
+            delete(auth::revoke_device_session_with_browser_cleanup),
         )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

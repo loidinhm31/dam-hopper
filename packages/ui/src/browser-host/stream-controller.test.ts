@@ -302,6 +302,41 @@ describe("stream-controller", () => {
     // Resuming from hidden/paused detaches sockets and requires fresh attachment per C2
     expect(controller.getStatus()).toBe("disconnected");
   });
+  it("preserves inputTrusted, viewportEpoch, and geometry across redrawCachedFrame", async () => {
+    const fakeBitmap = {
+      width: 640,
+      height: 480,
+      close: vi.fn(),
+    } as unknown as ImageBitmap;
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => fakeBitmap));
+
+    controller.attach(mockCreds);
+    const mediaWs = MockWebSocket.instances[0];
+    mediaWs.onopen?.();
+
+    const header = {
+      ...makeHeader("1"),
+      viewportEpoch: "7",
+      inputTrusted: true,
+    };
+    const frame = packBhjfFrame(header, createMockJpeg(640, 480));
+    mediaWs.onmessage?.({ data: frame.buffer } as MessageEvent);
+    await vi.waitFor(() => {
+      expect(controller.getDrawnRect()).not.toBeNull();
+    });
+    expect(controller.getDrawnRect()?.inputTrusted).toBe(true);
+
+    // Resize canvas and redraw cached frame (e.g. selection panel opens on static page)
+    canvas.width = 640;
+    canvas.height = 360;
+    controller.redrawCachedFrame();
+
+    const redrawn = controller.getDrawnRect();
+    expect(redrawn).not.toBeNull();
+    expect(redrawn?.inputTrusted).toBe(true);
+    expect(redrawn?.viewportEpoch).toBe("7");
+  });
+
   it("cleans up on dispose", () => {
     controller.attach(mockCreds);
     const mediaWs = MockWebSocket.instances[0];

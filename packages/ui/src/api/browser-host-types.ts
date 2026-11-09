@@ -4,9 +4,6 @@
  * Implements typed DTOs for REST endpoints, BHJF binary frame parser,
  * media and control WebSocket protocols per architecture-contracts.md.
  */
-
-import type { ConnectionRef } from "./ownership.js";
-
 // Wire protocol constants
 export const BHJF_MAGIC = new Uint8Array([0x42, 0x48, 0x4a, 0x46]); // "BHJF"
 export const BHJF_VERSION = 1;
@@ -369,6 +366,7 @@ export class BrowserHostClientError extends Error {
     message: string,
     public readonly kind: string,
     public readonly status?: number,
+    public readonly operationId?: string,
   ) {
     super(message);
     this.name = "BrowserHostClientError";

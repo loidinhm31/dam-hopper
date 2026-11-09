@@ -19,11 +19,88 @@ use crate::browser_host::auth::{
 use crate::browser_host::input::{
     InputError, SessionInputManager, MAX_FIND_QUERY_CHARS,
 };
-use crate::browser_host::manager::ResetOutcome;
+use crate::browser_debug::BrowserDebugArtifactManager;
+use crate::browser_host::manager::{
+    AdminRecheckCallback, FenceCallback, ManagerError, ResetFenceHooks, ResetOutcome, ResetStatus,
+    DEFAULT_RESET_WAIT_TIMEOUT,
+};
+use crate::browser_host::selection::{self, InspectPoint, SelectionError};
 use crate::browser_host::session::{
     CreateSessionRequest, DEFAULT_MAX_TARGETS, SessionError, SessionRegistry,
 };
 use crate::state::AppState;
+fn deserialize_u64_or_string<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct Visitor;
+    impl<'de> serde::de::Visitor<'de> for Visitor {
+        type Value = u64;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("u64 integer or canonical decimal string")
+        }
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<u64, E> {
+            Ok(v)
+        }
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<u64, E> {
+            u64::try_from(v).map_err(|_| E::custom("negative integer"))
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<u64, E> {
+            v.parse::<u64>().map_err(E::custom)
+        }
+    }
+    deserializer.deserialize_any(Visitor)
+}
+
+fn deserialize_opt_u64_or_string<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Val {
+        Num(u64),
+        Str(String),
+    }
+    match Option::<Val>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(Val::Num(n)) => Ok(Some(n)),
+        Some(Val::Str(s)) => s.parse::<u64>().map(Some).map_err(serde::de::Error::custom),
+    }
+}
+
+fn selection_error_to_response(err: SelectionError) -> Response {
+    match err {
+        SelectionError::Session(e) => e.into(),
+        SelectionError::Artifact(e) => {
+            let status = StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::BAD_REQUEST);
+            let kind = match e {
+                crate::browser_debug::BrowserDebugError::IncarnationMismatch => {
+                    "TERMINAL_INCARNATION_MISMATCH"
+                }
+                crate::browser_debug::BrowserDebugError::NotFound => "notFound",
+                crate::browser_debug::BrowserDebugError::TooLarge => "tooLarge",
+                _ => "artifactError",
+            };
+            browser_error_response(status, kind, &e.to_string())
+        }
+        SelectionError::Conflict(msg) => browser_error_response(StatusCode::CONFLICT, "conflict", &msg),
+        SelectionError::TerminalNotFound => {
+            browser_error_response(StatusCode::NOT_FOUND, "terminalNotFound", "terminal not found")
+        }
+        SelectionError::TerminalIncarnationMismatch => browser_error_response(
+            StatusCode::CONFLICT,
+            "TERMINAL_INCARNATION_MISMATCH",
+            "selected terminal incarnation mismatch",
+        ),
+        SelectionError::NoSelection(msg) => {
+            browser_error_response(StatusCode::CONFLICT, "noSelection", &msg)
+        }
+        SelectionError::Cdp(msg) => {
+            browser_error_response(StatusCode::BAD_GATEWAY, "cdpError", &msg)
+        }
+    }
+}
 pub const X_BROWSER_LEASE: HeaderName = HeaderName::from_static("x-browser-lease");
 pub static GLOBAL_SESSION_REGISTRY: LazyLock<SessionRegistry> =
     LazyLock::new(|| SessionRegistry::new(DEFAULT_MAX_TARGETS));
@@ -167,7 +244,9 @@ pub(crate) async fn authenticate_browser_caller(
 ) -> Result<BrowserAdmission, Response> {
     let mut resolved_actor = actor.cloned();
     if resolved_actor.is_none() && !state.no_auth {
-        let token_opt = crate::api::auth::extract_bearer_token(headers).map(str::to_string).or_else(|| {
+        let token_opt = if headers.contains_key(header::AUTHORIZATION) {
+            crate::api::auth::extract_bearer_token(headers).map(str::to_string)
+        } else {
             headers
                 .get(header::COOKIE)
                 .and_then(|v| v.to_str().ok())
@@ -180,8 +259,7 @@ pub(crate) async fn authenticate_browser_caller(
                     }
                     None
                 })
-        });
-
+        };
         if let Some(token) = token_opt {
             if let Some(claims) = crate::auth::model::AuthClaims::decode(&token, &state.jwt_secret) {
                 match state.auth_service.evaluate_claims(&claims).await {
@@ -391,7 +469,21 @@ pub async fn get_session(
         .get_session(&id, &admission.principal)
         .await
     {
-        Ok(dto) => no_store_response(StatusCode::OK, serde_json::to_value(&dto).unwrap_or_default()),
+        Ok(dto) => {
+            let mut val = serde_json::to_value(&dto).unwrap_or_default();
+            let nav_rev = dto.navigation_revision.parse::<u64>().unwrap_or(0);
+            if let Some(summary) =
+                selection::get_selection_summary(&id, &admission.principal, nav_rev).await
+            {
+                if let Some(obj) = val.as_object_mut() {
+                    obj.insert(
+                        "selection".to_string(),
+                        serde_json::to_value(&summary).unwrap_or_default(),
+                    );
+                }
+            }
+            no_store_response(StatusCode::OK, val)
+        }
         Err(err) => err.into(),
     }
 }
@@ -421,6 +513,7 @@ pub async fn delete_session(
         .await
     {
         Ok(()) => {
+            selection::cleanup_session(&state, &id).await;
             crate::browser_host::media::remove_producer(&id).await;
             global_attachment_manager().revoke_by_browser_session(&id).await;
             if let Some(mgr) = global_input_managers().write().await.remove(&id) {
@@ -436,6 +529,7 @@ pub async fn delete_session(
 #[serde(rename_all = "camelCase")]
 pub struct NavigateRequest {
     pub url: String,
+    #[serde(deserialize_with = "deserialize_u64_or_string")]
     pub navigation_revision: u64,
 }
 
@@ -473,6 +567,21 @@ pub async fn navigate_session(
         Ok(dto) => {
             let input_mgr = get_or_create_input_manager(&id).await;
             input_mgr.set_selected_text("").await;
+            let new_nav_rev = dto.navigation_revision.parse::<u64>().unwrap_or(0);
+            if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
+                global_session_registry().mark_api_navigation_pending(&id).await;
+                if let Ok(page_sid) = prod.ensure_page_session().await {
+                    let _ = prod
+                        .cdp_client
+                        .send_command(
+                            "Page.navigate",
+                            Some(json!({ "url": dto.url })),
+                            Some(&page_sid),
+                        )
+                        .await;
+                }
+            }
+            selection::invalidate_on_navigation(&state, &id, Some(new_nav_rev)).await;
             no_store_response(StatusCode::OK, serde_json::to_value(&dto).unwrap_or_default())
         }
         Err(err) => err.into(),
@@ -483,6 +592,7 @@ pub async fn navigate_session(
 #[serde(rename_all = "camelCase")]
 pub struct HistoryRequest {
     pub direction: String,
+    #[serde(deserialize_with = "deserialize_u64_or_string")]
     pub navigation_revision: u64,
 }
 
@@ -516,7 +626,40 @@ pub async fn history_session(
         )
         .await
     {
-        Ok(dto) => no_store_response(StatusCode::OK, serde_json::to_value(&dto).unwrap_or_default()),
+        Ok(dto) => {
+            let new_nav_rev = dto.navigation_revision.parse::<u64>().unwrap_or(0);
+            if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
+                global_session_registry().mark_api_navigation_pending(&id).await;
+                if let Ok(page_sid) = prod.ensure_page_session().await {
+                    if let Ok(hist) = prod
+                        .cdp_client
+                        .send_command("Page.getNavigationHistory", None, Some(&page_sid))
+                        .await
+                    {
+                        if let (Some(idx), Some(entries)) = (
+                            hist.get("currentIndex").and_then(|v| v.as_i64()),
+                            hist.get("entries").and_then(|v| v.as_array()),
+                        ) {
+                            let target_idx = if body.direction == "back" { idx - 1 } else { idx + 1 };
+                            if target_idx >= 0 && (target_idx as usize) < entries.len() {
+                                if let Some(entry_id) = entries[target_idx as usize].get("id").and_then(|v| v.as_i64()) {
+                                    let _ = prod
+                                        .cdp_client
+                                        .send_command(
+                                            "Page.navigateToHistoryEntry",
+                                            Some(json!({ "entryId": entry_id })),
+                                            Some(&page_sid),
+                                        )
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            selection::invalidate_on_navigation(&state, &id, Some(new_nav_rev)).await;
+            no_store_response(StatusCode::OK, serde_json::to_value(&dto).unwrap_or_default())
+        }
         Err(err) => err.into(),
     }
 }
@@ -524,6 +667,7 @@ pub async fn history_session(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReloadRequest {
+    #[serde(deserialize_with = "deserialize_u64_or_string")]
     pub navigation_revision: u64,
 }
 
@@ -552,7 +696,20 @@ pub async fn reload_session(
         .reload(&id, &admission.principal, body.navigation_revision)
         .await
     {
-        Ok(dto) => no_store_response(StatusCode::OK, serde_json::to_value(&dto).unwrap_or_default()),
+        Ok(dto) => {
+            let new_nav_rev = dto.navigation_revision.parse::<u64>().unwrap_or(0);
+            if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
+                global_session_registry().mark_api_navigation_pending(&id).await;
+                if let Ok(page_sid) = prod.ensure_page_session().await {
+                    let _ = prod
+                        .cdp_client
+                        .send_command("Page.reload", None, Some(&page_sid))
+                        .await;
+                }
+            }
+            selection::invalidate_on_navigation(&state, &id, Some(new_nav_rev)).await;
+            no_store_response(StatusCode::OK, serde_json::to_value(&dto).unwrap_or_default())
+        }
         Err(err) => err.into(),
     }
 }
@@ -798,10 +955,13 @@ pub async fn handle_dialog(
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SelectionActionRequest {
     pub lease_token: String,
+    #[serde(deserialize_with = "deserialize_u64_or_string")]
     pub navigation_revision: u64,
+    #[serde(default)]
+    pub inspect_point: Option<InspectPoint>,
 }
 
 /// POST /api/browser/sessions/{id}/selection/start
@@ -825,16 +985,42 @@ pub async fn start_selection(
         Err(resp) => return resp,
     };
 
-    if let Err(err) = global_session_registry().get_session(&id, &admission.principal).await {
+    if let Err(err) = global_session_registry()
+        .get_session(&id, &admission.principal)
+        .await
+    {
         return err.into();
     }
 
     let input_mgr = get_or_create_input_manager(&id).await;
-    if let Err(err) = input_mgr.renew_lease(&body.lease_token, admission.effective_deadline).await {
+    if let Err(err) = input_mgr
+        .renew_lease(&body.lease_token, admission.effective_deadline)
+        .await
+    {
         return err.into();
     }
 
-    no_store_response(StatusCode::OK, json!({ "selectionActive": true, "navigationRevision": body.navigation_revision }))
+    match selection::start_selection(
+        &state,
+        &id,
+        &admission.principal,
+        admission.is_dev,
+        body.navigation_revision,
+        body.inspect_point,
+    )
+    .await
+    {
+        Ok(summary) => no_store_response(
+            StatusCode::OK,
+            json!({
+                "selectionActive": summary.active,
+                "navigationRevision": summary.navigation_revision,
+                "selectionRevision": summary.selection_revision,
+                "preview": summary.preview,
+            }),
+        ),
+        Err(err) => selection_error_to_response(err),
+    }
 }
 
 /// POST /api/browser/sessions/{id}/selection/cancel
@@ -858,24 +1044,46 @@ pub async fn cancel_selection(
         Err(resp) => return resp,
     };
 
-    if let Err(err) = global_session_registry().get_session(&id, &admission.principal).await {
+    if let Err(err) = global_session_registry()
+        .get_session(&id, &admission.principal)
+        .await
+    {
         return err.into();
     }
 
     let input_mgr = get_or_create_input_manager(&id).await;
-    if let Err(err) = input_mgr.renew_lease(&body.lease_token, admission.effective_deadline).await {
+    if let Err(err) = input_mgr
+        .renew_lease(&body.lease_token, admission.effective_deadline)
+        .await
+    {
         return err.into();
     }
 
-    no_store_response(StatusCode::OK, json!({ "selectionActive": false, "navigationRevision": body.navigation_revision }))
+    match selection::cancel_selection(&state, &id, &admission.principal, body.navigation_revision).await {
+        Ok(summary) => no_store_response(
+            StatusCode::OK,
+            json!({
+                "selectionActive": summary.active,
+                "navigationRevision": summary.navigation_revision,
+                "selectionRevision": summary.selection_revision,
+            }),
+        ),
+        Err(err) => selection_error_to_response(err),
+    }
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SelectionArtifactsRequest {
+    #[serde(deserialize_with = "deserialize_u64_or_string")]
     pub selection_revision: u64,
     pub terminal_id: String,
-    pub terminal_incarnation: String,
+    #[serde(deserialize_with = "deserialize_u64_or_string")]
+    pub terminal_incarnation: u64,
+    #[serde(default, deserialize_with = "deserialize_opt_u64_or_string")]
+    pub navigation_revision: Option<u64>,
+    #[serde(default)]
+    pub include_png: Option<bool>,
 }
 
 /// POST /api/browser/sessions/{id}/selection/artifacts
@@ -899,19 +1107,41 @@ pub async fn create_selection_artifacts(
         Err(resp) => return resp,
     };
 
-    if let Err(err) = global_session_registry().get_session(&id, &admission.principal).await {
-        return err.into();
-    }
+    let resolved_actor = if let Some(Extension(a)) = actor {
+        a
+    } else if admission.is_dev {
+        AuthenticatedActor::dev_user()
+    } else {
+        AuthenticatedActor {
+            subject: admission.principal.clone(),
+            exp: None,
+            session_id: admission.session_id.clone(),
+            auth_version: admission.auth_version,
+            credential_version: admission.credential_version,
+            effective_deadline: admission.effective_deadline,
+            role: Some(crate::auth::model::UserRole::Admin),
+        }
+    };
 
-    let artifact_id = format!("browser-sel-{}", uuid::Uuid::new_v4());
-    no_store_response(
-        StatusCode::CREATED,
-        json!({
-            "artifactId": artifact_id,
-            "selectionRevision": body.selection_revision,
-            "terminalId": body.terminal_id,
-        }),
+    match selection::create_managed_selection_artifact(
+        &state,
+        &id,
+        &admission,
+        &resolved_actor,
+        body.selection_revision,
+        body.navigation_revision,
+        body.terminal_id,
+        body.terminal_incarnation,
+        body.include_png,
     )
+    .await
+    {
+        Ok(result) => no_store_response(
+            StatusCode::CREATED,
+            serde_json::to_value(&result).unwrap_or_default(),
+        ),
+        Err(err) => selection_error_to_response(err),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1049,10 +1279,172 @@ pub async fn issue_attachment_ticket(
     }
 }
 
+pub(crate) fn is_valid_reset_operation_id(op_id: &str) -> bool {
+    let trimmed = op_id.trim();
+    !trimmed.is_empty()
+        && trimmed.len() <= 128
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+pub(crate) fn validate_destructive_browser_csrf(
+    state: &AppState,
+    headers: &HeaderMap,
+    has_bearer_auth: bool,
+) -> bool {
+    if headers.contains_key(header::ORIGIN) {
+        if state.origin_is_allowed(headers) {
+            return true;
+        }
+        if state.no_auth && state.cors_origins.is_empty() {
+            if headers.get_all(header::ORIGIN).iter().count() == 1 {
+                if let Some(origin_val) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+                    return origin_val == "http://127.0.0.1:5173"
+                        || origin_val == "http://localhost:5173";
+                }
+            }
+        }
+        return false;
+    }
+
+    if state.no_auth {
+        true
+    } else {
+        has_bearer_auth
+    }
+}
+
+pub(crate) async fn revoke_auth_session_browser_resources(principal: &str, auth_session_id: &str) {
+    let cancelled = global_attachment_manager()
+        .revoke_by_auth_session(principal, auth_session_id)
+        .await;
+    if cancelled.is_empty() {
+        return;
+    }
+    let managers = global_input_managers().read().await;
+    for (browser_session_id, viewer_id) in cancelled {
+        if let Some(mgr) = managers.get(&browser_session_id).cloned() {
+            if mgr.is_lease_holder(&viewer_id).await {
+                let releases = mgr.revoke_lease().await;
+                if !releases.is_empty() {
+                    if let Some(producer) = get_producer(&browser_session_id).await {
+                        if let Ok(page_sid) = producer.ensure_page_session().await {
+                            let geom = producer.geometry().await;
+                            for rel in &releases {
+                                crate::browser_host::media::dispatch_input_event_to_cdp(
+                                    &producer.cdp_client,
+                                    &page_sid,
+                                    &geom,
+                                    rel,
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Pure in-memory fence with zero disk or network I/O; returns `(session_ids, removed_artifact_paths)`.
+pub(crate) async fn fence_principal_browser_resources_sync(
+    state: &AppState,
+    principal: &str,
+) -> (Vec<String>, Vec<(uuid::Uuid, Vec<std::path::PathBuf>)>) {
+    global_attachment_manager()
+        .revoke_all_for_principal(principal)
+        .await;
+    let principal_sessions = global_session_registry().list_sessions(principal).await;
+    global_session_registry()
+        .close_principal_sessions(principal)
+        .await;
+    {
+        let mut input_map = global_input_managers().write().await;
+        for s in &principal_sessions {
+            if let Some(mgr) = input_map.remove(&s.browser_session_id) {
+                let _ = mgr.revoke_lease().await;
+            }
+        }
+    }
+    let pending_sel_ids = selection::fence_principal_sessions_in_memory(principal).await;
+    let removed_artifacts = state
+        .browser_debug_artifacts
+        .fence_managed_by_principal_and_ids(principal, None, &pending_sel_ids)
+        .await;
+    let session_ids = principal_sessions
+        .into_iter()
+        .map(|s| s.browser_session_id)
+        .collect();
+    (session_ids, removed_artifacts)
+}
+
+pub(crate) async fn teardown_principal_network_resources(session_ids: Vec<String>) {
+    for sid in session_ids {
+        remove_producer(&sid).await;
+    }
+}
+
+pub(crate) async fn revoke_principal_browser_resources(state: &AppState, principal: &str) {
+    let (session_ids, removed_artifacts) =
+        fence_principal_browser_resources_sync(state, principal).await;
+    BrowserDebugArtifactManager::delete_fenced_artifacts(removed_artifacts, principal).await;
+    teardown_principal_network_resources(session_ids).await;
+}
+
+pub(crate) fn make_reset_fence_hooks(
+    state: AppState,
+    principal: String,
+    recheck_admin: Option<AdminRecheckCallback>,
+) -> ResetFenceHooks {
+    type PendingCleanup = (Vec<String>, Vec<(uuid::Uuid, Vec<std::path::PathBuf>)>);
+    let pending: Arc<tokio::sync::Mutex<PendingCleanup>> =
+        Arc::new(tokio::sync::Mutex::new((Vec::new(), Vec::new())));
+
+    let sync_state = state.clone();
+    let sync_principal = principal.clone();
+    let sync_slot = pending.clone();
+    let sync_fence: FenceCallback = Arc::new(move || {
+        let state = sync_state.clone();
+        let principal = sync_principal.clone();
+        let slot = sync_slot.clone();
+        Box::pin(async move {
+            let (sids, artifacts) =
+                fence_principal_browser_resources_sync(&state, &principal).await;
+            *slot.lock().await = (sids, artifacts);
+        })
+    });
+
+    let async_slot = pending;
+    let async_principal = principal;
+    let async_teardown: FenceCallback = Arc::new(move || {
+        let slot = async_slot.clone();
+        let principal = async_principal.clone();
+        Box::pin(async move {
+            let (sids, artifacts) = std::mem::take(&mut *slot.lock().await);
+            // Delete fenced managed artifacts BEFORE bounded network teardown and BEFORE profile user-data deletion
+            BrowserDebugArtifactManager::delete_fenced_artifacts(artifacts, &principal).await;
+            let _ = tokio::time::timeout(
+                DEFAULT_RESET_WAIT_TIMEOUT,
+                teardown_principal_network_resources(sids),
+            )
+            .await;
+        })
+    });
+
+    ResetFenceHooks {
+        recheck_admin,
+        sync_fence: Some(sync_fence),
+        async_teardown: Some(async_teardown),
+    }
+}
+
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileResetRequest {
     pub operation_id: String,
+    #[serde(deserialize_with = "deserialize_u64_or_string")]
     pub expected_profile_epoch: u64,
     pub confirmed: bool,
 }
@@ -1077,6 +1469,23 @@ pub async fn reset_profile(
         Err(resp) => return resp,
     };
 
+    let has_bearer = crate::api::auth::extract_bearer_token(&headers).is_some();
+    if !validate_destructive_browser_csrf(&state, &headers, has_bearer) {
+        return browser_error_response(
+            StatusCode::FORBIDDEN,
+            "forbiddenOrigin",
+            "destructive browser profile reset requires an allowed Origin or explicit Bearer authentication",
+        );
+    }
+
+    if !is_valid_reset_operation_id(&body.operation_id) {
+        return browser_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalidOperationId",
+            "operationId must be a non-empty identifier up to 128 safe characters",
+        );
+    }
+
     if !body.confirmed {
         return browser_error_response(
             StatusCode::BAD_REQUEST,
@@ -1085,29 +1494,54 @@ pub async fn reset_profile(
         );
     }
 
-    // Cancel all attachments, close sessions, and clear input managers for this principal
-    global_attachment_manager().revoke_all_for_principal(&admission.principal).await;
-    global_session_registry().close_principal_sessions(&admission.principal).await;
-    global_input_managers().write().await.clear();
+    let op_id = body.operation_id.trim();
+    let recheck_state = state.clone();
+    let recheck_principal = admission.principal.clone();
+    let recheck_is_dev = admission.is_dev;
+    let recheck_admin: AdminRecheckCallback = Arc::new(move || {
+        let state = recheck_state.clone();
+        let principal = recheck_principal.clone();
+        Box::pin(async move {
+            if state.no_auth {
+                recheck_is_dev
+            } else {
+                super::auth::verify_live_admin_for_reset(&state, &principal).await
+            }
+        })
+    });
+    let hooks = make_reset_fence_hooks(
+        state.clone(),
+        admission.principal.clone(),
+        Some(recheck_admin),
+    );
     match state
         .browser_host
-        .reset_profile(
+        .reset_profile_with_hooks(
             &admission.principal,
             admission.is_dev,
-            &body.operation_id,
+            op_id,
             body.expected_profile_epoch,
+            hooks,
         )
         .await
     {
-        Ok(ResetOutcome::Completed { operation_id, new_profile_epoch }) => no_store_response(
+        Ok(ResetOutcome::Completed {
+            operation_id,
+            new_profile_epoch,
+        }) => no_store_response(
             StatusCode::OK,
             json!({
                 "operationId": operation_id,
                 "status": "completed",
+                "profileEpoch": new_profile_epoch,
                 "newProfileEpoch": new_profile_epoch,
             }),
         ),
-        Ok(ResetOutcome::CleanupPending { operation_id, profile_epoch, reason }) => no_store_response(
+        Ok(ResetOutcome::CleanupPending {
+            operation_id,
+            profile_epoch,
+            reason,
+        }) => no_store_response(
             StatusCode::ACCEPTED,
             json!({
                 "operationId": operation_id,
@@ -1116,6 +1550,28 @@ pub async fn reset_profile(
                 "reason": reason,
             }),
         ),
+        Err(ManagerError::PermissionDenied(msg)) => {
+            browser_error_response(StatusCode::FORBIDDEN, "adminRequired", &msg)
+        }
+        Err(ManagerError::StaleEpoch { expected, actual }) => browser_error_response(
+            StatusCode::CONFLICT,
+            "staleEpoch",
+            &format!("stale profile epoch (expected {expected}, current {actual})"),
+        ),
+        Err(ManagerError::CleanupPending(msg)) => {
+            let active_op = msg
+                .rsplit_once("operation ")
+                .map(|(_, op)| op.trim().to_string())
+                .filter(|op| is_valid_reset_operation_id(op));
+            no_store_response(
+                StatusCode::CONFLICT,
+                json!({
+                    "error": msg,
+                    "kind": "cleanupPending",
+                    "operationId": active_op,
+                }),
+            )
+        }
         Err(err) => browser_error_response(StatusCode::CONFLICT, "resetFailed", &err.to_string()),
     }
 }
@@ -1140,21 +1596,56 @@ pub async fn get_profile_reset_status(
         Err(resp) => return resp,
     };
 
-    let caps = state
+    if !is_valid_reset_operation_id(&operation_id) {
+        return browser_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalidOperationId",
+            "invalid operationId",
+        );
+    }
+
+    match state
         .browser_host
-        .capabilities(&admission.principal, admission.is_dev)
-        .await;
-
-    no_store_response(
-        StatusCode::OK,
-        json!({
-            "operationId": operation_id,
-            "status": if caps.available { "completed" } else { "cleanupPending" },
-            "profileEpoch": caps.profile_epoch,
-        }),
-    )
+        .get_reset_status(&admission.principal, admission.is_dev, operation_id.trim())
+        .await
+    {
+        Ok(ResetStatus::Completed {
+            operation_id,
+            profile_epoch,
+        }) => no_store_response(
+            StatusCode::OK,
+            json!({
+                "operationId": operation_id,
+                "status": "completed",
+                "profileEpoch": profile_epoch,
+                "newProfileEpoch": profile_epoch,
+            }),
+        ),
+        Ok(ResetStatus::CleanupPending {
+            operation_id,
+            profile_epoch,
+            reason,
+        }) => no_store_response(
+            StatusCode::OK,
+            json!({
+                "operationId": operation_id,
+                "status": "cleanupPending",
+                "profileEpoch": profile_epoch,
+                "reason": reason,
+            }),
+        ),
+        Ok(ResetStatus::NotFound) => browser_error_response(
+            StatusCode::NOT_FOUND,
+            "operationNotFound",
+            "profile reset operation not found",
+        ),
+        Err(err) => browser_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "resetStatusFailed",
+            &err.to_string(),
+        ),
+    }
 }
-
 pub use crate::browser_host::cdp_gateway::{
     cdp_ws_handler, cdp_ws_handler_target, get_cdp_json_alias, get_cdp_list, get_cdp_version,
 };

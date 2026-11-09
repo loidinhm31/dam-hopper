@@ -392,6 +392,11 @@ impl AppState {
             None,
             tokio_util::sync::CancellationToken::new(),
         ));
+        browser_debug_artifacts.set_authority(Arc::new(AppStateBrowserAdmissionAuthority {
+            auth_service: auth_service.clone(),
+            browser_host: browser_host.clone(),
+            no_auth,
+        }));
         fs.reinit_workspace_sandbox(config.resolve_workspace_root().ok());
 
         Ok(Self {
@@ -493,7 +498,14 @@ impl AppState {
 
     /// Override the auth service handle (used for testing or custom clock injection).
     pub fn with_auth_service(mut self, auth_service: Arc<crate::auth::AuthService>) -> Self {
-        self.auth_service = auth_service;
+        self.auth_service = auth_service.clone();
+        self.browser_debug_artifacts.set_authority(Arc::new(
+            AppStateBrowserAdmissionAuthority {
+                auth_service,
+                browser_host: self.browser_host.clone(),
+                no_auth: self.no_auth,
+            },
+        ));
         self
     }
     /// Override the client presence registry handle (used for testing or custom capacity injection).
@@ -600,4 +612,144 @@ pub fn project_roots_from_config(config: &DamHopperConfig) -> Vec<(String, StdPa
         .iter()
         .map(|project| (project.name.clone(), StdPathBuf::from(&project.path)))
         .collect()
+}
+
+struct AppStateBrowserAdmissionAuthority {
+    auth_service: Arc<crate::auth::AuthService>,
+    browser_host: Arc<crate::browser_host::manager::BrowserHostManager>,
+    no_auth: bool,
+}
+
+impl crate::browser_debug::BrowserAdmissionAuthority for AppStateBrowserAdmissionAuthority {
+    fn check_managed_admission<'a>(
+        &'a self,
+        actor: &'a crate::api::auth::AuthenticatedActor,
+        principal: &'a str,
+        profile_epoch: u64,
+    ) -> crate::browser_debug::BoxFuture<'a, bool> {
+        Box::pin(async move {
+            if actor.subject != principal {
+                return false;
+            }
+
+            if self.browser_host.has_active_tombstone(principal, self.no_auth).await {
+                return false;
+            }
+
+            if self.no_auth {
+                let caps = self.browser_host.capabilities(principal, true).await;
+                return caps.profile_epoch.parse::<u64>().ok() == Some(profile_epoch);
+            }
+
+            let now = self.auth_service.clock().now();
+            if let Some(deadline) = actor.effective_deadline {
+                if now >= deadline {
+                    return false;
+                }
+            }
+
+            if let Some(store) = self.auth_service.store() {
+                let Ok(Some(user)) = store.get_user(principal).await else {
+                    return false;
+                };
+                if !user.is_enabled || user.role != crate::auth::model::UserRole::Admin {
+                    return false;
+                }
+                if let Some(sid) = &actor.session_id {
+                    let Ok(Some(session)) = store.get_session(sid).await else {
+                        return false;
+                    };
+                    if session.revoked_at.is_some() || session.auth_version != user.auth_version {
+                        return false;
+                    }
+                    if let Some(req_av) = actor.auth_version {
+                        if session.auth_version != req_av {
+                            return false;
+                        }
+                    }
+                    if let Some(req_cv) = actor.credential_version {
+                        if session.credential_version != req_cv {
+                            return false;
+                        }
+                    }
+                }
+            } else if let Some(mock) = self.auth_service.mock_user() {
+                if mock.username != principal
+                    || !mock.is_enabled
+                    || mock.role != crate::auth::model::UserRole::Admin
+                {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+
+            let caps = self.browser_host.capabilities(principal, false).await;
+            caps.profile_epoch.parse::<u64>().ok() == Some(profile_epoch)
+        })
+    }
+
+    fn check_managed_selection_live<'a>(
+        &'a self,
+        principal: &'a str,
+        session_id: &'a str,
+        navigation_revision: u64,
+        selection_revision: u64,
+    ) -> crate::browser_debug::BoxFuture<'a, bool> {
+        Box::pin(async move {
+            let Ok(dto) = crate::api::browser_host::global_session_registry()
+                .get_session(session_id, principal)
+                .await
+            else {
+                return false;
+            };
+            if dto.status != "running" {
+                return false;
+            }
+            if dto.navigation_revision.parse::<u64>().ok() != Some(navigation_revision) {
+                return false;
+            }
+            crate::browser_host::selection::is_selection_live(
+                session_id,
+                principal,
+                navigation_revision,
+                selection_revision,
+            )
+            .await
+        })
+    }
+
+    fn acquire_managed_selection_fence<'a>(
+        &'a self,
+        principal: &'a str,
+        profile_epoch: u64,
+        session_id: &'a str,
+        navigation_revision: u64,
+        selection_revision: u64,
+        artifact_id: uuid::Uuid,
+    ) -> crate::browser_debug::BoxFuture<'a, Option<Box<dyn std::any::Any + Send + Sync>>> {
+        Box::pin(async move {
+            if !self
+                .browser_host
+                .is_profile_epoch_live_sync(principal, self.no_auth, profile_epoch)
+            {
+                return None;
+            }
+            let guard = crate::browser_host::selection::acquire_managed_selection_fence(
+                session_id,
+                principal,
+                navigation_revision,
+                selection_revision,
+                artifact_id,
+            )
+            .await?;
+            if !self
+                .browser_host
+                .is_profile_epoch_live_sync(principal, self.no_auth, profile_epoch)
+            {
+                return None;
+            }
+            Some(Box::new(guard) as Box<dyn std::any::Any + Send + Sync>)
+        })
+    }
 }

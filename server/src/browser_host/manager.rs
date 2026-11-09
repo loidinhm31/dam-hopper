@@ -1,28 +1,41 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 use std::time::Duration;
 
-use tokio::sync::Mutex;
+use futures_util::future::BoxFuture;
+use tokio::sync::{watch, Mutex};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use super::config::{evaluate_capabilities, BrowserCapabilitiesDto, BrowserHostConfig};
 use super::process::{BrowserLaunchConfig, BrowserProcess, ProcessError};
-use super::profile::{now_unix_ms, ManagedProfile, ProfileError, ProfileLock, ResetStage, ResetTombstone};
+use super::profile::{now_unix_ms, ManagedProfile, ManagerMetadata, ProfileError, ProfileLock, ResetStage, ResetTombstone};
 
 pub const DEFAULT_TERMINATE_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_DELETE_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_START_TIMEOUT: Duration = Duration::from_secs(15);
 pub const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+pub const DEFAULT_RESET_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
+
+pub type FenceCallback = Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
+pub type AdminRecheckCallback = Arc<dyn Fn() -> BoxFuture<'static, bool> + Send + Sync>;
+
+#[derive(Default, Clone)]
+pub struct ResetFenceHooks {
+    pub recheck_admin: Option<AdminRecheckCallback>,
+    pub sync_fence: Option<FenceCallback>,
+    pub async_teardown: Option<FenceCallback>,
+}
 
 #[derive(Debug)]
 pub enum ManagerError {
     Busy(String),
     CleanupPending(String),
+    PermissionDenied(String),
     StaleEpoch { expected: u64, actual: u64 },
     Disabled(String),
     Process(ProcessError),
@@ -36,6 +49,7 @@ impl fmt::Display for ManagerError {
         match self {
             Self::Busy(msg) => write!(f, "browser busy (429): {msg}"),
             Self::CleanupPending(msg) => write!(f, "browser cleanup pending (409): {msg}"),
+            Self::PermissionDenied(msg) => write!(f, "browser permission denied (403): {msg}"),
             Self::StaleEpoch { expected, actual } => {
                 write!(f, "stale profile epoch (expected {expected}, current {actual})")
             }
@@ -85,6 +99,26 @@ pub enum ResetOutcome {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResetStatus {
+    Completed {
+        operation_id: String,
+        profile_epoch: u64,
+    },
+    CleanupPending {
+        operation_id: String,
+        profile_epoch: u64,
+        reason: Option<String>,
+    },
+    NotFound,
+}
+
+#[derive(Clone)]
+struct ActiveResetWorker {
+    operation_id: String,
+    target_profile_epoch: u64,
+    outcome_rx: watch::Receiver<Option<Result<ResetOutcome, String>>>,
+}
 #[derive(Debug, Clone)]
 pub struct BrowserInstanceHandle {
     pub subject: String,
@@ -113,8 +147,9 @@ pub struct BrowserHostManager {
     config: BrowserHostConfig,
     profile_root: PathBuf,
     instances: Arc<Mutex<HashMap<String, Arc<Mutex<InnerInstance>>>>>,
+    active_reset_workers: Arc<StdMutex<HashMap<String, ActiveResetWorker>>>,
+    live_profile_epochs: Arc<StdRwLock<HashMap<String, u64>>>,
     global_process_count: Arc<AtomicUsize>,
-    _global_target_count: Arc<AtomicUsize>,
     _global_viewer_count: Arc<AtomicUsize>,
     _global_raw_cdp_count: Arc<AtomicUsize>,
     _cancellation_token: CancellationToken,
@@ -122,6 +157,8 @@ pub struct BrowserHostManager {
     pub _simulated_reset_kill_failure: Arc<AtomicBool>,
     #[doc(hidden)]
     pub _simulated_reset_delete_failure: Arc<AtomicBool>,
+    #[doc(hidden)]
+    pub _simulated_reset_delay_ms: Arc<AtomicU64>,
     #[doc(hidden)]
     pub _test_mock_handle: Arc<parking_lot::RwLock<Option<BrowserInstanceHandle>>>,
 }
@@ -142,17 +179,18 @@ impl BrowserHostManager {
             config,
             profile_root,
             instances: Arc::new(Mutex::new(HashMap::new())),
+            active_reset_workers: Arc::new(StdMutex::new(HashMap::new())),
+            live_profile_epochs: Arc::new(StdRwLock::new(HashMap::new())),
             global_process_count: Arc::new(AtomicUsize::new(0)),
-            _global_target_count: Arc::new(AtomicUsize::new(0)),
             _global_viewer_count: Arc::new(AtomicUsize::new(0)),
             _global_raw_cdp_count: Arc::new(AtomicUsize::new(0)),
             _cancellation_token: cancellation_token,
             _simulated_reset_kill_failure: Arc::new(AtomicBool::new(false)),
             _simulated_reset_delete_failure: Arc::new(AtomicBool::new(false)),
+            _simulated_reset_delay_ms: Arc::new(AtomicU64::new(0)),
             _test_mock_handle: Arc::new(parking_lot::RwLock::new(None)),
         }
     }
-
     pub fn config(&self) -> &BrowserHostConfig {
         &self.config
     }
@@ -163,6 +201,20 @@ impl BrowserHostManager {
 
     fn principal_key(subject: &str, is_dev: bool) -> String {
         format!("{}:{}", if is_dev { "dev" } else { "prod" }, subject)
+    }
+
+    /// Non-async check of live profile epoch & active reset fencing for atomic selection handoff.
+    pub fn is_profile_epoch_live_sync(&self, subject: &str, is_dev: bool, expected_epoch: u64) -> bool {
+        let key = Self::principal_key(subject, is_dev);
+        if self.active_reset_workers.lock().unwrap().contains_key(&key) {
+            return false;
+        }
+        if let Some(live_epoch) = self.live_profile_epochs.read().unwrap().get(&key).copied() {
+            if live_epoch != expected_epoch {
+                return false;
+            }
+        }
+        true
     }
 
     async fn get_or_create_instance_inner(
@@ -199,6 +251,11 @@ impl BrowserHostManager {
             deletion_worker: None,
         }));
 
+
+        self.live_profile_epochs
+            .write()
+            .unwrap()
+            .insert(key.clone(), meta.profile_epoch);
         map.insert(key, inst.clone());
         Ok(inst)
     }
@@ -247,15 +304,39 @@ impl BrowserHostManager {
         if let Some(mock) = self._test_mock_handle.read().clone() {
             return Ok(mock);
         }
+        if let Ok(profile) = ManagedProfile::new(&self.profile_root, subject, is_dev) {
+            if profile.load_tombstone().ok().flatten().is_some() {
+                return Err(ManagerError::CleanupPending(
+                    "cannot start browser while profile reset cleanup is pending".to_string(),
+                ));
+            }
+        }
         let inst_arc = self.get_or_create_instance_inner(subject, is_dev).await?;
-        let mut inst = inst_arc.lock().await;
+        let mut inst = match inst_arc.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                let key = Self::principal_key(subject, is_dev);
+                let has_worker = self
+                    .active_reset_workers
+                    .lock()
+                    .unwrap()
+                    .contains_key(&key);
+                if has_worker {
+                    return Err(ManagerError::CleanupPending(
+                        "cannot start browser while profile reset cleanup is active".to_string(),
+                    ));
+                }
+                inst_arc.lock().await
+            }
+        };
 
-        if inst.state == InstanceLifecycleState::CleanupPending {
+        if inst.state == InstanceLifecycleState::CleanupPending
+            || inst.state == InstanceLifecycleState::Resetting
+        {
             return Err(ManagerError::CleanupPending(
                 "cannot start browser while profile reset cleanup is pending".to_string(),
             ));
         }
-
         // Reconnect: check if existing process is running and alive
         if inst.state == InstanceLifecycleState::Running {
             if let Some(mut proc) = inst.process.take() {
@@ -457,6 +538,134 @@ impl BrowserHostManager {
     /// 6. Delete user-data/ within 10s.
     /// 7. Recreate empty 0700 user-data/.
     /// 8. Clear tombstone and return Completed.
+    /// Checks whether user-data credentials, running instance, active worker, or reset tombstone exist.
+    pub async fn has_browser_credentials_or_tombstone(&self, subject: &str, is_dev: bool) -> bool {
+        let key = Self::principal_key(subject, is_dev);
+        if self.active_reset_workers.lock().unwrap().contains_key(&key) {
+            return true;
+        }
+        if let Some(inst_arc) = self.instances.lock().await.get(&key).cloned() {
+            if let Ok(inst) = inst_arc.try_lock() {
+                if matches!(
+                    inst.state,
+                    InstanceLifecycleState::Running
+                        | InstanceLifecycleState::Starting
+                        | InstanceLifecycleState::Resetting
+                        | InstanceLifecycleState::CleanupPending
+                ) || inst.process.is_some()
+                {
+                    return true;
+                }
+            } else {
+                return true;
+            }
+        }
+        let Ok(profile) = ManagedProfile::new(&self.profile_root, subject, is_dev) else {
+            return true;
+        };
+        if profile.reset_file().exists() {
+            return true;
+        }
+        if profile.user_data_dir().exists() {
+            return match std::fs::read_dir(profile.user_data_dir()) {
+                Ok(mut entries) => entries.next().is_some(),
+                Err(_) => true,
+            };
+        }
+        false
+    }
+
+    /// Checks whether any persisted profile directory/metadata/tombstone exists on disk.
+    pub fn has_persisted_profile_state(&self, subject: &str, is_dev: bool) -> bool {
+        let Ok(profile) = ManagedProfile::new(&self.profile_root, subject, is_dev) else {
+            return true;
+        };
+        profile.metadata_file().exists()
+            || profile.user_data_dir().exists()
+            || profile.reset_file().exists()
+    }
+
+    /// Checks whether an active reset tombstone or background reset worker exists.
+    pub async fn has_active_tombstone(&self, subject: &str, is_dev: bool) -> bool {
+        let key = Self::principal_key(subject, is_dev);
+        if self.active_reset_workers.lock().unwrap().contains_key(&key) {
+            return true;
+        }
+        let Ok(profile) = ManagedProfile::new(&self.profile_root, subject, is_dev) else {
+            return false;
+        };
+        profile.reset_file().exists()
+    }
+    /// Inspects status of a specific profile reset operation without creating metadata files.
+    pub async fn get_reset_status(
+        &self,
+        subject: &str,
+        is_dev: bool,
+        operation_id: &str,
+    ) -> Result<ResetStatus, ManagerError> {
+        let key = Self::principal_key(subject, is_dev);
+        let worker_opt = self.active_reset_workers.lock().unwrap().get(&key).cloned();
+        if let Some(worker) = worker_opt {
+            if worker.operation_id == operation_id {
+                if let Some(res) = worker.outcome_rx.borrow().clone() {
+                    match res {
+                        Ok(ResetOutcome::Completed { operation_id, new_profile_epoch }) => {
+                            return Ok(ResetStatus::Completed {
+                                operation_id,
+                                profile_epoch: new_profile_epoch,
+                            });
+                        }
+                        Ok(ResetOutcome::CleanupPending { operation_id, profile_epoch, reason }) => {
+                            return Ok(ResetStatus::CleanupPending {
+                                operation_id,
+                                profile_epoch,
+                                reason: Some(reason),
+                            });
+                        }
+                        Err(msg) => return Err(ManagerError::Internal(msg)),
+                    }
+                }
+                return Ok(ResetStatus::CleanupPending {
+                    operation_id: worker.operation_id,
+                    profile_epoch: worker.target_profile_epoch,
+                    reason: Some("profile reset cleanup continuing in background".to_string()),
+                });
+            }
+        }
+
+        let profile = ManagedProfile::new(&self.profile_root, subject, is_dev)?;
+        if let Some(tombstone) = profile.load_tombstone()? {
+            if tombstone.operation_id == operation_id {
+                return Ok(ResetStatus::CleanupPending {
+                    operation_id: tombstone.operation_id,
+                    profile_epoch: tombstone.target_profile_epoch,
+                    reason: tombstone.error,
+                });
+            }
+            return Ok(ResetStatus::NotFound);
+        }
+
+        if profile.metadata_file().exists() {
+            let content = std::fs::read_to_string(profile.metadata_file())
+                .map_err(|e| ManagerError::Profile(ProfileError::Io(e)))?;
+            let meta: ManagerMetadata = serde_json::from_str(&content).map_err(|e| {
+                ManagerError::Profile(ProfileError::CorruptMetadata(format!(
+                    "cannot parse {}: {e}",
+                    profile.metadata_file().display()
+                )))
+            })?;
+            if meta.last_reset_operation_id.as_deref() == Some(operation_id) {
+                return Ok(ResetStatus::Completed {
+                    operation_id: operation_id.to_string(),
+                    profile_epoch: meta.profile_epoch,
+                });
+            }
+        }
+
+        Ok(ResetStatus::NotFound)
+    }
+
+    /// Perform confirmed browser profile reset according to architecture-contracts.md §11.
     pub async fn reset_profile(
         &self,
         subject: &str,
@@ -464,11 +673,99 @@ impl BrowserHostManager {
         operation_id: &str,
         expected_profile_epoch: u64,
     ) -> Result<ResetOutcome, ManagerError> {
+        self.reset_profile_with_fence(subject, is_dev, operation_id, expected_profile_epoch, None)
+            .await
+    }
+
+    /// Perform confirmed browser profile reset, invoking `on_intent_committed` immediately after
+    /// writing durable tombstone/epoch and before terminate-and-wait/deletion. Responds within 2s
+    /// with CleanupPending if worker is still finishing under manager ownership.
+    pub async fn reset_profile_with_fence(
+        &self,
+        subject: &str,
+        is_dev: bool,
+        operation_id: &str,
+        expected_profile_epoch: u64,
+        on_intent_committed: Option<FenceCallback>,
+    ) -> Result<ResetOutcome, ManagerError> {
+        self.reset_profile_with_hooks(
+            subject,
+            is_dev,
+            operation_id,
+            expected_profile_epoch,
+            ResetFenceHooks {
+                recheck_admin: None,
+                sync_fence: on_intent_committed,
+                async_teardown: None,
+            },
+        )
+        .await
+    }
+
+    /// Perform confirmed browser profile reset under the principal lock:
+    /// 1) Recheck live Admin admission after acquiring principal lock (if provided),
+    /// 2) Write durable tombstone and bump profile epoch,
+    /// 3) Invoke synchronous in-memory/artifact fence immediately,
+    /// 4) Register and spawn background worker BEFORE waiting up to 2s, running bounded async CDP teardown inside the worker.
+    pub async fn reset_profile_with_hooks(
+        &self,
+        subject: &str,
+        is_dev: bool,
+        operation_id: &str,
+        expected_profile_epoch: u64,
+        hooks: ResetFenceHooks,
+    ) -> Result<ResetOutcome, ManagerError> {
+        let key = Self::principal_key(subject, is_dev);
+
+        // If a background worker for this principal is already running, wait up to 2s for same operation_id
+        let existing_worker = self.active_reset_workers.lock().unwrap().get(&key).cloned();
+        if let Some(worker) = existing_worker {
+            if worker.operation_id != operation_id {
+                return Err(ManagerError::CleanupPending(format!(
+                    "profile has active reset operation {}",
+                    worker.operation_id
+                )));
+            }
+            let mut rx = worker.outcome_rx;
+            let wait_res = timeout(DEFAULT_RESET_WAIT_TIMEOUT, async move {
+                loop {
+                    if let Some(res) = rx.borrow().clone() {
+                        return res;
+                    }
+                    if rx.changed().await.is_err() {
+                        return Err("reset worker exited unexpectedly".to_string());
+                    }
+                }
+            })
+            .await;
+            return match wait_res {
+                Ok(Ok(outcome)) => Ok(outcome),
+                Ok(Err(msg)) => Err(ManagerError::Internal(msg)),
+                Err(_) => Ok(ResetOutcome::CleanupPending {
+                    operation_id: operation_id.to_string(),
+                    profile_epoch: worker.target_profile_epoch,
+                    reason: "profile reset cleanup continuing in background".to_string(),
+                }),
+            };
+        }
+
         let inst_arc = self.get_or_create_instance_inner(subject, is_dev).await?;
-        let mut inst = inst_arc.lock().await;
+        let mut inst = inst_arc.lock_owned().await;
         let had_held_lock = inst._held_lock.is_some();
         if !had_held_lock {
             inst._held_lock = Some(inst.profile.lock_with_timeout(DEFAULT_LOCK_TIMEOUT).await?);
+        }
+
+        // Recheck live Admin authorization under the principal lock BEFORE initiating/resuming any destructive intent.
+        if let Some(recheck) = &hooks.recheck_admin {
+            if !recheck().await {
+                if !had_held_lock && inst.state == InstanceLifecycleState::Dormant {
+                    inst._held_lock = None;
+                }
+                return Err(ManagerError::PermissionDenied(
+                    "live admin authorization revoked before reset intent".to_string(),
+                ));
+            }
         }
 
         let mut meta = inst.profile.load_or_init_metadata()?;
@@ -484,17 +781,19 @@ impl BrowserHostManager {
                 new_profile_epoch: meta.profile_epoch,
             });
         }
-
         // Check existing tombstone or initialize new reset intent
-        let (mut tombstone, new_epoch, _resuming) = if let Some(existing) = inst.profile.load_tombstone()? {
+        let (mut tombstone, new_epoch) = if let Some(existing) = inst.profile.load_tombstone()? {
             if existing.operation_id == operation_id {
                 info!(operation_id, "resuming incomplete/failed profile reset");
                 let epoch = existing.target_profile_epoch;
                 meta.profile_epoch = epoch;
                 inst.profile_epoch = epoch;
                 let _ = inst.profile.save_metadata(&meta);
-                (existing, epoch, true)
+                (existing, epoch)
             } else {
+                if !had_held_lock && inst.state == InstanceLifecycleState::Dormant {
+                    inst._held_lock = None;
+                }
                 return Err(ManagerError::CleanupPending(format!(
                     "profile has active tombstone from operation {}",
                     existing.operation_id
@@ -532,205 +831,309 @@ impl BrowserHostManager {
             meta.updated_at_unix_ms = now_unix_ms();
             inst.profile.save_metadata(&meta)?;
             inst.profile_epoch = target_epoch;
-            (tombstone, target_epoch, false)
+            (tombstone, target_epoch)
         };
         inst.state = InstanceLifecycleState::Resetting;
-
-        // Step 5: Terminate process if running
-        tombstone.stage = ResetStage::Terminating;
-        tombstone.updated_at_unix_ms = now_unix_ms();
-        let _ = inst.profile.save_tombstone(&tombstone);
-
-        let kill_simulated_fail = self._simulated_reset_kill_failure.load(Ordering::SeqCst);
-        if kill_simulated_fail {
-            tombstone.stage = ResetStage::Failed;
-            tombstone.error = Some("simulated process kill failure".to_string());
-            let _ = inst.profile.save_tombstone(&tombstone);
-            inst.state = InstanceLifecycleState::CleanupPending;
-            return Ok(ResetOutcome::CleanupPending {
-                operation_id: operation_id.to_string(),
-                profile_epoch: new_epoch,
-                reason: "simulated process kill failure".to_string(),
-            });
-        }
-
-        if let Some(mut proc) = inst.process.take() {
-            let term_res = timeout(DEFAULT_TERMINATE_TIMEOUT, proc.terminate()).await;
-            self.global_process_count.fetch_sub(1, Ordering::SeqCst);
-
-            match term_res {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    tombstone.stage = ResetStage::Failed;
-                    tombstone.error = Some(format!("process termination failed: {e}"));
-                    let _ = inst.profile.save_tombstone(&tombstone);
-                    inst.state = InstanceLifecycleState::CleanupPending;
-                    return Ok(ResetOutcome::CleanupPending {
-                        operation_id: operation_id.to_string(),
-                        profile_epoch: new_epoch,
-                        reason: format!("process termination failed: {e}"),
-                    });
-                }
-                Err(_) => {
-                    tombstone.stage = ResetStage::Failed;
-                    tombstone.error = Some("process termination timed out after 10s".to_string());
-                    let _ = inst.profile.save_tombstone(&tombstone);
-                    inst.state = InstanceLifecycleState::CleanupPending;
-                    return Ok(ResetOutcome::CleanupPending {
-                        operation_id: operation_id.to_string(),
-                        profile_epoch: new_epoch,
-                        reason: "process termination timed out after 10s".to_string(),
-                    });
-                }
-            }
-        } else if let Some(pgid) = tombstone.process_pgid.or(meta.process_pgid) {
-            // Reconcile unmanaged prior process group after restart
-            if pgid <= 1 {
-                tombstone.stage = ResetStage::Failed;
-                tombstone.error = Some(format!("invalid non-positive PGID {pgid}"));
-                let _ = inst.profile.save_tombstone(&tombstone);
-                inst.state = InstanceLifecycleState::CleanupPending;
-                return Ok(ResetOutcome::CleanupPending {
-                    operation_id: operation_id.to_string(),
-                    profile_epoch: new_epoch,
-                    reason: format!("invalid non-positive PGID {pgid}"),
-                });
-            }
-            #[cfg(unix)]
-            {
-                use nix::sys::signal::killpg;
-                use nix::unistd::Pid;
-                let pg = Pid::from_raw(pgid);
-                match killpg(pg, None) {
-                    Err(nix::errno::Errno::ESRCH) => {
-                        // Group is already extinct! Proven gone.
-                    }
-                    Ok(()) => {
-                        // Group is still alive on restart; ownership unverified without daemon handle
-                        tombstone.stage = ResetStage::Failed;
-                        tombstone.error = Some(format!("prior browser process group {pgid} still active on restart; unverified ownership"));
-                        let _ = inst.profile.save_tombstone(&tombstone);
-                        inst.state = InstanceLifecycleState::CleanupPending;
-                        return Ok(ResetOutcome::CleanupPending {
-                            operation_id: operation_id.to_string(),
-                            profile_epoch: new_epoch,
-                            reason: format!("prior browser process group {pgid} still active on restart; unverified ownership"),
-                        });
-                    }
-                    Err(e) => {
-                        tombstone.stage = ResetStage::Failed;
-                        tombstone.error = Some(format!("OS probe error on PGID {pgid}: {e}"));
-                        let _ = inst.profile.save_tombstone(&tombstone);
-                        inst.state = InstanceLifecycleState::CleanupPending;
-                        return Ok(ResetOutcome::CleanupPending {
-                            operation_id: operation_id.to_string(),
-                            profile_epoch: new_epoch,
-                            reason: format!("OS probe error on PGID {pgid}: {e}"),
-                        });
-                    }
-                }
-            }
-        }
-
-        // Step 6: Delete user-data/ within 10s
-        tombstone.stage = ResetStage::DeletingUserData;
-        tombstone.updated_at_unix_ms = now_unix_ms();
-        let _ = inst.profile.save_tombstone(&tombstone);
-
-        let delete_simulated_fail = self._simulated_reset_delete_failure.load(Ordering::SeqCst);
-        if delete_simulated_fail {
-            tombstone.stage = ResetStage::Failed;
-            tombstone.error = Some("simulated user-data deletion failure".to_string());
-            let _ = inst.profile.save_tombstone(&tombstone);
-            inst.state = InstanceLifecycleState::CleanupPending;
-            return Ok(ResetOutcome::CleanupPending {
-                operation_id: operation_id.to_string(),
-                profile_epoch: new_epoch,
-                reason: "simulated user-data deletion failure".to_string(),
-            });
-        }
-        let mut handle = inst.deletion_worker.take().unwrap_or_else(|| {
-            let profile_clone = inst.profile.clone();
-            tokio::task::spawn_blocking(move || profile_clone.delete_user_data())
-        });
-
-        let del_res = timeout(DEFAULT_DELETE_TIMEOUT, &mut handle).await;
-
-        match del_res {
-            Ok(Ok(Ok(()))) => {}
-            Ok(Ok(Err(e))) => {
-                tombstone.stage = ResetStage::Failed;
-                tombstone.error = Some(format!("user-data deletion failed: {e}"));
-                let _ = inst.profile.save_tombstone(&tombstone);
-                inst.state = InstanceLifecycleState::CleanupPending;
-                return Ok(ResetOutcome::CleanupPending {
-                    operation_id: operation_id.to_string(),
-                    profile_epoch: new_epoch,
-                    reason: format!("user-data deletion failed: {e}"),
-                });
-            }
-            Ok(Err(join_err)) => {
-                tombstone.stage = ResetStage::Failed;
-                tombstone.error = Some(format!("user-data deletion task failed: {join_err}"));
-                let _ = inst.profile.save_tombstone(&tombstone);
-                inst.state = InstanceLifecycleState::CleanupPending;
-                return Ok(ResetOutcome::CleanupPending {
-                    operation_id: operation_id.to_string(),
-                    profile_epoch: new_epoch,
-                    reason: format!("user-data deletion task failed: {join_err}"),
-                });
-            }
-            Err(_) => {
-                inst.deletion_worker = Some(handle);
-                tombstone.stage = ResetStage::Failed;
-                tombstone.error = Some("user-data deletion timed out after 10s".to_string());
-                let _ = inst.profile.save_tombstone(&tombstone);
-                inst.state = InstanceLifecycleState::CleanupPending;
-                return Ok(ResetOutcome::CleanupPending {
-                    operation_id: operation_id.to_string(),
-                    profile_epoch: new_epoch,
-                    reason: "user-data deletion timed out after 10s".to_string(),
-                });
-            }
-        }
-
-        // Step 7: Recreate empty user-data/ with 0700 permissions
-        tombstone.stage = ResetStage::RecreatingUserData;
-        tombstone.updated_at_unix_ms = now_unix_ms();
-        let _ = inst.profile.save_tombstone(&tombstone);
-
-        if let Err(e) = inst.profile.recreate_user_data() {
-            tombstone.stage = ResetStage::Failed;
-            tombstone.error = Some(format!("failed to recreate user-data dir: {e}"));
-            let _ = inst.profile.save_tombstone(&tombstone);
-            inst.state = InstanceLifecycleState::CleanupPending;
-            return Ok(ResetOutcome::CleanupPending {
-                operation_id: operation_id.to_string(),
-                profile_epoch: new_epoch,
-                reason: format!("failed to recreate user-data dir: {e}"),
-            });
-        }
-
-        // Step 8: Clear tombstone and finish
-        meta.last_reset_operation_id = Some(operation_id.to_string());
-        meta.process_pid = None;
-        meta.process_pgid = None;
-        let _ = inst.profile.save_metadata(&meta);
-        inst.profile.clear_tombstone()?;
-        inst.state = InstanceLifecycleState::Dormant;
         inst.active_targets.clear();
         inst.active_viewers = 0;
         inst.active_raw_cdp = 0;
-        inst.deletion_worker = None;
-        inst._held_lock = None;
-        info!(subject, is_dev, operation_id, new_epoch, "browser profile reset completed successfully");
 
-        Ok(ResetOutcome::Completed {
-            operation_id: operation_id.to_string(),
-            new_profile_epoch: new_epoch,
+        // Update fast epoch map synchronously and spawn worker immediately with ZERO .await gaps
+        // after durable tombstone persistence so caller cancellation cannot orphan intent.
+        self.live_profile_epochs
+            .write()
+            .unwrap()
+            .insert(key.clone(), new_epoch);
+
+        let (tx, mut rx) = watch::channel::<Option<Result<ResetOutcome, String>>>(None);
+        {
+            let mut workers = self.active_reset_workers.lock().unwrap();
+            workers.insert(
+                key.clone(),
+                ActiveResetWorker {
+                    operation_id: operation_id.to_string(),
+                    target_profile_epoch: new_epoch,
+                    outcome_rx: rx.clone(),
+                },
+            );
+        }
+
+        let global_process_count = self.global_process_count.clone();
+        let kill_fail_flag = self._simulated_reset_kill_failure.clone();
+        let delete_fail_flag = self._simulated_reset_delete_failure.clone();
+        let delay_ms_flag = self._simulated_reset_delay_ms.clone();
+        let active_workers = self.active_reset_workers.clone();
+        let subject_owned = subject.to_string();
+        let op_owned = operation_id.to_string();
+        let sync_fence = hooks.sync_fence;
+        let async_teardown = hooks.async_teardown;
+
+        tokio::spawn(async move {
+            let finish_worker = |outcome: Result<ResetOutcome, String>| async {
+                active_workers.lock().unwrap().remove(&key);
+                let _ = tx.send(Some(outcome));
+            };
+
+            // In-memory fence + artifact disk cleanup & network/CDP teardown INSIDE worker ownership
+            // and covered by the 2s caller response deadline.
+            if let Some(sync_cb) = sync_fence {
+                sync_cb().await;
+            }
+            if let Some(teardown_cb) = async_teardown {
+                teardown_cb().await;
+            }
+            let delay_ms = delay_ms_flag.load(Ordering::SeqCst);
+            if delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+            tombstone.stage = ResetStage::Terminating;
+            tombstone.updated_at_unix_ms = now_unix_ms();
+            let _ = inst.profile.save_tombstone(&tombstone);
+
+            if kill_fail_flag.load(Ordering::SeqCst) {
+                tombstone.stage = ResetStage::Failed;
+                tombstone.error = Some("simulated process kill failure".to_string());
+                let _ = inst.profile.save_tombstone(&tombstone);
+                inst.state = InstanceLifecycleState::CleanupPending;
+                finish_worker(Ok(ResetOutcome::CleanupPending {
+                    operation_id: op_owned,
+                    profile_epoch: new_epoch,
+                    reason: "simulated process kill failure".to_string(),
+                }))
+                .await;
+                return;
+            }
+
+            if let Some(mut proc) = inst.process.take() {
+                let term_res = timeout(DEFAULT_TERMINATE_TIMEOUT, proc.terminate()).await;
+                global_process_count.fetch_sub(1, Ordering::SeqCst);
+
+                match term_res {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        tombstone.stage = ResetStage::Failed;
+                        tombstone.error = Some(format!("process termination failed: {e}"));
+                        let _ = inst.profile.save_tombstone(&tombstone);
+                        inst.state = InstanceLifecycleState::CleanupPending;
+                        finish_worker(Ok(ResetOutcome::CleanupPending {
+                            operation_id: op_owned,
+                            profile_epoch: new_epoch,
+                            reason: format!("process termination failed: {e}"),
+                        }))
+                        .await;
+                        return;
+                    }
+                    Err(_) => {
+                        tombstone.stage = ResetStage::Failed;
+                        tombstone.error = Some("process termination timed out after 10s".to_string());
+                        let _ = inst.profile.save_tombstone(&tombstone);
+                        inst.state = InstanceLifecycleState::CleanupPending;
+                        finish_worker(Ok(ResetOutcome::CleanupPending {
+                            operation_id: op_owned,
+                            profile_epoch: new_epoch,
+                            reason: "process termination timed out after 10s".to_string(),
+                        }))
+                        .await;
+                        return;
+                    }
+                }
+            } else if let Some(pgid) = tombstone.process_pgid.or(meta.process_pgid) {
+                if pgid <= 1 {
+                    tombstone.stage = ResetStage::Failed;
+                    tombstone.error = Some(format!("invalid non-positive PGID {pgid}"));
+                    let _ = inst.profile.save_tombstone(&tombstone);
+                    inst.state = InstanceLifecycleState::CleanupPending;
+                    finish_worker(Ok(ResetOutcome::CleanupPending {
+                        operation_id: op_owned,
+                        profile_epoch: new_epoch,
+                        reason: format!("invalid non-positive PGID {pgid}"),
+                    }))
+                    .await;
+                    return;
+                }
+                #[cfg(unix)]
+                {
+                    use nix::sys::signal::killpg;
+                    use nix::unistd::Pid;
+                    let pg = Pid::from_raw(pgid);
+                    match killpg(pg, None) {
+                        Err(nix::errno::Errno::ESRCH) => {}
+                        Ok(()) => {
+                            tombstone.stage = ResetStage::Failed;
+                            tombstone.error = Some(format!(
+                                "prior browser process group {pgid} still active on restart; unverified ownership"
+                            ));
+                            let _ = inst.profile.save_tombstone(&tombstone);
+                            inst.state = InstanceLifecycleState::CleanupPending;
+                            finish_worker(Ok(ResetOutcome::CleanupPending {
+                                operation_id: op_owned,
+                                profile_epoch: new_epoch,
+                                reason: format!(
+                                    "prior browser process group {pgid} still active on restart; unverified ownership"
+                                ),
+                            }))
+                            .await;
+                            return;
+                        }
+                        Err(e) => {
+                            tombstone.stage = ResetStage::Failed;
+                            tombstone.error = Some(format!("OS probe error on PGID {pgid}: {e}"));
+                            let _ = inst.profile.save_tombstone(&tombstone);
+                            inst.state = InstanceLifecycleState::CleanupPending;
+                            finish_worker(Ok(ResetOutcome::CleanupPending {
+                                operation_id: op_owned,
+                                profile_epoch: new_epoch,
+                                reason: format!("OS probe error on PGID {pgid}: {e}"),
+                            }))
+                            .await;
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // Step 6: Delete user-data/ within 10s
+            tombstone.stage = ResetStage::DeletingUserData;
+            tombstone.updated_at_unix_ms = now_unix_ms();
+            let _ = inst.profile.save_tombstone(&tombstone);
+
+            if delete_fail_flag.load(Ordering::SeqCst) {
+                tombstone.stage = ResetStage::Failed;
+                tombstone.error = Some("simulated user-data deletion failure".to_string());
+                let _ = inst.profile.save_tombstone(&tombstone);
+                inst.state = InstanceLifecycleState::CleanupPending;
+                finish_worker(Ok(ResetOutcome::CleanupPending {
+                    operation_id: op_owned,
+                    profile_epoch: new_epoch,
+                    reason: "simulated user-data deletion failure".to_string(),
+                }))
+                .await;
+                return;
+            }
+
+            let mut handle = inst.deletion_worker.take().unwrap_or_else(|| {
+                let profile_clone = inst.profile.clone();
+                tokio::task::spawn_blocking(move || profile_clone.delete_user_data())
+            });
+
+            let del_res = timeout(DEFAULT_DELETE_TIMEOUT, &mut handle).await;
+            match del_res {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(e))) => {
+                    tombstone.stage = ResetStage::Failed;
+                    tombstone.error = Some(format!("user-data deletion failed: {e}"));
+                    let _ = inst.profile.save_tombstone(&tombstone);
+                    inst.state = InstanceLifecycleState::CleanupPending;
+                    finish_worker(Ok(ResetOutcome::CleanupPending {
+                        operation_id: op_owned,
+                        profile_epoch: new_epoch,
+                        reason: format!("user-data deletion failed: {e}"),
+                    }))
+                    .await;
+                    return;
+                }
+                Ok(Err(join_err)) => {
+                    tombstone.stage = ResetStage::Failed;
+                    tombstone.error = Some(format!("user-data deletion task failed: {join_err}"));
+                    let _ = inst.profile.save_tombstone(&tombstone);
+                    inst.state = InstanceLifecycleState::CleanupPending;
+                    finish_worker(Ok(ResetOutcome::CleanupPending {
+                        operation_id: op_owned,
+                        profile_epoch: new_epoch,
+                        reason: format!("user-data deletion task failed: {join_err}"),
+                    }))
+                    .await;
+                    return;
+                }
+                Err(_) => {
+                    inst.deletion_worker = Some(handle);
+                    tombstone.stage = ResetStage::Failed;
+                    tombstone.error = Some("user-data deletion timed out after 10s".to_string());
+                    let _ = inst.profile.save_tombstone(&tombstone);
+                    inst.state = InstanceLifecycleState::CleanupPending;
+                    finish_worker(Ok(ResetOutcome::CleanupPending {
+                        operation_id: op_owned,
+                        profile_epoch: new_epoch,
+                        reason: "user-data deletion timed out after 10s".to_string(),
+                    }))
+                    .await;
+                    return;
+                }
+            }
+
+            // Step 7: Recreate empty user-data/ with 0700 permissions
+            tombstone.stage = ResetStage::RecreatingUserData;
+            tombstone.updated_at_unix_ms = now_unix_ms();
+            let _ = inst.profile.save_tombstone(&tombstone);
+
+            if let Err(e) = inst.profile.recreate_user_data() {
+                tombstone.stage = ResetStage::Failed;
+                tombstone.error = Some(format!("failed to recreate user-data dir: {e}"));
+                let _ = inst.profile.save_tombstone(&tombstone);
+                inst.state = InstanceLifecycleState::CleanupPending;
+                finish_worker(Ok(ResetOutcome::CleanupPending {
+                    operation_id: op_owned,
+                    profile_epoch: new_epoch,
+                    reason: format!("failed to recreate user-data dir: {e}"),
+                }))
+                .await;
+                return;
+            }
+
+            // Step 8: Clear tombstone and finish
+            meta.last_reset_operation_id = Some(op_owned.clone());
+            meta.process_pid = None;
+            meta.process_pgid = None;
+            let _ = inst.profile.save_metadata(&meta);
+            if let Err(e) = inst.profile.clear_tombstone() {
+                inst.state = InstanceLifecycleState::CleanupPending;
+                finish_worker(Err(format!("failed to clear tombstone: {e}")))
+                    .await;
+                return;
+            }
+            inst.state = InstanceLifecycleState::Dormant;
+            inst.active_targets.clear();
+            inst.active_viewers = 0;
+            inst.active_raw_cdp = 0;
+            inst.deletion_worker = None;
+            inst._held_lock = None;
+            info!(
+                subject = %subject_owned,
+                is_dev,
+                operation_id = %op_owned,
+                new_epoch,
+                "browser profile reset completed successfully"
+            );
+
+            finish_worker(Ok(ResetOutcome::Completed {
+                operation_id: op_owned,
+                new_profile_epoch: new_epoch,
+            }))
+            .await;
+        });
+
+        let wait_res = timeout(DEFAULT_RESET_WAIT_TIMEOUT, async move {
+            loop {
+                if let Some(res) = rx.borrow().clone() {
+                    return res;
+                }
+                if rx.changed().await.is_err() {
+                    return Err("reset worker exited unexpectedly".to_string());
+                }
+            }
         })
-    }
+        .await;
 
+        match wait_res {
+            Ok(Ok(outcome)) => Ok(outcome),
+            Ok(Err(msg)) => Err(ManagerError::Internal(msg)),
+            Err(_) => Ok(ResetOutcome::CleanupPending {
+                operation_id: operation_id.to_string(),
+                profile_epoch: new_epoch,
+                reason: "profile reset cleanup continuing in background".to_string(),
+            }),
+        }
+    }
     /// Terminate all managed browser instances during server shutdown.
     pub async fn shutdown_all(&self) {
         info!("shutting down all managed browser host instances");

@@ -1,4 +1,5 @@
 import type { ConnectionRef } from "./ownership.js";
+import { isSecureOrLoopbackOrigin } from "./auth-client.js";
 
 export const MEDIA_SESSION_AUTHORIZATION_MODE = "session-cookie-v2";
 
@@ -163,7 +164,9 @@ export async function revokeCurrentMediaSession(
       credentials: "include",
       headers: {
         "Content-Type": "application/json",
-        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        ...(authToken && isSecureOrLoopbackOrigin(serverOrigin)
+          ? { Authorization: `Bearer ${authToken}` }
+          : {}),
       },
       body: JSON.stringify({ mediaClientId: clientId }),
       signal: controller.signal,

@@ -66,13 +66,16 @@ pub async fn get_producer(session_id: &str) -> Option<Arc<ScreencastProducer>> {
 }
 
 pub async fn remove_producer(session_id: &str) {
-    let mut map = GLOBAL_PRODUCERS.write().await;
-    if let Some(producer) = map.remove(session_id) {
+    crate::browser_host::selection::stop_session_navigation_watcher(session_id);
+    let removed = {
+        let mut map = GLOBAL_PRODUCERS.write().await;
+        map.remove(session_id)
+    };
+    if let Some(producer) = removed {
         let _ = producer.stop_screencast().await;
         let _ = producer.close_target().await;
     }
 }
-
 /// Lazily creates and registers a ScreencastProducer for a session in production if not present.
 pub async fn ensure_producer_for_session(
     state: &AppState,
@@ -115,6 +118,15 @@ pub async fn ensure_producer_for_session(
     ));
 
     get_or_register_producer(session_id, producer.clone()).await;
+    if let Ok(page_sid) = producer.ensure_page_session().await {
+        crate::browser_host::selection::ensure_session_navigation_watcher(
+            state,
+            session_id,
+            &producer.cdp_client,
+            &page_sid,
+        )
+        .await;
+    }
     Some(producer)
 }
 
@@ -897,6 +909,17 @@ async fn run_control_session(
                                     if let Ok(page_sid) = producer.ensure_page_session().await {
                                         let geom = producer.geometry().await;
                                         while let Some(msg) = input_manager.pop_next_input().await {
+                                            let event_kind = match &msg.event {
+                                                crate::browser_host::input::InputEvent::PointerDown { .. } => "pointerDown",
+                                                crate::browser_host::input::InputEvent::PointerUp { .. } => "pointerUp",
+                                                crate::browser_host::input::InputEvent::PointerMove { .. } => "pointerMove",
+                                                crate::browser_host::input::InputEvent::PointerCancel => "pointerCancel",
+                                                crate::browser_host::input::InputEvent::Wheel { .. } => "wheel",
+                                                crate::browser_host::input::InputEvent::KeyDown { .. } => "keyDown",
+                                                crate::browser_host::input::InputEvent::KeyUp { .. } => "keyUp",
+                                                crate::browser_host::input::InputEvent::InsertText { .. } => "insertText",
+                                            };
+                                            debug!(session_id = %session_id, event_kind, "Dispatching CDP input event");
                                             dispatch_input_event_to_cdp(&producer.cdp_client, &page_sid, &geom, &msg.event).await;
                                         }
                                     }

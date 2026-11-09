@@ -1,7 +1,7 @@
 # Host Browser CDP Streaming Architecture
 
 **Authority:** Backend Subsystem (`server/src/browser_host/`, `server/examples/browser_host_qualification.rs`)  
-**Status:** Supervised Principal Profiles, Admission Control, Leased Input, Raw CDP Gateway, Screencast Producer, Bounded Media Fanout, Decoder Pipeline & OS Root Lifecycle Cutover (Phases 01–07 Finalized & Verified; Phase 08 Unblocked)
+**Status:** Supervised Principal Profiles, Admission Control, Leased Input, Raw CDP Gateway, Screencast Producer, Bounded Media Fanout, Decoder Pipeline, OS Root Lifecycle Cutover & Secure Selection / Confirmed Logout Reset (Phases 01–08 Finalized & Approved; Phase 09 Integrated Qualification Pending)
 
 This specification defines the architectural contracts, process containment boundaries, bounded CDP actor lifecycle, and binary wire framing for the Host Browser CDP Streaming subsystem.
 
@@ -273,17 +273,14 @@ Atomic writes via temporary file (`manager.json.tmp.<pid>.<uuid>`) and rename:
 
 The reset state machine purges user credentials (`user-data/`) and recreates a fresh profile while maintaining process exclusivity and preventing concurrent operations.
 
-### Reset Sequence (`reset_profile`)
+### Reset Sequence (`reset_profile_with_hooks`)
 
-1. **Acquire Lock:** Acquires exclusive `ProfileLock` on `manager.lock` (up to 5s timeout).
-2. **Idempotence Check:** If `meta.last_reset_operation_id == Some(operation_id)`, returns `ResetOutcome::Completed` immediately without re-executing.
-3. **Epoch Validation:** Confirms `meta.profile_epoch == expected_profile_epoch`; mismatch returns `ManagerError::StaleEpoch`.
-4. **Advance Epoch & Persist Tombstone:** Increments `profileEpoch`, sets state to `InstanceLifecycleState::Resetting`, and atomically writes `reset.json` tombstone with `stage: ResetStage::Initiated`. Atomically saves `manager.json` with new epoch.
-5. **Terminate Process (Bounded 10s):** Updates tombstone to `stage: ResetStage::Terminating`. If running, terminates browser process via `proc.terminate()` with `DEFAULT_TERMINATE_TIMEOUT = 10s`. Failure or timeout transitions tombstone to `stage: ResetStage::Failed`, enters `InstanceLifecycleState::CleanupPending`, and returns `ResetOutcome::CleanupPending`.
-6. **Delete User Data (Bounded 10s):** Updates tombstone to `stage: ResetStage::DeletingUserData`. Asynchronously deletes `user-data/` with `DEFAULT_DELETE_TIMEOUT = 10s`. Failure or timeout records `stage: ResetStage::Failed`, enters `CleanupPending`, and returns `ResetOutcome::CleanupPending`.
-7. **Recreate User Data:** Updates tombstone to `stage: ResetStage::RecreatingUserData`. Recreates empty `user-data/` directory with mode `0700`.
-8. **Clear Tombstone & Complete:** Records `last_reset_operation_id` in `manager.json`, clears `reset.json`, transitions state to `Dormant`, releases `ProfileLock`, and returns `ResetOutcome::Completed`.
-
+1. **Acquire Lock & Live Admin Recheck:** Acquires exclusive `ProfileLock` on `manager.lock` (up to 5s timeout) and executes `ResetFenceHooks::recheck_admin` (`verify_live_admin_for_reset`) before modifying profile state.
+2. **Idempotence & Epoch Validation:** Returns `ResetOutcome::Completed` immediately if `meta.last_reset_operation_id == Some(operation_id)`; resumes interrupted `reset.json` when `operation_id` matches; otherwise verifies `meta.profile_epoch == expected_profile_epoch` (`ManagerError::StaleEpoch`).
+3. **Advance Epoch & Persist Tombstone:** Increments `profileEpoch`, writes `reset.json` (`ResetStage::Initiated`) and `manager.json` atomically, updates `live_profile_epochs`, and spawns a manager-owned worker (returning `ResetOutcome::CleanupPending` after `DEFAULT_RESET_WAIT_TIMEOUT = 2s` while the worker continues).
+4. **Synchronous Fence & Bounded Async Teardown:** Inside worker ownership, runs `sync_fence` (revokes attachments, closes sessions/input managers, fences selection state and `ManagedBrowser` artifacts) followed by `async_teardown` (deletes fenced artifact files before bounded CDP/producer removal within 2s).
+5. **Terminate Process & Delete User Data:** Executes bounded 10s process termination (`DEFAULT_TERMINATE_TIMEOUT`), bounded 10s `user-data/` deletion (`DEFAULT_DELETE_TIMEOUT`), and `0700` `user-data/` recreation; failure persists `ResetStage::Failed` and `CleanupPending`.
+6. **Clear Tombstone & Status Polling:** Records `last_reset_operation_id`, clears `reset.json`, and returns `Dormant`; `GET /api/browser/profile/reset/{operationId}` inspects active workers, tombstones, and metadata via `get_reset_status`.
 ### Tombstone Lifecycle & Crash Reconciliation
 
 | Stage | Trigger / Transition | Failure Behavior |
@@ -523,7 +520,15 @@ The frontend client modules (`packages/ui/src/browser-host/`, `packages/ui/src/a
 - **Pointer Move Coalescing:** Consecutive pointer move events within the same microtask coalesce into the latest coordinate, while discrete barriers (pointerDown, pointerUp, wheel) flush pending moves beforehand.
 - **Soft-Keyboard & IME Composition Proxy:** Focusable `TextInputProxy` manages virtual keyboard visibility on mobile and Android web, deduplicating Vietnamese and Japanese multi-stage IME compositions (`compositionstart`, `compositionend`, `beforeinput`) to prevent duplicate character insertions.
 
-## 20. Qualification Status & Open Proof Obligations
+## 20. Selection Artifacts, Actor Binding & Revoke-First Logout Reset (Phase 08)
+
+Phase 08 integrates secure CDP DOM selection, actor-bound artifact authorization, revoke-first logout ordering, and confirmed profile reset UX:
+
+- **Actor-Bound Debug Artifacts (`browser_debug/`, `state.rs`):** Every artifact carries an immutable `owner` (`AuthenticatedActor.subject`) and internal `ArtifactSource` (`Cooperative` vs `ManagedBrowser { principal, profile_epoch, browser_incarnation }`). Public `POST /api/browser-debug/artifacts` (`deny_unknown_fields`) always assigns `Cooperative`; managed selection artifacts require live `AppStateBrowserAdmissionAuthority` checks (enabled Admin or `--no-auth` dev, matching `profileEpoch`, and zero active reset tombstones) across create, PNG upload, delete, and handoff—denying demoted Admins and foreign owners with indistinguishable `404`. Global quota enforces 64 records / 64 MiB via cancellation-safe `QuotaReservationGuard`, `UploadReservationGuard`, and `PublishedPathCleanupGuard`, while `revoke_managed_by_principal` purges artifacts prior to profile reset deletion.
+- **CDP Selection Preview & Atomic Terminal Delivery (`selection.rs`, `cdp.rs`, `selection-controller.ts`, `BrowserApp.tsx`):** `Overlay` inspect mode (`Overlay.setInspectMode`) and one-shot `inspectPoint` (`DOM.getNodeForLocation` + allowlisted `Runtime.callFunctionOn`) sanitize DOM metadata into `BrowserSelectionV1` (omitting form values, passwords, raw HTML, and control bytes) with optional cropped CDP PNG capture (`<= 4 MiB` at `1.0x`/`0.5x` scale). A session-lifetime background navigation watcher subscribes to projected `CdpLifecycleEvent` records (`MAX_LIFECYCLE_EVENT_SLOTS = 8`, bounded via `MemoryAdmissionController`) to invalidate selections/pending artifacts on main-frame or same-document navigation. Atomic handoff holds `acquire_managed_selection_fence` and executes `pty_manager.write_if_incarnation` with server-generated reference paths only (`[DamHopper browser-debug artifact ...]`); UI `useHostBrowserSelection` enforces 409 `navigationRevision` sync recovery and preserves Cooperative extension/bridge flows (`use-browser-debug.ts`, `browser-bridge`).
+- **Revoke-First Logout & Profile Reset UX (`api/auth.rs`, `AccountLogoutDialog.tsx`, `ServerProfilesDialog.tsx`, `ServerSettingsDialog.tsx`, `BrowserStreamKeepAliveHost.tsx`):** `POST /api/auth/logout` captures pre-revocation live Admin admission, then **always executes session revocation, media-ticket revocation, Browser attachment/lease teardown (`revoke_auth_session_browser_resources`), and cookie clearing FIRST**, returning HTTP 200 `{ browserResetState: "retained", resetRequired: true }` for legacy/missing/stale-confirmation callers. Destructive reset additionally requires CSRF/Origin (`validate_destructive_browser_csrf`), `confirmed: true`, `expectedProfileEpoch`, `operationId`, and lock-guarded Admin recheck. Unified `AccountLogoutDialog` enforces Cancel-first focus with zero preselected actions (V1); cleartext non-loopback HTTP omits Bearer tokens in both `logoutAccount` and `revokeCurrentMediaSession` (`isSecureOrLoopbackOrigin`); `ServerSettingsDialog` provides standalone reset and `PendingBrowserResetContext` status resume alongside immediate view fencing (`fenceBrowserViewsForProfile`); and `ServerProfilesDialog` local profile deletion clarifies that server sessions and shared Browser credentials are retained.
+
+## 21. Qualification Status & Open Proof Obligations
 
 Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) against real Google Chrome 157.0.8103.38:
 
@@ -536,7 +541,7 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Dual Bearer Relay | **PASS** | Exact Origin policy, bearer authentication, 2-connection concurrency, 4 MiB frame limit |
 | Configuration & Capabilities | **PASS** | Bounded budgets, origin/destination validation, executable/root permissions, domain DTO |
 | Principal Profile Isolation | **PASS** | Dev/prod separation, 64-hex hashed root, 0700/0600 permissions, advisory flock exclusivity |
-| Reset Reconciliation & Tombstones | **PASS** | Epoch advance, atomic reset.json, 10s terminate/delete timeouts, CleanupPending fencing |
+| Reset Reconciliation & Tombstones | **PASS** | Epoch advance, atomic reset.json, 2s wait + async worker, 10s terminate/delete timeouts, CleanupPending fencing |
 | Lazy Manager & Graceful Shutdown | **PASS** | Zero startup spawn, reconnect reuse, 10s shutdown reap preserving credentials |
 | Admission & Network Policy | **PASS** | Admin live role checks, dev loopback/Origin bypass, scheme/metadata filtering |
 | Single-Use Capability Tickets | **PASS** | 256-bit OsRng, SHA-256 memory store, 30s TTL, single-use atomic consume, pair matching |
@@ -547,9 +552,10 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Stream Memory Admission | **PASS** | Hard 128 MiB global memory reservation ceiling across ingress, commands, raw gateway, and frames; `TrackedBhjfFrame` shared RAII reservation held until last clone drops; bounded stream diagnostics counters and ring buffer |
 | Viewer Client Decoder & Input | **PASS** | 1-active + 1-pending frame decode governor, captured subscription credit ACKs, synchronous privacy blackening, letterbox coordinate mapping, and IME deduplication. Verified by 60 unit tests, 8 Chromium browser tests, clean UI build, and clean E2E typecheck. User approved after Cycle 3 (score 4/10; technical carryovers C1, C3, W1–W8). |
 | Root Browser Keep-Alive & OS Cutover | **PASS** | Root keepalive host, canvas slot reparenting, viewer-local claims, explicit target close, recipe sanitization, and retired iframe path. Verified by 206 test cases + 2 typecheck suites. User approved after Cycle 2 (score 4/10; technical carryovers W1–W10; unblocks Phase 08). |
+| Actor-Bound Artifacts, Selection & Logout Reset | **PASS** | Immutable owner/source class, live Admin demotion checks, bounded CDP selection + PNG + atomic terminal handoff, revoke-first logout, 2s bounded async reset worker, and Cancel-first UI (V1). Verified by 237/237 scoped Phase 08 checks + 3,718/3,718 full UI unit run; Cycle 3 approved (`7/10`, 0 critical issues; carryovers W1–W9). |
+| Live-Server Selection E2E (`selection.spec.ts`) | **DEFERRED (PHASE 09)** | `packages/ui/e2e/os-host-browser/selection.spec.ts` authored and E2E typechecked; live-server Playwright execution deferred to Phase 09 integrated qualification. |
 | Native Browser Zoom | **UNVERIFIED** | Unreachable via standard CDP in headless Chromium 157; `inputTrusted: false` enforced |
 | Windows Containment | **FAIL-CLOSED** | Windows Job Object containment unqualified; non-Unix launch returns `ContainmentUnavailable` |
-
 ### Phase 05 Verification Summary
 
 - **Phase 05 Finalized (2026-11-09):** The user explicitly approved the code review with noted issues after Cycle 3 (70/70 checks passing across screencast, fanout, bounds, regressions, build, and TypeScript compile suites). Phase 06 (Frame Assembly & Decoder Pipeline) is unblocked.
@@ -593,6 +599,21 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
   - W8: Connected-boundary behavioral integration test requirements.
   - W9: React-owned DOM movement vs imperative host portal convention.
   - W10: Capability and transport error handling in UI.
+
+### Phase 08 Verification Summary
+
+- **Phase 08 Finalized (2026-11-09):** User approved Cycle 3 code review (`7/10`, 0 critical issues). Unblocks Phase 09 integrated qualification.
+- **Test Evidence:** `237/237` scoped Phase 08 checks passing: `78/78` Rust across 7 targets (`browser_debug` [13], `browser_host` [27], `browser_debug_artifacts` [7], `browser_host_selection` [7], `browser_host_logout` [8], `browser_host_lifecycle` [10], `auth_device_sessions` [6]); `121/121` scoped UI Vitest across 9 files (plus `3,718/3,718` full UI unit run); `19/19` scoped Chromium browser tests across 5 files (`host-browser-selection.browser.tsx`, `host-browser-logout.browser.tsx`, `browser-debug-panel.browser.tsx`, `browser-debug-keep-alive.browser.tsx`, `host-browser-lifecycle.browser.tsx`); `19/19` `browser-bridge`; clean UI/extension/E2E typechecks, UI/web builds, and 15-file ESLint. (Accidental `--` full-browser expansion showed 3 pre-existing failures in 2 untouched files; live-server `selection.spec.ts` execution deferred to Phase 09.)
+- **Noted Technical Carryovers (Cycle 3 W1–W9 tracked into Phase 09):**
+  - **W1 (High):** Serialize handoff final validation/write and authoritative navigation/reset epoch updates through one ordered fence (`state.rs`, `selection.rs`, `browser_debug/store.rs`).
+  - **W2 (High):** Check complete captured owner/generation/token/operation across every standalone reset/status mutation (`ServerSettingsDialog.tsx`).
+  - **W3 (High):** Clear/replace `GLOBAL_NAV_WATCHERS` entry or retire target authority on lifecycle overflow/lag (`selection.rs`).
+  - **W4 (High):** Return `sessionRevoked: false` / uncertain when public logout receives no usable credential so cleartext non-loopback HTTP without cookie cannot misreport revocation (`auth.rs`, `auth-client.ts`).
+  - **W5 (High):** Preserve pending reset operation identity on post-commit `409 resetFailed` and reconcile surviving `reset.json` before completion replay (`manager.rs`, `browser_host.rs`, `ServerSettingsDialog.tsx`).
+  - **W6 (Medium):** Correlate `pending_api_navigation_at` suppression with dispatched navigation rather than a 5s timer (`session.rs`, `api/browser_host.rs`).
+  - **W7 (Medium):** Hold quota charges until artifact deletion/expiry file removal succeeds (`browser_debug/store.rs`).
+  - **W8 (Medium):** Make selection status polling single-flight with abort/deadline and revision ordering checks (`selection-controller.ts`).
+  - **W9 (Medium):** Restore `setIsDeleting(true)` busy-state guard in `handleConfirmDelete` (`ServerProfilesDialog.tsx`).
 ### Finalization & Roadmap Status
 
 - **Phase 04 Finalized (2026-11-09):** The user explicitly approved the code review with noted issues after Cycle 3 (score 7/10; 57/57 tests passing across Rust gateway, regressions, example build, TypeScript compile, and Playwright E2E suites). Phase 05 (Screencast Producer Actor & JPEG Fragmentation) is unblocked.
@@ -601,7 +622,7 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 - **Teardown Timing Under Congestion:** While `write_with_cancel` races auth cancellation and absolute deadline against in-flight writes, actual kernel socket buffer draining and upstream termination remain subject to OS scheduler scheduling and network latency; immediate teardown is bounded by local runtime aborts, not an absolute wall-clock guarantee.
 - **Windows Platform Boundary:** Windows process containment remains unimplemented and fails closed with `ContainmentUnavailable`.
 - **Native Engine Zoom:** Headless Chromium zoom cannot be verified via standard CDP without layout distortion; non-unit zoom geometry remains flagged `inputTrusted: false`.
-## 21. Source Map
+## 22. Source Map
 
 | Responsibility | Path |
 | --- | --- |
@@ -623,6 +644,9 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Screencast Producer Actor | `server/src/browser_host/screencast.rs` |
 | Binary Media Fanout & Transports | `server/src/browser_host/media.rs` |
 | Stream Diagnostics & Memory Admission | `server/src/browser_host/diagnostics.rs` |
+| Managed Selection & Nav Watcher | `server/src/browser_host/selection.rs` |
+| Actor-Bound Debug Artifact Store | `server/src/browser_debug/{mod,store,error}.rs`, `server/src/api/browser_debug.rs` |
+| Revoke-First Logout & Cleanup Wiring | `server/src/api/auth.rs`, `server/src/api/router.rs`, `server/src/state.rs` |
 | Qualification Example Harness | `server/examples/browser_host_qualification.rs` |
 | Adapter & Protocol Test Suite | `server/tests/browser_host_adapter.rs` |
 | Process Containment Test Suite | `server/tests/browser_host_process.rs` |
@@ -636,6 +660,10 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Native Screencast Test Suite | `server/tests/browser_host_screencast.rs` |
 | Media Fanout & Credit Test Suite | `server/tests/browser_host_media.rs` |
 | Bounds Admission Test Suite | `server/tests/browser_host_bounds.rs` |
+| Actor-Bound Artifacts Test Suite | `server/tests/browser_debug_artifacts.rs` |
+| Managed Selection Test Suite | `server/tests/browser_host_selection.rs` |
+| Revoke-First Logout & Reset Suite | `server/tests/browser_host_logout.rs` |
+| Device Session & Cleanup Suite | `server/tests/auth_device_sessions.rs` |
 | E2E Qualification Harness Fixture | `packages/ui/e2e/fixtures/browser-host-qualification.ts` |
 | Playwright Compatibility Spec | `packages/ui/e2e/os-host-browser/compatibility.spec.ts` |
 | Agent CDP Qualification Spec | `packages/ui/e2e/os-host-browser/agent.spec.ts` |
@@ -654,3 +682,8 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Chromium Input Browser Test | `packages/ui/browser-tests/host-browser-input.browser.tsx` |
 | Root Browser Keep-Alive Host | `packages/ui/src/os/BrowserStreamKeepAliveHost.tsx` |
 | Host Browser Lifecycle Browser Test | `packages/ui/browser-tests/host-browser-lifecycle.browser.tsx` |
+| Playwright Selection E2E Spec | `packages/ui/e2e/os-host-browser/selection.spec.ts` |
+| Selection Preview & Handoff Controller | `packages/ui/src/browser-host/selection-controller.ts` |
+| Unified Cancel-First Logout Dialog | `packages/ui/src/components/organisms/AccountLogoutDialog.tsx` |
+| Profile Management & Settings Reset UI | `packages/ui/src/components/organisms/{ServerProfilesDialog,ServerSettingsDialog}.tsx` |
+| Chromium Selection & Logout Tests | `packages/ui/browser-tests/host-browser-{selection,logout}.browser.tsx` |
