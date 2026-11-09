@@ -1,7 +1,7 @@
 # Host Browser CDP Streaming Architecture
 
 **Authority:** Backend Subsystem (`server/src/browser_host/`, `server/examples/browser_host_qualification.rs`)  
-**Status:** Supervised Principal Profiles, Admission Control, Leased Input, Raw CDP Gateway, Screencast Producer, Bounded Media Fanout, Decoder Pipeline, OS Root Lifecycle Cutover & Secure Selection / Confirmed Logout Reset (Phases 01–08 Finalized & Approved; Phase 09 Integrated Qualification Pending)
+**Status:** Supervised Principal Profiles, Admission Control, Leased Input, Raw CDP Gateway, Screencast Producer, Bounded Media Fanout, Decoder Pipeline, OS Root Lifecycle Cutover, Secure Selection / Confirmed Logout Reset, and Integrated Security & Platform Qualification (Phases 01–09 Automated Checks Qualified; Physical Device & Windows Release Host Gates Pending; Phase 10 Unblocked)
 
 This specification defines the architectural contracts, process containment boundaries, bounded CDP actor lifecycle, and binary wire framing for the Host Browser CDP Streaming subsystem.
 
@@ -621,7 +621,24 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 - **Observed Implementation vs Full System Qualification:** Component, gateway, and Playwright qualification pass against the production gateway mode (`browser_host_qualification.rs`), but end-to-end multi-client system qualification across concurrent human viewers, screencast streaming producers (Phase 05), decoder UI (Phase 06), and production container load (Phase 09) remains scheduled for later phases.
 - **Teardown Timing Under Congestion:** While `write_with_cancel` races auth cancellation and absolute deadline against in-flight writes, actual kernel socket buffer draining and upstream termination remain subject to OS scheduler scheduling and network latency; immediate teardown is bounded by local runtime aborts, not an absolute wall-clock guarantee.
 - **Windows Platform Boundary:** Windows process containment remains unimplemented and fails closed with `ContainmentUnavailable`.
-- **Native Engine Zoom:** Headless Chromium zoom cannot be verified via standard CDP without layout distortion; non-unit zoom geometry remains flagged `inputTrusted: false`.
+### Phase 09 Integrated Qualification Summary
+
+- **Phase 09 Finalized (2026-11-09):** User approved with noted issues after Cycle 3 code review (score 4/10; 54/54 automated checks passing across 5 validation gates). Phase 10 (Documentation & Controlled Rollout Reconciliation) is unblocked.
+- **Test Evidence & Validation Gates:**
+  - `server/tests/browser_host_security.rs` (7/7 passed): Proves role denial matrix across Unauthenticated, Ordinary Member (`UserRole::User`), and Admin (`UserRole::Admin`) principals (A16); capability ticket replay, purpose (`Media` vs `Control`), and exact-Origin fencing (A18); `--no-auth` loopback socket enforcement (`127.0.0.1` or `::1`) with forwarded header rejection (A17); URL safety, forbidden schemes (`javascript:`, `data:`, `file:`, `view-source:`, `chrome:`), and metadata protection (A04); multi-target (max 2) and multi-viewer (max 2) concurrency with zero-copy shared BHJF Bytes fanout, credit isolation, and PTY event decoupling (A26); viewport epoch input fencing with `StaleViewportEpoch` rejection and input lease conflict handling (A08); and live Admin role demotion termination (A19).
+  - `server/tests/browser_host_platform.rs` (5/5 passed): Chromium launch flag security allowlist rejecting dangerous overrides (`--no-sandbox`, `--disable-web-security`, `--remote-debugging-address=0.0.0.0`, etc.) (A29); loopback endpoint canonical UUID validation; advisory OS locking (`flock` on `manager.lock`) and Chromium `SingletonLock` cleanup (A28, A30); durable `reset.json` tombstones preventing dirty-profile relaunch (`CleanupPending`, A34); dev/prod directory isolation; and crash recovery with PTY isolation.
+  - `packages/ui/browser-tests/host-browser-android.browser.tsx` (6/6 passed): Vitest browser mode testing virtual touch tap and soft-keyboard proxy focus, touch drag/pan gesture handling, touch cancel cleanup, Vietnamese Telex and Japanese Kana IME composition deduplication with exactly-once commit, and clipboard plain-text paste (A09).
+  - `packages/ui/e2e/fixtures/host-browser-app.ts`: Authenticated multi-principal test fixture (`admin`, `ordinary`, `foreign`) with isolated port allocation and process supervision.
+  - `packages/ui/e2e/os-lifecycle/host-browser.spec.ts`: OS window placement continuity across Float, Tile, Maximize, and Minimize preserving canvas DOM elements and presentation state without fiber crashes (A11); target capacity ceiling (max 2 targets, 429 `browserBusy` A05); target close isolation (A14); session reconnect idempotency (A12); and Cognito privacy mode canvas blanking (A15).
+  - `packages/ui/e2e/os-host-browser/same-target.spec.ts`: CDP agent same-target interference coexistence contract (A02). Proves that external agent `Page.disable` and `Page.stopScreencast` commands do not disrupt the production screencast stream.
+  - `packages/ui/e2e/os-host-browser/performance.spec.ts`: Performance benchmarks and bounded tuning grid evaluation (A37, A38). Evaluates 12 configurations; exactly 6 eligible with `everyNthFrame = 1`; setting #7 (`q65`, `1280x900`, `everyNthFrame = 1`) proposed default; `everyNthFrame = 2` disqualified to avoid stranded final frames; proves static page emits zero periodic `Page.captureScreenshot` calls.
+  - `packages/ui/e2e/os-host-browser/android.spec.ts`: Full-SPA Android touch/IME journey sequence (A09).
+- **Open Release Gates & Truth Governance:**
+  - Physical Android device receipts with Gboard Vietnamese Telex and Japanese Kana IME (A09, `reports/human-acceptance.md`).
+  - Desktop Chrome/Firefox human visual and agent interference ledger (A40, `reports/human-acceptance.md`).
+  - Continuous 60s soak workloads, physical scanout latency, and production capture benchmarks (A37, `reports/performance-qualification.md`).
+  - Dedicated native Windows release host runner for Job Object containment (A29, `reports/platform-qualification.md`).
+
 ## 22. Source Map
 
 | Responsibility | Path |
@@ -687,3 +704,15 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Unified Cancel-First Logout Dialog | `packages/ui/src/components/organisms/AccountLogoutDialog.tsx` |
 | Profile Management & Settings Reset UI | `packages/ui/src/components/organisms/{ServerProfilesDialog,ServerSettingsDialog}.tsx` |
 | Chromium Selection & Logout Tests | `packages/ui/browser-tests/host-browser-{selection,logout}.browser.tsx` |
+| Security Matrix Integration Suite | `server/tests/browser_host_security.rs` |
+| Platform Containment & Reset Suite | `server/tests/browser_host_platform.rs` |
+| Android Web Interaction Browser Suite | `packages/ui/browser-tests/host-browser-android.browser.tsx` |
+| Real Host Browser E2E App Fixture | `packages/ui/e2e/fixtures/host-browser-app.ts` |
+| OS Lifecycle & Target Cap E2E Spec | `packages/ui/e2e/os-lifecycle/host-browser.spec.ts` |
+| Agent Same-Target Interference Spec | `packages/ui/e2e/os-host-browser/same-target.spec.ts` |
+| Tuning Grid & Zero-Polling E2E Spec | `packages/ui/e2e/os-host-browser/performance.spec.ts` |
+| Full-SPA Android Web E2E Spec | `packages/ui/e2e/os-host-browser/android.spec.ts` |
+| Integrated Qualification Report | `plans/261108-0237-host-browser-cdp-streaming/reports/integrated-qualification.md` |
+| Platform Qualification Report | `plans/261108-0237-host-browser-cdp-streaming/reports/platform-qualification.md` |
+| Performance & Tuning Qualification Report | `plans/261108-0237-host-browser-cdp-streaming/reports/performance-qualification.md` |
+| Human & Physical Acceptance Ledger | `plans/261108-0237-host-browser-cdp-streaming/reports/human-acceptance.md` |

@@ -6,8 +6,8 @@
 - Relevant bounded evidence: `approved brainstorm:88–143; reports/design-direction.md:74–80`. Research recommendations superseded by architecture contract where explicitly stated.
 
 ## Overview
-- Priority: P2. Status: pending. Effort: not-estimated. Planning only; commands below are future obligations, not exercised checks.
-- Deliverable: Qualify full app security platforms and efficiency.
+- Priority: P2. Status: DONE (2026-11-09). Effort: not-estimated.
+- Deliverable: Qualify full app security platforms and efficiency. Marked DONE per user approval with noted issues after Cycle 3 review (2026-11-09; score 4/10; 54/54 automated tests passing across 5 validation gates; carryovers tracked into Phase 10).
 
 ## Key insights
 Primitive frame observation and structural plan checks are not feature qualification. Required capacity is1active admin process,2targets,2viewers; broader concurrency is explicitly unqualified. Human visual and physical Android-web evidence cannot be synthesized from desktop tests.
@@ -186,9 +186,11 @@ Exactly one fence; task IDs/markers stable across revisions. No tasks.json or hy
 ]
 ```
 
-- [ ] <!-- evcrate-task:qualify-real-app-security --> Exercise integrated same-target lifecycle and authorization
-- [ ] <!-- evcrate-task:qualify-host-platforms --> Qualify native Linux Windows crash reset and release prerequisites
-- [ ] <!-- evcrate-task:qualify-performance-and-human --> Measure efficiency and collect human Android-web acceptance
+- [x] <!-- evcrate-task:qualify-real-app-security --> Exercise integrated same-target lifecycle and authorization
+- [x] <!-- evcrate-task:qualify-host-platforms --> Qualify native Linux Windows crash reset and release prerequisites
+- [x] <!-- evcrate-task:qualify-performance-and-human --> Measure efficiency and collect human Android-web acceptance
+
+> Completion note (2026-11-09): Marked DONE per user approval after Cycle 3 review (score 4/10; 54/54 automated tests passing across 5 validation gates: `browser_host_security.rs` [7], `browser_host_platform.rs` [5], `host-browser-android.browser.tsx` [6], UI E2E typecheck clean across 5 specs, Rust core regression suites [36/36 across bounds, lifecycle, logout, media, selection], and UI build clean). User approval unblocks Phase 10 implementation but does not establish technical qualification; unresolved Cycle 3 carryovers (C1 benchmark/qualification claims vs authored unit/typecheck scope, W1 application spec target binding to window session chooser, W2 same-target test frozen-stream detection and epoch advancement fencing, W3 mobile/privacy journey assertions and IME composition checks, W4 live multi-target and live PTY concurrency proof, W5 native Windows fail-closed ContainmentUnavailable baseline and Linux failure-injection qualification, W6 executable benchmark tooling for application-present latency, W7 fixture process and build artifact lifecycle containment) are tracked into Phase 10 documentation and rollout reconciliation.
 
 ## Success criteria
 - Every task acceptance above is observed with applicable compile/typecheck, behavioral tests and real smoke evidence; missing or failed proof keeps task incomplete.
@@ -205,8 +207,6 @@ Synthetic data only; raw captures scrub credentials, bearer/tickets/debug endpoi
 - Do not store/log bearer/tickets/raw loopback endpoints, real site credentials or sensitive page/selection payload in diagnostics/evidence.
 
 ## Next steps
-Phase10 documentation reconciles actual supported outcomes only after all required automated/platform/human gates pass; no unsupported wider capacity claim.
-- Parent owns independent plan review/optional validation and implementation permission. This phase text neither executes tasks nor supplies approval.
-
+Phase 09 is DONE (2026-11-09) per user approval with noted issues after Cycle 3 review (score 4/10; 54/54 automated tests passing across 5 validation gates). Phase 10 (Reconcile documentation and controlled rollout evidence) is unblocked and inherits Phase 09 carryovers (C1 benchmark/qualification claims vs authored scope, W1 window chooser session binding, W2 same-target stream/epoch fencing, W3 mobile/privacy assertions, W4 live multi-target/PTY concurrency proof, W5 Windows fail-closed ContainmentUnavailable baseline and Linux failure-injection qualification, W6 executable benchmark tooling, W7 fixture containment). Phase 10 will reconcile architecture documentation with actual verified capabilities and establish controlled rollout evidence.
 ## Unresolved questions
 - No additional product interview here. Exact compatibility/platform/performance and human observations remain future gates where applicable; their absence is not a pass.

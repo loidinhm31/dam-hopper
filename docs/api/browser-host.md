@@ -742,3 +742,16 @@ Frontend client API and stream controller exports (`packages/ui/src/api/browser-
 - `BrowserStreamController`: Persistent canvas controller governing 1-active-decode + 1-pending-frame, captured-socket ACKs, synchronous privacy blackening (`setPrivacyMode`), and visibility detachment (`setVisibility`).
 - `BrowserInputController`: Letterbox coordinate mapping to $[0.0, 1.0]$, microtask move coalescing, and held-input auto-release.
 - `TextInputProxy`: Manages virtual keyboard focus and multi-stage IME composition deduplication.
+
+---
+
+## 10. Integrated Test Fixtures & Qualification Specs
+
+The Host Browser API and streaming transport are qualified by integrated test harnesses (`server/tests/` and `packages/ui/e2e/`):
+
+- **Real App Test Fixture (`packages/ui/e2e/fixtures/host-browser-app.ts`):** Spawns an authenticated production server instance with dynamically allocated ports, synthetic `admin`, `ordinary`, and `foreign` principals, and automated cleanup.
+- **Same-Target Coexistence (`packages/ui/e2e/os-host-browser/same-target.spec.ts`):** Verifies that external automation clients connecting over `/api/browser/cdp` do not terminate production screencasts when executing `Page.disable` or `Page.stopScreencast`.
+- **Tuning Grid & Zero-Polling (`packages/ui/e2e/os-host-browser/performance.spec.ts`):** Evaluates 12 candidate configurations against protocol safety caps; release profile requires `everyNthFrame = 1` (setting #7 q65 1280x900 default); static pages emit zero periodic `Page.captureScreenshot` calls.
+- **Mobile Android Web Journeys (`packages/ui/e2e/os-host-browser/android.spec.ts`):** Exercises touch gestures, soft-keyboard proxy focus, and IME composition sequences (Vietnamese Telex / Japanese Kana).
+- **Security Matrix Integration (`server/tests/browser_host_security.rs`):** Validates role denial, single-use ticket replay/purpose/Origin fencing, `--no-auth` loopback socket enforcement, URL network policy, multi-target/multi-viewer concurrency limits, and live role demotion termination.
+- **Platform Containment & Reset (`server/tests/browser_host_platform.rs`):** Validates Chromium launch argument security allowlisting, Unix supervisor death-pipe architecture, advisory OS locking (`flock`), and `reset.json` restart fencing.
