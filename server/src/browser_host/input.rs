@@ -268,6 +268,11 @@ impl SessionInputManager {
         }
     }
 
+    pub async fn is_lease_holder(&self, viewer_id: &str) -> bool {
+        let guard = self.lease.lock().await;
+        guard.as_ref().map(|l| l.viewer_id == viewer_id).unwrap_or(false)
+    }
+
     /// Acquires cooperative control lease.
     ///
     /// Returns lease token and expires_at unix ms.

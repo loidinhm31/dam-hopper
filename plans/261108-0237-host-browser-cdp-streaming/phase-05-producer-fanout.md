@@ -6,8 +6,8 @@
 - Relevant bounded evidence: `research/stream-protocol.md:14–72; reports/design-direction.md:39–46 (prompt ACK overrides paced-ACK recommendation)`. Research recommendations superseded by architecture contract where explicitly stated.
 
 ## Overview
-- Priority: P2. Status: pending. Effort: not-estimated. Planning only; commands below are future obligations, not exercised checks.
-- Deliverable: Stream bounded native JPEG with independent credits.
+- Priority: P2. Status: DONE (2026-11-09). Effort: not-estimated.
+- Deliverable: Stream bounded native JPEG with independent credits. Marked DONE per user approval with noted issues after Cycle 3 (2026-11-09; score 4/10; 70/70 checks passing across 8 targets: `browser_host_screencast` [3/3], `browser_host_media` [7/7], `browser_host_bounds` [3/3], regressions [57/57 across `gateway` 14/14, `admission` 7/7, `lifecycle` 10/10, UI E2E typecheck clean with 0 errors, and core unit checks `browser_host` 24/24]). Ready to proceed to Phase 06; Phase 06 unblocked.
 
 ## Key insights
 Prompt exact-once CDP ACK avoids researched starvation/final-frame failure;10FPS is viewer governor only. Native compositor/encode rate and loopback CPU/bytes remain qualification risks.
@@ -173,9 +173,9 @@ Exactly one fence; task IDs/markers stable across revisions. No tasks.json or hy
 ]
 ```
 
-- [ ] <!-- evcrate-task:produce-native-jpeg --> Implement native screencast producer and bounded recovery
-- [ ] <!-- evcrate-task:fanout-binary-media --> Implement atomic envelopes bounded credits and media writer
-- [ ] <!-- evcrate-task:instrument-stream-bounds --> Expose bounded operational counters and enforce memory admission
+- [x] <!-- evcrate-task:produce-native-jpeg --> Implement native screencast producer and bounded recovery
+- [x] <!-- evcrate-task:fanout-binary-media --> Implement atomic envelopes bounded credits and media writer
+- [x] <!-- evcrate-task:instrument-stream-bounds --> Expose bounded operational counters and enforce memory admission
 
 ## Success criteria
 - Every task acceptance above is observed with applicable compile/typecheck, behavioral tests and real smoke evidence; missing or failed proof keeps task incomplete.
@@ -191,7 +191,7 @@ JPEG/header lengths checked before allocation; abusive ACK/control traffic disco
 - Do not store/log bearer/tickets/raw loopback endpoints, real site credentials or sensitive page/selection payload in diagnostics/evidence.
 
 ## Next steps
-Phase07 joins completed producer and viewer branches; no root OS cutover before both are coherent.
+Phase 05 is DONE (2026-11-09). Phase 06 is unblocked. Phase 06 (owner-fenced canvas decoder and Android-web input) may proceed using isolated component and input harnesses. Phase 07 joins completed producer and viewer branches; no root OS cutover before both are coherent.
 - Parent owns independent plan review/optional validation and implementation permission. This phase text neither executes tasks nor supplies approval.
 
 ## Unresolved questions

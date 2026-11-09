@@ -1,7 +1,7 @@
 # Host Browser CDP Streaming Architecture
 
 **Authority:** Backend Subsystem (`server/src/browser_host/`, `server/examples/browser_host_qualification.rs`)  
-**Status:** Supervised Principal Profiles, Admission Control, Leased Input & Raw CDP Gateway (Phases 01–04 Finalized & Verified; Phase 05 Unblocked)
+**Status:** Supervised Principal Profiles, Admission Control, Leased Input, Raw CDP Gateway, Screencast Producer & Bounded Media Fanout (Phases 01–05 Finalized & Verified; Phase 06 Unblocked)
 
 This specification defines the architectural contracts, process containment boundaries, bounded CDP actor lifecycle, and binary wire framing for the Host Browser CDP Streaming subsystem.
 
@@ -399,7 +399,100 @@ Navigation URLs are validated against `validate_navigation_url`:
 - **Production Private & Metadata IP Blocking:** Rejects private IPv4/IPv6, link-local, loopback, and cloud metadata endpoints (`169.254.169.254`, `100.100.100.200`, `fd00:ec2::254`, `metadata.google.internal`) unless matching explicit project origin exceptions.
 - **Development Isolation:** Rejects general internet destinations; restricts navigation to loopback and configured `allowed_origins`.
 
-## 15. Qualification Status & Open Proof Obligations
+## 15. Native Screencast Producer & Bounded Ingress (`screencast.rs`)
+
+The screencast producer (`server/src/browser_host/screencast.rs`) manages native Chromium screencast streaming with bounded memory admission and strict lifecycle control:
+
+### Dedicated Page Session Attachment
+
+- **Explicit Page Session:** Subscribes to target via `Target.attachToTarget(flatten: true)` before starting screencast; enables the `Page` domain on the target session.
+- **Serial Lifecycle Runs:** Starts, stops, and reconfigures with a fresh `producerRun` UUID and native `sessionId` learned from the ordered run. Reconnection or run abort generates a new `producerRun`.
+
+### Prompt Exact-Once CDP ACK
+
+- **compositor Starvation Prevention:** Enqueues exactly one ACK (`Page.screencastFrameAck`) for each received current-run event after bounded admission or explicit drop.
+- **No ACK Retries:** Ambiguously written ACKs are not replayed or retried; connection failure aborts the run cleanly to avoid over-ACKing or state desynchronization.
+
+### Single Replaceable Encoded Candidate Mailbox
+
+- **No Task-per-Event:** Event ingress drains into one replaceable candidate mailbox without spawning background tasks per incoming frame.
+- **Base64 Bounds Enforcement:** Enforces base64 size ceiling (`MAX_BASE64_BYTES = 2_796_204`, corresponding to 2 MiB decoded payload) before admission.
+- **Late Base64 Decoding:** Overwritten candidates are dropped and ACKed immediately. Base64 is decoded only once when the governor selects the latest candidate at the 10 FPS boundary.
+- **SOF Dimension Validation:** Parses JPEG SOF0/SOF2 marker (`parse_jpeg_dimensions`) directly to inspect image dimensions ($\le 1920 \times 1080$, $\le 2,073,600$ pixels). Never decodes uncompressed pixels or re-encodes JPEG images.
+
+### Viewport Epoch & Geometry Reconciliation
+
+- **Epoch Synchronization:** Synchronizes `viewportEpoch` and layout geometry (`TargetGeometry`) before publishing.
+- **Cached Frame Reuse:** On initial attachment, resize, or restart, the producer reuses the valid cached frame if dimensions match.
+- **Zero Periodic Screenshots:** If 250 ms elapses without a native frame (`SCREENSHOT_FALLBACK_DELAY`), allows exactly one bracketed `Page.captureScreenshot` fallback per epoch. Periodic or post-input screenshot engines are strictly prohibited.
+
+### Demand-Driven Lifecycle & Heartbeat Expiry
+
+- **Viewer Demand Tracking:** Screencast runs only when active viewers register visible demand (`ViewerDemand`, `visible: true`).
+- **Heartbeat Cadence:** Viewers send heartbeats every 5 seconds (`HEARTBEAT_INTERVAL`); demand expires after 15 seconds (`VISIBLE_DEMAND_EXPIRY`).
+- **Zero-Demand Teardown:** When visible demand drops to zero (or all viewer heartbeats expire), screencast stops immediately (`zero_demand_stops`).
+- **Final Frame Retention:** The final published frame is retained in cache without withholding ACKs from Chromium.
+
+## 16. Binary Media Fanout & Independent Credit Governor (`media.rs`)
+
+The media fanout layer (`server/src/browser_host/media.rs`) delivers atomic binary frames to multiple concurrent viewers with independent credit flow control:
+
+### Atomic Binary Envelope & Publication
+
+- **Serialize Once:** Complete immutable BHJF frame (16-byte prefix + target frame header + JPEG payload) is serialized once per publication.
+- **Zero App-Level Copies:** Broadcasts identical contiguous `Bytes` clones through Axum 0.8.8 / tungstenite 0.28.0 WebSocket `AxumWsMessage::Binary(Bytes)`. Viewers share the underlying memory buffer.
+
+### Independent Per-Viewer Credit Governor
+
+- **Rate Ceiling:** Governed to maximum 10 deliveries per second (`MIN_DELIVERY_INTERVAL = 100ms`).
+- **Credit Budget:** Maximum 2 outstanding frames (`MAX_OUTSTANDING_PER_VIEWER = 2`) + 1 latest pending frame (`MAX_PENDING_PER_VIEWER = 1`) per viewer.
+- **Outstanding Key:** Each delivery is tracked by `OutstandingKey(subscriptionEpoch, producerRun, viewportEpoch, frameSeq)`.
+- **Originating Socket Subscription Authority:** Incoming `frameAck` and `frameDiscarded` messages must match the connected socket's `subscriptionEpoch` (`control_sub == self.subscription_epoch`). Foreign, duplicate, future, or old-socket traffic cannot alter credit or clear replacement entries.
+- **Settled-Frame Flush:** Releasing credit immediately flushes any buffered pending frame if the rate governor interval has elapsed.
+- **Deadlines & Timeouts:** 30-second outstanding frame timeout (`OUTSTANDING_TIMEOUT = 30s`) and 5-second physical socket write deadline (`WRITE_DEADLINE = 5s`). Failed writes close the subscription, while buffer reservations survive until the last clone drops.
+
+### Pause & Rebind Protocol
+
+- **Demand Detachment:** Pausing detaches viewer demand and frees credit controller state.
+- **Fresh Socket Requirement:** Resuming requires a fresh media socket + new single-use capability ticket + new `subscriptionEpoch` and paired control connection. Old sockets cannot be retagged.
+
+### Viewer Capacity
+
+- **Global Ceiling:** Capped at 2 concurrent active streaming viewers globally (`MAX_GLOBAL_VIEWERS = 2`), guarded by RAII `ViewerPermit`. Admissions beyond capacity return HTTP 429 Too Many Requests (`kind: "browserBusy"`).
+
+## 17. Memory Admission Controller & Stream Diagnostics (`diagnostics.rs`)
+
+The memory admission controller (`server/src/browser_host/diagnostics.rs`) enforces strict bounds across all browser payload buffers:
+
+### Global Payload Memory Ceiling
+
+- **128 MiB Hard Cap:** Hard memory ceiling of 128 MiB (`MAX_BROWSER_PAYLOAD_MEMORY_BYTES = 134,217,728` bytes) enforced across actor ingress, commands, raw gateway, and encoded/JPEG references.
+- **Pre-Allocation Admission:** Memory is reserved via `try_reserve(bytes)` before base64 decoding or frame packing; exhaustion drops candidates cleanly.
+
+### Complete BHJF Buffer Tracking (`TrackedBhjfFrame`)
+
+- **Last-Clone RAII Release:** Wraps packed frame `Bytes` with a shared `Arc<FrameReservationOwner>` holding `MemoryReservation`.
+- **Survives Subscription Teardown:** The memory reservation remains held until the LAST active-writer, cache, outstanding, or pending clone drops—including slow-writer or old-outstanding clones after subscription cleanup.
+
+### Bounded Operational Stream Diagnostics (`StreamDiagnostics`)
+
+- **Operational Counters:** Reports bounded-label atomic counters: `events_received`, `events_admitted`, `events_dropped`, `acks_enqueued`, `acks_failed`, `base64_decoded_bytes`, `jpeg_bytes_total`, `frames_delivered`, `acks_received`, `discards_received`, `timeouts_occurred`, `reservations_denied`.
+- **Capture vs Delivery Distinction:** Distinguishes native engine capture rate from viewer delivery rate.
+- **Synthetic Qualification Ring:** Bounded ring buffer for qualification event timestamps (`MAX_QUALIFICATION_EVENTS = 256`).
+
+## 18. Streaming WebSocket Transports (`/api/browser/media` and `/api/browser/control`)
+
+The streaming interface exposes two paired WebSocket routes:
+
+### Dual-Transport Separation
+
+- **Media Transport (`GET /api/browser/media`):** Dedicated binary delivery socket for BHJF v1 frames. Subprotocol: `damhopper.browser.media.v1`. Max control message/frame size: 1024 bytes (`MAX_MEDIA_CONTROL_BYTES`). Receives client `frameAck`, `frameDiscarded`, `pause`, and `heartbeat`.
+- **Control Transport (`GET /api/browser/control`):** Dedicated ordered text socket for input dispatch and browser events. Subprotocol: `damhopper.browser.control.v1`. Max message/frame size: 16 KiB (`MAX_CONTROL_MESSAGE_BYTES`). Rate limited: burst 200, sustained 100/s. Transmits `InputMessage` records; receives `ServerControlEvent` notifications. Zero JPEG bytes.
+- **Capability Ticket Authentication:** Both sockets require single-use capability tickets (`damhopper.ticket.<base64url>`) with respective purposes (`media`, `control`).
+- **Socket Pairing:** Paired via `AttachmentManager` requiring identical `viewerId` and `subscriptionEpoch` with a 15-second wait timeout.
+- **Continuous Auth Supervisor:** Active sockets share a `CancellationToken` wired to the 5s live auth check; revocation aborts both connections immediately without waiting for stalled media writes.
+
+## 19. Qualification Status & Open Proof Obligations
 
 Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) against real Google Chrome 157.0.8103.38:
 
@@ -418,8 +511,16 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Single-Use Capability Tickets | **PASS** | 256-bit OsRng, SHA-256 memory store, 30s TTL, single-use atomic consume, pair matching |
 | Leased Input Queue & Releases | **PASS** | 30s lease, 128-record queue, contiguous inputSeq, stuck key auto-release, aspect-fit mapping |
 | Agent CDP Gateway & Relay | **PASS** | Authenticated discovery URL rewriting, dedicated upstream relay, 4 MiB frame/message cap, 5s write timeout, exact Origin policy, dynamic connection budget (`budgets.max_raw_cdp_connections`, cap 8), manager target tracking (64 targets), viewport epoch fencing with stale input Conflict (409), live auth cancellation racing with socket writes and absolute deadline, and fast socket drop on revocation. Verified by 14 Rust gateway tests and 8 Playwright E2E tests in `agent.spec.ts` against production gateway mode. User approved after Cycle 3 (score 7/10; 57/57 tests passing). |
+| Screencast Producer & Ingress | **PASS** | Dedicated Page session, serial `producerRun`, prompt exact-once CDP ACK, single replaceable candidate, JPEG SOF dimension validation, zero periodic screenshots, and 15s visible demand stop |
+| Binary Media Fanout & Credits | **PASS** | Immutable BHJF v1 fanout via Axum `Binary(Bytes)` with zero per-viewer JPEG copies, independent credit governor (max 10 FPS, 2 outstanding + 1 pending), originating socket subscription authority, 30s outstanding timeout, 5s write deadline, pause detaching demand, and max 2 global viewers |
+| Stream Memory Admission | **PASS** | Hard 128 MiB global memory reservation ceiling across ingress, commands, raw gateway, and frames; `TrackedBhjfFrame` shared RAII reservation held until last clone drops; bounded stream diagnostics counters and ring buffer |
 | Native Browser Zoom | **UNVERIFIED** | Unreachable via standard CDP in headless Chromium 157; `inputTrusted: false` enforced |
 | Windows Containment | **FAIL-CLOSED** | Windows Job Object containment unqualified; non-Unix launch returns `ContainmentUnavailable` |
+
+### Phase 05 Verification Summary
+
+- **Phase 05 Finalized (2026-11-09):** The user explicitly approved the code review with noted issues after Cycle 3 (70/70 checks passing across screencast, fanout, bounds, regressions, build, and TypeScript compile suites). Phase 06 (Frame Assembly & Decoder Pipeline) is unblocked.
+- **Test Evidence:** Verified by real Google Chrome screencast tests (`server/tests/browser_host_screencast.rs` [3/3]), media fanout and credit governor tests (`server/tests/browser_host_media.rs` [7/7]), and memory admission bounds tests (`server/tests/browser_host_bounds.rs` [3/3]), alongside 57 regression tests.
 
 ### Finalization & Roadmap Status
 
@@ -429,7 +530,7 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 - **Teardown Timing Under Congestion:** While `write_with_cancel` races auth cancellation and absolute deadline against in-flight writes, actual kernel socket buffer draining and upstream termination remain subject to OS scheduler scheduling and network latency; immediate teardown is bounded by local runtime aborts, not an absolute wall-clock guarantee.
 - **Windows Platform Boundary:** Windows process containment remains unimplemented and fails closed with `ContainmentUnavailable`.
 - **Native Engine Zoom:** Headless Chromium zoom cannot be verified via standard CDP without layout distortion; non-unit zoom geometry remains flagged `inputTrusted: false`.
-## 16. Source Map
+## 20. Source Map
 
 | Responsibility | Path |
 | --- | --- |
@@ -448,6 +549,9 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Browser Host REST API Handlers | `server/src/api/browser_host.rs` |
 | Agent CDP Gateway & Upstream Relay | `server/src/browser_host/cdp_gateway.rs` |
 | Module Exports | `server/src/browser_host/mod.rs` |
+| Screencast Producer Actor | `server/src/browser_host/screencast.rs` |
+| Binary Media Fanout & Transports | `server/src/browser_host/media.rs` |
+| Stream Diagnostics & Memory Admission | `server/src/browser_host/diagnostics.rs` |
 | Qualification Example Harness | `server/examples/browser_host_qualification.rs` |
 | Adapter & Protocol Test Suite | `server/tests/browser_host_adapter.rs` |
 | Process Containment Test Suite | `server/tests/browser_host_process.rs` |
@@ -458,6 +562,9 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Capability Ticket & Live Auth Test Suite | `server/tests/browser_host_auth.rs` |
 | Leased Input Queue Test Suite | `server/tests/browser_host_input.rs` |
 | Agent CDP Gateway Test Suite | `server/tests/browser_host_gateway.rs` |
+| Native Screencast Test Suite | `server/tests/browser_host_screencast.rs` |
+| Media Fanout & Credit Test Suite | `server/tests/browser_host_media.rs` |
+| Bounds Admission Test Suite | `server/tests/browser_host_bounds.rs` |
 | E2E Qualification Harness Fixture | `packages/ui/e2e/fixtures/browser-host-qualification.ts` |
 | Playwright Compatibility Spec | `packages/ui/e2e/os-host-browser/compatibility.spec.ts` |
 | Agent CDP Qualification Spec | `packages/ui/e2e/os-host-browser/agent.spec.ts` |

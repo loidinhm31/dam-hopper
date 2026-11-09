@@ -29,6 +29,11 @@ pub const MAX_PIXELS: u64 = 2_073_600; // 1920 * 1080
 pub const MAX_VIEWPORT_CSS_WIDTH: f64 = 1920.0;
 pub const MAX_VIEWPORT_CSS_HEIGHT: f64 = 1080.0;
 
+pub const MEDIA_SUBPROTOCOL: &str = "damhopper.browser.media.v1";
+pub const CONTROL_SUBPROTOCOL: &str = "damhopper.browser.control.v1";
+pub const CDP_SUBPROTOCOL: &str = "damhopper.browser.cdp.v1";
+pub const TICKET_SUBPROTOCOL_PREFIX: &str = "damhopper.ticket.";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolError {
     MessageTooShort { got: usize, min: usize },
@@ -474,6 +479,30 @@ pub enum DiscardReason {
     Hidden,
     DecodeFailed,
     OwnerChanged,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum ServerControlEvent {
+    DialogOpened {
+        dialog_id: String,
+        message: String,
+        dialog_type: String,
+    },
+    DialogClosed {
+        dialog_id: String,
+    },
+    LeaseRevoked {
+        reason: String,
+    },
+    Status {
+        input_available: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        unavailable_reason: Option<String>,
+    },
+    Error {
+        message: String,
+    },
 }
 
 // Capabilities DTO for GET /api/browser/capabilities

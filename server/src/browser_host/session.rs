@@ -380,6 +380,18 @@ impl SessionRegistry {
         }
         Ok(session.to_dto())
     }
+    pub async fn set_native_target_id(&self, session_id: &str, native_id: String) {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.native_target_id = Some(native_id);
+        }
+    }
+
+    pub async fn get_native_target_id(&self, session_id: &str) -> Option<String> {
+        let sessions = self.sessions.read().await;
+        sessions.get(session_id).and_then(|s| s.native_target_id.clone())
+    }
+
     pub async fn session_exists_for_other(&self, session_id: &str, principal: &str) -> bool {
         let sessions = self.sessions.read().await;
         if let Some(session) = sessions.get(session_id) {

@@ -11,3 +11,6 @@ pub mod input;
 pub mod network_policy;
 pub mod session;
 pub mod cdp_gateway;
+pub mod screencast;
+pub mod media;
+pub mod diagnostics;

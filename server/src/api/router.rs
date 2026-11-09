@@ -703,6 +703,14 @@ pub fn build_router_with_web_dir_and_origins(
             "/api/browser/cdp",
             get(browser_host::cdp_ws_handler),
         )
+        .route(
+            "/api/browser/media",
+            get(browser_host::media_ws_handler),
+        )
+        .route(
+            "/api/browser/control",
+            get(browser_host::control_ws_handler),
+        )
         .layer(RequestBodyLimitLayer::new(64 * 1024));
 
     let router = Router::new()

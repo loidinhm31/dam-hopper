@@ -350,6 +350,13 @@ pub async fn create_session(
     {
         Ok((dto, is_new)) => {
             let status = if is_new {
+                let _ = crate::browser_host::media::ensure_producer_for_session(
+                    &state,
+                    &dto.browser_session_id,
+                    &admission.principal,
+                    admission.is_dev,
+                )
+                .await;
                 StatusCode::CREATED
             } else {
                 StatusCode::OK
@@ -414,6 +421,7 @@ pub async fn delete_session(
         .await
     {
         Ok(()) => {
+            crate::browser_host::media::remove_producer(&id).await;
             global_attachment_manager().revoke_by_browser_session(&id).await;
             if let Some(mgr) = global_input_managers().write().await.remove(&id) {
                 mgr.revoke_lease().await;
@@ -596,7 +604,24 @@ pub async fn update_viewport(
         )
         .await
     {
-        Ok(dto) => no_store_response(StatusCode::OK, serde_json::to_value(&dto).unwrap_or_default()),
+        Ok(dto) => {
+            if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
+                let new_geom = crate::browser_host::protocol::TargetGeometry {
+                    css_width: body.width as f64,
+                    css_height: body.height as f64,
+                    offset_top: 0.0,
+                    scroll_x: 0.0,
+                    scroll_y: 0.0,
+                    page_scale: 1.0,
+                    visual_offset_x: 0.0,
+                    visual_offset_y: 0.0,
+                    dpr: body.dpr,
+                };
+                let _ = prod.update_geometry(new_geom).await;
+            }
+            input_mgr.set_expected_viewport_epoch(body.viewport_epoch + 1).await;
+            no_store_response(StatusCode::OK, serde_json::to_value(&dto).unwrap_or_default())
+        }
         Err(err) => err.into(),
     }
 }
@@ -1132,4 +1157,7 @@ pub async fn get_profile_reset_status(
 
 pub use crate::browser_host::cdp_gateway::{
     cdp_ws_handler, cdp_ws_handler_target, get_cdp_json_alias, get_cdp_list, get_cdp_version,
+};
+pub use crate::browser_host::media::{
+    control_ws_handler, get_or_register_producer, get_producer, media_ws_handler, remove_producer,
 };

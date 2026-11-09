@@ -668,3 +668,89 @@ Raw CDP operates at instance-level authority:
 - Agents attached to the raw CDP gateway bypass cooperative input leases and target fences.
 - An agent can inspect all pages, manipulate browser settings, and access host resources accessible to Chromium.
 - Upon connection, the gateway registers the connection with `state.browser_host.register_agent_cdp` and logs an authoritative security warning.
+
+---
+
+## 7. Binary Media Streaming WebSocket Protocol (`GET /api/browser/media`)
+
+Upgrades an authenticated WebSocket connection for binary BHJF screencast delivery:
+
+### Connection Handshake
+
+- **Route:** `GET /api/browser/media`
+- **Subprotocol:** `Sec-WebSocket-Protocol: damhopper.browser.media.v1, damhopper.ticket.<base64url>`
+- **Ticket Purpose:** Requires single-use capability ticket minted with `purpose: "media"`.
+- **Capacity:** Capped at 2 concurrent active viewers globally (`MAX_GLOBAL_VIEWERS = 2`); returns HTTP 429 `browserBusy` on saturation.
+- **Message & Frame Limits:** Max 1024 bytes per message and frame (`MAX_MEDIA_CONTROL_BYTES = 1024`).
+
+### Downstream Binary Frames (Server -> Client)
+
+Frames arrive as binary WebSocket messages (`AxumWsMessage::Binary(Bytes)`) formatted using the atomic BHJF v1 envelope:
+- **Prefix (16 bytes):** ASCII `BHJF`, `version: 1`, `flags: 0`, `header_len` (u16 BE), `payload_len` (u32 BE), `reserved: 0` (u32 BE).
+- **JSON Target Frame Header:** Target-scoped metadata (`browserSessionId`, `browserIncarnation`, `profileEpoch`, `producerRun`, `viewportEpoch`, `frameSeq`, `width`, `height`, `captureTimeUnixMs`, `geometry`, `inputTrusted`).
+- **Payload:** Raw JPEG binary stream validated against SOF marker dimensions.
+
+### Client Control Messages (Client -> Server)
+
+Client sends JSON text messages ($\le 1024$ bytes) to manage credit flow and visibility:
+
+| Kind | Required Fields | Semantics |
+| --- | --- | --- |
+| `frameAck` | `subscriptionEpoch`, `producerRun`, `viewportEpoch`, `frameSeq`, optional `reason` | Returns credit for admitted frame. Flushes pending buffer if rate governor permits. |
+| `frameDiscarded` | `subscriptionEpoch`, `producerRun`, `viewportEpoch`, `frameSeq`, optional `reason` (`replaced`, `obsolete`, `hidden`, `decodeFailed`, `ownerChanged`) | Discards frame and returns credit without display. |
+| `pause` | `subscriptionEpoch` | Pauses delivery and detaches demand. Resuming requires a fresh media socket and ticket. |
+| `heartbeat` | `subscriptionEpoch`, `visible: bool` | Renews viewer visibility demand (5s cadence; expires after 15s). |
+
+*Invariant:* `subscriptionEpoch` must match the connected socket's admission subscription; foreign or stale ACKs are rejected without modifying credits.
+
+---
+
+## 8. Control & Event Streaming WebSocket Protocol (`GET /api/browser/control`)
+
+Upgrades an authenticated WebSocket connection for ordered user input and session events:
+
+### Connection Handshake
+
+- **Route:** `GET /api/browser/control`
+- **Subprotocol:** `Sec-WebSocket-Protocol: damhopper.browser.control.v1, damhopper.ticket.<base64url>`
+- **Ticket Purpose:** Requires single-use capability ticket minted with `purpose: "control"`.
+- **Socket Pairing:** Paired with the media connection via `AttachmentManager` matching `viewerId` and `subscriptionEpoch` (15s timeout).
+- **Message & Frame Limits:** Max 16 KiB per message and frame (`MAX_CONTROL_MESSAGE_BYTES = 16384`).
+- **Rate Limits:** Max 100 sustained messages/s, burst 200 (`MAX_CONTROL_BURST = 200`, `MAX_CONTROL_SUSTAINED_PER_SEC = 100`).
+
+### Client Input Dispatch (Client -> Server)
+
+Client sends JSON `InputMessage` records carrying ordered user interactions:
+
+```json
+{
+  "browserSessionId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "browserIncarnation": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "profileEpoch": 1,
+  "subscriptionEpoch": "4fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "leaseToken": "5fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "inputSeq": 1,
+  "viewportEpoch": 1,
+  "event": {
+    "kind": "pointerDown",
+    "button": "left",
+    "u": 0.5,
+    "v": 0.5,
+    "modifiers": 0
+  }
+}
+```
+
+Supported `event.kind` variants: `pointerDown`, `pointerUp`, `pointerMove`, `pointerCancel`, `wheel` (with `deltaX`, `deltaY`), `keyDown` (with `key`, `code`), `keyUp`, `insertText` (with `text`).
+
+### Server Control Events (Server -> Client)
+
+Server pushes JSON text notifications for modal interactions and session state:
+
+| Event Kind | Payload Fields | Description |
+| --- | --- | --- |
+| `status` | `inputAvailable: bool`, optional `unavailableReason` | Emitted on connection and geometry availability changes. |
+| `dialogOpened` | `dialogId`, `message`, `dialogType` (`alert`, `confirm`, `prompt`, `beforeunload`) | Native JavaScript dialog opened by page. |
+| `dialogClosed` | `dialogId` | Dialog dismissed or handled. |
+| `leaseRevoked` | `reason` | Input control lease expired, revoked, or preempted. |
+| `error` | `message` | Processing or rate-limit error. |
