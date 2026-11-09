@@ -44,6 +44,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -665,5 +666,164 @@ class NotificationCoordinatorTest {
         sink.failAllCancels = null
         coordinator.retire(ownerN)
         assertTrue(sink.posted.isEmpty())
+    }
+
+    @Test
+    fun exactActivationTransportsFullTargetAndRefusalDoesNotClearReadMark() = runSuspending {
+        val rt = Runtime(ownerN, socketId = "s1").start()
+        rt.fire("t1")
+        val stateBefore = coordinator.feed.value
+        assertEquals(1, stateBefore.records.size)
+        val record = stateBefore.records.first()
+        assertFalse(record.read)
+        assertNull(stateBefore.activatingKey)
+
+        var transportedTarget: NotificationTarget? = null
+        val refusal = coordinator.activate(record.key) { target ->
+            transportedTarget = target
+            "The terminal connection changed after this notification arrived."
+        }
+
+        assertEquals("The terminal connection changed after this notification arrived.", refusal)
+        assertNotNull(transportedTarget)
+        assertEquals(ownerN.profileId, transportedTarget!!.profileId)
+        assertEquals(ownerN.generation, transportedTarget!!.generation)
+        assertEquals("s1", transportedTarget!!.socketInstanceId)
+        assertEquals("https://host", transportedTarget!!.endpoint)
+        assertEquals("acct", transportedTarget!!.accountId)
+        assertEquals("omp", transportedTarget!!.agentKind)
+        assertEquals("sess-t1", transportedTarget!!.agentSessionId)
+        assertEquals("t1", transportedTarget!!.terminalId)
+        assertEquals(1L, transportedTarget!!.incarnation)
+        assertEquals(1L, transportedTarget!!.serverEpoch)
+        assertEquals(1L, transportedTarget!!.attentionRevision)
+
+        // Read mark is independent of route refusal
+        val stateAfter = coordinator.feed.value
+        assertTrue(stateAfter.records.first { it.key == record.key }.read)
+        assertNull(stateAfter.activatingKey)
+    }
+
+    @Test
+    fun activationSingleFlightAdmissionRejectsConcurrentActivation() = runSuspending {
+        val rt = Runtime(ownerN).start()
+        rt.fire("t1")
+        rt.fire("t2")
+        val key1 = coordinator.feed.value.records.first { it.target.terminalId == "t1" }.key
+        val key2 = coordinator.feed.value.records.first { it.target.terminalId == "t2" }.key
+
+        val inFlight = CompletableDeferred<Unit>()
+        val proceed = CompletableDeferred<Unit>()
+
+        coroutineScope {
+            launch {
+                coordinator.activate(key1) {
+                    inFlight.complete(Unit)
+                    proceed.await()
+                    null
+                }
+            }
+
+            inFlight.await()
+            assertEquals(key1, coordinator.feed.value.activatingKey)
+
+            // Concurrent activation while another is active is rejected immediately
+            val concurrentRefusal = coordinator.activate(key2) { null }
+            assertEquals("Another notification activation is currently in progress.", concurrentRefusal)
+
+            proceed.complete(Unit)
+        }
+
+        assertNull(coordinator.feed.value.activatingKey)
+    }
+
+    @Test
+    fun activationOfMissingOrEvictedRecordReturnsTruthfulNotice() = runSuspending {
+        val notice = coordinator.activate("unknown-key") { null }
+        assertEquals("That notification is no longer in history.", notice)
+    }
+
+    @Test
+    fun feedVisibilityStateManagement() = runSuspending {
+        assertFalse(coordinator.feed.value.isVisible)
+        assertFalse(coordinator.feed.value.visible)
+
+        coordinator.openFeed()
+        assertTrue(coordinator.feed.value.isVisible)
+        assertTrue(coordinator.feed.value.visible)
+
+        coordinator.toggleFeedVisible()
+        assertFalse(coordinator.feed.value.isVisible)
+
+        coordinator.setFeedVisible(true)
+        assertTrue(coordinator.feed.value.isVisible)
+
+        // Admitting a new event preserves feed visibility
+        val rt = Runtime(ownerN).start()
+        rt.fire("t1")
+        assertTrue(coordinator.feed.value.isVisible)
+
+        coordinator.closeFeed()
+        assertFalse(coordinator.feed.value.isVisible)
+    }
+
+    @Test
+    fun retiredOwnerCancellationCannotEraseAnotherOwnerOrGeneration() = runSuspending {
+        val ownerA1 = ConnectionRef("prof-A", 1L)
+        val ownerA2 = ConnectionRef("prof-A", 2L)
+        val ownerB1 = ConnectionRef("prof-B", 1L)
+
+        val rtA1 = Runtime(ownerA1, "sA1").start()
+        val rtA2 = Runtime(ownerA2, "sA2").start()
+        val rtB1 = Runtime(ownerB1, "sB1").start()
+
+        rtA1.fire("t-A1")
+        rtA2.fire("t-A2")
+        rtB1.fire("t-B1")
+
+        assertEquals(3, coordinator.feed.value.records.size)
+        assertEquals(3, sink.posted.size)
+
+        // Retiring owner A1 MUST NOT cancel or erase owner A2 or owner B1
+        coordinator.retire(ownerA1)
+
+        val remaining = coordinator.feed.value.records
+        assertEquals(2, remaining.size)
+        assertTrue(remaining.any { it.target.profileId == "prof-A" && it.target.generation == 2L })
+        assertTrue(remaining.any { it.target.profileId == "prof-B" && it.target.generation == 1L })
+        assertFalse(remaining.any { it.target.profileId == "prof-A" && it.target.generation == 1L })
+
+        assertEquals(2, sink.posted.size)
+        assertTrue(sink.posted.values.any { it.target.profileId == "prof-A" && it.target.generation == 2L })
+        assertTrue(sink.posted.values.any { it.target.profileId == "prof-B" && it.target.generation == 1L })
+    }
+
+    @Test
+    fun repeatedSnapshotHighWaterReplayEndToEndNeverAlerts() = runSuspending {
+        val rt = Runtime(ownerN).start()
+        rt.fire("t1", attentionRev = 1uL)
+        assertEquals(1, coordinator.feed.value.records.size)
+
+        coordinator.clear()
+        assertEquals(0, coordinator.feed.value.records.size)
+
+        // Replaying same attention revision produces Silent from reducer, never alert
+        val replayed = rt.fire("t1", attentionRev = 1uL)
+        assertEquals(AgentAdmission.Silent, replayed)
+        assertEquals(0, coordinator.feed.value.records.size)
+
+        // Lower revision is also Silent
+        val lower = rt.fire("t1", attentionRev = 1uL)
+        assertEquals(AgentAdmission.Silent, lower)
+        assertEquals(0, coordinator.feed.value.records.size)
+    }
+
+    @Test
+    fun turnEndedCopyExplicitlyDisclaimsTaskSuccess() = runSuspending {
+        val rt = Runtime(ownerN).start()
+        rt.fire("t-ended", attentionRev = 1uL, kind = AttentionKind.TURN_ENDED)
+        val record = coordinator.feed.value.records.first()
+        assertEquals("OMP turn ended", record.title)
+        assertEquals("The agent turn ended. Task success is not verified.", record.body)
     }
 }

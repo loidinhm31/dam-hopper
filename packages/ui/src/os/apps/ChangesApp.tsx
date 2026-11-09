@@ -152,6 +152,35 @@ export function ChangesApp({ window }: ChangesAppProps) {
       ),
     );
   }, [profileId, project, worktreeId, window.id]);
+  const handleLocateFile = useCallback(
+    (file: string) => {
+      setActiveTab("changes");
+      const matchingEntry = diffEntries.find(
+        (e) => projectPathForEntry(e) === file || e.path === file,
+      );
+      if (matchingEntry) {
+        setSelectedSelection(createChangedFileSelection(matchingEntry));
+      }
+      const effectiveProfileId = profileId ?? "default";
+      void dispatchIntent(
+        createIntent("file:reveal", {
+          profileId: effectiveProfileId,
+          generation: owner.generation ?? 1,
+          target: {
+            kind: "project",
+            profileId: effectiveProfileId,
+            project,
+            worktreePath: worktreeId,
+          },
+          projectId: project,
+          worktreeId,
+          filePath: file,
+        }),
+      );
+    },
+    [diffEntries, profileId, project, worktreeId, owner.generation],
+  );
+
 
   return (
     <div
@@ -224,6 +253,7 @@ export function ChangesApp({ window }: ChangesAppProps) {
             gitRootId={selectedSelection?.gitRootId ?? window.ctx.gitRootId}
             diffPath={selectedSelection?.diffPath}
             onClose={() => setActiveTab("changes")}
+            onLocateFile={handleLocateFile}
           />
         )}
       </div>

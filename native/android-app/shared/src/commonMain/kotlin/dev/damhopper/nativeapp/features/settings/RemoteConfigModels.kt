@@ -1,6 +1,7 @@
 package dev.damhopper.nativeapp.features.settings
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -51,6 +52,7 @@ data class UiPreferences(
     val cognitoModeStyle: String? = null, // "heavy-blur" | "black-screen"
     val terminalAgentNotifications: JsonObject? = null,
     val agentSettingsPaths: JsonObject? = null,
+    val unboundFields: Set<String> = emptySet(),
 ) {
     /** True when the patch carries no field at all (nothing to save). */
     fun isEmpty(): Boolean = toPatchObject().isEmpty()
@@ -92,6 +94,42 @@ data class UiPreferences(
         agentSettingsPaths?.let { put("agentSettingsPaths", it) }
     }
 
+
+    fun toSparsePatch(explicitUnbinds: Set<String> = emptySet()): SparseUiConfigPatch = buildMap {
+        systemFontSize?.let { put("systemFontSize", JsonPrimitive(it)) }
+        editorFontSize?.let { put("editorFontSize", JsonPrimitive(it)) }
+        terminalFontSize?.let { put("terminalFontSize", JsonPrimitive(it)) }
+        editorZoomWheelEnabled?.let { put("editorZoomWheelEnabled", JsonPrimitive(it)) }
+        explorerShowHidden?.let { put("explorerShowHidden", JsonPrimitive(it)) }
+        terminalSuggestionsEnabled?.let { put("terminalSuggestionsEnabled", JsonPrimitive(it)) }
+        terminalCommitStatusEnabled?.let { put("terminalCommitStatusEnabled", JsonPrimitive(it)) }
+        terminalAutoSwitchProjectEnabled?.let { put("terminalAutoSwitchProjectEnabled", JsonPrimitive(it)) }
+        terminalScrollButtonsEnabled?.let { put("terminalScrollButtonsEnabled", JsonPrimitive(it)) }
+        terminalScrollStep?.let { put("terminalScrollStep", JsonPrimitive(it)) }
+        explorerLanguageFilter?.let { put("explorerLanguageFilter", JsonPrimitive(it)) }
+        mobileCustomKeyboardEnabled?.let { put("mobileCustomKeyboardEnabled", JsonPrimitive(it)) }
+        mobileCustomKeyboardFontSize?.let { put("mobileCustomKeyboardFontSize", JsonPrimitive(it)) }
+        mobileCustomKeyboardPadding?.let { put("mobileCustomKeyboardPadding", JsonPrimitive(it)) }
+        mobileCustomKeyboardRowGap?.let { put("mobileCustomKeyboardRowGap", JsonPrimitive(it)) }
+        searchTextShortcut?.let { put("searchTextShortcut", JsonPrimitive(it)) }
+        searchFilenameShortcut?.let { put("searchFilenameShortcut", JsonPrimitive(it)) }
+        terminalWorkspaceShortcut?.let { put("terminalWorkspaceShortcut", JsonPrimitive(it)) }
+        terminalFilePanelShortcut?.let { put("terminalFilePanelShortcut", JsonPrimitive(it)) }
+        projectPanelShortcut?.let { put("projectPanelShortcut", JsonPrimitive(it)) }
+        revealActiveFileShortcut?.let { put("revealActiveFileShortcut", JsonPrimitive(it)) }
+        gitPanelShortcut?.let { put("gitPanelShortcut", JsonPrimitive(it)) }
+        portsPanelShortcut?.let { put("portsPanelShortcut", JsonPrimitive(it)) }
+        fleetTerminalShortcut?.let { put("fleetTerminalShortcut", JsonPrimitive(it)) }
+        terminalFontSizeIncreaseShortcut?.let { put("terminalFontSizeIncreaseShortcut", JsonPrimitive(it)) }
+        terminalFontSizeDecreaseShortcut?.let { put("terminalFontSizeDecreaseShortcut", JsonPrimitive(it)) }
+        cognitoModeShortcut?.let { put("cognitoModeShortcut", JsonPrimitive(it)) }
+        cognitoModeStyle?.let { put("cognitoModeStyle", JsonPrimitive(it)) }
+        terminalAgentNotifications?.let { put("terminalAgentNotifications", it) }
+        agentSettingsPaths?.let { put("agentSettingsPaths", it) }
+        explicitUnbinds.forEach { key ->
+            put(key, JsonNull)
+        }
+    }.let { SparseUiConfigPatch(it) }
     fun toUiRequestBody(): String = buildJsonObject { put("ui", toPatchObject()) }.toString()
 }
 

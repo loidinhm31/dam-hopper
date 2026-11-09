@@ -1,0 +1,38 @@
+{
+  "taskId": "qualify-coherent-automated",
+  "phase": "P08",
+  "wave": "W10",
+  "status": "passed",
+  "timestamp": "2026-11-08T01:30:00Z",
+  "gates": {
+    "sharedJvmTests": {
+      "command": "cmd.exe /c gradlew.bat :shared:jvmTest",
+      "total": 1044,
+      "passed": 1044,
+      "failed": 0,
+      "status": "passed"
+    },
+    "androidAppUnitTests": {
+      "command": "cmd.exe /c gradlew.bat :androidApp:testDebugUnitTest",
+      "total": 255,
+      "passed": 255,
+      "failed": 0,
+      "status": "passed"
+    },
+    "androidDebugPackaging": {
+      "command": "pnpm android:assembleDebug",
+      "exitCode": 0,
+      "status": "passed"
+    },
+    "androidTestCompilation": {
+      "command": "cmd.exe /c gradlew.bat :androidApp:compileDebugAndroidTestKotlin",
+      "exitCode": 0,
+      "status": "passed"
+    },
+    "gitWorkspaceFixtureOracle": {
+      "command": "node native/android-app/scripts/git-workspace-fixture.mjs --self-test",
+      "exitCode": 0,
+      "status": "passed"
+    }
+  }
+}

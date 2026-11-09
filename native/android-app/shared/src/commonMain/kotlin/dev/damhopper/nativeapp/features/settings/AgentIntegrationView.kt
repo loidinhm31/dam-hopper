@@ -132,7 +132,7 @@ fun AgentIntegrationView(
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Remote Agent Integration", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
         Text(
-            "Paths are remote server paths saved to the preference source ($sourceLabel). Verification and install run on the Settings target ($targetLabel). Neither certifies the live runtime; alerts need runtime verification.",
+            "Preference Source A ($sourceLabel): where agent directory paths are saved. Admin Target B ($targetLabel): where verification and install run. Hub C runtime remains independent. Neither certifies the live runtime; alerts need runtime verification.",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -169,7 +169,7 @@ fun AgentIntegrationView(
 
         if (integration == null || integrationState == null) {
             Text(
-                "No connected Settings target: verification and install are unavailable.",
+                "Admin Target B ($targetLabel) administration is unavailable: verification and install cannot run.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
             )

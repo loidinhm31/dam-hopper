@@ -1,6 +1,7 @@
 package dev.damhopper.nativeapp.features.media
 
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.model.ServerFsTarget
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -20,7 +21,8 @@ enum class MediaPurpose {
 
 @Serializable
 data class IssueImageTicketRequest(
-    val project: String,
+    val target: ServerFsTarget? = null,
+    val project: String? = null,
     val worktreePath: String? = null,
     val path: String,
     val mediaClientId: String,
@@ -37,13 +39,13 @@ data class IssueImageTicketResponse(
 
 @Serializable
 data class IssueVideoTicketRequest(
-    val project: String,
+    val target: ServerFsTarget? = null,
+    val project: String? = null,
     val worktreePath: String? = null,
     val path: String,
     val purpose: String,
     val mediaClientId: String,
 )
-
 @Serializable
 data class IssueVideoTicketResponse(
     val ticket: String,

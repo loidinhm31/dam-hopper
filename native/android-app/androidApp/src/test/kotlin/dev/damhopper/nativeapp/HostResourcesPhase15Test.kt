@@ -1,6 +1,5 @@
 package dev.damhopper.nativeapp
 
-import dev.damhopper.nativeapp.features.host.DeleteUsageRequest
 import dev.damhopper.nativeapp.features.host.ResourceConsumerKind
 import dev.damhopper.nativeapp.features.host.ResourceSourceMode
 import dev.damhopper.nativeapp.features.host.ResourcesSubProduct
@@ -83,9 +82,4 @@ class HostResourcesPhase15Test {
         assertEquals("Host Resources", ResourcesSubProduct.FLEET.label)
     }
 
-    @Test
-    fun testDeleteUsageConfirmationDefault() {
-        val req = DeleteUsageRequest()
-        assertEquals("delete-usage-data", req.confirmation)
-    }
 }

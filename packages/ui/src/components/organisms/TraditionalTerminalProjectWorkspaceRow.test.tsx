@@ -370,4 +370,95 @@ describe("TraditionalTerminalProjectWorkspaceRow", () => {
     }));
   });
 
+  it("renders branch, commit, and worktree in exact order: name -> branch -> commit -> worktree selection", async () => {
+    await act(async () => {
+      root.render(
+        <TraditionalTerminalProjectWorkspaceRow
+          group={baseGroup}
+          index={0}
+          isActive={true}
+          activeGroupId={baseGroup.id}
+          onSelectGroup={vi.fn()}
+          onKeyDown={vi.fn()}
+          setButtonRef={vi.fn()}
+          showCommitStatus={true}
+        />,
+      );
+    });
+
+    // 1. Verify project name in tab button
+    const tab = container.querySelector('[role="tab"]')!;
+    expect(tab.textContent).toContain("demo");
+
+    // 2. Verify branch is rendered with branch text
+    const branchEl = container.querySelector('[aria-label="Branch main"]');
+    expect(branchEl).not.toBeNull();
+    expect(branchEl!.textContent).toContain("main");
+
+    // 3. Verify commit chip is rendered
+    const commitEl = container.querySelector('[aria-label^="Commit 1234567"]');
+    expect(commitEl).not.toBeNull();
+
+    // 4. Verify worktree selection is rendered
+    const worktreeEl = container.querySelector('[role="combobox"]');
+    expect(worktreeEl).not.toBeNull();
+
+    // 5. Verify relative vertical order in DOM:
+    // tab (contains name) -> branchEl -> commitEl -> worktreeEl
+    const compareTabBranch = tab.compareDocumentPosition(branchEl!);
+    expect(compareTabBranch & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const compareBranchCommit = branchEl!.compareDocumentPosition(commitEl!);
+    expect(compareBranchCommit & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const compareCommitWorktree = commitEl!.compareDocumentPosition(worktreeEl!);
+    expect(compareCommitWorktree & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("gracefully omits branch chip when branch is empty or whitespace-only", async () => {
+    mocks.useProjectStatus.mockReturnValue({
+      data: { ...mocks.status, branch: "   " },
+      isLoading: false,
+      isError: false,
+    });
+    mocks.useWorktrees.mockReturnValue({
+      data: [{ ...mocks.worktree, branch: "" }],
+      isLoading: false,
+      isError: false,
+    });
+
+    await act(async () => {
+      root.render(
+        <TraditionalTerminalProjectWorkspaceRow
+          group={baseGroup}
+          index={0}
+          isActive={true}
+          activeGroupId={baseGroup.id}
+          onSelectGroup={vi.fn()}
+          onKeyDown={vi.fn()}
+          setButtonRef={vi.fn()}
+          showCommitStatus={true}
+        />,
+      );
+    });
+
+    // No branch chip should be rendered
+    expect(container.querySelector('[aria-label^="Branch"]')).toBeNull();
+    // Commit chip and worktree combobox are still rendered
+    expect(container.querySelector('[aria-label^="Commit"]')).not.toBeNull();
+    expect(container.querySelector('[role="combobox"]')).not.toBeNull();
+
+    // Restore default mocks
+    mocks.useProjectStatus.mockImplementation(() => ({
+      data: mocks.status,
+      isLoading: false,
+      isError: false,
+    }));
+    mocks.useWorktrees.mockImplementation(() => ({
+      data: [mocks.worktree],
+      isLoading: false,
+      isError: false,
+    }));
+  });
+
 });

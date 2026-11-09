@@ -1,15 +1,14 @@
 # Android Contract Impacts: Workspace File Tree and Marked Projects
 
-**Date:** 2026-11-03
-**Status:** Invariant Documentation (Android changes explicitly excluded from current scope)
-**Reference:** `plans/reports/brainstorm-261103-1552-workspace-file-tree-project-marks.md`
+**Date:** 2026-11-03 (Updated: 2026-11-07)
+**Status:** Wire Contracts Adopted in Native Android Core (P01/P02 implementation accepted with known limitations; UI waves pending)
+**Reference:** `plans/reports/brainstorm-261103-1552-workspace-file-tree-project-marks.md`, `plans/261107-0305-android-agent-hub-redesign/plan.md`, `docs/android-native-acceptance.md`
 
 ## 1. Overview
 
-The Web OS workspace file tree redesign decouples whole-workspace filesystem access from configured project registration. Per project directive, Android implementation, compatibility adapters solely for Android, and Android qualification were excluded from this implementation.
+*Historical Baseline (2026-11-03):* The Web OS workspace file tree redesign decoupled whole-workspace filesystem access from configured project registration. At that time, Android client implementation, compatibility adapters solely for Android, and Android qualification were excluded from the web OS redesign scope.
 
-This document serves as the authoritative record of the breaking REST and WebSocket contract deltas that the companion Android client (`native/android-app`) must adopt during its subsequent redesign.
-
+*Current Status (2026-11-07):* Under the Native Android Agent Hub redesign (`plans/261107-0305-android-agent-hub-redesign/plan.md`), the core wire contracts and API client layers were atomically migrated in Phases P01 and P02. This document serves as the authoritative record of those contract deltas, tracking core adoption and remaining UI presentation milestones.
 ---
 
 ## 2. Breaking Wire Contracts
@@ -129,18 +128,18 @@ All Git operations (`/api/git/*`) strictly require a marked project:
 
 ---
 
-## 3. Required Android Client Actions (Future Scope)
+## 3. Native Android Client Adoption Status
 
-When the Android client is updated to consume these contracts:
-1. Update `KMP Shared Core` (`native/android-app/shared`) models:
-   - Introduce `FsTargetRef` sealed class (`Workspace` vs `Project`).
-   - Add `FileIdentity` data class.
-   - Update `WsConnection` serialization for nested `target`.
-2. Update Android API client:
-   - Add `POST /api/config/projects` and `DELETE /api/config/projects/{name}`.
-   - Update `fsList`, `fsRead`, `fsStat`, `fsSearch` to pass `targetType`.
-3. Update Jetpack Compose UI:
-   - Add dual navigation modes (Workspace / Projects).
-   - Show `[Project]` badges on folders matching marked project roots.
-   - Add context menu actions to mark/unmark projects.
-   - Gate Git screen on marked project selection.
+Under the Native Android Agent Hub redesign (`plans/261107-0305-android-agent-hub-redesign/`):
+1. **KMP Shared Core (`native/android-app/shared`) models — DELIVERED (P01/P02):**
+   - Introduced `FilesystemTargetRef` (`Workspace` vs `Project` with worktree path).
+   - Introduced `FileIdentityDto` (`workspaceId`, `workspaceEpoch`, `canonicalPath`) and bound canonical document identity.
+   - Updated `WsConnection` serialization and `ClientMsg`/`ServerMsg` envelopes for nested `target` payloads.
+2. **Android API client — DELIVERED (P02):**
+   - Added `POST /api/config/projects` and `DELETE /api/config/projects/{name}`.
+   - Migrated `fsList`, `fsRead`, `fsStat`, `fsSearch`, and chunked/atomic writes to pass `targetType` and capture `x-file-identity`.
+3. **Jetpack Compose UI — PENDING (Feature Waves W05–W07 / Root P07):**
+   - Dual navigation presentation (Workspace / Projects).
+   - Project badges matching marked roots.
+   - Context menu actions to mark/unmark projects.
+   - Gating Git screen on marked project selection (server/repository layer enforces marked project requirement via HTTP 404 `UNKNOWN_PROJECT`; Compose UI screen-level gating is scheduled for W07/P06/P07).

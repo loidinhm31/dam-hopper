@@ -22,6 +22,8 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -33,7 +35,13 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.damhopper.nativeapp.core.model.ConnectionRef
+import dev.damhopper.nativeapp.core.model.ProfileId
+import dev.damhopper.nativeapp.core.model.ProjectTargetRef
 import dev.damhopper.nativeapp.core.model.SocketInstanceRef
+import dev.damhopper.nativeapp.features.terminal.AgentHubNavigatorCallbacks
+import dev.damhopper.nativeapp.features.terminal.AgentHubNavigatorMode
+import dev.damhopper.nativeapp.features.terminal.AgentHubNavigatorUiState
+import dev.damhopper.nativeapp.features.terminal.AgentHubProjectRowState
 import dev.damhopper.nativeapp.features.terminal.AgentKind
 import dev.damhopper.nativeapp.features.terminal.AgentObservationSource
 import dev.damhopper.nativeapp.features.terminal.BlockedReason
@@ -54,6 +62,15 @@ import dev.damhopper.nativeapp.features.terminal.TerminalAgentsStatus
 import dev.damhopper.nativeapp.features.terminal.TerminalAgentsTarget
 import dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner
 import dev.damhopper.nativeapp.ui.components.TerminalAgentsSidebar
+import dev.damhopper.nativeapp.ui.components.AGENT_HUB_CLOSE_BUTTON_TAG
+import dev.damhopper.nativeapp.ui.components.AGENT_HUB_CREATE_BUTTON_TAG_PREFIX
+import dev.damhopper.nativeapp.ui.components.AGENT_HUB_DISMISS_BUTTON_TAG_PREFIX
+import dev.damhopper.nativeapp.ui.components.AGENT_HUB_NAVIGATOR_TAG
+import dev.damhopper.nativeapp.ui.components.AGENT_HUB_OPEN_PROJECT_BUTTON_TAG
+import dev.damhopper.nativeapp.ui.components.AGENT_HUB_PROJECT_ROW_TAG_PREFIX
+import dev.damhopper.nativeapp.ui.components.AGENT_HUB_SETTINGS_BUTTON_TAG
+import dev.damhopper.nativeapp.ui.components.AgentHubNavigator
+import dev.damhopper.nativeapp.ui.components.AgentHubNavigatorModal
 import dev.damhopper.nativeapp.ui.theme.NativeTheme
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -71,6 +88,7 @@ class TerminalAgentsSidebarTest {
 
     @get:Rule
     val rule = createComposeRule()
+    private val compose get() = rule
 
     private val ui = mutableStateOf(emptyUiState())
     private val mode = mutableStateOf(TerminalAgentsSidebarMode.PINNED)
@@ -723,5 +741,195 @@ class TerminalAgentsSidebarTest {
         const val FILTER_ALL_TAG = "terminal-agents-filter-option:all"
         const val FILTER_OPTION_TAG_PREFIX = "terminal-agents-filter-option:"
         const val SIDEBAR_TAG_PREFIX = "terminal-agents-sidebar:"
+    }
+
+    // =========================================================================================================
+    // AgentHubNavigator tests (P03)
+    // =========================================================================================================
+
+    @Test
+    fun agentHubNavigatorRendersSelectableProjectRowAndSiblingControls() {
+        val targetActive = ProjectTargetRef(profileId = "p1", project = "alpha")
+        val targetZero = ProjectTargetRef(profileId = "p1", project = "beta")
+
+        val projectActive = AgentHubProjectRowState(
+            target = targetActive,
+            projectLabel = "alpha",
+            profileLabel = "Default",
+            sessionCount = 2,
+            agentCount = 1,
+            isSelected = true,
+            isAvailable = true,
+            canDismiss = false, // Sessions exist => cannot dismiss
+        )
+        val projectZero = AgentHubProjectRowState(
+            target = targetZero,
+            projectLabel = "beta",
+            profileLabel = "Default",
+            sessionCount = 0,
+            agentCount = 0,
+            isSelected = false,
+            isAvailable = true,
+            canDismiss = true, // Zero sessions + authoritative => can dismiss
+        )
+
+        var selectedTarget: ProjectTargetRef? = null
+        var createTarget: ProjectTargetRef? = null
+        var dismissedTarget: ProjectTargetRef? = null
+        var openProjectPickerClicked = false
+        var settingsClicked = false
+
+        val callbacks = AgentHubNavigatorCallbacks(
+            onSelectProject = { selectedTarget = it },
+            onCreateSession = { createTarget = it },
+            onDismissProject = { dismissedTarget = it },
+            onOpenProjectPicker = { openProjectPickerClicked = true },
+            onAgentGroupClick = {},
+            onFilterChange = {},
+            onRefresh = {},
+            onOpenSettings = { settingsClicked = true },
+            onDismissNavigator = {},
+        )
+
+        compose.setContent {
+            NativeTheme {
+                AgentHubNavigator(
+                    state = AgentHubNavigatorUiState(
+                        projects = listOf(projectActive, projectZero),
+                        agentsUiState = emptyUiState(),
+                    ),
+                    mode = AgentHubNavigatorMode.RAIL,
+                    callbacks = callbacks,
+                )
+            }
+        }
+
+        // 1. Verify header controls
+        compose.onNodeWithTag(AGENT_HUB_OPEN_PROJECT_BUTTON_TAG).assertIsEnabled()
+        compose.onNodeWithTag(AGENT_HUB_SETTINGS_BUTTON_TAG).assertIsEnabled()
+
+        // 2. Click Settings button -> Target B action invoked
+        compose.onNodeWithTag(AGENT_HUB_SETTINGS_BUTTON_TAG).performClick()
+        assertTrue(settingsClicked)
+
+        // 3. Click Open Project -> picker invoked without mutating root
+        compose.onNodeWithTag(AGENT_HUB_OPEN_PROJECT_BUTTON_TAG).performClick()
+        assertTrue(openProjectPickerClicked)
+
+        // 4. Verify selectable row exists
+        val activeRowTag = "${AGENT_HUB_PROJECT_ROW_TAG_PREFIX}p1:alpha"
+        val zeroRowTag = "${AGENT_HUB_PROJECT_ROW_TAG_PREFIX}p1:beta"
+        compose.onNodeWithTag(activeRowTag).assertIsSelected()
+        compose.onNodeWithTag(zeroRowTag).assertIsNotSelected()
+
+        // Click selectable zero row -> selects project
+        compose.onNodeWithTag(zeroRowTag).performClick()
+        assertEquals(targetZero, selectedTarget)
+
+        // 5. Verify sibling create button meets >=48dp bounds
+        val createActiveTag = "${AGENT_HUB_CREATE_BUTTON_TAG_PREFIX}p1:alpha"
+        compose.onNodeWithTag(createActiveTag)
+            .assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp)
+            .assertIsEnabled()
+            .performClick()
+        assertEquals(targetActive, createTarget)
+
+        // 6. Verify sibling dismiss button meets >=48dp bounds and safe enablement
+        val dismissActiveTag = "${AGENT_HUB_DISMISS_BUTTON_TAG_PREFIX}p1:alpha"
+        val dismissZeroTag = "${AGENT_HUB_DISMISS_BUTTON_TAG_PREFIX}p1:beta"
+        compose.onNodeWithTag(dismissActiveTag)
+            .assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp)
+            .assertIsNotEnabled()
+        compose.onNodeWithTag(dismissZeroTag)
+            .assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp)
+            .assertIsEnabled()
+            .performClick()
+        assertEquals(targetZero, dismissedTarget)
+    }
+
+    @Test
+    fun agentHubNavigatorModalRendersScrimAndCloseButton() {
+        var closed = false
+        val callbacks = AgentHubNavigatorCallbacks(
+            onSelectProject = {},
+            onCreateSession = {},
+            onDismissProject = {},
+            onOpenProjectPicker = {},
+            onAgentGroupClick = {},
+            onFilterChange = {},
+            onRefresh = {},
+            onOpenSettings = {},
+            onDismissNavigator = { closed = true },
+        )
+
+        compose.setContent {
+            NativeTheme {
+                AgentHubNavigatorModal(
+                    state = AgentHubNavigatorUiState(
+                        projects = emptyList(),
+                        agentsUiState = emptyUiState(),
+                    ),
+                    callbacks = callbacks,
+                )
+            }
+        }
+
+        compose.onNodeWithTag("$AGENT_HUB_NAVIGATOR_TAG:MODAL").assertExists()
+        compose.onNodeWithTag(AGENT_HUB_CLOSE_BUTTON_TAG).assertExists().performClick()
+        assertTrue(closed)
+    }
+
+    @Test
+    fun agentHubNavigatorDisambiguatesMultiProfileProjects() {
+        val p1 = "prod"
+        val p2 = "dev"
+        val targetProd = ProjectTargetRef(profileId = p1, project = "dam-hopper")
+        val targetDev = ProjectTargetRef(profileId = p2, project = "dam-hopper")
+
+        val rowProd = AgentHubProjectRowState(
+            target = targetProd,
+            projectLabel = "dam-hopper",
+            profileLabel = "Production",
+            sessionCount = 1,
+            isAvailable = true,
+        )
+        val rowDev = AgentHubProjectRowState(
+            target = targetDev,
+            projectLabel = "dam-hopper",
+            profileLabel = "Development",
+            sessionCount = 0,
+            isAvailable = true,
+            canDismiss = true,
+        )
+
+        compose.setContent {
+            NativeTheme {
+                AgentHubNavigator(
+                    state = AgentHubNavigatorUiState(
+                        projects = listOf(rowProd, rowDev),
+                        agentsUiState = emptyUiState(),
+                        showProfileBadges = true,
+                    ),
+                    mode = AgentHubNavigatorMode.RAIL,
+                    callbacks = AgentHubNavigatorCallbacks(
+                        onSelectProject = {},
+                        onCreateSession = {},
+                        onDismissProject = {},
+                        onOpenProjectPicker = {},
+                        onAgentGroupClick = {},
+                        onFilterChange = {},
+                        onRefresh = {},
+                        onOpenSettings = {},
+                        onDismissNavigator = {},
+                    ),
+                )
+            }
+        }
+
+        compose.onNodeWithText("Production").assertExists()
+        compose.onNodeWithText("Development").assertExists()
     }
 }

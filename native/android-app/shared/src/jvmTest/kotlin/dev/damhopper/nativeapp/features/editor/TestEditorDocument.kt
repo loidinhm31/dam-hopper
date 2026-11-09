@@ -1,5 +1,6 @@
 package dev.damhopper.nativeapp.features.editor
 
+import dev.damhopper.nativeapp.features.files.FileIdentityDto
 import dev.damhopper.nativeapp.features.workspace.DocumentId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -23,12 +24,119 @@ class TestEditorDocument(
 ) : EditorDocument {
 
     private var text: StringBuilder = StringBuilder(initialText)
-    private var serverMtime: Long = initialMtime
+    override var serverMtime: Long = initialMtime
+        private set
     private var savedRevision: Long = 1L
 
     private val undoStack: ArrayDeque<String> = ArrayDeque()
     private val redoStack: ArrayDeque<String> = ArrayDeque()
     private var currentUndoBytes: Long = 0L
+    override var fileIdentity: FileIdentityDto? = null
+    override var canonicalPath: String? = null
+
+    private var leaseSeq: Long = 0L
+    private val _inFlightSaveCount = MutableStateFlow(0)
+    val inFlightSaveCount: StateFlow<Int> = _inFlightSaveCount.asStateFlow()
+    private var activeEditor: Any? = null
+    private var activeViewReceipt: Any? = null
+    private var activeViewToken: ViewLeaseToken? = null
+
+    private val _activeAliasLeases = MutableStateFlow<Set<AliasLeaseToken>>(emptySet())
+    override val activeAliasLeases: StateFlow<Set<AliasLeaseToken>> = _activeAliasLeases.asStateFlow()
+
+    private val _activeViewLeases = MutableStateFlow<Set<ViewLeaseToken>>(emptySet())
+    override val activeViewLeases: StateFlow<Set<ViewLeaseToken>> = _activeViewLeases.asStateFlow()
+
+    override var isDiscarded: Boolean = false
+
+    override fun markDiscarded() {
+        isDiscarded = true
+    }
+    override var onDisposalEligible: (() -> Unit)? = null
+
+    override val canDispose: Boolean
+        get() = _activeAliasLeases.value.isEmpty() &&
+                _activeViewLeases.value.isEmpty() &&
+                (!_isDirty.value || isDiscarded) &&
+                _inFlightSaveCount.value == 0
+
+    override fun beginSaveTracking(): () -> Unit {
+        _inFlightSaveCount.value++
+        var released = false
+        return {
+            if (!released) {
+                released = true
+                _inFlightSaveCount.value = maxOf(0, _inFlightSaveCount.value - 1)
+                if (canDispose) {
+                    onDisposalEligible?.invoke()
+                    if (isDiscarded) {
+                        close()
+                    }
+                }
+            }
+        }
+    }
+
+    override fun acquireAliasLease(aliasId: String): AliasLeaseToken {
+        checkNotClosed()
+        val seq = ++leaseSeq
+        val token = AliasLeaseToken("alias-${id.owner.profileId.orEmpty()}-$aliasId-$seq", aliasId, _revision.value)
+        _activeAliasLeases.value = _activeAliasLeases.value + token
+        return token
+    }
+
+    override fun releaseAliasLease(token: AliasLeaseToken) {
+        _activeAliasLeases.value = _activeAliasLeases.value - token
+        if (canDispose) {
+            onDisposalEligible?.invoke()
+            if (isDiscarded) {
+                close()
+            }
+        }
+    }
+
+    override fun acquireViewLease(surfaceId: String): ViewLeaseToken {
+        checkNotClosed()
+        val seq = ++leaseSeq
+        val token = ViewLeaseToken("view-${id.owner.profileId.orEmpty()}-$surfaceId-$seq", surfaceId)
+        _activeViewLeases.value = _activeViewLeases.value + token
+        return token
+    }
+
+    override fun releaseViewLease(token: ViewLeaseToken) {
+        _activeViewLeases.value = _activeViewLeases.value - token
+        if (canDispose) {
+            onDisposalEligible?.invoke()
+            if (isDiscarded) {
+                close()
+            }
+        }
+    }
+
+    fun attachTestEditor(editor: Any, token: ViewLeaseToken? = null) {
+        checkNotClosed()
+        if (activeEditor != null && activeEditor !== editor) {
+            activeViewReceipt = null
+        }
+        activeEditor = editor
+        activeViewToken = token
+        activeViewReceipt = "receipt-$editor"
+    }
+
+    fun hasActiveReceipt(editor: Any): Boolean =
+        activeEditor === editor && activeViewReceipt == "receipt-$editor"
+
+    fun detachTestEditor(editor: Any, token: ViewLeaseToken? = null, capturedViewState: DocumentViewState? = null) {
+        if (activeEditor === editor) {
+            if (capturedViewState != null) {
+                _viewState.value = capturedViewState
+            }
+            activeEditor = null
+            activeViewReceipt = null
+            activeViewToken = null
+        }
+        // Late old detach from superseded editor does not damage active successor
+    }
 
     private val _revision = MutableStateFlow(1L)
     override val revision: StateFlow<Long> = _revision.asStateFlow()
@@ -59,7 +167,8 @@ class TestEditorDocument(
 
     private var matches: List<Pair<Int, Int>> = emptyList() // startOffset, endOffset
     private var currentMatchIndex: Int = -1
-    private var isClosed = false
+    override var isClosed: Boolean = false
+        private set
 
     fun getText(): String = text.toString()
 
@@ -307,7 +416,9 @@ class TestEditorDocument(
             id = id,
             revision = _revision.value,
             utf8Bytes = text.toString().encodeToByteArray(),
-            mtime = serverMtime
+            mtime = serverMtime,
+            fileIdentity = fileIdentity,
+            canonicalPath = canonicalPath,
         )
     }
 

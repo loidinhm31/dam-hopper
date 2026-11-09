@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.damhopper.nativeapp.features.settings.WorkbenchPreferences
+import dev.damhopper.nativeapp.features.terminal.AccessoryCollapseMode
 import dev.damhopper.nativeapp.ui.theme.DamHopperColors
 import dev.damhopper.nativeapp.ui.theme.JetBrainsMonoFontFamily
 
@@ -94,8 +95,28 @@ fun accessoryKeyRows(
     enabled: Boolean,
     scrollButtonsEnabled: Boolean,
     scrollStep: Int,
+    collapseMode: AccessoryCollapseMode = AccessoryCollapseMode.EXPANDED,
 ): List<List<AccessoryKey>> {
     if (!enabled && !scrollButtonsEnabled) return emptyList()
+    if (collapseMode == AccessoryCollapseMode.HIDDEN) return emptyList()
+    if (collapseMode == AccessoryCollapseMode.COLLAPSED_SINGLE_ROW) {
+        val singleRow = buildList {
+            if (enabled) {
+                add(AccessoryKey("Ctrl", "Control key", AccessoryAction.ToggleCtrl))
+                add(AccessoryKey("Alt", "Alt key", AccessoryAction.ToggleAlt))
+                add(AccessoryKey("Esc", "Escape key", AccessoryAction.Special("ESC")))
+                add(AccessoryKey("Tab", "Tab key", AccessoryAction.Special("TAB")))
+                add(AccessoryKey("▲", "Cursor Up", AccessoryAction.Special("UP")))
+                add(AccessoryKey("▼", "Cursor Down", AccessoryAction.Special("DOWN")))
+                add(AccessoryKey("◀", "Cursor Left", AccessoryAction.Special("LEFT")))
+                add(AccessoryKey("▶", "Cursor Right", AccessoryAction.Special("RIGHT")))
+            }
+            if (scrollButtonsEnabled) {
+                addAll(accessoryScrollKeys(scrollStep))
+            }
+        }
+        return listOf(singleRow)
+    }
     return buildList {
         if (enabled) {
             val row1 = if (scrollButtonsEnabled) {
@@ -139,10 +160,10 @@ fun NativeAccessoryKeyboard(
     modifier: Modifier = Modifier,
     scrollButtonsEnabled: Boolean = false,
     scrollStep: Int = 5,
+    collapseMode: AccessoryCollapseMode = AccessoryCollapseMode.EXPANDED,
 ) {
-    if (inert) return
-    val rows = accessoryKeyRows(enabled, scrollButtonsEnabled, scrollStep)
-    if (rows.isEmpty()) return
+    if (inert || collapseMode == AccessoryCollapseMode.HIDDEN) return
+    val rows = accessoryKeyRows(enabled, scrollButtonsEnabled, scrollStep, collapseMode)
     val haptic = LocalHapticFeedback.current
     Column(
         modifier = modifier

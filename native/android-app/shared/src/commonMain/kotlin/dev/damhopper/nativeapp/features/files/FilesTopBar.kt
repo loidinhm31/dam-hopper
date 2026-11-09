@@ -1,5 +1,6 @@
 package dev.damhopper.nativeapp.features.files
 
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +43,10 @@ fun FilesTopBar(
     isMutating: Boolean = false,
     canMutate: Boolean = true,
     isSelectionUnresolved: Boolean = false,
+    browsingTarget: FilesystemTargetRef? = null,
+    defaultProjectTarget: FilesystemTargetRef.Project? = null,
+    onSelectBrowsingTarget: ((FilesystemTargetRef) -> Unit)? = null,
+    registeredProjects: List<String> = emptyList(),
 ) {
     val hasNonRootSelection = !selectedPath.isNullOrBlank()
     val mutationAllowedForSelection = canMutate && !isMutating && hasNonRootSelection && !isSelectionUnresolved
@@ -80,6 +85,35 @@ fun FilesTopBar(
 
         if (focusedWorkspaceMode || activeSubTab == FilesSubTab.EXPLORER) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (browsingTarget != null) {
+                    val label = when (browsingTarget) {
+                        is FilesystemTargetRef.Workspace -> "Workspace"
+                        is FilesystemTargetRef.Project -> browsingTarget.project
+                    }
+                    Button(
+                        onClick = {
+                            if (onSelectBrowsingTarget != null) {
+                                if (browsingTarget is FilesystemTargetRef.Workspace) {
+                                    val returnTarget = defaultProjectTarget ?: registeredProjects.firstOrNull()?.let {
+                                        FilesystemTargetRef.Project(profileId = browsingTarget.profileId, project = it)
+                                    }
+                                    if (returnTarget != null) {
+                                        onSelectBrowsingTarget(returnTarget)
+                                    }
+                                } else {
+                                    onSelectBrowsingTarget(FilesystemTargetRef.Workspace(profileId = browsingTarget.profileId))
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = DamHopperColors.Primary.copy(alpha = 0.2f),
+                            contentColor = DamHopperColors.Primary,
+                        ),
+                    ) {
+                        Text("Target: $label")
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
                 Button(
                     onClick = onRefresh,
                     colors = ButtonDefaults.buttonColors(containerColor = DamHopperColors.Surface),

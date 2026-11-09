@@ -324,8 +324,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.validate-metadata.outputs.release_tag }}
         run: |
-          echo "Cleaning up any stale draft release for ${TAG}..."
-          gh release delete "${TAG}" -y || true
+          bash deploy/release/preflight-release-draft.sh "${TAG}" "${GITHUB_REPOSITORY}"
           echo "Creating draft release for ${TAG}..."
           gh release create "${TAG}" \
             artifacts/final/* \

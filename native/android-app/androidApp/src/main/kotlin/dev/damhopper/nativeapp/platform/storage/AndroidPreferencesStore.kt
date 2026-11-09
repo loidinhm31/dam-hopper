@@ -11,6 +11,9 @@ import dev.damhopper.nativeapp.features.settings.decodeNativePreferences
 import dev.damhopper.nativeapp.features.settings.encodeNativePreferences
 import dev.damhopper.nativeapp.features.settings.encodeSourceTargetState
 import dev.damhopper.nativeapp.features.settings.migrateSourceSnapshot
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonElement
 
 /**
@@ -37,10 +40,15 @@ class AndroidPreferencesStore(
     private var preferencesError: String? = null
     private var sourceTarget: SettingsSourceTargetState = SettingsSourceTargetState()
     private var sourceTargetError: String? = null
-
+    private var uncertainCreateError: String? = null
+    private val _uncertainCreatesFlow = MutableStateFlow<List<dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord>>(emptyList())
+    val uncertainCreatesFlow: StateFlow<List<dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord>> = _uncertainCreatesFlow.asStateFlow()
     init {
         loadPreferencesFromDisk()
         loadSourceTargetFromDisk()
+        try {
+            _uncertainCreatesFlow.value = loadUncertainCreateRecords()
+        } catch (_: Throwable) {}
     }
 
     private fun loadPreferencesFromDisk() {
@@ -127,7 +135,53 @@ class AndroidPreferencesStore(
     }
 
     override fun loadRecoverableError(): String? = synchronized(lock) {
-        preferencesError ?: sourceTargetError
+        preferencesError ?: sourceTargetError ?: uncertainCreateError
+    }
+
+    override fun loadUncertainCreateRecords(): List<dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord> = synchronized(lock) {
+        val raw = prefs.getString(KEY_UNCERTAIN_CREATES, null) ?: return emptyList()
+        try {
+            ProtocolJson.decodeFromString(
+                kotlinx.serialization.builtins.ListSerializer(dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord.serializer()),
+                raw
+            )
+        } catch (e: Throwable) {
+            uncertainCreateError = "Uncertain create records corrupted: ${e.message}"
+            if (!prefs.contains(KEY_UNCERTAIN_CREATES_CORRUPT)) {
+                prefs.edit().putString(KEY_UNCERTAIN_CREATES_CORRUPT, raw).commit()
+            }
+            throw IllegalStateException("Cannot read uncertain create records: corruption detected; replacement blocked", e)
+        }
+    }
+
+    override fun saveUncertainCreateRecord(record: dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord) {
+        synchronized(lock) {
+            check(uncertainCreateError == null) { "Cannot save uncertain create record while corrupted state exists: $uncertainCreateError" }
+            val current = loadUncertainCreateRecords().toMutableList()
+            current.removeAll { it.intentId == record.intentId }
+            current.add(record)
+            val encoded = ProtocolJson.encodeToString(
+                kotlinx.serialization.builtins.ListSerializer(dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord.serializer()),
+                current
+            )
+            val success = prefs.edit().putString(KEY_UNCERTAIN_CREATES, encoded).commit()
+            check(success) { "Failed to durably commit uncertain create record to disk" }
+            _uncertainCreatesFlow.value = current
+        }
+    }
+
+    override fun removeUncertainCreateRecord(intentId: String) {
+        synchronized(lock) {
+            val current = loadUncertainCreateRecords().toMutableList()
+            current.removeAll { it.intentId == intentId }
+            val encoded = ProtocolJson.encodeToString(
+                kotlinx.serialization.builtins.ListSerializer(dev.damhopper.nativeapp.features.terminal.UncertainCreateRecord.serializer()),
+                current
+            )
+            val success = prefs.edit().putString(KEY_UNCERTAIN_CREATES, encoded).commit()
+            check(success) { "Failed to durably commit removal of uncertain create record to disk" }
+            _uncertainCreatesFlow.value = current
+        }
     }
 
     private fun persistEnvelope() {
@@ -138,6 +192,8 @@ class AndroidPreferencesStore(
         const val KEY_PREFERENCES = "damhopper_workbench_preferences"
         const val KEY_SOURCE_TARGET = "damhopper_settings_source_target"
         const val KEY_PREFERENCES_PRE_V2 = "damhopper_workbench_preferences_pre_v2"
+        const val KEY_UNCERTAIN_CREATES = "damhopper_terminal_uncertain_creates"
+        const val KEY_UNCERTAIN_CREATES_CORRUPT = "damhopper_terminal_uncertain_creates_corrupted"
         const val KEY_SOURCE_TARGET_PRE_V2 = "damhopper_settings_source_target_pre_v2"
     }
 }

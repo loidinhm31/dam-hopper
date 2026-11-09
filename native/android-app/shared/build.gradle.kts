@@ -76,6 +76,7 @@ tasks.withType<Test>().configureEach {
 
 tasks.named<Test>("jvmTest").configure {
     exclude("**/*LiveSmoke.class")
+    exclude("**/LiveDaemonSmokeTest.class")
 }
 
 tasks.register<Test>("jvmGitSmoke") {
@@ -86,4 +87,14 @@ tasks.register<Test>("jvmGitSmoke") {
     testClassesDirs = jvmTest.get().testClassesDirs
     classpath = jvmTest.get().classpath
     include("**/*LiveSmoke.class")
+}
+
+tasks.register<Test>("jvmLiveDaemonSmoke") {
+    group = "verification"
+    description = "Runs standalone external live daemon smoke tests against an isolated loopback server."
+    dependsOn("jvmTestClasses")
+    val jvmTest = tasks.named<Test>("jvmTest")
+    testClassesDirs = jvmTest.get().testClassesDirs
+    classpath = jvmTest.get().classpath
+    include("**/LiveDaemonSmokeTest.class")
 }

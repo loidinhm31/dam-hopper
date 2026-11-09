@@ -1,5 +1,6 @@
 package dev.damhopper.nativeapp.features.settings
 
+import dev.damhopper.nativeapp.core.logging.Redactor
 import dev.damhopper.nativeapp.core.notifications.NotificationPlatformStatus
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -42,7 +43,23 @@ object SettingsDiagnostics {
     fun suggestedFileName(generatedAtMs: Long): String = "damhopper-diagnostics-$generatedAtMs.json"
 
     const val INVALID_VALUE = "<invalid>"
+    const val REDACTED = "[REDACTED]"
 
+    /**
+     * Sanitizes diagnostic text by redacting secret tokens, credentials, passwords,
+     * sensitive account identifiers, and ticket paths.
+     */
+    fun redact(input: String?): String {
+        if (input == null) return ""
+        var text = Redactor.redactString(input)
+        text = text.replace(Regex("://([^:@/\\s]+):([^@/\\s]+)@"), "://$1:$REDACTED@")
+        text = text.replace(Regex("(?i)([?&]ticket(?:[-_]?id)?=)[^&\\s]+"), "$1$REDACTED")
+        text = text.replace(Regex("(?i)(/(?:media/stream|tickets?|ticket)/)[A-Za-z0-9._~+/=-]+"), "$1$REDACTED")
+        text = text.replace(Regex("(?i)([?&](?:account(?:[-_]?id)?|user[-_]?id)=)[^&\\s]+"), "$1$REDACTED")
+        text = text.replace(Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"), REDACTED)
+        text = text.replace(Regex("(?i)(password|passwd|passphrase|api[-_]?key|secret|credential|client[-_]?secret|access[-_]?token)=([^&\\s]+)"), "$1=$REDACTED")
+        return text
+    }
     /** A shortcut is exported only when it is DoubleShift or a keyboard chord with a well-known DOM code. */
     internal fun safeShortcut(value: String): String {
         val parsed = ShortcutGrammar.parse(value) ?: return INVALID_VALUE

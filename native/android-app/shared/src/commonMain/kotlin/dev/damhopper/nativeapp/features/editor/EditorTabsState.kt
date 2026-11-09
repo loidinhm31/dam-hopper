@@ -16,6 +16,284 @@ import kotlinx.coroutines.sync.withLock
  * Implements [EditorTabLifecyclePort], [EditorDirtyGuardPort], [EditorDocumentAccessPort],
  * [EditorCommandPort], and [EditorSaveOutcomePort].
  */
+interface CanonicalReplacementListener {
+    fun onCanonicalDocumentReplaced(
+        canonicalKey: String,
+        successor: EditorDocument,
+        metadata: SuccessorLoadMetadata? = null,
+    )
+}
+
+data class SuccessorLoadMetadata(
+    val tier: FileTier? = null,
+    val mtime: Long? = null,
+    val size: Long? = null,
+    val mime: String? = null,
+    val content: String? = null,
+    val fileIdentity: dev.damhopper.nativeapp.features.files.FileIdentityDto? = null,
+    val canonicalPath: String? = null,
+)
+
+/**
+ * Retained registry managing canonical documents, explicit alias/view leases,
+ * document-level save admission, atomic tier replacements, and disposal lifecycle.
+ */
+class CanonicalDocumentRegistry(
+    val defaultDocumentFactory: EditorDocumentFactory? = null,
+) {
+    private val documents = mutableMapOf<String, EditorDocument>()
+    private val saveLocks = mutableMapOf<String, Boolean>()
+    private val activeAliases = mutableMapOf<String, MutableSet<String>>()
+    private val replacementListeners = mutableListOf<CanonicalReplacementListener>()
+    private val retiredDocuments = mutableSetOf<EditorDocument>()
+    private val unauthorizedCanonicalKeys = mutableSetOf<String>()
+
+    fun revokeAllAuthority() {
+        unauthorizedCanonicalKeys.addAll(documents.keys)
+    }
+
+    fun revokeAuthority(canonicalKey: String) {
+        unauthorizedCanonicalKeys.add(canonicalKey)
+    }
+
+    fun grantAuthority(canonicalKey: String) {
+        unauthorizedCanonicalKeys.remove(canonicalKey)
+    }
+
+    fun isAuthorityGranted(canonicalKey: String): Boolean =
+        canonicalKey !in unauthorizedCanonicalKeys
+
+    fun getUnauthorizedCanonicalKeys(): Set<String> =
+        unauthorizedCanonicalKeys.toSet()
+
+    fun settleRetiredDocuments() {
+        checkRetiredDocuments()
+    }
+
+    private fun checkRetiredDocuments() {
+        val iterator = retiredDocuments.iterator()
+        while (iterator.hasNext()) {
+            val doc = iterator.next()
+            if (doc.canDispose) {
+                iterator.remove()
+                doc.close()
+            }
+        }
+    }
+    fun registerReplacementListener(listener: CanonicalReplacementListener) {
+        replacementListeners.add(listener)
+    }
+
+    fun unregisterReplacementListener(listener: CanonicalReplacementListener) {
+        replacementListeners.remove(listener)
+    }
+
+    fun registerAlias(canonicalKey: String, aliasId: String) {
+        activeAliases.getOrPut(canonicalKey) { mutableSetOf() }.add(aliasId)
+    }
+
+    fun unregisterAlias(canonicalKey: String, aliasId: String) {
+        activeAliases[canonicalKey]?.remove(aliasId)
+        if (activeAliases[canonicalKey]?.isEmpty() == true) {
+            activeAliases.remove(canonicalKey)
+        }
+    }
+
+    fun rekeyAlias(oldCanonicalKey: String, oldAliasId: String, newCanonicalKey: String, newAliasId: String) {
+        unregisterAlias(oldCanonicalKey, oldAliasId)
+        registerAlias(newCanonicalKey, newAliasId)
+    }
+
+    fun hasSurvivingAliases(canonicalKey: String, excludingAliasId: String): Boolean {
+        val set = activeAliases[canonicalKey] ?: return false
+        return set.any { it != excludingAliasId }
+    }
+
+    fun getDocument(canonicalKey: String): EditorDocument? = documents[canonicalKey]
+
+    fun getAllDocuments(): Map<String, EditorDocument> = documents.toMap()
+
+    fun getOrCreateDocument(
+        canonicalKey: String,
+        fallbackDocId: DocumentId,
+        content: String,
+        mtime: Long?,
+        tier: FileTier,
+        factory: EditorDocumentFactory? = defaultDocumentFactory,
+        metadata: SuccessorLoadMetadata? = null,
+    ): Pair<EditorDocument, Boolean> {
+        val existing = documents[canonicalKey]
+        if (existing != null) {
+            if (existing.isClosed) {
+                documents.remove(canonicalKey)
+            } else if (tier.isReadOnly == existing.isReadOnly.value || existing.isDirty.value || isSaveInProgress(canonicalKey)) {
+                return Pair(existing, false)
+            } else {
+                val effFactory = factory ?: defaultDocumentFactory
+                    ?: throw IllegalStateException("No EditorDocumentFactory available to create canonical document for $canonicalKey")
+                val created = effFactory.createDocument(
+                    id = fallbackDocId,
+                    initialText = content,
+                    initialMtime = mtime ?: 0L,
+                    readOnly = tier.isReadOnly,
+                    maxUndoStackSize = if (tier == FileTier.DEGRADED) 50 else 200,
+                )
+                created.fileIdentity = metadata?.fileIdentity ?: existing.fileIdentity
+                created.canonicalPath = metadata?.canonicalPath ?: existing.canonicalPath
+                replaceDocumentAtomic(canonicalKey, created, metadata)
+                return Pair(created, true)
+            }
+        }
+        val effFactory = factory ?: defaultDocumentFactory
+            ?: throw IllegalStateException("No EditorDocumentFactory available to create canonical document for $canonicalKey")
+        val created = effFactory.createDocument(
+            id = fallbackDocId,
+            initialText = content,
+            initialMtime = mtime ?: 0L,
+            readOnly = tier.isReadOnly,
+            maxUndoStackSize = if (tier == FileTier.DEGRADED) 50 else 200,
+        )
+        created.fileIdentity = metadata?.fileIdentity
+        created.canonicalPath = metadata?.canonicalPath
+        documents[canonicalKey] = created
+        return Pair(created, true)
+    }
+
+    fun registerDocument(canonicalKey: String, doc: EditorDocument) {
+        documents[canonicalKey] = doc
+    }
+
+    fun acquireAliasLease(canonicalKey: String, aliasId: String): AliasLeaseToken? {
+        val doc = documents[canonicalKey] ?: return null
+        registerAlias(canonicalKey, aliasId)
+        return doc.acquireAliasLease(aliasId)
+    }
+
+    fun releaseAliasLease(canonicalKey: String, token: AliasLeaseToken, doc: EditorDocument? = null) {
+        val targetDoc = doc ?: documents[canonicalKey] ?: retiredDocuments.find { it.activeAliasLeases.value.contains(token) }
+        targetDoc?.releaseAliasLease(token)
+        unregisterAlias(canonicalKey, token.aliasId)
+        checkAndPruneDocument(canonicalKey, targetDoc)
+        checkRetiredDocuments()
+    }
+
+    fun acquireViewLease(canonicalKey: String, surfaceId: String): ViewLeaseToken? {
+        val doc = documents[canonicalKey] ?: return null
+        return doc.acquireViewLease(surfaceId)
+    }
+
+    fun releaseViewLease(canonicalKey: String, token: ViewLeaseToken, doc: EditorDocument? = null) {
+        val targetDoc = doc ?: documents[canonicalKey] ?: retiredDocuments.find { it.activeViewLeases.value.contains(token) }
+        targetDoc?.releaseViewLease(token)
+        checkAndPruneDocument(canonicalKey, targetDoc)
+        checkRetiredDocuments()
+    }
+
+    fun isSaveInProgress(canonicalKey: String): Boolean =
+        saveLocks[canonicalKey] == true
+
+    fun tryBeginSave(canonicalKey: String): Boolean {
+        if (saveLocks[canonicalKey] == true) return false
+        saveLocks[canonicalKey] = true
+        return true
+    }
+
+    fun completeSave(canonicalKey: String) {
+        saveLocks.remove(canonicalKey)
+        checkAndPruneDocument(canonicalKey, documents[canonicalKey])
+        checkRetiredDocuments()
+    }
+
+    fun abortSave(canonicalKey: String) {
+        saveLocks.remove(canonicalKey)
+        checkAndPruneDocument(canonicalKey, documents[canonicalKey])
+        checkRetiredDocuments()
+    }
+
+    fun replaceDocumentAtomic(
+        canonicalKey: String,
+        successor: EditorDocument,
+        metadata: SuccessorLoadMetadata? = null,
+    ): EditorDocument? {
+        val old = documents.put(canonicalKey, successor)
+        for (listener in replacementListeners.toList()) {
+            listener.onCanonicalDocumentReplaced(canonicalKey, successor, metadata)
+        }
+        if (old != null) {
+            if (old.canDispose) {
+                old.close()
+            } else {
+                retiredDocuments.add(old)
+                old.onDisposalEligible = { checkRetiredDocuments() }
+            }
+        }
+        return old
+    }
+
+    fun checkAndPruneDocument(canonicalKey: String, doc: EditorDocument?) {
+        if (doc == null) return
+        if (documents[canonicalKey] === doc) {
+            if (isSaveInProgress(canonicalKey)) return
+            if (doc.canDispose) {
+                documents.remove(canonicalKey)
+                doc.close()
+            }
+        } else {
+            // Retired / replaced document awaiting lease/save settlement
+            if (doc.canDispose) {
+                retiredDocuments.remove(doc)
+                doc.close()
+            }
+        }
+    }
+
+    fun pruneDocument(canonicalKey: String, forceDiscard: Boolean = false) {
+        val doc = documents[canonicalKey] ?: return
+        if (isSaveInProgress(canonicalKey) && !forceDiscard) return
+        if (forceDiscard) {
+            val hasAliases = activeAliases[canonicalKey]?.isNotEmpty() == true
+            if (!hasAliases) {
+                documents.remove(canonicalKey)
+                doc.markDiscarded()
+                if (doc.canDispose) {
+                    doc.close()
+                } else {
+                    retiredDocuments.add(doc)
+                    doc.onDisposalEligible = { checkRetiredDocuments() }
+                }
+            }
+        } else if (doc.canDispose) {
+            documents.remove(canonicalKey)
+            doc.close()
+        }
+    }
+
+    fun pruneClosed(forceDiscard: Boolean = false) {
+        val toRemove = documents.filter { (key, doc) ->
+            if (forceDiscard) {
+                activeAliases[key].isNullOrEmpty()
+            } else {
+                doc.canDispose && !isSaveInProgress(key)
+            }
+        }.keys.toList()
+        for (k in toRemove) {
+            val doc = documents.remove(k) ?: continue
+            if (forceDiscard) {
+                doc.markDiscarded()
+                if (doc.canDispose) {
+                    doc.close()
+                } else {
+                    retiredDocuments.add(doc)
+                    doc.onDisposalEligible = { checkRetiredDocuments() }
+                }
+            } else {
+                doc.close()
+            }
+        }
+        checkRetiredDocuments()
+    }
+}
+
 class EditorTabsState(
     val profileId: String,
     editorRepository: EditorRepository,
@@ -24,7 +302,8 @@ class EditorTabsState(
     val jsonLanguageService: JsonLanguageService = JsonLanguageService(),
     val tsLanguageService: TsJsLanguageService = TsJsLanguageService("typescript"),
     val jsLanguageService: TsJsLanguageService = TsJsLanguageService("javascript"),
-) : EditorTabLifecyclePort, EditorDirtyGuardPort, EditorDocumentAccessPort, EditorCommandPort, EditorSaveOutcomePort {
+    val registry: CanonicalDocumentRegistry = CanonicalDocumentRegistry(documentFactory),
+) : EditorTabLifecyclePort, EditorDirtyGuardPort, EditorDocumentAccessPort, EditorCommandPort, EditorSaveOutcomePort, EditorCanonicalDocumentPort, CanonicalReplacementListener {
 
     var editorRepository: EditorRepository = editorRepository
         private set
@@ -48,7 +327,7 @@ class EditorTabsState(
     private val sessions: MutableMap<String, EditorSession> = mutableMapOf()
     private val tabDocumentIds: MutableMap<String, DocumentId> = mutableMapOf()
     private var nextIncarnation: Long = 1L
-
+    val canonicalDocuments: Map<String, EditorDocument> get() = registry.getAllDocuments()
     private val diagnosticsManager = EditorDiagnosticsManager(
         languageServiceCoordinator, jsonLanguageService, tsLanguageService, jsLanguageService
     )
@@ -56,14 +335,84 @@ class EditorTabsState(
     private val saveMutex = Mutex()
 
     init {
+        registry.registerReplacementListener(this)
         installRepositoryGates(editorRepository)
     }
+
+    override fun onCanonicalDocumentReplaced(
+        canonicalKey: String,
+        successor: EditorDocument,
+        metadata: SuccessorLoadMetadata?,
+    ) {
+        val matchingKeys = _tabs.value.filter { resolveCanonicalKey(it) == canonicalKey }.map { it.key }
+        if (matchingKeys.isEmpty()) return
+        val updatedAliases = mutableListOf<EditorTab>()
+        val successorText = metadata?.content ?: successor.snapshotForSave().utf8Bytes.decodeToString()
+        for (aKey in matchingKeys) {
+            val aTab = _tabs.value.find { it.key == aKey } ?: continue
+            val aIncarnation = nextIncarnation++
+            val aDocId = createDocumentId(aTab.target, aTab.path, aIncarnation)
+            tabDocumentIds[aKey] = aDocId
+            if (_activeTabKey.value == aKey) {
+                _activeTabId.value = aDocId
+            }
+            sessions.remove(aKey)?.close()
+            val lease = successor.acquireAliasLease(aKey)
+            val aSession = EditorSession(
+                document = successor,
+                key = aKey,
+                profileId = profileId,
+                target = aTab.target,
+                path = aTab.path,
+                sessionIncarnation = aIncarnation,
+                initialMtime = metadata?.mtime ?: aTab.mtime,
+                isReadOnly = successor.isReadOnly.value,
+            )
+            aSession.aliasLease = lease
+            aSession.isInputAllowed = { isInputAllowed() }
+            sessions[aKey] = aSession
+            attachSessionListeners(aSession)
+
+            val resolvedTier = metadata?.tier ?: if (successor.isReadOnly.value) {
+                FileTier.LARGE
+            } else if (aTab.tier == FileTier.DEGRADED) {
+                FileTier.DEGRADED
+            } else {
+                FileTier.NORMAL
+            }
+
+            updatedAliases.add(aTab.copy(
+                content = successorText,
+                savedContent = successorText,
+                tier = resolvedTier,
+                mtime = metadata?.mtime ?: aTab.mtime,
+                size = metadata?.size ?: aTab.size,
+                mime = metadata?.mime ?: aTab.mime,
+                fileIdentity = metadata?.fileIdentity ?: successor.fileIdentity ?: aTab.fileIdentity,
+                canonicalPath = metadata?.canonicalPath ?: successor.canonicalPath ?: aTab.canonicalPath,
+                isDirty = false,
+                isLoading = false,
+                error = null,
+                isConflicted = false,
+                isStale = false,
+                sessionIncarnation = aIncarnation,
+            ))
+        }
+        val updatedMap = updatedAliases.associateBy { it.key }
+        _tabs.value = _tabs.value.map { updatedMap[it.key] ?: it }
+        updateMetadataFlow()
+    }
+
+    var unauthorizedDirtyDocIdsProvider: () -> Set<DocumentId> = { emptySet() }
+    var unauthorizedCanonicalKeysProvider: () -> Set<String> = { emptySet() }
 
     private fun installRepositoryGates(repo: EditorRepository) {
         repo.documentProvider = { getDocument(it) }
         repo.saveGate = gate@{ id ->
             val key = tabDocumentIds.entries.find { it.value == id }?.key ?: return@gate "Tab is closed"
             val tab = _tabs.value.find { it.key == key } ?: return@gate "Tab is closed"
+            val cKey = resolveCanonicalKey(tab)
+            val doc = registry.getDocument(cKey) ?: sessions[key]?.document
             when {
                 tab.tier.isReadOnly -> "Tier ${tab.tier} is read-only"
                 tab.encryptedSessionRequired -> "Encrypted session required; plaintext port save denied"
@@ -72,6 +421,10 @@ class EditorTabsState(
                 sessions[key] == null -> "No retained session"
                 sessions[key]?.isFrozen == true -> "Document editing is frozen"
                 !isInputAllowed() -> "Input blocked"
+                !registry.isAuthorityGranted(cKey) || cKey in unauthorizedCanonicalKeysProvider() || id in unauthorizedDirtyDocIdsProvider() ->
+                    "Document requires fresh server baseline reauthorization after reconnect"
+                tab.fileIdentity == null || doc?.fileIdentity == null ->
+                    "Document lacks verified canonical identity"
                 else -> null
             }
         }
@@ -97,16 +450,41 @@ class EditorTabsState(
         content: String,
         mtime: Long?,
         tier: FileTier,
+        fileIdentity: dev.damhopper.nativeapp.features.files.FileIdentityDto? = null,
+        canonicalPath: String? = null,
+        size: Long? = null,
+        mime: String? = null,
     ) {
         val factory = documentFactory ?: return
         sessions.remove(key)?.close()
-        val doc = factory.createDocument(
-            id = docId,
-            initialText = content,
-            initialMtime = mtime ?: 0L,
-            readOnly = tier.isReadOnly,
-            maxUndoStackSize = if (tier == FileTier.DEGRADED) 50 else 200,
+        val cKey = resolveCanonicalKey(fileIdentity, profileId, target, path)
+
+        val shouldDemote = !tier.isReadOnly && fileIdentity == null
+        val effectiveTier = if (shouldDemote) FileTier.LARGE else tier
+        val isReadOnly = effectiveTier.isReadOnly
+        val (doc, _) = registry.getOrCreateDocument(
+            canonicalKey = cKey,
+            fallbackDocId = docId,
+            content = content,
+            mtime = mtime,
+            tier = effectiveTier,
+            factory = factory,
+            metadata = SuccessorLoadMetadata(
+                tier = effectiveTier,
+                mtime = mtime,
+                size = size ?: content.length.toLong(),
+                mime = mime,
+                content = content,
+                fileIdentity = fileIdentity,
+                canonicalPath = canonicalPath,
+            ),
         )
+        if (fileIdentity != null && doc.fileIdentity == null) {
+            doc.fileIdentity = fileIdentity
+            doc.canonicalPath = canonicalPath
+        }
+
+        val lease = registry.acquireAliasLease(cKey, key) ?: doc.acquireAliasLease(key)
         val session = EditorSession(
             document = doc,
             key = key,
@@ -115,8 +493,9 @@ class EditorTabsState(
             path = path,
             sessionIncarnation = incarnation,
             initialMtime = mtime,
-            isReadOnly = tier.isReadOnly,
+            isReadOnly = isReadOnly,
         )
+        session.aliasLease = lease
         session.isInputAllowed = { isInputAllowed() }
         sessions[key] = session
         attachSessionListeners(session)
@@ -130,6 +509,45 @@ class EditorTabsState(
 
     val activeTab: EditorTab? get() = _tabs.value.find { it.key == _activeTabKey.value }
     fun getSession(key: String): EditorSession? = sessions[key]
+    fun getDocumentId(tabKey: String): DocumentId? = tabDocumentIds[tabKey]
+    fun resolveCanonicalKey(tab: EditorTab): String =
+        resolveCanonicalKey(tab.fileIdentity, tab.profileId, tab.target, tab.path)
+
+    fun resolveCanonicalKey(
+        fileIdentity: dev.damhopper.nativeapp.features.files.FileIdentityDto?,
+        tabProfileId: String,
+        target: ProjectTargetRef,
+        path: String,
+    ): String {
+        val owner = editorRepository.fileRepository.owner
+        val wsId = fileIdentity?.workspaceId?.trim()
+        val cPath = fileIdentity?.canonicalPath?.trim()
+        val wsEpoch = fileIdentity?.workspaceEpoch
+
+        if (!wsId.isNullOrEmpty() && !cPath.isNullOrEmpty() && wsEpoch != null && wsEpoch >= 0L) {
+            return dev.damhopper.nativeapp.features.files.CanonicalDocumentKey(
+                profileId = tabProfileId,
+                normalizedEndpoint = owner.normalizedBaseUrl,
+                authenticatedAccount = owner.accountUser,
+                workspaceId = wsId,
+                workspaceEpoch = wsEpoch,
+                canonicalPath = fileIdentity.canonicalPath, // verbatim, no lowercasing, no slash stripping!
+            ).key
+        }
+
+        // Conservative fallback identity scoped to exact target with owner epoch isolation
+        fun enc(s: String): String = "${s.length}:$s"
+        val fallbackEpoch = owner.workspaceEpoch ?: 0L
+        return listOf(
+            enc(tabProfileId),
+            enc(owner.normalizedBaseUrl),
+            enc(owner.accountUser),
+            enc(target.project),
+            enc(target.worktreePath.orEmpty()),
+            "$fallbackEpoch",
+            enc(path),
+        ).joinToString("/")
+    }
 
     private fun updateMetadataFlow() {
         _openTabs.value = _tabs.value.map { tab ->
@@ -150,6 +568,8 @@ class EditorTabsState(
                 isLoading = tab.isLoading,
                 error = tab.error,
                 rangeWindow = tab.rangeWindow,
+                fileIdentity = tab.fileIdentity,
+                canonicalKey = resolveCanonicalKey(tab),
             )
         }
         val currentKey = _activeTabKey.value
@@ -308,15 +728,30 @@ class EditorTabsState(
                     return
                 }
 
-                installSession(key, docId, target, path, incarnation, result.content, result.mtime, result.tier)
+                installSession(
+                    key = key,
+                    docId = docId,
+                    target = target,
+                    path = path,
+                    incarnation = incarnation,
+                    content = result.content,
+                    mtime = result.mtime,
+                    tier = result.tier,
+                    fileIdentity = result.fileIdentity,
+                    canonicalPath = result.canonicalPath,
+                    size = result.size,
+                    mime = result.mime,
+                )
 
+                val shouldDemote = !result.tier.isReadOnly && result.fileIdentity == null
+                val effectiveTier = if (shouldDemote) FileTier.LARGE else result.tier
                 _tabs.value = _tabs.value.map {
                     if (it.key == key) it.copy(
                         content = result.content,
                         savedContent = result.content,
                         mtime = result.mtime ?: 0L,
                         size = result.size,
-                        tier = result.tier,
+                        tier = effectiveTier,
                         mime = result.mime,
                         isDirty = false,
                         isLoading = false,
@@ -324,7 +759,9 @@ class EditorTabsState(
                         selection = selection,
                         cursorPosition = selection?.end ?: TextPosition(1, 1),
                         largeFileEof = result.isEof,
-                        rangeWindow = result.rangeWindow
+                        rangeWindow = result.rangeWindow,
+                        fileIdentity = result.fileIdentity,
+                        canonicalPath = result.canonicalPath,
                     ) else it
                 }
                 updateMetadataFlow()
@@ -393,11 +830,23 @@ class EditorTabsState(
         }
     }
 
-    fun closeTab(key: String) {
+    fun closeTab(key: String, forceDiscard: Boolean = false) {
+        val tab = _tabs.value.find { it.key == key }
+        val cKey = tab?.let { resolveCanonicalKey(it) }
+        if ((tab?.isSaving == true || (cKey != null && registry.isSaveInProgress(cKey))) && !forceDiscard) {
+            // Busy during in-flight save!
+            return
+        }
         val remaining = _tabs.value.filter { it.key != key }
         _tabs.value = remaining
-        sessions.remove(key)?.close()
+        val session = sessions.remove(key)
+        val doc = session?.document
+        session?.close()
         tabDocumentIds.remove(key)
+        if (cKey != null) {
+            registry.unregisterAlias(cKey, key)
+            registry.pruneDocument(cKey, forceDiscard)
+        }
         if (_activeTabKey.value == key) {
             val nextKey = remaining.lastOrNull()?.key
             _activeTabKey.value = nextKey
@@ -406,14 +855,29 @@ class EditorTabsState(
         updateMetadataFlow()
     }
 
-    fun closeAll() {
+    fun closeAll(forceDiscard: Boolean = false) {
+        _tabs.value.forEach { tab ->
+            val cKey = resolveCanonicalKey(tab)
+            registry.unregisterAlias(cKey, tab.key)
+        }
         _tabs.value = emptyList()
         _activeTabKey.value = null
         _activeTabId.value = null
         tabDocumentIds.clear()
         sessions.values.forEach { it.close() }
         sessions.clear()
+        registry.unregisterReplacementListener(this)
+        registry.pruneClosed(forceDiscard)
         updateMetadataFlow()
+    }
+
+    override fun getCanonicalDocument(canonicalKey: String): EditorDocument? = registry.getDocument(canonicalKey)
+
+    override fun acquireCanonicalLease(canonicalKey: String, aliasId: String): AliasLeaseToken? =
+        registry.acquireAliasLease(canonicalKey, aliasId)
+
+    override fun releaseCanonicalLease(canonicalKey: String, token: AliasLeaseToken) {
+        registry.releaseAliasLease(canonicalKey, token)
     }
 
     // --- EditorTabLifecyclePort Close & Conflict ---
@@ -423,8 +887,24 @@ class EditorTabsState(
         val tab = _tabs.value.find { it.key == entry.key } ?: return null
         val session = sessions[entry.key]
 
+        if (tab.isSaving) {
+            return CloseIntent(
+                id = id,
+                dirtyRevision = session?.revision ?: tab.modelVersion,
+                decision = CloseDecision.SAVE
+            )
+        }
+
         val isDirty = session?.isDirty ?: tab.isDirty
         if (isDirty) {
+            val cKey = resolveCanonicalKey(tab)
+            val otherAliases = _tabs.value.any { it.key != tab.key && resolveCanonicalKey(it) == cKey } ||
+                    registry.hasSurvivingAliases(cKey, excludingAliasId = tab.key)
+            if (otherAliases) {
+                // Surviving alias exists! Close this tab lease only; surviving alias retains dirty edits
+                closeTab(entry.key)
+                return null
+            }
             return CloseIntent(
                 id = id,
                 dirtyRevision = session?.revision ?: tab.modelVersion,
@@ -437,13 +917,15 @@ class EditorTabsState(
 
     override fun confirmClose(intent: CloseIntent) {
         val entry = tabDocumentIds.entries.find { it.value == intent.id } ?: return
+        val tab = _tabs.value.find { it.key == entry.key } ?: return
         val session = sessions[entry.key]
+        if (tab.isSaving) return // Busy during save
         when (intent.decision) {
             CloseDecision.DISCARD -> {
                 if (session != null && session.revision > intent.dirtyRevision) {
                     return // Newer edits occurred after consent; protect local buffer
                 }
-                closeTab(entry.key)
+                closeTab(entry.key, forceDiscard = true)
             }
             CloseDecision.CANCEL -> { /* user cancelled; tab stays open */ }
             CloseDecision.SAVE -> {
@@ -474,15 +956,42 @@ class EditorTabsState(
         key: String,
         reservationToken: dev.damhopper.nativeapp.features.files.ReservationToken? = null,
     ): EditorSaveResult = saveMutex.withLock {
-        val docId = tabDocumentIds[key]
         val tab = _tabs.value.find { it.key == key }
-        val effectiveOwner = if (tab != null) {
-            dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(editorRepository.fileRepository.owner, tab.target)
-        } else editorRepository.fileRepository.owner
-        val acquiredToken = if (reservationToken == null && tab != null) {
+            ?: return@withLock EditorSaveResult.Error("Tab not found: $key")
+        val docId = tabDocumentIds[key]
+        val cKey = resolveCanonicalKey(tab)
+        val session = sessions[key]
+        val doc = registry.getDocument(cKey) ?: session?.document
+        if (!registry.isAuthorityGranted(cKey) || cKey in unauthorizedCanonicalKeysProvider() || (docId != null && docId in unauthorizedDirtyDocIdsProvider())) {
+            return@withLock EditorSaveResult.Error("Document requires fresh server baseline reauthorization after reconnect")
+        }
+        if (!registry.tryBeginSave(cKey)) {
+            return@withLock EditorSaveResult.Error("Save already in flight for canonical document")
+        }
+        val effectiveOwner = dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(editorRepository.fileRepository.owner, tab.target)
+        val acquiredToken = if (reservationToken == null) {
             editorRepository.fileRepository.arbiter.tryReserveSave(effectiveOwner, tab.path)
-                ?: return@withLock EditorSaveResult.Error("Path '${tab.path}' is currently reserved by another file operation")
         } else null
+
+        if (acquiredToken == null && reservationToken == null) {
+            registry.abortSave(cKey)
+            return@withLock EditorSaveResult.Error("Path '${tab.path}' is currently reserved by another file operation")
+        }
+
+        val fid = doc?.fileIdentity ?: tab.fileIdentity
+        val wsId = fid?.workspaceId?.trim()
+        val cPath = fid?.canonicalPath?.trim()
+        val wsEpoch = fid?.workspaceEpoch
+        val ownerEpoch = editorRepository.fileRepository.owner.workspaceEpoch
+        if (tab.fileIdentity == null || doc?.fileIdentity == null || wsId.isNullOrEmpty() || cPath.isNullOrEmpty() || wsEpoch == null || (ownerEpoch != null && wsEpoch != ownerEpoch)) {
+            registry.abortSave(cKey)
+            if (acquiredToken != null && acquiredToken.state == dev.damhopper.nativeapp.features.files.ReservationState.ACTIVE) {
+                try {
+                    editorRepository.fileRepository.arbiter.releaseToken(acquiredToken)
+                } catch (_: Throwable) {}
+            }
+            return@withLock EditorSaveResult.Error("Document lacks verified canonical identity")
+        }
 
         val tokenToUse = reservationToken ?: acquiredToken
         try {
@@ -490,7 +999,7 @@ class EditorTabsState(
             val res = saveCoordinator.save(
                 tabKey = key,
                 currentTabProvider = { _tabs.value.find { it.key == key } },
-                session = sessions[key],
+                session = session,
                 transformTab = { transform ->
                     _tabs.value = _tabs.value.map { if (it.key == key) transform(it) else it }
                     updateMetadataFlow()
@@ -498,7 +1007,26 @@ class EditorTabsState(
                 reservationToken = tokenToUse,
             )
             if (transportEpoch != saveEpoch) {
+                registry.abortSave(cKey)
                 return@withLock EditorSaveResult.Error("Transport epoch changed during save")
+            }
+            if (res is EditorSaveResult.Success) {
+                registry.completeSave(cKey)
+                _tabs.value = _tabs.value.map {
+                    if (resolveCanonicalKey(it) == cKey) {
+                        it.copy(
+                            mtime = res.newMtime,
+                            isDirty = session?.isDirty ?: false,
+                            isConflicted = false,
+                            isStale = false,
+                            savedContent = it.content,
+                            error = null,
+                        )
+                    } else it
+                }
+                updateMetadataFlow()
+            } else {
+                registry.abortSave(cKey)
             }
             if (docId != null) {
                 val outcome = when (res) {
@@ -512,6 +1040,7 @@ class EditorTabsState(
             }
             res
         } finally {
+            registry.completeSave(cKey)
             if (acquiredToken != null && acquiredToken.state == dev.damhopper.nativeapp.features.files.ReservationState.ACTIVE) {
                 try {
                     editorRepository.fileRepository.arbiter.releaseToken(acquiredToken)
@@ -592,6 +1121,9 @@ class EditorTabsState(
 
             tabDocumentIds.remove(oldKey)
             tabDocumentIds[newKey] = newDocId
+            val oldCKey = resolveCanonicalKey(tab)
+            val newCKey = resolveCanonicalKey(tab.fileIdentity, profileId, target, rekeyedRelativePath)
+            registry.rekeyAlias(oldCKey, oldKey, newCKey, newKey)
 
             val oldOutcome = _saveOutcomes.value[oldDocId]
             if (oldOutcome != null) {
@@ -640,28 +1172,78 @@ class EditorTabsState(
         key: String,
         reservationToken: dev.damhopper.nativeapp.features.files.ReservationToken? = null,
     ): EditorSaveResult = saveMutex.withLock {
-        val docId = tabDocumentIds[key]
         val tab = _tabs.value.find { it.key == key }
-        val effectiveOwner = if (tab != null) {
-            dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(editorRepository.fileRepository.owner, tab.target)
-        } else editorRepository.fileRepository.owner
-        val acquiredToken = if (reservationToken == null && tab != null) {
+            ?: return@withLock EditorSaveResult.Error("Tab not found: $key")
+        val docId = tabDocumentIds[key]
+        val cKey = resolveCanonicalKey(tab)
+        val session = sessions[key]
+        val doc = registry.getDocument(cKey) ?: session?.document
+        if (!registry.isAuthorityGranted(cKey) || cKey in unauthorizedCanonicalKeysProvider() || (docId != null && docId in unauthorizedDirtyDocIdsProvider())) {
+            return@withLock EditorSaveResult.Error("Document requires fresh server baseline reauthorization after reconnect")
+        }
+        if (!registry.tryBeginSave(cKey)) {
+            return@withLock EditorSaveResult.Error("Save already in flight for canonical document")
+        }
+        val effectiveOwner = dev.damhopper.nativeapp.features.files.FileWatchCoordinator.resolveEffectiveOwner(editorRepository.fileRepository.owner, tab.target)
+        val acquiredToken = if (reservationToken == null) {
             editorRepository.fileRepository.arbiter.tryReserveSave(effectiveOwner, tab.path)
-                ?: return@withLock EditorSaveResult.Error("Path '${tab.path}' is currently reserved by another file operation")
         } else null
 
+        if (acquiredToken == null && reservationToken == null) {
+            registry.abortSave(cKey)
+            return@withLock EditorSaveResult.Error("Path '${tab.path}' is currently reserved by another file operation")
+        }
+
+        val fid = doc?.fileIdentity ?: tab.fileIdentity
+        val wsId = fid?.workspaceId?.trim()
+        val cPath = fid?.canonicalPath?.trim()
+        val wsEpoch = fid?.workspaceEpoch
+        val ownerEpoch = editorRepository.fileRepository.owner.workspaceEpoch
+        if (tab.fileIdentity == null || doc?.fileIdentity == null || wsId.isNullOrEmpty() || cPath.isNullOrEmpty() || wsEpoch == null || (ownerEpoch != null && wsEpoch != ownerEpoch)) {
+            registry.abortSave(cKey)
+            if (acquiredToken != null && acquiredToken.state == dev.damhopper.nativeapp.features.files.ReservationState.ACTIVE) {
+                try {
+                    editorRepository.fileRepository.arbiter.releaseToken(acquiredToken)
+                } catch (_: Throwable) {}
+            }
+            return@withLock EditorSaveResult.Error("Document lacks verified canonical identity")
+        }
+
         val tokenToUse = reservationToken ?: acquiredToken
+        val saveEpoch = transportEpoch
         try {
             val res = saveCoordinator.forceOverwrite(
                 tabKey = key,
                 currentTabProvider = { _tabs.value.find { it.key == key } },
-                session = sessions[key],
+                session = session,
                 transformTab = { transform ->
                     _tabs.value = _tabs.value.map { if (it.key == key) transform(it) else it }
                     updateMetadataFlow()
                 },
                 reservationToken = tokenToUse,
             )
+            if (transportEpoch != saveEpoch) {
+                registry.abortSave(cKey)
+                return@withLock EditorSaveResult.Error("Transport epoch changed during save")
+            }
+            if (res is EditorSaveResult.Success) {
+                registry.completeSave(cKey)
+                _tabs.value = _tabs.value.map {
+                    if (resolveCanonicalKey(it) == cKey) {
+                        it.copy(
+                            mtime = res.newMtime,
+                            isDirty = session?.isDirty ?: false,
+                            isConflicted = false,
+                            isStale = false,
+                            savedContent = it.content,
+                            error = null,
+                        )
+                    } else it
+                }
+                updateMetadataFlow()
+            } else {
+                registry.abortSave(cKey)
+            }
             if (docId != null) {
                 val outcome = when (res) {
                     is EditorSaveResult.Success -> FileOperationOutcome.Confirmed(res.newMtime)
@@ -674,6 +1256,7 @@ class EditorTabsState(
             }
             res
         } finally {
+            registry.completeSave(cKey)
             if (acquiredToken != null && acquiredToken.state == dev.damhopper.nativeapp.features.files.ReservationState.ACTIVE) {
                 try {
                     editorRepository.fileRepository.arbiter.releaseToken(acquiredToken)
@@ -762,63 +1345,98 @@ class EditorTabsState(
         val tab = _tabs.value.find { it.key == key } ?: return
         val session = sessions[key] ?: return
         if (session.isDisposed) return
+        val cKey = resolveCanonicalKey(tab)
+        if (tab.isSaving || registry.isSaveInProgress(cKey)) {
+            return
+        }
         val initialEpoch = session.editEpoch
         val initialRevision = session.revision
         val incarnation = tab.sessionIncarnation
-        _tabs.value = _tabs.value.map { if (it.key == key) it.copy(isLoading = true, isConflicted = false, isStale = false) else it }
+
+        val aliasKeys = _tabs.value.filter { resolveCanonicalKey(it) == cKey }.map { it.key }
+        if (aliasKeys.any { aKey -> _tabs.value.find { it.key == aKey }?.isSaving == true }) {
+            return
+        }
+
+        _tabs.value = _tabs.value.map {
+            if (it.key in aliasKeys) it.copy(isLoading = true, isConflicted = false, isStale = false) else it
+        }
         updateMetadataFlow()
+
         val loadEpoch = transportEpoch
         when (val res = editorRepository.loadFile(tab.target, tab.path)) {
             is EditorLoadResult.Success -> {
                 if (transportEpoch != loadEpoch) return
+                if (registry.isSaveInProgress(cKey) || aliasKeys.any { aKey -> _tabs.value.find { it.key == aKey }?.isSaving == true }) {
+                    _tabs.value = _tabs.value.map { if (it.key in aliasKeys) it.copy(isLoading = false) else it }
+                    updateMetadataFlow()
+                    return
+                }
+                val resCKey = resolveCanonicalKey(res.fileIdentity, profileId, tab.target, tab.path)
+                if (resCKey != cKey) {
+                    _tabs.value = _tabs.value.map { if (it.key in aliasKeys) it.copy(isLoading = false, error = "File identity changed during reload") else it }
+                    updateMetadataFlow()
+                    return
+                }
                 val currentTab = _tabs.value.find { it.key == key }
                 if (currentTab == null || currentTab.sessionIncarnation != incarnation) return
 
                 val currentSession = sessions[key]
                 if (currentSession != null && !currentSession.isDisposed) {
                     val editedDuringRequest = currentSession.revision != initialRevision || currentSession.editEpoch != initialEpoch
+                    val shouldDemote = !res.tier.isReadOnly && res.fileIdentity == null
+                    val effectiveTier = if (shouldDemote) FileTier.LARGE else res.tier
+                    val successorReadOnly = effectiveTier.isReadOnly
                     if (editedDuringRequest || (!forceDiscardLocal && currentSession.isDirty)) {
-                        _tabs.value = _tabs.value.map { if (it.key == key) it.copy(isLoading = false, isStale = true) else it }
-                    } else if (res.tier != currentTab.tier) {
-                        // Tier changed (growth/shrink): never push a different-capability payload into the
-                        // existing authority; replace it with a document that matches the new tier.
-                        // Rotate the tab incarnation so every outstanding CloseIntent / save outcome / async
-                        // completion captured against the replaced authority is rejected (revisions restart).
-                        val newIncarnation = nextIncarnation++
-                        val newDocId = createDocumentId(currentTab.target, currentTab.path, newIncarnation)
-                        tabDocumentIds[key] = newDocId
-                        installSession(key, newDocId, currentTab.target, currentTab.path, newIncarnation, res.content, res.mtime, res.tier)
                         _tabs.value = _tabs.value.map {
-                            if (it.key == key) it.copy(
-                                content = res.content,
-                                savedContent = res.content,
-                                mtime = res.mtime ?: 0L,
+                            if (it.key in aliasKeys) it.copy(isLoading = false, isStale = true) else it
+                        }
+                    } else if (effectiveTier != currentTab.tier) {
+                        val factory = documentFactory ?: return
+                        val newIncarnation = nextIncarnation++
+                        val successorDoc = factory.createDocument(
+                            id = createDocumentId(currentTab.target, currentTab.path, newIncarnation),
+                            initialText = res.content,
+                            initialMtime = res.mtime ?: 0L,
+                            readOnly = successorReadOnly,
+                            maxUndoStackSize = if (effectiveTier == FileTier.DEGRADED) 50 else 200,
+                        )
+                        successorDoc.fileIdentity = res.fileIdentity
+                        successorDoc.canonicalPath = res.canonicalPath
+                        val oldDoc = registry.replaceDocumentAtomic(
+                            canonicalKey = cKey,
+                            successor = successorDoc,
+                            metadata = SuccessorLoadMetadata(
+                                tier = effectiveTier,
+                                mtime = res.mtime,
                                 size = res.size,
-                                tier = res.tier,
                                 mime = res.mime,
-                                isDirty = false,
-                                isLoading = false,
-                                error = null,
-                                isConflicted = false,
-                                isStale = false,
-                                largeFileOffset = 0L,
-                                sessionIncarnation = newIncarnation,
-                                largeFileEof = res.isEof,
-                                rangeWindow = res.rangeWindow,
-                            ) else it
+                                content = res.content,
+                                fileIdentity = res.fileIdentity,
+                                canonicalPath = res.canonicalPath,
+                            )
+                        )
+                        if (oldDoc != null) {
+                            oldDoc.markDiscarded()
+                            registry.checkAndPruneDocument(cKey, oldDoc)
                         }
                     } else {
                         currentSession.loadServerContent(res.content, res.mtime)
+                        currentSession.document.fileIdentity = res.fileIdentity
+                        currentSession.document.canonicalPath = res.canonicalPath
                         _tabs.value = _tabs.value.map {
-                            if (it.key == key) it.copy(
+                            if (it.key in aliasKeys) it.copy(
                                 content = res.content,
                                 savedContent = res.content,
                                 mtime = res.mtime ?: 0L,
+                                tier = effectiveTier,
                                 isDirty = false,
                                 isLoading = false,
                                 error = null,
-                                isConflicted = false,
-                                isStale = false
+                                 isConflicted = false,
+                                 isStale = false,
+                                 fileIdentity = res.fileIdentity,
+                                 canonicalPath = res.canonicalPath,
                             ) else it
                         }
                     }
@@ -826,11 +1444,21 @@ class EditorTabsState(
                 }
             }
             is EditorLoadResult.Error -> {
-                _tabs.value = _tabs.value.map { if (it.key == key) it.copy(isLoading = false, error = res.message) else it }
+                if (transportEpoch != loadEpoch) return
+                val currentTab = _tabs.value.find { it.key == key }
+                if (currentTab == null || currentTab.sessionIncarnation != incarnation) return
+                _tabs.value = _tabs.value.map {
+                    if (it.key in aliasKeys) it.copy(isLoading = false, error = res.message) else it
+                }
                 updateMetadataFlow()
             }
             is EditorLoadResult.TargetUnavailable -> {
-                _tabs.value = _tabs.value.map { if (it.key == key) it.copy(isLoading = false, targetAvailable = false) else it }
+                if (transportEpoch != loadEpoch) return
+                val currentTab = _tabs.value.find { it.key == key }
+                if (currentTab == null || currentTab.sessionIncarnation != incarnation) return
+                _tabs.value = _tabs.value.map {
+                    if (it.key in aliasKeys) it.copy(isLoading = false, targetAvailable = false) else it
+                }
                 updateMetadataFlow()
             }
         }

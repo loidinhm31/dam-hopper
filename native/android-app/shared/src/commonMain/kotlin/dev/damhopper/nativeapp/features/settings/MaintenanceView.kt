@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -33,11 +35,16 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 
 /** A bounded, strict-UTF-8 validated TOML file waiting for the user's explicit confirmation. */
-class PendingTomlImport(val operation: SettingsOperation, val bytes: ByteArray)
+class PendingTomlImport(
+    val operation: SettingsOperation,
+    val bytes: ByteArray,
+    val targetRoot: String? = null,
+)
 
 /** An expected picker callback: the exact captured operation and kind it must carry. */
 data class PendingDocument(val kind: SettingsDocumentKind, val operation: SettingsOperation)
@@ -53,6 +60,7 @@ data class DocumentWorkflowState(
     /** Authoritative server answer of the last confirmed import (never inferred locally). */
     val lastImport: SettingsImportResult? = null,
     val lastImportOwner: SettingsOwner? = null,
+    val lastOutcomeKind: SettingsOutcomeKind? = null,
 )
 
 /**
@@ -63,6 +71,8 @@ data class DocumentWorkflowState(
  * is retried and no rollback is claimed. Create it in a retained scope (not in composition) so a rotation
  * cannot orphan an open picker.
  */
+private const val LOCAL_TOKEN_BASE = 1L shl 52
+
 class SettingsDocumentWorkflow(
     private val repository: SettingsRepository,
     private val port: SettingsDocumentPort,
@@ -125,7 +135,33 @@ class SettingsDocumentWorkflow(
                     launchPicker(operation, SettingsDocumentKind.CREATE_TOML, "Saving the workspace TOML") {
                         port.createDocument(operation, "config.toml", "application/toml", outcome.value)
                     }
-                else -> note(outcome.describe("Exporting the workspace TOML"), error = true, owner = operation.owner)
+                is SettingsOutcome.NotSubmitted ->
+                    _state.update {
+                        it.copy(
+                            lastOutcomeKind = SettingsOutcomeKind.NOT_SUBMITTED,
+                            message = outcome.describe("Exporting the workspace TOML"),
+                            messageIsError = true,
+                            messageOwner = operation.owner,
+                        )
+                    }
+                is SettingsOutcome.Rejected ->
+                    _state.update {
+                        it.copy(
+                            lastOutcomeKind = SettingsOutcomeKind.REJECTED,
+                            message = outcome.describe("Exporting the workspace TOML"),
+                            messageIsError = true,
+                            messageOwner = operation.owner,
+                        )
+                    }
+                is SettingsOutcome.Unknown ->
+                    _state.update {
+                        it.copy(
+                            lastOutcomeKind = SettingsOutcomeKind.UNKNOWN,
+                            message = outcome.describe("Exporting the workspace TOML"),
+                            messageIsError = true,
+                            messageOwner = operation.owner,
+                        )
+                    }
             }
         }
     }
@@ -138,8 +174,7 @@ class SettingsDocumentWorkflow(
 
     /** Local diagnostics only (allowlisted bytes): no server operation is involved. */
     fun exportDiagnostics(bytes: ByteArray, fileName: String) {
-        var token = 0L
-        localTokens.update { token = it + 1; token }
+        val token = localTokens.updateAndGet { it + 1 }
         val local = SettingsOperation(
             scope = SettingsScope.PREFERENCE_SOURCE,
             owner = SettingsOwner(ConnectionRef("local-diagnostics", 0L), "local", "local"),
@@ -153,10 +188,17 @@ class SettingsDocumentWorkflow(
         }
     }
 
-    fun cancelImport() = _state.update { it.copy(awaitingImport = null) }
+    fun cancelImport() = _state.update {
+        it.copy(
+            awaitingImport = null,
+            lastOutcomeKind = SettingsOutcomeKind.NOT_SUBMITTED,
+            message = "Choosing a file was cancelled; nothing was sent.",
+            messageIsError = false,
+        )
+    }
 
     /** Submits the confirmed import through the request-local guard; shows only the authoritative answer. */
-    fun confirmImport() {
+    fun confirmImport(departureGuard: (suspend () -> Boolean)? = null) {
         // Atomic single consumption: concurrent confirms can never both submit the same payload.
         var taken: PendingTomlImport? = null
         _state.update {
@@ -165,21 +207,73 @@ class SettingsDocumentWorkflow(
         }
         val pending = taken ?: return
         scope.launch {
-            val outcome = repository.importWorkspaceToml(pending.operation, pending.bytes)
-            if (outcome is SettingsOutcome.Confirmed) {
-                val result = outcome.value
-                _state.update {
-                    it.copy(
-                        lastImport = result,
-                        lastImportOwner = pending.operation.owner,
-                        message = "Import confirmed by the server: ${result.fileName}; backup ${result.backupFileName}" +
-                            (result.workspaceName?.let { name -> "; workspace $name" } ?: "") + ".",
-                        messageIsError = false,
-                        messageOwner = pending.operation.owner,
-                    )
+            if (departureGuard != null) {
+                val proceed = try {
+                    departureGuard()
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (e: Exception) {
+                    note("Dirty-state guard failed: ${e.message}", error = true, owner = pending.operation.owner)
+                    _state.update { it.copy(lastOutcomeKind = SettingsOutcomeKind.NOT_SUBMITTED) }
+                    return@launch
                 }
-            } else {
-                note(outcome.describe("Importing the workspace TOML"), error = true, owner = pending.operation.owner)
+                if (!proceed) {
+                    note("Import was cancelled by dirty-state guard; nothing was sent.", error = false, owner = pending.operation.owner)
+                    _state.update { it.copy(lastOutcomeKind = SettingsOutcomeKind.NOT_SUBMITTED) }
+                    return@launch
+                }
+            }
+            if (!repository.isCurrent(pending.operation)) {
+                note("The Settings server changed while confirming the import; nothing was sent.", error = true, owner = pending.operation.owner)
+                _state.update { it.copy(lastOutcomeKind = SettingsOutcomeKind.NOT_SUBMITTED) }
+                return@launch
+            }
+            val outcome = repository.importWorkspaceToml(pending.operation, pending.bytes)
+            when (outcome) {
+                is SettingsOutcome.Confirmed -> {
+                    val result = outcome.value
+                    _state.update {
+                        it.copy(
+                            lastImport = result,
+                            lastImportOwner = pending.operation.owner,
+                            lastOutcomeKind = SettingsOutcomeKind.CONFIRMED,
+                            message = "Import confirmed by the server: ${result.fileName}; backup ${result.backupFileName}" +
+                                (result.workspaceName?.let { name -> "; workspace $name" } ?: "") + ".",
+                            messageIsError = false,
+                            messageOwner = pending.operation.owner,
+                        )
+                    }
+                }
+                is SettingsOutcome.NotSubmitted -> {
+                    _state.update {
+                        it.copy(
+                            lastOutcomeKind = SettingsOutcomeKind.NOT_SUBMITTED,
+                            message = outcome.describe("Importing the workspace TOML"),
+                            messageIsError = true,
+                            messageOwner = pending.operation.owner,
+                        )
+                    }
+                }
+                is SettingsOutcome.Rejected -> {
+                    _state.update {
+                        it.copy(
+                            lastOutcomeKind = SettingsOutcomeKind.REJECTED,
+                            message = outcome.describe("Importing the workspace TOML"),
+                            messageIsError = true,
+                            messageOwner = pending.operation.owner,
+                        )
+                    }
+                }
+                is SettingsOutcome.Unknown -> {
+                    _state.update {
+                        it.copy(
+                            lastOutcomeKind = SettingsOutcomeKind.UNKNOWN,
+                            message = outcome.describe("Importing the workspace TOML"),
+                            messageIsError = true,
+                            messageOwner = pending.operation.owner,
+                        )
+                    }
+                }
             }
         }
     }
@@ -197,10 +291,46 @@ class SettingsDocumentWorkflow(
 
     private fun reportCreate(result: SettingsDocumentResult, success: String, label: String, owner: SettingsOwner?) {
         when {
-            result.cancelled -> note("$label was cancelled; nothing was saved.", error = false, owner = owner)
-            result.error != null -> note("$label failed: ${result.error}", error = true, owner = owner)
-            result.saved -> note(success, error = false, owner = owner)
-            else -> note("$label did not complete; nothing is reported as saved.", error = true, owner = owner)
+            result.cancelled -> {
+                _state.update {
+                    it.copy(
+                        lastOutcomeKind = SettingsOutcomeKind.NOT_SUBMITTED,
+                        message = "$label was cancelled; nothing was saved.",
+                        messageIsError = false,
+                        messageOwner = owner,
+                    )
+                }
+            }
+            result.error != null -> {
+                _state.update {
+                    it.copy(
+                        lastOutcomeKind = SettingsOutcomeKind.UNKNOWN,
+                        message = "$label failed: ${result.error}",
+                        messageIsError = true,
+                        messageOwner = owner,
+                    )
+                }
+            }
+            result.saved -> {
+                _state.update {
+                    it.copy(
+                        lastOutcomeKind = SettingsOutcomeKind.CONFIRMED,
+                        message = success,
+                        messageIsError = false,
+                        messageOwner = owner,
+                    )
+                }
+            }
+            else -> {
+                _state.update {
+                    it.copy(
+                        lastOutcomeKind = SettingsOutcomeKind.UNKNOWN,
+                        message = "$label did not complete; nothing is reported as saved.",
+                        messageIsError = true,
+                        messageOwner = owner,
+                    )
+                }
+            }
         }
     }
 
@@ -208,13 +338,71 @@ class SettingsDocumentWorkflow(
         val bytes = result.bytes
         val owner = result.operation.owner
         when {
-            result.cancelled -> note("Choosing a file was cancelled; nothing was sent.", error = false, owner = owner)
-            result.error != null -> note("Could not read the file: ${result.error}", error = true, owner = owner)
-            bytes == null -> note("The file could not be read; nothing was sent.", error = true, owner = owner)
-            bytes.size > MAX_CONFIG_IMPORT_BYTES -> note("The file is larger than the 1 MiB import limit; nothing was sent.", error = true, owner = owner)
-            !isStrictUtf8(bytes) -> note("The file is not valid UTF-8 text; nothing was sent.", error = true, owner = owner)
-            !repository.isCurrent(result.operation) -> note("The Settings server changed while choosing the file; nothing was sent.", error = true, owner = owner)
-            else -> _state.update { it.copy(awaitingImport = PendingTomlImport(result.operation, bytes)) }
+            result.cancelled -> {
+                _state.update {
+                    it.copy(
+                        lastOutcomeKind = SettingsOutcomeKind.NOT_SUBMITTED,
+                        message = "Choosing a file was cancelled; nothing was sent.",
+                        messageIsError = false,
+                        messageOwner = owner,
+                    )
+                }
+            }
+            result.error != null -> {
+                _state.update {
+                    it.copy(
+                        lastOutcomeKind = SettingsOutcomeKind.UNKNOWN,
+                        message = "Could not read the file: ${result.error}",
+                        messageIsError = true,
+                        messageOwner = owner,
+                    )
+                }
+            }
+            bytes == null -> {
+                _state.update {
+                    it.copy(
+                        lastOutcomeKind = SettingsOutcomeKind.UNKNOWN,
+                        message = "The file could not be read; nothing was sent.",
+                        messageIsError = true,
+                        messageOwner = owner,
+                    )
+                }
+            }
+            bytes.size > MAX_CONFIG_IMPORT_BYTES -> {
+                _state.update {
+                    it.copy(
+                        lastOutcomeKind = SettingsOutcomeKind.REJECTED,
+                        message = "The file is larger than the 1 MiB import limit; nothing was sent.",
+                        messageIsError = true,
+                        messageOwner = owner,
+                    )
+                }
+            }
+            !isStrictUtf8(bytes) -> {
+                _state.update {
+                    it.copy(
+                        lastOutcomeKind = SettingsOutcomeKind.REJECTED,
+                        message = "The file is not valid UTF-8 text; nothing was sent.",
+                        messageIsError = true,
+                        messageOwner = owner,
+                    )
+                }
+            }
+            !repository.isCurrent(result.operation) -> {
+                _state.update {
+                    it.copy(
+                        lastOutcomeKind = SettingsOutcomeKind.NOT_SUBMITTED,
+                        message = "The Settings server changed while choosing the file; nothing was sent.",
+                        messageIsError = true,
+                        messageOwner = owner,
+                    )
+                }
+            }
+            else -> {
+                val tomlText = bytes.decodeToString()
+                val targetRoot = extractWorkspaceRootFromToml(tomlText)
+                _state.update { it.copy(awaitingImport = PendingTomlImport(result.operation, bytes, targetRoot)) }
+            }
         }
     }
 
@@ -225,10 +413,27 @@ class SettingsDocumentWorkflow(
         false
     }
 
-    private companion object {
-        const val LOCAL_TOKEN_BASE = 1L shl 52
-    }
 }
+    internal fun extractWorkspaceRootFromToml(toml: String): String? {
+        var inWorkspaceSection = false
+        for (line in toml.lineSequence()) {
+            val trimmed = line.trim()
+            if (trimmed.startsWith("#") || trimmed.isEmpty()) continue
+            if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                val section = trimmed.removePrefix("[").removeSuffix("]").trim()
+                inWorkspaceSection = section.equals("workspace", ignoreCase = true)
+                continue
+            }
+            if (inWorkspaceSection) {
+                val match = Regex("""^root\s*=\s*(?:"([^"]*)"|'([^']*)')""").find(trimmed)
+                if (match != null) {
+                    val value = match.groupValues[1].ifEmpty { match.groupValues[2] }
+                    if (value.isNotBlank()) return value
+                }
+            }
+        }
+        return null
+    }
 
 @Composable
 private fun ActionCard(title: String, description: String, content: @Composable () -> Unit) {
@@ -285,12 +490,41 @@ fun MaintenanceView(
     }
 
     docs?.awaitingImport?.let { pending ->
-        ImportTomlConfirmDialog(
-            targetLabel = availableProfiles.firstOrNull { it.id == pending.operation.owner.connection.profileId }?.name ?: "server",
-            targetEndpoint = pending.operation.owner.endpoint,
-            payloadBytes = pending.bytes.size,
-            onConfirm = { workflow?.confirmImport() },
-            onDismiss = { workflow?.cancelImport() },
+        val targetProfile = availableProfiles.firstOrNull { it.id == pending.operation.owner.connection.profileId }
+        val targetName = targetProfile?.name ?: "server"
+        val targetEndpoint = pending.operation.owner.endpoint
+        AlertDialog(
+            onDismissRequest = { workflow?.cancelImport() },
+            title = { Text("Import workspace TOML?", color = MaterialTheme.colorScheme.error) },
+            text = {
+                Column {
+                    Text("Admin Target B: $targetName ($targetEndpoint)", style = MaterialTheme.typography.bodyMedium)
+                    Text("File size: ${pending.bytes.size} bytes", style = MaterialTheme.typography.labelSmall)
+                    pending.targetRoot?.let {
+                        Text("Target workspace root: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                    Text(
+                        "DESTRUCTIVE REMOTE PTY IMPACT: Importing a workspace configuration replaces the active server configuration " +
+                            "and terminates all running remote PTYs and live terminal sessions on Admin Target B ($targetName). " +
+                            "Saved preferences and stored credentials are NOT reset. " +
+                            "This is a destructive host operation, not an ordinary Open Project selection. " +
+                            "If the server acknowledgement is lost or unclear, the result is unknown and nothing is retried automatically.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            val proceed = departureGuard()
+                            if (proceed) workflow?.confirmImport(departureGuard) else workflow?.cancelImport()
+                        }
+                    },
+                ) { Text("Confirm & Import", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { workflow?.cancelImport() }) { Text("Cancel") } },
         )
     }
     cachePending?.let { op ->

@@ -289,4 +289,31 @@ describe("TraditionalProjectWorkspaceTree", () => {
       }),
     );
   });
+
+  it("forwards revealRequest prop to FileTree", async () => {
+    mocks.connectionSnapshotByProfile.set("profile-1", {
+      owner: { profileId: "profile-1", generation: 1 },
+      status: "connected",
+      serverUrl: "http://localhost:8080",
+    });
+
+    const revealRequest = {
+      project: "dam-hopper",
+      path: "src/app.ts",
+      nonce: 12345,
+    };
+
+    await act(async () => {
+      root.render(
+        <TraditionalProjectWorkspaceTree
+          projectName="dam-hopper"
+          profileId="profile-1"
+          regionId="test-region-id"
+          revealRequest={revealRequest}
+        />,
+      );
+    });
+
+    expect(mocks.fileTreeProps?.revealRequest).toEqual(revealRequest);
+  });
 });

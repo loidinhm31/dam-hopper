@@ -1,5 +1,8 @@
 package dev.damhopper.nativeapp.features.editor
 
+import dev.damhopper.nativeapp.features.files.FileIdentityDto
+import kotlinx.coroutines.flow.MutableStateFlow
+
 import dev.damhopper.nativeapp.features.workspace.DocumentId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,6 +58,8 @@ data class DocumentSaveSnapshot(
     val revision: Long,
     val utf8Bytes: ByteArray,
     val mtime: Long,
+    val fileIdentity: FileIdentityDto? = null,
+    val canonicalPath: String? = null,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -62,7 +67,9 @@ data class DocumentSaveSnapshot(
         return id == other.id &&
             revision == other.revision &&
             mtime == other.mtime &&
-            utf8Bytes.contentEquals(other.utf8Bytes)
+            utf8Bytes.contentEquals(other.utf8Bytes) &&
+            fileIdentity == other.fileIdentity &&
+            canonicalPath == other.canonicalPath
     }
 
     override fun hashCode(): Int {
@@ -70,9 +77,28 @@ data class DocumentSaveSnapshot(
         result = 31 * result + revision.hashCode()
         result = 31 * result + mtime.hashCode()
         result = 31 * result + utf8Bytes.contentHashCode()
+        result = 31 * result + (fileIdentity?.hashCode() ?: 0)
+        result = 31 * result + (canonicalPath?.hashCode() ?: 0)
         return result
     }
 }
+
+/**
+ * Token representing an active lease on a canonical document held by an alias/tab/session.
+ */
+data class AliasLeaseToken(
+    val token: String,
+    val aliasId: String,
+    val capturedRevision: Long,
+)
+
+/**
+ * Token representing an active UI widget view attachment lease.
+ */
+data class ViewLeaseToken(
+    val token: String,
+    val surfaceId: String,
+)
 
 /**
  * Document retention and memory budget metrics.
@@ -102,6 +128,12 @@ interface EditorDocument {
     val isReadOnly: StateFlow<Boolean>
     val viewState: StateFlow<DocumentViewState>
     val events: Flow<DocumentEvent>
+    var fileIdentity: FileIdentityDto?
+        get() = null
+        set(_) {}
+    var canonicalPath: String?
+        get() = null
+        set(_) {}
 
     fun applyEdit(startLine: Int, startCol: Int, endLine: Int, endCol: Int, replacement: String, sourceToken: String? = null)
     fun rekey(newPath: String)
@@ -148,8 +180,28 @@ interface EditorDocument {
      * Releases retained native Content and listeners.
      */
     fun close()
-}
+    val isClosed: Boolean get() = false
+    var isDiscarded: Boolean
+        get() = false
+        set(_) {}
+    fun markDiscarded() {
+        isDiscarded = true
+    }
+    val serverMtime: Long get() = 0L
 
+    val activeAliasLeases: StateFlow<Set<AliasLeaseToken>> get() = MutableStateFlow(emptySet())
+    val activeViewLeases: StateFlow<Set<ViewLeaseToken>> get() = MutableStateFlow(emptySet())
+    val canDispose: Boolean get() = activeAliasLeases.value.isEmpty() && activeViewLeases.value.isEmpty() && (!isDirty.value || isDiscarded)
+
+    fun acquireAliasLease(aliasId: String): AliasLeaseToken = AliasLeaseToken(aliasId, aliasId, revision.value)
+    fun releaseAliasLease(token: AliasLeaseToken) {}
+    fun acquireViewLease(surfaceId: String): ViewLeaseToken = ViewLeaseToken(surfaceId, surfaceId)
+    fun releaseViewLease(token: ViewLeaseToken) {}
+    fun beginSaveTracking(): () -> Unit = { {} }
+    var onDisposalEligible: (() -> Unit)?
+        get() = null
+        set(_) {}
+}
 /**
  * Factory for creating qualified EditorDocument instances.
  * Injected from Android platform code (backed by Sora 0.23.4 Content subclass),

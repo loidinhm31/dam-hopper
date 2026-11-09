@@ -34,6 +34,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+
 
 /**
  * Behavior of the pure consumers of the one reactive preference flow (terminal scroll/suggestions/auto-switch,
@@ -229,5 +232,43 @@ class PreferenceConsumersTest {
         assertEquals("main · abc1234 · Fix it", TerminalCommitStatus("main", "abc1234", "Fix it\nsecond line").describe())
         assertEquals("abc1234", TerminalCommitStatus(null, "abc1234", null).describe())
         assertNull(TerminalCommitStatus(null, null, null).describe())
+    }
+
+    @Test
+    fun unboundShortcutInPreferencesSerializesAsEmptyStringAndPreservesUnbound() {
+        val base = WorkbenchPreferences()
+        assertEquals(ShortcutDefaults.SEARCH_TEXT, base.searchTextShortcut)
+        // Unbinding sets to empty string
+        val unbound = ShortcutAction.SEARCH_TEXT.write(base, "")
+        assertEquals("", unbound.searchTextShortcut)
+        // Clamping and normalizing preserves the explicitly unbound empty string (does not restore default)
+        val clamped = unbound.clamped()
+        assertEquals("", clamped.searchTextShortcut)
+        assertEquals("", ShortcutAction.SEARCH_TEXT.read(clamped))
+    }
+
+    @Test
+    fun sparsePatchUnbindEmitsJsonNullForExplicitUnbindsAndPreservesWebOnlyValues() {
+        val unbinds = setOf("searchTextShortcut")
+        val patch = UiPreferences(terminalFontSize = 16)
+        val sparse = patch.toSparsePatch(unbinds)
+        assertEquals(JsonNull, sparse.ui["searchTextShortcut"])
+        assertEquals(JsonPrimitive(16), sparse.ui["terminalFontSize"])
+        // Web-only shortcuts and untouched fields are NOT in the sparse patch
+        assertFalse(sparse.ui.containsKey("terminalWorkspaceShortcut"))
+        assertFalse(sparse.ui.containsKey("gitPanelShortcut"))
+        assertFalse(sparse.ui.containsKey("fleetTerminalShortcut"))
+    }
+
+    @Test
+    fun scopeSeparationThisDeviceVsPreferenceSourceA() {
+        val flow = MutableStateFlow(WorkbenchPreferences(commandHistoryEnabled = true, terminalFontSize = 15))
+        val access = PreferenceAccess(flow, { transform -> flow.value = transform(flow.value) })
+        // This Device local setting
+        access.update { it.copy(commandHistoryEnabled = false) }
+        assertFalse(access.current.commandHistoryEnabled)
+        // Synced setting
+        access.update { it.copy(terminalFontSize = 18) }
+        assertEquals(18, access.current.terminalFontSize)
     }
 }

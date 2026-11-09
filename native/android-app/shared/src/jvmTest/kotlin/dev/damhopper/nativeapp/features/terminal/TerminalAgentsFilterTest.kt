@@ -265,4 +265,19 @@ class TerminalAgentsFilterTest {
         val group = projector.project(base, TerminalAgentsFilterSelection.All).groups.single()
         assertEquals(listOf("a", "b", "c"), group.members.map { it.target.instance.terminalId })
     }
+
+    @Test
+    fun agentHubNavigatorFiltersAgentGroupsBySelectedStatuses() {
+        val input = allStatusesInput()
+        val allProj = projector.project(input, TerminalAgentsFilterSelection.All)
+        assertEquals(7, allProj.counts.byStatus.values.filter { it > 0 }.size)
+
+        val workingOnly = projector.project(input, selected(TerminalAgentsStatus.WORKING))
+        assertEquals(1, workingOnly.filteredCount)
+        assertEquals(1, workingOnly.groups.size)
+        assertEquals(TerminalAgentsStatus.WORKING, workingOnly.groups.single().key.status)
+
+        // Counts stay unfiltered
+        assertEquals(8, workingOnly.counts.all)
+    }
 }

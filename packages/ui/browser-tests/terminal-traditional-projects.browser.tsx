@@ -1708,9 +1708,21 @@ describe("Traditional terminal projects in Chromium", () => {
     );
     expect(row.getAttribute("aria-label")).toContain("Renamed server A");
     expect(document.activeElement).toBe(row);
+    const renamedSectionHeader = page.getByRole("button", {
+      name: "Server profile: Renamed server A",
+      exact: true,
+    });
+    await expect.element(renamedSectionHeader).toBeVisible();
+    const sectionId = renamedSectionHeader.element().getAttribute("aria-controls");
+    expect(sectionId).toBeTruthy();
+    const sectionGroup = document.getElementById(sectionId!);
+    expect(sectionGroup).not.toBeNull();
+    const alphaTab = sectionGroup!.querySelector('[role="tab"]');
+    expect(alphaTab).not.toBeNull();
+    expect(alphaTab!.textContent).toContain("alpha");
     await expect
-      .element(page.getByRole("tab", { name: /alpha.*Renamed server A/ }))
-      .toBeVisible();
+      .element(page.getByRole("button", { name: "Server profile: Server A", exact: true }))
+      .not.toBeInTheDocument();
   });
 
   it.each([320, 375, 390])(
@@ -1987,6 +1999,9 @@ describe("Traditional terminal projects in Chromium", () => {
       await userEvent.click(opener);
       const dialog = page.getByRole("dialog", { name: "Projects + Agents" });
       await expect.element(dialog).toBeVisible();
+      await Promise.allSettled(
+        dialog.element().getAnimations().map((animation) => animation.finished),
+      );
 
       const filterTrigger = dialog.getByRole("combobox", {
         name: "Filter agents by status",

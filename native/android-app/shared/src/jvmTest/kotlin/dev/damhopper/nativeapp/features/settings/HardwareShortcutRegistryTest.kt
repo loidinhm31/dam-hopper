@@ -170,4 +170,54 @@ class HardwareShortcutRegistryTest {
         r.reset()
         assertEquals(ShortcutOutcome.PassThrough, r.send(shift(true, true, 100)))
     }
+
+    @Test
+    fun unboundShortcutDoesNotDispatchAndNeverCollides() {
+        val r = HardwareShortcutRegistry()
+        val unbound = prefs.copy(searchTextShortcut = "", searchFilenameShortcut = "")
+        // An unbound chord never matches
+        assertNull(HardwareShortcutRegistry.match(unbound, "KeyF", ctrl = true, meta = false, alt = false, shift = true))
+        assertEquals(ShortcutOutcome.PassThrough, r.send(key("F", "KeyF", true, 0, ctrl = true, shift = true), gate, unbound))
+        // An unbound DoubleShift never arms or dispatches
+        assertEquals(ShortcutOutcome.PassThrough, r.send(shift(true, true, 100), gate, unbound))
+        assertEquals(ShortcutOutcome.PassThrough, r.send(shift(true, false, 150), gate, unbound))
+        assertEquals(ShortcutOutcome.PassThrough, r.send(shift(true, true, 300), gate, unbound))
+        // Multiple unbound shortcuts never collide with each other or with bound shortcuts
+        val multiUnbound = prefs.copy(
+            searchTextShortcut = "",
+            searchFilenameShortcut = "",
+            projectPanelShortcut = "",
+        )
+        assertTrue(HardwareShortcutRegistry.collisions(multiUnbound).isEmpty(), "unbound shortcuts never collide")
+    }
+
+    @Test
+    fun nativeSupportedFilterDistinguishesSupportedFromWebOnlyActions() {
+        val supported = ShortcutAction.entries.filter { it.isNativeSupported }
+        val webOnly = ShortcutAction.entries.filter { !it.isNativeSupported }
+        assertTrue(ShortcutAction.SEARCH_TEXT in supported)
+        assertTrue(ShortcutAction.SEARCH_FILENAME in supported)
+        assertTrue(ShortcutAction.COGNITO in supported)
+        assertTrue(ShortcutAction.TERMINAL_FONT_INCREASE in supported)
+        assertTrue(ShortcutAction.TERMINAL_WORKSPACE in webOnly)
+        assertTrue(ShortcutAction.GIT_PANEL in webOnly)
+        assertTrue(ShortcutAction.PORTS_PANEL in webOnly)
+        assertTrue(ShortcutAction.FLEET_TERMINAL in webOnly)
+        webOnly.forEach { action ->
+            assertNotNull(action.unavailableReason)
+            assertTrue(action.unavailableReason.isNotBlank())
+        }
+        val r = HardwareShortcutRegistry()
+        val fleet = r.send(key("F12", "F12", true, 0, ctrl = true, shift = true), gate, prefs.copy(fleetTerminalShortcut = "Ctrl+Shift+F12"))
+        val unavailable = assertNotNull(fleet as? ShortcutOutcome.Unavailable)
+        assertEquals(ShortcutAction.FLEET_TERMINAL, unavailable.action)
+    }
+
+    @Test
+    fun unknownKeysDoNotDispatchAndPassThrough() {
+        val r = HardwareShortcutRegistry()
+        // Null DOM code (e.g. unknown OS key or unmapped key) passes through safely
+        val unknown = r.send(key("UnknownKey_999", null, true, 0, ctrl = true))
+        assertEquals(ShortcutOutcome.PassThrough, unknown)
+    }
 }

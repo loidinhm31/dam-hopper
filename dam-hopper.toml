@@ -1,0 +1,23 @@
+[workspace]
+name = "dam-hopper"
+root = "."
+
+[[projects]]
+name = "dam-hopper"
+path = "."
+type = "pnpm"
+
+[[projects]]
+name = "android-app"
+path = "native/android-app"
+type = "custom"
+
+[[projects]]
+name = "server"
+path = "server"
+type = "cargo"
+
+[[projects]]
+name = "web"
+path = "apps/web"
+type = "pnpm"

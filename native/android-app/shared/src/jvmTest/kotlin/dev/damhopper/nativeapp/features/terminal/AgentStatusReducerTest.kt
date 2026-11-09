@@ -637,4 +637,83 @@ class AgentStatusReducerTest {
         reducer.abandonSnapshot(fourth, "boom", TerminalAgentsSnapshotFailure.OTHER)
         assertEquals(TerminalAgentsSnapshotFailure.OTHER, reducer.state.value.snapshotFailure)
     }
+
+    @Test
+    fun inventoryAndStatusTransitionsWithoutAttentionAreSilentAndNeverInferTaskSuccess() = runSuspending {
+        val reducer = AgentStatusReducer()
+        val row = makeAgentRow("term-1", 1uL, AgentState.WORKING, attentionRev = 0uL)
+        assertTrue(reducer.install(snapshot(10uL, 1uL, AgentStatusAvailability.READY, row)))
+
+        // Transition from WORKING to IDLE without attention: Silent (never accepted, never infers task success)
+        val idleRow = makeAgentRow("term-1", 1uL, AgentState.IDLE, attentionRev = 0uL)
+        val idleAdmission = reducer.status(changed(11uL, idleRow, attention = null))
+        assertEquals(AgentAdmission.Silent, idleAdmission)
+        assertEquals(AgentState.IDLE, reducer.state.value.agents["term-1"]?.state)
+
+        // Status removed (process exit): Silent (never accepted, never alerts)
+        val removedAdmission = reducer.applyStatusRemoved(owner, socket, removed(12uL, "term-1", 1uL))
+        assertEquals(AgentAdmission.Silent, removedAdmission)
+        assertNull(reducer.state.value.agents["term-1"])
+    }
+
+    @Test
+    fun repeatedSnapshotReplayAtOrBelowHighWaterIsSilent() = runSuspending {
+        val reducer = AgentStatusReducer()
+        val row5 = makeAgentRow("term-1", 1uL, AgentState.BLOCKED, attentionRev = 5uL)
+        assertTrue(reducer.install(snapshot(10uL, 1uL, AgentStatusAvailability.READY, row5)))
+
+        // Attention at same revision (replayed) is Silent
+        val replayed = reducer.status(changed(11uL, row5, attentionFor(row5, AttentionKind.NEEDS_ATTENTION)))
+        assertEquals(AgentAdmission.Silent, replayed)
+
+        // Attention at lower revision is Silent
+        val lowerRow = makeAgentRow("term-1", 1uL, AgentState.BLOCKED, attentionRev = 4uL)
+        val lower = reducer.status(changed(12uL, lowerRow, attentionFor(lowerRow, AttentionKind.NEEDS_ATTENTION)))
+        assertEquals(AgentAdmission.Silent, lower)
+
+        // Only higher revision is Accepted
+        val higherRow = makeAgentRow("term-1", 1uL, AgentState.BLOCKED, attentionRev = 6uL)
+        val higher = reducer.status(changed(13uL, higherRow, attentionFor(higherRow, AttentionKind.NEEDS_ATTENTION)))
+        assertIs<AgentAdmission.Accepted>(higher)
+    }
+
+    @Test
+    fun reconnectSnapshotInstallsBaselineSilentlyWithoutCatchUpAlerts() = runSuspending {
+        val reducer = AgentStatusReducer()
+        assertTrue(reducer.install(snapshot(10uL, 1uL, AgentStatusAvailability.READY)))
+
+        // Disconnect / invalidation ends baseline
+        assertEquals(AgentAdmission.Reconcile, reducer.applyStatusInvalidated(owner, socket, ServerMsg.AgentStatusInvalidated(1uL, 11uL)))
+        assertFalse(reducer.state.value.baselineInstalled)
+
+        // Reconnect: fresh snapshot installs silently
+        val capture = assertNotNull(reducer.captureSnapshot(owner, socket))
+        val row = makeAgentRow("term-1", 1uL, AgentState.BLOCKED, attentionRev = 3uL)
+        assertTrue(reducer.applySnapshot(capture, snapshot(20uL, 1uL, AgentStatusAvailability.READY, row)))
+        assertTrue(reducer.state.value.baselineInstalled)
+        assertTrue(reducer.state.value.admissionOpen)
+        // Historical attention in the snapshot is NOT in unreadAttentions
+        assertTrue(reducer.state.value.unreadAttentions.isEmpty())
+    }
+
+    @Test
+    fun epochReplacementClosesAdmissionAndRejectsOldEpochMessages() = runSuspending {
+        val reducer = AgentStatusReducer()
+        val row = makeAgentRow("term-1", 1uL, AgentState.WORKING, attentionRev = 0uL)
+        assertTrue(reducer.install(snapshot(10uL, 1uL, AgentStatusAvailability.READY, row)))
+
+        // Message with new epoch (2) while baseline is on epoch 1 closes admission and asks for Reconcile
+        val nextRow = makeAgentRow("term-1", 1uL, AgentState.BLOCKED, attentionRev = 1uL)
+        val epochChangeAdmission = reducer.status(
+            ServerMsg.AgentStatusChanged(
+                serverEpoch = 2uL,
+                revision = 11uL,
+                row = kotlinx.serialization.json.Json.encodeToJsonElement(TerminalAgentStatusRow.serializer(), nextRow),
+                attention = kotlinx.serialization.json.Json.encodeToJsonElement(AgentAttentionEvent.serializer(), attentionFor(nextRow)),
+            ),
+        )
+        assertEquals(AgentAdmission.Reconcile, epochChangeAdmission)
+        assertFalse(reducer.state.value.baselineInstalled)
+        assertFalse(reducer.state.value.admissionOpen)
+    }
 }

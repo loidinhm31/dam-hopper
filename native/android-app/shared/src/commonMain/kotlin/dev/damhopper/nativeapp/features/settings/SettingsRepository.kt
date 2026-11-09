@@ -164,7 +164,7 @@ suspend fun guardedConfirmation(
  * persistence/debounce run outside the lock. Contention at the guard is a terminal NotSubmitted, never a retry.
  */
 class SettingsRepository(
-    private val preferencesStore: PreferencesStore,
+    val preferencesStore: PreferencesStore,
     private val ownerResolver: SettingsOwnerResolver,
     private val coroutineScope: CoroutineScope,
     private val debounceMillis: Long = 500L,
@@ -363,7 +363,25 @@ class SettingsRepository(
         val snapshot = captured.snapshot
         val base = snapshot.base ?: return
         val patch = snapshot.preferences.dirtyUiPatch(base, snapshot.languageWrite, snapshot.includePolicy)
-        if (patch.isEmpty()) {
+        val unbinds = buildSet {
+            fun checkUnbound(key: String, curr: String, prev: String) {
+                if (prev.isNotBlank() && curr.isBlank()) add(key)
+            }
+            checkUnbound("searchTextShortcut", snapshot.preferences.searchTextShortcut, base.searchTextShortcut)
+            checkUnbound("searchFilenameShortcut", snapshot.preferences.searchFilenameShortcut, base.searchFilenameShortcut)
+            checkUnbound("terminalWorkspaceShortcut", snapshot.preferences.terminalWorkspaceShortcut, base.terminalWorkspaceShortcut)
+            checkUnbound("terminalFilePanelShortcut", snapshot.preferences.terminalFilePanelShortcut, base.terminalFilePanelShortcut)
+            checkUnbound("projectPanelShortcut", snapshot.preferences.projectPanelShortcut, base.projectPanelShortcut)
+            checkUnbound("revealActiveFileShortcut", snapshot.preferences.revealActiveFileShortcut, base.revealActiveFileShortcut)
+            checkUnbound("gitPanelShortcut", snapshot.preferences.gitPanelShortcut, base.gitPanelShortcut)
+            checkUnbound("portsPanelShortcut", snapshot.preferences.portsPanelShortcut, base.portsPanelShortcut)
+            checkUnbound("fleetTerminalShortcut", snapshot.preferences.fleetTerminalShortcut, base.fleetTerminalShortcut)
+            checkUnbound("terminalFontSizeIncreaseShortcut", snapshot.preferences.terminalFontSizeIncreaseShortcut, base.terminalFontSizeIncreaseShortcut)
+            checkUnbound("terminalFontSizeDecreaseShortcut", snapshot.preferences.terminalFontSizeDecreaseShortcut, base.terminalFontSizeDecreaseShortcut)
+            checkUnbound("cognitoModeShortcut", snapshot.preferences.cognitoModeShortcut, base.cognitoModeShortcut)
+        }
+        val sparsePatch = patch.toSparsePatch(unbinds)
+        if (sparsePatch.ui.isEmpty()) {
             operationMutex.withLock {
                 if (sourceRevision == op.selectionRevision && editRevision == op.editRevision) {
                     _syncState.value = PreferenceSyncState(PreferenceSyncStatus.SYNCED)
@@ -373,7 +391,7 @@ class SettingsRepository(
         }
         val guard = requestGuard(op)
         val outcome = guardedConfirmation(guard, onCancelled = { recordPreferenceSave(it) }) {
-            RemoteConfigRepository(captured.binding.client).updateGlobalUi(patch, guard)
+            RemoteConfigRepository(captured.binding.client).updateGlobalUiSparse(sparsePatch, guard)
         }
         publishSave(op, patch, snapshot.preferences, outcome)
     }

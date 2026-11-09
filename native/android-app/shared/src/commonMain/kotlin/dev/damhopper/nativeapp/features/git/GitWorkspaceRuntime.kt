@@ -44,21 +44,30 @@ class GitWorkspaceRuntime(
     val diff: DiffReviewController = DiffReviewController(repository.apiClient, coroutineScope)
 
     private var isRevoked = false
+    val isRegisteredProjectTarget: Boolean get() = safety.isRegisteredProjectTarget(owner)
     private val _roots = MutableStateFlow<List<VcsRoot>>(emptyList())
     val roots: StateFlow<List<VcsRoot>> = _roots.asStateFlow()
 
     private val _selectedRootId = MutableStateFlow<String?>(null)
     val selectedRootId: StateFlow<String?> = _selectedRootId.asStateFlow()
 
+    private val _operationStatus = MutableStateFlow<GitOperationStatus?>(null)
+    val operationStatus: StateFlow<GitOperationStatus?> = _operationStatus.asStateFlow()
+
+    private val _conflictSummary = MutableStateFlow<GitConflictSummary?>(null)
+    val conflictSummary: StateFlow<GitConflictSummary?> = _conflictSummary.asStateFlow()
+
     private val _scope = MutableStateFlow<GitOperationScope?>(
-        GitOperationScope.from(owner, connection, root = null)
+        if (safety.isRegisteredProjectTarget(owner)) GitOperationScope.from(owner, connection, root = null) else null
     )
     val scope: StateFlow<GitOperationScope?> = _scope.asStateFlow()
 
     init {
         val initialScope = _scope.value
-        if (initialScope != null) {
+        if (initialScope != null && isRegisteredProjectTarget) {
             propagateScope(initialScope)
+        } else {
+            clearControllers()
         }
     }
 
@@ -74,21 +83,34 @@ class GitWorkspaceRuntime(
     }
 
     fun selectRoot(rootId: String) {
-        if (isRevoked) return
-        _selectedRootId.value = rootId
-        val rootPath = _roots.value.find { it.rootId == rootId || it.path == rootId }?.path ?: rootId
-        val newScope = GitOperationScope.from(owner, connection, root = rootPath)
+        if (isRevoked || !isRegisteredProjectTarget) return
+        val currentRoots = _roots.value
+        val effectivePath: String
+        val effectiveId: String
+        if (currentRoots.isNotEmpty()) {
+            val found = currentRoots.find { it.rootId == rootId || it.path == rootId } ?: return
+            effectiveId = found.rootId
+            effectivePath = found.path
+        } else {
+            effectiveId = rootId
+            effectivePath = rootId
+        }
+        _selectedRootId.value = effectiveId
+        val newScope = GitOperationScope.from(owner, connection, root = effectivePath)
         _scope.value = newScope
         propagateScope(newScope)
     }
 
     override fun refresh(reason: GitRefreshReason) {
-        if (isRevoked) return
+        if (isRevoked || !isRegisteredProjectTarget) {
+            clearControllers()
+            return
+        }
         coroutineScope.launch {
-            if (isRevoked) return@launch
+            if (isRevoked || !isRegisteredProjectTarget) return@launch
             try {
                 val fetchedRoots = repository.listRoots(owner.project, owner.worktreePath)
-                if (isRevoked) return@launch
+                if (isRevoked || !isRegisteredProjectTarget) return@launch
                 _roots.value = fetchedRoots
                 if (_selectedRootId.value == null && fetchedRoots.isNotEmpty()) {
                     val primary = fetchedRoots.firstOrNull { it.kind == "primary" } ?: fetchedRoots.first()
@@ -97,13 +119,13 @@ class GitWorkspaceRuntime(
             } catch (c: CancellationException) {
                 throw c
             } catch (_: Exception) {
-                if (isRevoked) return@launch
+                if (isRevoked || !isRegisteredProjectTarget) return@launch
             }
 
-            if (isRevoked) return@launch
+            if (isRevoked || !isRegisteredProjectTarget) return@launch
             changes.refreshChanges()
             branches.refreshBranches { brs ->
-                if (isRevoked) return@refreshBranches
+                if (isRevoked || !isRegisteredProjectTarget) return@refreshBranches
                 val active = brs.firstOrNull { it.isCurrent }
                 val currentScope = _scope.value
                 if (currentScope != null) {
@@ -114,15 +136,22 @@ class GitWorkspaceRuntime(
             }
             worktrees.refreshWorktrees()
             history.loadHistory(resetOffset = (reason == GitRefreshReason.ENTRY || reason == GitRefreshReason.RECONCILE))
-            if (!isRevoked) {
+
+            // Query scope-fenced operation and conflict summaries
+            try {
+                _operationStatus.value = repository.query.getOperation(owner.project, owner.worktreePath, _scope.value?.root)
+            } catch (_: Exception) {}
+            try {
+                _conflictSummary.value = repository.query.getConflicts(owner.project, owner.worktreePath, _scope.value?.root)
+            } catch (_: Exception) {}
+
+            if (!isRevoked && isRegisteredProjectTarget) {
                 presentation.revalidateAuthority()
             }
         }
     }
 
-    fun revoke() {
-        isRevoked = true
-        _scope.value = null
+    private fun clearControllers() {
         changes.revoke()
         branches.revoke()
         sync.revoke()
@@ -132,6 +161,14 @@ class GitWorkspaceRuntime(
         rewrite.revoke()
         leased.revoke()
         diff.clearScope()
+    }
+
+    fun revoke() {
+        isRevoked = true
+        _scope.value = null
+        _operationStatus.value = null
+        _conflictSummary.value = null
+        clearControllers()
         presentation.invalidateAuthority()
     }
 

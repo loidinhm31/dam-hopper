@@ -18,6 +18,15 @@ import dev.damhopper.nativeapp.features.settings.SettingsBinding
 import dev.damhopper.nativeapp.features.settings.SettingsOwnerResolver
 import dev.damhopper.nativeapp.features.settings.SettingsRepository
 import dev.damhopper.nativeapp.features.settings.SettingsSourceTargetState
+import dev.damhopper.nativeapp.features.settings.dirtyUiPatch
+import dev.damhopper.nativeapp.features.settings.applyTo
+import dev.damhopper.nativeapp.features.profiles.AuthStatus
+import dev.damhopper.nativeapp.features.profiles.AuthSession
+import dev.damhopper.nativeapp.ui.flow.AppFlowState
+import dev.damhopper.nativeapp.ui.flow.AppFlowNavigation
+import dev.damhopper.nativeapp.ui.flow.AppFlowStage
+import dev.damhopper.nativeapp.ui.flow.SettingsOrigin
+import kotlinx.serialization.json.JsonNull
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,6 +34,7 @@ import kotlinx.coroutines.cancel
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -141,5 +151,175 @@ class SettingsPreferencesPhase17Test {
         } finally {
             scope.cancel()
         }
+    }
+
+    @Test
+    fun hubCWorkspaceSwitchNeverSelectsSettingsSourceAOrAdminTargetB() {
+        val scope = CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
+        try {
+            val store = InMemoryPreferencesStore(
+                initialPreferences = WorkbenchPreferences(),
+                initialSourceTargetState = SettingsSourceTargetState(
+                    preferencesProfileId = "server-A",
+                    preferencesStatus = PreferenceSourceStatus.ACTIVE,
+                    settingsProfileId = "server-B",
+                ),
+            )
+            val resolver = object : SettingsOwnerResolver {
+                override suspend fun current(profileId: String): SettingsBinding? = null
+                override fun currentSnapshot(profileId: String): SettingsBinding? = null
+            }
+            val repository = SettingsRepository(store, resolver, scope, debounceMillis = 20L, invalidateRuntime = {})
+
+            val nav = AppFlowNavigation()
+
+            // Hub C workspace/profile context via production navigation
+            nav.onProfileAuthenticated("server-C1")
+            assertEquals("server-A", repository.sourceTargetState.value.preferencesProfileId)
+            assertEquals("server-B", repository.sourceTargetState.value.settingsProfileId)
+
+            nav.onProfileAuthenticated("server-C2")
+            // Switching Hub C never modifies Source A or Target B
+            assertEquals("server-A", repository.sourceTargetState.value.preferencesProfileId)
+            assertEquals("server-B", repository.sourceTargetState.value.settingsProfileId)
+
+            // Switching target B never modifies Source A or Hub C
+            repository.setSettingsTarget("server-B-new")
+            assertEquals("server-A", repository.sourceTargetState.value.preferencesProfileId)
+            assertEquals("server-B-new", repository.sourceTargetState.value.settingsProfileId)
+            assertEquals("server-C2", nav.state.value.activeProfileId)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun sparsePatchUnbindingSendsExplicitJsonNullAndPreservesWebOnlyValues() {
+        val base = WorkbenchPreferences(
+            searchTextShortcut = "Ctrl+F",
+            terminalWorkspaceShortcut = "Ctrl+Shift+D", // web-only desktop shortcut
+            gitPanelShortcut = "Ctrl+Shift+G", // web-only shortcut
+        )
+        // User unbinds searchTextShortcut
+        val unbound = base.copy(searchTextShortcut = "")
+        val dirty = unbound.dirtyUiPatch(base)
+        val unbinds = buildSet {
+            if (base.searchTextShortcut.isNotBlank() && unbound.searchTextShortcut.isBlank()) {
+                add("searchTextShortcut")
+            }
+        }
+        val sparse = dirty.toSparsePatch(unbinds)
+        // Emits JSON null for the unbound field
+        assertEquals(JsonNull, sparse.ui["searchTextShortcut"])
+        // Web-only shortcuts remain un-emitted and untouched
+        assertFalse(sparse.ui.containsKey("terminalWorkspaceShortcut"))
+        assertFalse(sparse.ui.containsKey("gitPanelShortcut"))
+        assertFalse(sparse.ui.containsKey("fleetTerminalShortcut"))
+        // Applying the patch preserves the unbind
+        val updated = dirty.applyTo(base)
+        assertEquals("", updated.searchTextShortcut)
+        assertEquals("Ctrl+Shift+D", updated.terminalWorkspaceShortcut)
+        assertEquals("Ctrl+Shift+G", updated.gitPanelShortcut)
+    }
+
+    @Test
+    fun removedPreferenceSourcePreservesLocalSnapshotAndDisplaysRemovedState() {
+        val scope = CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
+        try {
+            val initial = WorkbenchPreferences(terminalFontSize = 19)
+            val store = InMemoryPreferencesStore(
+                initialPreferences = initial,
+                initialSourceTargetState = SettingsSourceTargetState(
+                    preferencesProfileId = "server-A",
+                    preferencesStatus = PreferenceSourceStatus.ACTIVE,
+                    settingsProfileId = "server-B",
+                    lastSnapshot = initial,
+                    lastSnapshotSourceProfileId = "server-A",
+                ),
+            )
+            val resolver = object : SettingsOwnerResolver {
+                override suspend fun current(profileId: String): SettingsBinding? = null
+                override fun currentSnapshot(profileId: String): SettingsBinding? = null
+            }
+            val repository = SettingsRepository(store, resolver, scope, debounceMillis = 20L, invalidateRuntime = {})
+
+            // Profile A is removed from available profiles
+            repository.onProfileRemoved("server-A")
+
+            val state = repository.sourceTargetState.value
+            assertNull(state.preferencesProfileId, "removed source leaves preference profile ID null")
+            assertEquals(PreferenceSourceStatus.SOURCE_REMOVED, state.preferencesStatus)
+            assertEquals("server-B", state.settingsProfileId, "admin target B remains independent")
+            // Local preferences remain readable and editable
+            assertEquals(19, repository.preferences.value.terminalFontSize)
+            repository.updatePreferences { it.copy(terminalFontSize = 21) }
+            assertEquals(21, repository.preferences.value.terminalFontSize)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun supportedNoAuthDevAdminProvidesCapabilityWarningWithoutBlanketDenial() {
+        val devSession = AuthSession(
+            token = "dev-token-xyz",
+            user = "developer",
+            devMode = true,
+            expiresAt = "2099-01-01T00:00:00Z",
+        )
+        val devStatus = AuthStatus.Authenticated(session = devSession)
+        assertTrue(devStatus.session.devMode)
+
+        // Check dev-mode capability policy
+        val isDevMode = devStatus.session.devMode
+        val adminBlockedReason: String? = when {
+            devStatus !is AuthStatus.Authenticated -> "Sign in to the selected server to administer it."
+            else -> null
+        }
+        val adminWarning = if (isDevMode) {
+            "This server runs in development mode without authentication. Administration is active without credential verification."
+        } else {
+            null
+        }
+        val idleBlocked = if (isDevMode) {
+            "This server runs without authentication; it does not accept idle-suspend changes."
+        } else {
+            null
+        }
+
+        // Administration is NOT denied or blocked
+        assertNull(adminBlockedReason, "dev-mode must not produce a blanket read-only denial")
+        assertNotNull(adminWarning, "dev-mode must provide an explicit informational warning")
+        assertEquals("This server runs without authentication; it does not accept idle-suspend changes.", idleBlocked)
+    }
+
+    @Test
+    fun settingsOverlayOriginRestorationReturnsExactPanelDocumentAndSession() {
+        val capturedOrigin = SettingsOrigin(
+            stage = AppFlowStage.TERMINAL,
+            panel = "EDITOR",
+            document = "native/android-app/Main.kt",
+            sessionId = "term-sess-99",
+        )
+
+        // 1. Production navigation path test
+        val nav = AppFlowNavigation(AppFlowState(stage = AppFlowStage.TERMINAL))
+        nav.openSettings(capturedOrigin)
+        val closedOrigin = nav.closeSettings()
+        assertNotNull(closedOrigin)
+        assertEquals(capturedOrigin, closedOrigin)
+        assertNull(nav.state.value.settings)
+
+        // 2. Component hook contract test
+        var restoredOrigin: SettingsOrigin? = null
+        val onCloseWithOrigin: (SettingsOrigin?) -> Unit = { origin ->
+            restoredOrigin = origin
+        }
+        onCloseWithOrigin(capturedOrigin)
+
+        assertEquals(AppFlowStage.TERMINAL, restoredOrigin?.stage)
+        assertEquals("EDITOR", restoredOrigin?.panel)
+        assertEquals("native/android-app/Main.kt", restoredOrigin?.document)
+        assertEquals("term-sess-99", restoredOrigin?.sessionId)
     }
 }

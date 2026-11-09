@@ -20,7 +20,7 @@ import {
   type ConnectionRef,
   type ProjectTargetInput,
 } from "./client.js";
-import type { FsTargetRef } from "./ownership.js";
+import { toServerFsTarget, type FsTargetRef } from "./ownership.js";
 import {
   captureConnection,
   getConnectionSnapshot,
@@ -86,17 +86,7 @@ function toServerMediaTarget(
   target: FsTargetRef | ProjectTargetInput,
 ): Record<string, unknown> {
   if (typeof target === "object" && target !== null && "kind" in target) {
-    const fsTarget = target as FsTargetRef;
-    if (fsTarget.kind === "workspace") {
-      return { target: { kind: "workspace" } };
-    }
-    return {
-      target: {
-        kind: "project",
-        project: fsTarget.project,
-        ...(fsTarget.worktreePath ? { worktreePath: fsTarget.worktreePath } : {}),
-      },
-    };
+    return { target: toServerFsTarget(target as FsTargetRef) };
   }
   const projectRef = normalizeProjectTarget(target as ProjectTargetInput);
   return { ...toServerProjectTarget(projectRef) };

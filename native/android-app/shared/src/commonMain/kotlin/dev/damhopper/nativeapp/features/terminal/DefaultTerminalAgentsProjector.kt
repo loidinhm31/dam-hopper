@@ -47,6 +47,38 @@ class DefaultTerminalAgentsProjector(
     override fun nextTarget(group: TerminalAgentsGroup, active: TerminalAgentsInstanceKey?): TerminalAgentsTarget? =
         TerminalAgentsGrouping.nextTarget(group, active)
 
+    fun composeProjectRows(
+        openTargets: List<dev.damhopper.nativeapp.core.model.ProjectTargetRef>,
+        openOwners: List<dev.damhopper.nativeapp.features.workspace.WorkspaceFileOwner> = emptyList(),
+        observedGroups: List<TerminalAgentsGroup> = emptyList(),
+        terminalRows: List<dev.damhopper.nativeapp.features.workspace.HubTerminalRow> = emptyList(),
+        selectedTarget: dev.damhopper.nativeapp.core.model.ProjectTargetRef? = null,
+        pinnedTargets: Set<dev.damhopper.nativeapp.core.model.ProjectTargetRef> = emptySet(),
+        profileLabels: Map<dev.damhopper.nativeapp.core.model.ProfileId?, String> = emptyMap(),
+        isInventoryLoaded: Boolean = false,
+        isConnected: Boolean = false,
+        hiddenTerminalIds: Set<String> = emptySet(),
+        restartPendingTerminalIds: Set<String> = emptySet(),
+        pendingCreateIntents: List<UncertainCreateRecord> = emptyList(),
+        unavailableTargets: Set<dev.damhopper.nativeapp.core.model.ProjectTargetRef> = emptySet(),
+        unsupportedTargets: Set<dev.damhopper.nativeapp.core.model.ProjectTargetRef> = emptySet(),
+    ): List<AgentHubProjectRowState> = TerminalAgentsGrouping.composeProjectRows(
+        openTargets = openTargets,
+        openOwners = openOwners,
+        observedGroups = observedGroups,
+        terminalRows = terminalRows,
+        selectedTarget = selectedTarget,
+        pinnedTargets = pinnedTargets,
+        profileLabels = profileLabels,
+        isInventoryLoaded = isInventoryLoaded,
+        isConnected = isConnected,
+        hiddenTerminalIds = hiddenTerminalIds,
+        restartPendingTerminalIds = restartPendingTerminalIds,
+        pendingCreateIntents = pendingCreateIntents,
+        unavailableTargets = unavailableTargets,
+        unsupportedTargets = unsupportedTargets,
+    )
+
     private fun toRow(member: TerminalAgentsMember): TerminalAgentsRow = TerminalAgentsRow(
         target = member.target,
         projectLabel = member.projectLabel,

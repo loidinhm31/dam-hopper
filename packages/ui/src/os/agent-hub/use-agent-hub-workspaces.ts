@@ -289,7 +289,7 @@ export function useAgentHubWorkspaces(
       }
       const termRef: TerminalRef = { profileId: s.profileId, id: s.id };
       const qSessionId = terminalKey(termRef);
-      const groupKey = `${s.profileId}:${s.project || "default"}`;
+      const groupKey = `${s.profileId}:${s.project || "free-terminals"}`;
       const ordinal = (ordinalsByGroup.get(groupKey) ?? 0) + 1;
       ordinalsByGroup.set(groupKey, ordinal);
 
@@ -300,7 +300,7 @@ export function useAgentHubWorkspaces(
         sessionId: qSessionId,
         terminalRef: termRef,
         profileId: s.profileId,
-        project: s.project || "default",
+        project: s.project || "",
         command: s.command || "bash",
         cwd: s.cwd,
         worktreePath: s.worktreePath,
@@ -366,7 +366,7 @@ export function useAgentHubWorkspaces(
       mounts.push({
         logicalKey: terminalKey({ profileId: s.profileId, id: s.id }),
         target: s.terminationTarget,
-        project: s.project || "default",
+        project: s.project || "",
         command: s.command || "bash",
         cwd: s.cwd,
         worktreePath: s.worktreePath,

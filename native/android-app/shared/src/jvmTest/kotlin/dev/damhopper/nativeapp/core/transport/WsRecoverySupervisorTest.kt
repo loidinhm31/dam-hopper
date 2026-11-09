@@ -3,6 +3,7 @@ package dev.damhopper.nativeapp.core.transport
 import dev.damhopper.nativeapp.core.model.ConnectionRef
 import dev.damhopper.nativeapp.core.model.SocketInstanceRef
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -170,5 +171,103 @@ class WsRecoverySupervisorTest {
         assertEquals(RecoveryPhase.CONNECTED, supervisor.snapshot.value.phase)
         assertEquals(1, connectCalls)
         assertEquals(0, disconnectCalls)
+    }
+
+    @Test
+    fun testAbnormalClosure1006StaysHonestUnavailableErrorWithoutSuppression() = runTest {
+        val testDispatcher = StandardTestDispatcher(testScheduler)
+        val testScope = TestScope(testDispatcher)
+
+        val conn = ConnectionRef("test-prof", 1L)
+        val stateFlow = kotlinx.coroutines.flow.MutableStateFlow<WsState>(WsState.Disconnected)
+        var connectCalls = 0
+        val ws = object : WsConnection(conn, "http://127.0.0.1:1") {
+            override val state: kotlinx.coroutines.flow.StateFlow<WsState> = stateFlow
+            override suspend fun connect() {
+                connectCalls++
+                stateFlow.value = WsState.Connected(SocketInstanceRef(conn, "sock-1"))
+            }
+            override suspend fun disconnect() {
+                stateFlow.value = WsState.Disconnected
+            }
+        }
+
+        val supervisor = WsRecoverySupervisor(ws, testScope)
+        supervisor.start()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(RecoveryPhase.CONNECTED, supervisor.snapshot.value.phase)
+        assertEquals(1, connectCalls)
+
+        // Abnormal closure 1006 / socket crash occurs
+        stateFlow.value = WsState.Error(RuntimeException("WS 1006 abnormal closure"))
+        testDispatcher.scheduler.runCurrent()
+
+        // Must stay honest error/waiting retry; never suppressed or reported clean
+        val snapshot = supervisor.snapshot.value
+        assertEquals(RecoveryPhase.WAITING_RETRY, snapshot.phase)
+        assertEquals("SocketError", snapshot.reason)
+        assertEquals(1, snapshot.attempt)
+        val delayMs = snapshot.nextDelayMillis
+        kotlin.test.assertNotNull(delayMs)
+
+        // Advance time before delay expires: still waiting retry, no duplicate connect
+        testDispatcher.scheduler.advanceTimeBy(delayMs / 2)
+        assertEquals(1, connectCalls)
+
+        // Advance past delay: retry attempt dispatches connect
+        testDispatcher.scheduler.advanceTimeBy(delayMs)
+        testDispatcher.scheduler.runCurrent()
+        assertEquals(2, connectCalls)
+    }
+
+    @Test
+    fun testStopSuspendedAwaitsDisconnectAndHaltsRetries() = runTest {
+        val testDispatcher = StandardTestDispatcher(testScheduler)
+        val testScope = TestScope(testDispatcher)
+
+        val conn = ConnectionRef("test-prof", 1L)
+        val stateFlow = kotlinx.coroutines.flow.MutableStateFlow<WsState>(WsState.Disconnected)
+        val disconnectStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val disconnectGate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var connectCalls = 0
+
+        val ws = object : WsConnection(conn, "http://127.0.0.1:1") {
+            override val state: kotlinx.coroutines.flow.StateFlow<WsState> = stateFlow
+            override suspend fun connect() {
+                connectCalls++
+                stateFlow.value = WsState.Connected(SocketInstanceRef(conn, "sock-1"))
+            }
+            override suspend fun disconnect() {
+                disconnectStarted.complete(Unit)
+                disconnectGate.await()
+                stateFlow.value = WsState.Disconnected
+            }
+        }
+
+        val supervisor = WsRecoverySupervisor(ws, testScope)
+        supervisor.start()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(RecoveryPhase.CONNECTED, supervisor.snapshot.value.phase)
+        assertEquals(1, connectCalls)
+
+        // Trigger suspending stop in a separate job
+        val stopJob = testScope.launch {
+            supervisor.stopSuspended()
+        }
+        testDispatcher.scheduler.runCurrent()
+        // Disconnect has started but not finished; stopJob must be actively waiting!
+        kotlin.test.assertTrue(disconnectStarted.isCompleted)
+        kotlin.test.assertTrue(stopJob.isActive, "stopSuspended must suspend until disconnect completes")
+
+        // Complete disconnect gate
+        disconnectGate.complete(Unit)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        kotlin.test.assertTrue(stopJob.isCompleted)
+        assertEquals(RecoveryPhase.STOPPED, supervisor.snapshot.value.phase)
+
+        // Advance time: no retry attempts or reconnect calls occur after stop
+        testDispatcher.scheduler.advanceTimeBy(60_000L)
+        assertEquals(1, connectCalls, "Zero subsequent connect calls after stop")
     }
 }

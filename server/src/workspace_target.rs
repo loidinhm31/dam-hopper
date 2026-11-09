@@ -42,13 +42,61 @@ pub struct WorkspaceTargetPayload {
     pub workspace_epoch: Option<u64>,
 }
 /// Discriminates between a whole-workspace filesystem target and a project-scoped target.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum FilesystemTargetRef {
     #[serde(rename = "workspace")]
     Workspace(#[serde(default)] WorkspaceTargetPayload),
     #[serde(rename = "project")]
     Project(ProjectTargetRef),
+}
+
+impl<'de> serde::Deserialize<'de> for FilesystemTargetRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let obj = value
+            .as_object()
+            .ok_or_else(|| serde::de::Error::custom("expected target object"))?;
+
+        let type_val = obj.get("type").and_then(|v| v.as_str());
+        let kind_val = obj.get("kind").and_then(|v| v.as_str());
+
+        if let (Some(t), Some(k)) = (type_val, kind_val) {
+            if t != k {
+                return Err(serde::de::Error::custom(format!(
+                    "conflicting target type '{t}' and kind '{k}'"
+                )));
+            }
+        }
+
+        let tag = type_val.or(kind_val).ok_or_else(|| {
+            serde::de::Error::custom("missing field `type` or `kind`")
+        })?;
+
+        let mut clean_obj = obj.clone();
+        clean_obj.remove("type");
+        clean_obj.remove("kind");
+        let clean_value = serde_json::Value::Object(clean_obj);
+
+        match tag {
+            "workspace" => {
+                let payload: WorkspaceTargetPayload =
+                    serde_json::from_value(clean_value).map_err(serde::de::Error::custom)?;
+                Ok(FilesystemTargetRef::Workspace(payload))
+            }
+            "project" => {
+                let payload: ProjectTargetRef =
+                    serde_json::from_value(clean_value).map_err(serde::de::Error::custom)?;
+                Ok(FilesystemTargetRef::Project(payload))
+            }
+            other => Err(serde::de::Error::custom(format!(
+                "unknown target tag '{other}', expected 'workspace' or 'project'"
+            ))),
+        }
+    }
 }
 
 impl FilesystemTargetRef {
@@ -1186,5 +1234,48 @@ mod tests {
             .unwrap(),
             PathBuf::from("src")
         );
+    }
+
+    #[test]
+    fn filesystem_target_ref_deserializes_both_type_and_kind_tags() {
+        let by_type_ws: FilesystemTargetRef =
+            serde_json::from_str(r#"{"type":"workspace"}"#).unwrap();
+        assert!(by_type_ws.is_workspace());
+
+        let by_kind_ws: FilesystemTargetRef =
+            serde_json::from_str(r#"{"kind":"workspace"}"#).unwrap();
+        assert!(by_kind_ws.is_workspace());
+
+        let by_type_proj: FilesystemTargetRef =
+            serde_json::from_str(r#"{"type":"project","project":"frontend"}"#).unwrap();
+        assert_eq!(by_type_proj.as_project().unwrap().project, "frontend");
+
+        let by_kind_proj: FilesystemTargetRef =
+            serde_json::from_str(r#"{"kind":"project","project":"frontend"}"#).unwrap();
+        assert_eq!(by_kind_proj.as_project().unwrap().project, "frontend");
+
+        let conflicting: Result<FilesystemTargetRef, _> =
+            serde_json::from_str(r#"{"type":"workspace","kind":"project"}"#);
+        assert!(conflicting.is_err());
+
+        let missing_tag: Result<FilesystemTargetRef, _> =
+            serde_json::from_str(r#"{"project":"frontend"}"#);
+        assert!(missing_tag.is_err());
+
+        let unknown_type: Result<FilesystemTargetRef, _> =
+            serde_json::from_str(r#"{"type":"unknown"}"#);
+        assert!(unknown_type.is_err());
+
+        let unknown_kind: Result<FilesystemTargetRef, _> =
+            serde_json::from_str(r#"{"kind":"bogus"}"#);
+        assert!(unknown_kind.is_err());
+
+        let malformed_ws: Result<FilesystemTargetRef, _> =
+            serde_json::from_str(r#"{"type":"workspace","bogus":true}"#);
+        assert!(malformed_ws.is_err());
+
+        let malformed_proj: Result<FilesystemTargetRef, _> =
+            serde_json::from_str(r#"{"type":"project","project":"p","bogus":1}"#);
+        assert!(malformed_proj.is_err());
     }
 }

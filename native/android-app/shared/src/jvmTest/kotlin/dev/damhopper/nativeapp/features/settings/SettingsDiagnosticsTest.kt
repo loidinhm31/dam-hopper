@@ -134,4 +134,98 @@ class SettingsDiagnosticsTest {
         assertEquals(SettingsDiagnostics.INVALID_VALUE, doc["notificationPolicy"]!!.jsonObject["omp"]!!.jsonObject["pattern"]!!.jsonPrimitive.content)
         assertEquals("0.0", doc["notificationPolicy"]!!.jsonObject["claude"]!!.jsonObject["volume"]!!.jsonPrimitive.content)
     }
+
+    @Test
+    fun diagnosticRedactionSanitizesTokensCredentialsPasswordsAndTicketPaths() {
+        // Tokens: Bearer, url query token, access_token:
+        val bearer = "Authorization: Bearer secret_jwt_token_12345.xyz"
+        val redactedBearer = SettingsDiagnostics.redact(bearer)
+        assertFalse(redactedBearer.contains("secret_jwt_token"))
+        assertTrue(redactedBearer.contains("Bearer [REDACTED]"))
+
+        val urlToken = "wss://127.0.0.1:4803/ws?token=tok_super_secret_value&mode=term"
+        val redactedUrlToken = SettingsDiagnostics.redact(urlToken)
+        assertFalse(redactedUrlToken.contains("tok_super_secret_value"))
+        assertTrue(redactedUrlToken.contains("token=[REDACTED]"))
+
+        val accessToken = "access_token=secret_access_val_789"
+        val redactedAccessToken = SettingsDiagnostics.redact(accessToken)
+        assertFalse(redactedAccessToken.contains("secret_access_val_789"))
+        assertTrue(redactedAccessToken.contains("access_token=[REDACTED]"))
+
+        // Credentials & passwords:
+        val userPassUrl = "https://admin:superSecret123@127.0.0.1:4801/api/terminals"
+        val redactedUserPass = SettingsDiagnostics.redact(userPassUrl)
+        assertFalse(redactedUserPass.contains("superSecret123"))
+        assertTrue(redactedUserPass.contains("admin:[REDACTED]@"))
+
+        val kvSecrets = "password=verySecretPass99&passwd=secret456&client_secret=topsecret&api_key=sk-live-123"
+        val redactedKv = SettingsDiagnostics.redact(kvSecrets)
+        assertFalse(redactedKv.contains("verySecretPass99"))
+        assertFalse(redactedKv.contains("secret456"))
+        assertFalse(redactedKv.contains("topsecret"))
+        assertFalse(redactedKv.contains("sk-live-123"))
+        assertTrue(redactedKv.contains("password=[REDACTED]"))
+        assertTrue(redactedKv.contains("passwd=[REDACTED]"))
+        assertTrue(redactedKv.contains("client_secret=[REDACTED]"))
+        assertTrue(redactedKv.contains("api_key=[REDACTED]"))
+
+        // Sensitive account identifiers:
+        val emailText = "User email is developer.alice@damhopper.dev in the system"
+        val redactedEmail = SettingsDiagnostics.redact(emailText)
+        assertFalse(redactedEmail.contains("developer.alice@damhopper.dev"))
+        assertTrue(redactedEmail.contains("[REDACTED]"))
+
+        val accountQuery = "https://127.0.0.1:4803/api/user?account_id=acc_sensitive_99&user_id=usr_private_11"
+        val redactedAccount = SettingsDiagnostics.redact(accountQuery)
+        assertFalse(redactedAccount.contains("acc_sensitive_99"))
+        assertFalse(redactedAccount.contains("usr_private_11"))
+        assertTrue(redactedAccount.contains("account_id=[REDACTED]"))
+        assertTrue(redactedAccount.contains("user_id=[REDACTED]"))
+
+        // Ticket paths:
+        val streamTicketPath = "https://127.0.0.1:4803/media/stream/ticket-uuid-secret-554433?ticket=tkt_secret_token"
+        val redactedStream = SettingsDiagnostics.redact(streamTicketPath)
+        assertFalse(redactedStream.contains("ticket-uuid-secret-554433"))
+        assertFalse(redactedStream.contains("tkt_secret_token"))
+        assertTrue(redactedStream.contains("/media/stream/[REDACTED]"))
+        assertTrue(redactedStream.contains("ticket=[REDACTED]"))
+
+        val ticketEndpoint = "/tickets/sec_ticket_auth_token_998877"
+        val redactedTicket = SettingsDiagnostics.redact(ticketEndpoint)
+        assertFalse(redactedTicket.contains("sec_ticket_auth_token_998877"))
+        assertTrue(redactedTicket.contains("/tickets/[REDACTED]"))
+    }
+
+    @Test
+    fun diagnosticRedactionHandlesNullEmptyAndBenignStrings() {
+        assertEquals("", SettingsDiagnostics.redact(null))
+        assertEquals("", SettingsDiagnostics.redact(""))
+        val benign = "damhopper-desktop font=14 dark-mode=true"
+        assertEquals(benign, SettingsDiagnostics.redact(benign))
+    }
+
+    @Test
+    fun canaryTokensAndTicketPathsNeverEnterExportedDocument() {
+        val canaryToken = "canary-jwt-token-xyz"
+        val canaryPassword = "canary-password-secret"
+        val canaryTicketPath = "/media/stream/ticket-canary-uuid"
+        val canaryEmail = "canary.user@damhopper.dev"
+
+        val hostile = WorkbenchPreferences(
+            searchTextShortcut = "Mod+$canaryToken",
+            searchFilenameShortcut = "Alt+$canaryPassword",
+            terminalWorkspaceShortcut = canaryTicketPath,
+            terminalFilePanelShortcut = canaryEmail,
+        )
+        val bytes = SettingsDiagnostics.build(input(hostile))
+        val text = bytes.decodeToString()
+        assertFalse(text.contains(canaryToken), "canary token must not leak")
+        assertFalse(text.contains(canaryPassword), "canary password must not leak")
+        assertFalse(text.contains(canaryTicketPath), "canary ticket path must not leak")
+        assertFalse(text.contains(canaryEmail), "canary email must not leak")
+
+        val doc = parse(bytes)
+        assertEquals(SettingsDiagnostics.TOP_LEVEL_KEYS, doc.keys, "top level keys must remain strictly allowlisted")
+    }
 }

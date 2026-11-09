@@ -1,0 +1,66 @@
+{
+  "taskId": "present-terminal-lifetime",
+  "phase": "P03",
+  "wave": "W06",
+  "status": "approved_with_noted_issues",
+  "timestamp": "2026-11-07T21:40:00Z",
+  "compilation": [
+    {
+      "command": "cmd.exe /c gradlew.bat :shared:compileKotlinJvm",
+      "exitCode": 0,
+      "status": "success"
+    },
+    {
+      "command": "cmd.exe /c gradlew.bat :androidApp:compileDebugKotlin",
+      "exitCode": 0,
+      "status": "success"
+    }
+  ],
+  "testsDemonstrated": [
+    {
+      "suite": "dev.damhopper.nativeapp.features.terminal.TerminalPresentationPolicyTest",
+      "total": 17,
+      "passed": 17,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.terminal.TerminalConnectionPresentationTest",
+      "total": 10,
+      "passed": 10,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.terminal.ProjectTerminalVisibilityTest",
+      "total": 16,
+      "passed": 16,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.terminal.TerminalScreenBindingTest",
+      "total": 5,
+      "passed": 5,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.terminal.TerminalAttachQueueBindingTest",
+      "total": 4,
+      "passed": 4,
+      "failed": 0
+    }
+  ],
+  "verifiedBehaviors": [
+    "Cancel default focus on terminal close dialog",
+    "Local Close View hides tab locally with zero server mutation",
+    "Explicit reopen reuses exact live inventory identity",
+    "Pinned close refused until explicit unpin",
+    "Uncertain create presentation offers Check status and strictly forbids Launch Again",
+    "Termination outcome 202/200/409 preserves original target",
+    "Input blocked when hidden or covered"
+  ],
+  "reviewProvenance": {
+    "cycle": 3,
+    "score": 6,
+    "userDisposition": "approved_with_noted_issues",
+    "reportFile": "plans/reports/code-review-261107-2123-wave06-cycle3.md"
+  }
+}

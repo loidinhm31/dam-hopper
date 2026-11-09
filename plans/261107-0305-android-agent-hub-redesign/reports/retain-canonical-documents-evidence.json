@@ -1,0 +1,78 @@
+{
+  "taskId": "retain-canonical-documents",
+  "phase": "P06",
+  "wave": "W06",
+  "status": "approved_with_noted_issues",
+  "timestamp": "2026-11-07T21:40:00Z",
+  "compilation": [
+    {
+      "command": "cmd.exe /c gradlew.bat :shared:compileKotlinJvm",
+      "exitCode": 0,
+      "status": "success"
+    },
+    {
+      "command": "cmd.exe /c gradlew.bat :androidApp:compileDebugKotlin",
+      "exitCode": 0,
+      "status": "success"
+    }
+  ],
+  "testsDemonstrated": [
+    {
+      "suite": "dev.damhopper.nativeapp.features.workspace.ProjectWorkspaceStateTest",
+      "total": 12,
+      "passed": 12,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.editor.EditorTabsStateTest",
+      "total": 21,
+      "passed": 21,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.editor.EditorSaveRaceTest",
+      "total": 9,
+      "passed": 9,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.editor.EditorSessionTest",
+      "total": 8,
+      "passed": 8,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.editor.EditorRepositoryTest",
+      "total": 10,
+      "passed": 10,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.files.FileEditorMutationTest",
+      "total": 12,
+      "passed": 12,
+      "failed": 0
+    },
+    {
+      "suite": "dev.damhopper.nativeapp.features.files.FileWatchCoordinatorTest",
+      "total": 10,
+      "passed": 10,
+      "failed": 0
+    }
+  ],
+  "verifiedBehaviors": [
+    "One logical file shares one native buffer and undo chain across aliases in same owner",
+    "Surviving alias preserves dirty edits and closes without dirty prompt",
+    "Final dirty alias prompts with CloseIntent",
+    "Close and reload are busy during in-flight save",
+    "Atomic tier replacement updates all aliases across workspaces",
+    "Late old-view detach cannot damage successor receipt or view state",
+    "CAS failure preserves original dirty buffer and undo stack"
+  ],
+  "reviewProvenance": {
+    "cycle": 3,
+    "score": 6,
+    "userDisposition": "approved_with_noted_issues",
+    "reportFile": "plans/reports/code-review-261107-2123-wave06-cycle3.md"
+  }
+}

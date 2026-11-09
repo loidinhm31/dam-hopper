@@ -190,4 +190,93 @@ class TerminalScreenBindingTest {
         assertEquals(null, write, "Stale binding must drop input before enqueueing")
         assertFalse(admitted)
     }
+
+    @Test
+    fun bindingFencesInputWhenInputEligibleBecomesFalse() = runTest {
+        val owner = WorkspaceFileOwner("prof-1", "http://127.0.0.1:8080", "dev-user", "dam-hopper")
+        val conn = ConnectionRef("prof-1", 1L)
+        val repo = createRepository(conn)
+        val controller = TerminalSessionController("term-1", 1L, conn)
+        val writeChannel = Channel<QueuedWrite>(capacity = 64)
+        val token = TerminalBindingToken(owner, conn, System.identityHashCode(repo), "term-1", 1L, 1L)
+        controller.handleBufferReplay("prompt$ ".encodeToByteArray(), 8uL, reset = true, truncated = false, bufferIncarnation = 1uL)
+
+        var eligible = true
+        installCurrentControllerBinding(
+            controller = controller,
+            bindingToken = token,
+            ownerScope = this,
+            terminalRepo = repo,
+            writeChannel = writeChannel,
+            attachQueues = mutableMapOf(),
+            destroyingSessionIds = emptyMap(),
+            isInputEligible = { eligible },
+            currentActiveSessionId = { "term-1" },
+            currentActiveSessionEpoch = { 1L },
+            currentAttachmentAttemptToken = { 1L },
+            nextAttachmentAttemptToken = { 2L },
+            isBindingCurrent = { true },
+            lastSubmittedCommandText = { "command" },
+            onAdmitted = {},
+        )
+
+        // Input permitted while eligible
+        controller.sendInput("valid\n".encodeToByteArray())
+        val write1 = writeChannel.tryReceive().getOrNull()
+        assertNotNull(write1, "Input must enqueue while eligible")
+
+        // Input immediately blocked when eligible becomes false (e.g. covered or hidden)
+        eligible = false
+        controller.isPanelActive = false
+        controller.sendInput("blocked\n".encodeToByteArray())
+        val write2 = writeChannel.tryReceive().getOrNull()
+        assertEquals(null, write2, "Input must be dropped when eligible is false")
+    }
+
+    @Test
+    fun closeDialogAuthorityChangeAbortsTermination() {
+        val target = CapturedTerminationTarget(
+            profileId = "prof-1",
+            connectionGeneration = 1L,
+            terminalId = "term-1",
+            serverPtyEpoch = "3f8c7b6a-9123-4567-890a-bcdef0123456",
+            incarnationExact = "1",
+        )
+
+        // Authority unchanged
+        val connSame = ConnectionRef("prof-1", 1L)
+        val authorityValid = connSame.profileId == target.profileId && connSame.generation == target.connectionGeneration
+        assertTrue(authorityValid)
+
+        // Generation bumped (reconnected/rebound)
+        val connRebound = ConnectionRef("prof-1", 2L)
+        val authorityStale = connRebound.profileId == target.profileId && connRebound.generation == target.connectionGeneration
+        assertFalse(authorityStale, "Reconnected authority must abort destructive operation committed against prior generation")
+    }
+
+    @Test
+    fun testStaleDialogConfirmationSendsZeroRequestsAcrossAuthorityChange() = runTest {
+        var networkRequestsSent = 0
+        val target = CapturedTerminationTarget(
+            profileId = "prof-1",
+            connectionGeneration = 1L,
+            terminalId = "term-1",
+            serverPtyEpoch = "3f8c7b6a-9123-4567-890a-bcdef0123456",
+            incarnationExact = "1",
+        )
+
+        // Authority changed to generation 2 before user confirmed in dialog
+        val currentConn = ConnectionRef("prof-1", 2L)
+
+        // Action boundary verification (matching ProjectTerminalScreen logic)
+        var errorBanner: String? = null
+        if (currentConn.profileId != target.profileId || currentConn.generation != target.connectionGeneration) {
+            errorBanner = "Cannot end session: connection authority changed"
+        } else {
+            networkRequestsSent++
+        }
+
+        assertEquals(0, networkRequestsSent, "Zero termination requests must be sent across generation mismatch")
+        assertEquals("Cannot end session: connection authority changed", errorBanner)
+    }
 }

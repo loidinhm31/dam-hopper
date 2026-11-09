@@ -7,12 +7,29 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import dev.damhopper.nativeapp.core.model.FilesystemTargetRef
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import dev.damhopper.nativeapp.features.workspace.AgentHubActionPort
+import dev.damhopper.nativeapp.features.workspace.AgentHubSnapshotPort
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -111,7 +128,7 @@ import kotlin.time.TimeSource
  * constructs Settings, notification or history services itself, so they survive rotation and route changes and
  * exist exactly once per process-retained owner.
  */
-interface RetainedRootServices {
+interface RetainedRootServices : AgentHubSnapshotPort, AgentHubActionPort {
     val settingsRepository: SettingsRepository
     val privacyController: PrivacyController
     val settingsScreenServices: StateFlow<SettingsScreenServices>
@@ -130,6 +147,7 @@ interface RetainedRootServices {
 
     /** Validates [target] against authoritative live state and routes it; null when routed, else the refusal text. */
     suspend fun openNotification(target: NotificationTarget): String?
+    suspend fun activateNotification(key: String): String?
 
     /** Hands the root's EXISTING socket to the retained owner (one collector per runtime; no new connection). */
     suspend fun attachRuntime(client: ApiClient, ws: WsConnection, accountId: String)
@@ -252,8 +270,10 @@ private fun RootContent(
     var workspaceRepo by remember { mutableStateOf<WorkspaceRepository?>(null) }
     var terminalRepo by remember { mutableStateOf<TerminalRepository?>(null) }
 
+    val effectiveAccountUser = (currentAuthStatus as? AuthStatus.Authenticated)?.session?.user
+
     // Reconstruct repositories when active profile, its base URL, or generation changes
-    LaunchedEffect(activeProfileId, currentProfile?.baseUrl, currentConn?.generation) {
+    LaunchedEffect(activeProfileId, currentProfile?.baseUrl, currentConn?.generation, effectiveAccountUser) {
         workspaceRepo = null
         terminalRepo = null
         apiClient = null
@@ -273,7 +293,7 @@ private fun RootContent(
                 apiClient = client
                 wsConnection = ws
                 workspaceRepo = WorkspaceRepository(client, targetStore)
-                terminalRepo = TerminalRepository(client, ws)
+                terminalRepo = TerminalRepository(client, ws, services?.settingsRepository?.preferencesStore, accountUser = effectiveAccountUser)
                 // When RetainedRootServices is available, connection lifecycle and recovery are managed
                 // by WsRecoverySupervisor in attachRuntime(). Only standalone preview/tests without services connect directly.
                 if (services == null && ws != null) {
@@ -295,7 +315,6 @@ private fun RootContent(
     }
 
     // Hand the already-created runtime to the retained owner (one collector per runtime, no extra connection).
-    val effectiveAccountUser = (currentAuthStatus as? AuthStatus.Authenticated)?.session?.user
     LaunchedEffect(apiClient, wsConnection, effectiveAccountUser, activeProfileId) {
         val client = apiClient
         val ws = wsConnection
@@ -340,18 +359,22 @@ private fun RootContent(
         val prof = currentProfile
         val conn = currentConn
         val accountUser = effectiveAccountUser
-        if (profId != null && prof != null && client != null && ws != null && selectedProj != null &&
+        val effectiveProject = selectedProj ?: "*"
+        if (profId != null && prof != null && client != null && ws != null &&
             conn != null && accountUser != null &&
             client.connection == conn && ws.connection == conn &&
             client.normalizedBaseUrl == WorkspaceFileOwner.normalizeBaseUrl(prof.baseUrl) &&
             ws.baseUrl.trim().trimEnd('/') == WorkspaceFileOwner.normalizeBaseUrl(prof.baseUrl)
         ) {
+            val snapshot = targetStore.getSnapshot(profId, null, effectiveProject)
             val owner = WorkspaceFileOwner(
                 profileId = profId,
                 baseUrl = prof.baseUrl,
                 accountUser = accountUser,
-                project = selectedProj,
+                project = effectiveProject,
                 worktreePath = flowState.activeWorktreePath,
+                workspaceRoot = snapshot.workspaceRoot,
+                workspaceEpoch = snapshot.workspaceEpoch,
             )
             val target = owner.toProjectTargetRef()
             if (workspaceStateProvider != null) {
@@ -368,13 +391,14 @@ private fun RootContent(
                     preferenceAccess = prefAccess,
                     commandHistory = services?.commandHistory,
                     historyOwner = SettingsOwner(client.connection, client.normalizedBaseUrl, accountUser),
+                    preferencesStore = services?.settingsRepository?.preferencesStore,
                 )
                 val safety = WorkspaceGitSafety(
                     boundOwner = owner,
                     connectionGetter = { client.connection },
                     fileRepositoryGetter = { fileRepo },
                     editorRepositoryGetter = { editorRepo },
-                    terminalRepositoryGetter = { dev.damhopper.nativeapp.features.terminal.TerminalRepository(client, ws) },
+                    terminalRepositoryGetter = { dev.damhopper.nativeapp.features.terminal.TerminalRepository(client, ws, services?.settingsRepository?.preferencesStore, accountUser = accountUser) },
                     workspaceStateGetter = { wsState },
                     retainedDirtyDocsProvider = { requestedOwner ->
                         if (requestedOwner == owner) {
@@ -410,7 +434,8 @@ private fun RootContent(
         val profId = activeProfileId
         val prof = currentProfile
         val project = selectedProj
-        if (agentsService != null && flowState.stage == AppFlowStage.TERMINAL && profId != null && prof != null &&
+        val isWorkspaceActive = (flowState.stage == AppFlowStage.HUB || flowState.stage == AppFlowStage.TERMINAL)
+        if (agentsService != null && isWorkspaceActive && profId != null && prof != null &&
             agentsAccount != null && project != null && project.isNotBlank()
         ) {
             agentsService.registerWorkspace(
@@ -430,7 +455,7 @@ private fun RootContent(
     val agentInventories by (agentsService?.inventories ?: remember { MutableStateFlow(emptyMap()) }).collectAsState()
     val currentReceipt = activeProfileId?.let { profId -> agentInventories.values.firstOrNull { it.runtime.connection.profileId == profId } }
 
-    LaunchedEffect(currentReceipt, agentsService, activeProfileId, currentProfile, effectiveAccountUser, currentConn) {
+    LaunchedEffect(currentReceipt, agentsService, activeProfileId, currentProfile, effectiveAccountUser, currentConn, selectedProj, flowState.stage, flowState.activeWorktreePath, activeWorkspaceState) {
         val service = agentsService ?: return@LaunchedEffect
         val receipt = currentReceipt ?: return@LaunchedEffect
         val profId = activeProfileId ?: return@LaunchedEffect
@@ -457,7 +482,10 @@ private fun RootContent(
             val reg = service.registerWorkspace(owner)
             val normWt = WorkspaceFileOwner.normalizeWorktree(worktreePath)
             val activeWt = WorkspaceFileOwner.normalizeWorktree(flowState.activeWorktreePath)
-            if (flowState.stage != AppFlowStage.TERMINAL || project != selectedProj || normWt != activeWt) {
+            val isForegroundTerminalActive = (flowState.stage == AppFlowStage.HUB || flowState.stage == AppFlowStage.TERMINAL) &&
+                project == selectedProj && normWt == activeWt &&
+                (activeWorkspaceState?.activePanel?.value ?: WorkspacePanel.TERMINAL) == WorkspacePanel.TERMINAL
+            if (!isForegroundTerminalActive) {
                 val matchingSessions = receipt.sessions.filter {
                     TerminalAgentsMembership.isTraditionalType(it.sessionType) && it.alive && !it.targetUnavailable &&
                         it.project == project && WorkspaceFileOwner.normalizeWorktree(it.worktreePath) == normWt
@@ -493,9 +521,9 @@ private fun RootContent(
             if (flowState.stage == AppFlowStage.PROFILE_LOGIN) {
                 hasInitialAutoAdvanced = true
                 val lastNav = profileRepository.getLastNavigationState()
-                if (lastNav != null && lastNav.profileId == profId && lastNav.stage == AppFlowStage.TERMINAL.name && lastNav.project != null) {
+                if (lastNav != null && lastNav.profileId == profId && (lastNav.stage == AppFlowStage.HUB.name || lastNav.stage == AppFlowStage.TERMINAL.name) && lastNav.project != null) {
                     navigation.restoreState(
-                        stage = AppFlowStage.TERMINAL,
+                        stage = AppFlowStage.HUB,
                         profileId = profId,
                         project = lastNav.project,
                         sessionId = lastNav.sessionId,
@@ -520,27 +548,41 @@ private fun RootContent(
     val languageNotice by (services?.settingsRepository?.languageFilterMigrationNotice ?: remember { MutableStateFlow<String?>(null) }).collectAsState()
     var searchMode by remember { mutableStateOf<WorkspaceSearchMode?>(null) }
     var shortcutNotice by remember { mutableStateOf<String?>(null) }
+    val hubSnapshot by (services?.hubSnapshot ?: remember { MutableStateFlow(dev.damhopper.nativeapp.features.workspace.AgentHubSnapshot()) }).collectAsState()
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    LaunchedEffect(settingsOpen, masked, activeWorkspaceState) {
-        activeWorkspaceState?.setInputSuspended(settingsOpen || masked)
-        if (settingsOpen || masked) {
+    LaunchedEffect(settingsOpen, masked, flowState.projectPickerOpen, flowState.notificationsOpen, activeWorkspaceState) {
+        val covered = settingsOpen || masked || flowState.projectPickerOpen || flowState.notificationsOpen
+        activeWorkspaceState?.setInputSuspended(covered)
+        if (covered) {
             keyboardController?.hide()
             focusManager.clearFocus(force = true)
         }
     }
     LaunchedEffect(activeWorkspaceState) { searchMode = null }
 
+    // Capability -> Terminal back unwinding: when active panel is not TERMINAL, Back switches back to Terminal
+    val currentPanel by (activeWorkspaceState?.activePanel ?: remember { MutableStateFlow(WorkspacePanel.TERMINAL) }).collectAsState()
+    DisposableEffect(navigation, activeWorkspaceState, currentPanel) {
+        val ws = activeWorkspaceState
+        val unregister = if (ws != null && currentPanel != WorkspacePanel.TERMINAL) {
+            navigation.registerBackInterceptor {
+                ws.selectPanel(WorkspacePanel.TERMINAL)
+                true
+            }
+        } else null
+        onDispose { unregister?.invoke() }
+    }
+
     // ONE effective cover, derived synchronously in composition from the owned sources: privacy, Settings, search,
-    // pending departure + the host-owned local terminal modals, sidebar popup and compact Agents.
+    // project picker modal, pending departure + the host-owned local terminal modals, sidebar popup and compact Agents.
     val departurePending by remember(activeWorkspaceState) {
         activeWorkspaceState?.pendingDeparture ?: MutableStateFlow<WorkspaceDepartureIntent?>(null)
     }.collectAsState()
-    val externalCover = masked || settingsOpen || searchMode != null || departurePending != null
+    val externalCover = masked || settingsOpen || searchMode != null || departurePending != null || flowState.projectPickerOpen || flowState.notificationsOpen
     SideEffect { agentsHost.setExternalCover(externalCover) }
     val effectiveCover = externalCover || agentsHost.localCover || agentsHost.popupVisible || agentsHost.compactSheetOpen
-
     // Search owns Back dismissal while open.
     DisposableEffect(navigation, searchMode) {
         val unregister = if (searchMode != null) {
@@ -566,7 +608,7 @@ private fun RootContent(
     }
     // The Agents host only exists on the Terminal stage: leaving it can never strand a cover without its surface.
     LaunchedEffect(flowState.stage) {
-        if (flowState.stage != AppFlowStage.TERMINAL && flowState.stage != AppFlowStage.PROJECT_LIST) agentsHost.close()
+        if (flowState.stage != AppFlowStage.HUB && flowState.stage != AppFlowStage.TERMINAL && flowState.stage != AppFlowStage.PROJECT_LIST) agentsHost.close()
     }
 
     // Back returns to the captured origin: restore the workspace panel the user left (state itself never moved).
@@ -632,8 +674,7 @@ private fun RootContent(
     fun openRecord(record: NotificationRecord) {
         val svc = services ?: return
         scope.launch {
-            svc.markNotificationRead(record.key)
-            svc.openNotification(record.target)
+            svc.activateNotification(record.key)
         }
     }
 
@@ -684,7 +725,7 @@ private fun RootContent(
         // A compact Agents sheet consumes search/panel/Projects shortcuts: nothing routes under it.
         if (agentsSheetConsumesShortcut(agentsHost.compactSheetOpen, action)) return true
         val ws = activeWorkspaceState
-        val inWorkspace = flowState.stage == AppFlowStage.TERMINAL && ws != null
+        val inWorkspace = (flowState.stage == AppFlowStage.HUB || flowState.stage == AppFlowStage.TERMINAL) && ws != null
         return when (action) {
             ShortcutAction.SEARCH_TEXT -> inWorkspace.also { if (it) searchMode = WorkspaceSearchMode.TEXT }
             ShortcutAction.SEARCH_FILENAME -> inWorkspace.also { if (it) searchMode = WorkspaceSearchMode.FILENAME }
@@ -696,7 +737,10 @@ private fun RootContent(
                     if (path != null) ws.fileTreeState.revealPath(path)
                 }
             }
-            ShortcutAction.PROJECT_PANEL -> (flowState.stage == AppFlowStage.TERMINAL).also { if (it) navigation.handleBackPress() }
+            ShortcutAction.PROJECT_PANEL -> {
+                navigation.openProjectPicker()
+                true
+            }
             ShortcutAction.TERMINAL_FONT_INCREASE -> {
                 prefAccess.update { it.copy(terminalFontSize = stepTerminalFontSize(it.terminalFontSize, 1)) }
                 true
@@ -728,7 +772,7 @@ private fun RootContent(
         val gate = ShortcutGate(
             routeId = "${flowState.stage}|$activeProfileId|$selectedProj|${activeWorkspaceState?.activePanel?.value}",
             focused = windowFocused,
-            blocked = settingsOpen,
+            blocked = settingsOpen || flowState.projectPickerOpen,
             masked = masked,
             capturing = false,
             editableFocused = isEditing || isComposing,
@@ -802,67 +846,46 @@ private fun RootContent(
                             )
                         }
 
-                        AppFlowStage.PROJECT_LIST -> {
-                            if (agentsContext != null) {
-                                TerminalAgentsSidebarHost(
-                                    agents = agentsContext,
-                                    active = null,
-                                    modifier = Modifier.fillMaxSize(),
-                                ) {
-                                    ProjectListScreen(
-                                        profileName = currentProfile?.name ?: "Server",
-                                        serverUrl = currentProfile?.baseUrl,
-                                        workspaceRepository = workspaceRepo,
-                                        onNavigateProfiles = {
-                                            navigation.navigateToProfiles()
-                                        },
-                                        onSelectProject = { projectName ->
-                                            targetStore.selectTarget(
-                                                profileId = activeProfileId,
-                                                workspaceConfigPath = null,
-                                                project = projectName,
-                                                worktreePath = null,
+                        AppFlowStage.HUB, AppFlowStage.TERMINAL, AppFlowStage.PROJECT_LIST -> {
+                            val proj = flowState.activeProject
+                            if (proj.isNullOrBlank() && (activeWorkspaceState == null || currentPanel == WorkspacePanel.TERMINAL)) {
+                                AgentHubLandingRoot(
+                                    currentProfile = currentProfile,
+                                    hubSnapshot = hubSnapshot,
+                                    agentsContext = agentsContext,
+                                    activeWorkspaceState = activeWorkspaceState,
+                                    workspaceRepo = workspaceRepo,
+                                    apiClient = apiClient,
+                                    onAction = { action -> scope.launch { services?.dispatchAction(action) } },
+                                    onOpenProject = { navigation.openProjectPicker() },
+                                    onOpenSettings = { navigation.openSettings(captureOrigin()) },
+                                    onOpenNotifications = { navigation.toggleNotifications() },
+                                    onSwitchProfile = { navigation.navigateToProfiles() },
+                                    onLaunchTerminal = { target ->
+                                        scope.launch {
+                                            navigation.requestWorkspaceTarget(
+                                                target = target,
+                                                revalidate = { true },
+                                                onCommitted = {},
                                             )
-                                            navigation.selectProject(projectName)
-                                        },
-                                        headerEntries = headerEntries,
-                                        agents = agentsContext,
-                                        modifier = Modifier.fillMaxSize(),
-                                    )
-                                }
-                            } else {
-                                ProjectListScreen(
-                                    profileName = currentProfile?.name ?: "Server",
-                                    serverUrl = currentProfile?.baseUrl,
-                                    workspaceRepository = workspaceRepo,
-                                    onNavigateProfiles = {
-                                        navigation.navigateToProfiles()
+                                        }
                                     },
-                                    onSelectProject = { projectName ->
-                                        targetStore.selectTarget(
-                                            profileId = activeProfileId,
-                                            workspaceConfigPath = null,
-                                            project = projectName,
-                                            worktreePath = null,
-                                        )
-                                        navigation.selectProject(projectName)
+                                    onOpenGit = { target ->
+                                        scope.launch {
+                                            navigation.requestWorkspaceTarget(
+                                                target = target,
+                                                revalidate = { true },
+                                                onCommitted = {
+                                                    activeWorkspaceState?.selectPanel(WorkspacePanel.GIT)
+                                                },
+                                            )
+                                        }
                                     },
-                                    headerEntries = headerEntries,
-                                    agents = null,
                                     modifier = Modifier.fillMaxSize(),
                                 )
-                            }
-                        }
-
-                        AppFlowStage.TERMINAL -> {
-                            val proj = flowState.activeProject
-                            if (proj.isNullOrBlank()) {
-                                LaunchedEffect(Unit) {
-                                    navigation.handleBackPress()
-                                }
                             } else if (activeWorkspaceState != null) {
                                 ProjectWorkspaceScreen(
-                                    projectName = proj,
+                                    projectName = proj ?: "Workspace",
                                     workspaceState = activeWorkspaceState,
                                     terminalRepo = terminalRepo,
                                     navigation = navigation,
@@ -876,11 +899,12 @@ private fun RootContent(
                                     headerEntries = headerEntries,
                                     requiredTerminalInstance = flowState.requiredTerminalInstance,
                                     agents = agentsContext,
+                                    isMaskActive = masked,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                             } else {
                                 ProjectTerminalScreen(
-                                    projectName = proj,
+                                    projectName = proj ?: "Workspace",
                                     terminalRepo = terminalRepo,
                                     onBackToProjects = {
                                         navigation.handleBackPress()
@@ -892,6 +916,7 @@ private fun RootContent(
                                     profileId = activeProfileId,
                                     preferenceAccess = prefAccess,
                                     inputCovered = settingsOpen || masked || effectiveCover,
+                                    isMaskActive = masked,
                                     requiredTerminalInstance = flowState.requiredTerminalInstance,
                                     agents = agentsContext,
                                     modifier = Modifier.fillMaxSize(),
@@ -903,7 +928,8 @@ private fun RootContent(
                     val mode = searchMode
                     val ws = activeWorkspaceState
                     val client = apiClient
-                    if (mode != null && ws != null && client != null && flowState.stage == AppFlowStage.TERMINAL && !settingsOpen) {
+                    val inWorkspace = (flowState.stage == AppFlowStage.HUB || flowState.stage == AppFlowStage.TERMINAL) && !settingsOpen
+                    if (mode != null && ws != null && client != null && inWorkspace) {
                         val search = remember { SearchRepository() }
                         WorkspaceSearchView(
                             mode = mode,
@@ -1001,11 +1027,58 @@ private fun RootContent(
                                 modifier = Modifier.weight(1f),
                             )
                         }
-                        }
                     }
                 }
+                    if (flowState.projectPickerOpen && !masked) {
+                        AgentHubProjectPickerModal(
+                            profileName = currentProfile?.name ?: "Server",
+                            serverUrl = currentProfile?.baseUrl,
+                            workspaceRepo = workspaceRepo,
+                            onClose = { navigation.closeProjectPicker() },
+                            onSelectProject = { projectName ->
+                                val profId = activeProfileId.orEmpty()
+                                val targetRef = ProjectTargetRef(
+                                    profileId = activeProfileId,
+                                    project = projectName,
+                                    worktreePath = null,
+                                )
+                                val capturedConn = profileRepository.registry.connectionsState.value[profId]
+                                val capturedProfile = profileRepository.profiles.value.find { it.id == profId }
+                                val capturedAccount = (profileRepository.authStatuses.value[profId] as? AuthStatus.Authenticated)?.session?.user
+                                scope.launch {
+                                    navigation.requestWorkspaceTarget(
+                                        target = targetRef,
+                                        revalidate = {
+                                            val currentConn = profileRepository.registry.connectionsState.value[profId]
+                                            val currentProfile = profileRepository.profiles.value.find { it.id == profId }
+                                            val currentAccount = (profileRepository.authStatuses.value[profId] as? AuthStatus.Authenticated)?.session?.user
+                                            capturedConn != null && currentConn != null &&
+                                                currentConn.generation == capturedConn.generation &&
+                                                capturedProfile != null && currentProfile != null &&
+                                                currentProfile.baseUrl == capturedProfile.baseUrl &&
+                                                capturedAccount != null && currentAccount == capturedAccount
+                                        },
+                                        onCommitted = {
+                                            targetStore.selectTarget(
+                                                profileId = activeProfileId,
+                                                workspaceConfigPath = null,
+                                                project = projectName,
+                                                worktreePath = null,
+                                            )
+                                            navigation.closeProjectPicker()
+                                        }
+                                    )
+                                }
+                            },
+                            onNavigateProfiles = {
+                                navigation.closeProjectPicker()
+                                navigation.navigateToProfiles()
+                            },
+                        )
+                    }
             }
         }
+    }
     }
 
     if (privacyController != null) {
@@ -1035,3 +1108,394 @@ private val AGENTS_SHEET_SUPPRESSED_SHORTCUTS: Set<ShortcutAction> = setOf(
  */
 internal fun agentsSheetConsumesShortcut(compactSheetOpen: Boolean, action: ShortcutAction): Boolean =
     compactSheetOpen && action in AGENTS_SHEET_SUPPRESSED_SHORTCUTS
+
+@Composable
+private fun HubCapabilityTab(
+    label: String,
+    isSelected: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit = {},
+    contentDescription: String? = null,
+) {
+    val bg = if (isSelected) DamHopperColors.Primary else DamHopperColors.SurfaceVariant
+    val textColor = if (isSelected) DamHopperColors.Background else if (enabled) DamHopperColors.TextPrimary else DamHopperColors.TextSecondary.copy(alpha = 0.5f)
+    Box(
+        modifier = Modifier
+            .sizeIn(minWidth = 48.dp, minHeight = 36.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(bg)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .semantics { contentDescription?.let { this.contentDescription = it } },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = textColor,
+            fontSize = 13.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+        )
+    }
+}
+
+@Composable
+private fun AgentHubLandingRoot(
+    currentProfile: dev.damhopper.nativeapp.features.profiles.ServerProfile?,
+    hubSnapshot: dev.damhopper.nativeapp.features.workspace.AgentHubSnapshot,
+    agentsContext: TerminalAgentsContext?,
+    activeWorkspaceState: ProjectWorkspaceState?,
+    workspaceRepo: WorkspaceRepository?,
+    apiClient: ApiClient?,
+    onAction: (dev.damhopper.nativeapp.features.workspace.AgentHubAction) -> Unit,
+    onOpenProject: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenNotifications: () -> Unit,
+    onSwitchProfile: () -> Unit,
+    onLaunchTerminal: (dev.damhopper.nativeapp.core.model.ProjectTargetRef) -> Unit,
+    onOpenGit: (dev.damhopper.nativeapp.core.model.ProjectTargetRef) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val coroutineScope = rememberCoroutineScope()
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedTarget by rememberSaveable { mutableStateOf<dev.damhopper.nativeapp.core.model.ProjectTargetRef?>(null) }
+    var isAgentsDrawerOpen by rememberSaveable { mutableStateOf(false) }
+    var isFilesDrawerOpen by rememberSaveable { mutableStateOf(false) }
+    var isRightFileTreePinned by rememberSaveable { mutableStateOf(true) }
+    var serverProjects by remember(workspaceRepo) { mutableStateOf<List<dev.damhopper.nativeapp.features.workspace.ProjectSummary>>(emptyList()) }
+    var fileNodes by remember(selectedTarget, apiClient) { mutableStateOf<List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState>>(emptyList()) }
+    var fileChanges by remember(selectedTarget, apiClient) { mutableStateOf(dev.damhopper.nativeapp.ui.flow.FileChangeSummaryUiState()) }
+    var isLoadingFiles by remember(selectedTarget, apiClient) { mutableStateOf(false) }
+
+    val agentsServiceState = agentsContext?.service?.state?.collectAsState()?.value
+
+    LaunchedEffect(workspaceRepo) {
+        if (workspaceRepo != null) {
+            try {
+                val list = workspaceRepo.listProjects()
+                serverProjects = list
+                if (selectedTarget == null && list.isNotEmpty()) {
+                    selectedTarget = dev.damhopper.nativeapp.core.model.ProjectTargetRef(profileId = currentProfile?.id, project = list.first().name)
+                }
+            } catch (c: CancellationException) {
+                throw c
+            } catch (_: Exception) {}
+        }
+    }
+
+    LaunchedEffect(selectedTarget, apiClient, serverProjects) {
+        val target = selectedTarget ?: serverProjects.firstOrNull()?.let {
+            dev.damhopper.nativeapp.core.model.ProjectTargetRef(profileId = currentProfile?.id, project = it.name)
+        }
+        val client = apiClient
+        if (target != null && client != null) {
+            isLoadingFiles = true
+            try {
+                val fsText = client.get("/api/fs/list", mapOf("targetType" to "project", "project" to target.project, "path" to "."))
+                val fsList = dev.damhopper.nativeapp.core.transport.ProtocolJson.decodeFromString(
+                    dev.damhopper.nativeapp.features.files.ListResponseDto.serializer(), fsText
+                )
+                fileNodes = fsList.entries.map { entry ->
+                    dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState(
+                        path = entry.name,
+                        name = entry.name,
+                        isDirectory = entry.kind == "dir",
+                    )
+                }
+                val encodedProj = dev.damhopper.nativeapp.core.transport.ApiClient.encodePathSegment(target.project)
+                val diffText = client.get("/api/git/$encodedProj/diff")
+                val diffResponse = dev.damhopper.nativeapp.core.transport.ProtocolJson.decodeFromString(
+                    dev.damhopper.nativeapp.features.git.GitDiffResponse.serializer(), diffText
+                )
+                val staged = diffResponse.entries.filter { it.staged }.map { it.path }
+                val unstaged = diffResponse.entries.filter { !it.staged }.map { it.path }
+                fileChanges = dev.damhopper.nativeapp.ui.flow.FileChangeSummaryUiState(
+                    stagedCount = staged.size,
+                    unstagedCount = unstaged.size,
+                    stagedFiles = staged,
+                    unstagedFiles = unstaged,
+                )
+            } catch (c: CancellationException) {
+                throw c
+            } catch (_: Exception) {}
+            finally {
+                isLoadingFiles = false
+            }
+        }
+    }
+
+    val landingState = remember(
+        currentProfile,
+        hubSnapshot,
+        agentsServiceState,
+        activeWorkspaceState,
+        serverProjects,
+        fileNodes,
+        fileChanges,
+        isLoadingFiles,
+        searchQuery,
+        selectedTarget,
+        isAgentsDrawerOpen,
+        isFilesDrawerOpen,
+        isRightFileTreePinned,
+    ) {
+        dev.damhopper.nativeapp.ui.flow.AgentHubLandingProjection.project(
+            currentProfile = currentProfile,
+            hubSnapshot = hubSnapshot,
+            agentsState = agentsServiceState,
+            activeWorkspaceState = activeWorkspaceState,
+            serverProjects = serverProjects,
+            fileNodes = fileNodes,
+            fileChanges = fileChanges,
+            isLoadingFiles = isLoadingFiles,
+            searchQuery = searchQuery,
+            selectedTarget = selectedTarget,
+            isAgentsDrawerOpen = isAgentsDrawerOpen,
+            isFilesDrawerOpen = isFilesDrawerOpen,
+            isRightFileTreePinned = isRightFileTreePinned,
+        )
+    }
+
+    val callbacks = remember(landingState) {
+        object : dev.damhopper.nativeapp.ui.flow.AgentHubLandingCallbacks {
+            override fun onToggleAgentsSidebar() {
+                isAgentsDrawerOpen = !isAgentsDrawerOpen
+            }
+            override fun onToggleFilesSidebar() {
+                isFilesDrawerOpen = !isFilesDrawerOpen
+            }
+            override fun onTogglePinFileTree() {
+                isRightFileTreePinned = !isRightFileTreePinned
+            }
+            override fun onOpenNotifications() {
+                onOpenNotifications()
+            }
+            override fun onOpenSettings() {
+                onOpenSettings()
+            }
+            override fun onSwitchProfile() {
+                onSwitchProfile()
+            }
+            override fun onAgentFilterChange(filter: dev.damhopper.nativeapp.features.terminal.TerminalAgentsFilterSelection) {
+                agentsContext?.service?.setFilter(filter)
+            }
+            override fun onJumpToAgentTerminal(agent: dev.damhopper.nativeapp.ui.flow.AgentGroupItemUiState) {
+                isAgentsDrawerOpen = false
+                val owner = agent.target?.registration?.owner
+                val targetRef = if (owner != null) {
+                    dev.damhopper.nativeapp.core.model.ProjectTargetRef(
+                        profileId = owner.profileId,
+                        project = owner.project,
+                        worktreePath = owner.worktreePath,
+                    )
+                } else {
+                    hubSnapshot.terminalRows.firstOrNull { it.id == agent.targetTerminalId }?.projectTarget
+                }
+                if (agent.target != null) {
+                    coroutineScope.launch {
+                        agentsContext?.service?.activate(agent.target)
+                    }
+                }
+                onAction(
+                    dev.damhopper.nativeapp.features.workspace.AgentHubAction.SelectTerminal(
+                        terminalId = agent.targetTerminalId,
+                        profileId = currentProfile?.id,
+                        target = targetRef,
+                        incarnationExact = agent.incarnationExact.toString(),
+                    ),
+                )
+            }
+            override fun onRefreshAgents() {
+                agentsContext?.refreshAll?.invoke(dev.damhopper.nativeapp.features.terminal.TerminalAgentsRefreshReason.USER_RETRY)
+            }
+            override fun onOpenAgentSettings() {
+                onOpenSettings()
+            }
+            override fun onSearchQueryChange(query: String) {
+                searchQuery = query
+            }
+            override fun onOpenProjectPicker() {
+                onOpenProject()
+            }
+            override fun onSelectProjectForTree(target: dev.damhopper.nativeapp.core.model.ProjectTargetRef) {
+                selectedTarget = target
+                isFilesDrawerOpen = true
+            }
+            override fun onLaunchTerminalInProject(target: dev.damhopper.nativeapp.core.model.ProjectTargetRef) {
+                onLaunchTerminal(target)
+            }
+            override fun onOpenGitForProject(target: dev.damhopper.nativeapp.core.model.ProjectTargetRef) {
+                onOpenGit(target)
+            }
+            override fun onDismissZeroSessionProject(target: dev.damhopper.nativeapp.core.model.ProjectTargetRef) {
+                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.DismissZeroSessionProject(target))
+            }
+            override fun onOpenWorkspaceFiles() {
+                onAction(
+                    dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenFiles(
+                        dev.damhopper.nativeapp.core.model.FilesystemTargetRef.Workspace(profileId = currentProfile?.id),
+                    ),
+                )
+            }
+            override fun onOpenWorkspaceEditor() {
+                onAction(
+                    dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenEditor(
+                        fileRef = "",
+                        target = dev.damhopper.nativeapp.core.model.FilesystemTargetRef.Workspace(profileId = currentProfile?.id),
+                    ),
+                )
+            }
+            override fun onToggleFolder(path: String) {
+                val target = selectedTarget ?: serverProjects.firstOrNull()?.let {
+                    dev.damhopper.nativeapp.core.model.ProjectTargetRef(profileId = currentProfile?.id, project = it.name)
+                }
+                val client = apiClient
+                fileNodes = toggleNode(fileNodes, path, target, client, coroutineScope) { updated ->
+                    fileNodes = updated
+                }
+            }
+            override fun onOpenFileInEditor(target: dev.damhopper.nativeapp.core.model.ProjectTargetRef?, path: String) {
+                val fileTarget = if (target != null) {
+                    dev.damhopper.nativeapp.core.model.FilesystemTargetRef.Project(
+                        profileId = target.profileId,
+                        project = target.project,
+                        worktreePath = target.worktreePath,
+                    )
+                } else {
+                    dev.damhopper.nativeapp.core.model.FilesystemTargetRef.Workspace(profileId = currentProfile?.id)
+                }
+                onAction(dev.damhopper.nativeapp.features.workspace.AgentHubAction.OpenEditor(fileRef = path, target = fileTarget))
+            }
+            override fun onOpenChangesReview(target: dev.damhopper.nativeapp.core.model.ProjectTargetRef) {
+                onOpenGit(target)
+            }
+            override fun onCloseFilesSidebar() {
+                isFilesDrawerOpen = false
+            }
+        }
+    }
+
+    AgentHubLandingScreen(
+        state = landingState,
+        callbacks = callbacks,
+        modifier = modifier,
+    )
+}
+
+private fun toggleNode(
+    nodes: List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState>,
+    path: String,
+    target: dev.damhopper.nativeapp.core.model.ProjectTargetRef?,
+    client: ApiClient?,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onLoaded: (List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState>) -> Unit,
+): List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState> {
+    return nodes.map { node ->
+        if (node.path == path) {
+            val newExpanded = !node.isExpanded
+            if (newExpanded && node.children.isEmpty() && target != null && client != null) {
+                scope.launch {
+                    try {
+                        val fsText = client.get("/api/fs/list", mapOf("targetType" to "project", "project" to target.project, "path" to path))
+                        val fsList = dev.damhopper.nativeapp.core.transport.ProtocolJson.decodeFromString(
+                            dev.damhopper.nativeapp.features.files.ListResponseDto.serializer(), fsText
+                        )
+                        val children = fsList.entries.map { entry ->
+                            dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState(
+                                path = "$path/${entry.name}",
+                                name = entry.name,
+                                isDirectory = entry.kind == "dir",
+                            )
+                        }
+                        onLoaded(setChildren(nodes, path, children))
+                    } catch (_: Exception) {}
+                }
+            }
+            node.copy(isExpanded = newExpanded)
+        } else if (node.isDirectory && path.startsWith(node.path + "/")) {
+            node.copy(children = toggleNode(node.children, path, target, client, scope, onLoaded))
+        } else {
+            node
+        }
+    }
+}
+
+private fun setChildren(
+    nodes: List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState>,
+    path: String,
+    children: List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState>,
+): List<dev.damhopper.nativeapp.ui.flow.FileTreeNodeUiState> {
+    return nodes.map { node ->
+        if (node.path == path) {
+            node.copy(children = children, isExpanded = true)
+        } else if (node.isDirectory && path.startsWith(node.path + "/")) {
+            node.copy(children = setChildren(node.children, path, children))
+        } else {
+            node
+        }
+    }
+}
+
+@Composable
+private fun AgentHubProjectPickerModal(
+    profileName: String,
+    serverUrl: String?,
+    workspaceRepo: WorkspaceRepository?,
+    onClose: () -> Unit,
+    onSelectProject: (String) -> Unit,
+    onNavigateProfiles: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(DamHopperColors.Background.copy(alpha = 0.95f))
+                .padding(16.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Open Project",
+                        color = DamHopperColors.TextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Box(
+                        modifier = Modifier
+                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable(onClick = onClose)
+                            .padding(8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "✕ Close",
+                            color = DamHopperColors.Primary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+                ProjectListScreen(
+                    profileName = profileName,
+                    serverUrl = serverUrl,
+                    workspaceRepository = workspaceRepo,
+                    onNavigateProfiles = onNavigateProfiles,
+                    onSelectProject = onSelectProject,
+                    headerEntries = null,
+                    agents = null,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
