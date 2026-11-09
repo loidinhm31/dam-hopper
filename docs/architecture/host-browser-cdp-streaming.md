@@ -492,7 +492,38 @@ The streaming interface exposes two paired WebSocket routes:
 - **Socket Pairing:** Paired via `AttachmentManager` requiring identical `viewerId` and `subscriptionEpoch` with a 15-second wait timeout.
 - **Continuous Auth Supervisor:** Active sockets share a `CancellationToken` wired to the 5s live auth check; revocation aborts both connections immediately without waiting for stalled media writes.
 
-## 19. Qualification Status & Open Proof Obligations
+## 19. Viewer Client Decoder & Android-Web Input Subsystem
+
+The frontend client modules (`packages/ui/src/browser-host/`, `packages/ui/src/api/`) implement the viewer-facing decode pipeline and user input dispatch:
+
+### Typed Browser Client Identity & REST Transport (`browser-host-client.ts`, `browser-host-types.ts`)
+
+- **Connection Ownership Validation:** Every asynchronous request and ticket minting operation asserts connection validity (`assertValidConnection`), verifying profile ID and generation before and after network operations.
+- **Session Lifecycle & Management:** Typed REST calls manage capabilities, session creation, navigation, history, reloads, viewport adjustments, control lease acquisition/renewal/release, dialog responses, page search, selected text, and profile resets.
+- **Atomic Ticket Minting (`mintViewerAttachmentTickets`):** Fetches session state, validates incarnation and profile epoch, issues matching single-use capability tickets for media and control WebSockets, and constructs WebSocket endpoints with ticket subprotocols without persisting credentials in URLs or local storage.
+
+### Target-Scoped Binary Frame Parser (`frame-protocol.ts`)
+
+- **Header Validation:** Binary unpacker (`unpackBhjfFrame`) validates the 16-byte `BHJF` prefix, version 1, header length ($\le 1024$ bytes), payload length ($\le 2$ MiB), and canonical lowercase UUID fields.
+- **JPEG SOF0 Marker Inspection:** `parseJpegDimensions` parses image dimensions directly from JPEG Start-of-Frame markers ($\le 1920 \times 1080$, $\le 2,073,600$ pixels) without full pixel decompression or canvas allocation.
+- **Strict Sequence Counters:** Canonical decimal string validation (`validateDecimalSequence`) parses positive numeric sequence IDs (`profileEpoch`, `viewportEpoch`, `frameSeq`) as `bigint`.
+
+### Bounded Canvas Stream Controller (`stream-controller.ts`, `canvas-view.tsx`)
+
+- **1-Active + 1-Pending Decode Governor:** Canvas controller maintains at most one in-flight `createImageBitmap` decode and one pending compressed frame. Intermediate frames arriving during an active decode replace the pending slot and emit an immediate `frameDiscarded` (reason `replaced`) for the overwritten frame.
+- **Captured Originating Socket & Subscription:** ACKs and discards are transmitted strictly over the captured originating media WebSocket with the frame's admission subscription epoch. If the socket closes, no replacement traffic is sent over subsequent connections.
+- **Synchronous Privacy Blackening:** Triggering privacy mode (`setPrivacyMode(true)`) synchronously clears and blacks the canvas, advances the decode epoch to invalidate in-flight decode completions, cancels queued frames, and closes active media and control WebSockets.
+- **Visibility & Detachment Lifecycle:** Hiding the viewer (`setVisibility(false)`) pauses stream delivery, detaches demand, and closes both WebSockets. Resuming requires fresh capability tickets, a new subscription epoch, and paired WebSocket handshakes.
+- **ImageBitmap Cleanup:** Guarantees `ImageBitmap.close()` execution across normal render, exceptional draw, and disposal paths.
+
+### Virtual Pointer, Keyboard & IME Input Controller (`input-controller.ts`, `text-input-proxy.tsx`)
+
+- **Aspect-Fit Coordinate Transformation:** Maps canvas client coordinates to normalized image fractions $(u, v) \in [0.0, 1.0]$ based on letterbox aspect-fit calculations; pointer events falling within letterbox margins or with untrusted geometry (`inputTrusted: false`) are rejected.
+- **Lease Token Tracking & Held Input Cleanup:** Input messages carry the current 30-second control lease token and monotonic sequence counter (`inputSeq`). Loss of lease, blur, or disposal immediately sends synthetic release events (`releaseAllHeldInput`) to avoid stuck modifier keys or held mouse buttons.
+- **Pointer Move Coalescing:** Consecutive pointer move events within the same microtask coalesce into the latest coordinate, while discrete barriers (pointerDown, pointerUp, wheel) flush pending moves beforehand.
+- **Soft-Keyboard & IME Composition Proxy:** Focusable `TextInputProxy` manages virtual keyboard visibility on mobile and Android web, deduplicating Vietnamese and Japanese multi-stage IME compositions (`compositionstart`, `compositionend`, `beforeinput`) to prevent duplicate character insertions.
+
+## 20. Qualification Status & Open Proof Obligations
 
 Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) against real Google Chrome 157.0.8103.38:
 
@@ -514,6 +545,7 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Screencast Producer & Ingress | **PASS** | Dedicated Page session, serial `producerRun`, prompt exact-once CDP ACK, single replaceable candidate, JPEG SOF dimension validation, zero periodic screenshots, and 15s visible demand stop |
 | Binary Media Fanout & Credits | **PASS** | Immutable BHJF v1 fanout via Axum `Binary(Bytes)` with zero per-viewer JPEG copies, independent credit governor (max 10 FPS, 2 outstanding + 1 pending), originating socket subscription authority, 30s outstanding timeout, 5s write deadline, pause detaching demand, and max 2 global viewers |
 | Stream Memory Admission | **PASS** | Hard 128 MiB global memory reservation ceiling across ingress, commands, raw gateway, and frames; `TrackedBhjfFrame` shared RAII reservation held until last clone drops; bounded stream diagnostics counters and ring buffer |
+| Viewer Client Decoder & Input | **PASS** | 1-active + 1-pending frame decode governor, captured subscription credit ACKs, synchronous privacy blackening, letterbox coordinate mapping, and IME deduplication. Verified by 60 unit tests, 8 Chromium browser tests, clean UI build, and clean E2E typecheck. User approved after Cycle 3 (score 4/10; technical carryovers C1, C3, W1–W8). |
 | Native Browser Zoom | **UNVERIFIED** | Unreachable via standard CDP in headless Chromium 157; `inputTrusted: false` enforced |
 | Windows Containment | **FAIL-CLOSED** | Windows Job Object containment unqualified; non-Unix launch returns `ContainmentUnavailable` |
 
@@ -521,6 +553,18 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 
 - **Phase 05 Finalized (2026-11-09):** The user explicitly approved the code review with noted issues after Cycle 3 (70/70 checks passing across screencast, fanout, bounds, regressions, build, and TypeScript compile suites). Phase 06 (Frame Assembly & Decoder Pipeline) is unblocked.
 - **Test Evidence:** Verified by real Google Chrome screencast tests (`server/tests/browser_host_screencast.rs` [3/3]), media fanout and credit governor tests (`server/tests/browser_host_media.rs` [7/7]), and memory admission bounds tests (`server/tests/browser_host_bounds.rs` [3/3]), alongside 57 regression tests.
+
+### Phase 06 Verification Summary
+
+- **Phase 06 Finalized (2026-11-09):** The user explicitly approved the code review with noted issues after Cycle 3 (70/70 validation checks passing across unit, Chromium browser component, package build, and E2E typecheck suites). Phase 07 (OS Shell Cutover & Legacy Frame Deletion) is unblocked.
+- **Test Evidence:**
+  - Unit tests (60 passed, 0 failed, 0 skipped): `src/api/browser-host-client.test.ts` (8), `src/browser-host/frame-protocol.test.ts` (16), `src/browser-host/stream-controller.test.ts` (21), `src/browser-host/input-controller.test.ts` (15).
+  - Chromium browser tests (8 passed, 0 failed, 0 skipped): `browser-tests/host-browser-decoder.browser.tsx` (2), `browser-tests/host-browser-input.browser.tsx` (6).
+  - TypeScript build & typechecks (2 passed): `pnpm --filter @dam-hopper/ui build` (clean, 0 errors), `pnpm --filter @dam-hopper/ui test:e2e:typecheck` (clean, 0 errors).
+- **Noted Technical Carryovers:** Cycle 3 code review scored 4/10; unresolved carryovers tracked for subsequent phases include:
+  - C1: Live owner and cache boundary fences to eliminate potential stale private pixel redrawing on attachment changes.
+  - C3: Release ordering and ambient identity on the leased input stream to prevent command sequence corruption and dropped releases under queue saturation.
+  - W1–W8: Input trust fencing against stale geometry, canonical numeric counter precision, exactly-once IME text commit state machine, draw/decode exceptional bitmap cleanup, REST DTO schema alignment, explicit copy/find/touch controls, and half-pair transport teardown bounds.
 
 ### Finalization & Roadmap Status
 
@@ -530,7 +574,7 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 - **Teardown Timing Under Congestion:** While `write_with_cancel` races auth cancellation and absolute deadline against in-flight writes, actual kernel socket buffer draining and upstream termination remain subject to OS scheduler scheduling and network latency; immediate teardown is bounded by local runtime aborts, not an absolute wall-clock guarantee.
 - **Windows Platform Boundary:** Windows process containment remains unimplemented and fails closed with `ContainmentUnavailable`.
 - **Native Engine Zoom:** Headless Chromium zoom cannot be verified via standard CDP without layout distortion; non-unit zoom geometry remains flagged `inputTrusted: false`.
-## 20. Source Map
+## 21. Source Map
 
 | Responsibility | Path |
 | --- | --- |
@@ -568,3 +612,16 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | E2E Qualification Harness Fixture | `packages/ui/e2e/fixtures/browser-host-qualification.ts` |
 | Playwright Compatibility Spec | `packages/ui/e2e/os-host-browser/compatibility.spec.ts` |
 | Agent CDP Qualification Spec | `packages/ui/e2e/os-host-browser/agent.spec.ts` |
+| Browser Host REST & Ticket Client | `packages/ui/src/api/browser-host-client.ts` |
+| Browser Host Client & Wire Types | `packages/ui/src/api/browser-host-types.ts` |
+| Binary BHJF Frame Codec & Parser | `packages/ui/src/browser-host/frame-protocol.ts` |
+| Bounded Canvas Stream Controller | `packages/ui/src/browser-host/stream-controller.ts` |
+| Bounded Canvas View Component | `packages/ui/src/browser-host/canvas-view.tsx` |
+| Virtual Input Controller | `packages/ui/src/browser-host/input-controller.ts` |
+| Soft-Keyboard & IME Text Proxy | `packages/ui/src/browser-host/text-input-proxy.tsx` |
+| Browser Host Client Test Suite | `packages/ui/src/api/browser-host-client.test.ts` |
+| BHJF Frame Protocol Test Suite | `packages/ui/src/browser-host/frame-protocol.test.ts` |
+| Stream Controller Test Suite | `packages/ui/src/browser-host/stream-controller.test.ts` |
+| Input Controller Test Suite | `packages/ui/src/browser-host/input-controller.test.ts` |
+| Chromium Decoder Browser Test | `packages/ui/browser-tests/host-browser-decoder.browser.tsx` |
+| Chromium Input Browser Test | `packages/ui/browser-tests/host-browser-input.browser.tsx` |

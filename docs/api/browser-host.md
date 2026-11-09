@@ -754,3 +754,32 @@ Server pushes JSON text notifications for modal interactions and session state:
 | `dialogClosed` | `dialogId` | Dialog dismissed or handled. |
 | `leaseRevoked` | `reason` | Input control lease expired, revoked, or preempted. |
 | `error` | `message` | Processing or rate-limit error. |
+
+---
+
+## 9. Viewer Client SDK (`@dam-hopper/ui`)
+
+Frontend client API and stream controller exports (`packages/ui/src/api/browser-host-client.ts`, `packages/ui/src/browser-host/`):
+
+### REST & Ticket Client Functions
+
+- `getBrowserCapabilities(owner, signal?)`: Fetches capabilities, bounds, engine qualification, and profile epoch.
+- `listBrowserSessions(owner, signal?)` / `getBrowserSession(owner, sessionId, signal?)`: Queries active sessions.
+- `createBrowserSession(owner, req, signal?)`: Creates new browser session with idempotent `creationKey`.
+- `closeBrowserSession(owner, sessionId, signal?)`: Closes and unregisters browser session.
+- `navigateBrowser(owner, sessionId, req)` / `historyBrowser(...)` / `reloadBrowser(...)`: Controls navigation state.
+- `setBrowserViewport(owner, sessionId, req)`: Sets CSS layout viewport and DPR under lease.
+- `acquireBrowserControl(owner, sessionId, req)` / `renewBrowserControl(...)` / `releaseBrowserControl(...)`: Manages 30s cooperative input lease.
+- `respondBrowserDialog(owner, sessionId, req)`: Dismisses or confirms native JavaScript dialog.
+- `findInBrowserPage(owner, sessionId, req)`: Searches text in page ($\le 256$ chars).
+- `getBrowserSelectedText(owner, sessionId, leaseToken, signal?)`: Retrieves currently selected text ($\le 64$ KiB).
+- `issueAttachmentTicket(owner, req, signal?)`: Mints single-use capability ticket.
+- `resetBrowserProfile(owner, req, signal?)`: Idempotent profile data wipe with tombstone fence.
+- `mintViewerAttachmentTickets(owner, sessionId, incarnation, profileEpoch)`: Atomically mints matching media and control capability tickets and formats WebSocket URLs with ticket subprotocols.
+
+### Frame Parser & Controllers
+
+- `unpackBhjfFrame(buffer)`: Validates 16-byte `BHJF` prefix, JSON header, and JPEG SOF0 dimensions ($\le 1920 \times 1080$).
+- `BrowserStreamController`: Persistent canvas controller governing 1-active-decode + 1-pending-frame, captured-socket ACKs, synchronous privacy blackening (`setPrivacyMode`), and visibility detachment (`setVisibility`).
+- `BrowserInputController`: Letterbox coordinate mapping to $[0.0, 1.0]$, microtask move coalescing, and held-input auto-release.
+- `TextInputProxy`: Manages virtual keyboard focus and multi-stage IME composition deduplication.

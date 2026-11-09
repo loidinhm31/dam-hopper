@@ -6,8 +6,8 @@
 - Relevant bounded evidence: `reports/viewer-boundaries.md:35–74; reports/design-direction.md:43–54`. Research recommendations superseded by architecture contract where explicitly stated.
 
 ## Overview
-- Priority: P2. Status: pending. Effort: not-estimated. Planning only; commands below are future obligations, not exercised checks.
-- Deliverable: Build owner-fenced canvas decoder and Android-web input.
+- Priority: P2. Status: DONE (2026-11-09). Effort: not-estimated.
+- Deliverable: Build owner-fenced canvas decoder and Android-web input. Marked DONE per user approval with noted issues after Cycle 3 (2026-11-09; score 4/10; 70 validation checks passing across unit [60/60 across browser-host-client, frame-protocol, stream-controller, input-controller], Chromium browser tests [8/8 across host-browser-decoder and host-browser-input], UI build, and E2E typecheck). Ready to proceed to Phase 07; Phase 07 unblocked. Technical carryovers C1, C3, and W1–W8 tracked into Phases 07, 08, and 09.
 
 ## Key insights
 WebSocket has no receive backpressure; bounded server credits require explicit discarded dispositions and client decode limits. React per-frame state would create needless work.
@@ -178,9 +178,9 @@ Exactly one fence; task IDs/markers stable across revisions. No tasks.json or hy
 ]
 ```
 
-- [ ] <!-- evcrate-task:bind-viewer-transport --> Implement typed Browser client identity tickets and parser
-- [ ] <!-- evcrate-task:render-bounded-canvas --> Implement persistent canvas controller and exact frame dispositions
-- [ ] <!-- evcrate-task:implement-web-input --> Implement precise pointer keyboard IME copy and find controls
+- [x] <!-- evcrate-task:bind-viewer-transport --> Implement typed Browser client identity tickets and parser
+- [x] <!-- evcrate-task:render-bounded-canvas --> Implement persistent canvas controller and exact frame dispositions
+- [x] <!-- evcrate-task:implement-web-input --> Implement precise pointer keyboard IME copy and find controls
 
 ## Success criteria
 - Every task acceptance above is observed with applicable compile/typecheck, behavioral tests and real smoke evidence; missing or failed proof keeps task incomplete.
@@ -196,8 +196,11 @@ No target HTML/form/password value capture; clipboard paste text only; canvas la
 - Do not store/log bearer/tickets/raw loopback endpoints, real site credentials or sensitive page/selection payload in diagnostics/evidence.
 
 ## Next steps
-Phase07 starts only after implement-web-input and instrument-stream-bounds; exclusive sequential integration owner receives both contracts.
+Phase 06 is DONE (2026-11-09). Phase 07 is unblocked. Phase 07 (Integrate root Browser lifecycle and retire iframe path) joins completed producer and viewer streams.
+- User approved Phase 06 after Cycle 3 (score 4/10; 70 validation checks passing). Technical carryovers for subsequent phases:
+  - **Phase 07 (Integrate root Browser lifecycle and retire iframe path):** C1 owner/target/session identity lifecycle and cache blackening on window/profile change; C3 input release ordering and queue flushing before teardown; W1 input trust gating; W2 counter precision/DTO alignment; W3 IME/text commit deduplication; W4 decode/draw error discard handling; W5 REST capability/reset schema normalization; W7 strict protocol error teardown; W8 half-pair lifecycle teardown.
+  - **Phase 08 (Secure selection artifacts and confirmed logout reset):** W5 completed reset DTO verification; W6 selection artifacts / copy / find integration; confirmed logout reset flow.
+  - **Phase 09 (Qualify full app security platforms and efficiency):** Full multi-target soak testing; real physical Android SPA verification (IME virtual keyboard, touch gestures, letterbox mapping); complete end-to-end OS privacy proof; global memory ceiling validation across backend and client.
 - Parent owns independent plan review/optional validation and implementation permission. This phase text neither executes tasks nor supplies approval.
-
 ## Unresolved questions
 - No additional product interview here. Exact compatibility/platform/performance and human observations remain future gates where applicable; their absence is not a pass.
