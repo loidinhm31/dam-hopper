@@ -27,6 +27,7 @@ import {
   type TextInputProxyHandle,
 } from "../browser-host/text-input-proxy.js";
 import {
+  acquireBrowserControl,
   createBrowserSession,
   getBrowserCapabilities,
   mintViewerAttachmentTickets,
@@ -646,10 +647,34 @@ function ParkedBrowserStreamItem({
   }, [activeDialog, owner, win.id]);
 
   // Input event dispatchers to input controller
-  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-    inputControllerRef.current?.handlePointerDown(e);
-  }, []);
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      textInputProxyRef.current?.focus();
 
+      const latestWin = useWindowStore.getState().session.windows[win.id];
+      if (!latestWin?.appState?.isController) {
+        const activeViewerId =
+          (latestWin?.appState?.viewerId as string | undefined) ?? win.id;
+        const sessionId = latestWin?.appState?.sessionId as string | undefined;
+        if (sessionId) {
+          void acquireBrowserControl(owner, sessionId, {
+            viewerId: activeViewerId,
+            holderKind: "human",
+          })
+            .then((resp) => {
+              useWindowStore.getState().updateAppState(win.id, {
+                isController: true,
+                leaseToken: resp.leaseToken,
+              });
+            })
+            .catch(() => {});
+        }
+      }
+
+      inputControllerRef.current?.handlePointerDown(e);
+    },
+    [owner, win.id],
+  );
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     inputControllerRef.current?.handlePointerUp(e);
   }, []);

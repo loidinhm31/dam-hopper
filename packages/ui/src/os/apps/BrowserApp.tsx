@@ -16,7 +16,9 @@ import {
   acquireBrowserControl,
   historyBrowser,
   navigateBrowser,
+  releaseBrowserControl,
   reloadBrowser,
+  renewBrowserControl,
 } from "@/api/browser-host-client.js";
 import {
   collectHostTerminalCandidates,
@@ -305,6 +307,41 @@ function BrowserResourceView({
       console.warn("[BrowserApp] Acquire control failed:", err);
     }
   }, [owner, sessionId, window.id, window.appState?.viewerId]);
+  const handleReleaseControl = useCallback(async () => {
+    if (!sessionId || !leaseToken) return;
+    try {
+      await releaseBrowserControl(owner, sessionId, { leaseToken });
+    } catch (err) {
+      console.warn("[BrowserApp] Release control failed:", err);
+    } finally {
+      useWindowStore.getState().updateAppState(window.id, {
+        isController: false,
+        leaseToken: undefined,
+      });
+    }
+  }, [owner, sessionId, leaseToken, window.id]);
+
+  // Periodic lease renewal (every 10s within 30s TTL) while active controller
+  useEffect(() => {
+    if (!isController || !leaseToken || !sessionId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const resp = await renewBrowserControl(owner, sessionId, { leaseToken });
+        useWindowStore.getState().updateAppState(window.id, {
+          leaseToken: resp.leaseToken,
+        });
+      } catch (err) {
+        console.warn("[BrowserApp] Lease renewal failed, reverting to view-only:", err);
+        useWindowStore.getState().updateAppState(window.id, {
+          isController: false,
+          leaseToken: undefined,
+        });
+      }
+    }, 10_000);
+
+    return () => clearInterval(interval);
+  }, [isController, leaseToken, owner, sessionId, window.id]);
 
   // Discover live terminal candidates for current owner
   const refreshTerminalCandidates = useCallback(async () => {
@@ -462,12 +499,23 @@ function BrowserResourceView({
 
         {/* View-only vs Controller Indicator */}
         {isController ? (
-          <span
-            data-testid="browser-controller-badge"
-            className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-500/20 text-green-400 border border-green-500/30"
-          >
-            Controlling
-          </span>
+          <div className="flex items-center gap-1">
+            <span
+              data-testid="browser-controller-badge"
+              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-500/20 text-green-400 border border-green-500/30"
+            >
+              Controlling
+            </span>
+            <button
+              type="button"
+              data-testid="browser-release-control-btn"
+              onClick={handleReleaseControl}
+              className="px-2 py-0.5 rounded text-[10px] font-medium bg-[var(--color-surface-2)] hover:bg-[var(--color-surface-3)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] border border-[var(--color-border)]"
+              title="Release control to view-only mode"
+            >
+              Release
+            </button>
+          </div>
         ) : (
           <div className="flex items-center gap-1">
             <span
