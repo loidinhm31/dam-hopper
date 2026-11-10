@@ -38,14 +38,13 @@ function BrowserTargetChooser({
   const [error, setError] = useState<string | null>(null);
 
   const handleOpen = () => {
-    const trimmed = url.trim();
+    let trimmed = url.trim();
     if (!trimmed) {
       setError("Please enter a URL for the browser preview");
       return;
     }
     if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
-      setError("URL must start with http:// or https://");
-      return;
+      trimmed = `https://${trimmed}`;
     }
     try {
       new URL(trimmed);
@@ -220,8 +219,11 @@ function BrowserResourceView({
 
   // Navigation callbacks
   const handleNavigate = useCallback(async () => {
-    const trimmed = addressInput.trim();
+    let trimmed = addressInput.trim();
     if (!trimmed || !sessionId) return;
+    if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+      trimmed = `https://${trimmed}`;
+    }
     try {
       const resp = await navigateBrowser(owner, sessionId, {
         url: trimmed,

@@ -117,6 +117,7 @@ impl fmt::Display for SessionStatus {
 pub struct ViewportRequest {
     pub width: u32,
     pub height: u32,
+    #[serde(alias = "deviceScaleFactor")]
     pub dpr: f64,
 }
 

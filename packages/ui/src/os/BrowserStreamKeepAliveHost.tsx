@@ -7,6 +7,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
 import { useLockScreenStore } from "@/stores/lock-screen.js";
 import { generateUUID } from "../lib/utils.js";
 import { useWindowStore } from "./window-store.js";
@@ -30,6 +31,7 @@ import {
   getBrowserCapabilities,
   mintViewerAttachmentTickets,
   respondBrowserDialog,
+  type ViewerAttachmentCredentials,
 } from "../api/browser-host-client.js";
 import type {
   ServerControlEvent,
@@ -255,8 +257,9 @@ function ParkedBrowserStreamItem({
   window: win,
   parkingHost,
 }: ParkedBrowserStreamItemProps) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null);
+  const [canvasEl, setCanvasEl] = useState<HTMLCanvasElement | null>(null);
+  const pendingCredsRef = useRef<ViewerAttachmentCredentials | null>(null);
   const textInputProxyRef = useRef<TextInputProxyHandle | null>(null);
   const streamControllerRef = useRef<BrowserStreamController | null>(null);
   const inputControllerRef = useRef<BrowserInputController | null>(null);
@@ -300,19 +303,42 @@ function ParkedBrowserStreamItem({
     };
   }, [win.id]);
 
+  // Imperatively create host element inside parkingHost so React never manages hostEl's parent
+  useLayoutEffect(() => {
+    const el = document.createElement("div");
+    el.setAttribute("data-os-browser-stream-container", win.id);
+    el.setAttribute("data-testid", `browser-stream-container-${win.id}`);
+    el.className = "relative w-full h-full bg-black overflow-hidden select-none";
+    el.style.width = "100%";
+    el.style.height = "100%";
+    parkingHost.appendChild(el);
+    setHostEl(el);
+
+    return () => {
+      el.remove();
+      setHostEl(null);
+    };
+  }, [parkingHost, win.id]);
+
   // Reparent container node between slot.element and parkingHost
   useLayoutEffect(() => {
-    const node = containerRef.current;
-    if (!node) return;
+    if (!hostEl) return;
 
     const destination = slot?.element ?? parkingHost;
-    if (destination && node.parentElement !== destination) {
-      destination.appendChild(node);
+    if (destination && hostEl.parentElement !== destination) {
+      destination.appendChild(hostEl);
     }
-  }, [slot?.element, parkingHost]);
+  }, [slot?.element, parkingHost, hostEl]);
 
   // Derived effective visibility
   const isEffectiveVisible = Boolean(slot?.isVisible && slot?.element && !isSuppressed);
+
+  // Synchronous style updates for suppression and visibility
+  useLayoutEffect(() => {
+    if (!hostEl) return;
+    hostEl.style.pointerEvents = isSuppressed ? "none" : "auto";
+    hostEl.style.visibility = isEffectiveVisible ? "visible" : "hidden";
+  }, [hostEl, isSuppressed, isEffectiveVisible]);
 
   // Synchronous privacy / visibility updates to stream controller
   useLayoutEffect(() => {
@@ -332,12 +358,11 @@ function ParkedBrowserStreamItem({
 
   // Initialize controllers when canvas is ready
   useLayoutEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvasEl) return;
 
     if (!streamControllerRef.current) {
       const streamCtrl = new BrowserStreamController({
-        canvas,
+        canvas: canvasEl,
         onGeometryChange: () => {},
         onControlEvent: (event: ServerControlEvent) => {
           if (event.kind === "dialogOpened") {
@@ -371,6 +396,10 @@ function ParkedBrowserStreamItem({
 
       streamControllerRef.current = streamCtrl;
       setStreamController(streamCtrl);
+
+      if (pendingCredsRef.current) {
+        streamCtrl.attach(pendingCredsRef.current);
+      }
     }
 
     if (!inputControllerRef.current) {
@@ -398,7 +427,7 @@ function ParkedBrowserStreamItem({
       inputControllerRef.current = inputCtrl;
       setInputController(inputCtrl);
     }
-  }, [win.id, win.ctx.profileId]);
+  }, [canvasEl, win.id, win.ctx.profileId]);
 
   // Server session connection / creation lifecycle
   useEffect(() => {
@@ -466,11 +495,20 @@ function ParkedBrowserStreamItem({
               title: created.title,
               navigationRevision: created.navigationRevision ?? 1,
             });
+            // The state update triggers a re-render with the new sessionId,
+            // which handles minting tickets without racing against this effect instance.
+            return;
           } catch (createErr) {
-            console.warn(
-              "[BrowserStream] Session creation request skipped/failed in current environment:",
-              createErr,
-            );
+            if (
+              !isCancelled &&
+              !abortCtrl.signal.aborted &&
+              (createErr as Error)?.name !== "AbortError"
+            ) {
+              console.warn(
+                "[BrowserStream] Session creation request skipped/failed in current environment:",
+                createErr,
+              );
+            }
             return;
           }
         }
@@ -486,6 +524,7 @@ function ParkedBrowserStreamItem({
             );
 
             if (isCancelled) return;
+            pendingCredsRef.current = creds;
 
             useWindowStore.getState().updateAppState(win.id, {
               viewerId: creds.viewerId,
@@ -495,10 +534,16 @@ function ParkedBrowserStreamItem({
               streamControllerRef.current.attach(creds);
             }
           } catch (ticketErr) {
-            console.warn(
-              "[BrowserStream] Ticket minting skipped/failed in current environment:",
-              ticketErr,
-            );
+            if (
+              !isCancelled &&
+              !abortCtrl.signal.aborted &&
+              (ticketErr as Error)?.name !== "AbortError"
+            ) {
+              console.warn(
+                "[BrowserStream] Ticket minting skipped/failed in current environment:",
+                ticketErr,
+              );
+            }
           }
         }
       } catch (err) {
@@ -555,13 +600,9 @@ function ParkedBrowserStreamItem({
     prevEffectiveVisibleRef.current = isEffectiveVisible;
   }, [isEffectiveVisible, owner, win.id]);
 
-  // Cleanup on final component unmount (when window is closed)
+  // Cleanup controllers on final component unmount (when window is closed)
   useEffect(() => {
-    const node = containerRef.current;
     return () => {
-      if (node?.parentElement) {
-        node.parentElement.removeChild(node);
-      }
       streamControllerRef.current?.dispose();
       inputControllerRef.current?.dispose();
       streamControllerRef.current = null;
@@ -629,42 +670,32 @@ function ParkedBrowserStreamItem({
     e.preventDefault();
   }, []);
 
-  return (
-    <div
-      ref={containerRef}
-      data-os-browser-stream-container={win.id}
-      data-testid={`browser-stream-container-${win.id}`}
-      className="relative w-full h-full bg-black overflow-hidden select-none"
-      style={{
-        width: "100%",
-        height: "100%",
-        pointerEvents: isSuppressed ? "none" : "auto",
-        visibility: isEffectiveVisible ? "visible" : "hidden",
-      }}
+  if (!hostEl) return null;
+
+  return createPortal(
+    <CanvasView
+      ref={setCanvasEl}
+      controller={streamController}
+      onCanvasPointerDown={handlePointerDown}
+      onCanvasPointerUp={handlePointerUp}
+      onCanvasPointerMove={handlePointerMove}
+      onCanvasPointerCancel={handlePointerCancel}
+      onCanvasWheel={handleWheel}
+      onCanvasContextMenu={handleContextMenu}
     >
-      <CanvasView
-        ref={canvasRef}
-        controller={streamController}
-        onCanvasPointerDown={handlePointerDown}
-        onCanvasPointerUp={handlePointerUp}
-        onCanvasPointerMove={handlePointerMove}
-        onCanvasPointerCancel={handlePointerCancel}
-        onCanvasWheel={handleWheel}
-        onCanvasContextMenu={handleContextMenu}
-      >
-        <TextInputProxy
-          ref={textInputProxyRef}
-          controller={inputController}
+      <TextInputProxy
+        ref={textInputProxyRef}
+        controller={inputController}
+      />
+      {activeDialog && (
+        <BrowserDialogModal
+          dialog={activeDialog}
+          onConfirm={handleDialogConfirm}
+          onCancel={handleDialogCancel}
         />
-        {activeDialog && (
-          <BrowserDialogModal
-            dialog={activeDialog}
-            onConfirm={handleDialogConfirm}
-            onCancel={handleDialogCancel}
-          />
-        )}
-      </CanvasView>
-    </div>
+      )}
+    </CanvasView>,
+    hostEl,
   );
 }
 
