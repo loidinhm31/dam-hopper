@@ -286,6 +286,92 @@ impl ScreencastProducer {
         Ok(session_id)
     }
 
+    /// Applies Chrome identity, focus emulation, document-start anti-detection preload, and
+    /// cross-origin OOPIF (`iframe`) stealth propagation before the first managed navigation.
+    pub async fn apply_stealth_and_focus(&self, session_id: &str) -> Result<(), CdpError> {
+        use super::cdp::CdpTargetEvent;
+        use super::stealth::ChromeIdentity;
+
+        let version_raw = self
+            .cdp_client
+            .send_command("Browser.getVersion", None, None)
+            .await
+            .ok()
+            .and_then(|v| {
+                v.get("userAgent")
+                    .or_else(|| v.get("product"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            });
+        let identity = ChromeIdentity::from_version_str(version_raw.as_deref());
+        let ua_params = identity.user_agent_override_params();
+        apply_stealth_to_session(&self.cdp_client, session_id, &ua_params).await?;
+
+        let mut target_events = self.cdp_client.subscribe_target_events();
+        self.cdp_client
+            .send_command(
+                "Target.setAutoAttach",
+                Some(serde_json::json!({
+                    "autoAttach": true,
+                    "waitForDebuggerOnStart": false,
+                    "flatten": true,
+                    "filter": [{ "type": "iframe" }, { "exclude": true }],
+                })),
+                Some(session_id),
+            )
+            .await?;
+        let weak_client = Arc::downgrade(&self.cdp_client);
+        tokio::spawn(async move {
+            loop {
+                match target_events.recv().await {
+                    Ok(ev) => {
+                        if let CdpTargetEvent::ChildAttached {
+                            session_id: child_sid,
+                            info,
+                            waiting_for_debugger,
+                            ..
+                        } = &*ev
+                        {
+                            let Some(client) = weak_client.upgrade() else {
+                                break;
+                            };
+                            if info.target_type == "iframe" {
+                                let _ = client
+                                    .send_command("Page.enable", None, Some(child_sid))
+                                    .await;
+                                let _ = apply_stealth_to_session(&client, child_sid, &ua_params).await;
+                                let _ = client
+                                    .send_command(
+                                        "Target.setAutoAttach",
+                                        Some(serde_json::json!({
+                                            "autoAttach": true,
+                                            "waitForDebuggerOnStart": false,
+                                            "flatten": true,
+                                            "filter": [{ "type": "iframe" }, { "exclude": true }],
+                                        })),
+                                        Some(child_sid),
+                                    )
+                                    .await;
+                            }
+                            if *waiting_for_debugger {
+                                let _ = client
+                                    .send_command(
+                                        "Runtime.runIfWaitingForDebugger",
+                                        None,
+                                        Some(child_sid),
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        Ok(())
+    }
+
     /// Register or update viewer demand for a subscription epoch.
     pub async fn register_viewer_demand(
         &self,
@@ -965,6 +1051,43 @@ impl ScreencastProducer {
     }
 }
 
+async fn apply_stealth_to_session(
+    client: &CdpClient,
+    session_id: &str,
+    ua_params: &serde_json::Value,
+) -> Result<(), CdpError> {
+    use super::stealth::ANTI_DETECTION_SCRIPT;
+    client
+        .send_command(
+            "Emulation.setFocusEmulationEnabled",
+            Some(serde_json::json!({ "enabled": true })),
+            Some(session_id),
+        )
+        .await?;
+    client
+        .send_command(
+            "Emulation.setUserAgentOverride",
+            Some(ua_params.clone()),
+            Some(session_id),
+        )
+        .await?;
+    client
+        .send_command(
+            "Page.addScriptToEvaluateOnNewDocument",
+            Some(serde_json::json!({ "source": ANTI_DETECTION_SCRIPT })),
+            Some(session_id),
+        )
+        .await?;
+    client
+        .send_command(
+            "Runtime.evaluate",
+            Some(serde_json::json!({ "expression": ANTI_DETECTION_SCRIPT })),
+            Some(session_id),
+        )
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod request_policy_tests {
     use super::*;
@@ -1285,5 +1408,141 @@ mod request_policy_tests {
         ));
         browser.push.send(paused("still-denied", "http://localhost:5175/denied", "Fetch")).unwrap();
         assert_eq!(next_command(&mut browser).await["method"], "Fetch.failRequest");
+    }
+
+    #[tokio::test]
+    async fn stealth_setup_applies_to_page_and_attached_oopif_and_sanitizes_worker_headers() {
+        let mut browser = mock_browser(false).await;
+        install(&browser).await;
+        assert_eq!(next_command(&mut browser).await["method"], "Fetch.enable");
+
+        let producer = ScreencastProducer::new(
+            Uuid::new_v4().to_string(),
+            Uuid::new_v4().to_string(),
+            1,
+            1,
+            browser.client.clone(),
+            "PAGE-TARGET".to_string(),
+            TargetGeometry {
+                css_width: 1280.0,
+                css_height: 900.0,
+                dpr: 1.0,
+                offset_top: 0.0,
+                scroll_x: 0.0,
+                scroll_y: 0.0,
+                page_scale: 1.0,
+                visual_offset_x: 0.0,
+                visual_offset_y: 0.0,
+            },
+        );
+        let page_sid = producer.ensure_page_session().await.unwrap();
+        for expected in [
+            "Target.attachToTarget",
+            "Page.enable",
+            "Emulation.setDeviceMetricsOverride",
+        ] {
+            assert_eq!(next_command(&mut browser).await["method"], expected);
+        }
+        producer.apply_stealth_and_focus(&page_sid).await.unwrap();
+        for expected in [
+            "Browser.getVersion",
+            "Emulation.setFocusEmulationEnabled",
+            "Emulation.setUserAgentOverride",
+            "Page.addScriptToEvaluateOnNewDocument",
+            "Runtime.evaluate",
+            "Target.setAutoAttach",
+        ] {
+            let cmd = next_command(&mut browser).await;
+            assert_eq!(cmd["method"], expected);
+            if expected != "Browser.getVersion" {
+                assert_eq!(cmd["sessionId"], page_sid);
+            }
+        }
+
+        // Simulate cross-origin Cloudflare Turnstile OOPIF attachment
+        browser
+            .push
+            .send(json!({
+                "method": "Target.attachedToTarget",
+                "sessionId": page_sid,
+                "params": {
+                    "sessionId": "OOPIF-SESSION-1",
+                    "waitingForDebugger": true,
+                    "targetInfo": {
+                        "targetId": "OOPIF-TARGET-1",
+                        "type": "iframe",
+                        "url": "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile"
+                    }
+                }
+            }))
+            .unwrap();
+        for expected in [
+            "Page.enable",
+            "Emulation.setFocusEmulationEnabled",
+            "Emulation.setUserAgentOverride",
+            "Page.addScriptToEvaluateOnNewDocument",
+            "Runtime.evaluate",
+            "Target.setAutoAttach",
+            "Runtime.runIfWaitingForDebugger",
+        ] {
+            let cmd = next_command(&mut browser).await;
+            assert_eq!(cmd["method"], expected);
+            assert_eq!(cmd["sessionId"], "OOPIF-SESSION-1");
+        }
+
+        // Worker/subresource request carrying HeadlessChrome headers gets sanitized in Fetch.continueRequest
+        browser
+            .push
+            .send(json!({
+                "method": "Fetch.requestPaused",
+                "params": {
+                    "requestId": "worker-req-1",
+                    "request": {
+                        "url": "http://localhost:5173/worker-check",
+                        "headers": {
+                            "User-Agent": "Mozilla/5.0 HeadlessChrome/140.0.1.2 Safari/537.36",
+                            "sec-ch-ua": "\"HeadlessChrome\";v=\"140\""
+                        }
+                    },
+                    "resourceType": "Script"
+                }
+            }))
+            .unwrap();
+        let decision = next_command(&mut browser).await;
+        assert_eq!(decision["method"], "Fetch.continueRequest");
+        assert_eq!(decision["params"]["requestId"], "worker-req-1");
+        let headers = decision["params"]["headers"].as_array().expect("rewritten headers");
+        assert!(headers.iter().any(|h| h["name"] == "User-Agent" && h["value"].as_str().unwrap().contains("Chrome/140.0.0.0")));
+        assert!(headers.iter().any(|h| h["name"] == "sec-ch-ua" && h["value"].as_str().unwrap().contains("Google Chrome")));
+
+        // Oversized header override exceeding MAX_COMMAND_BYTES fails closed and triggers containment
+        let huge = "A".repeat(12_000);
+        browser
+            .push
+            .send(json!({
+                "method": "Fetch.requestPaused",
+                "params": {
+                    "requestId": "worker-req-oversized",
+                    "request": {
+                        "url": "http://localhost:5173/huge",
+                        "headers": {
+                            "User-Agent": format!("HeadlessChrome/140.0.0.0 {huge}")
+                        }
+                    },
+                    "resourceType": "Script"
+                }
+            }))
+            .unwrap();
+        timeout(Duration::from_secs(2), async {
+            while !browser.client.is_closed() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            producer.apply_stealth_and_focus(&page_sid).await.is_err(),
+            "stealth setup must return error when CDP session is closed/rejected"
+        );
     }
 }

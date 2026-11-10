@@ -64,8 +64,9 @@ Process management (`server/src/browser_host/process.rs`) supervises Chromium ex
 
 - **No Automatic Discovery:** `find_browser_executable(None)` fails closed with `ProcessError::ExecutableNotFound` when `DAM_HOPPER_BROWSER_EXECUTABLE` is not explicitly set. Automatic PATH or standard-directory scanning is prohibited.
 - **Strict Argument Allowlist (`is_allowlisted_arg`):**
-  - **Permitted Prefixes:** `--window-size=`, `--user-agent=`, `--lang=`, `--force-device-scale-factor=`, `--default-background-color=`.
+  - **Permitted Exact Flag & Prefixes:** Exact `--disable-blink-features=AutomationControlled` (prevents `navigator.webdriver = true` across main frames, cross-origin OOPIF iframes, and workers), plus prefixes `--window-size=`, `--user-agent=`, `--lang=`, `--force-device-scale-factor=`, `--default-background-color=`. Any other `--disable-blink-features*` value is rejected fail-closed.
   - **Explicitly Forbidden Flags:** `--remote-debugging*`, `--remote-allow-origins*`, `--user-data-dir*`, `--load-extension*`, `no-sandbox`, `disable-web-security`, `ignore-certificate-errors`, `disable-site-isolation`, `password-store`, `use-mock-keychain`, `disable-hang-monitor`, `disable-ipc-flooding`, `disable-renderer-backgrounding`, `disable-backgrounding-occluded`, `disable-background-timer-throttling`.
+  - **Platform-Coherent Chrome Identity & Focus Emulation (`server/src/browser_host/stealth.rs`):** On page session setup and cross-origin OOPIF `iframe` attachment (`Target.setAutoAttach`), `ScreencastProducer::apply_stealth_and_focus` queries `Browser.getVersion`, normalizes `HeadlessChrome/<ver>` to a frozen desktop Chrome User-Agent (`Chrome/<major>.0.0.0`) with matching `sec-ch-ua` Client Hints (`Emulation.setUserAgentOverride`), enables `Emulation.setFocusEmulationEnabled`, and injects a document-start anti-detection preload (`Page.addScriptToEvaluateOnNewDocument`). Allowed `Fetch.requestPaused` subresource/worker requests carrying `HeadlessChrome` headers are sanitized on `Fetch.continueRequest`.
   - All default Chromium sandboxing, certificate verification, and site isolation protections remain active.
 
 ### Unix Process Group & Death-Pipe Watcher
@@ -409,6 +410,7 @@ $$x = u \times \text{css\_width}, \quad y = v \times \text{css\_height} + \text{
 - **Session Listing & TTL Reaping:** `GET /api/browser/sessions` lists all non-closed sessions (including `closing` and `lost`) so operators and UI observe truth. Retired sessions and idempotency records are reaped after `IDEMPOTENCY_TTL = 600s`. Note: UI TypeScript `BrowserSessionStatus` union does NOT yet include `closing` or `lost` (Phase 02/03 owns UI contract alignment).
 - **Independent Epochs:** Tracks `navigationRevision` independently of `viewportEpoch` and `profileEpoch`.
 
+- **Popup Parent-Child Lifecycle (`activePopupSessionId` / `parentSessionId`):** Admitted `window.open` popups record `parentSessionId` on the child session at reservation and publish `activePopupSessionId` on the opener session once `commit_running` succeeds. When the popup session retires (`begin_close`, `finish_close`, `native_destroyed`, `rollback_creation`, incarnation retirement, or principal close), `clear_parent_popup_link` clears the opener's `activePopupSessionId` (if it still matches that child) and publishes `sessionUpdated`, enabling `BrowserStreamKeepAliveHost` and `BrowserApp` to switch into admitted OAuth popups and restore the opener when sign-in completes.
 ## 14. Navigation & HTTP Network Policy (`network_policy.rs`)
 
 Navigation URLs are validated against `validate_navigation_url`:

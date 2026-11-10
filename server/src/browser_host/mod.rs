@@ -15,3 +15,4 @@ pub mod screencast;
 pub mod media;
 pub mod diagnostics;
 pub mod selection;
+pub mod stealth;

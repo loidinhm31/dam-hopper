@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { generateUUID } from "@/lib/utils.js";
 import type { OsWindow, ResourceClaimKey } from "../types.js";
 import { useWindowOwner, useWindowContext } from "../window-context.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { useResourceClaim } from "../resource-registry.js";
 import { useWindowStore } from "../window-store.js";
-import { syncBrowserSessionWindow } from "../browser-session-sync.js";
+import {
+  switchBrowserWindowSession,
+  syncBrowserSessionWindow,
+} from "../browser-session-sync.js";
 import {
   clearBrowserViewFenceForProfile,
   registerBrowserStreamSlot,
+  requestBrowserProxyFocus,
   updateBrowserStreamSlot,
 } from "../BrowserStreamKeepAliveHost.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
@@ -182,6 +187,10 @@ function BrowserResourceView({
   const isController = Boolean(window.appState?.isController);
   const leaseToken = window.appState?.leaseToken as string | undefined;
 
+  const popupBlocked = Boolean(window.appState?.popupBlocked);
+  const activePopupSessionId = window.appState?.activePopupSessionId as string | undefined;
+  const parentSessionId = (window.appState?.parentSessionId ??
+    window.appState?.openerSessionId) as string | undefined;
   const [addressInput, setAddressInput] = useState(previewUrl);
   const [liveSessions, setLiveSessions] = useState<SessionInfo[]>([]);
   const [selectedTerminalId, setSelectedTerminalId] = useState<string>("");
@@ -239,37 +248,87 @@ function BrowserResourceView({
 
   // Read authority before each explicit action; native navigation is independent
   // of our last rendered snapshot. A raced CAS rejection is refreshed, never replayed.
+  const recreateDeadSession = useCallback(
+    (targetUrl: string) => {
+      if (!isCurrentConnection(owner)) return;
+      clearBrowserViewFenceForProfile(owner.profileId);
+      setNavigationError(null);
+      useWindowStore.getState().updateAppState(window.id, {
+        creationKey: generateUUID(),
+        sessionId: undefined,
+        browserIncarnation: undefined,
+        browserSessionStatus: undefined,
+        unsupportedReason: undefined,
+        unavailableReason: undefined,
+        isController: false,
+        leaseToken: undefined,
+        viewerId: undefined,
+        parentSessionId: undefined,
+        openerSessionId: undefined,
+        activePopupSessionId: undefined,
+        dismissedPopupSessionId: undefined,
+        url: targetUrl,
+      });
+    },
+    [owner, window.id],
+  );
+
   const runNavigation = useCallback(async (
     operation: (revision: string, signal: AbortSignal) => Promise<BrowserSessionDto>,
+    recoveryUrl?: string,
   ) => {
     if (!sessionId || navigationActionRef.current) return;
     const action = new AbortController();
     navigationActionRef.current = action;
-    const isActive = () => navigationActionRef.current === action && !action.signal.aborted;
     setNavigationPending(true);
     setNavigationError(null);
     try {
       const current = await getBrowserSession(owner, sessionId, action.signal);
-      if (!isActive()) return;
+      if (navigationActionRef.current !== action || action.signal.aborted) return;
+      if (
+        recoveryUrl &&
+        (current.status === "lost" || current.status === "closed") &&
+        isCurrentConnection(owner) &&
+        useWindowStore.getState().session.windows[window.id]?.appState?.sessionId === sessionId
+      ) {
+        recreateDeadSession(recoveryUrl);
+        return;
+      }
       const sync = syncBrowserSessionWindow(owner, window.id, sessionId, current);
       if (sync === "detached") return;
       if (sync === "stale") {
         throw new BrowserHostClientError("Page changed while preparing navigation; retry the action", "sessionConflict", 409);
       }
       const response = await operation(current.navigationRevision, action.signal);
-      if (isActive()) syncBrowserSessionWindow(owner, window.id, sessionId, response);
+      if (navigationActionRef.current === action && !action.signal.aborted) {
+        syncBrowserSessionWindow(owner, window.id, sessionId, response);
+      }
     } catch (err) {
-      if (!isActive()) return;
+      if (navigationActionRef.current !== action || action.signal.aborted) return;
+      if (
+        recoveryUrl &&
+        err instanceof BrowserHostClientError &&
+        err.status === 404 &&
+        isCurrentConnection(owner) &&
+        useWindowStore.getState().session.windows[window.id]?.appState?.sessionId === sessionId
+      ) {
+        recreateDeadSession(recoveryUrl);
+        return;
+      }
       console.warn("[BrowserApp] Navigation failed:", err);
       if (err instanceof BrowserHostClientError && err.status === 409) {
         try {
           const current = await getBrowserSession(owner, sessionId, action.signal);
-          if (isActive()) syncBrowserSessionWindow(owner, window.id, sessionId, current);
+          if (navigationActionRef.current === action && !action.signal.aborted) {
+            syncBrowserSessionWindow(owner, window.id, sessionId, current);
+          }
         } catch (refreshError) {
-          if (isActive()) console.warn("[BrowserApp] Navigation conflict refresh failed:", refreshError);
+          if (navigationActionRef.current === action && !action.signal.aborted) {
+            console.warn("[BrowserApp] Navigation conflict refresh failed:", refreshError);
+          }
         }
       }
-      if (isActive() && isCurrentConnection(owner) &&
+      if (navigationActionRef.current === action && !action.signal.aborted && isCurrentConnection(owner) &&
           useWindowStore.getState().session.windows[window.id]?.appState?.sessionId === sessionId) {
         setNavigationError(err instanceof Error ? err.message : "Navigation failed");
       }
@@ -279,25 +338,66 @@ function BrowserResourceView({
         setNavigationPending(false);
       }
     }
-  }, [owner, sessionId, window.id]);
+  }, [owner, recreateDeadSession, sessionId, window.id]);
 
   const handleNavigate = useCallback(async () => {
     let trimmed = addressInput.trim();
-    if (!trimmed || !sessionId) return;
+    if (!trimmed) return;
     if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
       trimmed = `https://${trimmed}`;
     }
-    await runNavigation((revision, signal) => navigateBrowser(owner, sessionId, {
-      url: trimmed,
-      navigationRevision: revision,
-    }, signal));
-  }, [addressInput, owner, sessionId, runNavigation]);
+    const status = window.appState?.browserSessionStatus as string | undefined;
+    if (!sessionId || status === "lost" || status === "closed") {
+      recreateDeadSession(trimmed);
+      return;
+    }
+    await runNavigation(
+      (revision, signal) =>
+        navigateBrowser(
+          owner,
+          sessionId,
+          {
+            url: trimmed,
+            navigationRevision: revision,
+          },
+          signal,
+        ),
+      trimmed,
+    );
+  }, [
+    addressInput,
+    owner,
+    recreateDeadSession,
+    runNavigation,
+    sessionId,
+    window.appState?.browserSessionStatus,
+  ]);
 
   const handleReload = useCallback(async () => {
+    const targetUrl = (addressInput.trim() || previewUrl).trim();
+    const status = window.appState?.browserSessionStatus as string | undefined;
+    if ((!sessionId || status === "lost" || status === "closed") && targetUrl) {
+      recreateDeadSession(
+        targetUrl.startsWith("http://") || targetUrl.startsWith("https://")
+          ? targetUrl
+          : `https://${targetUrl}`,
+      );
+      return;
+    }
     if (!sessionId) return;
-    await runNavigation((revision, signal) => reloadBrowser(owner, sessionId, { navigationRevision: revision }, signal));
-  }, [owner, sessionId, runNavigation]);
-
+    await runNavigation(
+      (revision, signal) => reloadBrowser(owner, sessionId, { navigationRevision: revision }, signal),
+      targetUrl || undefined,
+    );
+  }, [
+    addressInput,
+    owner,
+    previewUrl,
+    recreateDeadSession,
+    runNavigation,
+    sessionId,
+    window.appState?.browserSessionStatus,
+  ]);
   const handleBack = useCallback(async () => {
     if (!sessionId) return;
     await runNavigation((revision, signal) => historyBrowser(owner, sessionId, {
@@ -316,20 +416,103 @@ function BrowserResourceView({
 
   const handleAcquireControl = useCallback(async () => {
     if (!sessionId) return;
-    const activeViewerId = (window.appState?.viewerId as string | undefined) ?? window.id;
+    const expectedViewerId = window.appState?.viewerId as string | undefined;
+    const activeViewerId = expectedViewerId ?? window.id;
+    const expectedIncarnation = window.appState?.browserIncarnation;
+    const expectedProfileEpoch = window.appState?.profileEpoch;
     try {
       const resp = await acquireBrowserControl(owner, sessionId, {
         viewerId: activeViewerId,
         holderKind: "human",
       });
+      const current = useWindowStore.getState().session.windows[window.id];
+      if (
+        !isCurrentConnection(owner) ||
+        current?.ctx.profileId !== owner.profileId ||
+        current.appState?.sessionId !== sessionId ||
+        (current.appState?.viewerId as string | undefined) !== expectedViewerId ||
+        current.appState?.browserIncarnation !== expectedIncarnation ||
+        current.appState?.profileEpoch !== expectedProfileEpoch ||
+        (current.appState?.browserSessionStatus !== undefined &&
+          current.appState.browserSessionStatus !== "running")
+      ) {
+        void releaseBrowserControl(owner, sessionId, { leaseToken: resp.leaseToken }).catch(() => {});
+        return;
+      }
       useWindowStore.getState().updateAppState(window.id, {
         isController: true,
         leaseToken: resp.leaseToken,
       });
+      requestBrowserProxyFocus(window.id, owner, sessionId, resp.leaseToken);
     } catch (err) {
       console.warn("[BrowserApp] Acquire control failed:", err);
     }
-  }, [owner, sessionId, window.id, window.appState?.viewerId]);
+  }, [
+    owner,
+    sessionId,
+    window.id,
+    window.appState?.viewerId,
+    window.appState?.browserIncarnation,
+    window.appState?.profileEpoch,
+  ]);
+
+  const handleReturnToOpener = useCallback(async () => {
+    if (!sessionId || !parentSessionId) return;
+    const fallbackOpenerId = window.appState?.openerSessionId as string | undefined;
+    const candidates =
+      fallbackOpenerId && fallbackOpenerId !== parentSessionId
+        ? [parentSessionId, fallbackOpenerId]
+        : [parentSessionId];
+    for (const candidateId of candidates) {
+      try {
+        const openerSnap = await getBrowserSession(owner, candidateId);
+        if (openerSnap.status === "running") {
+          const switched = switchBrowserWindowSession(owner, window.id, sessionId, openerSnap, {
+            openerSessionId: openerSnap.parentSessionId ?? undefined,
+            dismissedPopupSessionId: sessionId,
+          });
+          if (switched === "applied") {
+            setNavigationError(null);
+            return;
+          }
+        }
+      } catch {
+        // Try fallback ancestor if available
+      }
+    }
+    if (
+      isCurrentConnection(owner) &&
+      useWindowStore.getState().session.windows[window.id]?.appState?.sessionId === sessionId
+    ) {
+      useWindowStore.getState().updateAppState(window.id, {
+        parentSessionId: undefined,
+        openerSessionId: undefined,
+      });
+      setNavigationError("Opener page is no longer running");
+    }
+  }, [owner, parentSessionId, sessionId, window.appState?.openerSessionId, window.id]);
+
+  const handleOpenActivePopup = useCallback(async () => {
+    if (!sessionId || !activePopupSessionId) return;
+    try {
+      const popupSnap = await getBrowserSession(owner, activePopupSessionId);
+      if (popupSnap.status === "running" && popupSnap.parentSessionId === sessionId) {
+        switchBrowserWindowSession(owner, window.id, sessionId, popupSnap, {
+          openerSessionId:
+            (window.appState?.openerSessionId as string | undefined) ?? sessionId,
+          dismissedPopupSessionId: undefined,
+        });
+        setNavigationError(null);
+      }
+    } catch (err) {
+      if (
+        isCurrentConnection(owner) &&
+        useWindowStore.getState().session.windows[window.id]?.appState?.sessionId === sessionId
+      ) {
+        setNavigationError(err instanceof Error ? err.message : "Popup window is no longer available");
+      }
+    }
+  }, [activePopupSessionId, owner, sessionId, window.appState?.openerSessionId, window.id]);
   const handleReleaseControl = useCallback(async () => {
     if (!sessionId || !leaseToken) return;
     try {
@@ -478,6 +661,51 @@ function BrowserResourceView({
         </div>
       )}
 
+      {popupBlocked && (
+        <div
+          role="alert"
+          data-testid="browser-popup-blocked-banner"
+          className="flex items-center justify-between px-3 py-1 bg-amber-500/15 border-b border-amber-500/30 text-amber-300 text-xs select-none"
+        >
+          <span>
+            Sign-in popup blocked: browser target capacity reached. Close an unused browser session and retry.
+          </span>
+        </div>
+      )}
+      {parentSessionId && (
+        <div
+          data-testid="browser-popup-banner"
+          className="flex items-center justify-between gap-2 px-3 py-1 bg-blue-500/15 border-b border-blue-500/30 text-blue-300 text-xs select-none"
+        >
+          <span className="truncate">
+            Viewing popup window ({previewUrl || "about:blank"})
+          </span>
+          <button
+            type="button"
+            data-testid="browser-popup-return-btn"
+            onClick={() => void handleReturnToOpener()}
+            className="shrink-0 px-2 py-0.5 rounded text-[11px] font-medium bg-blue-500/20 hover:bg-blue-500/30 text-blue-200 border border-blue-400/40"
+          >
+            Return to Page
+          </button>
+        </div>
+      )}
+      {!parentSessionId && activePopupSessionId && (
+        <div
+          data-testid="browser-active-popup-banner"
+          className="flex items-center justify-between gap-2 px-3 py-1 bg-blue-500/15 border-b border-blue-500/30 text-blue-300 text-xs select-none"
+        >
+          <span className="truncate">Sign-in popup window is open</span>
+          <button
+            type="button"
+            data-testid="browser-open-popup-btn"
+            onClick={() => void handleOpenActivePopup()}
+            className="shrink-0 px-2 py-0.5 rounded text-[11px] font-medium bg-blue-500/20 hover:bg-blue-500/30 text-blue-200 border border-blue-400/40"
+          >
+            Open Popup
+          </button>
+        </div>
+      )}
       {/* Top Browser Controls Bar */}
       <div className="flex items-center gap-1.5 px-2 py-1 bg-[var(--color-surface)] border-b border-[var(--color-border)] text-xs text-[var(--color-text)] select-none">
         <button

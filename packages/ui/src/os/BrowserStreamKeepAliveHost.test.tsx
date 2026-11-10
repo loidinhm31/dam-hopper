@@ -9,7 +9,11 @@ import type { ViewerAttachmentCredentials } from "@/api/browser-host-client.js";
 import type { StreamControllerOptions } from "@/browser-host/stream-controller.js";
 import { BrowserHostClientError } from "@/api/browser-host-types.js";
 import type { CanvasViewProps } from "@/browser-host/canvas-view.js";
-
+import {
+  BrowserStreamKeepAliveHost,
+  registerBrowserStreamSlot,
+  requestBrowserProxyFocus,
+} from "./BrowserStreamKeepAliveHost.js";
 const { owner, store, getSession, mintTickets, attach, streamState, acquireControl, releaseControl, controlSocket } = vi.hoisted(() => ({
   owner: { profileId: "profile-1", generation: 1 },
   store: { session: { windows: {} as Record<string, OsWindow> }, updateAppState: vi.fn() },
@@ -432,5 +436,140 @@ describe("browser first pointer gesture control handoff", () => {
     expect(store.session.windows["window-1"].appState?.leaseToken).toBe("new-lease");
     expect(controlSocket.send.mock.calls.map(([message]) => JSON.parse(message).event.kind))
       .toEqual(["pointerDown", "pointerUp"]);
+  });
+
+  it("focuses TextInputProxy on toolbar control request unless an input element or another OS window is focused", async () => {
+    Object.assign(store.session.windows["window-1"].appState!, {
+      isController: true,
+      leaseToken: "toolbar-lease",
+    });
+    const proxy = slot.querySelector("textarea") as HTMLTextAreaElement;
+    proxy.blur();
+    expect(document.activeElement).not.toBe(proxy);
+
+    await act(async () => {
+      requestBrowserProxyFocus("window-1", owner, "session-1", "toolbar-lease");
+    });
+    expect(document.activeElement).toBe(proxy);
+
+    // Does not steal focus when another OS window on the active desktop is focused
+    proxy.blur();
+    (store.session as unknown as Record<string, unknown>).activeDesktopId = "desktop-1";
+    (store.session as unknown as Record<string, unknown>).desktops = [
+      { id: "desktop-1", focusedWindowId: "other-window" },
+    ];
+    await act(async () => {
+      requestBrowserProxyFocus("window-1", owner, "session-1", "toolbar-lease");
+    });
+    expect(document.activeElement).not.toBe(proxy);
+    delete (store.session as unknown as Record<string, unknown>).activeDesktopId;
+    delete (store.session as unknown as Record<string, unknown>).desktops;
+
+    const addressInput = document.createElement("input");
+    document.body.append(addressInput);
+    addressInput.focus();
+    expect(document.activeElement).toBe(addressInput);
+    await act(async () => {
+      requestBrowserProxyFocus("window-1", owner, "session-1", "toolbar-lease");
+    });
+    expect(document.activeElement).toBe(addressInput);
+    addressInput.remove();
+  });
+
+  it("auto-switches to an admitted OAuth popup and restores the opener when the popup closes", async () => {
+    const popupSnapshot: BrowserSessionDto = {
+      ...snapshot,
+      browserSessionId: "popup-oauth-1",
+      navigationRevision: "1",
+      viewportEpoch: "1",
+      url: "https://accounts.google.com/o/oauth2/v2/auth",
+      title: "Sign in - Google Accounts",
+      parentSessionId: "session-1",
+    };
+    getSession.mockImplementation(async (_owner, id: string) =>
+      id === "popup-oauth-1" ? popupSnapshot : snapshot,
+    );
+
+    await push({
+      kind: "sessionUpdated",
+      session: { ...snapshot, activePopupSessionId: "popup-oauth-1" },
+    });
+    await tick(10);
+    expect(store.session.windows["window-1"].appState).toMatchObject({
+      sessionId: "popup-oauth-1",
+      url: "https://accounts.google.com/o/oauth2/v2/auth",
+      parentSessionId: "session-1",
+      openerSessionId: "session-1",
+    });
+
+    await render();
+    await tick(10);
+    // Simulate OAuth popup closing after login completes
+    await push({
+      kind: "sessionUpdated",
+      session: { ...popupSnapshot, status: "closed", inputAvailable: false },
+    });
+    await tick(10);
+    expect(store.session.windows["window-1"].appState).toMatchObject({
+      sessionId: "session-1",
+      url: snapshot.url,
+      dismissedPopupSessionId: "popup-oauth-1",
+    });
+  });
+
+  it("ignores an older popup lookup when superseded by a newer popup and recovers opener if popup closes before ticket minting", async () => {
+    const popupALookup = Promise.withResolvers<BrowserSessionDto>();
+    const popupBSnapshot: BrowserSessionDto = {
+      ...snapshot,
+      browserSessionId: "popup-B",
+      navigationRevision: "1",
+      viewportEpoch: "1",
+      url: "https://accounts.google.com/signin/v2",
+      title: "Popup B",
+      parentSessionId: "session-1",
+    };
+    const popupASnapshot: BrowserSessionDto = {
+      ...popupBSnapshot,
+      browserSessionId: "popup-A",
+      title: "Popup A",
+    };
+    getSession.mockImplementation(async (_owner, id: string) => {
+      if (id === "popup-A") return popupALookup.promise;
+      if (id === "popup-B") return popupBSnapshot;
+      return snapshot;
+    });
+
+    await push({
+      kind: "sessionUpdated",
+      session: { ...snapshot, activePopupSessionId: "popup-A" },
+    });
+    await push({
+      kind: "sessionUpdated",
+      session: { ...snapshot, activePopupSessionId: "popup-B" },
+    });
+    await tick(10);
+    expect(store.session.windows["window-1"].appState?.sessionId).toBe("popup-B");
+
+    // Late resolution of popup-A must not overwrite popup-B
+    await act(async () => popupALookup.resolve(popupASnapshot));
+    await tick(10);
+    expect(store.session.windows["window-1"].appState?.sessionId).toBe("popup-B");
+
+    // Now simulate popup-B closing right as tickets are being minted during connectSession
+    getSession.mockImplementation(async (_owner, id: string) => {
+      if (id === "popup-B") {
+        return mintTickets.mock.calls.length > 1
+          ? { ...popupBSnapshot, status: "closed", inputAvailable: false }
+          : popupBSnapshot;
+      }
+      return snapshot;
+    });
+    mintTickets.mockRejectedValueOnce(new BrowserHostClientError("session closed", "notFound", 404));
+    await render();
+    await tick(20);
+    expect(store.session.windows["window-1"].appState).toMatchObject({
+      sessionId: "session-1",
+      dismissedPopupSessionId: "popup-B",
+    });
   });
 });

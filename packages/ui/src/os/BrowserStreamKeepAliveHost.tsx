@@ -11,7 +11,10 @@ import { createPortal } from "react-dom";
 import { useLockScreenStore } from "@/stores/lock-screen.js";
 import { generateUUID } from "../lib/utils.js";
 import { useWindowStore } from "./window-store.js";
-import { syncBrowserSessionWindow } from "./browser-session-sync.js";
+import {
+  switchBrowserWindowSession,
+  syncBrowserSessionWindow,
+} from "./browser-session-sync.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import {
   getConnectionSnapshot,
@@ -62,6 +65,20 @@ const fencedBrowserProfiles = new Map<
   { generation: number; reason: string }
 >();
 const fenceListeners = new Set<() => void>();
+
+const proxyFocusListeners = new Map<
+  string,
+  (owner: ConnectionRef, sessionId: string, leaseToken: string) => void
+>();
+
+export function requestBrowserProxyFocus(
+  windowId: string,
+  owner: ConnectionRef,
+  sessionId: string,
+  leaseToken: string,
+): void {
+  proxyFocusListeners.get(windowId)?.(owner, sessionId, leaseToken);
+}
 
 function subscribeBrowserViewFences(listener: () => void): () => void {
   fenceListeners.add(listener);
@@ -417,6 +434,62 @@ function ParkedBrowserStreamItem({
     win.appState?.navigationRevision, win.appState?.viewportEpoch,
     cancelPendingGesture,
   ]);
+  useLayoutEffect(() => {
+    const handler = (
+      reqOwner: ConnectionRef,
+      reqSessionId: string,
+      reqLeaseToken: string,
+    ) => {
+      if (
+        !isEffectiveVisible ||
+        activeDialog !== null ||
+        useCognitoModeStore.getState().active ||
+        useLockScreenStore.getState().isLocked ||
+        isBrowserViewFenced(reqOwner.profileId, reqOwner.generation) ||
+        !isCurrentConnection(reqOwner)
+      ) {
+        return;
+      }
+      const storeState = useWindowStore.getState();
+      const activeDesktop = storeState.session?.desktops?.find(
+        (d) => d.id === storeState.session.activeDesktopId,
+      );
+      if (activeDesktop?.focusedWindowId && activeDesktop.focusedWindowId !== win.id) {
+        return;
+      }
+      const current = storeState.session.windows[win.id];
+      if (
+        current?.ctx.profileId !== reqOwner.profileId ||
+        current.appState?.sessionId !== reqSessionId ||
+        current.appState?.leaseToken !== reqLeaseToken ||
+        !current.appState?.isController ||
+        (current.appState?.browserSessionStatus !== undefined &&
+          current.appState.browserSessionStatus !== "running") ||
+        current.appState?.inputAvailable === false
+      ) {
+        return;
+      }
+      const activeEl = document.activeElement as HTMLElement | null;
+      if (
+        activeEl &&
+        !textInputProxyRef.current?.isFocused() &&
+        (activeEl instanceof HTMLInputElement ||
+          activeEl instanceof HTMLTextAreaElement ||
+          activeEl instanceof HTMLSelectElement ||
+          activeEl.isContentEditable)
+      ) {
+        return;
+      }
+      textInputProxyRef.current?.focus();
+    };
+    proxyFocusListeners.set(win.id, handler);
+    return () => {
+      if (proxyFocusListeners.get(win.id) === handler) {
+        proxyFocusListeners.delete(win.id);
+      }
+    };
+  }, [win.id, isEffectiveVisible, activeDialog]);
+
 
   // Initialize controllers when canvas is ready
   useLayoutEffect(() => {
@@ -442,6 +515,110 @@ function ParkedBrowserStreamItem({
               cancelPendingGesture();
               inputControllerRef.current?.releaseAllHeldInput();
               setActiveDialog(null);
+            }
+            if (result !== "detached") {
+              const latest = useWindowStore.getState().session.windows[win.id];
+              const popupId = event.session.activePopupSessionId;
+              const returnParentId = (latest?.appState?.parentSessionId ??
+                latest?.appState?.openerSessionId) as string | undefined;
+              if (
+                event.session.status === "running" &&
+                popupId &&
+                latest?.appState?.dismissedPopupSessionId !== popupId
+              ) {
+                void (async () => {
+                  try {
+                    const popupSnap = await getBrowserSession(credentials.owner, popupId);
+                    const cur = useWindowStore.getState().session.windows[win.id];
+                    if (
+                      !isCurrentConnection(credentials.owner) ||
+                      cur?.ctx.profileId !== credentials.owner.profileId ||
+                      cur.appState?.sessionId !== credentials.browserSessionId ||
+                      cur.appState?.browserIncarnation !== credentials.browserIncarnation ||
+                      String(cur.appState?.profileEpoch) !== String(credentials.profileEpoch) ||
+                      cur.appState?.activePopupSessionId !== popupId ||
+                      cur.appState?.dismissedPopupSessionId === popupId ||
+                      popupSnap.status !== "running" ||
+                      popupSnap.parentSessionId !== credentials.browserSessionId
+                    ) {
+                      return;
+                    }
+                    cancelPendingGesture();
+                    inputControllerRef.current?.releaseAllHeldInput();
+                    setActiveDialog(null);
+                    switchBrowserWindowSession(
+                      credentials.owner,
+                      win.id,
+                      credentials.browserSessionId,
+                      popupSnap,
+                      {
+                        openerSessionId:
+                          (cur.appState?.openerSessionId as string | undefined) ??
+                          credentials.browserSessionId,
+                      },
+                    );
+                  } catch {
+                    // Popup may have closed before lookup completed
+                  }
+                })();
+              } else if (
+                (event.session.status === "closed" || event.session.status === "lost") &&
+                returnParentId
+              ) {
+                void (async () => {
+                  const fallbackOpenerId = latest?.appState?.openerSessionId as string | undefined;
+                  const candidates =
+                    fallbackOpenerId && fallbackOpenerId !== returnParentId
+                      ? [returnParentId, fallbackOpenerId]
+                      : [returnParentId];
+                  for (const candidateId of candidates) {
+                    try {
+                      const openerSnap = await getBrowserSession(credentials.owner, candidateId);
+                      const cur = useWindowStore.getState().session.windows[win.id];
+                      if (
+                        !isCurrentConnection(credentials.owner) ||
+                        cur?.ctx.profileId !== credentials.owner.profileId ||
+                        cur.appState?.sessionId !== credentials.browserSessionId ||
+                        cur.appState?.browserIncarnation !== credentials.browserIncarnation ||
+                        String(cur.appState?.profileEpoch) !== String(credentials.profileEpoch)
+                      ) {
+                        return;
+                      }
+                      if (openerSnap.status === "running") {
+                        cancelPendingGesture();
+                        inputControllerRef.current?.releaseAllHeldInput();
+                        setActiveDialog(null);
+                        const switched = switchBrowserWindowSession(
+                          credentials.owner,
+                          win.id,
+                          credentials.browserSessionId,
+                          openerSnap,
+                          {
+                            openerSessionId: openerSnap.parentSessionId ?? undefined,
+                            dismissedPopupSessionId: credentials.browserSessionId,
+                          },
+                        );
+                        if (switched === "applied") return;
+                      }
+                    } catch {
+                      // Try next ancestor if available
+                    }
+                  }
+                  const cur = useWindowStore.getState().session.windows[win.id];
+                  if (
+                    isCurrentConnection(credentials.owner) &&
+                    cur?.ctx.profileId === credentials.owner.profileId &&
+                    cur.appState?.sessionId === credentials.browserSessionId &&
+                    cur.appState?.browserIncarnation === credentials.browserIncarnation &&
+                    String(cur.appState?.profileEpoch) === String(credentials.profileEpoch)
+                  ) {
+                    useWindowStore.getState().updateAppState(win.id, {
+                      parentSessionId: undefined,
+                      openerSessionId: undefined,
+                    });
+                  }
+                })();
+              }
             }
           } else if (event.kind === "dialogOpened") {
             cancelPendingGesture();
@@ -613,8 +790,46 @@ function ParkedBrowserStreamItem({
           const snapshot = await getBrowserSession(owner, activeSessionId, abortCtrl.signal);
           if (isCancelled || !isCurrentConnection(owner)) return;
           const sync = syncBrowserSessionWindow(owner, win.id, activeSessionId, snapshot);
-          if (sync === "detached" ||
-              useWindowStore.getState().session.windows[win.id]?.appState?.browserSessionStatus !== "running") return;
+          if (sync === "detached") return;
+          const syncedWin = useWindowStore.getState().session.windows[win.id];
+          if (snapshot.status !== "running") {
+            const returnParentId = (syncedWin?.appState?.parentSessionId ??
+              syncedWin?.appState?.openerSessionId) as string | undefined;
+            if (returnParentId) {
+              try {
+                const openerSnap = await getBrowserSession(owner, returnParentId, abortCtrl.signal);
+                if (!isCancelled && openerSnap.status === "running") {
+                  switchBrowserWindowSession(owner, win.id, activeSessionId, openerSnap, {
+                    openerSessionId: openerSnap.parentSessionId ?? undefined,
+                    dismissedPopupSessionId: activeSessionId,
+                  });
+                }
+              } catch {
+                // Fall through to terminal state on current session
+              }
+            }
+            return;
+          }
+          const popupId = snapshot.activePopupSessionId;
+          if (popupId && syncedWin?.appState?.dismissedPopupSessionId !== popupId) {
+            try {
+              const popupSnap = await getBrowserSession(owner, popupId, abortCtrl.signal);
+              if (
+                !isCancelled &&
+                popupSnap.status === "running" &&
+                popupSnap.parentSessionId === activeSessionId
+              ) {
+                const switched = switchBrowserWindowSession(owner, win.id, activeSessionId, popupSnap, {
+                  openerSessionId:
+                    (syncedWin?.appState?.openerSessionId as string | undefined) ?? activeSessionId,
+                });
+                if (switched === "applied") return;
+              }
+            } catch {
+              // Attach to opener if popup closed before lookup
+            }
+          }
+          if (useWindowStore.getState().session.windows[win.id]?.appState?.browserSessionStatus !== "running") return;
           try {
             const creds = await mintViewerAttachmentTickets(
               owner,
@@ -646,6 +861,46 @@ function ParkedBrowserStreamItem({
               !abortCtrl.signal.aborted &&
               (ticketErr as Error)?.name !== "AbortError"
             ) {
+              const cur = useWindowStore.getState().session.windows[win.id];
+              const returnParentId = (cur?.appState?.parentSessionId ??
+                cur?.appState?.openerSessionId) as string | undefined;
+              if (
+                returnParentId &&
+                isCurrentConnection(owner) &&
+                cur?.ctx.profileId === owner.profileId &&
+                cur.appState?.sessionId === activeSessionId
+              ) {
+                let childStillRunning = false;
+                try {
+                  const latestChild = await getBrowserSession(owner, activeSessionId, abortCtrl.signal);
+                  if (!isCancelled) {
+                    syncBrowserSessionWindow(owner, win.id, activeSessionId, latestChild);
+                  }
+                  childStillRunning = latestChild.status === "running";
+                } catch {
+                  childStillRunning = false;
+                }
+                if (!childStillRunning && !isCancelled && isCurrentConnection(owner)) {
+                  try {
+                    const openerSnap = await getBrowserSession(owner, returnParentId, abortCtrl.signal);
+                    if (!isCancelled && openerSnap.status === "running") {
+                      const switched = switchBrowserWindowSession(
+                        owner,
+                        win.id,
+                        activeSessionId,
+                        openerSnap,
+                        {
+                          openerSessionId: openerSnap.parentSessionId ?? undefined,
+                          dismissedPopupSessionId: activeSessionId,
+                        },
+                      );
+                      if (switched === "applied") return;
+                    }
+                  } catch {
+                    // Fall through to warning if opener is also unavailable
+                  }
+                }
+              }
               console.warn(
                 "[BrowserStream] Ticket minting skipped/failed in current environment:",
                 ticketErr,
@@ -656,15 +911,45 @@ function ParkedBrowserStreamItem({
       } catch (err) {
         if (!isCancelled && isCurrentConnection(owner)) {
           const current = useWindowStore.getState().session.windows[win.id];
+          const expectedIncarnation = current?.appState?.browserIncarnation;
+          const expectedProfileEpoch = current?.appState?.profileEpoch;
           if (current?.ctx.profileId === owner.profileId && current.appState?.sessionId === rawSessionId) {
-            useWindowStore.getState().updateAppState(win.id, {
-              unsupportedReason: err instanceof BrowserHostClientError && err.status === 404
-                ? "Browser session no longer exists on this host"
-                : "Browser session could not be connected",
-              inputAvailable: false,
-              isController: false,
-              leaseToken: undefined,
-            });
+            const returnParentId = (current.appState?.parentSessionId ??
+              current.appState?.openerSessionId) as string | undefined;
+            if (returnParentId && rawSessionId) {
+              try {
+                const openerSnap = await getBrowserSession(owner, returnParentId, abortCtrl.signal);
+                if (!isCancelled && openerSnap.status === "running") {
+                  const switched = switchBrowserWindowSession(owner, win.id, rawSessionId, openerSnap, {
+                    openerSessionId: openerSnap.parentSessionId ?? undefined,
+                    dismissedPopupSessionId: rawSessionId,
+                  });
+                  if (switched === "applied") return;
+                }
+              } catch {
+                // Opener also unavailable
+              }
+            }
+            const latest = useWindowStore.getState().session.windows[win.id];
+            if (
+              !isCancelled &&
+              isCurrentConnection(owner) &&
+              latest?.ctx.profileId === owner.profileId &&
+              latest.appState?.sessionId === rawSessionId &&
+              latest.appState?.browserIncarnation === expectedIncarnation &&
+              latest.appState?.profileEpoch === expectedProfileEpoch
+            ) {
+              useWindowStore.getState().updateAppState(win.id, {
+                unsupportedReason: err instanceof BrowserHostClientError && err.status === 404
+                  ? "Browser session no longer exists on this host"
+                  : "Browser session could not be connected",
+                inputAvailable: false,
+                isController: false,
+                leaseToken: undefined,
+                parentSessionId: undefined,
+                openerSessionId: undefined,
+              });
+            }
           }
           console.error("[BrowserStream] Session connect failed:", err);
         }

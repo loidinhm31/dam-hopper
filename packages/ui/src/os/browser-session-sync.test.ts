@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserSessionDto } from "@/api/browser-host-types.js";
 import type { OsWindow } from "./types.js";
-import { syncBrowserSessionWindow } from "./browser-session-sync.js";
+import {
+  switchBrowserWindowSession,
+  syncBrowserSessionWindow,
+} from "./browser-session-sync.js";
 
 const { currentConnection, store } = vi.hoisted(() => ({
   currentConnection: vi.fn(() => true),
@@ -112,5 +115,70 @@ describe("live browser session synchronization", () => {
     expect(pushed()).toBe("detached");
     expect(store.updateAppState).not.toHaveBeenCalled();
     expect(store.session.windows["window-1"].appState?.browserIncarnation).toBe("replacement-runtime");
+  });
+
+  it("synchronizes popupBlocked, activePopupSessionId, and parentSessionId and switches sessions atomically", () => {
+    expect(
+      sync({
+        popupBlocked: true,
+        activePopupSessionId: "popup-session-1",
+      }),
+    ).toBe("applied");
+    expect(store.session.windows["window-1"].appState).toMatchObject({
+      popupBlocked: true,
+      activePopupSessionId: "popup-session-1",
+    });
+
+    const popupSnapshot: BrowserSessionDto = {
+      ...snapshot,
+      browserSessionId: "popup-session-1",
+      navigationRevision: "1",
+      viewportEpoch: "1",
+      url: "https://accounts.google.com/o/oauth2/v2/auth",
+      title: "Sign in - Google Accounts",
+      parentSessionId: "session-1",
+    };
+    Object.assign(store.session.windows["window-1"].appState!, {
+      isController: true,
+      leaseToken: "opener-lease",
+      viewerId: "opener-viewer",
+    });
+    expect(
+      switchBrowserWindowSession(owner, "window-1", "session-1", popupSnapshot, {
+        openerSessionId: "session-1",
+      }),
+    ).toBe("applied");
+    expect(store.session.windows["window-1"].appState).toMatchObject({
+      sessionId: "popup-session-1",
+      url: "https://accounts.google.com/o/oauth2/v2/auth",
+      parentSessionId: "session-1",
+      openerSessionId: "session-1",
+      isController: false,
+      leaseToken: undefined,
+      viewerId: undefined,
+    });
+
+    // Returning to opener records dismissedPopupSessionId and preserves it while activePopupSessionId matches
+    expect(
+      switchBrowserWindowSession(
+        owner,
+        "window-1",
+        "popup-session-1",
+        { ...snapshot, activePopupSessionId: "popup-session-1" },
+        { dismissedPopupSessionId: "popup-session-1" },
+      ),
+    ).toBe("applied");
+    expect(store.session.windows["window-1"].appState?.dismissedPopupSessionId).toBe(
+      "popup-session-1",
+    );
+    expect(sync({ activePopupSessionId: "popup-session-1" })).toBe("applied");
+    expect(store.session.windows["window-1"].appState?.dismissedPopupSessionId).toBe(
+      "popup-session-1",
+    );
+    // Clearing activePopupSessionId also clears dismissedPopupSessionId
+    expect(sync({ activePopupSessionId: undefined, popupBlocked: false })).toBe("applied");
+    expect(store.session.windows["window-1"].appState?.activePopupSessionId).toBeUndefined();
+    expect(store.session.windows["window-1"].appState?.dismissedPopupSessionId).toBeUndefined();
+    expect(store.session.windows["window-1"].appState?.popupBlocked).toBeUndefined();
   });
 });

@@ -97,6 +97,9 @@ export interface BrowserSessionDto {
   geometry: TargetGeometry;
   inputAvailable: boolean;
   unavailableReason?: string;
+  popupBlocked?: boolean;
+  activePopupSessionId?: string;
+  parentSessionId?: string;
 }
 
 export interface CreateSessionRequest {

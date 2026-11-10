@@ -233,8 +233,14 @@ async fn start_mock_cdp_server(extracted_payload: Value) -> MockCdpServer {
                 let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
 
                 let out_tx_ev = out_tx.clone();
+                let default_sid = format!("mock-page-sid-{current_seq}");
                 tokio::spawn(async move {
-                    while let Ok(ev) = ev_rx.recv().await {
+                    while let Ok(mut ev) = ev_rx.recv().await {
+                        if ev.get("sessionId").is_none() {
+                            if let Some(obj) = ev.as_object_mut() {
+                                obj.insert("sessionId".into(), Value::String(default_sid.clone()));
+                            }
+                        }
                         let _ = out_tx_ev.send(ev.to_string());
                     }
                 });

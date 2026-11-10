@@ -173,6 +173,10 @@ pub struct BrowserSessionDto {
     pub lease: Option<SessionLeaseSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub popup_blocked: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_popup_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -210,6 +214,8 @@ pub struct BrowserSession {
     pub active_dialog: Option<SessionDialog>,
     pub pending_api_navigation_at: Option<Instant>,
     pub popup_blocked: bool,
+    pub active_popup_session_id: Option<String>,
+    pub parent_session_id: Option<String>,
     pub created_at: Instant,
     /// Set when the session becomes `Closed` or `Lost`; drives TTL reaping.
     pub retired_at: Option<Instant>,
@@ -254,6 +260,8 @@ impl BrowserSession {
             dialog: dialog_summary,
             lease: lease_summary,
             popup_blocked: if self.popup_blocked { Some(true) } else { None },
+            active_popup_session_id: self.active_popup_session_id.clone(),
+            parent_session_id: self.parent_session_id.clone(),
         }
     }
 
@@ -283,6 +291,7 @@ impl BrowserSession {
         self.input_available = false;
         self.lease = None;
         self.active_dialog = None;
+        self.active_popup_session_id = None;
         if self.unavailable_reason.is_none() || reason.is_some() {
             self.unavailable_reason = reason;
         }
@@ -347,6 +356,19 @@ impl RegistryInner {
             .clone()
     }
 
+    /// Clears the parent session's `active_popup_session_id` only if it still points at `child_id`.
+    fn clear_parent_popup_link(&mut self, child_id: &str, parent_id: Option<&str>) {
+        let Some(pid) = parent_id else {
+            return;
+        };
+        if let Some(parent) = self.sessions.get_mut(pid) {
+            if parent.active_popup_session_id.as_deref() == Some(child_id) {
+                parent.active_popup_session_id = None;
+                parent.publish_update();
+            }
+        }
+    }
+
     /// Drops expired idempotency records, then retired sessions whose required retry TTL has
     /// elapsed. Live records, and results still promised by an unexpired creation record, are
     /// preserved. Returns the number of reaped sessions.
@@ -384,6 +406,11 @@ impl RegistryInner {
             .map(|(id, _)| id.clone())
             .collect();
         for id in &expired {
+            let parent_id = self
+                .sessions
+                .get(id)
+                .and_then(|s| s.parent_session_id.clone());
+            self.clear_parent_popup_link(id, parent_id.as_deref());
             self.sessions.remove(id);
             self.gates.remove(id);
         }
@@ -618,6 +645,8 @@ impl SessionRegistry {
             lease: None,
             active_dialog: None,
             popup_blocked: false,
+            active_popup_session_id: None,
+            parent_session_id: None,
             pending_api_navigation_at: None,
             created_at: now,
             retired_at: None,
@@ -857,7 +886,27 @@ impl SessionRegistry {
         session.input_available = true;
         session.unavailable_reason = None;
         session.publish_update();
-        Ok(session.to_dto())
+        let dto = session.to_dto();
+        let parent_id = session.parent_session_id.clone();
+        let owner = session.owner_principal.clone();
+        let is_dev = session.is_dev;
+        let epoch = session.profile_epoch;
+        let incarnation = session.browser_incarnation.clone();
+        if let Some(pid) = parent_id {
+            if let Some(parent) = inner.sessions.get_mut(&pid) {
+                if parent.status == SessionStatus::Running
+                    && parent.owner_principal == owner
+                    && parent.is_dev == is_dev
+                    && parent.profile_epoch == epoch
+                    && parent.browser_incarnation == incarnation
+                {
+                    parent.active_popup_session_id = Some(session_id.to_string());
+                    parent.popup_blocked = false;
+                    parent.publish_update();
+                }
+            }
+        }
+        Ok(dto)
     }
 
     /// Abandons a creation that failed after reservation. Without native identity the pending
@@ -871,10 +920,13 @@ impl SessionRegistry {
         if session.status != SessionStatus::Initializing {
             return RollbackOutcome::NoOp;
         }
+        let parent_id = session.parent_session_id.clone();
         if let Some(target_id) = session.native_target_id.clone() {
             session.status = SessionStatus::Closing;
             session.input_available = false;
+            session.active_popup_session_id = None;
             session.publish_update();
+            inner.clear_parent_popup_link(session_id, parent_id.as_deref());
             self.publish_count(&inner);
             return RollbackOutcome::Closing { target_id };
         }
@@ -883,6 +935,7 @@ impl SessionRegistry {
         session.retire(SessionStatus::Closed, None);
         inner.sessions.remove(session_id);
         inner.gates.remove(session_id);
+        inner.clear_parent_popup_link(session_id, parent_id.as_deref());
         if let Some(recs) = inner.creation_records.get_mut(&principal) {
             if recs.get(&key).is_some_and(|r| r.session_id == session_id) {
                 recs.remove(&key);
@@ -915,16 +968,19 @@ impl SessionRegistry {
                 Ok(CloseAction::Retired)
             }
             SessionStatus::Initializing | SessionStatus::Running | SessionStatus::Closing => {
+                let parent_id = session.parent_session_id.clone();
                 session.status = SessionStatus::Closing;
                 session.input_available = false;
                 session.lease = None;
                 session.active_dialog = None;
+                session.active_popup_session_id = None;
                 session.publish_update();
                 let action = CloseAction::Native {
                     target_id: session.native_target_id.clone(),
                     browser_incarnation: session.browser_incarnation.clone(),
                     is_dev: session.is_dev,
                 };
+                inner.clear_parent_popup_link(session_id, parent_id.as_deref());
                 self.publish_count(&inner);
                 Ok(action)
             }
@@ -939,6 +995,7 @@ impl SessionRegistry {
         let Some(session) = inner.sessions.get_mut(session_id) else {
             return;
         };
+        let parent_id = session.parent_session_id.clone();
         if session.status == SessionStatus::Closing {
             session.retire(SessionStatus::Closed, None);
         }
@@ -953,6 +1010,7 @@ impl SessionRegistry {
                 }
             }
         }
+        inner.clear_parent_popup_link(session_id, parent_id.as_deref());
         self.publish_count(&inner);
     }
 
@@ -1061,6 +1119,8 @@ impl SessionRegistry {
             lease: None,
             active_dialog: None,
             popup_blocked: false,
+            active_popup_session_id: None,
+            parent_session_id: Some(parent_id.clone()),
             pending_api_navigation_at: None,
             created_at: Instant::now(),
             retired_at: None,
@@ -1094,7 +1154,7 @@ impl SessionRegistry {
             self.publish_count(&inner);
             return None;
         }
-        let departure = inner
+        let found = inner
             .sessions
             .values_mut()
             .find(|s| {
@@ -1102,7 +1162,14 @@ impl SessionRegistry {
                     && s.native_target_id.as_deref() == Some(target_id)
                     && s.status.holds_slot()
             })
-            .map(|s| Self::depart(s, "native target was destroyed"));
+            .map(|s| {
+                let parent_id = s.parent_session_id.clone();
+                (Self::depart(s, "native target was destroyed"), parent_id)
+            });
+        let departure = found.map(|(dep, parent_id)| {
+            inner.clear_parent_popup_link(&dep.session_id, parent_id.as_deref());
+            dep
+        });
         self.publish_count(&inner);
         departure
     }
@@ -1118,12 +1185,20 @@ impl SessionRegistry {
         inner
             .raw_targets
             .retain(|(incarnation, _), _| incarnation != browser_incarnation);
-        let departures = inner
+        let found: Vec<(SessionDeparture, Option<String>)> = inner
             .sessions
             .values_mut()
             .filter(|s| s.browser_incarnation == browser_incarnation && s.status.holds_slot())
-            .map(|s| Self::depart(s, reason))
+            .map(|s| {
+                let parent_id = s.parent_session_id.clone();
+                (Self::depart(s, reason), parent_id)
+            })
             .collect();
+        let mut departures = Vec::with_capacity(found.len());
+        for (dep, parent_id) in found {
+            inner.clear_parent_popup_link(&dep.session_id, parent_id.as_deref());
+            departures.push(dep);
+        }
         self.publish_count(&inner);
         departures
     }
@@ -1149,11 +1224,18 @@ impl SessionRegistry {
     pub async fn close_principal_sessions(&self, principal: &str) -> Vec<String> {
         let mut inner = self.inner.write().await;
         let mut closed = Vec::new();
+        let mut parent_links = Vec::new();
         for s in inner.sessions.values_mut() {
             if s.owner_principal == principal && s.status != SessionStatus::Closed {
                 s.retire(SessionStatus::Closed, None);
                 closed.push(s.browser_session_id.clone());
+                if let Some(pid) = s.parent_session_id.clone() {
+                    parent_links.push((s.browser_session_id.clone(), pid));
+                }
             }
+        }
+        for (child_id, pid) in parent_links {
+            inner.clear_parent_popup_link(&child_id, Some(pid.as_str()));
         }
         inner
             .raw_targets

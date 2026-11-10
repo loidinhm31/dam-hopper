@@ -226,3 +226,74 @@ async fn snapshots_exclude_credentials_and_idle_publishers_do_not_allocate_state
     registry.update_title(&id, "after unsubscribe").await;
     assert!(registry.inner.read().await.sessions[&id].updates.is_none());
 }
+
+#[tokio::test]
+async fn popup_lifecycle_publishes_parent_link_on_running_and_clears_only_matching_child() {
+    let registry = SessionRegistry::new();
+    let opener = pending(&registry).await;
+    running(&registry, &opener).await;
+    let mut opener_rx = subscribe(&registry, &opener).await;
+    let initial = latest(&mut opener_rx);
+    assert!(initial.active_popup_session_id.is_none());
+    assert!(initial.parent_session_id.is_none());
+
+    // Admitting a popup reserves an Initializing child with parent_session_id,
+    // but does NOT publish active_popup_session_id on opener until commit_running.
+    let PopupAdmission::Admitted {
+        session: popup1,
+        parent_session_id,
+        ..
+    } = registry
+        .admit_popup("inc1", &opener, "popup-target-1", "https://accounts.google.com/o/oauth2/auth", 3)
+        .await
+    else {
+        panic!("popup1 must be admitted");
+    };
+    assert_eq!(parent_session_id, opener);
+    assert_eq!(popup1.parent_session_id.as_deref(), Some(opener.as_str()));
+    assert!(!opener_rx.has_changed().unwrap());
+
+    let popup1_id = popup1.browser_session_id;
+    let committed1 = registry.commit_running(&popup1_id, &|| true).await.unwrap();
+    assert_eq!(committed1.status, "running");
+    assert_eq!(committed1.parent_session_id.as_deref(), Some(opener.as_str()));
+    assert!(opener_rx.has_changed().unwrap());
+    assert_eq!(
+        latest(&mut opener_rx).active_popup_session_id.as_deref(),
+        Some(popup1_id.as_str())
+    );
+
+    // Second popup admitted and committed supersedes popup1 on the opener;
+    // closing older popup1 must NOT clear popup2's active link on the opener.
+    let PopupAdmission::Admitted { session: popup2, .. } = registry
+        .admit_popup("inc1", &opener, "popup-target-2", "https://accounts.google.com/signin", 3)
+        .await
+    else {
+        panic!("popup2 must be admitted");
+    };
+    let popup2_id = popup2.browser_session_id;
+    registry.commit_running(&popup2_id, &|| true).await.unwrap();
+    assert_eq!(
+        latest(&mut opener_rx).active_popup_session_id.as_deref(),
+        Some(popup2_id.as_str())
+    );
+
+    registry.begin_close(&popup1_id, "alice").await.unwrap();
+    registry.finish_close(&popup1_id, false).await;
+    assert_eq!(
+        registry
+            .get_session(&opener, "alice")
+            .await
+            .unwrap()
+            .active_popup_session_id
+            .as_deref(),
+        Some(popup2_id.as_str())
+    );
+
+    // Native destruction (e.g. window.close() after Google OAuth completes) of popup2 clears opener's activePopupSessionId.
+    registry.native_destroyed("inc1", "popup-target-2").await.unwrap();
+    assert!(opener_rx.has_changed().unwrap());
+    let after_close = latest(&mut opener_rx);
+    assert!(after_close.active_popup_session_id.is_none());
+    assert_eq!(after_close.status, "running");
+}

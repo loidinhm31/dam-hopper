@@ -473,6 +473,12 @@ async fn build_producer(
     let page_sid = producer.ensure_page_session().await.map_err(|err| {
         SessionError::NativeUnavailable(format!("browser page session setup failed: {err}"))
     })?;
+    producer
+        .apply_stealth_and_focus(&page_sid)
+        .await
+        .map_err(|err| {
+            SessionError::NativeUnavailable(format!("browser stealth session setup failed: {err}"))
+        })?;
     let initial_url = snapshot.dto.url.trim();
     if navigate && !initial_url.is_empty() && initial_url != "about:blank" {
         // First managed navigation: the request policy is already live on this page session.

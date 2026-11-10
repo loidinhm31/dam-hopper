@@ -196,6 +196,15 @@ pub enum CdpTargetEvent {
         waiting_for_debugger: bool,
         _reservation: Option<Arc<MemoryReservation>>,
     },
+    /// Flattened auto-attach of a child target (such as a cross-origin OOPIF `iframe`) scoped to
+    /// `parent_session_id`.
+    ChildAttached {
+        parent_session_id: String,
+        session_id: String,
+        info: NativeTargetInfo,
+        waiting_for_debugger: bool,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
     Destroyed {
         target_id: String,
         _reservation: Option<Arc<MemoryReservation>>,
@@ -745,8 +754,14 @@ where
                 "frame is not a JSON object".to_string(),
             ));
         }
-        let env: IncomingEnvelope = serde_json::from_str(text)
-            .map_err(|e| CdpError::MalformedResponse(format!("unparseable frame: {e}")))?;
+        let env: IncomingEnvelope = match serde_json::from_str(text) {
+            Ok(env) => env,
+            Err(_) => {
+                let sanitized = sanitize_cdp_json_escapes(text);
+                serde_json::from_str(&sanitized)
+                    .map_err(|e| CdpError::MalformedResponse(format!("unparseable frame: {e}")))?
+            }
+        };
 
         // An `id` marks a command response.
         if let Some(id_val) = env.id {
@@ -869,8 +884,15 @@ where
                 self.decide_request(env.session_id.as_ref(), env.params.as_ref())
             }
             Some(Value::String(method)) if method == "Target.attachedToTarget" => {
-                if env.session_id.is_none() {
-                    self.publish_target_event(method.as_str(), env.params.as_ref());
+                match env.session_id {
+                    None => self.publish_target_event(method.as_str(), env.params.as_ref()),
+                    Some(Value::String(parent_sid))
+                        if !parent_sid.is_empty()
+                            && parent_sid.len() <= MAX_EVENT_SESSION_ID_BYTES =>
+                    {
+                        self.publish_child_target_event(parent_sid, env.params.as_ref());
+                    }
+                    _ => {}
                 }
                 Ok(())
             }
@@ -935,18 +957,45 @@ where
                 ("Fetch.failRequest", Some("AccessDenied"))
             }
         };
+        let raw_headers = params.and_then(|p| p.pointer("/request/headers"));
+        let extra_header_bytes = if error_reason.is_none() {
+            super::stealth::estimate_headless_header_override_bytes(raw_headers).unwrap_or(0)
+        } else {
+            0
+        };
+        let total_budget = 256usize
+            .saturating_add(request_id.len().saturating_mul(6))
+            .saturating_add(extra_header_bytes);
+        if total_budget > super::protocol::MAX_COMMAND_BYTES {
+            return Err(CdpError::Transport(
+                "request-policy header override exceeds command budget".into(),
+            ));
+        }
+        // Reserve before allocating the rewritten headers or bounded serialization; request ids
+        // and header strings may need JSON escaping (six bytes per input byte).
+        let reservation = self
+            .memory_controller
+            .try_reserve(total_budget)
+            .map_err(|_| CdpError::Transport("request-policy memory admission failed".into()))?;
+        let headers = if extra_header_bytes > 0 {
+            super::stealth::sanitize_headless_request_headers(raw_headers)
+        } else {
+            None
+        };
         #[derive(Serialize)]
         struct Decision<'a> {
             #[serde(rename = "requestId")]
             request_id: &'a str,
             #[serde(rename = "errorReason", skip_serializing_if = "Option::is_none")]
             error_reason: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            headers: Option<Vec<Value>>,
         }
-        let decision = Decision { request_id, error_reason };
-        // Reserve before allocating the bounded serialization; request ids may need JSON
-        // escaping (six bytes per input byte). Only this one message is retained.
-        let reservation = self.memory_controller.try_reserve(256 + request_id.len() * 6)
-            .map_err(|_| CdpError::Transport("request-policy memory admission failed".into()))?;
+        let decision = Decision {
+            request_id,
+            error_reason,
+            headers,
+        };
         let json = serde_json::to_string(&CdpRequestWire {
             id: self.next_policy_id,
             method,
@@ -964,6 +1013,24 @@ where
     fn publish_target_event(&self, method: &str, params: Option<&Value>) {
         let event = self.project_target_event(method, params);
         let _ = self.target_tx.send(Arc::new(event));
+    }
+
+    fn publish_child_target_event(&self, parent_session_id: String, params: Option<&Value>) {
+        if let CdpTargetEvent::Attached {
+            session_id,
+            info,
+            waiting_for_debugger,
+            _reservation,
+        } = self.project_target_event("Target.attachedToTarget", params)
+        {
+            let _ = self.target_tx.send(Arc::new(CdpTargetEvent::ChildAttached {
+                parent_session_id,
+                session_id,
+                info,
+                waiting_for_debugger,
+                _reservation,
+            }));
+        }
     }
 
     fn project_target_event(&self, method: &str, params: Option<&Value>) -> CdpTargetEvent {
@@ -1163,6 +1230,101 @@ fn response_outcome(result: Option<Value>, error: Option<Value>) -> Result<Value
             "response missing both result and error".to_string(),
         )),
     }
+}
+
+/// Replaces unpaired UTF-16 surrogates (`\uD800`..`\uDFFF`) and truncated `\u` hex escapes
+/// inside JSON string literals (which Chromium's `Fetch.requestPaused` emits when serializing
+/// or truncating binary/WTF-16 `postData`) with `\ufffd` so `serde_json` can parse the frame.
+fn sanitize_cdp_json_escapes(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut in_string = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if !in_string {
+            if b == b'"' {
+                in_string = true;
+            }
+            let ch = text[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+        if b == b'"' {
+            in_string = false;
+            out.push('"');
+            i += 1;
+            continue;
+        }
+        if b != b'\\' {
+            let ch = text[i..].chars().next().unwrap();
+            if (ch as u32) < 0x20 {
+                out.push_str("\\ufffd");
+            } else {
+                out.push(ch);
+            }
+            i += ch.len_utf8();
+            continue;
+        }
+        if i + 1 >= bytes.len() {
+            out.push_str("\\\\");
+            break;
+        }
+        match bytes[i + 1] {
+            b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => {
+                out.push('\\');
+                out.push(bytes[i + 1] as char);
+                i += 2;
+            }
+            b'u' => {
+                let mut hex_len = 0;
+                while hex_len < 4
+                    && i + 2 + hex_len < bytes.len()
+                    && bytes[i + 2 + hex_len].is_ascii_hexdigit()
+                {
+                    hex_len += 1;
+                }
+                if hex_len < 4 {
+                    out.push_str("\\ufffd");
+                    i += 2 + hex_len;
+                    continue;
+                }
+                let code = u16::from_str_radix(&text[i + 2..i + 6], 16).unwrap_or(0xFFFD);
+                if (0xD800..=0xDBFF).contains(&code) {
+                    let valid_low = if i + 12 <= bytes.len()
+                        && bytes[i + 6] == b'\\'
+                        && bytes[i + 7] == b'u'
+                        && bytes[i + 8..i + 12].iter().all(u8::is_ascii_hexdigit)
+                    {
+                        u16::from_str_radix(&text[i + 8..i + 12], 16)
+                            .ok()
+                            .filter(|low| (0xDC00..=0xDFFF).contains(low))
+                    } else {
+                        None
+                    };
+                    if valid_low.is_some() {
+                        out.push_str(&text[i..i + 12]);
+                        i += 12;
+                    } else {
+                        out.push_str("\\ufffd");
+                        i += 6;
+                    }
+                } else if (0xDC00..=0xDFFF).contains(&code) {
+                    out.push_str("\\ufffd");
+                    i += 6;
+                } else {
+                    out.push_str(&text[i..i + 6]);
+                    i += 6;
+                }
+            }
+            _ => {
+                out.push_str("\\ufffd");
+                i += 2;
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1672,5 +1834,76 @@ mod tests {
         // Force ring slot drop by clearing broadcast channel on client close
         client.close().await;
         eventually(|| controller.current_reserved_bytes() == 0).await;
+    }
+
+    #[tokio::test]
+    async fn test_request_paused_with_lone_surrogate_and_truncated_hex_escapes_in_post_data_stays_alive() {
+        use crate::browser_host::config::BrowserHostConfig;
+        use crate::browser_host::network_policy::NetworkPolicy;
+
+        let controller = MemoryAdmissionController::new(64 * 1024);
+        let (in_tx, in_rx) = mpsc::channel(16);
+        let (out_tx, mut out_rx) = mpsc::channel(16);
+        let client = CdpClient::from_ws_stream_with_memory_controller(
+            MockChannelWs {
+                tx: out_tx,
+                rx: in_rx,
+            },
+            controller,
+        );
+        let policy = Arc::new(NetworkPolicy::from_config(&BrowserHostConfig::default(), false).unwrap());
+        let escalated = Arc::new(AtomicBool::new(false));
+        let esc_clone = escalated.clone();
+
+        let install_fut = client.install_browser_request_policy(
+            policy,
+            Arc::new(move |_| {
+                esc_clone.store(true, Ordering::SeqCst);
+            }),
+        );
+        let reply_fut = async {
+            let Message::Text(cmd) = out_rx.recv().await.unwrap() else {
+                panic!("expected Fetch.enable");
+            };
+            let parsed: Value = serde_json::from_str(&cmd).unwrap();
+            assert_eq!(parsed["method"], "Fetch.enable");
+            in_tx
+                .send(Ok(Message::Text(
+                    serde_json::json!({ "id": parsed["id"], "result": {} })
+                        .to_string()
+                        .into(),
+                )))
+                .await
+                .unwrap();
+        };
+        tokio::join!(install_fut, reply_fut).0.unwrap();
+
+        for (req_id, raw_frame) in [
+            (
+                "post-lone-surrogate",
+                r#"{"method":"Fetch.requestPaused","params":{"requestId":"post-lone-surrogate","request":{"url":"https://accounts.google.com/v3/signin","headers":{"User-Agent":"Mozilla/5.0 Chrome/140.0.0.0"},"postData":"binary\uD800payload\uDC00end"},"resourceType":"Fetch"}}"#,
+            ),
+            (
+                "post-truncated-hex",
+                r#"{"method":"Fetch.requestPaused","params":{"requestId":"post-truncated-hex","request":{"url":"https://challenges.cloudflare.com/turnstile","headers":{"User-Agent":"Mozilla/5.0 Chrome/140.0.0.0"},"postData":"truncated\u00"},"resourceType":"Ping"}}"#,
+            ),
+            (
+                "post-surrogate-newline",
+                r#"{"method":"Fetch.requestPaused","params":{"requestId":"post-surrogate-newline","request":{"url":"https://example.com/log","headers":{"User-Agent":"Mozilla/5.0 Chrome/140.0.0.0"},"postData":"lead\uD83D\ntrail"},"resourceType":"XHR"}}"#,
+            ),
+        ] {
+            in_tx
+                .send(Ok(Message::Text(raw_frame.to_string().into())))
+                .await
+                .unwrap();
+            let Message::Text(decision_txt) = out_rx.recv().await.unwrap() else {
+                panic!("expected Fetch.continueRequest");
+            };
+            let decision: Value = serde_json::from_str(&decision_txt).unwrap();
+            assert_eq!(decision["method"], "Fetch.continueRequest");
+            assert_eq!(decision["params"]["requestId"], req_id);
+        }
+        assert!(!client.is_closed());
+        assert!(!escalated.load(Ordering::SeqCst));
     }
 }

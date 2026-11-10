@@ -1313,3 +1313,94 @@ exec '{real}' "$@"
 fn fs_write_script(path: &Path, body: &str) {
     std::fs::write(path, body).unwrap();
 }
+
+#[tokio::test]
+async fn test_automation_controlled_allowlist_and_chrome_identity() {
+    use dam_hopper_server::browser_host::stealth::{
+        sanitize_headless_request_headers, ChromeIdentity, ANTI_DETECTION_SCRIPT,
+        DEFAULT_CHROME_VERSION,
+    };
+    use serde_json::json;
+
+    let tmp = tempdir().unwrap();
+    for bad_blink_flag in [
+        "--disable-blink-features=SitePerProcess",
+        "--disable-blink-features=AutomationControlled,WebSecurity",
+        "--disable-blink-features=",
+    ] {
+        let mut config = BrowserLaunchConfig::new(tmp.path().to_path_buf());
+        config.additional_args.push(bad_blink_flag.to_string());
+        let res = BrowserProcess::launch(config).await;
+        assert!(
+            matches!(res, Err(ProcessError::LaunchFailed(_))),
+            "flag '{bad_blink_flag}' should have been rejected by allowlist"
+        );
+    }
+
+    let mut ok_config = BrowserLaunchConfig::new(tmp.path().to_path_buf());
+    ok_config.executable_path = Some(Path::new("/nonexistent/chrome_bin").to_path_buf());
+    ok_config
+        .additional_args
+        .push("--disable-blink-features=AutomationControlled".to_string());
+    // Passes allowlist check and fails at executable lookup
+    let res = BrowserProcess::launch(ok_config).await;
+    assert!(matches!(res, Err(ProcessError::ExecutableNotFound(_))));
+
+    let parsed = ChromeIdentity::from_version_str(Some(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/144.0.7559.177 Safari/537.36",
+    ));
+    assert_eq!(parsed.full_version, "144.0.7559.177");
+    assert_eq!(parsed.major_version, "144");
+    assert!(parsed.user_agent.contains("Chrome/144.0.0.0 Safari/537.36"));
+    assert!(!parsed.user_agent.contains("HeadlessChrome"));
+    let params = parsed.user_agent_override_params();
+    assert_eq!(params["userAgent"], parsed.user_agent);
+    assert_eq!(
+        params["userAgentMetadata"]["brands"],
+        json!([
+            { "brand": "Not;A=Brand", "version": "8" },
+            { "brand": "Chromium", "version": "144" },
+            { "brand": "Google Chrome", "version": "144" }
+        ])
+    );
+    assert_eq!(
+        params["userAgentMetadata"]["fullVersionList"][2]["version"],
+        "144.0.7559.177"
+    );
+
+    for malformed in [None, Some(""), Some("HeadlessChrome/not-a-version"), Some("0.0.0")] {
+        let fallback = ChromeIdentity::from_version_str(malformed);
+        assert_eq!(fallback.full_version, DEFAULT_CHROME_VERSION);
+        assert_eq!(fallback.major_version, "136");
+    }
+
+    assert!(sanitize_headless_request_headers(None).is_none());
+    assert!(sanitize_headless_request_headers(Some(&json!({
+        "User-Agent": "Mozilla/5.0 Chrome/136.0.0.0 Safari/537.36",
+        "sec-ch-ua": "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"136\", \"Google Chrome\";v=\"136\""
+    })))
+    .is_none());
+
+    let rewritten = sanitize_headless_request_headers(Some(&json!({
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 HeadlessChrome/144.0.7559.177 Safari/537.36",
+        "sec-ch-ua": "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"144\", \"HeadlessChrome\";v=\"144\"",
+        "Accept": "text/html"
+    })))
+    .expect("headers with HeadlessChrome should be sanitized");
+    let map: std::collections::HashMap<String, String> = rewritten
+        .into_iter()
+        .map(|entry| {
+            (
+                entry["name"].as_str().unwrap().to_string(),
+                entry["value"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert!(map["User-Agent"].contains("Chrome/144.0.0.0"));
+    assert!(!map["User-Agent"].contains("HeadlessChrome"));
+    assert!(map["sec-ch-ua"].contains("Google Chrome"));
+    assert!(!map["sec-ch-ua"].contains("HeadlessChrome"));
+    assert_eq!(map["Accept"], "text/html");
+    assert!(ANTI_DETECTION_SCRIPT.contains("webdriver"));
+    assert!(ANTI_DETECTION_SCRIPT.contains("Google Chrome"));
+}

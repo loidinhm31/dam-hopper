@@ -172,9 +172,14 @@ Retrieves current metadata, viewport epoch, navigation revision, active lease, a
     "holderKind": "human",
     "expiresAtUnixMs": 1794142800000
   },
-  "popupBlocked": false
+  "popupBlocked": false,
+  "activePopupSessionId": "a1b2c3d4-0000-4000-8000-000000000001",
+  "parentSessionId": null
 }
 ```
+
+- `activePopupSessionId` *(optional)*: Present when an admitted popup child session opened by this session is currently `running`. Automatically cleared and published via `sessionUpdated` when the popup session closes or is lost.
+- `parentSessionId` *(optional)*: Present on admitted popup sessions, identifying the opener `browserSessionId` so the Browser App can display the popup session and restore the opener when OAuth sign-in completes (`window.close()`) or when the user clicks **Return to Page**.
 
 ### DELETE /api/browser/sessions/{id}
 

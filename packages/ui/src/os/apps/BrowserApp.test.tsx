@@ -7,10 +7,18 @@ import type * as BrowserHostClientModule from "@/api/browser-host-client.js";
 import type { OsWindow } from "../types.js";
 import { BrowserHostClientError } from "@/api/browser-host-types.js";
 
-const { owner, store, api } = vi.hoisted(() => ({
+const { owner, store, api, requestProxyFocus } = vi.hoisted(() => ({
   owner: { profileId: "profile-1", generation: 1 },
   store: { session: { windows: {} as Record<string, OsWindow> }, updateAppState: vi.fn() },
-  api: { getBrowserSession: vi.fn(), navigateBrowser: vi.fn(), reloadBrowser: vi.fn(), historyBrowser: vi.fn() },
+  api: {
+    getBrowserSession: vi.fn(),
+    navigateBrowser: vi.fn(),
+    reloadBrowser: vi.fn(),
+    historyBrowser: vi.fn(),
+    acquireBrowserControl: vi.fn(),
+    releaseBrowserControl: vi.fn(),
+  },
+  requestProxyFocus: vi.fn(),
 }));
 vi.mock("@/api/browser-host-client.js", async (original) => ({
   ...await original<typeof BrowserHostClientModule>(), ...api,
@@ -28,7 +36,10 @@ vi.mock("../window-context.js", () => ({
 vi.mock("../resource-registry.js", () => ({ useResourceClaim: () => ({ success: true }) }));
 vi.mock("@/stores/cognito-mode.js", () => ({ useCognitoModeStore: () => false }));
 vi.mock("../BrowserStreamKeepAliveHost.js", () => ({
-  registerBrowserStreamSlot: () => () => {}, updateBrowserStreamSlot: () => {}, clearBrowserViewFenceForProfile: () => {},
+  registerBrowserStreamSlot: () => () => {},
+  updateBrowserStreamSlot: () => {},
+  clearBrowserViewFenceForProfile: () => {},
+  requestBrowserProxyFocus: requestProxyFocus,
 }));
 vi.mock("@/browser-host/selection-controller.js", () => ({
   collectHostTerminalCandidates: () => [], useHostBrowserSelection: () => ({}),
@@ -63,6 +74,12 @@ beforeEach(async () => {
   for (const fn of [api.navigateBrowser, api.reloadBrowser, api.historyBrowser]) {
     fn.mockReset().mockResolvedValue({ ...live, navigationRevision: "9007199254740994" });
   }
+  api.acquireBrowserControl.mockReset().mockResolvedValue({
+    leaseToken: "lease-1",
+    expiresAtUnixMs: Date.now() + 30_000,
+  });
+  api.releaseBrowserControl.mockReset().mockResolvedValue({ released: true });
+  requestProxyFocus.mockReset();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -168,5 +185,145 @@ describe("BrowserApp native-navigation CAS", () => {
       direction: "back", navigationRevision: live.navigationRevision,
     }, expect.any(AbortSignal));
     expect((container.querySelector('[data-testid="browser-reload-btn"]') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("requests TextInputProxy focus on toolbar Control acquisition and releases stale leases if session or viewer changed", async () => {
+    const controlBtn = container.querySelector(
+      '[data-testid="browser-take-control-btn"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      controlBtn.click();
+    });
+    expect(api.acquireBrowserControl).toHaveBeenCalledWith(owner, "session-1", {
+      viewerId: "window-1",
+      holderKind: "human",
+    });
+    expect(store.session.windows["window-1"].appState).toMatchObject({
+      isController: true,
+      leaseToken: "lease-1",
+    });
+    expect(requestProxyFocus).toHaveBeenCalledExactlyOnceWith(
+      "window-1",
+      owner,
+      "session-1",
+      "lease-1",
+    );
+
+    // Reset to view-only and verify stale viewer/session releases lease without focusing proxy
+    requestProxyFocus.mockClear();
+    store.session.windows["window-1"].appState = {
+      ...store.session.windows["window-1"].appState,
+      isController: false,
+      leaseToken: undefined,
+      viewerId: "viewer-A",
+    };
+    await act(async () =>
+      root.render(createElement(BrowserApp, { window: store.session.windows["window-1"] })),
+    );
+    const delayedLease = Promise.withResolvers<{ leaseToken: string; expiresAtUnixMs: number }>();
+    api.acquireBrowserControl.mockReturnValueOnce(delayedLease.promise);
+    const takeBtn2 = container.querySelector(
+      '[data-testid="browser-take-control-btn"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      takeBtn2.click();
+    });
+    store.session.windows["window-1"].appState!.viewerId = "viewer-B";
+    await act(async () => {
+      delayedLease.resolve({ leaseToken: "stale-lease", expiresAtUnixMs: Date.now() + 30_000 });
+    });
+    expect(api.releaseBrowserControl).toHaveBeenCalledWith(owner, "session-1", {
+      leaseToken: "stale-lease",
+    });
+    expect(store.session.windows["window-1"].appState?.isController).toBe(false);
+    expect(requestProxyFocus).not.toHaveBeenCalled();
+  });
+
+  it("renders popup banners and supports Return to Page and Open Popup transitions", async () => {
+    store.session.windows["window-1"].appState = {
+      ...store.session.windows["window-1"].appState,
+      sessionId: "popup-session-1",
+      url: "https://accounts.google.com/o/oauth2/v2/auth",
+      parentSessionId: "session-1",
+      openerSessionId: "session-1",
+      popupBlocked: true,
+    };
+    await act(async () =>
+      root.render(createElement(BrowserApp, { window: store.session.windows["window-1"] })),
+    );
+    expect(container.querySelector('[data-testid="browser-popup-blocked-banner"]')).not.toBeNull();
+    const returnBtn = container.querySelector(
+      '[data-testid="browser-popup-return-btn"]',
+    ) as HTMLButtonElement;
+    expect(returnBtn).not.toBeNull();
+
+    api.getBrowserSession.mockResolvedValueOnce({
+      ...live,
+      activePopupSessionId: "popup-session-1",
+    });
+    await act(async () => {
+      returnBtn.click();
+    });
+    expect(store.session.windows["window-1"].appState).toMatchObject({
+      sessionId: "session-1",
+      activePopupSessionId: "popup-session-1",
+      dismissedPopupSessionId: "popup-session-1",
+    });
+
+    await act(async () =>
+      root.render(createElement(BrowserApp, { window: store.session.windows["window-1"] })),
+    );
+    const openPopupBtn = container.querySelector(
+      '[data-testid="browser-open-popup-btn"]',
+    ) as HTMLButtonElement;
+    expect(openPopupBtn).not.toBeNull();
+    api.getBrowserSession.mockResolvedValueOnce({
+      ...live,
+      browserSessionId: "popup-session-1",
+      url: "https://accounts.google.com/o/oauth2/v2/auth",
+      parentSessionId: "session-1",
+    });
+    await act(async () => {
+      openPopupBtn.click();
+    });
+    expect(store.session.windows["window-1"].appState).toMatchObject({
+      sessionId: "popup-session-1",
+      parentSessionId: "session-1",
+      openerSessionId: "session-1",
+      dismissedPopupSessionId: undefined,
+    });
+  });
+
+  it("recreates a fresh browser session when navigating or reloading from a lost session", async () => {
+    store.session.windows["window-1"].appState = {
+      ...store.session.windows["window-1"].appState,
+      sessionId: "lost-session-1",
+      browserSessionStatus: "lost",
+      unsupportedReason: "Browser session is lost",
+    };
+    await act(async () =>
+      root.render(createElement(BrowserApp, { window: store.session.windows["window-1"] })),
+    );
+    expect(container.querySelector('[data-testid="browser-unsupported-banner"]')?.textContent).toContain(
+      "Browser session is lost",
+    );
+
+    const input = container.querySelector(
+      '[data-testid="browser-address-input"]',
+    ) as HTMLInputElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, "https://accounts.google.com");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await action("navigate");
+    expect(api.navigateBrowser).not.toHaveBeenCalled();
+    expect(store.session.windows["window-1"].appState).toMatchObject({
+      sessionId: undefined,
+      browserSessionStatus: undefined,
+      unsupportedReason: undefined,
+      url: "https://accounts.google.com",
+    });
+    expect(typeof store.session.windows["window-1"].appState?.creationKey).toBe("string");
   });
 });

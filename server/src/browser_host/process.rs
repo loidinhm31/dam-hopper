@@ -318,8 +318,8 @@ impl BrowserProcess {
                 config.user_data_dir.display()
             ))
             .arg("--no-first-run")
-            .arg("--no-default-browser-check");
-
+            .arg("--no-default-browser-check")
+            .arg("--disable-blink-features=AutomationControlled");
         if config.headless {
             cmd.arg("--headless=new");
         }
@@ -933,6 +933,10 @@ fn is_allowlisted_arg(arg: &str) -> bool {
         || arg.contains("disable-background-timer-throttling")
     {
         return false;
+    }
+
+    if arg == "--disable-blink-features=AutomationControlled" {
+        return true;
     }
 
     const SAFE_PREFIXES: &[&str] = &[

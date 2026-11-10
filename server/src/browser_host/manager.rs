@@ -2611,6 +2611,7 @@ impl ObserverShared {
                     release_attached(control, session_id, *waiting_for_debugger).await;
                 }
             }
+            CdpTargetEvent::ChildAttached { .. } => {}
             CdpTargetEvent::Destroyed { target_id, .. } => {
                 state.rejected.remove(target_id);
                 state.pending_close.remove(target_id);
