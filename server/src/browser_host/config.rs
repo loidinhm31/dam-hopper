@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 
 pub const BROWSER_PROTOCOL_VERSION: u32 = 1;
 
@@ -19,10 +19,10 @@ pub const MIN_MEMORY_CEILING_BYTES: u64 = 33_554_432; // 32 MiB
 pub const MAX_MEMORY_CEILING_BYTES: u64 = 1_073_741_824; // 1 GiB
 
 pub const DEFAULT_DENIED_DESTINATIONS: &[&str] = &[
-    "169.254.169.254",            // AWS/GCP/Azure link-local metadata
-    "fd00:ec2::254",               // AWS IPv6 link-local metadata
-    "metadata.google.internal",    // GCP metadata DNS
-    "100.100.100.200",            // Alibaba cloud metadata
+    "169.254.169.254",          // AWS/GCP/Azure link-local metadata
+    "fd00:ec2::254",            // AWS IPv6 link-local metadata
+    "metadata.google.internal", // GCP metadata DNS
+    "100.100.100.200",          // Alibaba cloud metadata
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,9 +70,15 @@ pub struct BrowserBudgetsConfig {
     pub max_targets: usize,
     #[serde(default = "default_max_viewers", alias = "max_viewers")]
     pub max_viewers: usize,
-    #[serde(default = "default_max_raw_cdp_connections", alias = "max_raw_cdp_connections")]
+    #[serde(
+        default = "default_max_raw_cdp_connections",
+        alias = "max_raw_cdp_connections"
+    )]
     pub max_raw_cdp_connections: usize,
-    #[serde(default = "default_memory_ceiling_bytes", alias = "memory_ceiling_bytes")]
+    #[serde(
+        default = "default_memory_ceiling_bytes",
+        alias = "memory_ceiling_bytes"
+    )]
     pub memory_ceiling_bytes: u64,
     #[serde(default = "default_jpeg_quality", alias = "jpeg_quality")]
     pub jpeg_quality: u8,
@@ -137,10 +143,11 @@ impl BrowserBudgetsConfig {
     /// - Each raw CDP connection: 4 MiB per direction = 8 MiB
     pub fn estimate_reservation_bytes(&self) -> u64 {
         let per_target = 12_687_744u64; // ~12.1 MiB
-        let per_viewer = 4_404_019u64;  // ~4.2 MiB
+        let per_viewer = 4_404_019u64; // ~4.2 MiB
         let per_raw_cdp = 8_388_608u64; // 8 MiB
 
-        (self.max_targets as u64).saturating_mul(per_target)
+        (self.max_targets as u64)
+            .saturating_mul(per_target)
             .saturating_add((self.max_viewers as u64).saturating_mul(per_viewer))
             .saturating_add((self.max_raw_cdp_connections as u64).saturating_mul(per_raw_cdp))
     }
@@ -220,17 +227,41 @@ impl BrowserBudgetsConfig {
 pub struct BrowserHostConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default, alias = "executable_path", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "executable_path",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub executable_path: Option<PathBuf>,
-    #[serde(default, alias = "profile_root", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "profile_root",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub profile_root: Option<PathBuf>,
-    #[serde(default, alias = "allowed_target_origins", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        alias = "allowed_target_origins",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub allowed_target_origins: Vec<String>,
-    #[serde(default, alias = "allowed_asset_origins", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        alias = "allowed_asset_origins",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub allowed_asset_origins: Vec<String>,
-    #[serde(default, alias = "allowed_dev_origins", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        alias = "allowed_dev_origins",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub allowed_dev_origins: Vec<String>,
-    #[serde(default, alias = "denied_destinations", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        alias = "denied_destinations",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub denied_destinations: Vec<String>,
     #[serde(default)]
     pub budgets: BrowserBudgetsConfig,
@@ -245,7 +276,10 @@ impl Default for BrowserHostConfig {
             allowed_target_origins: Vec::new(),
             allowed_asset_origins: Vec::new(),
             allowed_dev_origins: Vec::new(),
-            denied_destinations: DEFAULT_DENIED_DESTINATIONS.iter().map(|s| s.to_string()).collect(),
+            denied_destinations: DEFAULT_DENIED_DESTINATIONS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             budgets: BrowserBudgetsConfig::default(),
         }
     }
@@ -262,7 +296,9 @@ impl BrowserHostConfig {
         let url = url::Url::parse(trimmed).map_err(|e| format!("parse error: {e}"))?;
         let scheme = url.scheme();
         if scheme != "http" && scheme != "https" {
-            return Err(format!("unsupported scheme '{scheme}', only http and https allowed"));
+            return Err(format!(
+                "unsupported scheme '{scheme}', only http and https allowed"
+            ));
         }
         if !url.username().is_empty() || url.password().is_some() {
             return Err("credentials in origin are forbidden".to_string());
@@ -299,7 +335,10 @@ impl BrowserHostConfig {
         if trimmed.contains('/') {
             // Check IP CIDR
             let parts: Vec<&str> = trimmed.split('/').collect();
-            if parts.len() == 2 && parts[0].parse::<IpAddr>().is_ok() && parts[1].parse::<u8>().is_ok() {
+            if parts.len() == 2
+                && parts[0].parse::<IpAddr>().is_ok()
+                && parts[1].parse::<u8>().is_ok()
+            {
                 return Ok(());
             }
             return Err("invalid destination CIDR format".to_string());
@@ -330,8 +369,14 @@ impl BrowserHostConfig {
             }
             return Ok(());
         }
-        if host.is_empty() || !host.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-') {
-            return Err(format!("invalid characters in destination hostname: {host}"));
+        if host.is_empty()
+            || !host
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '.' || c == '-')
+        {
+            return Err(format!(
+                "invalid characters in destination hostname: {host}"
+            ));
         }
 
         Ok(())
@@ -366,7 +411,8 @@ impl BrowserHostConfig {
             if mode & 0o002 != 0 {
                 return Err(BrowserConfigError::UnsafeExecutablePermissions {
                     path: path.display().to_string(),
-                    reason: "file is world-writable (must be mode 0755 or more restrictive)".to_string(),
+                    reason: "file is world-writable (must be mode 0755 or more restrictive)"
+                        .to_string(),
                 });
             }
         }
@@ -454,9 +500,11 @@ impl BrowserHostConfig {
         }
 
         for dest in &self.denied_destinations {
-            Self::validate_destination(dest).map_err(|reason| BrowserConfigError::InvalidDestination {
-                destination: dest.clone(),
-                reason,
+            Self::validate_destination(dest).map_err(|reason| {
+                BrowserConfigError::InvalidDestination {
+                    destination: dest.clone(),
+                    reason,
+                }
             })?;
         }
 
@@ -487,6 +535,93 @@ impl BrowserHostConfig {
             return true;
         }
         false
+    }
+}
+
+/// Trusted, parsed public http(s) origin of this server (scheme + authority only).
+///
+/// It is the only authority raw CDP discovery may advertise: it comes from operator
+/// configuration (`DAM_HOPPER_PUBLIC_SERVER_ORIGIN`) or, in guarded development, from the
+/// verified bound loopback listener — never from request headers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicServerOrigin {
+    origin: String,
+    authority: String,
+    ws_base: String,
+}
+
+impl PublicServerOrigin {
+    /// Parses an operator-supplied origin. Rejects non-http(s) schemes, missing host,
+    /// userinfo, any path other than a single trailing `/`, query and fragment.
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err("origin cannot be empty".to_string());
+        }
+        let url = url::Url::parse(trimmed).map_err(|e| format!("parse error: {e}"))?;
+        let ws_scheme = match url.scheme() {
+            "https" => "wss",
+            "http" => "ws",
+            other => {
+                return Err(format!(
+                    "unsupported scheme '{other}', only http and https allowed"
+                ))
+            }
+        };
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err("userinfo in origin is forbidden".to_string());
+        }
+        if url.host_str().is_none_or(str::is_empty) {
+            return Err("origin must include a host".to_string());
+        }
+        if url.query().is_some() || trimmed.contains('?') {
+            return Err("query parameters in origin are forbidden".to_string());
+        }
+        if url.fragment().is_some() || trimmed.contains('#') {
+            return Err("fragments in origin are forbidden".to_string());
+        }
+        if url.path() != "/" {
+            return Err(format!(
+                "origin cannot contain path segments: '{}'",
+                url.path()
+            ));
+        }
+        let origin = url.origin().ascii_serialization();
+        let authority = origin
+            .split_once("://")
+            .map(|(_, rest)| rest.to_string())
+            .ok_or_else(|| "origin has no authority".to_string())?;
+        let ws_base = format!("{ws_scheme}://{authority}");
+        Ok(Self {
+            origin,
+            authority,
+            ws_base,
+        })
+    }
+
+    /// Builds the origin of a verified bound listener address (development only).
+    pub fn from_listener_addr(addr: std::net::SocketAddr) -> Self {
+        let authority = addr.to_string();
+        Self {
+            origin: format!("http://{authority}"),
+            ws_base: format!("ws://{authority}"),
+            authority,
+        }
+    }
+
+    /// Canonical `scheme://authority` serialization (byte-comparable with an `Origin` header).
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
+    /// `host[:port]` without scheme.
+    pub fn authority(&self) -> &str {
+        &self.authority
+    }
+
+    /// `ws://authority` or `wss://authority` matching the public scheme.
+    pub fn ws_base(&self) -> &str {
+        &self.ws_base
     }
 }
 

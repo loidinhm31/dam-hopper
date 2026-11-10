@@ -43,9 +43,10 @@ impl BrowserAuthError {
             Self::Unauthorized(_) | Self::SessionRevoked(_) | Self::SessionExpired(_) => {
                 StatusCode::UNAUTHORIZED
             }
-            Self::AdminRequired(_) | Self::DevBypassDenied(_) | Self::AccountDisabled(_) | Self::OriginForbidden(_) => {
-                StatusCode::FORBIDDEN
-            }
+            Self::AdminRequired(_)
+            | Self::DevBypassDenied(_)
+            | Self::AccountDisabled(_)
+            | Self::OriginForbidden(_) => StatusCode::FORBIDDEN,
             Self::StorageUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
@@ -91,17 +92,161 @@ impl IntoResponse for BrowserAuthError {
     }
 }
 
+/// Loopback test that also treats IPv4-mapped IPv6 (`::ffff:127.0.0.1`) as loopback.
+pub fn is_loopback_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map_or_else(|| v6.is_loopback(), |v4| v4.is_loopback()),
+        v4 => v4.is_loopback(),
+    }
+}
+
+/// Development boundary: `state.no_auth` AND the actual bound listener is loopback AND the
+/// peer is loopback. Forwarded headers are never consulted. An unrecorded listener (never
+/// bound) fails closed, so a wildcard (`0.0.0.0`/`::`) listener can never serve the bypass.
+pub fn verify_dev_boundary(
+    state: &AppState,
+    peer_addr: Option<SocketAddr>,
+) -> Result<(), BrowserAuthError> {
+    if !state.no_auth {
+        return Err(BrowserAuthError::DevBypassDenied(
+            "dev bypass is not enabled on server".to_string(),
+        ));
+    }
+    verify_dev_listener(state)?;
+    let Some(addr) = peer_addr else {
+        warn!("Browser dev bypass rejected: missing peer address");
+        return Err(BrowserAuthError::DevBypassDenied(
+            "peer address information is missing".to_string(),
+        ));
+    };
+    if !is_loopback_ip(addr.ip()) {
+        warn!(peer = %addr, "Browser dev bypass rejected: non-loopback peer");
+        return Err(BrowserAuthError::DevBypassDenied(
+            "peer address must be loopback for dev bypass".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// The listener half of [`verify_dev_boundary`] (also re-checked on live revalidation).
+fn verify_dev_listener(state: &AppState) -> Result<(), BrowserAuthError> {
+    match state.bound_listener() {
+        Some(bound) if is_loopback_ip(bound.ip()) => Ok(()),
+        Some(bound) => {
+            warn!(listener = %bound, "Browser dev bypass rejected: non-loopback bound listener");
+            Err(BrowserAuthError::DevBypassDenied(
+                "bound listener must be loopback for dev bypass".to_string(),
+            ))
+        }
+        None => {
+            warn!("Browser dev bypass rejected: bound listener address unknown");
+            Err(BrowserAuthError::DevBypassDenied(
+                "bound listener address is unknown".to_string(),
+            ))
+        }
+    }
+}
+
+/// Default web origins accepted in guarded development when nothing is configured.
+const DEV_FALLBACK_ORIGINS: [&str; 2] = ["http://127.0.0.1:5173", "http://localhost:5173"];
+
+/// Exact approved web origins for Browser admission.
+///
+/// The union of the configured CORS origins, the trusted public server origin and, in guarded
+/// development only, `allowed_dev_origins` (plus the default Vite origins when no origin is
+/// configured at all). An empty set approves nothing: an Origin-bearing request is denied.
+fn approved_origin_matches(state: &AppState, origin: &str) -> bool {
+    if state.cors_origins.iter().any(|allowed| allowed == origin) {
+        return true;
+    }
+    if state
+        .public_server_origin
+        .as_ref()
+        .is_some_and(|public| public.origin() == origin)
+    {
+        return true;
+    }
+    if !state.no_auth {
+        return false;
+    }
+    let dev_origins = &state.browser_host.config().allowed_dev_origins;
+    if dev_origins.iter().any(|allowed| allowed == origin) {
+        return true;
+    }
+    state.cors_origins.is_empty()
+        && dev_origins.is_empty()
+        && DEV_FALLBACK_ORIGINS.contains(&origin)
+}
+
+/// Strictly parses a canonical web `Origin` value (`scheme://host[:port]`, nothing else).
+fn parse_canonical_origin(value: &str) -> Result<(), &'static str> {
+    if value.is_empty() {
+        return Err("empty Origin header");
+    }
+    if value == "null" {
+        return Err("null Origin header");
+    }
+    let url = url::Url::parse(value).map_err(|_| "malformed Origin header")?;
+    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+        return Err("malformed Origin header");
+    }
+    if url.origin().ascii_serialization() != value {
+        return Err("Origin header is not a canonical origin");
+    }
+    Ok(())
+}
+
+/// Single Browser Origin check shared by REST, discovery, media/control and CDP upgrades.
+///
+/// Returns `Ok(None)` when the request carries no Origin header (native tools; the caller
+/// decides whether that is acceptable), `Ok(Some(origin))` when it carries exactly one
+/// canonical Origin that exactly matches an approved origin, and `OriginForbidden` for every
+/// other case: repeated, empty, non-UTF8, `null`, malformed or non-canonical headers and any
+/// origin not approved. An empty allowlist never approves anything.
+pub fn validate_request_origin(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<String>, BrowserAuthError> {
+    let mut values = headers.get_all(header::ORIGIN).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(BrowserAuthError::OriginForbidden(
+            "multiple Origin headers not allowed".to_string(),
+        ));
+    }
+    let Ok(origin) = value.to_str() else {
+        return Err(BrowserAuthError::OriginForbidden(
+            "invalid Origin header encoding".to_string(),
+        ));
+    };
+    if let Err(reason) = parse_canonical_origin(origin) {
+        warn!("Browser request rejected: {reason}");
+        return Err(BrowserAuthError::OriginForbidden(reason.to_string()));
+    }
+    if !approved_origin_matches(state, origin) {
+        warn!(origin, "Browser request rejected: unapproved Origin");
+        return Err(BrowserAuthError::OriginForbidden(format!(
+            "Origin '{origin}' does not match configured web origin"
+        )));
+    }
+    Ok(Some(origin.to_string()))
+}
+
 /// Evaluates Browser host admission for an incoming HTTP or WebSocket upgrade request.
 ///
 /// In production:
+/// - Any `Origin` must exactly match an approved origin (see [`validate_request_origin`]).
 /// - Requires an authenticated actor.
 /// - Validates live in the database that the user account is enabled and has the Admin role.
 /// - Validates that the session is active, not revoked, and auth/credential versions match.
 ///
 /// In development (`state.no_auth == true`):
-/// - Requires state.no_auth.
-/// - Requires peer IP address to be loopback (127.0.0.1 or ::1).
-/// - If `Origin` header is present, it must match an exact configured web origin.
+/// - Requires state.no_auth AND an actually bound loopback listener AND a loopback peer.
+/// - Any `Origin` must exactly match an approved origin (reported as `devBypassDenied`).
 /// - Forwarded headers (`X-Forwarded-For`, etc.) are explicitly ignored.
 /// - Origin-less requests are allowed only for loopback peers (native tools/agents).
 pub async fn evaluate_browser_admission(
@@ -111,42 +256,11 @@ pub async fn evaluate_browser_admission(
     actor: Option<&AuthenticatedActor>,
 ) -> Result<BrowserAdmission, BrowserAuthError> {
     if state.no_auth {
-        // Dev bypass validation
-        let Some(addr) = peer_addr else {
-            warn!("Browser dev bypass rejected: missing peer address");
-            return Err(BrowserAuthError::DevBypassDenied(
-                "peer address information is missing".to_string(),
-            ));
-        };
-
-        if !addr.ip().is_loopback() {
-            warn!(peer = %addr, "Browser dev bypass rejected: non-loopback peer");
-            return Err(BrowserAuthError::DevBypassDenied(
-                "peer address must be loopback for dev bypass".to_string(),
-            ));
-        }
-
-        // Validate Origin header if present (single header only)
-        if headers.get_all(header::ORIGIN).iter().count() > 1 {
-            return Err(BrowserAuthError::OriginForbidden("multiple Origin headers not allowed".to_string()));
-        }
-        if let Some(origin_val) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
-            if origin_val == "null" || origin_val.ends_with('/') || origin_val.contains(',') {
-                warn!(origin = origin_val, "Browser dev bypass rejected: malformed Origin");
-                return Err(BrowserAuthError::DevBypassDenied("malformed Origin header".to_string()));
-            }
-
-            let matched = state.cors_origins.iter().any(|allowed| allowed == origin_val);
-            let allowed_fallback = state.cors_origins.is_empty()
-                && (origin_val == "http://127.0.0.1:5173" || origin_val == "http://localhost:5173");
-
-            if !matched && !allowed_fallback {
-                warn!(origin = origin_val, "Browser dev bypass rejected: unapproved Origin");
-                return Err(BrowserAuthError::DevBypassDenied(format!(
-                    "Origin '{origin_val}' does not match configured web origin"
-                )));
-            }
-        }
+        verify_dev_boundary(state, peer_addr)?;
+        validate_request_origin(state, headers).map_err(|err| match err {
+            BrowserAuthError::OriginForbidden(reason) => BrowserAuthError::DevBypassDenied(reason),
+            other => other,
+        })?;
 
         return Ok(BrowserAdmission {
             principal: "dev-user".to_string(),
@@ -158,22 +272,7 @@ pub async fn evaluate_browser_admission(
         });
     }
 
-    // Production mode validation (single header only)
-    if headers.get_all(header::ORIGIN).iter().count() > 1 {
-        return Err(BrowserAuthError::OriginForbidden("multiple Origin headers not allowed".to_string()));
-    }
-    if let Some(origin_val) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
-        if origin_val == "null" || origin_val.ends_with('/') || origin_val.contains(',') {
-            return Err(BrowserAuthError::OriginForbidden("malformed Origin header".to_string()));
-        }
-        let matched = state.cors_origins.iter().any(|allowed| allowed == origin_val);
-        if !matched && !state.cors_origins.is_empty() {
-            warn!(origin = origin_val, "Browser admission rejected: unapproved Origin");
-            return Err(BrowserAuthError::OriginForbidden(format!(
-                "Origin '{origin_val}' does not match configured web origin"
-            )));
-        }
-    }
+    validate_request_origin(state, headers)?;
 
     let Some(actor) = actor else {
         return Err(BrowserAuthError::Unauthorized(
@@ -220,7 +319,9 @@ pub async fn evaluate_browser_admission(
             let session = match store.get_session(sid).await {
                 Ok(Some(s)) => s,
                 Ok(None) => {
-                    return Err(BrowserAuthError::Unauthorized("session not found".to_string()));
+                    return Err(BrowserAuthError::Unauthorized(
+                        "session not found".to_string(),
+                    ));
                 }
                 Err(e) => {
                     return Err(BrowserAuthError::StorageUnavailable(format!(
@@ -300,6 +401,7 @@ pub async fn verify_live_admission(
                 "dev bypass is no longer enabled on server".to_string(),
             ));
         }
+        verify_dev_listener(state)?;
         return Ok(());
     }
 
@@ -362,7 +464,9 @@ pub async fn verify_live_admission(
                 }
             }
             Ok(Ok((None, _))) => {
-                return Err(BrowserAuthError::Unauthorized("user was deleted".to_string()));
+                return Err(BrowserAuthError::Unauthorized(
+                    "user was deleted".to_string(),
+                ));
             }
             Ok(Err(e)) => {
                 return Err(BrowserAuthError::StorageUnavailable(format!(

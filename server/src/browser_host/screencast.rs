@@ -17,12 +17,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use super::cdp::{CdpClient, CdpError, ScreencastFrameData};
-use super::protocol::{
-    pack_bhjf_frame, parse_jpeg_dimensions, TargetFrameHeader, TargetGeometry,
-    MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH, MAX_JPEG_PAYLOAD_BYTES, MAX_PIXELS,
-};
+use super::cdp::{CdpClient, CdpError, RequestPolicyEvent, ScreencastFrameData};
 use super::diagnostics::{global_memory_controller, global_stream_diagnostics, TrackedBhjfFrame};
+use super::network_policy::{NetworkPolicy, RequestKind};
+use super::protocol::{
+    pack_bhjf_frame, parse_jpeg_dimensions, TargetFrameHeader, TargetGeometry, MAX_IMAGE_HEIGHT,
+    MAX_IMAGE_WIDTH, MAX_JPEG_PAYLOAD_BYTES, MAX_PIXELS,
+};
 
 pub const DEFAULT_GOVERNOR_INTERVAL: Duration = Duration::from_millis(100); // 10 FPS
 pub const SCREENSHOT_FALLBACK_DELAY: Duration = Duration::from_millis(250);
@@ -83,6 +84,11 @@ pub struct ScreencastLedger {
     pub demand_starts: AtomicU64,
 }
 
+/// Hands a browser-wide containment obligation to the owner of the browser process (the
+/// manager). Synchronous and non-blocking: the obligation is accepted before the caller can
+/// be cancelled, so it does not depend on the lifetime of the producer that raised it.
+pub type ContainmentEscalation = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct ScreencastProducer {
     browser_session_id: String,
     browser_incarnation: String,
@@ -105,6 +111,14 @@ pub struct ScreencastProducer {
     frame_broadcast: broadcast::Sender<TrackedBhjfFrame>,
     active_run_cancel: Arc<Mutex<Option<CancellationToken>>>,
     geometry: Arc<RwLock<TargetGeometry>>,
+    /// Central request policy and the containment owner; when set, `ensure_page_session`
+    /// installs CDP `Fetch` interception on the Page session before it is handed out for any
+    /// navigation.
+    request_policy: Option<(Arc<NetworkPolicy>, ContainmentEscalation)>,
+    /// Serializes Page-session setup so exactly one session (and one interceptor) exists.
+    page_setup: Arc<Mutex<()>>,
+    /// Aborts the request-policy interceptor when the last producer handle is dropped.
+    interceptor_task: Arc<TaskGuard>,
 }
 
 impl ScreencastProducer {
@@ -140,7 +154,21 @@ impl ScreencastProducer {
             frame_broadcast,
             active_run_cancel: Arc::new(Mutex::new(None)),
             geometry: Arc::new(RwLock::new(initial_geometry)),
+            request_policy: None,
+            page_setup: Arc::new(Mutex::new(())),
+            interceptor_task: Arc::new(TaskGuard::default()),
         }
+    }
+
+    /// Attaches the central request policy installed on the Page session before navigation,
+    /// with the owner that contains the browser when a child cannot be policed or stopped.
+    pub fn with_request_policy(
+        mut self,
+        policy: Arc<NetworkPolicy>,
+        escalate: ContainmentEscalation,
+    ) -> Self {
+        self.request_policy = Some((policy, escalate));
+        self
     }
 
     pub fn subscribe_frames(&self) -> broadcast::Receiver<TrackedBhjfFrame> {
@@ -175,13 +203,9 @@ impl ScreencastProducer {
         self.geometry.read().await.clone()
     }
 
-    /// Closes the native Chromium target associated with this producer.
-    pub async fn close_target(&self) -> Result<(), CdpError> {
-        let params = serde_json::json!({
-            "targetId": self.target_id,
-        });
-        let _ = self.cdp_client.send_command("Target.closeTarget", Some(params), None).await;
-        Ok(())
+    /// Browser incarnation this producer was built for.
+    pub fn browser_incarnation(&self) -> &str {
+        &self.browser_incarnation
     }
 
     /// Advancing viewport epoch (e.g. on client resize or viewport change).
@@ -191,10 +215,12 @@ impl ScreencastProducer {
             return Err("invalid geometry");
         }
         let mut geom = self.geometry.write().await;
-        let dims_changed = geom.css_width != new_geometry.css_width || geom.css_height != new_geometry.css_height;
+        let dims_changed =
+            geom.css_width != new_geometry.css_width || geom.css_height != new_geometry.css_height;
         *geom = new_geometry.clone();
         self.viewport_epoch.fetch_add(1, Ordering::SeqCst);
-        self.screenshot_taken_in_epoch.store(false, Ordering::SeqCst);
+        self.screenshot_taken_in_epoch
+            .store(false, Ordering::SeqCst);
         // Clear candidate so pre-resize candidate cannot be published in new epoch
         *self.current_candidate.lock().await = None;
         if dims_changed {
@@ -208,7 +234,14 @@ impl ScreencastProducer {
                 "deviceScaleFactor": new_geometry.dpr,
                 "mobile": false,
             });
-            let _ = self.cdp_client.send_command("Emulation.setDeviceMetricsOverride", Some(emu_params), Some(&page_sid)).await;
+            let _ = self
+                .cdp_client
+                .send_command(
+                    "Emulation.setDeviceMetricsOverride",
+                    Some(emu_params),
+                    Some(&page_sid),
+                )
+                .await;
             if dims_changed && *self.state.read().await == ScreencastState::Streaming {
                 let max_w = (new_geometry.css_width.round() as u32).clamp(64, MAX_IMAGE_WIDTH);
                 let max_h = (new_geometry.css_height.round() as u32).clamp(64, MAX_IMAGE_HEIGHT);
@@ -219,7 +252,10 @@ impl ScreencastProducer {
                     .max_height(max_h)
                     .every_nth_frame(1)
                     .build();
-                let _ = self.cdp_client.send_typed(screencast_params, Some(&page_sid)).await;
+                let _ = self
+                    .cdp_client
+                    .send_typed(screencast_params, Some(&page_sid))
+                    .await;
             }
         }
         Ok(())
@@ -227,8 +263,11 @@ impl ScreencastProducer {
 
     /// Attach a dedicated flattened Page session for this target if not already attached.
     pub async fn ensure_page_session(&self) -> Result<String, CdpError> {
-        let existing = self.page_session_id.read().await.clone();
-        if let Some(session_id) = existing {
+        if let Some(session_id) = self.page_session_id.read().await.clone() {
+            return Ok(session_id);
+        }
+        let _setup = self.page_setup.lock().await;
+        if let Some(session_id) = self.page_session_id.read().await.clone() {
             return Ok(session_id);
         }
 
@@ -244,6 +283,18 @@ impl ScreencastProducer {
         let res = self.cdp_client.send_typed(attach_params, None).await?;
         let session_id: String = res.session_id.into();
 
+        // The request policy is live before the session is published, so no caller can
+        // navigate this target without redirect/subresource interception.
+        if let Some((policy, escalate)) = &self.request_policy {
+            if let Err(err) = self
+                .install_request_policy(policy, escalate, &session_id)
+                .await
+            {
+                self.interceptor_task.abort();
+                return Err(err);
+            }
+        }
+
         // Enable Page domain
         self.cdp_client
             .send_typed(EnableParams::default(), Some(&session_id))
@@ -254,8 +305,34 @@ impl ScreencastProducer {
         Ok(session_id)
     }
 
+    /// Starts the interceptor, then enables `Fetch` (request stage, all URLs) and flattened
+    /// auto-attach (paused until the child is also intercepted) on the Page session.
+    async fn install_request_policy(
+        &self,
+        policy: &Arc<NetworkPolicy>,
+        escalate: &ContainmentEscalation,
+        session_id: &str,
+    ) -> Result<(), CdpError> {
+        // Subscribe before enabling so no paused request can precede the receiver.
+        let events = self.cdp_client.subscribe_request_events();
+        self.interceptor_task
+            .replace(tokio::spawn(run_request_interceptor(
+                Arc::downgrade(&self.cdp_client),
+                policy.clone(),
+                events,
+                self.target_id.clone(),
+                escalate.clone(),
+            )));
+        enable_request_interception(&self.cdp_client, session_id).await
+    }
+
     /// Register or update viewer demand for a subscription epoch.
-    pub async fn register_viewer_demand(&self, viewer_id: &str, subscription_epoch: &str, visible: bool) {
+    pub async fn register_viewer_demand(
+        &self,
+        viewer_id: &str,
+        subscription_epoch: &str,
+        visible: bool,
+    ) {
         let mut viewers = self.viewers.write().await;
         let entry = viewers
             .entry(subscription_epoch.to_string())
@@ -371,7 +448,13 @@ impl ScreencastProducer {
             }
             *cancel_lock = Some(CancellationToken::new());
         }
-        let cancel_token = self.active_run_cancel.lock().await.as_ref().unwrap().clone();
+        let cancel_token = self
+            .active_run_cancel
+            .lock()
+            .await
+            .as_ref()
+            .unwrap()
+            .clone();
 
         // Subscribe to broadcast receiver BEFORE startScreencast command
         let screencast_rx = self.cdp_client.subscribe_screencast();
@@ -452,7 +535,9 @@ impl ScreencastProducer {
     async fn stop_screencast_due_to_zero_demand(&self) {
         let state = *self.state.read().await;
         if state == ScreencastState::Streaming || state == ScreencastState::Starting {
-            self.ledger.zero_demand_stops.fetch_add(1, Ordering::Relaxed);
+            self.ledger
+                .zero_demand_stops
+                .fetch_add(1, Ordering::Relaxed);
             if let Err(e) = self.stop_screencast().await {
                 warn!(error = %e, "error during zero demand screencast stop");
             }
@@ -522,25 +607,36 @@ impl ScreencastProducer {
         frame_data: Arc<ScreencastFrameData>,
     ) {
         self.ledger.events_received.fetch_add(1, Ordering::Relaxed);
-        global_stream_diagnostics().events_received.fetch_add(1, Ordering::Relaxed);
+        global_stream_diagnostics()
+            .events_received
+            .fetch_add(1, Ordering::Relaxed);
 
         // Verify that this event belongs to our Page session
         if frame_data.session_id != expected_page_session {
-            self.ledger.events_dropped_old_run.fetch_add(1, Ordering::Relaxed);
+            self.ledger
+                .events_dropped_old_run
+                .fetch_add(1, Ordering::Relaxed);
             return;
         }
 
         // Check if current run matches
         let cur_run = *self.current_run.read().await;
         if cur_run != Some(expected_producer_run) {
-            self.ledger.events_dropped_old_run.fetch_add(1, Ordering::Relaxed);
+            self.ledger
+                .events_dropped_old_run
+                .fetch_add(1, Ordering::Relaxed);
             return;
         }
 
         // Enforce base64 byte bounds
         if frame_data.data_base64.len() > MAX_BASE64_BYTES {
-            warn!(len = frame_data.data_base64.len(), "screencast base64 frame exceeded maximum size");
-            self.ledger.events_dropped_old_run.fetch_add(1, Ordering::Relaxed);
+            warn!(
+                len = frame_data.data_base64.len(),
+                "screencast base64 frame exceeded maximum size"
+            );
+            self.ledger
+                .events_dropped_old_run
+                .fetch_add(1, Ordering::Relaxed);
             return;
         }
 
@@ -550,7 +646,11 @@ impl ScreencastProducer {
             let mut native_sess = self.native_screencast_session_id.write().await;
             if let Some(expected_native) = *native_sess {
                 if expected_native != frame_session_id {
-                    warn!(expected = expected_native, got = frame_session_id, "native session id mismatch on current run; dropping event");
+                    warn!(
+                        expected = expected_native,
+                        got = frame_session_id,
+                        "native session id mismatch on current run; dropping event"
+                    );
                     return;
                 }
             } else {
@@ -567,11 +667,15 @@ impl ScreencastProducer {
         match ack_res {
             Ok(()) => {
                 self.ledger.acks_enqueued.fetch_add(1, Ordering::Relaxed);
-                global_stream_diagnostics().acks_enqueued.fetch_add(1, Ordering::Relaxed);
+                global_stream_diagnostics()
+                    .acks_enqueued
+                    .fetch_add(1, Ordering::Relaxed);
             }
             Err(e) => {
                 self.ledger.acks_failed.fetch_add(1, Ordering::Relaxed);
-                global_stream_diagnostics().acks_failed.fetch_add(1, Ordering::Relaxed);
+                global_stream_diagnostics()
+                    .acks_failed
+                    .fetch_add(1, Ordering::Relaxed);
                 warn!(error = %e, frame_session_id, "failed to enqueue screencast frame ACK; connection failure aborts run");
                 *self.state.write().await = ScreencastState::Stopped;
                 let cancel_lock = self.active_run_cancel.lock().await;
@@ -596,12 +700,18 @@ impl ScreencastProducer {
         // Replace candidate atomically
         let mut cand_lock = self.current_candidate.lock().await;
         if cand_lock.is_some() {
-            self.ledger.events_dropped_overwritten.fetch_add(1, Ordering::Relaxed);
-            global_stream_diagnostics().events_dropped.fetch_add(1, Ordering::Relaxed);
+            self.ledger
+                .events_dropped_overwritten
+                .fetch_add(1, Ordering::Relaxed);
+            global_stream_diagnostics()
+                .events_dropped
+                .fetch_add(1, Ordering::Relaxed);
         }
         *cand_lock = Some(candidate);
         self.ledger.events_admitted.fetch_add(1, Ordering::Relaxed);
-        global_stream_diagnostics().events_admitted.fetch_add(1, Ordering::Relaxed);
+        global_stream_diagnostics()
+            .events_admitted
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     fn extract_geometry_from_metadata(&self, meta: &serde_json::Value) -> Option<TargetGeometry> {
@@ -666,9 +776,14 @@ impl ScreencastProducer {
             }
         };
         self.ledger.base64_decoded.fetch_add(1, Ordering::Relaxed);
-        global_stream_diagnostics().base64_decoded_bytes.fetch_add(jpeg_bytes.len() as u64, Ordering::Relaxed);
+        global_stream_diagnostics()
+            .base64_decoded_bytes
+            .fetch_add(jpeg_bytes.len() as u64, Ordering::Relaxed);
         if jpeg_bytes.is_empty() || jpeg_bytes.len() > MAX_JPEG_PAYLOAD_BYTES {
-            warn!(len = jpeg_bytes.len(), "candidate JPEG payload size invalid");
+            warn!(
+                len = jpeg_bytes.len(),
+                "candidate JPEG payload size invalid"
+            );
             return;
         }
 
@@ -720,7 +835,9 @@ impl ScreencastProducer {
                     warn!(error = %e, "dropping BHJF frame: memory reservation ceiling exceeded on adjust");
                     return;
                 }
-                global_stream_diagnostics().jpeg_bytes_total.fetch_add(jpeg_bytes.len() as u64, Ordering::Relaxed);
+                global_stream_diagnostics()
+                    .jpeg_bytes_total
+                    .fetch_add(jpeg_bytes.len() as u64, Ordering::Relaxed);
                 let tracked = TrackedBhjfFrame::new(packed_bytes, reservation);
                 {
                     let mut frame_cache = self.cached_frame.write().await;
@@ -752,7 +869,9 @@ impl ScreencastProducer {
             return;
         }
 
-        self.ledger.screenshot_fallbacks.fetch_add(1, Ordering::Relaxed);
+        self.ledger
+            .screenshot_fallbacks
+            .fetch_add(1, Ordering::Relaxed);
         let epoch_before = self.viewport_epoch.load(Ordering::Relaxed);
 
         // 1. Bracket layout metrics before
@@ -841,7 +960,9 @@ impl ScreencastProducer {
                 warn!(error = %e, "dropping fallback screenshot: memory ceiling exceeded on adjust");
                 return;
             }
-            global_stream_diagnostics().screenshot_count.fetch_add(1, Ordering::Relaxed);
+            global_stream_diagnostics()
+                .screenshot_count
+                .fetch_add(1, Ordering::Relaxed);
             let tracked = TrackedBhjfFrame::new(packed_bytes, reservation);
             {
                 let mut frame_cache = self.cached_frame.write().await;
@@ -879,6 +1000,943 @@ impl ScreencastProducer {
             frame_broadcast: self.frame_broadcast.clone(),
             active_run_cancel: self.active_run_cancel.clone(),
             geometry: self.geometry.clone(),
+            request_policy: self.request_policy.clone(),
+            page_setup: self.page_setup.clone(),
+            interceptor_task: self.interceptor_task.clone(),
         })
+    }
+}
+
+/// Owns the request-policy interceptor task and aborts it when the last producer handle drops.
+#[derive(Default)]
+struct TaskGuard(std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>);
+
+impl TaskGuard {
+    fn replace(&self, handle: tokio::task::JoinHandle<()>) {
+        let old = self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(handle);
+        if let Some(old) = old {
+            old.abort();
+        }
+    }
+
+    fn abort(&self) {
+        if let Some(handle) = self.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            handle.abort();
+        }
+    }
+}
+
+impl Drop for TaskGuard {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
+
+/// Enables request-stage `Fetch` interception for all URLs and flattened auto-attach (children
+/// start paused so they are intercepted before their first request) on one CDP session.
+async fn enable_request_interception(client: &CdpClient, session_id: &str) -> Result<(), CdpError> {
+    client
+        .send_command(
+            "Fetch.enable",
+            Some(serde_json::json!({
+                "patterns": [{ "urlPattern": "*", "requestStage": "Request" }]
+            })),
+            Some(session_id),
+        )
+        .await?;
+    client
+        .send_command(
+            "Target.setAutoAttach",
+            Some(serde_json::json!({
+                "autoAttach": true,
+                "waitForDebuggerOnStart": true,
+                "flatten": true
+            })),
+            Some(session_id),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Decides every paused request against the central policy: navigations may reach only target
+/// origins, subresources also asset origins, and denied destinations never; redirect hops are
+/// separate paused requests, so each is decided on its own URL. A request is never continued
+/// without a positive policy decision. Holds only a weak client handle so it cannot keep the
+/// CDP connection alive.
+async fn run_request_interceptor(
+    client: std::sync::Weak<CdpClient>,
+    policy: Arc<NetworkPolicy>,
+    mut events: broadcast::Receiver<Arc<RequestPolicyEvent>>,
+    page_target_id: String,
+    escalate: ContainmentEscalation,
+) {
+    use tokio::sync::broadcast::error::RecvError;
+    let mut retired = false;
+    loop {
+        let event = match events.recv().await {
+            Ok(event) => event,
+            Err(RecvError::Lagged(skipped)) => {
+                warn!(skipped, "Browser request-policy events lagged");
+                if let Some(client) = client.upgrade() {
+                    retire_page_on_policy_loss(
+                        &client,
+                        &page_target_id,
+                        &mut retired,
+                        "request-policy events lagged",
+                    )
+                    .await;
+                }
+                continue;
+            }
+            Err(RecvError::Closed) => return,
+        };
+        let Some(client) = client.upgrade() else {
+            return;
+        };
+        match &*event {
+            RequestPolicyEvent::Paused {
+                session_id,
+                request_id,
+                url,
+                is_navigation,
+                ..
+            } => {
+                let kind = if *is_navigation {
+                    RequestKind::Navigation
+                } else {
+                    RequestKind::Subresource
+                };
+                let verdict = if url.is_empty() {
+                    Err(super::network_policy::NetworkPolicyError::MissingHost)
+                } else {
+                    policy.check_request(url, kind)
+                };
+                let (method, params) = match verdict {
+                    Ok(()) => (
+                        "Fetch.continueRequest",
+                        serde_json::json!({ "requestId": request_id }),
+                    ),
+                    Err(err) => {
+                        debug!(error = %err, "Browser request denied by network policy");
+                        (
+                            "Fetch.failRequest",
+                            serde_json::json!({ "requestId": request_id, "errorReason": "AccessDenied" }),
+                        )
+                    }
+                };
+                if let Err(err) = client
+                    .send_command(method, Some(params), session_id.as_deref())
+                    .await
+                {
+                    warn!(error = %err, method, "Browser request-policy decision was not delivered");
+                }
+            }
+            RequestPolicyEvent::Attached {
+                session_id,
+                target_id,
+                target_type,
+                waiting_for_debugger,
+                ..
+            } => {
+                // Every child (frame or worker) must be intercepted before it runs. A child
+                // whose interception failed is never resumed and is contained (see
+                // `contain_unpoliced_child`): it must neither run nor stay half-attached.
+                match enable_request_interception(&client, session_id).await {
+                    Ok(()) => {
+                        if *waiting_for_debugger {
+                            let _ = client
+                                .send_command(
+                                    "Runtime.runIfWaitingForDebugger",
+                                    None,
+                                    Some(session_id),
+                                )
+                                .await;
+                        }
+                    }
+                    Err(err) => {
+                        warn!(error = %err, target_type, "Browser child target interception failed");
+                        contain_unpoliced_child(
+                            client.clone(),
+                            page_target_id.clone(),
+                            &mut retired,
+                            ChildTarget {
+                                target_id: target_id.clone(),
+                                target_type: target_type.clone(),
+                            },
+                            escalate.clone(),
+                        )
+                        .await;
+                    }
+                }
+            }
+            RequestPolicyEvent::Overflow => {
+                retire_page_on_policy_loss(
+                    &client,
+                    &page_target_id,
+                    &mut retired,
+                    "request-policy event dropped",
+                )
+                .await;
+            }
+        }
+    }
+}
+
+/// A request-policy event was lost, so some request may stay paused forever or some child may
+/// run unpoliced. The page is closed (never resumed without a decision): its paused requests
+/// die with it and the native observer retires the session on the destroy event. Returns
+/// whether the page is retired (its close was accepted).
+async fn retire_page_on_policy_loss(
+    client: &CdpClient,
+    page_target_id: &str,
+    retired: &mut bool,
+    reason: &str,
+) -> bool {
+    if *retired {
+        return true;
+    }
+    warn!(
+        reason,
+        "Browser request policy cannot be enforced; closing the page"
+    );
+    match client
+        .send_command(
+            "Target.closeTarget",
+            Some(serde_json::json!({ "targetId": page_target_id })),
+            None,
+        )
+        .await
+    {
+        Ok(_) => *retired = true,
+        Err(err) => warn!(error = %err, "closing the page after request-policy loss failed"),
+    }
+    *retired
+}
+
+/// Upper bound for proving a closed worker target absent from `Target.getTargets`.
+const WORKER_TERMINATION_PROOF: Duration = Duration::from_secs(2);
+const WORKER_TERMINATION_POLL: Duration = Duration::from_millis(50);
+
+/// A flattened auto-attached child whose request interception could not be established.
+struct ChildTarget {
+    target_id: String,
+    target_type: String,
+}
+
+/// Frames and dedicated workers die with the page that owns them; every other target type
+/// (service workers, shared workers) outlives its documents.
+fn dies_with_page(target_type: &str) -> bool {
+    matches!(target_type, "page" | "iframe" | "worker")
+}
+
+/// Never lets a child without a request policy keep running or stay parked.
+///
+/// A child is never resumed without a policy, so a paused one would hang its page forever:
+/// it is contained like a running one.
+///
+/// * A page-owned child is retired with its page.
+/// * A service/shared worker is terminated through its own target id (`Target.closeTarget`) and
+///   its absence is proven from `Target.getTargets`: closing the page does **not** stop an
+///   event-driven service worker.
+///
+/// When retirement or termination cannot be proven, the obligation moves to the owner of the
+/// browser process (`escalate`). The whole sequence runs on its own task: the interceptor is
+/// aborted when its page is destroyed (which removes the last producer), and that must
+/// neither cancel the termination proof nor lose the escalation.
+async fn contain_unpoliced_child(
+    client: Arc<CdpClient>,
+    page_target_id: String,
+    retired: &mut bool,
+    child: ChildTarget,
+    escalate: ContainmentEscalation,
+) {
+    let page_retired = *retired;
+    let work = tokio::spawn(async move {
+        let mut retired = page_retired;
+        let contained = if dies_with_page(&child.target_type) {
+            retire_page_on_policy_loss(
+                &client,
+                &page_target_id,
+                &mut retired,
+                "child could not be intercepted",
+            )
+            .await
+        } else {
+            terminate_target(&client, &child.target_id).await
+        };
+        if !contained {
+            escalate("a child without request interception could not be retired or terminated");
+        }
+        retired
+    });
+    if let Ok(now_retired) = work.await {
+        *retired = now_retired;
+    }
+}
+
+/// Closes `target_id` and returns whether it is proven absent from the browser's target list
+/// within `WORKER_TERMINATION_PROOF`. A failed close or inventory is never taken as absence.
+async fn terminate_target(client: &CdpClient, target_id: &str) -> bool {
+    if let Err(err) = client
+        .send_command(
+            "Target.closeTarget",
+            Some(serde_json::json!({ "targetId": target_id })),
+            None,
+        )
+        .await
+    {
+        warn!(error = %err, "closing a worker target failed");
+    }
+    let deadline = Instant::now() + WORKER_TERMINATION_PROOF;
+    loop {
+        let present = client
+            .send_command("Target.getTargets", None, None)
+            .await
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("targetInfos")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|infos| infos.iter().any(|info| info["targetId"] == target_id))
+            });
+        if present == Some(false) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(WORKER_TERMINATION_POLL).await;
+    }
+}
+
+#[cfg(test)]
+mod request_policy_tests {
+    use super::*;
+    use crate::browser_host::config::BrowserHostConfig;
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio::sync::mpsc;
+    use tokio_tungstenite::tungstenite::Message;
+
+    struct MockBrowser {
+        client: Arc<CdpClient>,
+        commands: mpsc::UnboundedReceiver<Value>,
+        push: mpsc::UnboundedSender<Value>,
+    }
+
+    /// A scripted CDP endpoint: records every command and answers it; `Fetch.enable` fails
+    /// with a protocol error when `fail_fetch_enable` is set.
+    async fn mock_browser(fail_fetch_enable: bool) -> MockBrowser {
+        mock_browser_with_targets(fail_fetch_enable, &[], true).await
+    }
+
+    /// Like [`mock_browser`], plus a browser-level target inventory: `Target.getTargets` lists
+    /// `listed`; `Target.closeTarget` removes the id from it only when `close_removes_target`
+    /// (a worker that refuses to terminate otherwise).
+    async fn mock_browser_with_targets(
+        fail_fetch_enable: bool,
+        listed: &[&str],
+        close_removes_target: bool,
+    ) -> MockBrowser {
+        mock_browser_scripted(fail_fetch_enable, listed, close_removes_target, false).await
+    }
+
+    /// Full script; `fail_close_target` answers every `Target.closeTarget` with a protocol
+    /// error (the page cannot be retired).
+    async fn mock_browser_scripted(
+        fail_fetch_enable: bool,
+        listed: &[&str],
+        close_removes_target: bool,
+        fail_close_target: bool,
+    ) -> MockBrowser {
+        let mut listed: Vec<String> = listed.iter().map(|id| id.to_string()).collect();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (commands_tx, commands) = mpsc::unbounded_channel::<Value>();
+        let (push, mut push_rx) = mpsc::unbounded_channel::<Value>();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            loop {
+                tokio::select! {
+                    pushed = push_rx.recv() => {
+                        let Some(event) = pushed else { break };
+                        if ws.send(Message::Text(event.to_string().into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    incoming = ws.next() => {
+                        let Some(Ok(Message::Text(text))) = incoming else { break };
+                        let cmd: Value = serde_json::from_str(&text).unwrap();
+                        if cmd["method"] == "Target.closeTarget" && close_removes_target {
+                            listed.retain(|id| cmd["params"]["targetId"] != *id);
+                        }
+                        let reply = if fail_close_target && cmd["method"] == "Target.closeTarget" {
+                            json!({"id": cmd["id"], "error": {"code": -32000, "message": "close refused"}})
+                        } else if fail_fetch_enable && cmd["method"] == "Fetch.enable" {
+                            json!({"id": cmd["id"], "error": {"code": -32000, "message": "Fetch is not supported here"}})
+                        } else if cmd["method"] == "Target.getTargets" {
+                            let infos: Vec<Value> = listed
+                                .iter()
+                                .map(|id| json!({"targetId": id, "type": "service_worker"}))
+                                .collect();
+                            json!({"id": cmd["id"], "result": {"targetInfos": infos}})
+                        } else {
+                            json!({"id": cmd["id"], "result": {}})
+                        };
+                        let _ = commands_tx.send(cmd);
+                        if ws.send(Message::Text(reply.to_string().into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        let client = CdpClient::connect(&format!("ws://{addr}")).await.unwrap();
+        MockBrowser {
+            client,
+            commands,
+            push,
+        }
+    }
+
+    /// Records every escalation the interceptor hands to the containment owner.
+    type Escalations = Arc<std::sync::Mutex<Vec<String>>>;
+
+    fn spawn_interceptor_with(browser: &MockBrowser) -> (tokio::task::JoinHandle<()>, Escalations) {
+        let policy =
+            Arc::new(NetworkPolicy::from_config(&BrowserHostConfig::default(), false).unwrap());
+        let escalations = Escalations::default();
+        let recorded = escalations.clone();
+        let escalate: ContainmentEscalation =
+            Arc::new(move |reason: &str| recorded.lock().unwrap().push(reason.to_string()));
+        let task = tokio::spawn(run_request_interceptor(
+            Arc::downgrade(&browser.client),
+            policy,
+            browser.client.subscribe_request_events(),
+            "PAGE-TARGET".to_string(),
+            escalate,
+        ));
+        (task, escalations)
+    }
+
+    fn spawn_interceptor(browser: &MockBrowser) -> tokio::task::JoinHandle<()> {
+        spawn_interceptor_with(browser).0
+    }
+
+    fn attach(session: &str, waiting: bool) -> Value {
+        json!({
+            "method": "Target.attachedToTarget",
+            "params": {
+                "sessionId": session,
+                "targetInfo": { "targetId": format!("T-{session}"), "type": "worker" },
+                "waitingForDebugger": waiting,
+            }
+        })
+    }
+
+    /// Every command the mock receives within `window`.
+    async fn collect(browser: &mut MockBrowser, window: Duration) -> Vec<Value> {
+        let mut seen = Vec::new();
+        let deadline = tokio::time::Instant::now() + window;
+        while let Ok(Some(cmd)) = tokio::time::timeout_at(deadline, browser.commands.recv()).await {
+            seen.push(cmd);
+        }
+        seen
+    }
+
+    fn methods(seen: &[Value]) -> Vec<&str> {
+        seen.iter().filter_map(|c| c["method"].as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn paused_child_with_failed_interception_is_never_resumed_and_retires_the_page() {
+        let mut browser = mock_browser(true).await;
+        let (task, escalations) = spawn_interceptor_with(&browser);
+        browser.push.send(attach("W1", true)).unwrap();
+
+        let seen = collect(&mut browser, Duration::from_millis(600)).await;
+        let methods = methods(&seen);
+        assert!(methods.contains(&"Fetch.enable"), "{methods:?}");
+        assert!(
+            !methods.contains(&"Runtime.runIfWaitingForDebugger"),
+            "a worker without request interception must stay paused: {methods:?}"
+        );
+        assert_eq!(
+            close_target_ids(&seen),
+            ["PAGE-TARGET"],
+            "a denied paused child is retired with its page, not parked forever: {methods:?}"
+        );
+        assert!(escalations.lock().unwrap().is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn child_whose_page_cannot_be_retired_is_escalated_to_the_containment_owner() {
+        let mut browser = mock_browser_scripted(true, &[], true, true).await;
+        let (task, escalations) = spawn_interceptor_with(&browser);
+        browser.push.send(attach("W7", true)).unwrap();
+
+        let seen = collect(&mut browser, Duration::from_millis(600)).await;
+        assert_eq!(close_target_ids(&seen), ["PAGE-TARGET"]);
+        assert_eq!(
+            escalations.lock().unwrap().len(),
+            1,
+            "a failed page retirement must leave a containment owner: {:?}",
+            methods(&seen)
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn running_child_without_interception_retires_the_page() {
+        let mut browser = mock_browser(true).await;
+        let task = spawn_interceptor(&browser);
+        browser.push.send(attach("W2", false)).unwrap();
+
+        let seen = collect(&mut browser, Duration::from_millis(600)).await;
+        let close = seen
+            .iter()
+            .find(|c| c["method"] == "Target.closeTarget")
+            .unwrap_or_else(|| panic!("page was not retired: {:?}", methods(&seen)));
+        assert_eq!(close["params"]["targetId"], "PAGE-TARGET");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn dropped_policy_event_retires_the_page_instead_of_leaving_requests_paused() {
+        let mut browser = mock_browser(false).await;
+        let task = spawn_interceptor(&browser);
+        // No `sessionId` in the attach params: the event cannot be projected (`Overflow`).
+        browser
+            .push
+            .send(json!({
+                "method": "Target.attachedToTarget",
+                "params": { "targetInfo": { "targetId": "X", "type": "worker" } }
+            }))
+            .unwrap();
+
+        let seen = collect(&mut browser, Duration::from_millis(600)).await;
+        let close = seen
+            .iter()
+            .find(|c| c["method"] == "Target.closeTarget")
+            .unwrap_or_else(|| panic!("page was not retired: {:?}", methods(&seen)));
+        assert_eq!(close["params"]["targetId"], "PAGE-TARGET");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn worker_with_established_interception_is_resumed() {
+        let mut browser = mock_browser(false).await;
+        let task = spawn_interceptor(&browser);
+        browser.push.send(attach("W3", true)).unwrap();
+
+        let seen = collect(&mut browser, Duration::from_millis(600)).await;
+        let methods = methods(&seen);
+        let enable = methods.iter().position(|m| *m == "Fetch.enable").unwrap();
+        let resume = methods
+            .iter()
+            .position(|m| *m == "Runtime.runIfWaitingForDebugger")
+            .expect("intercepted worker is resumed");
+        assert!(enable < resume, "interception precedes resume: {methods:?}");
+        task.abort();
+    }
+
+    fn attach_service_worker(session: &str, waiting: bool) -> Value {
+        json!({
+            "method": "Target.attachedToTarget",
+            "params": {
+                "sessionId": session,
+                "targetInfo": { "targetId": format!("T-{session}"), "type": "service_worker" },
+                "waitingForDebugger": waiting,
+            }
+        })
+    }
+
+    fn close_target_ids(seen: &[Value]) -> Vec<&str> {
+        seen.iter()
+            .filter(|c| c["method"] == "Target.closeTarget")
+            .filter_map(|c| c["params"]["targetId"].as_str())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn running_service_worker_without_interception_is_terminated_and_proven_gone() {
+        let mut browser = mock_browser_with_targets(true, &["T-SW1"], true).await;
+        let (task, escalations) = spawn_interceptor_with(&browser);
+        browser
+            .push
+            .send(attach_service_worker("SW1", false))
+            .unwrap();
+
+        let seen = collect(&mut browser, Duration::from_millis(800)).await;
+        let methods = methods(&seen);
+        assert_eq!(
+            close_target_ids(&seen),
+            ["T-SW1"],
+            "the worker itself is closed, not the page: {methods:?}"
+        );
+        let close = methods.iter().position(|m| *m == "Target.closeTarget");
+        let inventory = methods.iter().rposition(|m| *m == "Target.getTargets");
+        assert!(
+            close < inventory,
+            "absence is proven after the close: {methods:?}"
+        );
+        assert!(
+            escalations.lock().unwrap().is_empty(),
+            "a proven-terminated worker does not escalate: {methods:?}"
+        );
+        assert!(
+            !methods.contains(&"Runtime.runIfWaitingForDebugger"),
+            "{methods:?}"
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn running_service_worker_that_survives_close_is_escalated_to_the_containment_owner() {
+        let mut browser = mock_browser_with_targets(true, &["T-SW2"], false).await;
+        let (task, escalations) = spawn_interceptor_with(&browser);
+        browser
+            .push
+            .send(attach_service_worker("SW2", false))
+            .unwrap();
+
+        let seen = collect(
+            &mut browser,
+            WORKER_TERMINATION_PROOF + Duration::from_millis(1500),
+        )
+        .await;
+        let methods = methods(&seen);
+        assert_eq!(
+            close_target_ids(&seen),
+            ["T-SW2"],
+            "only the worker is closed; the browser-wide fate belongs to the owner: {methods:?}"
+        );
+        assert!(
+            !methods.contains(&"Browser.close"),
+            "the interceptor never owns browser shutdown: {methods:?}"
+        );
+        assert_eq!(
+            escalations.lock().unwrap().len(),
+            1,
+            "an unpoliced worker that cannot be stopped must reach the containment owner: {methods:?}"
+        );
+        task.abort();
+    }
+
+    /// The interceptor dies with its page (the last producer is removed) while the worker's
+    /// termination proof is still running: the escalation must still reach the owner.
+    #[tokio::test]
+    async fn escalation_survives_the_interceptor_being_aborted_mid_proof() {
+        let mut browser = mock_browser_with_targets(true, &["T-SW5"], false).await;
+        let (task, escalations) = spawn_interceptor_with(&browser);
+        browser
+            .push
+            .send(attach_service_worker("SW5", false))
+            .unwrap();
+
+        // Wait until the proof is running, then destroy the interceptor.
+        loop {
+            let cmd = tokio::time::timeout(Duration::from_secs(3), browser.commands.recv())
+                .await
+                .expect("proof never started")
+                .expect("mock closed");
+            if cmd["method"] == "Target.getTargets" {
+                break;
+            }
+        }
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(escalations.lock().unwrap().is_empty(), "proof not over yet");
+
+        tokio::time::sleep(WORKER_TERMINATION_PROOF + Duration::from_millis(500)).await;
+        assert_eq!(
+            escalations.lock().unwrap().len(),
+            1,
+            "aborting the interceptor must not cancel the containment obligation"
+        );
+    }
+
+    #[tokio::test]
+    async fn paused_service_worker_without_interception_is_closed_never_resumed() {
+        let mut browser = mock_browser_with_targets(true, &["T-SW3"], true).await;
+        let (task, escalations) = spawn_interceptor_with(&browser);
+        browser
+            .push
+            .send(attach_service_worker("SW3", true))
+            .unwrap();
+
+        let seen = collect(&mut browser, Duration::from_millis(800)).await;
+        let methods = methods(&seen);
+        assert_eq!(close_target_ids(&seen), ["T-SW3"], "{methods:?}");
+        assert!(
+            !methods.contains(&"Runtime.runIfWaitingForDebugger"),
+            "{methods:?}"
+        );
+        assert!(escalations.lock().unwrap().is_empty(), "{methods:?}");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn paused_service_worker_that_resists_close_is_escalated_not_parked() {
+        let mut browser = mock_browser_with_targets(true, &["T-SW4"], false).await;
+        let (task, escalations) = spawn_interceptor_with(&browser);
+        browser
+            .push
+            .send(attach_service_worker("SW4", true))
+            .unwrap();
+
+        let seen = collect(
+            &mut browser,
+            WORKER_TERMINATION_PROOF + Duration::from_millis(1000),
+        )
+        .await;
+        let methods = methods(&seen);
+        assert_eq!(close_target_ids(&seen), ["T-SW4"], "{methods:?}");
+        assert!(
+            !methods.contains(&"Runtime.runIfWaitingForDebugger"),
+            "a paused worker without a policy is never resumed: {methods:?}"
+        );
+        assert_eq!(
+            escalations.lock().unwrap().len(),
+            1,
+            "a denied paused worker that resists closure needs a tracked owner: {methods:?}"
+        );
+        task.abort();
+    }
+
+    // ---- Real Chromium: a running service worker whose interception fails -----------------
+
+    /// Local HTTP origin: `/` registers `/sw.js`, which fetches `/tick` every 300 ms. Counts
+    /// the worker's requests.
+    async fn spawn_service_worker_origin() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let ticks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let counter = ticks.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let counter = counter.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 2048];
+                    let n = stream.read(&mut buf).await.unwrap_or(0);
+                    let head = String::from_utf8_lossy(&buf[..n]);
+                    let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
+                    let (content_type, body) = match path.as_str() {
+                        "/" => (
+                            "text/html",
+                            "<html><body><script>navigator.serviceWorker.register('/sw.js')</script></body></html>",
+                        ),
+                        "/sw.js" => (
+                            "text/javascript",
+                            "self.addEventListener('install',e=>self.skipWaiting());\
+                             self.addEventListener('activate',e=>e.waitUntil(clients.claim()));\
+                             setInterval(()=>fetch('/tick'),300);",
+                        ),
+                        _ => {
+                            if path.starts_with("/tick") {
+                                counter.fetch_add(1, Ordering::SeqCst);
+                            }
+                            ("text/plain", "ok")
+                        }
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        (port, ticks)
+    }
+
+    /// A CDP relay in front of the real browser that refuses `Fetch.enable` on every
+    /// service-worker session (identified from the browser's own `attachedToTarget` events),
+    /// which is exactly "interception of a running worker failed". Everything else passes.
+    async fn spawn_worker_interception_denier(browser_ws: String) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (client_stream, _) = listener.accept().await.unwrap();
+            let mut client = tokio_tungstenite::accept_async(client_stream)
+                .await
+                .unwrap();
+            let (mut upstream, _) = tokio_tungstenite::connect_async(browser_ws).await.unwrap();
+            let mut worker_sessions = std::collections::HashSet::<String>::new();
+            loop {
+                tokio::select! {
+                    from_client = client.next() => {
+                        let Some(Ok(Message::Text(text))) = from_client else { break };
+                        let cmd: Value = serde_json::from_str(&text).unwrap();
+                        let denied = cmd["method"] == "Fetch.enable"
+                            && cmd["sessionId"].as_str().is_some_and(|s| worker_sessions.contains(s));
+                        if denied {
+                            let reply = json!({
+                                "id": cmd["id"], "sessionId": cmd["sessionId"],
+                                "error": {"code": -32000, "message": "Fetch.enable refused for the worker"}
+                            });
+                            if client.send(Message::Text(reply.to_string().into())).await.is_err() {
+                                break;
+                            }
+                        } else if upstream.send(Message::Text(text)).await.is_err() {
+                            break;
+                        }
+                    }
+                    from_browser = upstream.next() => {
+                        let Some(Ok(Message::Text(text))) = from_browser else { break };
+                        let event: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+                        if event["method"] == "Target.attachedToTarget"
+                            && event["params"]["targetInfo"]["type"] == "service_worker"
+                        {
+                            if let Some(sid) = event["params"]["sessionId"].as_str() {
+                                worker_sessions.insert(sid.to_string());
+                            }
+                        }
+                        if client.send(Message::Text(text)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        format!("ws://{addr}")
+    }
+
+    async fn service_worker_target_ids(client: &CdpClient, origin_port: u16) -> Vec<String> {
+        let marker = format!("127.0.0.1:{origin_port}/sw.js");
+        let value = client
+            .send_command("Target.getTargets", None, None)
+            .await
+            .unwrap();
+        value["targetInfos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|info| {
+                info["type"] == "service_worker"
+                    && info["url"].as_str().is_some_and(|u| u.contains(&marker))
+            })
+            .map(|info| info["targetId"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn real_running_service_worker_without_interception_stops_making_requests() {
+        use crate::browser_host::process::{find_browser_executable, BrowserLaunchConfig};
+        let Ok(exec) = find_browser_executable(None) else {
+            eprintln!("skipping: no browser executable configured");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = BrowserLaunchConfig::new(tmp.path().join("sw-profile"));
+        config.executable_path = Some(exec);
+        let mut process = crate::browser_host::process::BrowserProcess::launch(config)
+            .await
+            .expect("launch browser");
+        let (port, ticks) = spawn_service_worker_origin().await;
+        let relay = spawn_worker_interception_denier(process.ws_endpoint().to_string()).await;
+        let client = CdpClient::connect(&relay).await.unwrap();
+
+        let result: Result<(), String> = async {
+            let page = client
+                .send_command(
+                    "Target.createTarget",
+                    Some(json!({"url": "about:blank"})),
+                    None,
+                )
+                .await
+                .map_err(|e| e.to_string())?["targetId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let session = client
+                .send_command(
+                    "Target.attachToTarget",
+                    Some(json!({"targetId": page, "flatten": true})),
+                    None,
+                )
+                .await
+                .map_err(|e| e.to_string())?["sessionId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            client
+                .send_command(
+                    "Page.navigate",
+                    Some(json!({"url": format!("http://127.0.0.1:{port}/")})),
+                    Some(&session),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            // The worker is registered, running and issuing requests before the policy exists.
+            let started = Instant::now();
+            while ticks.load(Ordering::SeqCst) < 2 {
+                if started.elapsed() > Duration::from_secs(15) {
+                    return Err("the service worker never started ticking".to_string());
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let worker_ids = service_worker_target_ids(&client, port).await;
+            if worker_ids.len() != 1 {
+                return Err(format!("expected one running worker, got {worker_ids:?}"));
+            }
+
+            // The real interceptor attaches to the already-running worker (not paused), the
+            // relay refuses its `Fetch.enable`, so the worker has to be terminated.
+            let policy =
+                Arc::new(NetworkPolicy::from_config(&BrowserHostConfig::default(), false).unwrap());
+            let escalated = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = escalated.clone();
+            let task = tokio::spawn(run_request_interceptor(
+                Arc::downgrade(&client),
+                policy,
+                client.subscribe_request_events(),
+                page.clone(),
+                Arc::new(move |_: &str| {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }),
+            ));
+            enable_request_interception(&client, &session)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let started = Instant::now();
+            loop {
+                if service_worker_target_ids(&client, port).await.is_empty() {
+                    break;
+                }
+                if started.elapsed() > Duration::from_secs(8) {
+                    task.abort();
+                    return Err("the unpoliced service worker was never terminated".to_string());
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let settled = ticks.load(Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            task.abort();
+            if ticks.load(Ordering::SeqCst) != settled {
+                return Err("the terminated worker kept making unpoliced requests".to_string());
+            }
+            if escalated.load(Ordering::SeqCst) != 0 {
+                return Err("a terminated worker must not escalate to browser containment".into());
+            }
+            Ok(())
+        }
+        .await;
+
+        drop(client);
+        process.terminate().await.expect("terminate browser");
+        result.unwrap();
     }
 }

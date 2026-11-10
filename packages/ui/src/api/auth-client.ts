@@ -696,9 +696,10 @@ export async function logoutAccount(
     };
   }
   const outcome = parseLogoutOutcome(res.status, data);
-  const rec =
-    data && typeof data === "object" ? (data as Record<string, unknown>) : null;
-  if (token && !includeBearer && rec?.sessionRevoked !== true) {
+  if (token && !includeBearer) {
+    // The saved Bearer token was deliberately not sent. Whatever the response says (e.g. an
+    // unrelated cookie session or an anonymous request reporting sessionRevoked:true), it
+    // cannot confirm revocation of that token, so the outcome stays unconfirmed.
     return {
       ...outcome,
       sessionRevoked: false,

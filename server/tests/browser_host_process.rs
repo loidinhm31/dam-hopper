@@ -2,13 +2,13 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::tempdir;
 
+#[cfg(unix)]
+use dam_hopper_server::browser_host::process::live_members;
 use dam_hopper_server::browser_host::process::{
     discover_ws_endpoint, find_browser_executable, is_canonical_uuid, validate_browser_path,
     validate_loopback_endpoint, BrowserLaunchConfig, BrowserProcess, ProcessError,
     MAX_STDERR_CAPTURE_BYTES,
 };
-#[cfg(unix)]
-use dam_hopper_server::browser_host::process::live_members;
 
 const VALID_UUID: &str = "e90e79e7-5782-4281-b83a-1dc27f852305";
 const ALT_UUID: &str = "01234567-89ab-cdef-0123-456789abcdef";
@@ -24,7 +24,9 @@ fn test_is_canonical_uuid() {
     assert!(!is_canonical_uuid(""));
     assert!(!is_canonical_uuid("e90e79e757824281b83a1dc27f852305")); // 32 chars unhyphenated
     assert!(!is_canonical_uuid("E90E79E7-5782-4281-B83A-1DC27F852305")); // uppercase hex
-    assert!(!is_canonical_uuid("e90e79e7-5782-4281-b83a-1dc27f852305/extra"));
+    assert!(!is_canonical_uuid(
+        "e90e79e7-5782-4281-b83a-1dc27f852305/extra"
+    ));
     assert!(!is_canonical_uuid("e90e79e7-5782-4281-b83a-1dc27f85230g")); // non-hex 'g'
 }
 
@@ -43,35 +45,80 @@ fn test_validate_browser_path() {
 
 #[test]
 fn test_loopback_validation() {
-    assert!(validate_loopback_endpoint(&format!("ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}")).is_ok());
-    assert!(validate_loopback_endpoint(&format!("ws://[::1]:9222/devtools/browser/{VALID_UUID}")).is_ok());
-    assert!(validate_loopback_endpoint(&format!("ws://localhost:9222/devtools/browser/{VALID_UUID}")).is_ok());
+    assert!(validate_loopback_endpoint(&format!(
+        "ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}"
+    ))
+    .is_ok());
+    assert!(
+        validate_loopback_endpoint(&format!("ws://[::1]:9222/devtools/browser/{VALID_UUID}"))
+            .is_ok()
+    );
+    assert!(validate_loopback_endpoint(&format!(
+        "ws://localhost:9222/devtools/browser/{VALID_UUID}"
+    ))
+    .is_ok());
 
     // Non-canonical UUID paths must be rejected
     assert!(validate_loopback_endpoint("ws://127.0.0.1:9222/devtools/browser/123").is_err());
     assert!(validate_loopback_endpoint("ws://127.0.0.1:9222/devtools/browser/abc-123").is_err());
     assert!(validate_loopback_endpoint("ws://127.0.0.1:9222/devtools/browser/").is_err());
-    assert!(validate_loopback_endpoint("ws://127.0.0.1:9222/devtools/browser/E90E79E7-5782-4281-B83A-1DC27F852305").is_err());
-    assert!(validate_loopback_endpoint(&format!("ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}/extra")).is_err());
-    assert!(validate_loopback_endpoint(&format!("ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}?q=1")).is_err());
-    assert!(validate_loopback_endpoint(&format!("ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}#frag")).is_err());
+    assert!(validate_loopback_endpoint(
+        "ws://127.0.0.1:9222/devtools/browser/E90E79E7-5782-4281-B83A-1DC27F852305"
+    )
+    .is_err());
+    assert!(validate_loopback_endpoint(&format!(
+        "ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}/extra"
+    ))
+    .is_err());
+    assert!(validate_loopback_endpoint(&format!(
+        "ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}?q=1"
+    ))
+    .is_err());
+    assert!(validate_loopback_endpoint(&format!(
+        "ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}#frag"
+    ))
+    .is_err());
 
     // Non-loopback endpoints MUST be rejected
-    assert!(validate_loopback_endpoint(&format!("ws://192.168.1.100:9222/devtools/browser/{VALID_UUID}")).is_err());
-    assert!(validate_loopback_endpoint(&format!("ws://0.0.0.0:9222/devtools/browser/{VALID_UUID}")).is_err());
-    assert!(validate_loopback_endpoint(&format!("ws://10.0.0.1:9222/devtools/browser/{VALID_UUID}")).is_err());
-    assert!(validate_loopback_endpoint(&format!("ws://google.com/devtools/browser/{VALID_UUID}")).is_err());
+    assert!(validate_loopback_endpoint(&format!(
+        "ws://192.168.1.100:9222/devtools/browser/{VALID_UUID}"
+    ))
+    .is_err());
+    assert!(validate_loopback_endpoint(&format!(
+        "ws://0.0.0.0:9222/devtools/browser/{VALID_UUID}"
+    ))
+    .is_err());
+    assert!(validate_loopback_endpoint(&format!(
+        "ws://10.0.0.1:9222/devtools/browser/{VALID_UUID}"
+    ))
+    .is_err());
+    assert!(
+        validate_loopback_endpoint(&format!("ws://google.com/devtools/browser/{VALID_UUID}"))
+            .is_err()
+    );
 }
 
 #[test]
 fn test_validate_loopback_endpoint_strict_rejections() {
     // Scheme must be ws
-    assert!(validate_loopback_endpoint(&format!("http://127.0.0.1:9222/devtools/browser/{VALID_UUID}")).is_err());
+    assert!(validate_loopback_endpoint(&format!(
+        "http://127.0.0.1:9222/devtools/browser/{VALID_UUID}"
+    ))
+    .is_err());
     // Port must be explicit and > 0
-    assert!(validate_loopback_endpoint(&format!("ws://127.0.0.1/devtools/browser/{VALID_UUID}")).is_err());
-    assert!(validate_loopback_endpoint(&format!("ws://127.0.0.1:0/devtools/browser/{VALID_UUID}")).is_err());
+    assert!(
+        validate_loopback_endpoint(&format!("ws://127.0.0.1/devtools/browser/{VALID_UUID}"))
+            .is_err()
+    );
+    assert!(
+        validate_loopback_endpoint(&format!("ws://127.0.0.1:0/devtools/browser/{VALID_UUID}"))
+            .is_err()
+    );
     // Credentials forbidden
-    assert!(validate_loopback_endpoint(&format!("ws://user:pass@127.0.0.1:9222/devtools/browser/{VALID_UUID}")).is_err());
+    assert!(validate_loopback_endpoint(&format!(
+        "ws://user:pass@127.0.0.1:9222/devtools/browser/{VALID_UUID}"
+    ))
+    .is_err());
 }
 
 #[tokio::test]
@@ -108,13 +155,18 @@ async fn test_allowlist_rejects_copied_overrides_and_insecure_flags() {
     }
 }
 
-#[tokio::test]
-async fn test_find_browser_executable_requires_explicit_configuration() {
+/// Body of `test_find_browser_executable_requires_explicit_configuration`, run in its own
+/// process with the variable removed so no sibling test ever observes the removal.
+#[ignore]
+#[test]
+fn helper_find_browser_executable_without_env() {
+    if std::env::var("DAM_HOPPER_TEST_HELPER_NO_BROWSER_ENV").as_deref() != Ok("1") {
+        return;
+    }
+    assert!(std::env::var_os("DAM_HOPPER_BROWSER_EXECUTABLE").is_none());
+
     // When DAM_HOPPER_BROWSER_EXECUTABLE is not set, find_browser_executable(None) MUST fail closed.
     // Automatic PATH and standard-location discovery is disabled per architecture-contracts §2.
-    let saved_env = std::env::var("DAM_HOPPER_BROWSER_EXECUTABLE").ok();
-    std::env::remove_var("DAM_HOPPER_BROWSER_EXECUTABLE");
-
     let res = find_browser_executable(None);
     assert!(
         matches!(res, Err(ProcessError::ExecutableNotFound(_))),
@@ -127,11 +179,23 @@ async fn test_find_browser_executable_requires_explicit_configuration() {
         find_browser_executable(Some(bad_path)),
         Err(ProcessError::ExecutableNotFound(_))
     ));
+}
 
-    // Restore environment
-    if let Some(val) = saved_env {
-        std::env::set_var("DAM_HOPPER_BROWSER_EXECUTABLE", val);
-    }
+#[test]
+fn test_find_browser_executable_requires_explicit_configuration() {
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("helper_find_browser_executable_without_env")
+        .arg("--ignored")
+        .arg("--nocapture")
+        .env_remove("DAM_HOPPER_BROWSER_EXECUTABLE")
+        .env("DAM_HOPPER_TEST_HELPER_NO_BROWSER_ENV", "1")
+        .status()
+        .expect("failed to run the unset-environment helper");
+    assert!(
+        status.success(),
+        "find_browser_executable must fail closed without explicit configuration"
+    );
 }
 
 #[cfg(unix)]
@@ -162,7 +226,10 @@ async fn test_guard_kills_descendants_on_early_failure() {
             .filter_map(|p| p.cmdline().ok())
             .filter(|cmd| cmd.iter().any(|arg| arg == "60"))
             .count();
-        assert_eq!(survivors, 0, "no background sleeper descendant should survive failed launch");
+        assert_eq!(
+            survivors, 0,
+            "no background sleeper descendant should survive failed launch"
+        );
     }
 }
 
@@ -186,7 +253,9 @@ async fn test_browser_lifecycle_and_descendant_cleanup() {
     config.executable_path = Some(exec);
     config.headless = true;
 
-    let mut process = BrowserProcess::launch(config).await.expect("failed to launch browser");
+    let mut process = BrowserProcess::launch(config)
+        .await
+        .expect("failed to launch browser");
 
     let pid = process.pid();
     let endpoint = process.ws_endpoint().to_string();
@@ -228,7 +297,11 @@ async fn test_browser_lifecycle_and_descendant_cleanup() {
 async fn test_corroboration_matching_succeeds() {
     let tmp = tempdir().unwrap();
     let port_file = tmp.path().join("DevToolsActivePort");
-    std::fs::write(&port_file, format!("9222\n/devtools/browser/{VALID_UUID}\n")).unwrap();
+    std::fs::write(
+        &port_file,
+        format!("9222\n/devtools/browser/{VALID_UUID}\n"),
+    )
+    .unwrap();
 
     let mock_stderr = std::io::Cursor::new(
         format!("Random log line\nDevTools listening on ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}\nMore logs\n").into_bytes()
@@ -237,7 +310,10 @@ async fn test_corroboration_matching_succeeds() {
     let res = discover_ws_endpoint(mock_stderr, tmp.path()).await;
     assert!(res.is_ok());
     let (endpoint, _) = res.unwrap();
-    assert_eq!(endpoint, format!("ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}"));
+    assert_eq!(
+        endpoint,
+        format!("ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}")
+    );
 }
 
 #[tokio::test]
@@ -245,15 +321,22 @@ async fn test_corroboration_mismatch_fails() {
     let tmp = tempdir().unwrap();
     let port_file = tmp.path().join("DevToolsActivePort");
     // Port file says port 9222
-    std::fs::write(&port_file, format!("9222\n/devtools/browser/{VALID_UUID}\n")).unwrap();
+    std::fs::write(
+        &port_file,
+        format!("9222\n/devtools/browser/{VALID_UUID}\n"),
+    )
+    .unwrap();
 
     // Stderr says port 9999 (mismatched)
     let mock_stderr = std::io::Cursor::new(
-        format!("DevTools listening on ws://127.0.0.1:9999/devtools/browser/{VALID_UUID}\n").into_bytes()
+        format!("DevTools listening on ws://127.0.0.1:9999/devtools/browser/{VALID_UUID}\n")
+            .into_bytes(),
     );
 
     let res = discover_ws_endpoint(mock_stderr, tmp.path()).await;
-    assert!(matches!(res, Err(ProcessError::InvalidEndpoint(msg)) if msg.contains("endpoint corroboration failed")));
+    assert!(
+        matches!(res, Err(ProcessError::InvalidEndpoint(msg)) if msg.contains("endpoint corroboration failed"))
+    );
 }
 
 #[tokio::test]
@@ -290,51 +373,74 @@ async fn test_stderr_overflow_rejection() {
 async fn test_stderr_endpoint_without_trailing_newline_at_eof() {
     let tmp = tempdir().unwrap();
     let mock_stderr = std::io::Cursor::new(
-        format!("DevTools listening on ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}").into_bytes()
+        format!("DevTools listening on ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}")
+            .into_bytes(),
     );
 
     let res = discover_ws_endpoint(mock_stderr, tmp.path()).await;
-    assert!(res.is_ok(), "expected successful endpoint discovery on EOF without newline: {:?}", res);
+    assert!(
+        res.is_ok(),
+        "expected successful endpoint discovery on EOF without newline: {:?}",
+        res
+    );
     let (endpoint, _) = res.unwrap();
-    assert_eq!(endpoint, format!("ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}"));
+    assert_eq!(
+        endpoint,
+        format!("ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}")
+    );
 }
 
 #[tokio::test]
 async fn test_delayed_stderr_corroboration_matching_succeeds() {
     let tmp = tempdir().unwrap();
     let port_file = tmp.path().join("DevToolsActivePort");
-    std::fs::write(&port_file, format!("9222\n/devtools/browser/{VALID_UUID}\n")).unwrap();
+    std::fs::write(
+        &port_file,
+        format!("9222\n/devtools/browser/{VALID_UUID}\n"),
+    )
+    .unwrap();
 
     let (mut client, server) = tokio::io::duplex(1024);
     tokio::spawn(async move {
         use tokio::io::AsyncWriteExt;
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let msg = format!("DevTools listening on ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}\n");
+        let msg =
+            format!("DevTools listening on ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}\n");
         let _ = client.write_all(msg.as_bytes()).await;
     });
 
     let res = discover_ws_endpoint(server, tmp.path()).await;
     assert!(res.is_ok());
     let (endpoint, _) = res.unwrap();
-    assert_eq!(endpoint, format!("ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}"));
+    assert_eq!(
+        endpoint,
+        format!("ws://127.0.0.1:9222/devtools/browser/{VALID_UUID}")
+    );
 }
 
 #[tokio::test]
 async fn test_delayed_stderr_corroboration_mismatch_fails() {
     let tmp = tempdir().unwrap();
     let port_file = tmp.path().join("DevToolsActivePort");
-    std::fs::write(&port_file, format!("9222\n/devtools/browser/{VALID_UUID}\n")).unwrap();
+    std::fs::write(
+        &port_file,
+        format!("9222\n/devtools/browser/{VALID_UUID}\n"),
+    )
+    .unwrap();
 
     let (mut client, server) = tokio::io::duplex(1024);
     tokio::spawn(async move {
         use tokio::io::AsyncWriteExt;
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let msg = format!("DevTools listening on ws://127.0.0.1:9999/devtools/browser/{VALID_UUID}\n");
+        let msg =
+            format!("DevTools listening on ws://127.0.0.1:9999/devtools/browser/{VALID_UUID}\n");
         let _ = client.write_all(msg.as_bytes()).await;
     });
 
     let res = discover_ws_endpoint(server, tmp.path()).await;
-    assert!(matches!(res, Err(ProcessError::InvalidEndpoint(msg)) if msg.contains("endpoint corroboration failed")));
+    assert!(
+        matches!(res, Err(ProcessError::InvalidEndpoint(msg)) if msg.contains("endpoint corroboration failed"))
+    );
 }
 
 // Helper test process invoked only when DAM_HOPPER_TEST_HELPER_PARENT=1
@@ -368,8 +474,26 @@ async fn helper_supervisor_sigkill_parent() {
     // 2. Launch BrowserProcess
     let tmp = tempdir().expect("failed to create tempdir");
     let mut config = BrowserLaunchConfig::new(tmp.path().join("helper-user-data"));
-    config.executable_path = Some(exec);
     config.headless = true;
+    config.executable_path = if std::env::var("DAM_HOPPER_TEST_STUBBORN_DESCENDANT").as_deref()
+        == Ok("1")
+    {
+        // The browser's group also holds a descendant that ignores SIGTERM.
+        use std::os::unix::fs::PermissionsExt;
+        let wrapper = tmp.path().join("stubborn_browser.sh");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\n( trap '' TERM; exec sleep 120 ) </dev/null >/dev/null 2>&1 &\nexec '{}' \"$@\"\n",
+                exec.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Some(wrapper)
+    } else {
+        Some(exec)
+    };
 
     let browser = match BrowserProcess::launch(config).await {
         Ok(b) => b,
@@ -392,9 +516,22 @@ async fn helper_supervisor_sigkill_parent() {
 #[cfg(unix)]
 #[tokio::test]
 async fn test_supervisor_sigkill_containment() {
-    use std::io::{BufRead, BufReader};
+    run_supervisor_sigkill_containment(false).await;
+}
+
+/// A descendant ignoring SIGTERM only dies at the watcher's delayed KILL, delivered through
+/// the pinned process-group object after the gap.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_supervisor_sigkill_kills_term_ignoring_descendant() {
+    run_supervisor_sigkill_containment(true).await;
+}
+
+#[cfg(unix)]
+async fn run_supervisor_sigkill_containment(stubborn_descendant: bool) {
     use nix::sys::signal::{kill, killpg, Signal};
     use nix::unistd::Pid;
+    use std::io::{BufRead, BufReader};
 
     // Check if browser executable is available
     if find_browser_executable(None).is_err() {
@@ -412,6 +549,10 @@ async fn test_supervisor_sigkill_containment() {
         .arg("--ignored")
         .arg("--nocapture")
         .env("DAM_HOPPER_TEST_HELPER_PARENT", "1")
+        .env(
+            "DAM_HOPPER_TEST_STUBBORN_DESCENDANT",
+            if stubborn_descendant { "1" } else { "0" },
+        )
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit())
         .spawn()
@@ -449,11 +590,15 @@ async fn test_supervisor_sigkill_containment() {
     }
 
     let pgid = pgid_opt.expect("helper failed to provide pgid within deadline");
-    let sibling_pid = sibling_pid_opt.expect("helper failed to provide sibling_pid within deadline");
+    let sibling_pid =
+        sibling_pid_opt.expect("helper failed to provide sibling_pid within deadline");
 
     // Assert that Chrome process group has active members
     let initial_count = live_members(pgid).expect("failed to check live members of Chrome pgid");
-    assert!(initial_count > 0, "Chrome process group {pgid} should have active members initially");
+    assert!(
+        initial_count > 0,
+        "Chrome process group {pgid} should have active members initially"
+    );
 
     // Assert that sibling process is alive
     assert!(
@@ -463,7 +608,8 @@ async fn test_supervisor_sigkill_containment() {
 
     // SIGKILL the helper supervisor parent process
     let helper_pid = helper.id() as i32;
-    kill(Pid::from_raw(helper_pid), Signal::SIGKILL).expect("failed to send SIGKILL to helper parent");
+    kill(Pid::from_raw(helper_pid), Signal::SIGKILL)
+        .expect("failed to send SIGKILL to helper parent");
     let _ = helper.wait();
 
     // Verify bounded termination of Chrome process group descendants:
@@ -472,7 +618,10 @@ async fn test_supervisor_sigkill_containment() {
     let mut clean = false;
     while std::time::Instant::now() < poll_deadline {
         let members = live_members(pgid).unwrap_or(1);
-        let esrch = matches!(killpg(Pid::from_raw(pgid), None), Err(nix::errno::Errno::ESRCH));
+        let esrch = matches!(
+            killpg(Pid::from_raw(pgid), None),
+            Err(nix::errno::Errno::ESRCH)
+        );
         if members == 0 && esrch {
             clean = true;
             break;
@@ -554,9 +703,9 @@ async fn helper_supervisor_sigkill_startup_window() {
 #[cfg(unix)]
 #[tokio::test]
 async fn test_supervisor_sigkill_startup_window() {
-    use std::io::{BufRead, BufReader};
     use nix::sys::signal::{kill, killpg, Signal};
     use nix::unistd::Pid;
+    use std::io::{BufRead, BufReader};
 
     if find_browser_executable(None).is_err() {
         if std::env::var("DAM_HOPPER_REQUIRE_BROWSER").as_deref() == Ok("1") {
@@ -610,11 +759,13 @@ async fn test_supervisor_sigkill_startup_window() {
     }
 
     let pgid = pgid_opt.expect("helper failed to provide pgid within deadline");
-    let sibling_pid = sibling_pid_opt.expect("helper failed to provide sibling_pid within deadline");
+    let sibling_pid =
+        sibling_pid_opt.expect("helper failed to provide sibling_pid within deadline");
 
     // IMMEDIATELY SIGKILL the helper supervisor parent process in the startup window
     let helper_pid = helper.id() as i32;
-    kill(Pid::from_raw(helper_pid), Signal::SIGKILL).expect("failed to send SIGKILL to helper parent");
+    kill(Pid::from_raw(helper_pid), Signal::SIGKILL)
+        .expect("failed to send SIGKILL to helper parent");
     let _ = helper.wait();
 
     // Verify bounded termination of Chrome process group descendants:
@@ -623,7 +774,10 @@ async fn test_supervisor_sigkill_startup_window() {
     let mut clean = false;
     while std::time::Instant::now() < poll_deadline {
         let members = live_members(pgid).unwrap_or(1);
-        let esrch = matches!(killpg(Pid::from_raw(pgid), None), Err(nix::errno::Errno::ESRCH));
+        let esrch = matches!(
+            killpg(Pid::from_raw(pgid), None),
+            Err(nix::errno::Errno::ESRCH)
+        );
         if members == 0 && esrch {
             clean = true;
             break;
@@ -654,7 +808,7 @@ async fn test_supervisor_sigkill_startup_window() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn test_watcher_exec_failure_fails_closed_and_cleans_up_chrome() {
+async fn test_watcher_arming_failure_fails_closed_and_cleans_up_chrome() {
     let exec = match find_browser_executable(None) {
         Ok(p) => p,
         Err(_) => {
@@ -670,15 +824,15 @@ async fn test_watcher_exec_failure_fails_closed_and_cleans_up_chrome() {
     let mut config = BrowserLaunchConfig::new(tmp.path().join("watcher-fail-data"));
     config.executable_path = Some(exec);
     config.headless = true;
-    // Arm failure test: force grandchild watcher to attempt execve on a nonexistent path
-    config._test_mock_watcher_exec_fail = true;
+    // Arm failure test: the watcher's setup succeeds but its arming step reports an errno
+    config._test_mock_watcher_arming_fail = true;
 
     let res = BrowserProcess::launch(config).await;
 
     // Launch MUST fail closed with LaunchFailed
     assert!(
-        matches!(&res, Err(ProcessError::LaunchFailed(msg)) if msg.contains("supervisor watcher execve failed")),
-        "launch must fail closed when watcher execve fails"
+        matches!(&res, Err(ProcessError::LaunchFailed(msg)) if msg.contains("supervisor watcher arming failed")),
+        "launch must fail closed when watcher arming fails"
     );
 
     // Bounded sleep to ensure guard cleanup took effect
@@ -693,7 +847,60 @@ async fn test_watcher_exec_failure_fails_closed_and_cleans_up_chrome() {
             .filter_map(|p| p.cmdline().ok())
             .filter(|cmd| cmd.iter().any(|arg| arg.contains("watcher-fail-data")))
             .count();
-        assert_eq!(survivors, 0, "no Chrome processes should survive failed watcher initialization");
+        assert_eq!(
+            survivors, 0,
+            "no Chrome processes should survive failed watcher initialization"
+        );
+    }
+}
+
+/// Kernels without `PIDFD_SIGNAL_PROCESS_GROUP` (< 6.9) are unsupported: the watcher cannot
+/// identify the launch's group without trusting a recyclable number, so launch fails closed
+/// (no per-member fallback) and leaves no browser process behind.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_watcher_unsupported_kernel_fails_closed_and_cleans_up_chrome() {
+    let exec = match find_browser_executable(None) {
+        Ok(p) => p,
+        Err(_) => {
+            if std::env::var("DAM_HOPPER_REQUIRE_BROWSER").as_deref() == Ok("1") {
+                panic!("DAM_HOPPER_REQUIRE_BROWSER=1 is set but no browser was found");
+            }
+            eprintln!("SKIP: No Chrome/Chromium executable available on this system.");
+            return;
+        }
+    };
+
+    let tmp = tempdir().unwrap();
+    let mut config = BrowserLaunchConfig::new(tmp.path().join("watcher-old-kernel-data"));
+    config.executable_path = Some(exec);
+    config.headless = true;
+    config._test_force_watcher_group_signal_unsupported = true;
+
+    let res = BrowserProcess::launch(config).await;
+    assert!(
+        matches!(&res, Err(ProcessError::LaunchFailed(msg))
+            if msg.contains("supervisor watcher arming failed") && msg.contains("6.9")),
+        "launch must fail closed on a kernel without process-group pidfd signalling: {:?}",
+        res.as_ref().err()
+    );
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    #[cfg(target_os = "linux")]
+    {
+        let survivors = procfs::process::all_processes()
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|p| p.cmdline().ok())
+            .filter(|cmd| {
+                cmd.iter()
+                    .any(|arg| arg.contains("watcher-old-kernel-data"))
+            })
+            .count();
+        assert_eq!(
+            survivors, 0,
+            "no Chrome processes may survive the rejection"
+        );
     }
 }
 
@@ -738,6 +945,371 @@ async fn test_watcher_pre_exec_failure_fails_closed_and_cleans_up_chrome() {
             .filter_map(|p| p.cmdline().ok())
             .filter(|cmd| cmd.iter().any(|arg| arg.contains("watcher-pre-fail-data")))
             .count();
-        assert_eq!(survivors, 0, "no Chrome processes should survive failed watcher pre-exec setup");
+        assert_eq!(
+            survivors, 0,
+            "no Chrome processes should survive failed watcher pre-exec setup"
+        );
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Prior-tree reconciliation (L6): identity-verified absence proof with real processes.
+// ---------------------------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+mod prior_tree {
+    use super::*;
+    use dam_hopper_server::browser_host::process::{
+        inspect_prior_tree, reap_prior_tree, ContainmentIdentity, ReapTimings, TreeState,
+        LAUNCH_TOKEN_ENV,
+    };
+    use nix::sys::signal::{kill, killpg, Signal};
+    use nix::unistd::Pid;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    fn timings(settle_ms: u64) -> ReapTimings {
+        ReapTimings {
+            settle: Duration::from_millis(settle_ms),
+            term_grace: Duration::from_secs(2),
+            proof: Duration::from_secs(2),
+        }
+    }
+
+    /// Shell leader of its own group plus two sleeping descendants; the leader is reaped by a
+    /// thread so a dead tree leaves no zombie.
+    async fn spawn_tree(token: Option<&str>) -> (u32, std::thread::JoinHandle<()>) {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("sleep 300 & sleep 300 & wait")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0);
+        if let Some(token) = token {
+            cmd.env(LAUNCH_TOKEN_ENV, token);
+        }
+        let mut child = cmd.spawn().unwrap();
+        let pid = child.id();
+        let waiter = std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        for _ in 0..100 {
+            if live_members(pid as i32).unwrap() >= 3 {
+                return (pid, waiter);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("tree did not start");
+    }
+
+    fn group_gone(pgid: i32) -> bool {
+        live_members(pgid).unwrap() == 0
+    }
+
+    fn destroy(pgid: i32, waiter: std::thread::JoinHandle<()>) {
+        let _ = killpg(Pid::from_raw(pgid), Signal::SIGKILL);
+        let _ = waiter.join();
+    }
+
+    #[tokio::test]
+    async fn test_reap_terminates_verified_owner_and_proves_every_descendant_absent() {
+        let dir = tempdir().unwrap();
+        let token = "reap-owner-token";
+        let (pid, waiter) = spawn_tree(Some(token)).await;
+        let pgid = pid as i32;
+        let identity = ContainmentIdentity::capture(pid, Some(pgid), Some(token.to_string()));
+        assert!(identity.start_ticks.is_some() && identity.boot_id.is_some());
+
+        reap_prior_tree(&identity, dir.path(), timings(100))
+            .await
+            .expect("verified owner must be terminated and proven absent");
+        assert!(group_gone(pgid), "all descendants must be absent");
+        assert!(matches!(
+            inspect_prior_tree(&identity, dir.path()).unwrap(),
+            TreeState::Absent
+        ));
+        destroy(pgid, waiter);
+    }
+
+    #[tokio::test]
+    async fn test_reap_never_signals_unverifiable_group() {
+        let dir = tempdir().unwrap();
+        let (pid, waiter) = spawn_tree(None).await;
+        let pgid = pid as i32;
+        // Bare pid/pgid (legacy record): nothing proves the live group is the prior browser.
+        let legacy = ContainmentIdentity {
+            pid: Some(pid),
+            pgid: Some(pgid),
+            ..Default::default()
+        };
+        let res = reap_prior_tree(&legacy, dir.path(), timings(150)).await;
+        assert!(
+            matches!(res, Err(ProcessError::OwnershipAmbiguous(_))),
+            "{res:?}"
+        );
+        assert!(
+            !group_gone(pgid),
+            "an unverified group must never be signalled"
+        );
+
+        // A different boot id proves the whole tree gone without touching live processes.
+        let other_boot = ContainmentIdentity {
+            boot_id: Some("00000000-0000-0000-0000-000000000000".to_string()),
+            ..legacy
+        };
+        reap_prior_tree(&other_boot, dir.path(), timings(0))
+            .await
+            .unwrap();
+        assert!(
+            !group_gone(pgid),
+            "a previous-boot identity must not signal anything"
+        );
+        destroy(pgid, waiter);
+    }
+
+    #[tokio::test]
+    async fn test_reap_ignores_reused_pid_with_different_start_time() {
+        let dir = tempdir().unwrap();
+        let (pid, waiter) = spawn_tree(None).await;
+        let pgid = pid as i32;
+        let mut identity = ContainmentIdentity::capture(pid, Some(pgid), None);
+        identity.start_ticks = identity.start_ticks.map(|t| t + 1_000_000);
+        reap_prior_tree(&identity, dir.path(), timings(0))
+            .await
+            .unwrap();
+        assert!(
+            !group_gone(pgid),
+            "a reused pid number must never be killed"
+        );
+        destroy(pgid, waiter);
+    }
+
+    #[tokio::test]
+    async fn test_reap_kills_descendant_that_left_the_process_group_by_launch_token() {
+        use std::io::{BufRead, BufReader};
+        let dir = tempdir().unwrap();
+        let token = "reap-stray-token";
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("setsid sleep 300 & echo $!")
+            .env(LAUNCH_TOKEN_ENV, token)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let stray: i32 = line.trim().parse().expect("stray pid");
+        let pid = child.id();
+        let identity = ContainmentIdentity::capture(pid, Some(pid as i32), Some(token.to_string()));
+        let _ = child.wait();
+
+        assert!(
+            kill(Pid::from_raw(stray), None).is_ok(),
+            "stray must be running"
+        );
+        assert!(
+            matches!(
+                inspect_prior_tree(&identity, dir.path()).unwrap(),
+                TreeState::Owned(_)
+            ),
+            "token-marked process outside the group is part of the tree"
+        );
+        reap_prior_tree(&identity, dir.path(), timings(0))
+            .await
+            .unwrap();
+        let mut gone = false;
+        for _ in 0..40 {
+            if kill(Pid::from_raw(stray), None).is_err() {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            gone,
+            "descendant outside the group must be terminated via its verified identity"
+        );
+    }
+}
+
+// Helper process: a production manager owning a real browser whose group also holds a
+// SIGTERM-ignoring descendant. Invoked only when DAM_HOPPER_TEST_HELPER_MANAGER=1.
+#[cfg(target_os = "linux")]
+#[ignore]
+#[tokio::test]
+async fn helper_manager_owner_for_replacement_race() {
+    use dam_hopper_server::browser_host::config::BrowserHostConfig;
+    use dam_hopper_server::browser_host::manager::BrowserHostManager;
+    use std::io::Write;
+    use tokio_util::sync::CancellationToken;
+
+    if std::env::var("DAM_HOPPER_TEST_HELPER_MANAGER").as_deref() != Ok("1") {
+        return;
+    }
+    let root = std::path::PathBuf::from(std::env::var("DAM_HOPPER_TEST_PROFILE_ROOT").unwrap());
+    let exec = std::path::PathBuf::from(std::env::var("DAM_HOPPER_TEST_EXEC").unwrap());
+    let config = BrowserHostConfig {
+        enabled: true,
+        executable_path: Some(exec),
+        ..Default::default()
+    };
+    let manager = BrowserHostManager::new(config, Some(root), CancellationToken::new());
+    match manager.ensure_running("race-user", false).await {
+        Ok(handle) => {
+            println!("MANAGER_HELPER_READY:pgid={}", handle.pid);
+            let _ = std::io::stdout().flush();
+            tokio::time::sleep(Duration::from_secs(300)).await;
+        }
+        Err(e) => {
+            println!("MANAGER_HELPER_FAILED:{e}");
+            let _ = std::io::stdout().flush();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn test_replacement_manager_cannot_race_surviving_tree_after_supervisor_sigkill() {
+    use dam_hopper_server::browser_host::config::BrowserHostConfig;
+    use dam_hopper_server::browser_host::manager::BrowserHostManager;
+    use nix::sys::signal::{kill, killpg, Signal};
+    use nix::unistd::Pid;
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::fs::PermissionsExt;
+    use tokio_util::sync::CancellationToken;
+
+    let real = match find_browser_executable(None).ok().or_else(|| {
+        [
+            "/usr/bin/google-chrome",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/chromium",
+        ]
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.is_file())
+    }) {
+        Some(p) => p,
+        None => {
+            if std::env::var("DAM_HOPPER_REQUIRE_BROWSER").as_deref() == Ok("1") {
+                panic!("DAM_HOPPER_REQUIRE_BROWSER=1 is set but no browser was found");
+            }
+            eprintln!("SKIP: No Chrome/Chromium executable available on this system.");
+            return;
+        }
+    };
+
+    let work = tempdir().unwrap();
+    let root = work.path().join("profiles");
+    // First launch: add a descendant that ignores SIGTERM, so the browser group outlives the
+    // death watcher's TERM and only dies at its KILL half a second later. Replacement launch
+    // (watch_pgid present): record whether the old group was already gone.
+    let wrapper = work.path().join("browser_wrapper.sh");
+    fs_write_script(
+        &wrapper,
+        &format!(
+            r#"#!/bin/sh
+ROOT='{work}'
+if [ -f "$ROOT/watch_pgid" ]; then
+  OLD=$(cat "$ROOT/watch_pgid")
+  if kill -s 0 -- "-$OLD" 2>/dev/null; then echo DIRTY > "$ROOT/verdict"; else echo CLEAN > "$ROOT/verdict"; fi
+else
+  ( trap '' TERM; exec sleep 30 ) </dev/null >/dev/null 2>&1 &
+fi
+exec '{real}' "$@"
+"#,
+            work = work.path().display(),
+            real = real.display()
+        ),
+    );
+    let _ = std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755));
+
+    let current_exe = std::env::current_exe().unwrap();
+    let mut helper = std::process::Command::new(&current_exe)
+        .arg("--exact")
+        .arg("helper_manager_owner_for_replacement_race")
+        .arg("--ignored")
+        .arg("--nocapture")
+        .env("DAM_HOPPER_TEST_HELPER_MANAGER", "1")
+        .env("DAM_HOPPER_TEST_PROFILE_ROOT", &root)
+        .env("DAM_HOPPER_TEST_EXEC", &wrapper)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .expect("failed to spawn helper manager process");
+
+    let mut reader = BufReader::new(helper.stdout.take().unwrap());
+    let mut line = String::new();
+    let mut old_pgid: Option<i32> = None;
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(40) {
+        line.clear();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+            break;
+        }
+        if let Some(val) = line.trim().strip_prefix("MANAGER_HELPER_READY:pgid=") {
+            old_pgid = val.parse().ok();
+            break;
+        }
+        if line.trim().starts_with("MANAGER_HELPER_FAILED:") {
+            let _ = helper.kill();
+            panic!(
+                "helper manager could not launch the browser: {}",
+                line.trim()
+            );
+        }
+    }
+    let old_pgid = old_pgid.expect("helper manager did not report its browser group");
+    std::fs::write(work.path().join("watch_pgid"), old_pgid.to_string()).unwrap();
+    assert!(
+        live_members(old_pgid).unwrap() >= 2,
+        "old browser group must hold the stubborn descendant"
+    );
+
+    // Parent death: the OS releases the profile flock at once while the death watcher is still
+    // between SIGTERM and SIGKILL.
+    kill(Pid::from_raw(helper.id() as i32), Signal::SIGKILL).unwrap();
+    let _ = helper.wait();
+    assert!(
+        live_members(old_pgid).unwrap() > 0,
+        "the TERM-to-KILL gap must be open when the replacement starts"
+    );
+
+    let config = BrowserHostConfig {
+        enabled: true,
+        executable_path: Some(wrapper.clone()),
+        ..Default::default()
+    };
+    let replacement = BrowserHostManager::new(config, Some(root), CancellationToken::new());
+    let handle = replacement
+        .ensure_running("race-user", false)
+        .await
+        .expect("replacement manager must launch once the old tree is proven absent");
+
+    assert_eq!(
+        std::fs::read_to_string(work.path().join("verdict"))
+            .unwrap()
+            .trim(),
+        "CLEAN",
+        "the replacement browser must not start while the old tree survives"
+    );
+    assert!(
+        matches!(
+            killpg(Pid::from_raw(old_pgid), None),
+            Err(nix::errno::Errno::ESRCH)
+        ),
+        "old group {old_pgid} must be fully gone"
+    );
+    assert_ne!(handle.pid as i32, old_pgid);
+    replacement.shutdown_all().await;
+}
+
+#[cfg(target_os = "linux")]
+fn fs_write_script(path: &Path, body: &str) {
+    std::fs::write(path, body).unwrap();
 }

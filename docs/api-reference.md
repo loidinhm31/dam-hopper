@@ -27,7 +27,7 @@ Base URL depends on deployment. Local development commonly uses `http://127.0.0.
 
 ## Authentication
 
-See the [authentication API reference](./api/authentication.md). Covers registration, TOTP MFA enrollment and verification, session status, account-wide device login sessions inventory (`GET /api/auth/sessions`), and bearer-only session revocation (`DELETE /api/auth/sessions/{id}`). `--no-auth` is a development bypass, not a production mode; bind it to loopback only. Privileged idle-suspend mutations and login device sessions remain denied in no-auth mode (`409 DEVICE_SESSIONS_UNAVAILABLE`).
+See the [authentication API reference](./api/authentication.md). Covers registration, TOTP MFA enrollment and verification, session status, account-wide device login sessions inventory (`GET /api/auth/sessions`), bearer-only session revocation (`DELETE /api/auth/sessions/{id}`), and revoke-first logout (`POST /api/auth/logout`). Logout reports `sessionRevoked: true` only when the request's own credential was identified and revoked (accompanied by `sessionIdentified`), ensuring clients never trust it for an unsent Bearer. `--no-auth` is a development bypass, not a production mode; bind it to loopback only. Privileged idle-suspend mutations and login device sessions remain denied in no-auth mode (`409 DEVICE_SESSIONS_UNAVAILABLE`).
 
 ## Terminal idle suspend
 
@@ -224,7 +224,7 @@ If any of these 4 criteria is missing or mismatched, destructive actions ("End S
 
 ## Host Browser CDP Streaming
 
-See the [Host browser CDP streaming API reference](./api/browser-host.md). Covers live Admin admission verification, `--no-auth` dev bypass loopback/Origin checks, REST routes (`GET/POST /api/browser/sessions`, `/navigate`, `/history`, `/reload`, `/viewport`, `/dialog`, `/selection/*`, `/find`, `/selected-text`), single-use capability tickets (`POST /api/browser/attachments`), cooperative 30s control leases with reliable input queue semantics (128 records / 256 KiB), and network destination policies. Architectural boundaries and binary wire framing are detailed in the [Host Browser CDP Streaming Architecture](./architecture/host-browser-cdp-streaming.md).
+See the [Host browser CDP streaming API reference](./api/browser-host.md). Covers live Admin admission verification, `--no-auth` dev bypass loopback/Origin checks, REST routes (`GET/POST /api/browser/sessions`, `/navigate`, `/history`, `/reload`, `/viewport`, `/dialog`, `/selection/*`, `/find`, `/selected-text`), session lifecycle status truth (`initializing`, `running`, `closing`, `lost`, `closed`), failed close handling (502 `nativeCloseUnconfirmed`), raw CDP discovery public origin resolution (503 `publicOriginUnavailable`), shared target capacity (`max_targets`), single-use capability tickets (`POST /api/browser/attachments`), cooperative 30s control leases with reliable input queue semantics (128 records / 256 KiB), and network destination policies. Architectural boundaries and binary wire framing are detailed in the [Host Browser CDP Streaming Architecture](./architecture/host-browser-cdp-streaming.md).
 
 ## Retired plugin API anchors
 

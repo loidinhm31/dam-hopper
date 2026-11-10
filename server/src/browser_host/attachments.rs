@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -15,13 +16,17 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
 
-use super::auth::{verify_live_admission, BrowserAdmission, LIVE_CHECK_INTERVAL};
+use super::auth::{
+    verify_live_admission, BrowserAdmission, LIVE_CHECK_INTERVAL, LIVE_CHECK_TIMEOUT,
+};
 use crate::state::AppState;
 
 pub const TICKET_TTL: Duration = Duration::from_secs(30);
 pub const PAIR_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 pub const MAX_UNCONSUMED_TICKETS_PER_PRINCIPAL: usize = 16;
 pub const MAX_UNCONSUMED_TICKETS_GLOBAL: usize = 64;
+/// Maximum identity checks in flight per supervision round.
+const MAX_CONCURRENT_LIVE_CHECKS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,8 +50,14 @@ impl fmt::Display for AttachmentPurpose {
 pub enum AttachmentError {
     TicketNotFound,
     TicketExpired,
-    PurposeMismatch { expected: AttachmentPurpose, actual: AttachmentPurpose },
-    OriginMismatch { expected: String, actual: String },
+    PurposeMismatch {
+        expected: AttachmentPurpose,
+        actual: AttachmentPurpose,
+    },
+    OriginMismatch {
+        expected: String,
+        actual: String,
+    },
     SessionMismatch,
     ViewerMismatch,
     SubscriptionMismatch,
@@ -61,7 +72,10 @@ impl fmt::Display for AttachmentError {
             Self::TicketNotFound => write!(f, "attachment ticket not found or already consumed"),
             Self::TicketExpired => write!(f, "attachment ticket expired"),
             Self::PurposeMismatch { expected, actual } => {
-                write!(f, "ticket purpose mismatch: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "ticket purpose mismatch: expected {expected}, got {actual}"
+                )
             }
             Self::OriginMismatch { expected, actual } => {
                 write!(f, "origin mismatch: expected {expected}, got {actual}")
@@ -207,13 +221,6 @@ impl AttachmentManager {
             }
         }
 
-        let current_global = self.global_ticket_count.load(Ordering::SeqCst);
-        if current_global >= MAX_UNCONSUMED_TICKETS_GLOBAL {
-            return Err(AttachmentError::CapacityExceeded(
-                "global unconsumed ticket limit reached".to_string(),
-            ));
-        }
-
         let now = Instant::now();
         let now_utc = Utc::now();
 
@@ -261,24 +268,36 @@ impl AttachmentManager {
         };
 
         {
+            // Single write-lock transaction: prune expired, check per-principal AND global
+            // caps against the pruned map, insert. No cap check reads state outside the lock,
+            // so concurrent issuers cannot be admitted past a cap and expired tickets never
+            // count toward saturation.
             let mut tickets = self.tickets.write().await;
-            // Prune expired tickets
-            tickets.retain(|_, t| t.expires_at > now);
+            let lock_now = Instant::now();
+            tickets.retain(|_, t| t.expires_at > lock_now);
 
-            // Check per-principal limit
             let principal_count = tickets
                 .values()
                 .filter(|t| t.principal == admission.principal)
                 .count();
-
             if principal_count >= MAX_UNCONSUMED_TICKETS_PER_PRINCIPAL {
+                self.global_ticket_count
+                    .store(tickets.len(), Ordering::SeqCst);
                 return Err(AttachmentError::CapacityExceeded(
                     "principal unconsumed ticket limit reached".to_string(),
                 ));
             }
+            if tickets.len() >= MAX_UNCONSUMED_TICKETS_GLOBAL {
+                self.global_ticket_count
+                    .store(tickets.len(), Ordering::SeqCst);
+                return Err(AttachmentError::CapacityExceeded(
+                    "global unconsumed ticket limit reached".to_string(),
+                ));
+            }
 
             tickets.insert(hash, stored);
-            self.global_ticket_count.store(tickets.len(), Ordering::SeqCst);
+            self.global_ticket_count
+                .store(tickets.len(), Ordering::SeqCst);
         }
 
         Ok(IssueTicketResponse {
@@ -311,8 +330,11 @@ impl AttachmentManager {
         // Atomic removal (single-use)
         let stored = {
             let mut tickets = self.tickets.write().await;
-            let ticket = tickets.remove(&hash).ok_or(AttachmentError::TicketNotFound)?;
-            self.global_ticket_count.store(tickets.len(), Ordering::SeqCst);
+            let ticket = tickets
+                .remove(&hash)
+                .ok_or(AttachmentError::TicketNotFound)?;
+            self.global_ticket_count
+                .store(tickets.len(), Ordering::SeqCst);
             ticket
         };
 
@@ -362,17 +384,33 @@ impl AttachmentManager {
         let connection_id = Uuid::new_v4();
         let mut cancel_token = CancellationToken::new();
         // For Media or Control, pair them under (viewer_id, subscription_epoch)
-        if admitted.purpose == AttachmentPurpose::Media || admitted.purpose == AttachmentPurpose::Control {
+        if admitted.purpose == AttachmentPurpose::Media
+            || admitted.purpose == AttachmentPurpose::Control
+        {
             let principal = admitted.principal.clone();
-            let session_id = admitted.browser_session_id.as_deref().unwrap_or_default().to_string();
-            let viewer_id = admitted.viewer_id.as_deref().unwrap_or_default().to_string();
-            let sub_epoch = admitted.subscription_epoch.as_deref().unwrap_or_default().to_string();
+            let session_id = admitted
+                .browser_session_id
+                .as_deref()
+                .unwrap_or_default()
+                .to_string();
+            let viewer_id = admitted
+                .viewer_id
+                .as_deref()
+                .unwrap_or_default()
+                .to_string();
+            let sub_epoch = admitted
+                .subscription_epoch
+                .as_deref()
+                .unwrap_or_default()
+                .to_string();
             let pair_key = (principal, session_id, viewer_id, sub_epoch);
             let mut pairs = self.pairs.write().await;
             let now = Instant::now();
 
             pairs.retain(|_, slot| {
-                if !(slot.media_connected && slot.control_connected) && now.duration_since(slot.created_at) > TICKET_TTL {
+                if !(slot.media_connected && slot.control_connected)
+                    && now.duration_since(slot.created_at) > TICKET_TTL
+                {
                     slot.cancel_token.cancel();
                     return false;
                 }
@@ -401,7 +439,8 @@ impl AttachmentManager {
                 AttachmentPurpose::Media => {
                     if slot.media_connected {
                         return Err(AttachmentError::CapacityExceeded(
-                            "media socket already connected for this viewer subscription".to_string(),
+                            "media socket already connected for this viewer subscription"
+                                .to_string(),
                         ));
                     }
                     slot.media_connected = true;
@@ -412,7 +451,8 @@ impl AttachmentManager {
                 AttachmentPurpose::Control => {
                     if slot.control_connected {
                         return Err(AttachmentError::CapacityExceeded(
-                            "control socket already connected for this viewer subscription".to_string(),
+                            "control socket already connected for this viewer subscription"
+                                .to_string(),
                         ));
                     }
                     slot.control_connected = true;
@@ -450,9 +490,18 @@ impl AttachmentManager {
         let mut conns = self.active_connections.write().await;
         if let Some(conn) = conns.remove(&connection_id) {
             conn.cancel_token.cancel();
-            if let (Some(session_id), Some(viewer_id), Some(sub_epoch)) = (conn.browser_session_id, conn.viewer_id.as_ref(), conn.subscription_epoch.as_ref()) {
+            if let (Some(session_id), Some(viewer_id), Some(sub_epoch)) = (
+                conn.browser_session_id,
+                conn.viewer_id.as_ref(),
+                conn.subscription_epoch.as_ref(),
+            ) {
                 let mut pairs = self.pairs.write().await;
-                if let Some(slot) = pairs.remove(&(conn.principal.clone(), session_id, viewer_id.clone(), sub_epoch.clone())) {
+                if let Some(slot) = pairs.remove(&(
+                    conn.principal.clone(),
+                    session_id,
+                    viewer_id.clone(),
+                    sub_epoch.clone(),
+                )) {
                     slot.cancel_token.cancel();
                 }
             }
@@ -462,7 +511,11 @@ impl AttachmentManager {
     /// Targeted revocation: revokes connections matching the specified auth_session_id.
     ///
     /// Sibling logins for the same principal remain running!
-    pub async fn revoke_by_auth_session(&self, principal: &str, session_id: &str) -> Vec<(String, String)> {
+    pub async fn revoke_by_auth_session(
+        &self,
+        principal: &str,
+        session_id: &str,
+    ) -> Vec<(String, String)> {
         let mut cancelled_pairs: Vec<(String, String, String, String)> = Vec::new();
         let mut cancelled_viewers: Vec<(String, String)> = Vec::new();
         {
@@ -503,7 +556,8 @@ impl AttachmentManager {
             tickets.retain(|_, t| {
                 !(t.principal == principal && t.auth_session_id.as_deref() == Some(session_id))
             });
-            self.global_ticket_count.store(tickets.len(), Ordering::SeqCst);
+            self.global_ticket_count
+                .store(tickets.len(), Ordering::SeqCst);
         }
 
         cancelled_viewers
@@ -537,7 +591,8 @@ impl AttachmentManager {
 
         let mut tickets = self.tickets.write().await;
         tickets.retain(|_, t| t.principal != principal);
-        self.global_ticket_count.store(tickets.len(), Ordering::SeqCst);
+        self.global_ticket_count
+            .store(tickets.len(), Ordering::SeqCst);
     }
     /// Revokes connections bound to a browser session when it closes.
     pub async fn revoke_by_browser_session(&self, session_id: &str) {
@@ -552,49 +607,127 @@ impl AttachmentManager {
         });
     }
 
-    /// Starts the background auth supervisor loop.
-    pub fn start_supervisor(&'static self, state: AppState) {
-        if self.supervisor_started.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
-            return;
-        }
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(LIVE_CHECK_INTERVAL);
-            interval.tick().await;
-
-            loop {
-                interval.tick().await;
-
-                // Collect distinct active principals and sessions
-                let checks: Vec<(Uuid, BrowserAdmission, CancellationToken)> = {
-                    let conns = self.active_connections.read().await;
-                    conns
-                        .values()
-                        .map(|c| {
-                            let adm = BrowserAdmission {
+    /// Runs one supervision round over every registered attachment.
+    ///
+    /// Connections sharing an auth identity (principal, session, versions, deadline) share ONE
+    /// check. Distinct identities are checked concurrently (at most `MAX_CONCURRENT_LIVE_CHECKS`
+    /// in flight) under one absolute `LIVE_CHECK_TIMEOUT` deadline that also covers the wait for
+    /// a concurrency permit (a timeout counts as a failed check), so neither a slow or
+    /// unavailable store nor the number of identities can serialize rounds: a revoked or
+    /// unverifiable identity is cancelled within one `LIVE_CHECK_INTERVAL` plus
+    /// `LIVE_CHECK_TIMEOUT` (5s healthy / 7s error). Pairing waits and setup are covered
+    /// because connections are registered (and therefore supervised) before either begins.
+    pub async fn run_live_check_round<F, Fut, E>(&self, is_dev: bool, check: F)
+    where
+        F: Fn(BrowserAdmission) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), E>> + Send + 'static,
+        E: fmt::Display + Send + 'static,
+    {
+        type IdentityKey = (
+            String,
+            Option<String>,
+            Option<i64>,
+            Option<i64>,
+            Option<DateTime<Utc>>,
+        );
+        let mut groups: HashMap<IdentityKey, (BrowserAdmission, Vec<Uuid>)> = HashMap::new();
+        {
+            let conns = self.active_connections.read().await;
+            for c in conns.values() {
+                let key = (
+                    c.principal.clone(),
+                    c.auth_session_id.clone(),
+                    c.auth_version,
+                    c.credential_version,
+                    c.effective_deadline,
+                );
+                groups
+                    .entry(key)
+                    .or_insert_with(|| {
+                        (
+                            BrowserAdmission {
                                 principal: c.principal.clone(),
-                                is_dev: state.no_auth,
+                                is_dev,
                                 session_id: c.auth_session_id.clone(),
                                 auth_version: c.auth_version,
                                 credential_version: c.credential_version,
                                 effective_deadline: c.effective_deadline,
-                            };
-                            (c.connection_id, adm, c.cancel_token.clone())
-                        })
-                        .collect()
-                };
+                            },
+                            Vec::new(),
+                        )
+                    })
+                    .1
+                    .push(c.connection_id);
+            }
+        }
+        if groups.is_empty() {
+            return;
+        }
 
-                for (conn_id, adm, cancel_token) in checks {
-                    if let Err(err) = verify_live_admission(&state, &adm).await {
-                        warn!(
-                            %conn_id,
-                            principal = %adm.principal,
-                            error = %err,
-                            "Live auth check failed: cancelling attachment socket"
-                        );
-                        cancel_token.cancel();
-                        self.unregister_connection(conn_id).await;
-                    }
-                }
+        let check = Arc::new(check);
+        let permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_LIVE_CHECKS));
+        // One absolute deadline for the whole round: waiting for a concurrency permit counts
+        // against it, so identities beyond the permit count can neither extend the round nor
+        // postpone the next one. An identity that could not be verified by the deadline
+        // (queued or slow) fails closed.
+        let round_deadline = tokio::time::Instant::now() + LIVE_CHECK_TIMEOUT;
+        let mut checks = tokio::task::JoinSet::new();
+        for (_, (adm, conn_ids)) in groups {
+            let check = check.clone();
+            let permits = permits.clone();
+            checks.spawn(async move {
+                let verified = tokio::time::timeout_at(round_deadline, async {
+                    let _permit = permits.acquire_owned().await.ok();
+                    check(adm.clone()).await
+                })
+                .await;
+                let verdict = match verified {
+                    Ok(Ok(())) => None,
+                    Ok(Err(err)) => Some(err.to_string()),
+                    Err(_) => Some("live check timed out".to_string()),
+                };
+                (adm, conn_ids, verdict)
+            });
+        }
+        while let Some(joined) = checks.join_next().await {
+            let Ok((adm, conn_ids, Some(reason))) = joined else {
+                continue;
+            };
+            warn!(
+                principal = %adm.principal,
+                connections = conn_ids.len(),
+                error = %reason,
+                "Live auth check failed: cancelling attachment sockets"
+            );
+            for conn_id in conn_ids {
+                // `unregister_connection` cancels the token and releases its pairing slot.
+                self.unregister_connection(conn_id).await;
+            }
+        }
+    }
+
+    /// Starts the background auth supervisor loop.
+    pub fn start_supervisor(&'static self, state: AppState) {
+        if self
+            .supervisor_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(LIVE_CHECK_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            interval.tick().await;
+
+            loop {
+                interval.tick().await;
+                let state = state.clone();
+                self.run_live_check_round(state.no_auth, move |adm| {
+                    let state = state.clone();
+                    async move { verify_live_admission(&state, &adm).await }
+                })
+                .await;
             }
         });
     }
@@ -632,7 +765,11 @@ mod tests {
 
         // First consume succeeds
         let consumed = mgr
-            .consume_ticket(&resp.ticket, AttachmentPurpose::Media, Some("http://localhost:5173"))
+            .consume_ticket(
+                &resp.ticket,
+                AttachmentPurpose::Media,
+                Some("http://localhost:5173"),
+            )
             .await
             .expect("first consume should succeed");
         assert_eq!(consumed.principal, "admin1");
@@ -640,7 +777,11 @@ mod tests {
 
         // Replay fails (single-use)
         let replay_res = mgr
-            .consume_ticket(&resp.ticket, AttachmentPurpose::Media, Some("http://localhost:5173"))
+            .consume_ticket(
+                &resp.ticket,
+                AttachmentPurpose::Media,
+                Some("http://localhost:5173"),
+            )
             .await;
         assert_eq!(replay_res.unwrap_err(), AttachmentError::TicketNotFound);
     }
@@ -673,7 +814,11 @@ mod tests {
 
         // Purpose mismatch (requesting Control with Media ticket)
         let err = mgr
-            .consume_ticket(&resp.ticket, AttachmentPurpose::Control, Some("http://localhost:5173"))
+            .consume_ticket(
+                &resp.ticket,
+                AttachmentPurpose::Control,
+                Some("http://localhost:5173"),
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, AttachmentError::PurposeMismatch { .. }));
@@ -686,7 +831,11 @@ mod tests {
 
         // Origin mismatch
         let err2 = mgr
-            .consume_ticket(&resp2.ticket, AttachmentPurpose::Media, Some("http://evil.com"))
+            .consume_ticket(
+                &resp2.ticket,
+                AttachmentPurpose::Media,
+                Some("http://evil.com"),
+            )
             .await
             .unwrap_err();
         assert!(matches!(err2, AttachmentError::OriginMismatch { .. }));
@@ -732,8 +881,14 @@ mod tests {
         let t1 = mgr.issue_ticket(&adm1, &req1, None).await.unwrap();
         let t2 = mgr.issue_ticket(&adm2, &req2, None).await.unwrap();
 
-        let c1 = mgr.consume_ticket(&t1.ticket, AttachmentPurpose::Media, None).await.unwrap();
-        let c2 = mgr.consume_ticket(&t2.ticket, AttachmentPurpose::Media, None).await.unwrap();
+        let c1 = mgr
+            .consume_ticket(&t1.ticket, AttachmentPurpose::Media, None)
+            .await
+            .unwrap();
+        let c2 = mgr
+            .consume_ticket(&t2.ticket, AttachmentPurpose::Media, None)
+            .await
+            .unwrap();
 
         let (_id1, cancel1) = mgr.register_connection(&c1).await.unwrap();
         let (_id2, cancel2) = mgr.register_connection(&c2).await.unwrap();

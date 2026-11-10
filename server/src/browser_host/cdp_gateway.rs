@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{Message as AxumWsMessage, WebSocket, WebSocketUpgrade};
-use axum::response::IntoResponse;
 use axum::extract::{ConnectInfo, Extension, Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::IntoResponse;
 use axum::response::Response;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
@@ -25,7 +25,10 @@ use crate::api::browser_host::{
     no_store_response,
 };
 use crate::browser_host::attachments::AttachmentPurpose;
-use crate::browser_host::auth::{verify_live_admission, BrowserAdmission, LIVE_CHECK_INTERVAL};
+use crate::browser_host::auth::{
+    validate_request_origin, verify_live_admission, BrowserAdmission, LIVE_CHECK_INTERVAL,
+};
+use crate::browser_host::config::PublicServerOrigin;
 use crate::browser_host::protocol::MAX_WS_MESSAGE_BYTES;
 use crate::state::AppState;
 
@@ -101,7 +104,10 @@ impl CdpGatewayManager {
         self.active_connections.load(Ordering::SeqCst)
     }
 
-    pub fn try_acquire_with_limit(&self, max_allowed: usize) -> Result<CdpGatewayPermit, StatusCode> {
+    pub fn try_acquire_with_limit(
+        &self,
+        max_allowed: usize,
+    ) -> Result<CdpGatewayPermit, StatusCode> {
         let current = self.active_connections.load(Ordering::SeqCst);
         if current >= max_allowed {
             return Err(StatusCode::TOO_MANY_REQUESTS);
@@ -139,120 +145,65 @@ impl Drop for CdpGatewayPermit {
     }
 }
 
-/// Derives the rewritten gateway WebSocket URL base.
-/// Respects architecture contract: derived from configured public server origin,
-/// never untrusted forwarded Host header (e.g. X-Forwarded-Host).
-pub fn resolve_gateway_ws_base(headers: &HeaderMap, _state: &AppState) -> String {
-    if let Ok(pub_origin) = std::env::var("DAM_HOPPER_PUBLIC_SERVER_ORIGIN") {
-        let trimmed = pub_origin.trim().trim_end_matches('/');
-        if !trimmed.is_empty() {
-            if let Some(rest) = trimmed.strip_prefix("https://") {
-                return format!("wss://{rest}");
-            } else if let Some(rest) = trimmed.strip_prefix("http://") {
-                return format!("ws://{rest}");
-            } else if trimmed.starts_with("ws://") || trimmed.starts_with("wss://") {
-                return trimmed.to_string();
-            }
+/// Resolves the trusted public origin used to rewrite discovery WebSocket URLs.
+///
+/// Only the parsed operator-configured origin (`DAM_HOPPER_PUBLIC_SERVER_ORIGIN`, scheme and
+/// authority only) is trusted; in guarded development with a loopback bound listener the
+/// verified bound socket address is used instead. The request `Host` and forwarded headers
+/// are never consulted, so an unconfigured or invalid origin rejects discovery rather than
+/// advertising an attacker-controlled destination for the next authenticated connection.
+pub fn resolve_gateway_public_origin(state: &AppState) -> Option<PublicServerOrigin> {
+    if let Some(public) = state.public_server_origin.as_deref() {
+        return Some(public.clone());
+    }
+    if state.no_auth {
+        if let Some(bound) = state
+            .bound_listener()
+            .filter(|a| crate::browser_host::auth::is_loopback_ip(a.ip()))
+        {
+            return Some(PublicServerOrigin::from_listener_addr(bound));
         }
     }
-
-    // Direct Host header only (never forwarded headers)
-    let host = headers
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|h| !h.is_empty())
-        .unwrap_or("127.0.0.1:4801");
-
-    format!("ws://{host}")
+    None
 }
 
-/// Validates Origin header per architecture-contracts.md §5:
-/// - Exact approved Origin matching (case-sensitive byte-for-byte).
-/// - `null`, trailing slash, repeated, or comma-separated Origin headers rejected with 403 Forbidden.
-/// - Origin-less requests permitted ONLY for Authorization-header authenticated clients.
+/// 503 for discovery when [`resolve_gateway_public_origin`] has no trusted origin.
+fn public_origin_unavailable_response() -> Response {
+    warn!("CDP discovery rejected: no trusted public server origin is configured");
+    browser_error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "publicOriginUnavailable",
+        "a valid DAM_HOPPER_PUBLIC_SERVER_ORIGIN is required for raw CDP discovery",
+    )
+}
+
+/// Validates the Origin header for raw CDP discovery and upgrades (architecture-contracts §5):
+/// - Origin-bearing requests must exactly match the unified approved-origin set, even with a
+///   valid bearer; `null`, empty, malformed, non-UTF8, repeated and non-approved values (and an
+///   empty allowlist) are rejected with 403 Forbidden.
+/// - Origin-less requests are permitted ONLY for Authorization-header authenticated clients.
 pub fn validate_cdp_origin(
     headers: &HeaderMap,
     state: &AppState,
     has_bearer_auth: bool,
 ) -> Result<(), Response> {
-    let mut origin_iter = headers.get_all(header::ORIGIN).iter();
-    match (origin_iter.next(), origin_iter.next()) {
-        (None, _) => {
-            if has_bearer_auth {
-                Ok(())
-            } else {
-                warn!("Origin-less CDP request rejected: missing Authorization header");
-                Err(browser_error_response(
-                    StatusCode::FORBIDDEN,
-                    "forbiddenOrigin",
-                    "Origin-less request requires Authorization header bearer authentication",
-                ))
-            }
-        }
-        (Some(origin_hdr), None) => {
-            let origin_bytes = origin_hdr.as_bytes();
-            if origin_bytes.contains(&b',') {
-                warn!("CDP request rejected: duplicate or comma-separated Origin header");
-                return Err(browser_error_response(
-                    StatusCode::FORBIDDEN,
-                    "forbiddenOrigin",
-                    "duplicate or comma-separated Origin header is forbidden",
-                ));
-            }
-            let origin_str = match origin_hdr.to_str() {
-                Ok(s) => s.trim(),
-                Err(_) => {
-                    return Err(browser_error_response(
-                        StatusCode::FORBIDDEN,
-                        "forbiddenOrigin",
-                        "invalid Origin header encoding",
-                    ))
-                }
-            };
-            if origin_str == "null" || origin_str.ends_with('/') {
-                warn!(origin = origin_str, "CDP request rejected: invalid Origin format");
-                return Err(browser_error_response(
-                    StatusCode::FORBIDDEN,
-                    "forbiddenOrigin",
-                    "Origin cannot be null or contain trailing slash",
-                ));
-            }
-
-            let matched = state
-                .cors_origins
-                .iter()
-                .any(|allowed| allowed.as_bytes() == origin_bytes)
-                || state
-                    .browser_host
-                    .config()
-                    .allowed_dev_origins
-                    .iter()
-                    .any(|allowed| allowed.as_bytes() == origin_bytes);
-
-            let dev_fallback = state.no_auth
-                && (state.cors_origins.is_empty()
-                    && state.browser_host.config().allowed_dev_origins.is_empty())
-                && (origin_str == "http://127.0.0.1:5173"
-                    || origin_str == "http://localhost:5173");
-
-            if matched || dev_fallback {
-                Ok(())
-            } else {
-                warn!(origin = origin_str, "CDP request rejected: Origin not in approved allowlist");
-                Err(browser_error_response(
-                    StatusCode::FORBIDDEN,
-                    "forbiddenOrigin",
-                    "Origin does not match exact approved origin allowlist",
-                ))
-            }
-        }
-        _ => {
-            warn!("CDP request rejected: multiple Origin headers");
+    match validate_request_origin(state, headers) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) if has_bearer_auth => Ok(()),
+        Ok(None) => {
+            warn!("Origin-less CDP request rejected: missing Authorization header");
             Err(browser_error_response(
                 StatusCode::FORBIDDEN,
                 "forbiddenOrigin",
-                "multiple Origin headers are forbidden",
+                "Origin-less request requires Authorization header bearer authentication",
+            ))
+        }
+        Err(err) => {
+            warn!(error = %err, "CDP request rejected: Origin not approved");
+            Err(browser_error_response(
+                StatusCode::FORBIDDEN,
+                "forbiddenOrigin",
+                &err.to_string(),
             ))
         }
     }
@@ -280,7 +231,10 @@ async fn authenticate_and_validate_discovery(
     Ok(admission)
 }
 
-async fn read_bounded_bytes(mut resp: reqwest::Response, max_bytes: usize) -> Result<Vec<u8>, &'static str> {
+async fn read_bounded_bytes(
+    mut resp: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, &'static str> {
     let mut buf = Vec::new();
     while let Some(chunk) = resp.chunk().await.map_err(|_| "read_failed")? {
         if buf.len().saturating_add(chunk.len()) > max_bytes {
@@ -309,6 +263,10 @@ pub async fn get_cdp_version(
         Ok(adm) => adm,
         Err(resp) => return resp,
     };
+    // Fail before touching the browser when no trusted public origin can be advertised.
+    let Some(public) = resolve_gateway_public_origin(&state) else {
+        return public_origin_unavailable_response();
+    };
 
     let handle = match state
         .browser_host
@@ -325,10 +283,7 @@ pub async fn get_cdp_version(
         }
     };
 
-    let chrome_port = match Url::parse(&handle.ws_endpoint)
-        .ok()
-        .and_then(|u| u.port())
-    {
+    let chrome_port = match Url::parse(&handle.ws_endpoint).ok().and_then(|u| u.port()) {
         Some(p) => p,
         None => {
             return browser_error_response(
@@ -394,13 +349,13 @@ pub async fn get_cdp_version(
         }
     };
 
-    let ws_base = resolve_gateway_ws_base(&headers, &state);
+    let ws_base = public.ws_base();
     val["webSocketDebuggerUrl"] = json!(format!("{ws_base}/api/browser/cdp/ws"));
 
     // Sanitize devtoolsFrontendUrl if present so it doesn't leak internal loopback
     if let Some(frontend_url) = val.get_mut("devtoolsFrontendUrl") {
         if let Some(s) = frontend_url.as_str() {
-            let sanitized = s.replace(&format!("127.0.0.1:{chrome_port}"), ws_base.trim_start_matches("ws://").trim_start_matches("wss://"));
+            let sanitized = s.replace(&format!("127.0.0.1:{chrome_port}"), public.authority());
             *frontend_url = json!(sanitized);
         }
     }
@@ -426,6 +381,10 @@ pub async fn get_cdp_list(
         Ok(adm) => adm,
         Err(resp) => return resp,
     };
+    // Fail before touching the browser when no trusted public origin can be advertised.
+    let Some(public) = resolve_gateway_public_origin(&state) else {
+        return public_origin_unavailable_response();
+    };
 
     let handle = match state
         .browser_host
@@ -442,10 +401,7 @@ pub async fn get_cdp_list(
         }
     };
 
-    let chrome_port = match Url::parse(&handle.ws_endpoint)
-        .ok()
-        .and_then(|u| u.port())
-    {
+    let chrome_port = match Url::parse(&handle.ws_endpoint).ok().and_then(|u| u.port()) {
         Some(p) => p,
         None => {
             return browser_error_response(
@@ -511,7 +467,7 @@ pub async fn get_cdp_list(
         }
     };
 
-    let ws_base = resolve_gateway_ws_base(&headers, &state);
+    let ws_base = public.ws_base();
     if let Some(targets) = val.as_array_mut() {
         for target in targets {
             if let Some(target_id) = target.get("id").and_then(|v| v.as_str()) {
@@ -523,7 +479,8 @@ pub async fn get_cdp_list(
 
             if let Some(frontend_url) = target.get_mut("devtoolsFrontendUrl") {
                 if let Some(s) = frontend_url.as_str() {
-                    let sanitized = s.replace(&format!("127.0.0.1:{chrome_port}"), ws_base.trim_start_matches("ws://").trim_start_matches("wss://"));
+                    let sanitized =
+                        s.replace(&format!("127.0.0.1:{chrome_port}"), public.authority());
                     *frontend_url = json!(sanitized);
                 }
             }
@@ -638,7 +595,11 @@ async fn cdp_ws_handler_internal(
 
         if let Err(err) = crate::browser_host::auth::verify_live_admission(&state, &adm).await {
             warn!(principal = %adm.principal, error = %err, "Ticket live auth check failed on CDP upgrade");
-            return browser_error_response(StatusCode::UNAUTHORIZED, "invalidSession", "live authentication validation failed");
+            return browser_error_response(
+                StatusCode::UNAUTHORIZED,
+                "invalidSession",
+                "live authentication validation failed",
+            );
         }
 
         adm
@@ -707,11 +668,23 @@ async fn cdp_ws_handler_internal(
             );
         }
     };
+    // Browser startup can take long: re-verify live authority before upgrading so a principal
+    // revoked or demoted during setup never reaches the upstream relay.
+    if let Err(err) = verify_live_admission(&state, &admission).await {
+        warn!(principal = %admission.principal, error = %err, "CDP upgrade rejected: live admission failed after setup");
+        return browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalidSession",
+            "live authentication validation failed",
+        );
+    }
     // 5. Determine upstream URL
     if let Some(tid) = &target_id {
         if tid.is_empty()
             || tid.len() > 128
-            || !tid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            || !tid
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         {
             return browser_error_response(
                 StatusCode::BAD_REQUEST,
@@ -722,10 +695,7 @@ async fn cdp_ws_handler_internal(
     }
 
     let upstream_url = if let Some(tid) = &target_id {
-        let chrome_port = match Url::parse(&handle.ws_endpoint)
-            .ok()
-            .and_then(|u| u.port())
-        {
+        let chrome_port = match Url::parse(&handle.ws_endpoint).ok().and_then(|u| u.port()) {
             Some(p) => p,
             None => {
                 return browser_error_response(
@@ -795,10 +765,17 @@ async fn relay_agent_cdp_socket(
             let now = chrono::Utc::now();
             if now >= dl {
                 warn!(principal = %admission.principal, "Agent CDP connection rejected: effective deadline already elapsed");
-                let _ = timeout(Duration::from_millis(500), client_ws.send(AxumWsMessage::Close(None))).await;
+                let _ = timeout(
+                    Duration::from_millis(500),
+                    client_ws.send(AxumWsMessage::Close(None)),
+                )
+                .await;
                 return;
             }
-            let rem_std = dl.signed_duration_since(now).to_std().unwrap_or(Duration::from_millis(1));
+            let rem_std = dl
+                .signed_duration_since(now)
+                .to_std()
+                .unwrap_or(Duration::from_millis(1));
             let inst = tokio::time::Instant::now() + rem_std;
             (rem_std, inst)
         }
@@ -808,28 +785,8 @@ async fn relay_agent_cdp_socket(
         ),
     };
 
-    let connect_timeout = deadline_duration.min(UPSTREAM_CONNECT_TIMEOUT);
-
-    let upstream_res = timeout(
-        connect_timeout,
-        tokio_tungstenite::connect_async_with_config(&upstream_url, Some(ws_config), false),
-    )
-    .await;
-
-    let (mut upstream_ws, _) = match upstream_res {
-        Ok(Ok(pair)) => pair,
-        Ok(Err(err)) => {
-            warn!("Failed to connect to upstream browser CDP endpoint: {err}");
-            let _ = timeout(Duration::from_millis(500), client_ws.send(AxumWsMessage::Close(None))).await;
-            return;
-        }
-        Err(_) => {
-            warn!("Timed out connecting to upstream browser CDP endpoint");
-            let _ = timeout(Duration::from_millis(500), client_ws.send(AxumWsMessage::Close(None))).await;
-            return;
-        }
-    };
-
+    // Live-auth supervision starts before any setup await (upstream connect, registration), so
+    // a revoked/demoted principal cannot hold a half-set-up connection past one check interval.
     let (auth_abort_tx, mut auth_abort_rx) = tokio::sync::mpsc::channel::<()>(1);
     let state_for_auth = state.clone();
     let admission_for_auth = admission.clone();
@@ -858,7 +815,45 @@ async fn relay_agent_cdp_socket(
     });
     let _watcher_guard = AbortOnDrop(Some(auth_watcher));
 
-    let reg_fut = state.browser_host.register_agent_cdp(&admission.principal, admission.is_dev);
+    let connect_timeout = deadline_duration.min(UPSTREAM_CONNECT_TIMEOUT);
+
+    let upstream_res = tokio::select! {
+        _ = auth_abort_rx.recv() => {
+            warn!(principal = %admission.principal, "Agent CDP connection aborted by auth during upstream connect");
+            let _ = timeout(Duration::from_millis(500), client_ws.send(AxumWsMessage::Close(None))).await;
+            return;
+        }
+        res = timeout(
+            connect_timeout,
+            tokio_tungstenite::connect_async_with_config(&upstream_url, Some(ws_config), false),
+        ) => res,
+    };
+
+    let (mut upstream_ws, _) = match upstream_res {
+        Ok(Ok(pair)) => pair,
+        Ok(Err(err)) => {
+            warn!("Failed to connect to upstream browser CDP endpoint: {err}");
+            let _ = timeout(
+                Duration::from_millis(500),
+                client_ws.send(AxumWsMessage::Close(None)),
+            )
+            .await;
+            return;
+        }
+        Err(_) => {
+            warn!("Timed out connecting to upstream browser CDP endpoint");
+            let _ = timeout(
+                Duration::from_millis(500),
+                client_ws.send(AxumWsMessage::Close(None)),
+            )
+            .await;
+            return;
+        }
+    };
+
+    let reg_fut = state
+        .browser_host
+        .register_agent_cdp(&admission.principal, admission.is_dev);
     tokio::select! {
         _ = auth_abort_rx.recv() => {
             warn!(principal = %admission.principal, "Agent CDP connection aborted by auth during registration");
@@ -944,16 +939,6 @@ async fn relay_agent_cdp_socket(
             upstream_msg = upstream_ws.next() => {
                 let (forwarded, aborted) = match upstream_msg {
                     Some(Ok(UpstreamMessage::Text(t))) => {
-                        let handle_fut = handle_upstream_cdp_message(t.as_str(), &state, &admission.principal, admission.is_dev);
-                        let aborted_during_handle = tokio::select! {
-                            _ = auth_abort_rx.recv() => true,
-                            _ = tokio::time::sleep_until(deadline_instant) => true,
-                            _ = handle_fut => false,
-                        };
-                        if aborted_during_handle {
-                            aborted_by_auth = true;
-                            break;
-                        }
                         let (outcome, aborted) = write_with_cancel(
                             client_ws.send(AxumWsMessage::Text(t.as_str().into())),
                             &mut auth_abort_rx,
@@ -1003,13 +988,20 @@ async fn relay_agent_cdp_socket(
     // avoiding lock contention delays during manager accounting.
     if !aborted_by_auth {
         let _ = timeout(Duration::from_millis(500), upstream_ws.close(None)).await;
-        let _ = timeout(Duration::from_millis(500), client_ws.send(AxumWsMessage::Close(None))).await;
+        let _ = timeout(
+            Duration::from_millis(500),
+            client_ws.send(AxumWsMessage::Close(None)),
+        )
+        .await;
     }
     drop(upstream_ws);
     drop(client_ws);
     drop(_permit); // Free capacity permit immediately before slow manager unregister
 
-    state.browser_host.unregister_agent_cdp(&admission.principal, admission.is_dev).await;
+    state
+        .browser_host
+        .unregister_agent_cdp(&admission.principal, admission.is_dev)
+        .await;
     debug!(principal = %admission.principal, "CDP gateway relay closed");
 }
 
@@ -1027,10 +1019,19 @@ pub async fn handle_client_cdp_message(msg_str: &str, principal: &str, is_dev: b
             | "Emulation.clearDeviceMetricsOverride"
             | "Emulation.setPageScaleFactor"
             | "Emulation.setVisibleSize" => {
-                let target_id = val.get("sessionId").or_else(|| val.get("targetId")).and_then(|v| v.as_str());
+                let target_id = val
+                    .get("sessionId")
+                    .or_else(|| val.get("targetId"))
+                    .and_then(|v| v.as_str());
                 let (w, h, dpr) = if let Some(params) = val.get("params") {
-                    let w = params.get("width").and_then(|v| v.as_u64()).map(|v| v as u32);
-                    let h = params.get("height").and_then(|v| v.as_u64()).map(|v| v as u32);
+                    let w = params
+                        .get("width")
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as u32);
+                    let h = params
+                        .get("height")
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as u32);
                     let dpr = params.get("deviceScaleFactor").and_then(|v| v.as_f64());
                     (w, h, dpr)
                 } else {
@@ -1039,48 +1040,6 @@ pub async fn handle_client_cdp_message(msg_str: &str, principal: &str, is_dev: b
                 crate::api::browser_host::global_session_registry()
                     .fence_geometry_and_advance_epoch(principal, is_dev, target_id, w, h, dpr)
                     .await;
-            }
-            _ => {}
-        }
-    }
-}
-
-pub async fn handle_upstream_cdp_message(
-    msg_str: &str,
-    state: &AppState,
-    principal: &str,
-    is_dev: bool,
-) {
-    if !msg_str.contains("\"Target.") {
-        return;
-    }
-    let Ok(val) = serde_json::from_str::<serde_json::Value>(msg_str) else {
-        return;
-    };
-
-    if let Some(method) = val.get("method").and_then(|m| m.as_str()) {
-        match method {
-            "Target.targetCreated" | "Target.targetInfoChanged" => {
-                if let Some(target_info) = val.get("params").and_then(|p| p.get("targetInfo")) {
-                    let target_id = target_info.get("targetId").and_then(|id| id.as_str()).unwrap_or("");
-                    let url = target_info.get("url").and_then(|u| u.as_str()).unwrap_or("");
-                    if !target_id.is_empty() && target_id.len() <= 64 && url.len() <= 2048 {
-                        state
-                            .browser_host
-                            .register_agent_target(principal, is_dev, target_id, url)
-                            .await;
-                    }
-                }
-            }
-            "Target.targetDestroyed" => {
-                if let Some(target_id) = val.get("params").and_then(|p| p.get("targetId")).and_then(|id| id.as_str()) {
-                    if !target_id.is_empty() && target_id.len() <= 64 {
-                        state
-                            .browser_host
-                            .unregister_agent_target(principal, is_dev, target_id)
-                            .await;
-                    }
-                }
             }
             _ => {}
         }

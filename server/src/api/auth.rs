@@ -6,9 +6,9 @@ use axum::{
     Json,
 };
 use axum_extra::extract::CookieJar;
-use std::net::SocketAddr;
 use bcrypt::verify;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use zeroize::Zeroize;
 
 use crate::api::auth_mfa::{auth_error_response, no_store_json_response, LoginChallengeResponse};
@@ -630,7 +630,9 @@ where
             Ok(Some(v))
         }
         fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
-            u64::try_from(v).map(Some).map_err(|_| E::custom("negative integer"))
+            u64::try_from(v)
+                .map(Some)
+                .map_err(|_| E::custom("negative integer"))
         }
         fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
             v.parse::<u64>()
@@ -675,14 +677,15 @@ pub async fn revoke_device_session_with_browser_cleanup(
     Path(id): Path<String>,
 ) -> Response {
     let resp = super::auth_sessions::revoke(
-        State(state),
+        State(state.clone()),
         Extension(actor.clone()),
         Extension(mechanism),
         Path(id.clone()),
     )
     .await;
     if resp.status() == StatusCode::NO_CONTENT {
-        super::browser_host::revoke_auth_session_browser_resources(&actor.subject, &id).await;
+        super::browser_host::revoke_auth_session_browser_resources(&state, &actor.subject, &id)
+            .await;
     }
     resp
 }
@@ -708,19 +711,20 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
     };
     let revoke_token = bearer_tok.or(cookie_tok);
 
-    let (parsed_req, body_malformed) = match axum::body::to_bytes(request.into_body(), 16 * 1024).await {
-        Ok(bytes) => {
-            if bytes.trim_ascii().is_empty() {
-                (Some(LogoutRequestBody::default()), false)
-            } else {
-                match serde_json::from_slice::<LogoutRequestBody>(&bytes) {
-                    Ok(req) => (Some(req), false),
-                    Err(_) => (None, true),
+    let (parsed_req, body_malformed) =
+        match axum::body::to_bytes(request.into_body(), 16 * 1024).await {
+            Ok(bytes) => {
+                if bytes.trim_ascii().is_empty() {
+                    (Some(LogoutRequestBody::default()), false)
+                } else {
+                    match serde_json::from_slice::<LogoutRequestBody>(&bytes) {
+                        Ok(req) => (Some(req), false),
+                        Err(_) => (None, true),
+                    }
                 }
             }
-        }
-        Err(_) => (None, true),
-    };
+            Err(_) => (None, true),
+        };
 
     // 1. Capture pre-revocation live Admin admission receipt BEFORE revoking this session
     let mut live_admission = None;
@@ -763,38 +767,55 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
     }
 
     // 2. ALWAYS preserve idempotent session revocation, media-ticket revocation, and cookie clearing FIRST
+    let mut credential_identified = false;
+    let mut credential_revoked = false;
     let mut session_revoke_failed = false;
     if let Some(tok) = &revoke_token {
         if let Some(claims) = AuthClaims::decode(tok, &state.jwt_secret) {
+            credential_identified = true;
             if let Some(store) = state.auth_service.store() {
-                if let Err(err) = store.revoke_session(&claims.sid, now).await {
-                    tracing::error!(error = %err, "Failed to revoke auth session during logout");
-                    session_revoke_failed = true;
+                match store.revoke_session(&claims.sid, now).await {
+                    Ok(_) => credential_revoked = true,
+                    Err(err) => {
+                        tracing::error!(error = %err, "Failed to revoke auth session during logout");
+                        session_revoke_failed = true;
+                    }
                 }
             }
             state
                 .media_tickets
                 .revoke_by_actor_or_session(&claims.sub, Some(&claims.sid));
-            super::browser_host::revoke_auth_session_browser_resources(&claims.sub, &claims.sid)
-                .await;
+            super::browser_host::revoke_auth_session_browser_resources(
+                &state,
+                &claims.sub,
+                &claims.sid,
+            )
+            .await;
         }
     }
 
-    let revocation_uncertain = session_revoke_failed || (revoke_token.is_some() && auth_backend_unavailable);
+    let revocation_uncertain =
+        session_revoke_failed || (revoke_token.is_some() && auth_backend_unavailable);
+    // `sessionRevoked` is true only when the credential carried by THIS request was identified
+    // and its session revoked. An anonymous/uncredentialed (or cookie-only) logout reports
+    // false: it cannot confirm revocation of a different, unsent saved Bearer token.
+    let session_revoked = credential_revoked && !revocation_uncertain;
 
     // 3. Evaluate Browser reset / credential status strictly after session revocation
     let mut payload = serde_json::json!({
         "ok": true,
         "token": null,
         "role": null,
-        "sessionRevoked": !revocation_uncertain,
+        "sessionRevoked": session_revoked,
+        "sessionIdentified": credential_identified,
         "revocationUncertain": revocation_uncertain,
         "browserResetState": "unknown",
         "browserCredentialsRetained": true,
         "resetRequired": true,
     });
     if revocation_uncertain {
-        payload["revocationError"] = serde_json::json!("server session revocation failed or backend unavailable");
+        payload["revocationError"] =
+            serde_json::json!("server session revocation failed or backend unavailable");
     }
     if !state.no_auth {
         if let Some(adm) = live_admission {
@@ -817,7 +838,11 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
 
             if body_malformed || !requested_reset {
                 if body_malformed {
-                    payload["browserResetState"] = serde_json::json!(if has_tombstone { "cleanupPending" } else { "retained" });
+                    payload["browserResetState"] = serde_json::json!(if has_tombstone {
+                        "cleanupPending"
+                    } else {
+                        "retained"
+                    });
                     payload["browserCredentialsRetained"] = serde_json::json!(true);
                     payload["resetRequired"] = serde_json::json!(true);
                 } else if !has_creds {
@@ -854,8 +879,17 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
                     false
                 };
 
-                if !csrf_ok || !confirmed || !role_still_ok || valid_op.is_none() || expected_epoch.is_none() {
-                    payload["browserResetState"] = serde_json::json!(if has_tombstone { "cleanupPending" } else { "retained" });
+                if !csrf_ok
+                    || !confirmed
+                    || !role_still_ok
+                    || valid_op.is_none()
+                    || expected_epoch.is_none()
+                {
+                    payload["browserResetState"] = serde_json::json!(if has_tombstone {
+                        "cleanupPending"
+                    } else {
+                        "retained"
+                    });
                     payload["browserCredentialsRetained"] = serde_json::json!(true);
                     payload["resetRequired"] = serde_json::json!(true);
                 } else {
@@ -863,14 +897,30 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
                     let epoch = expected_epoch.unwrap();
                     if !has_persisted {
                         if epoch == 1 && verify_live_admin_for_reset(&state, &adm.principal).await {
-                            super::browser_host::revoke_principal_browser_resources(
+                            match super::browser_host::revoke_principal_browser_resources(
                                 &state,
                                 &adm.principal,
                             )
-                            .await;
-                            payload["browserResetState"] = serde_json::json!("cleared");
-                            payload["browserCredentialsRetained"] = serde_json::json!(false);
-                            payload["resetRequired"] = serde_json::json!(false);
+                            .await
+                            {
+                                Ok(()) => {
+                                    payload["browserResetState"] = serde_json::json!("cleared");
+                                    payload["browserCredentialsRetained"] =
+                                        serde_json::json!(false);
+                                    payload["resetRequired"] = serde_json::json!(false);
+                                }
+                                Err(err) => {
+                                    // Private artifact files remain: never claim a completed purge.
+                                    tracing::error!(error = %err, "Browser artifact purge incomplete during logout");
+                                    payload["browserResetState"] =
+                                        serde_json::json!("cleanupPending");
+                                    payload["browserCredentialsRetained"] = serde_json::json!(true);
+                                    payload["resetRequired"] = serde_json::json!(true);
+                                    payload["operationId"] = serde_json::json!(op_id);
+                                    payload["reason"] =
+                                        serde_json::json!("browser artifact purge incomplete");
+                                }
+                            }
                         } else {
                             payload["browserResetState"] = serde_json::json!("retained");
                             payload["browserCredentialsRetained"] = serde_json::json!(true);
@@ -925,7 +975,9 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
                                 payload["profileEpoch"] = serde_json::json!(profile_epoch);
                                 payload["reason"] = serde_json::json!(reason);
                             }
-                            Err(crate::browser_host::manager::ManagerError::CleanupPending(reason)) => {
+                            Err(crate::browser_host::manager::ManagerError::CleanupPending(
+                                reason,
+                            )) => {
                                 payload["browserResetState"] = serde_json::json!("cleanupPending");
                                 payload["browserCredentialsRetained"] = serde_json::json!(true);
                                 payload["resetRequired"] = serde_json::json!(true);

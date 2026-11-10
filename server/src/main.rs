@@ -12,9 +12,8 @@ use dam_hopper_server::{
     agent_store::AgentStoreService,
     api::router::{build_router_with_web_dir_and_origins, parse_cors_origins},
     config::{
-        global_env_path,
-        resolve_startup_config, ConfigResolutionInput, ConfigSource, DamHopperConfig,
-        GlobalConfig,
+        global_env_path, resolve_startup_config, ConfigResolutionInput, ConfigSource,
+        DamHopperConfig, GlobalConfig,
     },
     crypto::load_or_create_server_setup,
     diagnostics::{DiagnosticStore, DiagnosticTracingLayer},
@@ -835,6 +834,26 @@ async fn init_auth_store(
     }
 }
 
+/// Parses `DAM_HOPPER_PUBLIC_SERVER_ORIGIN`. An invalid value is reported and treated as
+/// unconfigured so raw CDP discovery rejects instead of advertising an untrusted authority.
+fn public_server_origin_from_env(
+) -> Option<dam_hopper_server::browser_host::config::PublicServerOrigin> {
+    let raw = std::env::var("DAM_HOPPER_PUBLIC_SERVER_ORIGIN").ok()?;
+    if raw.trim().is_empty() {
+        return None;
+    }
+    match dam_hopper_server::browser_host::config::PublicServerOrigin::parse(&raw) {
+        Ok(origin) => Some(origin),
+        Err(reason) => {
+            tracing::warn!(
+                %reason,
+                "DAM_HOPPER_PUBLIC_SERVER_ORIGIN is invalid; raw CDP discovery is disabled until it is fixed"
+            );
+            None
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Early hook reporting dispatch before dotenv/tracing/global config/db.
@@ -886,7 +905,8 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let resolution = resolve_startup_config(ConfigResolutionInput::from_explicit(cli.config.clone()))?;
+    let resolution =
+        resolve_startup_config(ConfigResolutionInput::from_explicit(cli.config.clone()))?;
 
     let workspace_dir = resolution.workspace_dir;
     let config = resolution.config;
@@ -1082,7 +1102,8 @@ async fn main() -> anyhow::Result<()> {
         diagnostics,
     )?
     .with_workflow_store(workflow_store.clone())
-    .with_agent_status(agent_status_runtime.clone());
+    .with_agent_status(agent_status_runtime.clone())
+    .with_public_server_origin(public_server_origin_from_env());
 
     pty_manager.set_session_changes(state.session_changes.clone());
     agent_status_runtime.set_session_changes(state.session_changes.clone());
@@ -1216,14 +1237,20 @@ async fn main() -> anyhow::Result<()> {
     // Spawn /proc/net/tcp polling loop for port detection (Linux-only; warns on other OS).
     tokio::spawn(proc_poll_loop(port_forward_manager));
 
-    let router = build_router_with_web_dir_and_origins(state.clone(), allowed_origins, cli.web_dir);
-
     // ── Serve ─────────────────────────────────────────────────────────────────
 
     let addr = SocketAddr::new(cli.host, cli.port);
     tracing::info!(addr = %addr, "Listening");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    // Browser development admission trusts only the address the socket actually bound to
+    // (never the requested host/port), so record it before any request can be served.
+    let bound_addr = listener.local_addr()?;
+    if state.record_bound_listener(bound_addr).is_err() {
+        anyhow::bail!("bound listener address was already recorded");
+    }
+
+    let router = build_router_with_web_dir_and_origins(state.clone(), allowed_origins, cli.web_dir);
     let force_close_token = CancellationToken::new();
     let force_close_token_for_shutdown = force_close_token.clone();
     let listener =
@@ -1286,6 +1313,8 @@ async fn main() -> anyhow::Result<()> {
     host_resource_monitor_shutdown.shutdown().await;
     // Reap all tunnel children before exit — no orphaned cloudflared processes.
     tunnel_manager_shutdown.dispose_all().await;
+    // Queued selection teardown unlinks from the artifact store: finish it before disposal.
+    dam_hopper_server::browser_host::selection::drain_navigation_cleanups().await;
     browser_debug_artifacts_shutdown.dispose_all().await;
     browser_host_shutdown.shutdown_all().await;
     if let Some(collector) = agent_status_collector {

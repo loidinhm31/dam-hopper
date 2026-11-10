@@ -97,7 +97,7 @@ denied_destinations = ["169.254.169.254", "fd00:ec2::254", "metadata.google.inte
 
 [server.browser.budgets]
 max_processes = 1 # Global browser process capacity (1..=4)
-max_targets = 2 # Max concurrent page targets per principal (1..=16)
+max_targets = 2 # Shared native target capacity per principal across REST, raw CDP and popups (1..=16)
 max_viewers = 2 # Max concurrent viewers per target (1..=16)
 max_raw_cdp_connections = 2 # Max raw CDP proxy connections (1..=8)
 memory_ceiling_bytes = 134217728 # Hard memory ceiling (default 128 MiB, 32 MiB..=1 GiB)
@@ -114,7 +114,7 @@ frame_rate_fps = 10 # Capture frame rate (1..=30)
 | `enabled` | bool | `false` | Defaults disabled. Requires valid executable and policy before enabling. |
 | `executable_path` | string/path | `None` | Must be a regular file with execute permissions (`mode & 0o111 != 0`) and not world-writable (`mode & 0o002 == 0`). |
 | `profile_root` | string/path | `None` | Defaults to `~/.config/dam-hopper/browser-profiles`. Must be a directory, not a symlink, with mode `0700` (`mode & 0o077 == 0`). |
-| `allowed_target_origins` | string[] | `[]` | Scheme (`http`/`https`) + host + optional port. Paths, queries, fragments, credentials, and trailing slashes are forbidden. |
+| `allowed_target_origins` | string[] | `[]` | Scheme (`http`/`https`) + host + optional port. Paths, queries, fragments, credentials, and trailing slashes are forbidden. Empty allowlist approves nothing (denies all navigations except `about:blank`). |
 | `allowed_asset_origins` | string[] | `[]` | Approved asset origins. Same strict validation as target origins. |
 | `allowed_dev_origins` | string[] | `[]` | Approved developer debug origins. Same strict validation as target origins. |
 | `denied_destinations` | string[] | Metadata IPs | Blocked destination addresses. Accepts IP, IP CIDR, hostname, or `host:port`. |
@@ -124,6 +124,9 @@ frame_rate_fps = 10 # Capture frame rate (1..=30)
 - **Memory Ceiling Cross-Product:** Estimated reservation `(max_targets * 12.1 MiB) + (max_viewers * 4.2 MiB) + (max_raw_cdp_connections * 8.0 MiB)` must not exceed `memory_ceiling_bytes`. Overbudget configuration fails validation with `MemoryCeilingExceeded`.
 - **Permissions Enforcement:** Unsafe executable permissions (missing execute bit, world-writable) or profile root permissions (symlink, group/world accessible) fail validation.
 - **Restart Boundaries:** Changes to `enabled`, `executable_path`, `profile_root`, or `budgets.max_processes` require a server restart and do not hot-swap active directories.
+- **Shared Target Capacity:** `budgets.max_targets` bounds total concurrent native pages (REST sessions, raw CDP instances, and popups). Exceeding this limit returns HTTP 429 `kind: "browserBusy"`.
+- **Public Server Origin for Raw CDP:** Raw CDP discovery URL rewriting requires setting the `DAM_HOPPER_PUBLIC_SERVER_ORIGIN` environment variable (`http` or `https`). The request `Host` header is never reflected; if unset in production, discovery returns HTTP 503 `kind: "publicOriginUnavailable"`.
+- **OS Kernel & Platform Requirements:** Supervised headless Chromium strictly requires Linux 6.9+ for process group pidfd signalling (`pidfd_send_signal(PIDFD_SIGNAL_PROCESS_GROUP)`) and `close_range` 5.9+. Launch fails closed on older Linux kernels (< 6.9). Windows process containment is unimplemented and fails closed (`ContainmentUnavailable`).
 
 ### Deferred host-action scaffolding (inactive)
 

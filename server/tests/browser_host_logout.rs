@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
@@ -246,7 +246,8 @@ fn populate_browser_credentials(profile_root: &std::path::Path, subject: &str) -
 }
 
 #[tokio::test]
-async fn legacy_expired_missing_and_stale_confirmation_logout_always_200_revokes_session_first_and_retains_profile() {
+async fn legacy_expired_missing_and_stale_confirmation_logout_always_200_revokes_session_first_and_retains_profile(
+) {
     let fx = LogoutFixture::new().await;
     let admin = format!("admin-{}", Uuid::new_v4().simple());
     let ordinary = format!("user-{}", Uuid::new_v4().simple());
@@ -299,16 +300,33 @@ async fn legacy_expired_missing_and_stale_confirmation_logout_always_200_revokes
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(resp.headers()[CACHE_CONTROL], "no-store");
-    assert!(resp.headers()[SET_COOKIE].to_str().unwrap().contains("Max-Age=0"));
+    assert!(resp.headers()[SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .contains("Max-Age=0"));
     let body = json_body(resp).await;
     assert_eq!(body["ok"], true);
     assert_eq!(body["browserResetState"], "retained");
     assert_eq!(body["browserCredentialsRetained"], true);
     assert_eq!(body["resetRequired"], true);
     // Session & fs ticket revoked FIRST; Browser ticket for s1 revoked; sibling & cookies retained
-    assert!(fx.store.get_session(&s1.id).await.unwrap().unwrap().revoked_at.is_some());
-    assert!(fx.state.image_stream_tickets.lookup_and_touch(&img_ticket1).is_none());
-    assert!(att_mgr.consume_ticket(&t_s1.ticket, AttachmentPurpose::AgentCdp, None).await.is_err());
+    assert!(fx
+        .store
+        .get_session(&s1.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .revoked_at
+        .is_some());
+    assert!(fx
+        .state
+        .image_stream_tickets
+        .lookup_and_touch(&img_ticket1)
+        .is_none());
+    assert!(att_mgr
+        .consume_ticket(&t_s1.ticket, AttachmentPurpose::AgentCdp, None)
+        .await
+        .is_err());
     assert!(cookie_file.exists());
 
     // 2. Expired token logout even with confirmed reset fields returns 200 unknown, never wipes or leaks metadata
@@ -373,7 +391,14 @@ async fn legacy_expired_missing_and_stale_confirmation_logout_always_200_revokes
     assert_eq!(body_ord["browserCredentialsRetained"], true);
     assert_eq!(body_ord["resetRequired"], true);
     assert!(body_ord.get("profileEpoch").is_none());
-    assert!(fx.store.get_session(&s_ord.id).await.unwrap().unwrap().revoked_at.is_some());
+    assert!(fx
+        .store
+        .get_session(&s_ord.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .revoked_at
+        .is_some());
     assert!(cookie_file.exists());
 
     // 4. Live Admin with missing confirmation, malformed JSON, Origin-less cookie CSRF, or stale epoch:
@@ -436,11 +461,20 @@ async fn legacy_expired_missing_and_stale_confirmation_logout_always_200_revokes
         assert_eq!(body["resetRequired"], true, "{label}");
         assert_ne!(body["browserResetState"], "cleared", "{label}");
         assert!(
-            fx.store.get_session(&sess.id).await.unwrap().unwrap().revoked_at.is_some(),
+            fx.store
+                .get_session(&sess.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .revoked_at
+                .is_some(),
             "{label}: session must be revoked first"
         );
         assert!(
-            fx.state.image_stream_tickets.lookup_and_touch(&media_t).is_none(),
+            fx.state
+                .image_stream_tickets
+                .lookup_and_touch(&media_t)
+                .is_none(),
             "{label}: media ticket must be revoked first"
         );
         assert!(cookie_file.exists(), "{label}: cookies must NOT be wiped");
@@ -486,7 +520,8 @@ async fn legacy_expired_missing_and_stale_confirmation_logout_always_200_revokes
 }
 
 #[tokio::test]
-async fn confirmed_live_admin_logout_wipes_profile_fences_sibling_resources_and_preserves_sibling_login() {
+async fn confirmed_live_admin_logout_wipes_profile_fences_sibling_resources_and_preserves_sibling_login(
+) {
     let fx = LogoutFixture::new().await;
     let admin = format!("admin-wipe-{}", Uuid::new_v4().simple());
     fx.create_user_with_role(&admin, UserRole::Admin).await;
@@ -498,7 +533,7 @@ async fn confirmed_live_admin_logout_wipes_profile_fences_sibling_resources_and_
     // Seed shared Browser session, attachments for s1 and s2, and ManagedBrowser artifact
     let sess_reg = dam_hopper_server::api::browser_host::global_session_registry();
     let (b_sess, _) = sess_reg
-        .create_or_idempotent_get(
+        .insert_running_for_test(
             &admin,
             false,
             &Uuid::new_v4().to_string(),
@@ -574,7 +609,7 @@ async fn confirmed_live_admin_logout_wipes_profile_fences_sibling_resources_and_
             ArtifactSource::ManagedBrowser {
                 principal: admin.clone(),
                 profile_epoch: 1,
-                browser_incarnation: 1,
+                browser_incarnation: "inc-1".into(),
             },
             "term-1".into(),
             1,
@@ -622,7 +657,10 @@ async fn confirmed_live_admin_logout_wipes_profile_fences_sibling_resources_and_
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp.headers()[SET_COOKIE].to_str().unwrap().contains("Max-Age=0"));
+    assert!(resp.headers()[SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .contains("Max-Age=0"));
     let body = json_body(resp).await;
     assert_eq!(body["browserResetState"], "cleared");
     assert_eq!(body["browserCredentialsRetained"], false);
@@ -675,7 +713,14 @@ async fn confirmed_live_admin_logout_wipes_profile_fences_sibling_resources_and_
         .await
         .is_err());
     // 3. Initiating login s1 is revoked, sibling DamHopper login s2 remains valid
-    assert!(fx.store.get_session(&s1.id).await.unwrap().unwrap().revoked_at.is_some());
+    assert!(fx
+        .store
+        .get_session(&s1.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .revoked_at
+        .is_some());
     let sib_check = fx
         .app
         .clone()
@@ -692,7 +737,8 @@ async fn confirmed_live_admin_logout_wipes_profile_fences_sibling_resources_and_
 }
 
 #[tokio::test]
-async fn slow_or_failed_cleanup_returns_within_2s_with_cleanup_pending_survives_restart_and_status_requires_reauth() {
+async fn slow_or_failed_cleanup_returns_within_2s_with_cleanup_pending_survives_restart_and_status_requires_reauth(
+) {
     // Part A: Slow background cleanup (>2s) returns 200 cleanupPending within 2s and completes asynchronously
     let fx = LogoutFixture::new().await;
     let admin_slow = format!("admin-slow-{}", Uuid::new_v4().simple());
@@ -1001,7 +1047,7 @@ async fn stalled_cdp_teardown_does_not_delay_reset_past_2s_and_completes_worker(
         .await
         .unwrap();
     let (sess_dto, _) = dam_hopper_server::api::browser_host::global_session_registry()
-        .create_or_idempotent_get(
+        .insert_running_for_test(
             &admin,
             false,
             "inc-stalled",
@@ -1068,8 +1114,7 @@ async fn stalled_cdp_teardown_does_not_delay_reset_past_2s_and_completes_worker(
     );
     let body = json_body(resp).await;
     assert!(
-        body["browserResetState"] == "cleanupPending"
-            || body["browserResetState"] == "cleared",
+        body["browserResetState"] == "cleanupPending" || body["browserResetState"] == "cleared",
         "unexpected state: {body:?}"
     );
 
@@ -1099,7 +1144,10 @@ async fn stalled_cdp_teardown_does_not_delay_reset_past_2s_and_completes_worker(
             }
         }
     }
-    assert!(completed, "background reset worker never completed after stalled CDP teardown");
+    assert!(
+        completed,
+        "background reset worker never completed after stalled CDP teardown"
+    );
     assert!(!profile.user_data_dir().join("Cookies").exists());
     assert_eq!(fs::read_dir(profile.user_data_dir()).unwrap().count(), 0);
 }
@@ -1141,7 +1189,8 @@ async fn session_revocation_failure_reports_revocation_uncertain_on_logout() {
 }
 
 #[tokio::test]
-async fn stalled_sync_fence_returns_cleanup_pending_within_2s_and_aborted_caller_completes_worker() {
+async fn stalled_sync_fence_returns_cleanup_pending_within_2s_and_aborted_caller_completes_worker()
+{
     let fx = LogoutFixture::new().await;
     let admin = format!("admin-stalled-sync-{}", Uuid::new_v4().simple());
     fx.create_user_with_role(&admin, UserRole::Admin).await;
@@ -1222,4 +1271,429 @@ async fn stalled_sync_fence_returns_cleanup_pending_within_2s_and_aborted_caller
     }
     assert!(completed, "worker owned by aborted caller never completed");
     assert!(!profile.user_data_dir().join("Cookies").exists());
+}
+
+async fn post_logout(fx: &LogoutFixture, headers: &[(&str, String)], body: Option<Value>) -> Value {
+    let mut builder = Request::builder().method("POST").uri("/api/auth/logout");
+    for (name, value) in headers {
+        builder = builder.header(*name, value);
+    }
+    let req = match body {
+        Some(b) => builder
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(b.to_string())),
+        None => builder.body(Body::empty()),
+    }
+    .unwrap();
+    let resp = fx.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    json_body(resp).await
+}
+
+async fn token_authenticates(fx: &LogoutFixture, token: &str) -> bool {
+    fx.app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/sessions")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+        == StatusCode::OK
+}
+
+#[tokio::test]
+async fn anonymous_or_cookie_only_logout_never_confirms_revocation_of_an_unsent_saved_bearer_token()
+{
+    let fx = LogoutFixture::new().await;
+    let user = format!("user-l1-{}", Uuid::new_v4().simple());
+    fx.create_user_with_role(&user, UserRole::User).await;
+    let (saved_session, saved_token) = fx.create_session(&user, false).await;
+    let (cookie_session, cookie_token) = fx.create_session(&user, false).await;
+
+    // The client deliberately does not send its saved Bearer over cleartext HTTP, and has no
+    // cookie: a public, uncredentialed logout. Nothing is identified, nothing is revoked, and
+    // the server must not claim otherwise.
+    let anon = post_logout(&fx, &[], Some(json!({ "browserReset": false }))).await;
+    assert_eq!(anon["ok"], true);
+    assert_eq!(anon["sessionRevoked"], false);
+    assert_eq!(anon["sessionIdentified"], false);
+    assert!(fx
+        .store
+        .get_session(&saved_session.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .revoked_at
+        .is_none());
+    assert!(
+        token_authenticates(&fx, &saved_token).await,
+        "saved token is still valid"
+    );
+
+    // Cookie-only logout reports the cookie's own session, not the unsent saved token.
+    let cookie_only = post_logout(
+        &fx,
+        &[(COOKIE.as_str(), format!("damhopper-auth={cookie_token}"))],
+        Some(json!({ "browserReset": false })),
+    )
+    .await;
+    assert_eq!(cookie_only["sessionRevoked"], true);
+    assert_eq!(cookie_only["sessionIdentified"], true);
+    assert!(fx
+        .store
+        .get_session(&cookie_session.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .revoked_at
+        .is_some());
+    assert!(
+        fx.store
+            .get_session(&saved_session.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revoked_at
+            .is_none(),
+        "unsent saved token session must remain active"
+    );
+    assert!(token_authenticates(&fx, &saved_token).await);
+
+    // A request that actually carries the credential identifies and revokes exactly it.
+    let bearer = post_logout(
+        &fx,
+        &[(AUTHORIZATION.as_str(), format!("Bearer {saved_token}"))],
+        Some(json!({ "browserReset": false })),
+    )
+    .await;
+    assert_eq!(bearer["sessionRevoked"], true);
+    assert_eq!(bearer["sessionIdentified"], true);
+    assert_eq!(bearer["revocationUncertain"], false);
+    assert!(!token_authenticates(&fx, &saved_token).await);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn denied_artifact_unlink_keeps_confirmed_reset_pending_until_private_files_are_gone() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = LogoutFixture::new().await;
+    let admin = format!("admin-s3-{}", Uuid::new_v4().simple());
+    fx.create_user_with_role(&admin, UserRole::Admin).await;
+    let cookie_file = populate_browser_credentials(&fx.profile_root, &admin);
+    let (_s1, tok1) = fx.create_session(&admin, false).await;
+
+    let artifact = fx
+        .state
+        .browser_debug_artifacts
+        .create(
+            admin.clone(),
+            ArtifactSource::ManagedBrowser {
+                principal: admin.clone(),
+                profile_epoch: 1,
+                browser_incarnation: "inc-1".into(),
+            },
+            "term-s3".into(),
+            1,
+            BrowserSelectionV1 {
+                version: 1,
+                tag: "button".into(),
+                role: None,
+                accessible_name: None,
+                text: Some("Go".into()),
+                attributes: Default::default(),
+                locator: "button".into(),
+                bounds: BrowserSelectionBoundsV1 {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 40.0,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let artifact_dir = std::path::Path::new(&artifact.json_path)
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let charged = fx.state.browser_debug_artifacts.reserved_bytes();
+    assert!(charged > 0);
+
+    fs::set_permissions(&artifact_dir, fs::Permissions::from_mode(0o500)).unwrap();
+    assert!(
+        fs::File::create(artifact_dir.join("probe-denied")).is_err(),
+        "test requires a non-root user so a read-only directory denies unlink"
+    );
+
+    let body = post_logout(
+        &fx,
+        &[
+            (COOKIE.as_str(), format!("damhopper-auth={tok1}")),
+            (ORIGIN.as_str(), "http://trusted.example".to_string()),
+        ],
+        Some(json!({
+            "browserReset": true,
+            "confirmed": true,
+            "expectedProfileEpoch": 1,
+            "operationId": "op-denied-unlink-1",
+        })),
+    )
+    .await;
+    // The reset must not be reported complete while a private artifact file remains.
+    assert_eq!(body["browserResetState"], "cleanupPending", "{body}");
+    assert_eq!(body["browserCredentialsRetained"], true);
+    assert_eq!(body["resetRequired"], true);
+    assert!(Path::new(&artifact.json_path).exists());
+    assert_eq!(fx.state.browser_debug_artifacts.pending_cleanup_count(), 1);
+    assert_eq!(fx.state.browser_debug_artifacts.reserved_bytes(), charged);
+    assert!(
+        cookie_file.exists(),
+        "profile deletion must not start before the purge is clean"
+    );
+    assert!(matches!(
+        fx.state
+            .browser_host
+            .get_reset_status(&admin, false, "op-denied-unlink-1")
+            .await
+            .unwrap(),
+        dam_hopper_server::browser_host::manager::ResetStatus::CleanupPending { .. }
+    ));
+
+    // Permission restored: the retained cleanup is retried and only then does the reset finish.
+    fs::set_permissions(&artifact_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut completed = false;
+    for _ in 0..80 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if matches!(
+            fx.state
+                .browser_host
+                .get_reset_status(&admin, false, "op-denied-unlink-1")
+                .await
+                .unwrap(),
+            dam_hopper_server::browser_host::manager::ResetStatus::Completed { .. }
+        ) {
+            completed = true;
+            break;
+        }
+    }
+    assert!(
+        completed,
+        "reset never completed after the unlink became possible"
+    );
+    assert!(!Path::new(&artifact.json_path).exists());
+    assert_eq!(fx.state.browser_debug_artifacts.pending_cleanup_count(), 0);
+    assert_eq!(fx.state.browser_debug_artifacts.reserved_bytes(), 0);
+    assert!(!cookie_file.exists());
+}
+
+/// A managed writer that started before the reset fence has persisted its private file but not
+/// published it: the file is in neither the entry map nor the pending set. The reset must not
+/// complete (nor delete the profile) until that writer has cleaned up after itself.
+#[cfg(unix)]
+#[tokio::test]
+async fn reset_waits_for_an_unpublished_artifact_writer_started_before_its_fence() {
+    let fx = LogoutFixture::new().await;
+    let admin = format!("admin-s3w-{}", Uuid::new_v4().simple());
+    fx.create_user_with_role(&admin, UserRole::Admin).await;
+    let cookie_file = populate_browser_credentials(&fx.profile_root, &admin);
+    let (_s1, tok1) = fx.create_session(&admin, false).await;
+
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let gate = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let hook_gate = gate.clone();
+    struct OpenOnDrop(std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
+    impl Drop for OpenOnDrop {
+        fn drop(&mut self) {
+            let (lock, cvar) = &*self.0;
+            *lock.lock().unwrap() = true;
+            cvar.notify_all();
+        }
+    }
+    let _open = OpenOnDrop(gate.clone());
+    *fx.state
+        .browser_debug_artifacts
+        ._after_persist_before_publish_hook
+        .write()
+        .unwrap() = Some(std::sync::Arc::new(move || {
+        let _ = entered_tx.send(());
+        let (lock, cvar) = &*hook_gate;
+        let mut open = lock.lock().unwrap();
+        while !*open {
+            open = cvar.wait(open).unwrap();
+        }
+    }));
+    let writer = {
+        let artifacts = fx.state.browser_debug_artifacts.clone();
+        let principal = admin.clone();
+        tokio::spawn(async move {
+            artifacts
+                .create(
+                    principal.clone(),
+                    ArtifactSource::ManagedBrowser {
+                        principal,
+                        profile_epoch: 1,
+                        browser_incarnation: "inc-1".into(),
+                    },
+                    "term-s3w".into(),
+                    1,
+                    BrowserSelectionV1 {
+                        version: 1,
+                        tag: "button".into(),
+                        role: None,
+                        accessible_name: None,
+                        text: Some("Go".into()),
+                        attributes: Default::default(),
+                        locator: "button".into(),
+                        bounds: BrowserSelectionBoundsV1 {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 100.0,
+                            height: 40.0,
+                        },
+                    },
+                )
+                .await
+        })
+    };
+    tokio::task::spawn_blocking(move || {
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("writer never persisted its file")
+    })
+    .await
+    .unwrap();
+    assert!(fx.state.browser_debug_artifacts.reserved_bytes() > 0);
+
+    let body = post_logout(
+        &fx,
+        &[
+            (COOKIE.as_str(), format!("damhopper-auth={tok1}")),
+            (ORIGIN.as_str(), "http://trusted.example".to_string()),
+        ],
+        Some(json!({
+            "browserReset": true,
+            "confirmed": true,
+            "expectedProfileEpoch": 1,
+            "operationId": "op-inflight-writer-1",
+        })),
+    )
+    .await;
+    assert_eq!(body["browserResetState"], "cleanupPending", "{body}");
+    assert!(
+        cookie_file.exists(),
+        "profile deletion must not start while a pre-fence writer still owns a private file"
+    );
+    assert!(matches!(
+        fx.state
+            .browser_host
+            .get_reset_status(&admin, false, "op-inflight-writer-1")
+            .await
+            .unwrap(),
+        dam_hopper_server::browser_host::manager::ResetStatus::CleanupPending { .. }
+    ));
+
+    // The writer finishes: it sees the fence, removes its own file, and only then can the
+    // reset's purge (retried with backoff) complete.
+    {
+        let (lock, cvar) = &*gate;
+        *lock.lock().unwrap() = true;
+        cvar.notify_all();
+    }
+    assert!(
+        writer.await.unwrap().is_err(),
+        "fenced writer must not publish"
+    );
+    let mut completed = false;
+    for _ in 0..80 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if matches!(
+            fx.state
+                .browser_host
+                .get_reset_status(&admin, false, "op-inflight-writer-1")
+                .await
+                .unwrap(),
+            dam_hopper_server::browser_host::manager::ResetStatus::Completed { .. }
+        ) {
+            completed = true;
+            break;
+        }
+    }
+    assert!(completed, "reset never completed after the writer finished");
+    assert_eq!(fx.state.browser_debug_artifacts.pending_cleanup_count(), 0);
+    assert_eq!(fx.state.browser_debug_artifacts.reserved_bytes(), 0);
+    assert!(!cookie_file.exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn denied_artifact_unlink_never_reports_cleared_when_no_browser_profile_exists() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = LogoutFixture::new().await;
+    let admin = format!("admin-s3-noprofile-{}", Uuid::new_v4().simple());
+    fx.create_user_with_role(&admin, UserRole::Admin).await;
+    let (_s1, tok1) = fx.create_session(&admin, false).await;
+    let artifact = fx
+        .state
+        .browser_debug_artifacts
+        .create(
+            admin.clone(),
+            ArtifactSource::ManagedBrowser {
+                principal: admin.clone(),
+                profile_epoch: 1,
+                browser_incarnation: "inc-1".into(),
+            },
+            "term-s3b".into(),
+            1,
+            BrowserSelectionV1 {
+                version: 1,
+                tag: "button".into(),
+                role: None,
+                accessible_name: None,
+                text: None,
+                attributes: Default::default(),
+                locator: "button".into(),
+                bounds: BrowserSelectionBoundsV1 {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 10.0,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let artifact_dir = Path::new(&artifact.json_path)
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    fs::set_permissions(&artifact_dir, fs::Permissions::from_mode(0o500)).unwrap();
+    assert!(fs::File::create(artifact_dir.join("probe-denied")).is_err());
+
+    let reset_request = json!({
+        "browserReset": true,
+        "confirmed": true,
+        "expectedProfileEpoch": 1,
+        "operationId": "op-no-profile-denied",
+    });
+    let headers = [
+        (COOKIE.as_str(), format!("damhopper-auth={tok1}")),
+        (ORIGIN.as_str(), "http://trusted.example".to_string()),
+    ];
+    let body = post_logout(&fx, &headers, Some(reset_request)).await;
+    assert_eq!(body["browserResetState"], "cleanupPending", "{body}");
+    assert_eq!(body["resetRequired"], true);
+    assert!(Path::new(&artifact.json_path).exists());
+    assert_eq!(fx.state.browser_debug_artifacts.pending_cleanup_count(), 1);
+
+    // Once the unlink works, the retained cleanup completes on the next retry (sweeper path).
+    fs::set_permissions(&artifact_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    fx.state.browser_debug_artifacts.sweep_expired().await;
+    assert!(!Path::new(&artifact.json_path).exists());
+    assert_eq!(fx.state.browser_debug_artifacts.pending_cleanup_count(), 0);
+    assert_eq!(fx.state.browser_debug_artifacts.reserved_bytes(), 0);
 }

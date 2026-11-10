@@ -2,15 +2,19 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio::time::{sleep, timeout, Instant};
-use tracing::info;
+use tracing::{info, warn};
+
+#[cfg(target_os = "linux")]
+mod death_watcher;
 
 pub const STARTUP_TIMEOUT_SECS: u64 = 15;
 pub const MAX_STDERR_CAPTURE_BYTES: usize = 65_536; // 64 KiB
 pub const SHUTDOWN_GRACE_PERIOD_SECS: u64 = 3;
-
 
 #[derive(Debug)]
 pub enum ProcessError {
@@ -23,6 +27,10 @@ pub enum ProcessError {
     TerminationFailed(String),
     ContainmentUnavailable(String),
     ContainmentUnproven(i32),
+    /// A prior browser tree is still alive but its ownership cannot be verified.
+    OwnershipAmbiguous(String),
+    /// A verified prior browser tree survived TERM and KILL.
+    PriorTreeSurvived(String),
     Signal(i32),
     Reap(String),
     StderrOverflow,
@@ -36,11 +44,25 @@ impl fmt::Display for ProcessError {
             Self::LaunchFailed(err) => write!(f, "failed to launch browser process: {err}"),
             Self::StartupTimeout(d) => write!(f, "browser failed to emit debug port within {d:?}"),
             Self::InvalidEndpoint(ep) => write!(f, "invalid browser debug endpoint: {ep}"),
-            Self::NonLoopbackEndpoint(ep) => write!(f, "browser debug endpoint is not loopback: {ep}"),
-            Self::SandboxUnavailable(err) => write!(f, "browser sandbox cannot be initialized: {err}"),
-            Self::TerminationFailed(err) => write!(f, "failed to terminate browser process group: {err}"),
+            Self::NonLoopbackEndpoint(ep) => {
+                write!(f, "browser debug endpoint is not loopback: {ep}")
+            }
+            Self::SandboxUnavailable(err) => {
+                write!(f, "browser sandbox cannot be initialized: {err}")
+            }
+            Self::TerminationFailed(err) => {
+                write!(f, "failed to terminate browser process group: {err}")
+            }
             Self::ContainmentUnavailable(err) => write!(f, "containment unavailable: {err}"),
-            Self::ContainmentUnproven(pgid) => write!(f, "containment unproven for process group {pgid}"),
+            Self::ContainmentUnproven(pgid) => {
+                write!(f, "containment unproven for process group {pgid}")
+            }
+            Self::OwnershipAmbiguous(msg) => {
+                write!(f, "prior browser tree ownership unverified: {msg}")
+            }
+            Self::PriorTreeSurvived(msg) => {
+                write!(f, "prior browser tree survived termination: {msg}")
+            }
             Self::Signal(code) => write!(f, "process signal error (errno {code})"),
             Self::Reap(err) => write!(f, "process reap error: {err}"),
             Self::StderrOverflow => write!(f, "stderr output exceeded 64KiB without valid port"),
@@ -63,10 +85,19 @@ pub struct BrowserLaunchConfig {
     pub user_data_dir: PathBuf,
     pub headless: bool,
     pub additional_args: Vec<String>,
+    /// Ownership token exported (`LAUNCH_TOKEN_ENV`) to the browser and every descendant.
+    /// `None` generates a fresh token; callers persist it BEFORE launching so a crash between
+    /// spawn and the identity write still leaves a verifiable marker.
+    pub launch_token: Option<String>,
     #[doc(hidden)]
     pub _test_mock_watcher_pre_exec_fail: bool,
+    /// Forces the death watcher's arming step to fail after its pre-exec setup succeeded.
     #[doc(hidden)]
-    pub _test_mock_watcher_exec_fail: bool,
+    pub _test_mock_watcher_arming_fail: bool,
+    /// Makes the watcher behave as on a kernel without `PIDFD_SIGNAL_PROCESS_GROUP` (< 6.9),
+    /// where launch must fail closed.
+    #[doc(hidden)]
+    pub _test_force_watcher_group_signal_unsupported: bool,
 }
 
 impl BrowserLaunchConfig {
@@ -77,7 +108,9 @@ impl BrowserLaunchConfig {
             headless: true,
             additional_args: Vec::new(),
             _test_mock_watcher_pre_exec_fail: false,
-            _test_mock_watcher_exec_fail: false,
+            _test_mock_watcher_arming_fail: false,
+            _test_force_watcher_group_signal_unsupported: false,
+            launch_token: None,
         }
     }
 }
@@ -154,9 +187,8 @@ pub fn validate_browser_path(path: &str) -> Result<(), ProcessError> {
 
 /// Ensure browser endpoint connects strictly to loopback interface and matches DevTools URL schema.
 pub fn validate_loopback_endpoint(ws_url: &str) -> Result<(), ProcessError> {
-    let parsed = url::Url::parse(ws_url).map_err(|_| {
-        ProcessError::InvalidEndpoint("failed to parse WebSocket URL".to_string())
-    })?;
+    let parsed = url::Url::parse(ws_url)
+        .map_err(|_| ProcessError::InvalidEndpoint("failed to parse WebSocket URL".to_string()))?;
 
     if parsed.scheme() != "ws" {
         return Err(ProcessError::InvalidEndpoint(
@@ -168,28 +200,48 @@ pub fn validate_loopback_endpoint(ws_url: &str) -> Result<(), ProcessError> {
         Some(url::Host::Domain("localhost")) => {}
         Some(url::Host::Ipv4(ip)) if ip.is_loopback() => {}
         Some(url::Host::Ipv6(ip)) if ip.is_loopback() => {}
-        Some(_) => return Err(ProcessError::NonLoopbackEndpoint(
-            "endpoint host is not a loopback address".to_string(),
-        )),
-        None => return Err(ProcessError::InvalidEndpoint("missing host in DevTools URL".to_string())),
+        Some(_) => {
+            return Err(ProcessError::NonLoopbackEndpoint(
+                "endpoint host is not a loopback address".to_string(),
+            ))
+        }
+        None => {
+            return Err(ProcessError::InvalidEndpoint(
+                "missing host in DevTools URL".to_string(),
+            ))
+        }
     }
 
     match parsed.port() {
         Some(port) if port > 0 => {}
-        Some(_) => return Err(ProcessError::InvalidEndpoint("port cannot be 0".to_string())),
-        None => return Err(ProcessError::InvalidEndpoint("missing port in DevTools URL".to_string())),
+        Some(_) => {
+            return Err(ProcessError::InvalidEndpoint(
+                "port cannot be 0".to_string(),
+            ))
+        }
+        None => {
+            return Err(ProcessError::InvalidEndpoint(
+                "missing port in DevTools URL".to_string(),
+            ))
+        }
     }
 
     validate_browser_path(parsed.path())?;
 
     if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(ProcessError::InvalidEndpoint("credentials in DevTools URL are forbidden".to_string()));
+        return Err(ProcessError::InvalidEndpoint(
+            "credentials in DevTools URL are forbidden".to_string(),
+        ));
     }
     if parsed.query().is_some() {
-        return Err(ProcessError::InvalidEndpoint("query parameters in DevTools URL are forbidden".to_string()));
+        return Err(ProcessError::InvalidEndpoint(
+            "query parameters in DevTools URL are forbidden".to_string(),
+        ));
     }
     if parsed.fragment().is_some() {
-        return Err(ProcessError::InvalidEndpoint("fragment in DevTools URL is forbidden".to_string()));
+        return Err(ProcessError::InvalidEndpoint(
+            "fragment in DevTools URL is forbidden".to_string(),
+        ));
     }
 
     Ok(())
@@ -201,11 +253,14 @@ pub struct BrowserProcess {
     #[cfg(unix)]
     pgid: i32,
     #[cfg(unix)]
-    watcher_pid: Option<i32>,
+    watcher: Option<PidHandle>,
+    #[cfg(unix)]
+    leader: Option<PidHandle>,
     #[cfg(unix)]
     supervisor_pipe: Option<std::fs::File>,
     ws_endpoint: String,
     user_data_dir: PathBuf,
+    identity: ContainmentIdentity,
 }
 
 impl BrowserProcess {
@@ -230,10 +285,15 @@ impl BrowserProcess {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&config.user_data_dir, std::fs::Permissions::from_mode(0o700))
-                .map_err(|e| ProcessError::LaunchFailed(format!(
+            std::fs::set_permissions(
+                &config.user_data_dir,
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .map_err(|e| {
+                ProcessError::LaunchFailed(format!(
                     "failed to set restricted permissions (0700) on user-data-dir: {e}"
-                )))?;
+                ))
+            })?;
         }
 
         // Clean up any stale DevToolsActivePort from previous runs (fail closed on permission/IO error)
@@ -253,7 +313,10 @@ impl BrowserProcess {
         // Copied background-throttling/IPC/hang-monitor/keychain overrides REMOVED.
         // Default sandbox, TLS verification, and web security remain strictly ACTIVE.
         cmd.arg("--remote-debugging-port=0")
-            .arg(format!("--user-data-dir={}", config.user_data_dir.display()))
+            .arg(format!(
+                "--user-data-dir={}",
+                config.user_data_dir.display()
+            ))
             .arg("--no-first-run")
             .arg("--no-default-browser-check");
 
@@ -264,6 +327,12 @@ impl BrowserProcess {
             cmd.arg(arg);
         }
 
+        let launch_token = config
+            .launch_token
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+        cmd.env(LAUNCH_TOKEN_ENV, &launch_token);
+
         cmd.arg("about:blank");
 
         cmd.stdin(Stdio::null());
@@ -273,10 +342,11 @@ impl BrowserProcess {
         // Process containment setup:
         // An anonymous death-pipe is created before spawn.
         // In pre_exec, the child process atomically forks a supervisor watcher grandchild
-        // BEFORE executing Chrome. The grandchild inherits the pipe read end and sets its own PGID.
-        // When the supervisor process exits for ANY reason (including SIGKILL), the kernel closes
-        // pipe_write, causing the watcher to receive EOF, signal Chrome's process group with
-        // SIGTERM then SIGKILL, and exit.
+        // BEFORE executing Chrome. The watcher (`death_watcher`, raw syscalls, no exec) holds a
+        // pidfd on the leader and sets its own PGID. When the supervisor process exits for ANY
+        // reason (including SIGKILL), the kernel closes pipe_write, causing the watcher to see
+        // EOF and signal Chrome's process group with SIGTERM then SIGKILL through pidfd-bound
+        // identities only (never a bare pid/pgid number), and exit.
         // This eliminates any race window between Chrome spawn and watcher readiness.
         #[cfg(unix)]
         let (pipe_read, pipe_write, ready_read, ready_write) = {
@@ -317,8 +387,11 @@ impl BrowserProcess {
                 let parent_pid = std::process::id() as libc::pid_t;
                 let death_r = pipe_read;
                 let ready_w = ready_write;
+                let death_w = pipe_write;
                 let mock_pre_fail = config._test_mock_watcher_pre_exec_fail;
-                let mock_exec_fail = config._test_mock_watcher_exec_fail;
+                let mock_arming_fail = config._test_mock_watcher_arming_fail;
+                let force_group_signal_unsupported =
+                    config._test_force_watcher_group_signal_unsupported;
                 unsafe {
                     cmd.pre_exec(move || {
                         // 1. Establish distinct process group for Chrome
@@ -335,93 +408,33 @@ impl BrowserProcess {
                             libc::_exit(1);
                         }
 
-                        // 3. Atomically spawn supervisor watcher BEFORE Chrome can execute or fork descendants
-                        let watcher_pid = libc::fork();
-                        if watcher_pid < 0 {
+                        // 3. The leader pins itself: a pidfd on its own pid is identity-safe by
+                        // construction and survives the fork into the watcher.
+                        let leader_pidfd = death_watcher::open_pidfd(pgid);
+                        if leader_pidfd < 0 {
                             return Err(std::io::Error::last_os_error());
                         }
 
-                        if watcher_pid == 0 {
-                            // In grandchild watcher process:
-                            if mock_pre_fail {
-                                libc::_exit(127);
-                            }
-
-                            // Move watcher to its own independent process group
-                            if libc::setpgid(0, 0) != 0 {
-                                libc::_exit(127);
-                            }
-
-                            // Wire death_r to stdin (fd 0)
-                            if death_r != 0 {
-                                if libc::dup2(death_r, 0) < 0 {
-                                    libc::_exit(127);
-                                }
-                                libc::close(death_r);
-                            }
-
-                            // Redirect stdout and stderr to /dev/null
-                            let devnull = libc::open(b"/dev/null\0".as_ptr() as *const libc::c_char, libc::O_WRONLY);
-                            if devnull >= 0 {
-                                if libc::dup2(devnull, 1) < 0 || libc::dup2(devnull, 2) < 0 {
-                                    libc::_exit(127);
-                                }
-                                if devnull > 2 {
-                                    libc::close(devnull);
-                                }
-                            }
-
-                            // Format pgid into stack buffer without heap allocation
-                            let mut pgid_buf = [0u8; 16];
-                            let mut val = pgid;
-                            let mut idx = 15;
-                            if val == 0 {
-                                pgid_buf[14] = b'0';
-                                idx = 14;
-                            } else {
-                                while val > 0 && idx > 0 {
-                                    idx -= 1;
-                                    pgid_buf[idx] = b'0' + (val % 10) as u8;
-                                    val /= 10;
-                                }
-                            }
-                            let pgid_ptr = pgid_buf.as_ptr().add(idx) as *const libc::c_char;
-                            let sh_path = if mock_exec_fail {
-                                b"/nonexistent/dam_hopper_sh\0".as_ptr() as *const libc::c_char
-                            } else {
-                                b"/bin/sh\0".as_ptr() as *const libc::c_char
-                            };
-
-                            static C_ARG: &[u8] = b"-c\0";
-                            static SH_NAME: &[u8] = b"sh\0";
-                            static SCRIPT: &[u8] = b"exec <&0; cat >/dev/null; kill -s TERM -- -$1 2>/dev/null || kill -TERM -$1 2>/dev/null || true; sleep 0.5; kill -s KILL -- -$1 2>/dev/null || kill -KILL -$1 2>/dev/null || true\0";
-
-                            let args = [
-                                sh_path,
-                                C_ARG.as_ptr() as *const libc::c_char,
-                                SCRIPT.as_ptr() as *const libc::c_char,
-                                SH_NAME.as_ptr() as *const libc::c_char,
-                                pgid_ptr,
-                                std::ptr::null(),
-                            ];
-
-                            // Write watcher PID (4 bytes) to ready_w before execve to prove pre-exec setup succeeded
-                            let my_pid = libc::getpid();
-                            let pid_bytes = (my_pid as u32).to_ne_bytes();
-                            if libc::write(ready_w, pid_bytes.as_ptr() as *const libc::c_void, 4) != 4 {
-                                libc::_exit(127);
-                            }
-
-                            // Standard CLOEXEC-pipe pattern:
-                            // ready_w has FD_CLOEXEC. On successful execve, kernel closes ready_w -> parent sees EOF.
-                            // If execve fails, we write errno to ready_w and _exit(127).
-                            libc::execve(sh_path, args.as_ptr(), std::ptr::null());
-                            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(127) as u8;
-                            let err_buf = [if errno == 0 { 127 } else { errno }];
-                            let _ = libc::write(ready_w, err_buf.as_ptr() as *const libc::c_void, 1);
-                            libc::_exit(127);
+                        // 4. Atomically spawn supervisor watcher BEFORE Chrome can execute or fork descendants
+                        let watcher_pid = libc::fork();
+                        if watcher_pid < 0 {
+                            let err = std::io::Error::last_os_error();
+                            libc::close(leader_pidfd);
+                            return Err(err);
                         }
-                        // In child (Chrome): close death_r and ready_w before execve(chrome)
+                        if watcher_pid == 0 {
+                            death_watcher::run(death_watcher::Params {
+                                leader_pidfd,
+                                death_read: death_r,
+                                death_write: death_w,
+                                ready_write: ready_w,
+                                mock_pre_exec_fail: mock_pre_fail,
+                                mock_arming_fail,
+                                force_group_signal_unsupported,
+                            });
+                        }
+                        // In child (Chrome): close the watcher's descriptors before execve(chrome)
+                        libc::close(leader_pidfd);
                         libc::close(death_r);
                         libc::close(ready_w);
                         Ok(())
@@ -472,12 +485,16 @@ impl BrowserProcess {
         #[cfg(unix)]
         let pgid = pid as i32;
         #[cfg(unix)]
-        let mut pg_guard = ProcessGroupGuard { pgid, armed: true };
+        let mut pg_guard = ProcessGroupGuard {
+            identity: ContainmentIdentity::capture(pid, Some(pgid), Some(launch_token.clone())),
+            user_data_dir: config.user_data_dir.clone(),
+            armed: true,
+        };
 
-        // Verify supervisor watcher readiness handshake before proceeding
-        // Verify supervisor watcher readiness using bounded poll on CLOEXEC pipe:
-        // EOF (0 bytes read) proves /bin/sh execve succeeded and closed ready_w.
-        // Any byte read indicates execve failure; timeout indicates watcher startup stalled.
+        // Verify supervisor watcher readiness using bounded poll on the CLOEXEC readiness pipe:
+        // the watcher writes its pid once its setup (own group, descriptor table, leader pidfd)
+        // is done, then closes the pipe: EOF (0 further bytes) proves arming succeeded. Any
+        // further byte is the errno of a failed arming step; a timeout means startup stalled.
         #[cfg(unix)]
         let watcher_pid = {
             let mut pfd = libc::pollfd {
@@ -509,9 +526,10 @@ impl BrowserProcess {
             }
             let wpid = u32::from_ne_bytes(pid_buf) as i32;
 
-            // Read trailing byte if execve failed; on success, ready_w was closed by kernel (EOF, n_extra == 0)
+            // Read trailing byte if arming failed; on success the watcher closed ready_w (EOF, n_extra == 0)
             let mut err_byte = [0u8; 1];
-            let n_extra = unsafe { libc::read(ready_read, err_byte.as_mut_ptr() as *mut libc::c_void, 1) };
+            let n_extra =
+                unsafe { libc::read(ready_read, err_byte.as_mut_ptr() as *mut libc::c_void, 1) };
             unsafe {
                 libc::close(ready_read);
             }
@@ -520,8 +538,13 @@ impl BrowserProcess {
                     libc::close(pipe_write);
                 }
                 return Err(ProcessError::LaunchFailed(format!(
-                    "supervisor watcher execve failed with errno {}",
-                    err_byte[0]
+                    "supervisor watcher arming failed with errno {}{}",
+                    err_byte[0],
+                    if i32::from(err_byte[0]) == libc::EINVAL {
+                        " (Linux 6.9+ with pidfd process-group signalling is required)"
+                    } else {
+                        ""
+                    }
                 )));
             }
 
@@ -530,11 +553,31 @@ impl BrowserProcess {
                 if libc::kill(wpid, 0) != 0 || libc::getpgid(wpid) != wpid {
                     libc::close(pipe_write);
                     return Err(ProcessError::LaunchFailed(
-                        "supervisor watcher liveness or process group verification failed".to_string(),
+                        "supervisor watcher liveness or process group verification failed"
+                            .to_string(),
                     ));
                 }
             }
             wpid
+        };
+        // Pin leader and watcher now, while both numbers provably name our processes: the
+        // leader is our unreaped child, the watcher is the leader's child (verified once the
+        // handle is held). All later signalling goes through these handles.
+        #[cfg(unix)]
+        let (leader, watcher) = match PidHandle::open_child_of(
+            pid as i32,
+            std::process::id() as i32,
+        )
+        .and_then(|leader| {
+            PidHandle::open_child_of(watcher_pid, pid as i32).map(|watcher| (leader, watcher))
+        }) {
+            Ok(pair) => pair,
+            Err(e) => {
+                unsafe {
+                    libc::close(pipe_write);
+                }
+                return Err(e);
+            }
         };
         let stderr = child.stderr.take().ok_or_else(|| {
             #[cfg(unix)]
@@ -547,23 +590,24 @@ impl BrowserProcess {
         let deadline = Duration::from_secs(STARTUP_TIMEOUT_SECS);
         let user_data_dir = config.user_data_dir.clone();
 
-        let (ws_endpoint, mut stderr) = match timeout(deadline, discover_ws_endpoint(stderr, &user_data_dir)).await {
-            Ok(Ok(pair)) => pair,
-            Ok(Err(e)) => {
-                #[cfg(unix)]
-                unsafe {
-                    libc::close(pipe_write);
+        let (ws_endpoint, mut stderr) =
+            match timeout(deadline, discover_ws_endpoint(stderr, &user_data_dir)).await {
+                Ok(Ok(pair)) => pair,
+                Ok(Err(e)) => {
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::close(pipe_write);
+                    }
+                    return Err(e);
                 }
-                return Err(e);
-            }
-            Err(_) => {
-                #[cfg(unix)]
-                unsafe {
-                    libc::close(pipe_write);
+                Err(_) => {
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::close(pipe_write);
+                    }
+                    return Err(ProcessError::StartupTimeout(deadline));
                 }
-                return Err(ProcessError::StartupTimeout(deadline));
-            }
-        };
+            };
 
         // Drain remaining stderr to sink so Chrome never blocks or encounters EPIPE
         tokio::spawn(async move {
@@ -580,7 +624,10 @@ impl BrowserProcess {
             return Err(e);
         }
 
-        info!(pid, "supervised browser launched on loopback DevTools endpoint");
+        info!(
+            pid,
+            "supervised browser launched on loopback DevTools endpoint"
+        );
 
         #[cfg(unix)]
         {
@@ -593,17 +640,26 @@ impl BrowserProcess {
             Some(std::fs::File::from_raw_fd(pipe_write))
         };
 
+        #[cfg(unix)]
+        let identity_pgid = Some(pgid);
+        #[cfg(not(unix))]
+        let identity_pgid = None;
+        let identity = ContainmentIdentity::capture(pid, identity_pgid, Some(launch_token.clone()));
+
         Ok(Self {
             child: Some(child),
             pid,
             #[cfg(unix)]
             pgid,
             #[cfg(unix)]
-            watcher_pid: Some(watcher_pid),
+            watcher: Some(watcher),
+            #[cfg(unix)]
+            leader: Some(leader),
             #[cfg(unix)]
             supervisor_pipe,
             ws_endpoint,
             user_data_dir: config.user_data_dir,
+            identity,
         })
     }
 
@@ -619,9 +675,35 @@ impl BrowserProcess {
         self.pgid
     }
 
+    /// Persistable containment identity of this launch (pid, pgid, start time, boot id, token).
+    pub fn identity(&self) -> ContainmentIdentity {
+        self.identity.clone()
+    }
+
     pub fn user_data_dir(&self) -> &Path {
         &self.user_data_dir
     }
+    /// Signals the leader through its launch-time handle (valid even after the leader was
+    /// reaped) and every group member through a freshly verified inventory.
+    #[cfg(unix)]
+    async fn signal_group(&self, sig: nix::sys::signal::Signal) -> Result<(), ProcessError> {
+        if let Some(leader) = self.leader.as_ref() {
+            leader.signal(sig as i32)?;
+        }
+        #[cfg(target_os = "linux")]
+        signal_verified_tree(&self.identity, &self.user_data_dir, sig).await?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            // No pidfd: members beyond the leader cannot be verified; the unreaped leader
+            // keeps the group number reserved, so the group signal below stays ours.
+            match nix::sys::signal::killpg(nix::unistd::Pid::from_raw(self.pgid), sig) {
+                Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+                Err(e) => return Err(ProcessError::Signal(e as i32)),
+            }
+        }
+        Ok(())
+    }
+
     pub fn try_is_alive(&mut self) -> bool {
         if let Some(child) = self.child.as_mut() {
             match child.try_wait() {
@@ -634,7 +716,6 @@ impl BrowserProcess {
         }
     }
 
-
     /// Terminate browser and wait for all descendants in the process group to exit.
     pub async fn terminate(&mut self) -> Result<(), ProcessError> {
         if self.child.is_none() {
@@ -645,41 +726,57 @@ impl BrowserProcess {
 
         #[cfg(unix)]
         {
-            use nix::unistd::Pid;
+            use nix::sys::signal::Signal;
 
-            let pg = Pid::from_raw(self.pgid);
-
-            if let Some(wpid) = self.watcher_pid.take() {
-                let _ = nix::sys::signal::kill(Pid::from_raw(wpid), nix::sys::signal::Signal::SIGKILL);
+            // The watcher is signalled through its pinned handle, never a recorded number.
+            if let Some(watcher) = self.watcher.take() {
+                let _ = watcher.signal(Signal::SIGKILL as i32);
             }
             self.supervisor_pipe = None;
-            // Step 2: Send SIGTERM to entire process group
-            let _ = nix::sys::signal::killpg(pg, nix::sys::signal::Signal::SIGTERM);
+            // Step 2: SIGTERM to the leader handle and to every verified group member.
+            if let Err(e) = self.signal_group(Signal::SIGTERM).await {
+                warn!(error = %e, "SIGTERM to browser group was not fully delivered");
+            }
 
             // Step 3: Grace period (up to 3s)
             let grace = Instant::now() + Duration::from_secs(SHUTDOWN_GRACE_PERIOD_SECS);
-            while Instant::now() < grace && live_members(self.pgid)? > 0 {
+            while Instant::now() < grace && live_members_blocking(self.pgid).await? > 0 {
                 sleep(Duration::from_millis(50)).await;
             }
 
-            // Step 4: Send SIGKILL to the process group
-            match nix::sys::signal::killpg(pg, nix::sys::signal::Signal::SIGKILL) {
-                Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
-                Err(e) => return Err(ProcessError::Signal(e as i32)),
-            }
-
-            // Step 5: Prove group emptiness within 2s proof deadline
+            // Steps 4-5: SIGKILL on every fresh verified inventory until the group is proven
+            // empty within the 2s proof deadline (a member forked mid-teardown is caught).
             let proof_deadline = Instant::now() + Duration::from_secs(2);
-            while live_members(self.pgid)? > 0 {
+            loop {
+                self.signal_group(Signal::SIGKILL).await?;
+                if live_members_blocking(self.pgid).await? == 0 {
+                    break;
+                }
                 if Instant::now() >= proof_deadline {
                     return Err(ProcessError::ContainmentUnproven(self.pgid));
                 }
                 sleep(Duration::from_millis(50)).await;
             }
 
+            // Step 5b: a descendant that left the process group is still ours (launch token);
+            // none may survive the termination either.
+            reap_prior_tree(
+                &self.identity,
+                &self.user_data_dir,
+                ReapTimings {
+                    settle: Duration::ZERO,
+                    term_grace: Duration::from_secs(1),
+                    proof: Duration::from_secs(2),
+                },
+            )
+            .await?;
+
             // Step 6: Reap leader child LAST after descendants exit
             if let Some(child) = self.child.as_mut() {
-                child.wait().await.map_err(|e| ProcessError::Reap(e.to_string()))?;
+                child
+                    .wait()
+                    .await
+                    .map_err(|e| ProcessError::Reap(e.to_string()))?;
             }
         }
 
@@ -753,11 +850,20 @@ impl Drop for BrowserProcess {
         if self.child.is_some() {
             #[cfg(unix)]
             {
-                use nix::sys::signal::{killpg, Signal};
-                use nix::unistd::Pid;
-                let _ = killpg(Pid::from_raw(self.pgid), Signal::SIGKILL);
-                if let Some(wpid) = self.watcher_pid.take() {
-                    let _ = nix::sys::signal::kill(Pid::from_raw(wpid), Signal::SIGKILL);
+                use nix::sys::signal::Signal;
+                // Last resort without an async context: pinned handles only. The leader first,
+                // then a fresh verified inventory of the rest; never a bare pid or group number.
+                if let Some(leader) = self.leader.as_ref() {
+                    let _ = leader.signal(Signal::SIGKILL as i32);
+                }
+                #[cfg(target_os = "linux")]
+                if let Ok(TreeState::Owned(tree)) =
+                    inspect_prior_tree(&self.identity, &self.user_data_dir)
+                {
+                    let _ = signal_tree(&tree, Signal::SIGKILL);
+                }
+                if let Some(watcher) = self.watcher.take() {
+                    let _ = watcher.signal(Signal::SIGKILL as i32);
                 }
                 self.supervisor_pipe = None;
             }
@@ -765,19 +871,45 @@ impl Drop for BrowserProcess {
     }
 }
 
+/// Kills a half-launched browser tree if `launch` bails out. The leader is still our unreaped
+/// child at that point (its number cannot be recycled); the rest of the tree is signalled
+/// through the same verified-identity path as [`BrowserProcess`]'s drop, never a bare group
+/// number.
 #[cfg(unix)]
 struct ProcessGroupGuard {
-    pgid: i32,
+    identity: ContainmentIdentity,
+    user_data_dir: PathBuf,
     armed: bool,
 }
 
 #[cfg(unix)]
 impl Drop for ProcessGroupGuard {
     fn drop(&mut self) {
-        if self.armed {
-            use nix::sys::signal::{killpg, Signal};
-            use nix::unistd::Pid;
-            let _ = killpg(Pid::from_raw(self.pgid), Signal::SIGKILL);
+        if !self.armed {
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use nix::sys::signal::Signal;
+            if let Some(pid) = self.identity.pid {
+                if let Ok(leader) = PidHandle::open_child_of(pid as i32, std::process::id() as i32)
+                {
+                    let _ = leader.signal(Signal::SIGKILL as i32);
+                }
+            }
+            if let Ok(TreeState::Owned(tree)) =
+                inspect_prior_tree(&self.identity, &self.user_data_dir)
+            {
+                let _ = signal_tree(&tree, Signal::SIGKILL);
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        if let Some(pgid) = self.identity.pgid {
+            // No pidfd: the unreaped child leader keeps the group number reserved.
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(pgid),
+                nix::sys::signal::Signal::SIGKILL,
+            );
         }
     }
 }
@@ -844,12 +976,16 @@ pub async fn discover_ws_endpoint<R: tokio::io::AsyncRead + Unpin + Send + 'stat
                 let mut limited = file.take(513);
                 if limited.read_to_string(&mut content).is_ok() {
                     if content.len() > 512 {
-                        return Err(ProcessError::InvalidEndpoint("port file exceeded 512 bytes".to_string()));
+                        return Err(ProcessError::InvalidEndpoint(
+                            "port file exceeded 512 bytes".to_string(),
+                        ));
                     }
                     let lines: Vec<&str> = content.lines().collect();
                     if lines.len() >= 2 {
                         let port: u16 = lines[0].trim().parse().map_err(|_| {
-                            ProcessError::InvalidEndpoint("invalid numeric port in DevToolsActivePort".to_string())
+                            ProcessError::InvalidEndpoint(
+                                "invalid numeric port in DevToolsActivePort".to_string(),
+                            )
                         })?;
                         let browser_path = lines[1].trim();
 
@@ -944,11 +1080,667 @@ pub async fn discover_ws_endpoint<R: tokio::io::AsyncRead + Unpin + Send + 'stat
         // Once 300ms have elapsed (or stderr is EOF), settle on the valid endpoint.
         if let Some(first_seen) = first_endpoint_discovered_at {
             if first_seen.elapsed() >= Duration::from_millis(300) || stderr_eof {
-                let endpoint = port_file_endpoint.as_ref().or(stderr_endpoint.as_ref()).unwrap();
+                let endpoint = port_file_endpoint
+                    .as_ref()
+                    .or(stderr_endpoint.as_ref())
+                    .unwrap();
                 return Ok((endpoint.clone(), stderr));
             }
         } else if port_file_endpoint.is_some() || stderr_endpoint.is_some() {
             first_endpoint_discovered_at = Some(Instant::now());
         }
+    }
+}
+
+/// Environment variable carrying the per-launch ownership token to every descendant.
+pub const LAUNCH_TOKEN_ENV: &str = "DAM_HOPPER_BROWSER_LAUNCH_TOKEN";
+
+/// Persisted identity of one launched browser tree. A bare PID/PGID is never trusted: the
+/// kernel start time (`/proc/<pid>/stat` field 22) plus boot id distinguish a reused number,
+/// and the launch token marks every descendant through its environment.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainmentIdentity {
+    #[serde(
+        default,
+        rename = "processPid",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pid: Option<u32>,
+    #[serde(
+        default,
+        rename = "processPgid",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pgid: Option<i32>,
+    #[serde(
+        default,
+        rename = "processStartTicks",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub start_ticks: Option<u64>,
+    #[serde(
+        default,
+        rename = "processBootId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub boot_id: Option<String>,
+    #[serde(
+        default,
+        rename = "processLaunchToken",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub launch_token: Option<String>,
+}
+
+impl ContainmentIdentity {
+    /// True when nothing is recorded that could name a surviving process.
+    pub fn is_empty(&self) -> bool {
+        self.pid.is_none() && self.pgid.is_none() && self.launch_token.is_none()
+    }
+
+    /// Identity of a live launch, captured while the leader is still a child of this process.
+    pub fn capture(pid: u32, pgid: Option<i32>, launch_token: Option<String>) -> Self {
+        Self {
+            pid: Some(pid),
+            pgid,
+            start_ticks: process_start_ticks(pid as i32),
+            boot_id: current_boot_id(),
+            launch_token,
+        }
+    }
+
+    /// Durable pre-launch intent: only the token exists yet, but every process the coming
+    /// launch creates will carry it.
+    pub fn launch_intent(launch_token: String) -> Self {
+        Self {
+            boot_id: current_boot_id(),
+            launch_token: Some(launch_token),
+            ..Self::default()
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn current_boot_id() -> Option<String> {
+    std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn current_boot_id() -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn process_start_ticks(pid: i32) -> Option<u64> {
+    procfs::process::Process::new(pid)
+        .ok()?
+        .stat()
+        .ok()
+        .map(|stat| stat.starttime)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_start_ticks(_pid: i32) -> Option<u64> {
+    None
+}
+
+/// Verdict on a persisted prior browser tree.
+#[derive(Debug)]
+pub enum TreeState {
+    /// No process of the tree exists.
+    Absent,
+    /// Live processes whose ownership is verified; safe to signal.
+    Owned(OwnedTree),
+    /// Live processes exist but cannot be proven to be the prior tree: never signalled.
+    Ambiguous(String),
+}
+
+/// Verified live members of a prior tree.
+#[derive(Debug, Default)]
+pub struct OwnedTree {
+    /// Process group whose every live member was verified ours at inventory time.
+    group: Option<i32>,
+    /// Every verified-ours live process (group members and marked descendants outside the
+    /// group) as `(pid, start_ticks)`; each is signalled only through a pinned handle that
+    /// re-checks the start time, never through a bare pid or group number.
+    members: Vec<(i32, u64)>,
+}
+
+impl OwnedTree {
+    fn describe(&self) -> String {
+        format!(
+            "process group {:?} and {} verified member(s)",
+            self.group,
+            self.members.len()
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct ProcView {
+    pid: i32,
+    pgrp: i32,
+    start_ticks: u64,
+    zombie: bool,
+    /// Carries the launch token or the exact managed `--user-data-dir=` argument.
+    marked: bool,
+}
+
+#[cfg(target_os = "linux")]
+fn scan_processes(
+    token: Option<&str>,
+    user_data_dir: &Path,
+) -> Result<Vec<ProcView>, ProcessError> {
+    use std::ffi::OsStr;
+
+    let user_data_arg = format!("--user-data-dir={}", user_data_dir.display());
+    let procs = procfs::process::all_processes()
+        .map_err(|e| ProcessError::TerminationFailed(e.to_string()))?;
+    let mut views = Vec::new();
+    for entry in procs {
+        let proc = match entry {
+            Ok(proc) => proc,
+            Err(procfs::ProcError::NotFound(_)) => continue,
+            Err(e) => {
+                return Err(ProcessError::TerminationFailed(format!(
+                    "failed to inspect procfs during prior-tree check: {e}"
+                )))
+            }
+        };
+        let stat = match proc.stat() {
+            Ok(stat) => stat,
+            Err(procfs::ProcError::NotFound(_)) => continue,
+            Err(e) => {
+                return Err(ProcessError::TerminationFailed(format!(
+                    "failed to stat process during prior-tree check: {e}"
+                )))
+            }
+        };
+        let zombie = matches!(stat.state, 'Z' | 'X');
+        let mut marked = false;
+        if !zombie {
+            if let (Some(token), Ok(env)) = (token, proc.environ()) {
+                marked = env
+                    .get(OsStr::new(LAUNCH_TOKEN_ENV))
+                    .is_some_and(|value| value == OsStr::new(token));
+            }
+            if !marked {
+                if let Ok(cmdline) = proc.cmdline() {
+                    marked = cmdline.contains(&user_data_arg);
+                }
+            }
+        }
+        views.push(ProcView {
+            pid: stat.pid,
+            pgrp: stat.pgrp,
+            start_ticks: stat.starttime,
+            zombie,
+            marked,
+        });
+    }
+    Ok(views)
+}
+
+/// Classifies the processes that remain of a persisted prior tree.
+///
+/// A pid/pgid alone is never an identity. The kernel keeps a pid number reserved while any
+/// process is a member of that group, so: a live leader with a different start time proves the
+/// old group is empty; a leader with the recorded start time proves the group is ours; with no
+/// leader every live member must carry the launch token or the managed `--user-data-dir`.
+/// Anything else is `Ambiguous` and is never signalled.
+#[cfg(target_os = "linux")]
+pub fn inspect_prior_tree(
+    identity: &ContainmentIdentity,
+    user_data_dir: &Path,
+) -> Result<TreeState, ProcessError> {
+    if identity.is_empty() {
+        return Ok(TreeState::Absent);
+    }
+    if let (Some(saved), Some(now)) = (identity.boot_id.as_deref(), current_boot_id()) {
+        if saved != now {
+            // Every process of a previous boot is gone.
+            return Ok(TreeState::Absent);
+        }
+    }
+    if let Some(pgid) = identity.pgid {
+        if pgid <= 1 {
+            return Ok(TreeState::Ambiguous(format!(
+                "invalid non-positive PGID {pgid}"
+            )));
+        }
+    }
+
+    let procs = scan_processes(identity.launch_token.as_deref(), user_data_dir)?;
+    let mut tree = OwnedTree::default();
+    if let Some(pgid) = identity.pgid {
+        let live_group: Vec<&ProcView> = procs
+            .iter()
+            .filter(|p| !p.zombie && p.pgrp == pgid)
+            .collect();
+        if !live_group.is_empty() {
+            let leader = procs.iter().find(|p| p.pid == pgid);
+            match (leader, identity.start_ticks) {
+                (Some(leader), Some(ticks)) if leader.start_ticks == ticks => {
+                    tree.group = Some(pgid);
+                }
+                // The leader number belongs to a different process: the recorded group was
+                // empty (its number would otherwise still be reserved).
+                (Some(_), Some(_)) => {}
+                _ => {
+                    if live_group.iter().all(|p| p.marked) {
+                        tree.group = Some(pgid);
+                    } else {
+                        return Ok(TreeState::Ambiguous(format!(
+                            "process group {pgid} has {} live member(s) whose identity cannot be verified",
+                            live_group.iter().filter(|p| !p.marked).count()
+                        )));
+                    }
+                }
+            }
+            if tree.group.is_some() {
+                tree.members
+                    .extend(live_group.iter().map(|p| (p.pid, p.start_ticks)));
+            }
+        }
+    }
+    for p in procs.iter().filter(|p| !p.zombie && p.marked) {
+        if tree.group.is_some() && Some(p.pgrp) == tree.group {
+            continue;
+        }
+        tree.members.push((p.pid, p.start_ticks));
+    }
+    if tree.members.is_empty() {
+        Ok(TreeState::Absent)
+    } else {
+        Ok(TreeState::Owned(tree))
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+pub fn inspect_prior_tree(
+    identity: &ContainmentIdentity,
+    _user_data_dir: &Path,
+) -> Result<TreeState, ProcessError> {
+    use nix::sys::signal::killpg;
+    use nix::unistd::Pid;
+    match identity.pgid {
+        None => Ok(TreeState::Absent),
+        Some(pgid) if pgid <= 1 => Ok(TreeState::Ambiguous(format!(
+            "invalid non-positive PGID {pgid}"
+        ))),
+        Some(pgid) => match killpg(Pid::from_raw(pgid), None) {
+            Err(nix::errno::Errno::ESRCH) => Ok(TreeState::Absent),
+            Ok(()) | Err(nix::errno::Errno::EPERM) => Ok(TreeState::Ambiguous(format!(
+                "process group {pgid} is alive and ownership cannot be verified on this platform"
+            ))),
+            Err(e) => Err(ProcessError::Signal(e as i32)),
+        },
+    }
+}
+
+#[cfg(not(unix))]
+pub fn inspect_prior_tree(
+    _identity: &ContainmentIdentity,
+    _user_data_dir: &Path,
+) -> Result<TreeState, ProcessError> {
+    Err(ProcessError::ContainmentUnavailable(
+        "prior browser tree inspection is unavailable on this platform".to_string(),
+    ))
+}
+
+/// Pinned handle on one process: signals reach the process object it was opened on, never a
+/// pid number that was later recycled.
+///
+/// Linux uses a pidfd. The identity (start time or verified parent) is checked **after** the
+/// pidfd is held and the handle is only issued while the pinned process has not exited, so the
+/// number read from `/proc` provably named the pinned process. Other unix targets have no
+/// pidfd; their handle is a bare pid used solely for children this process has not yet reaped.
+#[cfg(unix)]
+pub(crate) struct PidHandle {
+    #[cfg(target_os = "linux")]
+    fd: std::os::fd::OwnedFd,
+    #[cfg(not(target_os = "linux"))]
+    pid: i32,
+}
+
+#[cfg(target_os = "linux")]
+impl PidHandle {
+    fn pidfd_open(pid: i32) -> Result<Option<std::os::fd::OwnedFd>, ProcessError> {
+        use std::os::fd::FromRawFd;
+        let raw =
+            unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::c_long, 0 as libc::c_long) };
+        if raw < 0 {
+            return match std::io::Error::last_os_error().raw_os_error() {
+                Some(libc::ESRCH) => Ok(None),
+                Some(code) => Err(ProcessError::Signal(code)),
+                None => Err(ProcessError::Signal(0)),
+            };
+        }
+        Ok(Some(unsafe {
+            std::os::fd::OwnedFd::from_raw_fd(raw as std::os::fd::RawFd)
+        }))
+    }
+
+    /// True once the pinned process has terminated (a pidfd turns readable on exit).
+    fn has_exited(&self) -> bool {
+        use std::os::fd::AsRawFd;
+        let mut pfd = libc::pollfd {
+            fd: self.fd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut pfd, 1, 0) };
+        ready != 0
+    }
+
+    /// Handle on the process observed at `start_ticks`; `None` when it is gone or when the
+    /// number now belongs to a different process.
+    fn open(pid: i32, start_ticks: u64) -> Result<Option<Self>, ProcessError> {
+        let Some(fd) = Self::pidfd_open(pid)? else {
+            return Ok(None);
+        };
+        let handle = Self { fd };
+        // Identity is read with the handle held, then the pinned process must still be live:
+        // a live pinned process keeps its number reserved, so `/proc/<pid>` named it.
+        let verified = process_start_ticks(pid) == Some(start_ticks) && !handle.has_exited();
+        Ok(verified.then_some(handle))
+    }
+
+    /// Handle on a process this supervisor just created: verified by its parent, checked
+    /// with the handle held (a live pinned process cannot change parent number unobserved).
+    fn open_child_of(pid: i32, parent: i32) -> Result<Self, ProcessError> {
+        let fd = Self::pidfd_open(pid)?.ok_or_else(|| {
+            ProcessError::LaunchFailed(format!("process {pid} vanished before it could be pinned"))
+        })?;
+        let handle = Self { fd };
+        let parent_ok = procfs::process::Process::new(pid)
+            .ok()
+            .and_then(|p| p.stat().ok())
+            .is_some_and(|stat| stat.ppid == parent);
+        if !parent_ok || handle.has_exited() {
+            return Err(ProcessError::LaunchFailed(format!(
+                "process {pid} is not the expected child of {parent}"
+            )));
+        }
+        Ok(handle)
+    }
+
+    fn signal(&self, sig: i32) -> Result<(), ProcessError> {
+        use std::os::fd::AsRawFd;
+        let ret = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                self.fd.as_raw_fd() as libc::c_long,
+                sig as libc::c_long,
+                0 as libc::c_long,
+                0 as libc::c_long,
+            )
+        };
+        if ret < 0 {
+            return match std::io::Error::last_os_error().raw_os_error() {
+                Some(libc::ESRCH) => Ok(()),
+                Some(code) => Err(ProcessError::Signal(code)),
+                None => Err(ProcessError::Signal(0)),
+            };
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+impl PidHandle {
+    fn open_child_of(pid: i32, _parent: i32) -> Result<Self, ProcessError> {
+        Ok(Self { pid })
+    }
+
+    fn signal(&self, sig: i32) -> Result<(), ProcessError> {
+        match nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(self.pid),
+            nix::sys::signal::Signal::try_from(sig).ok(),
+        ) {
+            Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+            Err(e) => Err(ProcessError::Signal(e as i32)),
+        }
+    }
+}
+
+/// Signals every verified member through its own pinned handle. A member that exited or whose
+/// number was recycled since inspection is skipped, never signalled.
+#[cfg(target_os = "linux")]
+fn signal_tree(tree: &OwnedTree, sig: nix::sys::signal::Signal) -> Result<(), ProcessError> {
+    for (pid, ticks) in &tree.members {
+        if let Some(handle) = PidHandle::open(*pid, *ticks)? {
+            handle.signal(sig as i32)?;
+        }
+    }
+    Ok(())
+}
+
+/// Verified signalling needs pidfds; other unix targets never obtain an `Owned` tree.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn signal_tree(_tree: &OwnedTree, _sig: nix::sys::signal::Signal) -> Result<(), ProcessError> {
+    Err(ProcessError::ContainmentUnavailable(
+        "verified process signalling requires Linux pidfd".to_string(),
+    ))
+}
+
+/// Blocking inventory moved off the Tokio workers; the identity is cloned into the task.
+#[cfg(unix)]
+async fn inspect_blocking(
+    identity: &ContainmentIdentity,
+    user_data_dir: &Path,
+) -> Result<TreeState, ProcessError> {
+    let identity = identity.clone();
+    let dir = user_data_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || inspect_prior_tree(&identity, &dir))
+        .await
+        .map_err(|e| ProcessError::TerminationFailed(format!("process inventory task: {e}")))?
+}
+
+/// Live (non-zombie) member count of `pgid`, with the `/proc` scan off the Tokio workers.
+#[cfg(unix)]
+async fn live_members_blocking(pgid: i32) -> Result<usize, ProcessError> {
+    tokio::task::spawn_blocking(move || live_members(pgid))
+        .await
+        .map_err(|e| ProcessError::TerminationFailed(format!("process inventory task: {e}")))?
+}
+
+/// Re-inventories and signals the verified tree once. `Absent` is success; a tree whose
+/// ownership cannot be verified is never signalled.
+#[cfg(unix)]
+async fn signal_verified_tree(
+    identity: &ContainmentIdentity,
+    user_data_dir: &Path,
+    sig: nix::sys::signal::Signal,
+) -> Result<(), ProcessError> {
+    match inspect_blocking(identity, user_data_dir).await? {
+        TreeState::Absent => Ok(()),
+        TreeState::Ambiguous(reason) => Err(ProcessError::OwnershipAmbiguous(reason)),
+        TreeState::Owned(tree) => signal_tree(&tree, sig),
+    }
+}
+
+/// Bounds of [`reap_prior_tree`].
+#[derive(Debug, Clone, Copy)]
+pub struct ReapTimings {
+    /// Wait for a prior tree to vanish by itself (its death watcher is mid TERM-to-KILL).
+    pub settle: Duration,
+    /// Wait after SIGTERM before SIGKILL.
+    pub term_grace: Duration,
+    /// Wait after SIGKILL for the absence proof.
+    pub proof: Duration,
+}
+
+#[cfg(unix)]
+async fn poll_until_absent(
+    identity: &ContainmentIdentity,
+    user_data_dir: &Path,
+    window: Duration,
+) -> Result<TreeState, ProcessError> {
+    let deadline = Instant::now() + window;
+    loop {
+        let state = inspect_blocking(identity, user_data_dir).await?;
+        if matches!(state, TreeState::Absent) || Instant::now() >= deadline {
+            return Ok(state);
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Proves the persisted prior browser tree absent, killing it only when ownership is verified.
+///
+/// Returns `Ok` solely on a positive absence proof. A tree that stays alive after `settle` is
+/// terminated (TERM then KILL) iff every live member is verified ours; unverifiable members
+/// yield `OwnershipAmbiguous` and are never signalled. Every signal goes through a pinned
+/// per-process handle; KILL repeats on a fresh inventory until the proof window closes so a
+/// descendant forked after the first inventory is still caught.
+#[cfg(unix)]
+pub async fn reap_prior_tree(
+    identity: &ContainmentIdentity,
+    user_data_dir: &Path,
+    timings: ReapTimings,
+) -> Result<(), ProcessError> {
+    use nix::sys::signal::Signal;
+
+    let tree = match poll_until_absent(identity, user_data_dir, timings.settle).await? {
+        TreeState::Absent => return Ok(()),
+        TreeState::Ambiguous(reason) => return Err(ProcessError::OwnershipAmbiguous(reason)),
+        TreeState::Owned(tree) => tree,
+    };
+    warn!(tree = %tree.describe(), "prior browser tree survived its supervisor; terminating verified owner");
+    signal_tree(&tree, Signal::SIGTERM)?;
+
+    let tree = match poll_until_absent(identity, user_data_dir, timings.term_grace).await? {
+        TreeState::Absent => return Ok(()),
+        TreeState::Ambiguous(reason) => return Err(ProcessError::OwnershipAmbiguous(reason)),
+        TreeState::Owned(tree) => tree,
+    };
+    signal_tree(&tree, Signal::SIGKILL)?;
+
+    let proof_deadline = Instant::now() + timings.proof;
+    loop {
+        match inspect_blocking(identity, user_data_dir).await? {
+            TreeState::Absent => return Ok(()),
+            TreeState::Ambiguous(reason) => return Err(ProcessError::OwnershipAmbiguous(reason)),
+            TreeState::Owned(tree) => {
+                if Instant::now() >= proof_deadline {
+                    return Err(ProcessError::PriorTreeSurvived(tree.describe()));
+                }
+                signal_tree(&tree, Signal::SIGKILL)?;
+            }
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[cfg(not(unix))]
+pub async fn reap_prior_tree(
+    _identity: &ContainmentIdentity,
+    _user_data_dir: &Path,
+    _timings: ReapTimings,
+) -> Result<(), ProcessError> {
+    Err(ProcessError::ContainmentUnavailable(
+        "prior browser tree reconciliation is unavailable on this platform".to_string(),
+    ))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod verified_signal_tests {
+    use super::*;
+    use nix::sys::signal::Signal;
+
+    fn spawn_sleeper(token: Option<&str>) -> std::process::Child {
+        let mut cmd = std::process::Command::new("sleep");
+        cmd.arg("60").stdin(Stdio::null());
+        if let Some(token) = token {
+            cmd.env(LAUNCH_TOKEN_ENV, token);
+        }
+        cmd.spawn().expect("spawn sleeper")
+    }
+
+    fn alive(child: &mut std::process::Child) -> bool {
+        matches!(child.try_wait(), Ok(None))
+    }
+
+    fn destroy(mut child: std::process::Child) {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// Models PID reuse after inspection: the inventory recorded start time T for number P, but
+    /// P now names an unrelated live process with a different start time.
+    #[test]
+    fn recycled_number_after_inspection_is_never_signalled() {
+        let mut bystander = spawn_sleeper(None);
+        let pid = bystander.id() as i32;
+        let real_ticks = process_start_ticks(pid).expect("start ticks");
+
+        assert!(
+            PidHandle::open(pid, real_ticks + 1).unwrap().is_none(),
+            "different start time must not yield a handle"
+        );
+        let tree = OwnedTree {
+            group: Some(pid),
+            members: vec![(pid, real_ticks + 1)],
+        };
+        signal_tree(&tree, Signal::SIGKILL).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(alive(&mut bystander), "unrelated process was signalled");
+        destroy(bystander);
+    }
+
+    /// The inventoried member exits between inspection and signalling while an unrelated
+    /// process runs: the stale entry is skipped and the bystander survives.
+    #[test]
+    fn member_exiting_between_inspection_and_signal_is_skipped() {
+        let token = format!("verified-signal-{}", std::process::id());
+        let mut member = spawn_sleeper(Some(&token));
+        let mut bystander = spawn_sleeper(None);
+        let identity = ContainmentIdentity::launch_intent(token);
+        let dir = tempfile::tempdir().unwrap();
+
+        let tree = match inspect_prior_tree(&identity, dir.path()).unwrap() {
+            TreeState::Owned(tree) => tree,
+            other => panic!("expected an owned tree, got {other:?}"),
+        };
+        assert!(tree.members.iter().any(|(p, _)| *p == member.id() as i32));
+
+        // Barrier point: the member is gone before the signal is sent.
+        member.kill().unwrap();
+        member.wait().unwrap();
+        signal_tree(&tree, Signal::SIGKILL).unwrap();
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(alive(&mut bystander), "unrelated process was signalled");
+        destroy(bystander);
+    }
+
+    /// A pinned handle keeps naming the process it was opened on after that process was
+    /// reaped, so a later signal is a no-op instead of hitting a recycled number.
+    #[test]
+    fn pinned_child_handle_survives_reap_without_signalling_anything_else() {
+        let mut child = spawn_sleeper(None);
+        let handle =
+            PidHandle::open_child_of(child.id() as i32, std::process::id() as i32).unwrap();
+        let mut bystander = spawn_sleeper(None);
+
+        child.kill().unwrap();
+        child.wait().unwrap();
+        handle.signal(Signal::SIGKILL as i32).unwrap();
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(alive(&mut bystander));
+        destroy(bystander);
+    }
+
+    #[test]
+    fn pinning_a_process_with_the_wrong_parent_is_refused() {
+        let child = spawn_sleeper(None);
+        let result = PidHandle::open_child_of(child.id() as i32, std::process::id() as i32 + 1);
+        assert!(result.is_err());
+        destroy(child);
     }
 }

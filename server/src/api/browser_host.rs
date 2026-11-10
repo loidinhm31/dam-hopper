@@ -10,24 +10,18 @@ use serde_json::json;
 use tokio::sync::RwLock;
 
 use crate::api::auth::AuthenticatedActor;
-use crate::browser_host::attachments::{
-    AttachmentError, AttachmentManager, IssueTicketRequest,
-};
+use crate::browser_host::attachments::{AttachmentError, AttachmentManager, IssueTicketRequest};
 use crate::browser_host::auth::{
-    evaluate_browser_admission, BrowserAdmission,
+    evaluate_browser_admission, validate_request_origin, BrowserAdmission,
 };
-use crate::browser_host::input::{
-    InputError, SessionInputManager, MAX_FIND_QUERY_CHARS,
-};
-use crate::browser_debug::BrowserDebugArtifactManager;
+use crate::browser_host::input::{InputError, SessionInputManager, MAX_FIND_QUERY_CHARS};
 use crate::browser_host::manager::{
     AdminRecheckCallback, FenceCallback, ManagerError, ResetFenceHooks, ResetOutcome, ResetStatus,
     DEFAULT_RESET_WAIT_TIMEOUT,
 };
+use crate::browser_host::network_policy::NetworkPolicy;
 use crate::browser_host::selection::{self, InspectPoint, SelectionError};
-use crate::browser_host::session::{
-    CreateSessionRequest, DEFAULT_MAX_TARGETS, SessionError, SessionRegistry,
-};
+use crate::browser_host::session::{CreateSessionRequest, SessionError, SessionRegistry};
 use crate::state::AppState;
 fn deserialize_u64_or_string<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
@@ -84,10 +78,14 @@ fn selection_error_to_response(err: SelectionError) -> Response {
             };
             browser_error_response(status, kind, &e.to_string())
         }
-        SelectionError::Conflict(msg) => browser_error_response(StatusCode::CONFLICT, "conflict", &msg),
-        SelectionError::TerminalNotFound => {
-            browser_error_response(StatusCode::NOT_FOUND, "terminalNotFound", "terminal not found")
+        SelectionError::Conflict(msg) => {
+            browser_error_response(StatusCode::CONFLICT, "conflict", &msg)
         }
+        SelectionError::TerminalNotFound => browser_error_response(
+            StatusCode::NOT_FOUND,
+            "terminalNotFound",
+            "terminal not found",
+        ),
         SelectionError::TerminalIncarnationMismatch => browser_error_response(
             StatusCode::CONFLICT,
             "TERMINAL_INCARNATION_MISMATCH",
@@ -102,8 +100,7 @@ fn selection_error_to_response(err: SelectionError) -> Response {
     }
 }
 pub const X_BROWSER_LEASE: HeaderName = HeaderName::from_static("x-browser-lease");
-pub static GLOBAL_SESSION_REGISTRY: LazyLock<SessionRegistry> =
-    LazyLock::new(|| SessionRegistry::new(DEFAULT_MAX_TARGETS));
+pub static GLOBAL_SESSION_REGISTRY: LazyLock<SessionRegistry> = LazyLock::new(SessionRegistry::new);
 pub static GLOBAL_ATTACHMENT_MANAGER: LazyLock<AttachmentManager> =
     LazyLock::new(AttachmentManager::new);
 pub static GLOBAL_INPUT_MANAGERS: LazyLock<
@@ -118,7 +115,8 @@ pub fn global_attachment_manager() -> &'static AttachmentManager {
     &GLOBAL_ATTACHMENT_MANAGER
 }
 
-pub fn global_input_managers() -> &'static RwLock<std::collections::HashMap<String, Arc<SessionInputManager>>> {
+pub fn global_input_managers(
+) -> &'static RwLock<std::collections::HashMap<String, Arc<SessionInputManager>>> {
     &GLOBAL_INPUT_MANAGERS
 }
 
@@ -131,14 +129,16 @@ pub async fn get_or_create_input_manager(session_id: &str) -> Arc<SessionInputMa
 
 pub(crate) fn no_store_response(status: StatusCode, json_val: serde_json::Value) -> Response {
     let mut resp = (status, Json(json_val)).into_response();
-    resp.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     resp
 }
 
-pub(crate) fn browser_error_response(status: StatusCode, kind: &'static str, message: &str) -> Response {
+pub(crate) fn browser_error_response(
+    status: StatusCode,
+    kind: &'static str,
+    message: &str,
+) -> Response {
     no_store_response(
         status,
         json!({
@@ -151,12 +151,16 @@ pub(crate) fn browser_error_response(status: StatusCode, kind: &'static str, mes
 impl From<SessionError> for Response {
     fn from(err: SessionError) -> Self {
         match err {
-            SessionError::NotFound => {
-                browser_error_response(StatusCode::NOT_FOUND, "sessionNotFound", "browser session not found")
-            }
-            SessionError::Forbidden => {
-                browser_error_response(StatusCode::FORBIDDEN, "forbidden", "access to browser session is forbidden")
-            }
+            SessionError::NotFound => browser_error_response(
+                StatusCode::NOT_FOUND,
+                "sessionNotFound",
+                "browser session not found",
+            ),
+            SessionError::Forbidden => browser_error_response(
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "access to browser session is forbidden",
+            ),
             SessionError::Conflict(msg) => {
                 browser_error_response(StatusCode::CONFLICT, "sessionConflict", &msg)
             }
@@ -169,6 +173,9 @@ impl From<SessionError> for Response {
             SessionError::PolicyViolation(msg) => {
                 browser_error_response(StatusCode::BAD_REQUEST, "policyViolation", &msg)
             }
+            SessionError::NativeUnavailable(msg) => {
+                browser_error_response(StatusCode::BAD_GATEWAY, "nativeTargetUnavailable", &msg)
+            }
             SessionError::Internal(msg) => {
                 browser_error_response(StatusCode::INTERNAL_SERVER_ERROR, "internalError", &msg)
             }
@@ -179,22 +186,30 @@ impl From<SessionError> for Response {
 impl From<AttachmentError> for Response {
     fn from(err: AttachmentError) -> Self {
         match err {
-            AttachmentError::TicketNotFound => {
-                browser_error_response(StatusCode::UNAUTHORIZED, "ticketNotFound", "attachment ticket not found or already consumed")
-            }
-            AttachmentError::TicketExpired => {
-                browser_error_response(StatusCode::UNAUTHORIZED, "ticketExpired", "attachment ticket has expired")
-            }
+            AttachmentError::TicketNotFound => browser_error_response(
+                StatusCode::UNAUTHORIZED,
+                "ticketNotFound",
+                "attachment ticket not found or already consumed",
+            ),
+            AttachmentError::TicketExpired => browser_error_response(
+                StatusCode::UNAUTHORIZED,
+                "ticketExpired",
+                "attachment ticket has expired",
+            ),
             AttachmentError::PurposeMismatch { .. } => {
                 browser_error_response(StatusCode::BAD_REQUEST, "purposeMismatch", &err.to_string())
             }
             AttachmentError::OriginMismatch { .. } => {
                 browser_error_response(StatusCode::FORBIDDEN, "originMismatch", &err.to_string())
             }
-            AttachmentError::CapacityExceeded(msg) => {
-                browser_error_response(StatusCode::TOO_MANY_REQUESTS, "ticketCapacityExceeded", &msg)
+            AttachmentError::CapacityExceeded(msg) => browser_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "ticketCapacityExceeded",
+                &msg,
+            ),
+            _ => {
+                browser_error_response(StatusCode::BAD_REQUEST, "attachmentError", &err.to_string())
             }
-            _ => browser_error_response(StatusCode::BAD_REQUEST, "attachmentError", &err.to_string()),
         }
     }
 }
@@ -202,33 +217,49 @@ impl From<AttachmentError> for Response {
 impl From<InputError> for Response {
     fn from(err: InputError) -> Self {
         match err {
-            InputError::LeaseNotFound => {
-                browser_error_response(StatusCode::FORBIDDEN, "leaseNotFound", "no active control lease")
-            }
-            InputError::LeaseExpired => {
-                browser_error_response(StatusCode::FORBIDDEN, "leaseExpired", "control lease has expired")
-            }
+            InputError::LeaseNotFound => browser_error_response(
+                StatusCode::FORBIDDEN,
+                "leaseNotFound",
+                "no active control lease",
+            ),
+            InputError::LeaseExpired => browser_error_response(
+                StatusCode::FORBIDDEN,
+                "leaseExpired",
+                "control lease has expired",
+            ),
             InputError::LeaseConflict(msg) => {
                 browser_error_response(StatusCode::CONFLICT, "leaseConflict", &msg)
             }
-            InputError::NotLeaseHolder => {
-                browser_error_response(StatusCode::FORBIDDEN, "notLeaseHolder", "caller does not hold control lease")
-            }
+            InputError::NotLeaseHolder => browser_error_response(
+                StatusCode::FORBIDDEN,
+                "notLeaseHolder",
+                "caller does not hold control lease",
+            ),
             InputError::StaleViewportEpoch { .. } => {
                 browser_error_response(StatusCode::CONFLICT, "staleViewportEpoch", &err.to_string())
             }
             InputError::SequenceGap { .. } | InputError::StaleSequence { .. } => {
-                browser_error_response(StatusCode::BAD_REQUEST, "sequenceViolation", &err.to_string())
+                browser_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "sequenceViolation",
+                    &err.to_string(),
+                )
             }
-            InputError::QueueOverflow => {
-                browser_error_response(StatusCode::TOO_MANY_REQUESTS, "queueOverflow", "input queue limit exceeded")
-            }
-            InputError::GeometryUnavailable => {
-                browser_error_response(StatusCode::SERVICE_UNAVAILABLE, "inputUnavailable", "geometry unavailable")
-            }
-            InputError::InvalidFraction { .. } => {
-                browser_error_response(StatusCode::BAD_REQUEST, "invalidCoordinates", &err.to_string())
-            }
+            InputError::QueueOverflow => browser_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "queueOverflow",
+                "input queue limit exceeded",
+            ),
+            InputError::GeometryUnavailable => browser_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "inputUnavailable",
+                "geometry unavailable",
+            ),
+            InputError::InvalidFraction { .. } => browser_error_response(
+                StatusCode::BAD_REQUEST,
+                "invalidCoordinates",
+                &err.to_string(),
+            ),
             InputError::TextTooLong { .. } | InputError::QueryTooLong { .. } => {
                 browser_error_response(StatusCode::BAD_REQUEST, "payloadTooLarge", &err.to_string())
             }
@@ -253,7 +284,9 @@ pub(crate) async fn authenticate_browser_caller(
                 .and_then(|c_str| {
                     for part in c_str.split(';') {
                         let trimmed = part.trim();
-                        if let Some(val) = trimmed.strip_prefix(&format!("{}=", crate::api::auth::AUTH_COOKIE)) {
+                        if let Some(val) =
+                            trimmed.strip_prefix(&format!("{}=", crate::api::auth::AUTH_COOKIE))
+                        {
                             return Some(val.to_string());
                         }
                     }
@@ -261,12 +294,15 @@ pub(crate) async fn authenticate_browser_caller(
                 })
         };
         if let Some(token) = token_opt {
-            if let Some(claims) = crate::auth::model::AuthClaims::decode(&token, &state.jwt_secret) {
+            if let Some(claims) = crate::auth::model::AuthClaims::decode(&token, &state.jwt_secret)
+            {
                 match state.auth_service.evaluate_claims(&claims).await {
                     crate::auth::model::AuthDecision::Authenticated { session, user } => {
                         let expires_at = crate::auth::model::bson_to_chrono(session.expires_at);
-                        let mfa_verified_at = crate::auth::model::bson_to_chrono(session.mfa_verified_at);
-                        let effective_deadline = crate::auth::compute_mfa_due_at(mfa_verified_at, expires_at);
+                        let mfa_verified_at =
+                            crate::auth::model::bson_to_chrono(session.mfa_verified_at);
+                        let effective_deadline =
+                            crate::auth::compute_mfa_due_at(mfa_verified_at, expires_at);
                         resolved_actor = Some(AuthenticatedActor::with_session(
                             user.username.clone(),
                             Some(expires_at.timestamp() as usize),
@@ -322,6 +358,14 @@ pub(crate) async fn authenticate_browser_caller(
     })
 }
 
+/// Applies the full configured Browser request policy (target/asset origins and denied
+/// destinations, not CORS origins) before a navigation reaches the session registry.
+fn prevalidate_navigation(state: &AppState, is_dev: bool, url: &str) -> Result<(), SessionError> {
+    let policy = NetworkPolicy::from_config(state.browser_host.config(), is_dev)?;
+    policy.validate_navigation(url)?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Route Handlers
 // ---------------------------------------------------------------------------
@@ -350,7 +394,10 @@ pub async fn get_capabilities(
         .capabilities(&admission.principal, admission.is_dev)
         .await;
 
-    no_store_response(StatusCode::OK, serde_json::to_value(&caps).unwrap_or_default())
+    no_store_response(
+        StatusCode::OK,
+        serde_json::to_value(&caps).unwrap_or_default(),
+    )
 }
 
 /// GET /api/browser/sessions
@@ -376,7 +423,10 @@ pub async fn list_sessions(
         .list_sessions(&admission.principal)
         .await;
 
-    no_store_response(StatusCode::OK, serde_json::to_value(&sessions).unwrap_or_default())
+    no_store_response(
+        StatusCode::OK,
+        serde_json::to_value(&sessions).unwrap_or_default(),
+    )
 }
 
 /// POST /api/browser/sessions
@@ -399,13 +449,17 @@ pub async fn create_session(
         Err(resp) => return resp,
     };
 
+    if let Err(err) = prevalidate_navigation(&state, admission.is_dev, &body.url) {
+        return err.into();
+    }
+
     // Ensure the principal's browser instance is started or adopt running
-    let (incarnation, profile_epoch) = match state
+    let handle = match state
         .browser_host
         .ensure_running(&admission.principal, admission.is_dev)
         .await
     {
-        Ok(handle) => (handle.browser_incarnation, handle.profile_epoch),
+        Ok(handle) => handle,
         Err(err) => {
             return browser_error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -415,26 +469,11 @@ pub async fn create_session(
         }
     };
 
-    match global_session_registry()
-        .create_or_idempotent_get(
-            &admission.principal,
-            admission.is_dev,
-            &incarnation,
-            profile_epoch,
-            &body,
-            &state.cors_origins,
-        )
+    match crate::browser_host::media::create_native_session(&state, &admission, &handle, &body)
         .await
     {
-        Ok((dto, is_new)) => {
-            let status = if is_new {
-                let _ = crate::browser_host::media::ensure_producer_for_session(
-                    &state,
-                    &dto.browser_session_id,
-                    &admission.principal,
-                    admission.is_dev,
-                )
-                .await;
+        Ok((dto, created)) => {
+            let status = if created {
                 StatusCode::CREATED
             } else {
                 StatusCode::OK
@@ -508,19 +547,21 @@ pub async fn delete_session(
         Err(resp) => return resp,
     };
 
-    match global_session_registry()
-        .delete_session(&id, &admission.principal)
-        .await
+    match crate::browser_host::media::close_native_session(&state, &id, &admission.principal).await
     {
-        Ok(()) => {
-            selection::cleanup_session(&state, &id).await;
-            crate::browser_host::media::remove_producer(&id).await;
-            global_attachment_manager().revoke_by_browser_session(&id).await;
-            if let Some(mgr) = global_input_managers().write().await.remove(&id) {
-                mgr.revoke_lease().await;
-            }
-            no_store_response(StatusCode::OK, json!({ "status": "closed", "browserSessionId": id }))
-        }
+        Ok(()) => no_store_response(
+            StatusCode::OK,
+            json!({ "status": "closed", "browserSessionId": id }),
+        ),
+        Err(SessionError::NativeUnavailable(msg)) => no_store_response(
+            StatusCode::BAD_GATEWAY,
+            json!({
+                "error": msg,
+                "kind": "nativeCloseUnconfirmed",
+                "status": "closing",
+                "browserSessionId": id,
+            }),
+        ),
         Err(err) => err.into(),
     }
 }
@@ -554,22 +595,31 @@ pub async fn navigate_session(
         Err(resp) => return resp,
     };
 
-    match global_session_registry()
-        .navigate(
+    if let Err(err) = prevalidate_navigation(&state, admission.is_dev, &body.url) {
+        return err.into();
+    }
+
+    match selection::fence_registry_navigation(
+        &state,
+        &id,
+        global_session_registry().navigate(
             &id,
             &admission.principal,
             &body.url,
             body.navigation_revision,
-            &state.cors_origins,
-        )
-        .await
+            &state.browser_host.config().allowed_target_origins,
+        ),
+        |dto| dto.navigation_revision.parse::<u64>().ok(),
+    )
+    .await
     {
         Ok(dto) => {
             let input_mgr = get_or_create_input_manager(&id).await;
             input_mgr.set_selected_text("").await;
-            let new_nav_rev = dto.navigation_revision.parse::<u64>().unwrap_or(0);
             if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
-                global_session_registry().mark_api_navigation_pending(&id).await;
+                global_session_registry()
+                    .mark_api_navigation_pending(&id)
+                    .await;
                 if let Ok(page_sid) = prod.ensure_page_session().await {
                     let _ = prod
                         .cdp_client
@@ -581,8 +631,10 @@ pub async fn navigate_session(
                         .await;
                 }
             }
-            selection::invalidate_on_navigation(&state, &id, Some(new_nav_rev)).await;
-            no_store_response(StatusCode::OK, serde_json::to_value(&dto).unwrap_or_default())
+            no_store_response(
+                StatusCode::OK,
+                serde_json::to_value(&dto).unwrap_or_default(),
+            )
         }
         Err(err) => err.into(),
     }
@@ -617,19 +669,24 @@ pub async fn history_session(
         Err(resp) => return resp,
     };
 
-    match global_session_registry()
-        .history(
+    match selection::fence_registry_navigation(
+        &state,
+        &id,
+        global_session_registry().history(
             &id,
             &admission.principal,
             &body.direction,
             body.navigation_revision,
-        )
-        .await
+        ),
+        |dto| dto.navigation_revision.parse::<u64>().ok(),
+    )
+    .await
     {
         Ok(dto) => {
-            let new_nav_rev = dto.navigation_revision.parse::<u64>().unwrap_or(0);
             if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
-                global_session_registry().mark_api_navigation_pending(&id).await;
+                global_session_registry()
+                    .mark_api_navigation_pending(&id)
+                    .await;
                 if let Ok(page_sid) = prod.ensure_page_session().await {
                     if let Ok(hist) = prod
                         .cdp_client
@@ -640,9 +697,16 @@ pub async fn history_session(
                             hist.get("currentIndex").and_then(|v| v.as_i64()),
                             hist.get("entries").and_then(|v| v.as_array()),
                         ) {
-                            let target_idx = if body.direction == "back" { idx - 1 } else { idx + 1 };
+                            let target_idx = if body.direction == "back" {
+                                idx - 1
+                            } else {
+                                idx + 1
+                            };
                             if target_idx >= 0 && (target_idx as usize) < entries.len() {
-                                if let Some(entry_id) = entries[target_idx as usize].get("id").and_then(|v| v.as_i64()) {
+                                if let Some(entry_id) = entries[target_idx as usize]
+                                    .get("id")
+                                    .and_then(|v| v.as_i64())
+                                {
                                     let _ = prod
                                         .cdp_client
                                         .send_command(
@@ -657,8 +721,10 @@ pub async fn history_session(
                     }
                 }
             }
-            selection::invalidate_on_navigation(&state, &id, Some(new_nav_rev)).await;
-            no_store_response(StatusCode::OK, serde_json::to_value(&dto).unwrap_or_default())
+            no_store_response(
+                StatusCode::OK,
+                serde_json::to_value(&dto).unwrap_or_default(),
+            )
         }
         Err(err) => err.into(),
     }
@@ -692,14 +758,19 @@ pub async fn reload_session(
         Err(resp) => return resp,
     };
 
-    match global_session_registry()
-        .reload(&id, &admission.principal, body.navigation_revision)
-        .await
+    match selection::fence_registry_navigation(
+        &state,
+        &id,
+        global_session_registry().reload(&id, &admission.principal, body.navigation_revision),
+        |dto| dto.navigation_revision.parse::<u64>().ok(),
+    )
+    .await
     {
         Ok(dto) => {
-            let new_nav_rev = dto.navigation_revision.parse::<u64>().unwrap_or(0);
             if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
-                global_session_registry().mark_api_navigation_pending(&id).await;
+                global_session_registry()
+                    .mark_api_navigation_pending(&id)
+                    .await;
                 if let Ok(page_sid) = prod.ensure_page_session().await {
                     let _ = prod
                         .cdp_client
@@ -707,8 +778,10 @@ pub async fn reload_session(
                         .await;
                 }
             }
-            selection::invalidate_on_navigation(&state, &id, Some(new_nav_rev)).await;
-            no_store_response(StatusCode::OK, serde_json::to_value(&dto).unwrap_or_default())
+            no_store_response(
+                StatusCode::OK,
+                serde_json::to_value(&dto).unwrap_or_default(),
+            )
         }
         Err(err) => err.into(),
     }
@@ -746,7 +819,10 @@ pub async fn update_viewport(
     };
     // Validate caller holds active lease
     let input_mgr = get_or_create_input_manager(&id).await;
-    if let Err(err) = input_mgr.renew_lease(&body.lease_token, admission.effective_deadline).await {
+    if let Err(err) = input_mgr
+        .renew_lease(&body.lease_token, admission.effective_deadline)
+        .await
+    {
         return err.into();
     }
 
@@ -776,8 +852,13 @@ pub async fn update_viewport(
                 };
                 let _ = prod.update_geometry(new_geom).await;
             }
-            input_mgr.set_expected_viewport_epoch(body.viewport_epoch + 1).await;
-            no_store_response(StatusCode::OK, serde_json::to_value(&dto).unwrap_or_default())
+            input_mgr
+                .set_expected_viewport_epoch(body.viewport_epoch + 1)
+                .await;
+            no_store_response(
+                StatusCode::OK,
+                serde_json::to_value(&dto).unwrap_or_default(),
+            )
         }
         Err(err) => err.into(),
     }
@@ -812,12 +893,18 @@ pub async fn acquire_control(
     };
 
     // Verify session belongs to principal
-    if let Err(err) = global_session_registry().get_session(&id, &admission.principal).await {
+    if let Err(err) = global_session_registry()
+        .get_session(&id, &admission.principal)
+        .await
+    {
         return err.into();
     }
 
     let input_mgr = get_or_create_input_manager(&id).await;
-    match input_mgr.acquire_lease(&body.viewer_id, &body.holder_kind).await {
+    match input_mgr
+        .acquire_lease(&body.viewer_id, &body.holder_kind)
+        .await
+    {
         Ok((lease_token, expires_at_unix_ms)) => no_store_response(
             StatusCode::OK,
             json!({
@@ -856,12 +943,18 @@ pub async fn renew_control(
         Err(resp) => return resp,
     };
 
-    if let Err(err) = global_session_registry().get_session(&id, &admission.principal).await {
+    if let Err(err) = global_session_registry()
+        .get_session(&id, &admission.principal)
+        .await
+    {
         return err.into();
     }
 
     let input_mgr = get_or_create_input_manager(&id).await;
-    match input_mgr.renew_lease(&body.lease_token, admission.effective_deadline).await {
+    match input_mgr
+        .renew_lease(&body.lease_token, admission.effective_deadline)
+        .await
+    {
         Ok(expires_at_unix_ms) => no_store_response(
             StatusCode::OK,
             json!({
@@ -900,7 +993,10 @@ pub async fn release_control(
         Err(resp) => return resp,
     };
 
-    if let Err(err) = global_session_registry().get_session(&id, &admission.principal).await {
+    if let Err(err) = global_session_registry()
+        .get_session(&id, &admission.principal)
+        .await
+    {
         return err.into();
     }
 
@@ -941,17 +1037,26 @@ pub async fn handle_dialog(
         Err(resp) => return resp,
     };
 
-    if let Err(err) = global_session_registry().get_session(&id, &admission.principal).await {
+    if let Err(err) = global_session_registry()
+        .get_session(&id, &admission.principal)
+        .await
+    {
         return err.into();
     }
 
     // Validate lease holder
     let input_mgr = get_or_create_input_manager(&id).await;
-    if let Err(err) = input_mgr.renew_lease(&body.lease_token, admission.effective_deadline).await {
+    if let Err(err) = input_mgr
+        .renew_lease(&body.lease_token, admission.effective_deadline)
+        .await
+    {
         return err.into();
     }
 
-    no_store_response(StatusCode::OK, json!({ "dialogId": body.dialog_id, "status": "handled" }))
+    no_store_response(
+        StatusCode::OK,
+        json!({ "dialogId": body.dialog_id, "status": "handled" }),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -1059,7 +1164,9 @@ pub async fn cancel_selection(
         return err.into();
     }
 
-    match selection::cancel_selection(&state, &id, &admission.principal, body.navigation_revision).await {
+    match selection::cancel_selection(&state, &id, &admission.principal, body.navigation_revision)
+        .await
+    {
         Ok(summary) => no_store_response(
             StatusCode::OK,
             json!({
@@ -1173,7 +1280,10 @@ pub async fn find_in_page(
         Err(resp) => return resp,
     };
 
-    if let Err(err) = global_session_registry().get_session(&id, &admission.principal).await {
+    if let Err(err) = global_session_registry()
+        .get_session(&id, &admission.principal)
+        .await
+    {
         return err.into();
     }
 
@@ -1186,7 +1296,10 @@ pub async fn find_in_page(
     }
 
     let input_mgr = get_or_create_input_manager(&id).await;
-    if let Err(err) = input_mgr.renew_lease(&body.lease_token, admission.effective_deadline).await {
+    if let Err(err) = input_mgr
+        .renew_lease(&body.lease_token, admission.effective_deadline)
+        .await
+    {
         return err.into();
     }
 
@@ -1221,7 +1334,10 @@ pub async fn get_selected_text(
         Err(resp) => return resp,
     };
 
-    if let Err(err) = global_session_registry().get_session(&id, &admission.principal).await {
+    if let Err(err) = global_session_registry()
+        .get_session(&id, &admission.principal)
+        .await
+    {
         return err.into();
     }
 
@@ -1260,7 +1376,11 @@ pub async fn issue_attachment_ticket(
         Err(resp) => return resp,
     };
     if let Some(sid) = &body.browser_session_id {
-        if global_session_registry().get_session(sid, &admission.principal).await.is_err() {
+        if global_session_registry()
+            .get_session(sid, &admission.principal)
+            .await
+            .is_err()
+        {
             return browser_error_response(
                 StatusCode::NOT_FOUND,
                 "sessionNotFound",
@@ -1268,13 +1388,25 @@ pub async fn issue_attachment_ticket(
             );
         }
     }
-    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+    let origin = match validate_request_origin(&state, &headers) {
+        Ok(origin) => origin,
+        Err(err) => {
+            return browser_error_response(
+                StatusCode::FORBIDDEN,
+                "forbiddenOrigin",
+                &err.to_string(),
+            )
+        }
+    };
 
     match global_attachment_manager()
-        .issue_ticket(&admission, &body, origin)
+        .issue_ticket(&admission, &body, origin.as_deref())
         .await
     {
-        Ok(resp) => no_store_response(StatusCode::OK, serde_json::to_value(&resp).unwrap_or_default()),
+        Ok(resp) => no_store_response(
+            StatusCode::OK,
+            serde_json::to_value(&resp).unwrap_or_default(),
+        ),
         Err(err) => err.into(),
     }
 }
@@ -1294,18 +1426,8 @@ pub(crate) fn validate_destructive_browser_csrf(
     has_bearer_auth: bool,
 ) -> bool {
     if headers.contains_key(header::ORIGIN) {
-        if state.origin_is_allowed(headers) {
-            return true;
-        }
-        if state.no_auth && state.cors_origins.is_empty() {
-            if headers.get_all(header::ORIGIN).iter().count() == 1 {
-                if let Some(origin_val) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
-                    return origin_val == "http://127.0.0.1:5173"
-                        || origin_val == "http://localhost:5173";
-                }
-            }
-        }
-        return false;
+        // Exact approved-origin policy shared with admission; never Host-derived same-origin.
+        return validate_request_origin(state, headers).is_ok();
     }
 
     if state.no_auth {
@@ -1315,7 +1437,15 @@ pub(crate) fn validate_destructive_browser_csrf(
     }
 }
 
-pub(crate) async fn revoke_auth_session_browser_resources(principal: &str, auth_session_id: &str) {
+/// Revokes the Browser resources tied to one login (`auth_session_id`). The revocation is first
+/// published synchronously to the artifact store, so a managed handoff already waiting for the
+/// PTY mutation lock is denied there without any further I/O.
+pub(crate) async fn revoke_auth_session_browser_resources(
+    state: &AppState,
+    principal: &str,
+    auth_session_id: &str,
+) {
+    state.browser_debug_artifacts.publish_revocation(principal);
     let cancelled = global_attachment_manager()
         .revoke_by_auth_session(principal, auth_session_id)
         .await;
@@ -1348,36 +1478,57 @@ pub(crate) async fn revoke_auth_session_browser_resources(principal: &str, auth_
     }
 }
 
-/// Pure in-memory fence with zero disk or network I/O; returns `(session_ids, removed_artifact_paths)`.
+/// Pure in-memory fence with zero disk or network I/O; returns the closed browser session ids.
+/// Fenced managed artifacts stay charged in the store's retryable pending-cleanup set until
+/// their private files are really gone ([`purge_principal_artifacts`]).
 pub(crate) async fn fence_principal_browser_resources_sync(
     state: &AppState,
     principal: &str,
-) -> (Vec<String>, Vec<(uuid::Uuid, Vec<std::path::PathBuf>)>) {
+) -> Vec<String> {
     global_attachment_manager()
         .revoke_all_for_principal(principal)
         .await;
-    let principal_sessions = global_session_registry().list_sessions(principal).await;
-    global_session_registry()
+    let closed_session_ids = global_session_registry()
         .close_principal_sessions(principal)
         .await;
     {
         let mut input_map = global_input_managers().write().await;
-        for s in &principal_sessions {
-            if let Some(mgr) = input_map.remove(&s.browser_session_id) {
+        for session_id in &closed_session_ids {
+            if let Some(mgr) = input_map.remove(session_id) {
                 let _ = mgr.revoke_lease().await;
             }
         }
     }
     let pending_sel_ids = selection::fence_principal_sessions_in_memory(principal).await;
-    let removed_artifacts = state
+    state
         .browser_debug_artifacts
         .fence_managed_by_principal_and_ids(principal, None, &pending_sel_ids)
         .await;
-    let session_ids = principal_sessions
-        .into_iter()
-        .map(|s| s.browser_session_id)
-        .collect();
-    (session_ids, removed_artifacts)
+    closed_session_ids
+}
+
+/// One purge attempt of every retained private artifact file of `principal`. Fails while any
+/// file remains (the quota stays charged and a later attempt retries).
+pub(crate) async fn purge_principal_artifacts(
+    state: &AppState,
+    principal: &str,
+) -> Result<(), crate::browser_debug::BrowserDebugError> {
+    state
+        .browser_debug_artifacts
+        .retry_pending_cleanups(Some(principal))
+        .await
+}
+
+/// Retries the artifact purge with bounded backoff until no private file remains. Reset
+/// completion is claimed only after this returns, so a denied unlink keeps the reset
+/// cleanup-pending instead of reporting completion with files left behind.
+pub(crate) async fn purge_principal_artifacts_until_clean(state: &AppState, principal: &str) {
+    let mut delay = std::time::Duration::from_millis(50);
+    while let Err(error) = purge_principal_artifacts(state, principal).await {
+        tracing::warn!(principal, error = %error, "browser artifact purge incomplete; retrying");
+        tokio::time::sleep(delay).await;
+        delay = (delay * 2).min(std::time::Duration::from_secs(2));
+    }
 }
 
 pub(crate) async fn teardown_principal_network_resources(session_ids: Vec<String>) {
@@ -1386,11 +1537,34 @@ pub(crate) async fn teardown_principal_network_resources(session_ids: Vec<String
     }
 }
 
-pub(crate) async fn revoke_principal_browser_resources(state: &AppState, principal: &str) {
-    let (session_ids, removed_artifacts) =
-        fence_principal_browser_resources_sync(state, principal).await;
-    BrowserDebugArtifactManager::delete_fenced_artifacts(removed_artifacts, principal).await;
+/// Retires every non-native resource of a session that left the live set (native loss, crash,
+/// failed adoption): viewer tickets/sockets, input lease and the producer.
+pub(crate) async fn retire_session_native_resources(session_id: &str) {
+    release_session_viewers(session_id).await;
+    remove_producer(session_id).await;
+}
+
+/// Revokes the viewer tickets, attachments and control lease of a session, keeping its producer.
+pub(crate) async fn release_session_viewers(session_id: &str) {
+    global_attachment_manager()
+        .revoke_by_browser_session(session_id)
+        .await;
+    if let Some(mgr) = global_input_managers().write().await.remove(session_id) {
+        let _ = mgr.revoke_lease().await;
+    }
+}
+
+/// Revokes every Browser resource of `principal`. Fails (after finishing the network teardown)
+/// while any private artifact file could not be removed, so callers never report a completed
+/// purge with files left behind.
+pub(crate) async fn revoke_principal_browser_resources(
+    state: &AppState,
+    principal: &str,
+) -> Result<(), crate::browser_debug::BrowserDebugError> {
+    let session_ids = fence_principal_browser_resources_sync(state, principal).await;
+    let purged = purge_principal_artifacts(state, principal).await;
     teardown_principal_network_resources(session_ids).await;
+    purged
 }
 
 pub(crate) fn make_reset_fence_hooks(
@@ -1398,9 +1572,8 @@ pub(crate) fn make_reset_fence_hooks(
     principal: String,
     recheck_admin: Option<AdminRecheckCallback>,
 ) -> ResetFenceHooks {
-    type PendingCleanup = (Vec<String>, Vec<(uuid::Uuid, Vec<std::path::PathBuf>)>);
-    let pending: Arc<tokio::sync::Mutex<PendingCleanup>> =
-        Arc::new(tokio::sync::Mutex::new((Vec::new(), Vec::new())));
+    let pending: Arc<tokio::sync::Mutex<Vec<String>>> =
+        Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
     let sync_state = state.clone();
     let sync_principal = principal.clone();
@@ -1410,26 +1583,31 @@ pub(crate) fn make_reset_fence_hooks(
         let principal = sync_principal.clone();
         let slot = sync_slot.clone();
         Box::pin(async move {
-            let (sids, artifacts) =
-                fence_principal_browser_resources_sync(&state, &principal).await;
-            *slot.lock().await = (sids, artifacts);
+            let sids = fence_principal_browser_resources_sync(&state, &principal).await;
+            *slot.lock().await = sids;
         })
     });
 
     let async_slot = pending;
     let async_principal = principal;
+    let async_state = state;
     let async_teardown: FenceCallback = Arc::new(move || {
         let slot = async_slot.clone();
         let principal = async_principal.clone();
+        let state = async_state.clone();
         Box::pin(async move {
-            let (sids, artifacts) = std::mem::take(&mut *slot.lock().await);
-            // Delete fenced managed artifacts BEFORE bounded network teardown and BEFORE profile user-data deletion
-            BrowserDebugArtifactManager::delete_fenced_artifacts(artifacts, &principal).await;
+            let sids = std::mem::take(&mut *slot.lock().await);
+            // Purge fenced managed artifacts BEFORE bounded network teardown and BEFORE profile
+            // user-data deletion; a denied unlink keeps the reset pending until it succeeds.
+            let purged = purge_principal_artifacts(&state, &principal).await;
             let _ = tokio::time::timeout(
                 DEFAULT_RESET_WAIT_TIMEOUT,
                 teardown_principal_network_resources(sids),
             )
             .await;
+            if purged.is_err() {
+                purge_principal_artifacts_until_clean(&state, &principal).await;
+            }
         })
     });
 

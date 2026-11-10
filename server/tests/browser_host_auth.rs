@@ -13,11 +13,14 @@ use tower::ServiceExt;
 
 use dam_hopper_server::agent_store::AgentStoreService;
 use dam_hopper_server::api::build_router_with_origins;
-use dam_hopper_server::auth::model::{chrono_to_bson, AuthClaims, AuthSession, UserRecord, UserRole};
+use dam_hopper_server::auth::model::{
+    chrono_to_bson, AuthClaims, AuthSession, UserRecord, UserRole,
+};
 use dam_hopper_server::auth::policy::AUTH_PROTOCOL_VERSION;
 use dam_hopper_server::auth::AuthService;
 use dam_hopper_server::browser_host::attachments::{
     AttachmentError, AttachmentManager, AttachmentPurpose, IssueTicketRequest,
+    MAX_UNCONSUMED_TICKETS_GLOBAL, MAX_UNCONSUMED_TICKETS_PER_PRINCIPAL,
 };
 use dam_hopper_server::browser_host::auth::{
     verify_live_admission, BrowserAdmission, BrowserAuthError,
@@ -63,7 +66,8 @@ fn create_test_state(workspace_root: PathBuf, no_auth: bool) -> AppState {
     let store_path = workspace_root.join(".dam-hopper/agent-store");
     let agent_store = AgentStoreService::new(store_path);
     let fs = FsSubsystem::new(vec![]);
-    let tunnel_manager = TunnelSessionManager::new(Arc::new(event_sink.clone()), Arc::new(CloudflaredDriver));
+    let tunnel_manager =
+        TunnelSessionManager::new(Arc::new(event_sink.clone()), Arc::new(CloudflaredDriver));
     let diagnostics = DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));
 
     let state = AppState::new(
@@ -148,7 +152,7 @@ async fn test_rest_issue_ticket_and_consume() {
     let app = build_router_with_origins(state, vec![]);
 
     let (sess_dto, _) = dam_hopper_server::api::browser_host::global_session_registry()
-        .create_or_idempotent_get(
+        .insert_running_for_test(
             "admin-ticket-tester",
             false,
             "inc-1",
@@ -187,7 +191,9 @@ async fn test_rest_issue_ticket_and_consume() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = serde_json::from_slice(
-        &axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap(),
+        &axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
     )
     .unwrap();
 
@@ -204,7 +210,10 @@ async fn test_rest_issue_ticket_and_consume() {
         .expect("consume should succeed");
 
     assert_eq!(consumed.principal, "admin-ticket-tester");
-    assert_eq!(consumed.browser_session_id.as_deref(), Some(sess_dto.browser_session_id.as_str()));
+    assert_eq!(
+        consumed.browser_session_id.as_deref(),
+        Some(sess_dto.browser_session_id.as_str())
+    );
     assert_eq!(consumed.viewer_id.as_deref(), Some("viewer-uuid-1"));
     assert_eq!(consumed.subscription_epoch.as_deref(), Some("sub-epoch-1"));
 
@@ -243,10 +252,17 @@ async fn test_purpose_and_origin_swap_rejected() {
 
     // Wrong purpose
     let purpose_err = mgr
-        .consume_ticket(&issued.ticket, AttachmentPurpose::Control, Some("http://localhost:5173"))
+        .consume_ticket(
+            &issued.ticket,
+            AttachmentPurpose::Control,
+            Some("http://localhost:5173"),
+        )
         .await
         .unwrap_err();
-    assert!(matches!(purpose_err, AttachmentError::PurposeMismatch { .. }));
+    assert!(matches!(
+        purpose_err,
+        AttachmentError::PurposeMismatch { .. }
+    ));
 
     // Re-issue for origin test
     let issued2 = mgr
@@ -256,7 +272,11 @@ async fn test_purpose_and_origin_swap_rejected() {
 
     // Wrong origin
     let origin_err = mgr
-        .consume_ticket(&issued2.ticket, AttachmentPurpose::Media, Some("http://evil.com"))
+        .consume_ticket(
+            &issued2.ticket,
+            AttachmentPurpose::Media,
+            Some("http://evil.com"),
+        )
         .await
         .unwrap_err();
     assert!(matches!(origin_err, AttachmentError::OriginMismatch { .. }));
@@ -326,8 +346,14 @@ async fn test_paired_media_control_connection_and_cancellation() {
     let t_m = mgr.issue_ticket(&adm, &req_media, None).await.unwrap();
     let t_c = mgr.issue_ticket(&adm, &req_control, None).await.unwrap();
 
-    let adm_m = mgr.consume_ticket(&t_m.ticket, AttachmentPurpose::Media, None).await.unwrap();
-    let adm_c = mgr.consume_ticket(&t_c.ticket, AttachmentPurpose::Control, None).await.unwrap();
+    let adm_m = mgr
+        .consume_ticket(&t_m.ticket, AttachmentPurpose::Media, None)
+        .await
+        .unwrap();
+    let adm_c = mgr
+        .consume_ticket(&t_c.ticket, AttachmentPurpose::Control, None)
+        .await
+        .unwrap();
 
     let (conn_m, cancel_m) = mgr.register_connection(&adm_m).await.unwrap();
     let (_conn_c, cancel_c) = mgr.register_connection(&adm_c).await.unwrap();
@@ -381,8 +407,14 @@ async fn test_targeted_revocation_preserves_sibling_login() {
     let t1 = mgr.issue_ticket(&adm_session1, &req1, None).await.unwrap();
     let t2 = mgr.issue_ticket(&adm_session2, &req2, None).await.unwrap();
 
-    let c1 = mgr.consume_ticket(&t1.ticket, AttachmentPurpose::AgentCdp, None).await.unwrap();
-    let c2 = mgr.consume_ticket(&t2.ticket, AttachmentPurpose::AgentCdp, None).await.unwrap();
+    let c1 = mgr
+        .consume_ticket(&t1.ticket, AttachmentPurpose::AgentCdp, None)
+        .await
+        .unwrap();
+    let c2 = mgr
+        .consume_ticket(&t2.ticket, AttachmentPurpose::AgentCdp, None)
+        .await
+        .unwrap();
 
     let (_id1, cancel1) = mgr.register_connection(&c1).await.unwrap();
     let (_id2, cancel2) = mgr.register_connection(&c2).await.unwrap();
@@ -424,5 +456,244 @@ async fn test_live_auth_verification_demotion() {
     assert_eq!(
         res.unwrap_err(),
         BrowserAuthError::AdminRequired("user was demoted from Admin role".to_string())
+    );
+}
+
+fn agent_request() -> IssueTicketRequest {
+    IssueTicketRequest {
+        purpose: AttachmentPurpose::AgentCdp,
+        browser_session_id: None,
+        viewer_id: None,
+        subscription_epoch: None,
+        browser_incarnation: "inc1".to_string(),
+        profile_epoch: 1,
+    }
+}
+
+fn admission_for(principal: &str, session: &str) -> BrowserAdmission {
+    BrowserAdmission {
+        principal: principal.to_string(),
+        is_dev: false,
+        session_id: Some(session.to_string()),
+        auth_version: Some(1),
+        credential_version: Some(1),
+        effective_deadline: None,
+    }
+}
+
+/// Issues, consumes and registers one supervised agent connection.
+async fn register_agent_connection(
+    mgr: &AttachmentManager,
+    principal: &str,
+    session: &str,
+) -> tokio_util::sync::CancellationToken {
+    let issued = mgr
+        .issue_ticket(&admission_for(principal, session), &agent_request(), None)
+        .await
+        .unwrap();
+    let admitted = mgr
+        .consume_ticket(&issued.ticket, AttachmentPurpose::AgentCdp, None)
+        .await
+        .unwrap();
+    let (_conn, token) = mgr.register_connection(&admitted).await.unwrap();
+    token
+}
+
+/// LA:L12 — concurrent issuers never exceed the per-principal or global cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_concurrent_ticket_issue_never_exceeds_caps() {
+    let mgr = Arc::new(AttachmentManager::new());
+    let mut tasks = Vec::new();
+    // 6 principals x 20 attempts = 120 concurrent attempts; per-principal cap 16 and global
+    // cap 64 mean exactly 64 may succeed (6 x 16 = 96 > 64) and no principal exceeds 16.
+    for p in 0..6 {
+        for _ in 0..20 {
+            let mgr = mgr.clone();
+            tasks.push(tokio::spawn(async move {
+                let principal = format!("cap-principal-{p}");
+                mgr.issue_ticket(&admission_for(&principal, "sid"), &agent_request(), None)
+                    .await
+                    .map(|_| principal)
+            }));
+        }
+    }
+    let mut per_principal = std::collections::HashMap::<String, usize>::new();
+    let mut rejected = 0;
+    for task in tasks {
+        match task.await.unwrap() {
+            Ok(principal) => *per_principal.entry(principal).or_default() += 1,
+            Err(err) => {
+                assert!(matches!(err, AttachmentError::CapacityExceeded(_)));
+                rejected += 1;
+            }
+        }
+    }
+    let total: usize = per_principal.values().sum();
+    assert_eq!(total, MAX_UNCONSUMED_TICKETS_GLOBAL, "global cap is exact");
+    assert_eq!(rejected, 120 - MAX_UNCONSUMED_TICKETS_GLOBAL);
+    assert!(per_principal
+        .values()
+        .all(|n| *n <= MAX_UNCONSUMED_TICKETS_PER_PRINCIPAL));
+}
+
+/// LA:L12 — expired tickets never count toward saturation: after a saturated window expires,
+/// concurrent issuers are admitted up to the cap again (prune happens under the same lock as
+/// the cap check and insert).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_concurrent_ticket_expiry_recovers_saturation_atomically() {
+    let mgr = Arc::new(AttachmentManager::new());
+    // Saturate globally with tickets clipped to expire in ~700ms by the auth deadline.
+    let short = Utc::now() + ChronoDuration::milliseconds(700);
+    for p in 0..4 {
+        for _ in 0..MAX_UNCONSUMED_TICKETS_PER_PRINCIPAL {
+            let mut adm = admission_for(&format!("expiring-{p}"), "sid");
+            adm.effective_deadline = Some(short);
+            mgr.issue_ticket(&adm, &agent_request(), None)
+                .await
+                .unwrap();
+        }
+    }
+    let saturated = mgr
+        .issue_ticket(&admission_for("fresh", "sid"), &agent_request(), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(saturated, AttachmentError::CapacityExceeded(_)));
+
+    tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+
+    // 8 principals x 8 concurrent issuers = exactly the global cap, all admitted once the
+    // expired tickets are pruned.
+    let mut tasks = Vec::new();
+    for p in 0..8 {
+        for _ in 0..8 {
+            let mgr = mgr.clone();
+            tasks.push(tokio::spawn(async move {
+                mgr.issue_ticket(
+                    &admission_for(&format!("fresh-{p}"), "sid"),
+                    &agent_request(),
+                    None,
+                )
+                .await
+            }));
+        }
+    }
+    for task in tasks {
+        task.await
+            .unwrap()
+            .expect("expired tickets must not hold capacity");
+    }
+    let over = mgr
+        .issue_ticket(&admission_for("fresh-extra", "sid"), &agent_request(), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(over, AttachmentError::CapacityExceeded(_)));
+}
+
+/// LA:L14 — identity checks are deduplicated, independent and hard-bounded: slow identities
+/// are cancelled at `LIVE_CHECK_TIMEOUT` (not serialized), never delay a revoked identity, and a
+/// healthy identity with many sockets costs one check.
+#[tokio::test]
+async fn test_live_check_round_is_deduped_concurrent_and_bounded() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mgr = Arc::new(AttachmentManager::new());
+    let slow: Vec<_> = {
+        let mut tokens = Vec::new();
+        for i in 0..4 {
+            tokens.push(register_agent_connection(&mgr, &format!("slow-{i}"), "sid").await);
+        }
+        tokens
+    };
+    let revoked = register_agent_connection(&mgr, "revoked", "sid").await;
+    let mut healthy = Vec::new();
+    for _ in 0..5 {
+        healthy.push(register_agent_connection(&mgr, "healthy", "sid-h").await);
+    }
+
+    let healthy_checks = Arc::new(AtomicUsize::new(0));
+    let healthy_counter = healthy_checks.clone();
+    let round = {
+        let mgr = mgr.clone();
+        tokio::spawn(async move {
+            mgr.run_live_check_round(false, move |adm| {
+                let healthy_counter = healthy_counter.clone();
+                async move {
+                    if adm.principal.starts_with("slow") {
+                        // A hung store: never answers.
+                        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                        Ok(())
+                    } else if adm.principal == "revoked" {
+                        Err(BrowserAuthError::SessionRevoked("revoked".to_string()))
+                    } else {
+                        healthy_counter.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    }
+                }
+            })
+            .await;
+        })
+    };
+    let started = std::time::Instant::now();
+
+    // The revoked identity is cancelled promptly while four hung stores are still pending.
+    tokio::time::timeout(std::time::Duration::from_millis(500), revoked.cancelled())
+        .await
+        .expect("revoked identity must not wait behind slow identity checks");
+
+    round.await.unwrap();
+    let elapsed = started.elapsed();
+    // Serialized 2s timeouts would take >= 8s for four slow identities.
+    assert!(
+        elapsed < std::time::Duration::from_millis(3500),
+        "round must be bounded by one check timeout, took {elapsed:?}"
+    );
+    assert!(
+        slow.iter().all(|t| t.is_cancelled()),
+        "unverifiable identities fail closed"
+    );
+    assert!(healthy.iter().all(|t| !t.is_cancelled()));
+    assert_eq!(
+        healthy_checks.load(Ordering::SeqCst),
+        1,
+        "one check per identity"
+    );
+}
+
+/// More distinct identities than the concurrency ceiling, against a hung store: queueing for a
+/// check slot is inside the one round deadline, so the round (and the revocation window of an
+/// identity stuck behind the hung ones) stays one `LIVE_CHECK_TIMEOUT`, never one per batch.
+#[tokio::test]
+async fn test_live_check_round_with_more_identities_than_capacity_is_one_deadline() {
+    let mgr = Arc::new(AttachmentManager::new());
+    let mut hung = Vec::new();
+    for i in 0..200 {
+        hung.push(register_agent_connection(&mgr, &format!("hung-{i}"), "sid").await);
+    }
+    let revoked = register_agent_connection(&mgr, "revoked", "sid").await;
+
+    let started = std::time::Instant::now();
+    mgr.run_live_check_round(false, move |adm| async move {
+        if adm.principal.starts_with("hung") {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            Ok(())
+        } else {
+            Err(BrowserAuthError::SessionRevoked("revoked".to_string()))
+        }
+    })
+    .await;
+    let elapsed = started.elapsed();
+
+    // Serial batches of 64 hung checks would take >= 4 x 2s.
+    assert!(
+        elapsed < std::time::Duration::from_millis(3500),
+        "round must end at one check deadline, took {elapsed:?}"
+    );
+    assert!(
+        hung.iter().all(|t| t.is_cancelled()),
+        "identities that could not be verified in time fail closed"
+    );
+    assert!(
+        revoked.is_cancelled(),
+        "the revoked identity queued behind hung checks is cancelled within the round"
     );
 }

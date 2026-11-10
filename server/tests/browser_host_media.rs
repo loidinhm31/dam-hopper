@@ -3,9 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dam_hopper_server::browser_host::diagnostics::{global_memory_controller, TrackedBhjfFrame};
-use dam_hopper_server::browser_host::media::{
-    ViewerCreditController, MAX_OUTSTANDING_PER_VIEWER,
-};
+use dam_hopper_server::browser_host::media::{ViewerCreditController, MAX_OUTSTANDING_PER_VIEWER};
 use dam_hopper_server::browser_host::protocol::{
     pack_bhjf_frame, unpack_bhjf_frame, TargetFrameHeader, TargetGeometry,
 };
@@ -16,8 +14,8 @@ fn make_dummy_jpeg() -> Vec<u8> {
     // Minimal valid JPEG header with SOF0 (64x64) and EOI
     let mut data = vec![
         0xFF, 0xD8, // SOI
-        0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x40, 0x00, 0x40, 0x03, 0x01, 0x11, 0x00, 0x02,
-        0x11, 0x01, 0x03, 0x11, 0x01, // SOF0 (64x64, 3 components)
+        0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x40, 0x00, 0x40, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11,
+        0x01, 0x03, 0x11, 0x01, // SOF0 (64x64, 3 components)
         0xFF, 0xD9, // EOI
     ];
     // Pad to valid payload
@@ -52,7 +50,9 @@ fn make_test_frame(run_id: &str, v_epoch: &str, seq: &str) -> TrackedBhjfFrame {
         input_trusted: true,
     };
     let bytes = pack_bhjf_frame(&header, &make_dummy_jpeg()).expect("pack frame");
-    let res = global_memory_controller().try_reserve(bytes.len()).expect("reserve frame memory");
+    let res = global_memory_controller()
+        .try_reserve(bytes.len())
+        .expect("reserve frame memory");
     TrackedBhjfFrame::new(bytes, res)
 }
 
@@ -74,26 +74,38 @@ async fn test_credit_controller_bounds_and_governor() {
 
     // 2. Immediate second frame throttled by 100ms governor -> buffered in pending
     let res2 = ctrl.on_incoming_frame(frame2.clone());
-    assert!(res2.is_none(), "frame within 100ms should be held in pending");
+    assert!(
+        res2.is_none(),
+        "frame within 100ms should be held in pending"
+    );
     assert_eq!(ctrl.outstanding_count(), 1);
     assert!(ctrl.has_pending());
 
     // 3. Wait > 100ms -> incoming third frame replaces pending and dispatches since outstanding (1) < 2
     sleep(Duration::from_millis(110)).await;
     let res3 = ctrl.on_incoming_frame(frame3);
-    assert!(res3.is_some(), "frame after 100ms with credit should be dispatched");
+    assert!(
+        res3.is_some(),
+        "frame after 100ms with credit should be dispatched"
+    );
     assert_eq!(ctrl.outstanding_count(), 2);
 
     // 4. Fourth frame arrives while outstanding == 2 -> must be held in pending (capacity capped at 2 outstanding)
     sleep(Duration::from_millis(110)).await;
     let res4 = ctrl.on_incoming_frame(frame4);
-    assert!(res4.is_none(), "when outstanding == 2, incoming frame must be pending");
+    assert!(
+        res4.is_none(),
+        "when outstanding == 2, incoming frame must be pending"
+    );
     assert_eq!(ctrl.outstanding_count(), 2);
     assert!(ctrl.has_pending());
 
     // 5. ACK for frame 1 frees 1 credit and unblocks dispatch of pending frame 4!
     let unblocked = ctrl.on_credit_return(&sub, &run, "1", "1", false);
-    assert!(unblocked.is_some(), "ACKing frame 1 should release pending frame");
+    assert!(
+        unblocked.is_some(),
+        "ACKing frame 1 should release pending frame"
+    );
     assert_eq!(ctrl.outstanding_count(), 2); // Frame 3 + Frame 4 now outstanding
     assert!(!ctrl.has_pending());
     assert_eq!(ctrl.total_acked, 1);
@@ -127,11 +139,13 @@ async fn test_settled_frame_governor_flush() {
 
     // 5. Governor flush ticker picks up pending settled frame!
     let flushed = ctrl.check_flush_pending();
-    assert!(flushed.is_some(), "settled pending frame must be flushed by governor");
+    assert!(
+        flushed.is_some(),
+        "settled pending frame must be flushed by governor"
+    );
     assert!(!ctrl.has_pending());
     assert_eq!(ctrl.outstanding_count(), 1);
 }
-
 
 #[tokio::test]
 async fn test_credit_controller_foreign_socket_rejection() {
@@ -263,19 +277,40 @@ async fn test_full_ticket_pairing_and_lease_scoping_journey() {
         credential_version: Some(1),
         effective_deadline: None,
     };
-    let media_res_a = att_manager.issue_ticket(&admission, &media_req_a, None).await.unwrap();
-    let control_res_a = att_manager.issue_ticket(&admission, &control_req_a, None).await.unwrap();
+    let media_res_a = att_manager
+        .issue_ticket(&admission, &media_req_a, None)
+        .await
+        .unwrap();
+    let control_res_a = att_manager
+        .issue_ticket(&admission, &control_req_a, None)
+        .await
+        .unwrap();
 
     // 2. Consume both tickets
-    let admitted_media = att_manager.consume_ticket(&media_res_a.ticket, AttachmentPurpose::Media, None).await.unwrap();
-    let admitted_control = att_manager.consume_ticket(&control_res_a.ticket, AttachmentPurpose::Control, None).await.unwrap();
+    let admitted_media = att_manager
+        .consume_ticket(&media_res_a.ticket, AttachmentPurpose::Media, None)
+        .await
+        .unwrap();
+    let admitted_control = att_manager
+        .consume_ticket(&control_res_a.ticket, AttachmentPurpose::Control, None)
+        .await
+        .unwrap();
 
     // 3. Register connections and verify pairing
-    let (conn_media, _cancel_media) = att_manager.register_connection(&admitted_media).await.unwrap();
-    let (conn_ctrl, _cancel_ctrl) = att_manager.register_connection(&admitted_control).await.unwrap();
+    let (conn_media, _cancel_media) = att_manager
+        .register_connection(&admitted_media)
+        .await
+        .unwrap();
+    let (conn_ctrl, _cancel_ctrl) = att_manager
+        .register_connection(&admitted_control)
+        .await
+        .unwrap();
 
     // 4. Viewer A acquires lease
-    let (lease_tok_a, _) = input_manager.acquire_lease(viewer_a, "human").await.unwrap();
+    let (lease_tok_a, _) = input_manager
+        .acquire_lease(viewer_a, "human")
+        .await
+        .unwrap();
     assert!(input_manager.is_lease_holder(viewer_a).await);
     assert!(!input_manager.is_lease_holder(viewer_b).await);
 
@@ -297,10 +332,9 @@ async fn test_full_ticket_pairing_and_lease_scoping_journey() {
 
 #[tokio::test]
 async fn test_live_axum_media_and_control_websocket_journey() {
-    use std::path::PathBuf;
     use dam_hopper_server::agent_store::AgentStoreService;
-    use dam_hopper_server::api::build_router;
     use dam_hopper_server::api::browser_host::global_attachment_manager;
+    use dam_hopper_server::api::build_router;
     use dam_hopper_server::browser_host::attachments::{AttachmentPurpose, IssueTicketRequest};
     use dam_hopper_server::browser_host::auth::BrowserAdmission;
     use dam_hopper_server::config::{DamHopperConfig, FeaturesConfig, GlobalConfig, WorkspaceInfo};
@@ -310,12 +344,13 @@ async fn test_live_axum_media_and_control_websocket_journey() {
     use dam_hopper_server::pty::{BroadcastEventSink, PtySessionManager};
     use dam_hopper_server::state::AppState;
     use dam_hopper_server::tunnel::{CloudflaredDriver, TunnelSessionManager};
+    use futures_util::{SinkExt, StreamExt};
     use opaque_ke::ServerSetup;
     use rand::rngs::OsRng;
+    use std::path::PathBuf;
     use tempfile::tempdir;
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    use futures_util::{SinkExt, StreamExt};
 
     let tmp = tempdir().unwrap();
     let workspace_root = tmp.path().to_path_buf();
@@ -337,7 +372,8 @@ async fn test_live_axum_media_and_control_websocket_journey() {
     let global_config = GlobalConfig::default();
     let agent_store = AgentStoreService::new(workspace_root.join(".dam-hopper/agent-store"));
     let fs = FsSubsystem::new(vec![]);
-    let tunnel_manager = TunnelSessionManager::new(Arc::new(event_sink.clone()), Arc::new(CloudflaredDriver));
+    let tunnel_manager =
+        TunnelSessionManager::new(Arc::new(event_sink.clone()), Arc::new(CloudflaredDriver));
     let diagnostics = DiagnosticStore::new(workspace_root.join("diagnostics.jsonl"));
 
     let state = AppState::new(
@@ -358,18 +394,24 @@ async fn test_live_axum_media_and_control_websocket_journey() {
     )
     .expect("test AppState");
 
-    let router = build_router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let local_addr = listener.local_addr().unwrap();
+    state
+        .record_bound_listener(local_addr)
+        .expect("record listener");
+    let router = build_router(state);
     tokio::spawn(async move {
-        axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
 
     let inc = Uuid::new_v4().to_string();
     let (dto, _) = dam_hopper_server::api::browser_host::global_session_registry()
-        .create_or_idempotent_get(
+        .insert_running_for_test(
             "dev-user",
             true,
             &inc,
@@ -418,20 +460,34 @@ async fn test_live_axum_media_and_control_websocket_journey() {
         browser_incarnation: inc.clone(),
         profile_epoch: 1,
     };
-    let media_tkt = att_manager.issue_ticket(&admission, &media_req, None).await.unwrap();
-    let control_tkt = att_manager.issue_ticket(&admission, &control_req, None).await.unwrap();
+    let media_tkt = att_manager
+        .issue_ticket(&admission, &media_req, None)
+        .await
+        .unwrap();
+    let control_tkt = att_manager
+        .issue_ticket(&admission, &control_req, None)
+        .await
+        .unwrap();
 
     // 2. Connect media WebSocket
     let media_url = format!("ws://{local_addr}/api/browser/media");
     let mut req = media_url.into_client_request().unwrap();
     req.headers_mut().insert(
         "Sec-WebSocket-Protocol",
-        format!("damhopper.browser.media.v1, damhopper.ticket.{}", media_tkt.ticket).parse().unwrap(),
+        format!(
+            "damhopper.browser.media.v1, damhopper.ticket.{}",
+            media_tkt.ticket
+        )
+        .parse()
+        .unwrap(),
     );
     let (mut media_ws, media_resp) = connect_async(req).await.expect("media ws connect failed");
     // Verify subprotocol negotiated
     assert_eq!(
-        media_resp.headers().get("Sec-WebSocket-Protocol").and_then(|v| v.to_str().ok()),
+        media_resp
+            .headers()
+            .get("Sec-WebSocket-Protocol")
+            .and_then(|v| v.to_str().ok()),
         Some("damhopper.browser.media.v1")
     );
 
@@ -440,11 +496,21 @@ async fn test_live_axum_media_and_control_websocket_journey() {
     let mut ctrl_req = control_url.into_client_request().unwrap();
     ctrl_req.headers_mut().insert(
         "Sec-WebSocket-Protocol",
-        format!("damhopper.browser.control.v1, damhopper.ticket.{}", control_tkt.ticket).parse().unwrap(),
+        format!(
+            "damhopper.browser.control.v1, damhopper.ticket.{}",
+            control_tkt.ticket
+        )
+        .parse()
+        .unwrap(),
     );
-    let (mut ctrl_ws, ctrl_resp) = connect_async(ctrl_req).await.expect("control ws connect failed");
+    let (mut ctrl_ws, ctrl_resp) = connect_async(ctrl_req)
+        .await
+        .expect("control ws connect failed");
     assert_eq!(
-        ctrl_resp.headers().get("Sec-WebSocket-Protocol").and_then(|v| v.to_str().ok()),
+        ctrl_resp
+            .headers()
+            .get("Sec-WebSocket-Protocol")
+            .and_then(|v| v.to_str().ok()),
         Some("damhopper.browser.control.v1")
     );
 

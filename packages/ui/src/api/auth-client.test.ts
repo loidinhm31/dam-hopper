@@ -482,6 +482,79 @@ describe("auth-client", () => {
       expect(revokeFailed.revocationUncertain).toBe(true);
       expect(revokeFailed.reason).toBe("database write error");
     });
+
+    it("never trusts sessionRevoked for a saved Bearer token that was deliberately not sent", async () => {
+      // Exact shape of the production server's uncredentialed (anonymous) public logout.
+      const anonymousShape = {
+        ok: true,
+        token: null,
+        role: null,
+        sessionRevoked: false,
+        sessionIdentified: false,
+        revocationUncertain: false,
+        browserResetState: "unknown",
+        browserCredentialsRetained: true,
+        resetRequired: true,
+      };
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify(anonymousShape), { status: 200 }))
+        // A cookie-only request revokes the cookie session, which says nothing about the unsent token.
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ ...anonymousShape, sessionRevoked: true, sessionIdentified: true }),
+            { status: 200 },
+          ),
+        )
+        // A legacy server that claims success regardless must not be believed either.
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ ...anonymousShape, sessionRevoked: true }), { status: 200 }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      for (let i = 0; i < 3; i++) {
+        const outcome = await logoutAccount("http://remote.test", "saved-bearer", {
+          browserReset: false,
+        });
+        const [, init] = fetchMock.mock.calls[i] as [string, RequestInit];
+        expect(new Headers(init.headers).get("Authorization")).toBeNull();
+        expect(outcome.sessionRevoked).toBe(false);
+        expect(outcome.revocationUncertain).toBe(true);
+        expect(outcome.reason).toContain("revocation unconfirmed");
+        expect(outcome.browserResetState).toBe("unknown");
+        expect(outcome.browserCredentialsRetained).toBe(true);
+      }
+    });
+
+    it("reports an anonymous response honestly and still trusts a revocation of the credential actually sent", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ ok: true, sessionRevoked: false, sessionIdentified: false, revocationUncertain: false }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ ok: true, sessionRevoked: true, sessionIdentified: true, revocationUncertain: false }),
+            { status: 200 },
+          ),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const anonymous = await logoutAccount("https://server.test", "expired-or-garbage", {
+        browserReset: false,
+      });
+      expect(anonymous.sessionRevoked).toBe(false);
+      expect(anonymous.revocationUncertain).toBe(true);
+
+      const revoked = await logoutAccount("https://server.test", "live-token", { browserReset: false });
+      const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+      expect(new Headers(init.headers).get("Authorization")).toBe("Bearer live-token");
+      expect(revoked.sessionRevoked).toBe(true);
+      expect(revoked.revocationUncertain).toBe(false);
+    });
   });
 });
 

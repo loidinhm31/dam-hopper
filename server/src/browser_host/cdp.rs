@@ -38,6 +38,16 @@ const SCREENCAST_METADATA_NUMBERS: [&str; 6] = [
 const WRITE_DEADLINE: Duration = Duration::from_secs(5);
 const MAX_EVENT_SESSION_ID_BYTES: usize = 256;
 const MAX_LIFECYCLE_EVENT_SLOTS: usize = 8;
+/// Slots of the dedicated request-policy channel (paused requests and child-session attaches).
+/// It is separate from lifecycle events so request floods can never displace navigation or
+/// inspect events.
+const MAX_REQUEST_POLICY_EVENT_SLOTS: usize = 64;
+/// Slots of the browser-level target lifecycle channel (created/attached/destroyed/crashed).
+/// An overflow forces the consumer to re-inventory the native targets.
+const MAX_TARGET_EVENT_SLOTS: usize = 128;
+const MAX_TARGET_ID_BYTES: usize = 128;
+const MAX_REQUEST_ID_BYTES: usize = 128;
+const MAX_RESOURCE_TYPE_BYTES: usize = 32;
 /// Result of a bounded, close-cancellable WebSocket write.
 enum WriteOutcome {
     Done,
@@ -161,6 +171,73 @@ pub enum CdpLifecycleEvent {
     Overflow,
 }
 
+/// Events feeding the central request policy (CDP `Fetch` interception and child-session
+/// auto-attach). Every paused request carries its own bounded memory reservation.
+#[derive(Debug, Clone)]
+pub enum RequestPolicyEvent {
+    /// `Fetch.requestPaused` at the request stage (initial requests and every redirect hop).
+    Paused {
+        session_id: Option<String>,
+        request_id: String,
+        /// Empty when the browser sent no URL or an oversize one; the policy then denies it.
+        url: String,
+        /// Document (main frame or subframe) request, as opposed to a subresource.
+        is_navigation: bool,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    /// `Target.attachedToTarget` for a flattened auto-attached child (OOPIF, worker).
+    Attached {
+        session_id: String,
+        /// CDP target id of the child: the handle used to terminate a worker whose request
+        /// interception could not be established (closing the page does not stop a service worker).
+        target_id: String,
+        /// CDP target type (`iframe`, `worker`, `service_worker`, ...).
+        target_type: String,
+        waiting_for_debugger: bool,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    /// A request-policy event could not be projected or buffered; some paused request may stay
+    /// paused (fail-closed: it is never continued without a policy decision).
+    Overflow,
+}
+
+/// Bounded projection of CDP `TargetInfo` for a top-level target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeTargetInfo {
+    pub target_id: String,
+    pub target_type: String,
+    /// Empty when the browser sent no URL or an oversize one.
+    pub url: String,
+    pub opener_id: Option<String>,
+}
+
+/// Browser-level target lifecycle events (events without a CDP `sessionId`). They feed the
+/// manager-owned native target observer; a lost event is reported as `Overflow`.
+#[derive(Debug, Clone)]
+pub enum CdpTargetEvent {
+    Created {
+        info: NativeTargetInfo,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    /// Flattened auto-attach of a top-level target; `waiting_for_debugger` means the target is
+    /// paused until `Runtime.runIfWaitingForDebugger` is sent on `session_id`.
+    Attached {
+        session_id: String,
+        info: NativeTargetInfo,
+        waiting_for_debugger: bool,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    Destroyed {
+        target_id: String,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    Crashed {
+        target_id: String,
+        _reservation: Option<Arc<MemoryReservation>>,
+    },
+    Overflow,
+}
+
 struct PendingRequest {
     sender: oneshot::Sender<Result<Value, CdpError>>,
     deadline: Instant,
@@ -237,6 +314,8 @@ pub struct CdpClient {
     budget: Arc<CommandBudget>,
     screencast_rx_broadcast: tokio::sync::broadcast::Sender<Arc<ScreencastFrameData>>,
     event_rx_broadcast: tokio::sync::broadcast::Sender<Arc<CdpLifecycleEvent>>,
+    request_rx_broadcast: tokio::sync::broadcast::Sender<Arc<RequestPolicyEvent>>,
+    target_rx_broadcast: tokio::sync::broadcast::Sender<Arc<CdpTargetEvent>>,
     memory_controller: Arc<MemoryAdmissionController>,
     stats: Arc<CdpActorStats>,
 }
@@ -283,6 +362,8 @@ impl CdpClient {
         let (command_tx, command_rx) = mpsc::channel(MAX_WRITER_QUEUE_MESSAGES);
         let (screencast_tx, _) = tokio::sync::broadcast::channel(2);
         let (event_tx, _) = tokio::sync::broadcast::channel(MAX_LIFECYCLE_EVENT_SLOTS);
+        let (request_tx, _) = tokio::sync::broadcast::channel(MAX_REQUEST_POLICY_EVENT_SLOTS);
+        let (target_tx, _) = tokio::sync::broadcast::channel(MAX_TARGET_EVENT_SLOTS);
         let stats = Arc::new(CdpActorStats::default());
         let close_notify = Arc::new(Notify::new());
 
@@ -292,6 +373,8 @@ impl CdpClient {
             close_notify: close_notify.clone(),
             screencast_tx: screencast_tx.clone(),
             event_tx: event_tx.clone(),
+            request_tx: request_tx.clone(),
+            target_tx: target_tx.clone(),
             memory_controller: memory_controller.clone(),
             pending_commands: HashMap::with_capacity(MAX_PENDING_COMMANDS),
             stats: stats.clone(),
@@ -306,6 +389,8 @@ impl CdpClient {
             budget: CommandBudget::new(MAX_PENDING_COMMANDS, MAX_WRITER_QUEUE_BYTES),
             screencast_rx_broadcast: screencast_tx,
             event_rx_broadcast: event_tx,
+            request_rx_broadcast: request_tx,
+            target_rx_broadcast: target_tx,
             memory_controller,
             stats,
         })
@@ -321,10 +406,29 @@ impl CdpClient {
         self.screencast_rx_broadcast.subscribe()
     }
 
-    pub fn subscribe_events(
-        &self,
-    ) -> tokio::sync::broadcast::Receiver<Arc<CdpLifecycleEvent>> {
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<Arc<CdpLifecycleEvent>> {
         self.event_rx_broadcast.subscribe()
+    }
+
+    pub fn subscribe_request_events(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<Arc<RequestPolicyEvent>> {
+        self.request_rx_broadcast.subscribe()
+    }
+
+    /// Subscribes to browser-level target lifecycle events.
+    pub fn subscribe_target_events(&self) -> tokio::sync::broadcast::Receiver<Arc<CdpTargetEvent>> {
+        self.target_rx_broadcast.subscribe()
+    }
+
+    /// True once the actor has stopped (transport closed, protocol failure or `close`).
+    pub fn is_closed(&self) -> bool {
+        self.command_tx.is_closed()
+    }
+
+    /// Resolves when the actor has stopped.
+    pub async fn closed(&self) {
+        self.command_tx.closed().await;
     }
 
     pub fn memory_controller(&self) -> &Arc<MemoryAdmissionController> {
@@ -452,6 +556,8 @@ struct CdpActor<S> {
     close_notify: Arc<Notify>,
     screencast_tx: tokio::sync::broadcast::Sender<Arc<ScreencastFrameData>>,
     event_tx: tokio::sync::broadcast::Sender<Arc<CdpLifecycleEvent>>,
+    request_tx: tokio::sync::broadcast::Sender<Arc<RequestPolicyEvent>>,
+    target_tx: tokio::sync::broadcast::Sender<Arc<CdpTargetEvent>>,
     memory_controller: Arc<MemoryAdmissionController>,
     pending_commands: HashMap<usize, PendingRequest>,
     stats: Arc<CdpActorStats>,
@@ -643,9 +749,8 @@ where
                 let params = env.params.as_ref();
                 let projected = match method.as_str() {
                     "Page.frameNavigated" => {
-                        let is_main_frame = params
-                            .and_then(|p| p.pointer("/frame/parentId"))
-                            .is_none();
+                        let is_main_frame =
+                            params.and_then(|p| p.pointer("/frame/parentId")).is_none();
                         let url = params
                             .and_then(|p| p.pointer("/frame/url"))
                             .and_then(Value::as_str)
@@ -704,6 +809,33 @@ where
                 let _ = self.event_tx.send(Arc::new(projected));
                 Ok(())
             }
+            Some(Value::String(method))
+                if matches!(
+                    method.as_str(),
+                    "Fetch.requestPaused" | "Target.attachedToTarget"
+                ) =>
+            {
+                let projected = self.project_request_policy_event(
+                    method.as_str(),
+                    env.session_id.clone(),
+                    env.params.as_ref(),
+                );
+                let _ = self.request_tx.send(Arc::new(projected));
+                if method == "Target.attachedToTarget" && env.session_id.is_none() {
+                    self.publish_target_event(method.as_str(), env.params.as_ref());
+                }
+                Ok(())
+            }
+            Some(Value::String(method))
+                if env.session_id.is_none()
+                    && matches!(
+                        method.as_str(),
+                        "Target.targetCreated" | "Target.targetDestroyed" | "Target.targetCrashed"
+                    ) =>
+            {
+                self.publish_target_event(method.as_str(), env.params.as_ref());
+                Ok(())
+            }
             Some(Value::String(_)) => {
                 // Ignore unknown event with bounded counter; no queue allocation
                 self.stats
@@ -714,6 +846,162 @@ where
             _ => Err(CdpError::MalformedResponse(
                 "message has neither a response id nor an event method".to_string(),
             )),
+        }
+    }
+
+    /// Projects a `Fetch.requestPaused` / `Target.attachedToTarget` event into bounded owned
+    /// data. Anything that cannot be bounded or identified becomes `Overflow`.
+    fn project_request_policy_event(
+        &self,
+        method: &str,
+        session_id: Option<Value>,
+        params: Option<&Value>,
+    ) -> RequestPolicyEvent {
+        let session_id = match session_id {
+            Some(Value::String(s)) if s.len() <= MAX_EVENT_SESSION_ID_BYTES => Some(s),
+            Some(Value::String(_)) => return RequestPolicyEvent::Overflow,
+            _ => None,
+        };
+        let str_at = |ptr: &str, max: usize| -> Option<String> {
+            params
+                .and_then(|p| p.pointer(ptr))
+                .and_then(Value::as_str)
+                .filter(|s| s.len() <= max)
+                .map(str::to_string)
+        };
+        if method == "Fetch.requestPaused" {
+            let Some(request_id) = str_at("/requestId", MAX_REQUEST_ID_BYTES) else {
+                return RequestPolicyEvent::Overflow;
+            };
+            let url = str_at("/request/url", MAX_URL_BYTES).unwrap_or_default();
+            let is_navigation = params
+                .and_then(|p| p.get("resourceType"))
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.len() <= MAX_RESOURCE_TYPE_BYTES && t == "Document");
+            let bytes = std::mem::size_of::<RequestPolicyEvent>()
+                + session_id.as_ref().map_or(0, String::len)
+                + request_id.len()
+                + url.len();
+            return match self.memory_controller.try_reserve(bytes) {
+                Ok(res) => RequestPolicyEvent::Paused {
+                    session_id,
+                    request_id,
+                    url,
+                    is_navigation,
+                    _reservation: Some(Arc::new(res)),
+                },
+                Err(_) => RequestPolicyEvent::Overflow,
+            };
+        }
+        let Some(child) = str_at("/sessionId", MAX_EVENT_SESSION_ID_BYTES) else {
+            return RequestPolicyEvent::Overflow;
+        };
+        let Some(target_id) = str_at("/targetInfo/targetId", MAX_TARGET_ID_BYTES) else {
+            return RequestPolicyEvent::Overflow;
+        };
+        let target_type = str_at("/targetInfo/type", MAX_RESOURCE_TYPE_BYTES).unwrap_or_default();
+        let waiting_for_debugger = params
+            .and_then(|p| p.get("waitingForDebugger"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let bytes = std::mem::size_of::<RequestPolicyEvent>()
+            + child.len()
+            + target_id.len()
+            + target_type.len();
+        match self.memory_controller.try_reserve(bytes) {
+            Ok(res) => RequestPolicyEvent::Attached {
+                session_id: child,
+                target_id,
+                target_type,
+                waiting_for_debugger,
+                _reservation: Some(Arc::new(res)),
+            },
+            Err(_) => RequestPolicyEvent::Overflow,
+        }
+    }
+
+    /// Projects a browser-level `Target.*` lifecycle event into bounded owned data. Anything that
+    /// cannot be bounded or identified becomes `Overflow` (the consumer re-inventories).
+    fn publish_target_event(&self, method: &str, params: Option<&Value>) {
+        let event = self.project_target_event(method, params);
+        let _ = self.target_tx.send(Arc::new(event));
+    }
+
+    fn project_target_event(&self, method: &str, params: Option<&Value>) -> CdpTargetEvent {
+        let str_at = |ptr: &str, max: usize| -> Option<String> {
+            params
+                .and_then(|p| p.pointer(ptr))
+                .and_then(Value::as_str)
+                .filter(|s| s.len() <= max)
+                .map(str::to_string)
+        };
+        let reserve = |bytes: usize| self.memory_controller.try_reserve(bytes).ok().map(Arc::new);
+        match method {
+            "Target.targetDestroyed" | "Target.targetCrashed" => {
+                let Some(target_id) = str_at("/targetId", MAX_TARGET_ID_BYTES) else {
+                    return CdpTargetEvent::Overflow;
+                };
+                let bytes = std::mem::size_of::<CdpTargetEvent>() + target_id.len();
+                let Some(res) = reserve(bytes) else {
+                    return CdpTargetEvent::Overflow;
+                };
+                if method == "Target.targetDestroyed" {
+                    CdpTargetEvent::Destroyed {
+                        target_id,
+                        _reservation: Some(res),
+                    }
+                } else {
+                    CdpTargetEvent::Crashed {
+                        target_id,
+                        _reservation: Some(res),
+                    }
+                }
+            }
+            _ => {
+                let Some(target_id) = str_at("/targetInfo/targetId", MAX_TARGET_ID_BYTES) else {
+                    return CdpTargetEvent::Overflow;
+                };
+                let target_type =
+                    str_at("/targetInfo/type", MAX_RESOURCE_TYPE_BYTES).unwrap_or_default();
+                let url = str_at("/targetInfo/url", MAX_URL_BYTES).unwrap_or_default();
+                let opener_id = str_at("/targetInfo/openerId", MAX_TARGET_ID_BYTES);
+                let info = NativeTargetInfo {
+                    target_id,
+                    target_type,
+                    url,
+                    opener_id,
+                };
+                let info_bytes = std::mem::size_of::<CdpTargetEvent>()
+                    + info.target_id.len()
+                    + info.target_type.len()
+                    + info.url.len()
+                    + info.opener_id.as_ref().map_or(0, String::len);
+                if method == "Target.targetCreated" {
+                    let Some(res) = reserve(info_bytes) else {
+                        return CdpTargetEvent::Overflow;
+                    };
+                    return CdpTargetEvent::Created {
+                        info,
+                        _reservation: Some(res),
+                    };
+                }
+                let Some(session_id) = str_at("/sessionId", MAX_EVENT_SESSION_ID_BYTES) else {
+                    return CdpTargetEvent::Overflow;
+                };
+                let waiting_for_debugger = params
+                    .and_then(|p| p.get("waitingForDebugger"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let Some(res) = reserve(info_bytes + session_id.len()) else {
+                    return CdpTargetEvent::Overflow;
+                };
+                CdpTargetEvent::Attached {
+                    session_id,
+                    info,
+                    waiting_for_debugger,
+                    _reservation: Some(res),
+                }
+            }
         }
     }
 
@@ -928,6 +1216,8 @@ mod tests {
             close_notify: Arc::new(Notify::new()),
             screencast_tx,
             event_tx,
+            request_tx: tokio::sync::broadcast::channel(8).0,
+            target_tx: tokio::sync::broadcast::channel(8).0,
             pending_commands: HashMap::with_capacity(MAX_PENDING_COMMANDS),
             memory_controller: global_memory_controller().clone(),
             stats,
@@ -1271,7 +1561,10 @@ mod tests {
         let (in_tx, in_rx) = mpsc::channel(16);
         let (sent_tx, _sent_rx) = mpsc::channel(16);
         let client = CdpClient::from_ws_stream_with_memory_controller(
-            MockChannelWs { tx: sent_tx, rx: in_rx },
+            MockChannelWs {
+                tx: sent_tx,
+                rx: in_rx,
+            },
             controller.clone(),
         );
         let mut rx = client.subscribe_events();
@@ -1293,7 +1586,12 @@ mod tests {
 
         let evt = rx.recv().await.unwrap();
         match &*evt {
-            CdpLifecycleEvent::FrameNavigated { session_id, is_main_frame, url, .. } => {
+            CdpLifecycleEvent::FrameNavigated {
+                session_id,
+                is_main_frame,
+                url,
+                ..
+            } => {
                 assert_eq!(session_id.as_deref(), Some("psid-1"));
                 assert!(*is_main_frame);
                 assert_eq!(url.as_deref(), Some("https://example.test/next"));
@@ -1302,7 +1600,10 @@ mod tests {
         }
         // Retained reservation only accounts for small projected fields, never the 100 KiB blob
         let retained = controller.current_reserved_bytes();
-        assert!(retained > 0 && retained <= 256, "unexpected retained bytes: {retained}");
+        assert!(
+            retained > 0 && retained <= 256,
+            "unexpected retained bytes: {retained}"
+        );
 
         // Fill remaining budget and verify subsequent event emits Overflow fail-closed
         let hold = controller.try_reserve(256 - retained).unwrap();

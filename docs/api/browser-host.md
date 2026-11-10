@@ -68,18 +68,18 @@ All errors return JSON with HTTP status $\ge 400$:
 | 429 Too Many Requests | `browserBusy` | Principal/global process limit or concurrent agent CDP ceiling (`max_raw_cdp_connections`, cap 8) reached |
 | 429 Too Many Requests | `ticketCapacityExceeded` | Unconsumed ticket limit reached (16 principal / 64 global) |
 | 429 Too Many Requests | `queueOverflow` | Input queue limit exceeded (128 records or 256 KiB) |
+| 502 Bad Gateway | `nativeCloseUnconfirmed` | Native close unconfirmed; session remains in `closing` status holding target capacity |
+| 502 Bad Gateway | `cdpError` | Upstream CDP inspect or screenshot command failed |
 | 503 Service Unavailable | `authUnavailable` | Database unavailable during admission check or live check timeout (2s) |
 | 503 Service Unavailable | `inputUnavailable` | Viewport geometry not yet available for coordinate mapping |
-| 401 Unauthorized | `mfaRequired` | MFA verification required before accessing browser host |
-| 401 Unauthorized | `invalidSession` | Session revoked, deleted, or claims version mismatch |
-| 403 Forbidden | `forbiddenOrigin` | Origin header invalid, disallowed, or missing for CSRF-checked destructive reset |
-| 403 Forbidden | `leaseHeaderRequired` | Missing `X-Browser-Lease` header on `/selected-text` |
+| 503 Service Unavailable | `publicOriginUnavailable` | Raw CDP discovery requires trusted `DAM_HOPPER_PUBLIC_SERVER_ORIGIN`; request `Host` never reflected |
+| 401 Unauthorized | `mfaRequired` / `invalidSession` | MFA verification required or claims version mismatch |
+| 403 Forbidden | `forbiddenOrigin` / `leaseHeaderRequired` | Origin disallowed/missing for destructive reset or missing lease header |
 | 400 Bad Request | `confirmationRequired` / `invalidOperationId` | Missing `confirmed: true` or malformed `operationId` (`<= 128` `[A-Za-z0-9_-]`) |
 | 404 Not Found | `operationNotFound` / `terminalNotFound` | Unknown reset `operationId` or absent target PTY |
 | 409 Conflict | `staleViewportEpoch` / `staleEpoch` | Mismatched `viewportEpoch` on input or stale `expectedProfileEpoch` on reset |
-| 409 Conflict | `cleanupPending` / `resetFailed` | Active reset tombstone/worker (includes `operationId` when active) or reset error |
-| 409 Conflict | `conflict` / `noSelection` / `TERMINAL_INCARNATION_MISMATCH` | Stale `navigationRevision`/`selectionRevision`, missing preview, or changed target PTY incarnation |
-| 502 Bad Gateway | `cdpError` | Upstream CDP inspect or screenshot command failed |
+| 409 Conflict | `cleanupPending` / `resetFailed` | Active reset tombstone/worker or reset execution error |
+| 409 Conflict | `conflict` / `noSelection` / `TERMINAL_INCARNATION_MISMATCH` | Stale revision, missing preview, or changed target PTY incarnation |
 
 ---
 
@@ -112,7 +112,7 @@ Returns the browser host capability summary for the calling principal.
 
 ### GET /api/browser/sessions
 
-Lists all active browser sessions owned by the authenticated principal.
+Lists all active and transitioning browser sessions (`initializing`, `running`, `closing`, `lost`) owned by the authenticated principal. `closing` sessions hold target capacity until native absence is proven; `lost` reflects unexpected native page destruction. (Note: UI TypeScript `BrowserSessionStatus` union does not yet include `closing` or `lost`).
 
 **Response (200 OK):** Array of `BrowserSessionDto` objects.
 
@@ -136,7 +136,7 @@ Creates or recovers a browser session. Requires an idempotent `creationKey`.
 - `creationKey`: Non-empty client-provided UUID or idempotency string. Idempotency records are cached in-memory per principal up to 128 records for 10 minutes (`IDEMPOTENCY_TTL`). Retrying with the same key returns the existing session with HTTP 200 OK.
 - `url`: Validated against network policy (see Section 5).
 - `viewport`: Clamped to `width` $\in [64, 1920]$, `height` $\in [64, 1080]$, `dpr` $\in [1.0, 3.0]$.
-- Target Capacity: Capped at `DEFAULT_MAX_TARGETS` (default 2). Excess creates return HTTP 429 `kind: "browserBusy"`.
+- Target Capacity: Capped at configured `max_targets` (default 2), shared across REST sessions, raw CDP instances, and popups. Excess creates return HTTP 429 `kind: "browserBusy"`.
 
 **Response (201 Created or 200 OK):** `BrowserSessionDto`.
 
@@ -178,9 +178,10 @@ Retrieves current metadata, viewport epoch, navigation revision, active lease, a
 
 ### DELETE /api/browser/sessions/{id}
 
-Closes session `{id}`. Cleans up selection/watcher state, stops screencast producer, revokes session capability tickets, releases any held control lease, and removes the session and input manager.
+Closes session `{id}`. Cleans up selection/watcher state, stops screencast producer, revokes session capability tickets, releases held leases, and proves native page destruction.
 
-**Response:** `200 OK` `{ "status": "closed", "browserSessionId": "<id>" }`.
+- **Response (200 OK):** `{ "status": "closed", "browserSessionId": "<id>" }` when native absence is confirmed.
+- **Response (502 Bad Gateway):** `{ "error": "<msg>", "kind": "nativeCloseUnconfirmed", "status": "closing", "browserSessionId": "<id>" }` when native close could not be confirmed; session stays in `closing` state and continues to hold target capacity.
 
 ### POST /api/browser/sessions/{id}/navigate
 
@@ -447,7 +448,7 @@ Selection artifacts created via `/api/browser/sessions/{id}/selection/artifacts`
 
 Returns browser DevTools version metadata for the calling principal. Automatically launches or attaches to the principal's browser process via `ensure_running`.
 
-- **Rewritten Debugger URL:** `webSocketDebuggerUrl` rewrites internal DevTools loopback IP/port (`127.0.0.1:{chrome_port}`) to `{gateway_ws_base}/api/browser/cdp/ws`.
+- **Rewritten Debugger URL:** `webSocketDebuggerUrl` rewrites internal DevTools loopback IP/port (`127.0.0.1:{chrome_port}`) to `{gateway_ws_base}/api/browser/cdp/ws`. `{gateway_ws_base}` is derived strictly from `DAM_HOPPER_PUBLIC_SERVER_ORIGIN` (mapping `http` to `ws` and `https` to `wss`) or loopback listener in dev mode; request `Host` is never reflected. Unconfigured origin returns HTTP 503 `kind: "publicOriginUnavailable"`.
 - **Origin Validation:** Enforces single approved Origin byte-for-byte; unauthenticated requests fail with HTTP 401 first to prevent Origin probing (`dev_fallback` restricted to `--no-auth`).
 - **Payload Bounds:** Chunk-bounded response reading up to 64 KiB ceiling via `read_bounded_bytes`.
 **Response (200 OK):**
@@ -466,10 +467,9 @@ Returns browser DevTools version metadata for the calling principal. Automatical
 
 Lists all active DevTools targets for the calling principal's browser instance.
 
-- **URL Rewriting:** `webSocketDebuggerUrl` rewrites internal DevTools loopback IP/port to `{gateway_ws_base}/api/browser/cdp/ws/{target_id}`.
+- **URL Rewriting:** `webSocketDebuggerUrl` rewrites internal DevTools loopback IP/port to `{gateway_ws_base}/api/browser/cdp/ws/{target_id}` using `DAM_HOPPER_PUBLIC_SERVER_ORIGIN` (returns 503 `publicOriginUnavailable` if unconfigured).
 - **Frontend Sanitization:** `devtoolsFrontendUrl` loopback DevTools ports are replaced with the sanitized public gateway host.
 - **Payload Bounds:** Chunk-bounded response reading up to 256 KiB ceiling via `read_bounded_bytes`.
-
 **Response (200 OK):**
 ```json
 [

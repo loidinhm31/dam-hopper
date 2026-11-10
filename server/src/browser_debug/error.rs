@@ -24,6 +24,8 @@ pub enum BrowserDebugError {
     Io(#[from] std::io::Error),
     #[error("browser debug artifact task failed: {0}")]
     Task(String),
+    #[error("browser debug artifact operations are still in flight")]
+    OperationsInFlight,
 }
 
 impl BrowserDebugError {
@@ -34,6 +36,7 @@ impl BrowserDebugError {
             Self::PngAlreadyUploaded
             | Self::AlreadyHandedOff
             | Self::ArtifactBusy
+            | Self::OperationsInFlight
             | Self::IncarnationMismatch => 409,
             Self::TooLarge => 413,
             Self::Io(_) | Self::Task(_) => 500,

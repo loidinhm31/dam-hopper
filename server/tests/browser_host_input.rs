@@ -154,7 +154,7 @@ async fn test_rest_control_lease_lifecycle() {
     let app = build_router_with_origins(state, vec![]);
     // Create session first
     let (session_dto, _) = global_session_registry()
-        .create_or_idempotent_get(
+        .insert_running_for_test(
             "admin-lease-user",
             false,
             "inc-1",
@@ -279,7 +279,7 @@ async fn test_viewport_update_and_epochs() {
         .with_auth_service(Arc::new(auth_service));
     let app = build_router_with_origins(state, vec![]);
     let (session_dto, _) = global_session_registry()
-        .create_or_idempotent_get(
+        .insert_running_for_test(
             "admin-vp-user",
             false,
             "inc-1",
@@ -535,7 +535,7 @@ async fn test_selected_text_and_find_commands() {
         .with_auth_service(Arc::new(auth_service));
     let app = build_router_with_origins(state, vec![]);
     let (session_dto, _) = global_session_registry()
-        .create_or_idempotent_get(
+        .insert_running_for_test(
             "admin-text-user",
             false,
             "inc-1",

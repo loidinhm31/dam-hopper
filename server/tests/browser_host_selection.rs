@@ -36,6 +36,16 @@ use tower::ServiceExt;
 const TOKEN: &str = "selection-test-secret-token";
 
 fn make_admin_state(tmp: &tempfile::TempDir, username: &str, role: UserRole) -> (AppState, String) {
+    let expires_at = chrono::DateTime::from_timestamp(MOCK_EXPIRY_SECS as i64, 0).unwrap();
+    make_admin_state_expiring(tmp, username, role, expires_at)
+}
+
+fn make_admin_state_expiring(
+    tmp: &tempfile::TempDir,
+    username: &str,
+    role: UserRole,
+    exp_chrono: chrono::DateTime<chrono::Utc>,
+) -> (AppState, String) {
     let root = tmp.path().to_path_buf();
     let mut server_cfg = dam_hopper_server::config::ServerConfig::default();
     server_cfg.browser.enabled = true;
@@ -57,7 +67,6 @@ fn make_admin_state(tmp: &tempfile::TempDir, username: &str, role: UserRole) -> 
     let tunnels = TunnelSessionManager::new(Arc::new(sink.clone()), Arc::new(CloudflaredDriver));
 
     let now = chrono::Utc::now();
-    let exp_chrono = chrono::DateTime::from_timestamp(MOCK_EXPIRY_SECS as i64, 0).unwrap();
     let user = UserRecord {
         id: None,
         username: username.to_string(),
@@ -110,7 +119,7 @@ fn make_admin_state(tmp: &tempfile::TempDir, username: &str, role: UserRole) -> 
         auth_version: 0,
         credential_version: 0,
         iat: now.timestamp() as usize,
-        exp: MOCK_EXPIRY_SECS,
+        exp: exp_chrono.timestamp() as usize,
     };
     let cookie = format!("damhopper-auth={}", claims.encode(TOKEN).unwrap());
     (state, cookie)
@@ -187,6 +196,8 @@ static TEST_SERIAL_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
 struct MockCdpServer {
     ws_url: String,
     received_methods: Arc<Mutex<Vec<String>>>,
+    /// `mode` of every `Overlay.setInspectMode` received, in order.
+    inspect_modes: Arc<Mutex<Vec<String>>>,
     event_tx: tokio::sync::broadcast::Sender<Value>,
 }
 
@@ -196,6 +207,8 @@ async fn start_mock_cdp_server(extracted_payload: Value) -> MockCdpServer {
     let ws_url = format!("ws://127.0.0.1:{port}/devtools/browser/mock");
     let received_methods = Arc::new(Mutex::new(Vec::new()));
     let methods_clone = received_methods.clone();
+    let inspect_modes = Arc::new(Mutex::new(Vec::new()));
+    let modes_clone = inspect_modes.clone();
     let (event_tx, _) = tokio::sync::broadcast::channel::<Value>(32);
     let event_tx_clone = event_tx.clone();
 
@@ -205,6 +218,7 @@ async fn start_mock_cdp_server(extracted_payload: Value) -> MockCdpServer {
         let mut target_seq = 0usize;
         while let Ok((stream, _)) = listener.accept().await {
             let methods = methods_clone.clone();
+            let modes = modes_clone.clone();
             let extracted = extracted_payload.clone();
             let png_b64 = png_b64.clone();
             let mut ev_rx = event_tx_clone.subscribe();
@@ -234,15 +248,25 @@ async fn start_mock_cdp_server(extracted_payload: Value) -> MockCdpServer {
 
                 while let Some(Ok(msg)) = stream_rx.next().await {
                     let WsMessage::Text(text) = msg else { continue };
-                    let Ok(val) = serde_json::from_str::<Value>(&text) else { continue };
+                    let Ok(val) = serde_json::from_str::<Value>(&text) else {
+                        continue;
+                    };
                     let id = val.get("id").and_then(Value::as_u64).unwrap_or(0);
                     let method = val.get("method").and_then(Value::as_str).unwrap_or("");
                     let session_id = val.get("sessionId").cloned();
                     methods.lock().unwrap().push(method.to_string());
+                    if method == "Overlay.setInspectMode" {
+                        let mode = val["params"]["mode"].as_str().unwrap_or("");
+                        modes.lock().unwrap().push(mode.to_string());
+                    }
 
                     let result = match method {
-                        "Target.createTarget" => json!({ "targetId": format!("mock-target-{current_seq}") }),
-                        "Target.attachToTarget" => json!({ "sessionId": format!("mock-page-sid-{current_seq}") }),
+                        "Target.createTarget" => {
+                            json!({ "targetId": format!("mock-target-{current_seq}") })
+                        }
+                        "Target.attachToTarget" => {
+                            json!({ "sessionId": format!("mock-page-sid-{current_seq}") })
+                        }
                         "DOM.getNodeForLocation" => json!({ "backendNodeId": 42 }),
                         "DOM.resolveNode" => json!({ "object": { "objectId": "mock-obj-1" } }),
                         "Runtime.callFunctionOn" => json!({ "result": { "value": extracted } }),
@@ -252,7 +276,9 @@ async fn start_mock_cdp_server(extracted_payload: Value) -> MockCdpServer {
 
                     let mut resp = json!({ "id": id, "result": result });
                     if let Some(sid) = session_id {
-                        resp.as_object_mut().unwrap().insert("sessionId".into(), sid);
+                        resp.as_object_mut()
+                            .unwrap()
+                            .insert("sessionId".into(), sid);
                     }
                     let _ = out_tx.send(resp.to_string());
                 }
@@ -263,6 +289,7 @@ async fn start_mock_cdp_server(extracted_payload: Value) -> MockCdpServer {
     MockCdpServer {
         ws_url,
         received_methods,
+        inspect_modes,
         event_tx,
     }
 }
@@ -388,7 +415,8 @@ async fn selection_extracts_sanitized_preview_creates_managed_png_and_hands_off_
     )
     .await;
     assert!(
-        forged_status == StatusCode::BAD_REQUEST || forged_status == StatusCode::UNPROCESSABLE_ENTITY
+        forged_status == StatusCode::BAD_REQUEST
+            || forged_status == StatusCode::UNPROCESSABLE_ENTITY
     );
 
     // 5. Create ManagedBrowser selection artifact with bounded PNG
@@ -431,7 +459,14 @@ async fn selection_extracts_sanitized_preview_creates_managed_png_and_hands_off_
     assert!(written.contains("; PNG "));
     assert!(!written.contains("Submit Order"));
     assert!(!written.contains("should-never-appear"));
-    let _ = api_request(state, "DELETE", &format!("/api/browser/sessions/{session_id}"), &cookie, None).await;
+    let _ = api_request(
+        state,
+        "DELETE",
+        &format!("/api/browser/sessions/{session_id}"),
+        &cookie,
+        None,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -576,7 +611,14 @@ async fn terminal_replacement_and_navigation_invalidate_pending_handoff() {
     )
     .await;
     assert_eq!(stale_art_status, StatusCode::CONFLICT);
-    let _ = api_request(state, "DELETE", &format!("/api/browser/sessions/{session_id}"), &cookie, None).await;
+    let _ = api_request(
+        state,
+        "DELETE",
+        &format!("/api/browser/sessions/{session_id}"),
+        &cookie,
+        None,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -698,7 +740,14 @@ async fn demoted_admin_cannot_handoff_managed_selection_artifact() {
     )
     .await;
     assert_eq!(ho_status, StatusCode::NOT_FOUND);
-    let _ = api_request(state_admin, "DELETE", &format!("/api/browser/sessions/{session_id}"), &cookie_admin, None).await;
+    let _ = api_request(
+        state_admin,
+        "DELETE",
+        &format!("/api/browser/sessions/{session_id}"),
+        &cookie_admin,
+        None,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -799,7 +848,10 @@ async fn overlay_inspect_event_populates_preview_and_frame_nav_clears_it() {
             break;
         }
     }
-    assert!(found_preview, "expected Overlay.inspectNodeRequested to populate preview");
+    assert!(
+        found_preview,
+        "expected Overlay.inspectNodeRequested to populate preview"
+    );
 
     // Emit top-level Page.frameNavigated -> clears preview
     let _ = cdp.event_tx.send(json!({
@@ -820,7 +872,14 @@ async fn overlay_inspect_event_populates_preview_and_frame_nav_clears_it() {
         after_nav["selection"]["preview"].is_null() || after_nav["selection"].is_null(),
         "expected Page.frameNavigated to invalidate selection preview"
     );
-    let _ = api_request(state, "DELETE", &format!("/api/browser/sessions/{session_id}"), &cookie, None).await;
+    let _ = api_request(
+        state,
+        "DELETE",
+        &format!("/api/browser/sessions/{session_id}"),
+        &cookie,
+        None,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -914,7 +973,14 @@ async fn inspect_point_installs_observer_and_navigated_within_document_invalidat
         after_spa["selection"]["preview"].is_null() || after_spa["selection"].is_null(),
         "expected Page.navigatedWithinDocument to invalidate inspectPoint preview"
     );
-    let _ = api_request(state, "DELETE", &format!("/api/browser/sessions/{session_id}"), &cookie, None).await;
+    let _ = api_request(
+        state,
+        "DELETE",
+        &format!("/api/browser/sessions/{session_id}"),
+        &cookie,
+        None,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1005,15 +1071,18 @@ async fn concurrent_navigation_barrier_during_handoff_fails_closed_without_writi
     let release = Arc::new(tokio::sync::Notify::new());
     let entered_c = entered.clone();
     let release_c = release.clone();
-    *state.browser_debug_artifacts._before_handoff_fence_hook.write().unwrap() =
-        Some(Arc::new(move || {
-            let e = entered_c.clone();
-            let r = release_c.clone();
-            Box::pin(async move {
-                e.notify_one();
-                r.notified().await;
-            })
-        }));
+    *state
+        .browser_debug_artifacts
+        ._before_handoff_fence_hook
+        .write()
+        .unwrap() = Some(Arc::new(move || {
+        let e = entered_c.clone();
+        let r = release_c.clone();
+        Box::pin(async move {
+            e.notify_one();
+            r.notified().await;
+        })
+    }));
 
     let ho_state = state.clone();
     let ho_cookie = cookie.clone();
@@ -1044,7 +1113,11 @@ async fn concurrent_navigation_barrier_during_handoff_fails_closed_without_writi
 
     release.notify_one();
     let (ho_status, _) = ho_task.await.unwrap();
-    *state.browser_debug_artifacts._before_handoff_fence_hook.write().unwrap() = None;
+    *state
+        .browser_debug_artifacts
+        ._before_handoff_fence_hook
+        .write()
+        .unwrap() = None;
 
     assert_eq!(ho_status, StatusCode::NOT_FOUND);
     let buf = state.pty_manager.get_buffer(term_id).unwrap_or_default();
@@ -1052,7 +1125,14 @@ async fn concurrent_navigation_barrier_during_handoff_fails_closed_without_writi
         !buf.contains("browser-debug artifact"),
         "stale handoff leaked bytes to PTY: {buf}"
     );
-    let _ = api_request(state, "DELETE", &format!("/api/browser/sessions/{session_id}"), &cookie, None).await;
+    let _ = api_request(
+        state,
+        "DELETE",
+        &format!("/api/browser/sessions/{session_id}"),
+        &cookie,
+        None,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1145,5 +1225,998 @@ async fn api_nav_does_not_double_bump_while_native_nav_advances_without_picker()
     .await;
     assert_eq!(after_native["navigationRevision"], "3");
     assert_eq!(after_native["url"], "http://example.com/three");
-    let _ = api_request(state, "DELETE", &format!("/api/browser/sessions/{session_id}"), &cookie, None).await;
+    let _ = api_request(
+        state,
+        "DELETE",
+        &format!("/api/browser/sessions/{session_id}"),
+        &cookie,
+        None,
+    )
+    .await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Final handoff fence, navigation watcher recovery and bounded selection bookkeeping.
+// ---------------------------------------------------------------------------------------------
+
+struct Fixture {
+    state: AppState,
+    cookie: String,
+    cdp: MockCdpServer,
+    session_id: String,
+    username: String,
+    lease_token: String,
+    temp: tempfile::TempDir,
+}
+
+async fn fixture(label: &str, session_expires_in: Option<chrono::Duration>) -> Fixture {
+    let temp = tempfile::tempdir().unwrap();
+    let username = format!("admin-{label}-{}", uuid::Uuid::new_v4());
+    let (state, cookie) = match session_expires_in {
+        Some(delta) => make_admin_state_expiring(
+            &temp,
+            &username,
+            UserRole::Admin,
+            chrono::Utc::now() + delta,
+        ),
+        None => make_admin_state(&temp, &username, UserRole::Admin),
+    };
+    let cdp = start_mock_cdp_server(json!({
+        "tag": "button",
+        "text": "Submit",
+        "attributes": { "id": "submit-fence" },
+        "locator": "button#submit-fence",
+        "bounds": { "x": 1.0, "y": 2.0, "width": 80.0, "height": 30.0 }
+    }))
+    .await;
+    *state.browser_host._test_mock_handle.write() = Some(BrowserInstanceHandle {
+        subject: username.clone(),
+        is_dev: false,
+        pid: 9990,
+        ws_endpoint: cdp.ws_url.clone(),
+        browser_incarnation: uuid::Uuid::new_v4().to_string(),
+        profile_epoch: 1,
+        user_data_dir: temp.path().to_path_buf(),
+    });
+    let (_, sess) = api_request(
+        state.clone(),
+        "POST",
+        "/api/browser/sessions",
+        &cookie,
+        Some(json!({
+            "creationKey": uuid::Uuid::new_v4().to_string(),
+            "url": "http://example.com/start",
+            "viewport": { "width": 1280, "height": 900, "dpr": 1 }
+        })),
+    )
+    .await;
+    let session_id = sess["browserSessionId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("session creation failed: {sess}"))
+        .to_string();
+    let (_, lease) = api_request(
+        state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{session_id}/control/acquire"),
+        &cookie,
+        Some(json!({ "viewerId": "v1", "holderKind": "human" })),
+    )
+    .await;
+    let lease_token = lease["leaseToken"].as_str().unwrap().to_string();
+    Fixture {
+        state,
+        cookie,
+        cdp,
+        session_id,
+        username,
+        lease_token,
+        temp,
+    }
+}
+
+impl Fixture {
+    /// Records an inspect-point selection at `navigation_revision`; returns its selectionRevision.
+    async fn select(&self, navigation_revision: u64) -> u64 {
+        let (status, sel) = api_request(
+            self.state.clone(),
+            "POST",
+            &format!("/api/browser/sessions/{}/selection/start", self.session_id),
+            &self.cookie,
+            Some(json!({
+                "leaseToken": self.lease_token,
+                "navigationRevision": navigation_revision,
+                "inspectPoint": { "x": 10, "y": 10 }
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{sel}");
+        sel["selectionRevision"].as_u64().unwrap()
+    }
+
+    async fn artifact(&self, term_id: &str, term_inc: u64, sel_rev: u64, nav_rev: u64) -> String {
+        let (status, art) = api_request(
+            self.state.clone(),
+            "POST",
+            &format!(
+                "/api/browser/sessions/{}/selection/artifacts",
+                self.session_id
+            ),
+            &self.cookie,
+            Some(json!({
+                "selectionRevision": sel_rev,
+                "terminalId": term_id,
+                "terminalIncarnation": term_inc,
+                "navigationRevision": nav_rev,
+                "includePng": false
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{art}");
+        art["artifactId"].as_str().unwrap().to_string()
+    }
+
+    async fn handoff(&self, artifact_id: &str) -> StatusCode {
+        api_request(
+            self.state.clone(),
+            "POST",
+            &format!("/api/browser-debug/artifacts/{artifact_id}/handoff"),
+            &self.cookie,
+            None,
+        )
+        .await
+        .0
+    }
+
+    async fn registry_nav(&self) -> u64 {
+        dam_hopper_server::api::browser_host::global_session_registry()
+            .get_session(&self.session_id, &self.username)
+            .await
+            .unwrap()
+            .navigation_revision
+            .parse()
+            .unwrap()
+    }
+
+    async fn wait_registry_nav(&self, expected: u64) {
+        for _ in 0..100 {
+            if self.registry_nav().await == expected {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!(
+            "navigation revision never reached {expected} (at {})",
+            self.registry_nav().await
+        );
+    }
+
+    async fn close(self) {
+        let _ = api_request(
+            self.state,
+            "DELETE",
+            &format!("/api/browser/sessions/{}", self.session_id),
+            &self.cookie,
+            None,
+        )
+        .await;
+    }
+
+    /// Closes the session when the (expired) login can no longer call the DELETE route, so the
+    /// global browser target capacity is not leaked into later tests.
+    async fn close_expired(self) {
+        dam_hopper_server::api::browser_host::global_session_registry()
+            .close_principal_sessions(&self.username)
+            .await;
+    }
+}
+
+fn install_final_validation_hook(
+    state: &AppState,
+    hook: impl Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        + Send
+        + Sync
+        + 'static,
+) {
+    *state
+        .browser_debug_artifacts
+        ._before_handoff_final_validation_hook
+        .write()
+        .unwrap() = Some(Arc::new(hook));
+}
+
+fn pty_has_reference(state: &AppState, term_id: &str) -> bool {
+    state
+        .pty_manager
+        .get_buffer(term_id)
+        .unwrap_or_default()
+        .contains("browser-debug artifact")
+}
+
+#[tokio::test]
+async fn navigation_recorded_after_fence_snapshot_is_caught_by_final_validation_without_pty_write()
+{
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("fence-nav", None).await;
+    let term_id = "shell:fence-nav";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+
+    // After the fence snapshot (entry lock + selection fence held) a navigation N+1 lands via a
+    // path that does not use the selection gate; final validation must still deny the write.
+    let sid = fx.session_id.clone();
+    install_final_validation_hook(&fx.state, move || {
+        let sid = sid.clone();
+        Box::pin(async move {
+            let bumped = dam_hopper_server::api::browser_host::global_session_registry()
+                .record_cdp_navigation(&sid, Some("http://example.com/after-fence"), &[])
+                .await;
+            assert_eq!(bumped, Some(2));
+        })
+    });
+    assert_eq!(fx.handoff(&artifact_id).await, StatusCode::NOT_FOUND);
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(
+        !pty_has_reference(&fx.state, term_id),
+        "stale handoff leaked bytes to the PTY"
+    );
+    fx.close().await;
+}
+
+/// Holds the PTY mutex on a blocking thread until the returned sender fires (or drops).
+async fn hold_pty_lock(state: &AppState) -> std::sync::mpsc::Sender<()> {
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let pty = state.pty_manager.clone();
+    tokio::task::spawn_blocking(move || {
+        pty.with_fleet_for_test(|_| {
+            locked_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        })
+    });
+    tokio::task::spawn_blocking(move || {
+        locked_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("PTY lock was never taken")
+    })
+    .await
+    .unwrap();
+    release_tx
+}
+
+type HandoffTask = tokio::task::JoinHandle<(StatusCode, Value)>;
+
+/// Starts a handoff and returns once its blocking worker is about to wait for the PTY lock the
+/// test holds. Every async validation has already completed at that point.
+async fn handoff_parked_on_pty_lock(
+    fx: &Fixture,
+    artifact_id: &str,
+) -> (HandoffTask, std::sync::mpsc::Sender<()>) {
+    let release = hold_pty_lock(&fx.state).await;
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    *fx.state
+        .browser_debug_artifacts
+        ._before_pty_mutation_hook
+        .write()
+        .unwrap() = Some(Arc::new(move || {
+        let _ = entered_tx.send(());
+    }));
+    let (state, cookie, artifact) = (fx.state.clone(), fx.cookie.clone(), artifact_id.to_string());
+    let task = tokio::spawn(async move {
+        api_request(
+            state,
+            "POST",
+            &format!("/api/browser-debug/artifacts/{artifact}/handoff"),
+            &cookie,
+            None,
+        )
+        .await
+    });
+    tokio::task::spawn_blocking(move || {
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("handoff never reached the PTY mutation boundary")
+    })
+    .await
+    .unwrap();
+    (task, release)
+}
+
+async fn wait_observed_navigations(fx: &Fixture, expected: u64) {
+    for _ in 0..100 {
+        if dam_hopper_server::browser_host::selection::observed_navigation_count(&fx.session_id)
+            == expected
+        {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("native navigation was never observed");
+}
+
+#[tokio::test]
+async fn native_navigation_observed_while_the_handoff_holds_the_fence_prevents_the_write() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("fence-order", None).await;
+    let term_id = "shell:fence-order";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (entered_c, release_c) = (entered.clone(), release.clone());
+    install_final_validation_hook(&fx.state, move || {
+        let (e, r) = (entered_c.clone(), release_c.clone());
+        Box::pin(async move {
+            e.notify_one();
+            r.notified().await;
+        })
+    });
+
+    let ho_state = fx.state.clone();
+    let ho_cookie = fx.cookie.clone();
+    let ho_art = artifact_id.clone();
+    let ho_task = tokio::spawn(async move {
+        api_request(
+            ho_state,
+            "POST",
+            &format!("/api/browser-debug/artifacts/{ho_art}/handoff"),
+            &ho_cookie,
+            None,
+        )
+        .await
+    });
+    entered.notified().await;
+
+    // A native navigation arrives while the handoff holds the fence. Chromium has already
+    // navigated: its registry record waits behind the fence, but the observation is published
+    // at once and must deny the write.
+    let _ = fx.cdp.event_tx.send(json!({
+        "method": "Page.navigatedWithinDocument",
+        "params": { "frameId": "main", "url": "http://example.com/native" }
+    }));
+    wait_observed_navigations(&fx, 1).await;
+    assert_eq!(
+        fx.registry_nav().await,
+        1,
+        "the revision record itself still waits behind the fence"
+    );
+
+    release.notify_one();
+    let (ho_status, _) = ho_task.await.unwrap();
+    assert_eq!(ho_status, StatusCode::NOT_FOUND);
+    fx.wait_registry_nav(2).await;
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(
+        !pty_has_reference(&fx.state, term_id),
+        "a navigation observed before the PTY write must prevent the handoff"
+    );
+
+    // The artifact is stale for good.
+    *fx.state
+        .browser_debug_artifacts
+        ._before_handoff_final_validation_hook
+        .write()
+        .unwrap() = None;
+    assert_eq!(fx.handoff(&artifact_id).await, StatusCode::NOT_FOUND);
+    fx.close().await;
+}
+
+#[tokio::test]
+async fn native_navigation_during_the_pty_lock_wait_prevents_the_write() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("fence-ptywait", None).await;
+    let term_id = "shell:fence-ptywait";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+
+    let (ho_task, release_pty) = handoff_parked_on_pty_lock(&fx, &artifact_id).await;
+
+    // Every async validation passed; the worker now waits for the PTY lock. The navigation
+    // lands only now and is the sole thing that can still deny the write.
+    let _ = fx.cdp.event_tx.send(json!({
+        "method": "Page.navigatedWithinDocument",
+        "params": { "frameId": "main", "url": "http://example.com/during-pty-wait" }
+    }));
+    wait_observed_navigations(&fx, 1).await;
+    assert_eq!(fx.registry_nav().await, 1);
+
+    release_pty.send(()).unwrap();
+    let (status, _) = ho_task.await.unwrap();
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(
+        !pty_has_reference(&fx.state, term_id),
+        "stale handoff leaked bytes to the PTY"
+    );
+    fx.wait_registry_nav(2).await;
+    fx.close().await;
+}
+
+#[tokio::test]
+async fn handoff_waiting_for_the_pty_lock_succeeds_when_no_navigation_arrives() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("fence-ptywait-ok", None).await;
+    let term_id = "shell:fence-ptywait-ok";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+
+    let (ho_task, release_pty) = handoff_parked_on_pty_lock(&fx, &artifact_id).await;
+    release_pty.send(()).unwrap();
+    let (status, _) = ho_task.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    for _ in 0..50 {
+        if pty_has_reference(&fx.state, term_id) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(pty_has_reference(&fx.state, term_id));
+    fx.close().await;
+}
+
+#[tokio::test]
+async fn session_deadline_passing_during_the_pty_lock_wait_prevents_the_write() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("fence-ptywait-deadline", Some(chrono::Duration::seconds(4))).await;
+    let term_id = "shell:fence-ptywait-deadline";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+
+    // Still live for every async validation; the deadline passes only while the worker waits
+    // for the PTY lock, so just the check made under that lock can deny the write.
+    let (ho_task, release_pty) = handoff_parked_on_pty_lock(&fx, &artifact_id).await;
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    release_pty.send(()).unwrap();
+    let (status, _) = ho_task.await.unwrap();
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(
+        !pty_has_reference(&fx.state, term_id),
+        "expired session leaked bytes to the PTY"
+    );
+    fx.close_expired().await;
+}
+
+#[tokio::test]
+async fn deadline_expiring_during_final_lock_waits_denies_the_handoff_write() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("fence-deadline", Some(chrono::Duration::seconds(4))).await;
+    let term_id = "shell:fence-deadline";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+
+    // The session is still live when the handoff starts and when the fence is acquired, then
+    // its deadline passes while the handoff waits for its final validation.
+    install_final_validation_hook(&fx.state, || {
+        Box::pin(async {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        })
+    });
+    assert_eq!(fx.handoff(&artifact_id).await, StatusCode::NOT_FOUND);
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(
+        !pty_has_reference(&fx.state, term_id),
+        "expired session leaked bytes to the PTY"
+    );
+    fx.close_expired().await;
+}
+
+#[tokio::test]
+async fn watcher_overflow_resumes_observation_so_a_new_picker_still_sees_navigation() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("watch-overflow", None).await;
+    let first_rev = fx.select(1).await;
+    assert!(first_rev >= 1);
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+    // An oversized sessionId makes the CDP client project an `Overflow` lifecycle event: a lost
+    // event that may have been a navigation. The watcher treats it as one and keeps observing.
+    let _ = fx.cdp.event_tx.send(json!({
+        "method": "Page.frameNavigated",
+        "sessionId": "x".repeat(300),
+        "params": { "frame": { "id": "main", "url": "http://example.com/lost" } }
+    }));
+    fx.wait_registry_nav(2).await;
+
+    // A new picker after the overflow is accepted and its watcher is live...
+    let second_rev = fx.select(2).await;
+    assert!(second_rev > first_rev);
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+    // ...so a later native navigation still advances the revision and invalidates the selection.
+    let _ = fx.cdp.event_tx.send(json!({
+        "method": "Page.navigatedWithinDocument",
+        "params": { "frameId": "main", "url": "http://example.com/after-overflow" }
+    }));
+    fx.wait_registry_nav(3).await;
+    let (_, after) = api_request(
+        fx.state.clone(),
+        "GET",
+        &format!("/api/browser/sessions/{}", fx.session_id),
+        &fx.cookie,
+        None,
+    )
+    .await;
+    assert_eq!(after["navigationRevision"], "3");
+    assert!(
+        after["selection"].is_null() || after["selection"]["preview"].is_null(),
+        "post-overflow navigation must invalidate the new selection: {after}"
+    );
+    fx.close().await;
+}
+
+#[tokio::test]
+async fn repeated_prepare_and_terminal_paths_keep_selection_registrations_bounded() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("registrations", None).await;
+    let term_id = "shell:registrations";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let count = || {
+        dam_hopper_server::browser_host::selection::pending_artifact_registration_count(
+            &fx.session_id,
+        )
+    };
+
+    // One unchanged selection, prepared and discarded repeatedly via the DELETE route.
+    for _ in 0..6 {
+        let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+        assert_eq!(count().await, 1);
+        let (status, _) = api_request(
+            fx.state.clone(),
+            "DELETE",
+            &format!("/api/browser-debug/artifacts/{artifact_id}"),
+            &fx.cookie,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(
+            count().await,
+            0,
+            "deleted artifact must not stay registered"
+        );
+    }
+
+    // Force-invalidation (capture failure / navigation teardown) retires the registration too.
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+    assert_eq!(count().await, 1);
+    fx.state
+        .browser_debug_artifacts
+        .force_invalidate(uuid::Uuid::parse_str(&artifact_id).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(count().await, 0);
+
+    // Principal reset/revocation retires registrations of fenced artifacts as well.
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+    assert_eq!(count().await, 1);
+    fx.state
+        .browser_debug_artifacts
+        .revoke_managed_by_principal(&fx.username, None)
+        .await
+        .unwrap();
+    assert_eq!(count().await, 0);
+    assert_eq!(fx.handoff(&artifact_id).await, StatusCode::NOT_FOUND);
+    fx.close().await;
+}
+
+#[tokio::test]
+async fn logout_during_the_pty_lock_wait_prevents_the_write() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("fence-logout", None).await;
+    let term_id = "shell:fence-logout";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+
+    // Every async validation passed and the worker waits for the PTY lock; the login is then
+    // revoked through the real logout route. Only the final in-lock check can still deny it.
+    let (ho_task, release_pty) = handoff_parked_on_pty_lock(&fx, &artifact_id).await;
+    let (logout_status, _) = api_request(
+        fx.state.clone(),
+        "POST",
+        "/api/auth/logout",
+        &fx.cookie,
+        None,
+    )
+    .await;
+    assert_eq!(logout_status, StatusCode::OK);
+
+    release_pty.send(()).unwrap();
+    let (status, _) = ho_task.await.unwrap();
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(
+        !pty_has_reference(&fx.state, term_id),
+        "a handoff of a revoked login leaked bytes to the PTY"
+    );
+    fx.close_expired().await;
+}
+
+/// Real StepUp MFA rotation (challenge + verify through the production routes, against a real
+/// SQLite auth store) completes while a handoff that already passed every async credential
+/// check waits for the PTY lock: the superseded credential must not write.
+#[tokio::test]
+async fn mfa_step_up_rotation_during_the_pty_lock_wait_prevents_the_write() {
+    use dam_hopper_server::auth::{
+        model::MfaConfirmed, policy::MockClock, secret::MfaEncryptionKey, totp::TotpEngine,
+        AuthStore, Clock,
+    };
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let mut fx = fixture("fence-mfa", None).await;
+    let term_id = "shell:fence-mfa";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+
+    // Swap the fixture's mock auth for a real store holding the same admin login.
+    let auth_dir = tempfile::tempdir().unwrap();
+    let store = AuthStore::open_sqlite(&auth_dir.path().join("auth.db"))
+        .await
+        .unwrap();
+    let mfa_key = MfaEncryptionKey::new([0x33u8; 32], "selection-mfa-key");
+    let clock = Arc::new(MockClock::new(chrono::Utc::now()));
+    let now = clock.now();
+    let secret = [7u8; 20];
+    let (ciphertext, nonce) = mfa_key
+        .encrypt(&fx.username, "enrollment-confirmed", &secret)
+        .unwrap();
+    store
+        .create_user(UserRecord {
+            id: None,
+            username: fx.username.clone(),
+            password_hash: String::new(),
+            is_enabled: true,
+            role: UserRole::Admin,
+            auth_version: 0,
+            mfa: Some(MfaConfirmed {
+                secret_ciphertext: ciphertext,
+                nonce,
+                key_id: mfa_key.key_id().to_string(),
+                enrolled_at: chrono_to_bson(now),
+                last_accepted_step: now.timestamp() / 30 - 1,
+            }),
+            mfa_attempt_window_started_at: None,
+            mfa_attempt_count: 0,
+            mfa_blocked_until: None,
+        })
+        .await
+        .unwrap();
+    store
+        .create_session(AuthSession {
+            id: format!("sess-{}", fx.username),
+            username: fx.username.clone(),
+            auth_version: 0,
+            credential_version: 0,
+            issued_at: chrono_to_bson(now),
+            expires_at: chrono_to_bson(
+                chrono::DateTime::from_timestamp(MOCK_EXPIRY_SECS as i64, 0).unwrap(),
+            ),
+            mfa_verified_at: chrono_to_bson(now),
+            revoked_at: None,
+            user_agent: None,
+        })
+        .await
+        .unwrap();
+    fx.state = fx
+        .state
+        .clone()
+        .with_auth_service(Arc::new(AuthService::new(
+            Some(store),
+            Some(mfa_key),
+            clock.clone(),
+        )));
+
+    // Every async validation passed and the worker waits for the PTY lock; the credential is
+    // then rotated by the real StepUp routes. Only the final in-lock check can still deny it.
+    let (ho_task, release_pty) = handoff_parked_on_pty_lock(&fx, &artifact_id).await;
+    let (status, challenge) = api_request(
+        fx.state.clone(),
+        "POST",
+        "/api/auth/mfa/challenge",
+        &fx.cookie,
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{challenge}");
+    let code = TotpEngine::generate_code_at(&secret, clock.now().timestamp() as u64).unwrap();
+    let (status, rotated) = api_request(
+        fx.state.clone(),
+        "POST",
+        "/api/auth/mfa/verify",
+        &fx.cookie,
+        Some(json!({ "challengeToken": challenge["challengeToken"], "code": code })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rotated}");
+    assert_eq!(rotated["state"], "authenticated");
+
+    release_pty.send(()).unwrap();
+    let (status, _) = ho_task.await.unwrap();
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(
+        !pty_has_reference(&fx.state, term_id),
+        "a handoff of a rotated-away credential leaked bytes to the PTY"
+    );
+    fx.close_expired().await;
+}
+
+#[tokio::test]
+async fn retired_browser_incarnation_during_the_pty_lock_wait_prevents_the_write() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("fence-incarnation", None).await;
+    let term_id = "shell:fence-incarnation";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let artifact_id = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+
+    let (ho_task, release_pty) = handoff_parked_on_pty_lock(&fx, &artifact_id).await;
+    // The browser the artifact came from is retired (crash/stop/reset): its live incarnation
+    // leaves the manager synchronously, before any selection cleanup could arrive.
+    let live = fx.state.browser_host._test_mock_handle.write().take();
+    release_pty.send(()).unwrap();
+    let (status, _) = ho_task.await.unwrap();
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(
+        !pty_has_reference(&fx.state, term_id),
+        "an artifact of a retired browser incarnation leaked bytes to the PTY"
+    );
+
+    // The artifact was never claimed: with the browser live again it still hands off.
+    *fx.state.browser_host._test_mock_handle.write() = live;
+    *fx.state
+        .browser_debug_artifacts
+        ._before_pty_mutation_hook
+        .write()
+        .unwrap() = None;
+    assert_eq!(fx.handoff(&artifact_id).await, StatusCode::OK);
+    fx.close().await;
+}
+
+/// Opens the parked-unlink gate when dropped, so a failing assertion cannot leave a blocking
+/// worker parked (which would hang runtime shutdown).
+struct OpenGateOnDrop(Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
+
+impl Drop for OpenGateOnDrop {
+    fn drop(&mut self) {
+        *self.0 .0.lock().unwrap() = true;
+        self.0 .1.notify_all();
+    }
+}
+
+#[tokio::test]
+async fn navigation_during_a_parked_artifact_cleanup_is_observed_and_denies_a_new_handoff() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("watch-parked-cleanup", None).await;
+    let term_id = "shell:watch-parked-cleanup";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let _stale_artifact = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+
+    // The first unlink (the cleanup the first navigation owes its pending artifact) parks.
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let first = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let hook_gate = gate.clone();
+    *fx.state
+        .browser_debug_artifacts
+        ._before_unlink_hook
+        .write()
+        .unwrap() = Some(Arc::new(move || {
+        if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            let _ = entered_tx.send(());
+            let (open, cvar) = &*hook_gate;
+            let mut open = open.lock().unwrap();
+            while !*open {
+                open = cvar.wait(open).unwrap();
+            }
+        }
+    }));
+    let open_gate = OpenGateOnDrop(gate.clone());
+
+    let _ = fx.cdp.event_tx.send(json!({
+        "method": "Page.navigatedWithinDocument",
+        "params": { "frameId": "main", "url": "http://example.com/first" }
+    }));
+    wait_observed_navigations(&fx, 1).await;
+    tokio::task::spawn_blocking(move || {
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the artifact cleanup never started")
+    })
+    .await
+    .unwrap();
+    fx.wait_registry_nav(2).await;
+
+    // While that cleanup is parked a new picker selects and prepares an artifact at revision 2.
+    let new_sel_rev = fx.select(2).await;
+    let artifact_id = fx.artifact(term_id, term_inc, new_sel_rev, 2).await;
+
+    // A second native navigation arrives: it must be observed at once, not queue behind the
+    // parked cleanup, so the handoff below can never validate a stale page.
+    let _ = fx.cdp.event_tx.send(json!({
+        "method": "Page.navigatedWithinDocument",
+        "params": { "frameId": "main", "url": "http://example.com/second" }
+    }));
+    wait_observed_navigations(&fx, 2).await;
+    assert_eq!(fx.handoff(&artifact_id).await, StatusCode::NOT_FOUND);
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(
+        !pty_has_reference(&fx.state, term_id),
+        "a handoff after an unpublished navigation leaked bytes to the PTY"
+    );
+
+    drop(open_gate);
+    fx.wait_registry_nav(3).await;
+    fx.close().await;
+}
+
+/// Parks the first artifact unlink on its blocking worker until the returned guard drops.
+fn park_first_unlink(state: &AppState) -> (std::sync::mpsc::Receiver<()>, OpenGateOnDrop) {
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let first = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let hook_gate = gate.clone();
+    *state
+        .browser_debug_artifacts
+        ._before_unlink_hook
+        .write()
+        .unwrap() = Some(Arc::new(move || {
+        if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            let _ = entered_tx.send(());
+            let (open, cvar) = &*hook_gate;
+            let mut open = open.lock().unwrap();
+            while !*open {
+                open = cvar.wait(open).unwrap();
+            }
+        }
+    }));
+    (entered_rx, OpenGateOnDrop(gate))
+}
+
+async fn wait_unlink_parked(entered: std::sync::mpsc::Receiver<()>) {
+    tokio::task::spawn_blocking(move || {
+        entered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the artifact cleanup never started")
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn late_cleanup_of_an_old_selection_never_disables_a_newer_picker() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("late-cleanup-picker", None).await;
+    let term_id = "shell:late-cleanup-picker";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let _stale_artifact = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+
+    let (entered, open_gate) = park_first_unlink(&fx.state);
+    let _ = fx.cdp.event_tx.send(json!({
+        "method": "Page.navigatedWithinDocument",
+        "params": { "frameId": "main", "url": "http://example.com/first" }
+    }));
+    wait_unlink_parked(entered).await;
+    fx.wait_registry_nav(2).await;
+
+    // While the old selection's unlink is parked a NEW interactive picker starts and enables
+    // native picking.
+    let (status, started) = api_request(
+        fx.state.clone(),
+        "POST",
+        &format!("/api/browser/sessions/{}/selection/start", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "leaseToken": fx.lease_token, "navigationRevision": 2 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    for _ in 0..100 {
+        if fx
+            .cdp
+            .inspect_modes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m == "searchForNode")
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    // The obsolete cleanup now finishes: it must not switch the new picker off.
+    drop(open_gate);
+    dam_hopper_server::browser_host::selection::drain_navigation_cleanups().await;
+    let modes = fx.cdp.inspect_modes.lock().unwrap().clone();
+    let picker = modes
+        .iter()
+        .position(|m| m == "searchForNode")
+        .expect("the new picker never enabled native picking");
+    assert!(
+        !modes[picker..].iter().any(|m| m == "none"),
+        "late cleanup of an old selection disabled the newer picker: {modes:?}"
+    );
+    fx.close().await;
+}
+
+#[tokio::test]
+async fn navigation_cleanup_queue_coalesces_and_session_close_waits_for_it() {
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("cleanup-queue", None).await;
+    let term_id = "shell:cleanup-queue";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let _stale_artifact = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+
+    let (entered, open_gate) = park_first_unlink(&fx.state);
+    let _ = fx.cdp.event_tx.send(json!({
+        "method": "Page.navigatedWithinDocument",
+        "params": { "frameId": "main", "url": "http://example.com/n0" }
+    }));
+    wait_unlink_parked(entered).await;
+    fx.wait_registry_nav(2).await;
+
+    // Many navigations land behind the parked unlink: each is observed at once and their
+    // (empty) teardowns coalesce instead of queueing one record per navigation.
+    const BURST: u64 = 12;
+    for i in 1..=BURST {
+        let _ = fx.cdp.event_tx.send(json!({
+            "method": "Page.navigatedWithinDocument",
+            "params": { "frameId": "main", "url": format!("http://example.com/n{i}") }
+        }));
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    wait_observed_navigations(&fx, BURST + 1).await;
+    fx.wait_registry_nav(BURST + 2).await;
+
+    // Session close must wait for the queued teardown instead of leaving it detached.
+    let close = {
+        let (state, cookie, session_id) =
+            (fx.state.clone(), fx.cookie.clone(), fx.session_id.clone());
+        tokio::spawn(async move {
+            api_request(
+                state,
+                "DELETE",
+                &format!("/api/browser/sessions/{session_id}"),
+                &cookie,
+                None,
+            )
+            .await
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert!(
+        !close.is_finished(),
+        "close returned while cleanup was still parked"
+    );
+    drop(open_gate);
+    let (status, _) = tokio::time::timeout(std::time::Duration::from_secs(10), close)
+        .await
+        .expect("close never finished after the cleanup was released")
+        .unwrap();
+    assert!(status.is_success(), "{status}");
+
+    let nones = fx
+        .cdp
+        .inspect_modes
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|m| *m == "none")
+        .count();
+    assert!(
+        nones <= 2,
+        "overlay teardown was queued once per navigation instead of coalesced: {nones}"
+    );
 }

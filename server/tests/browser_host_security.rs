@@ -448,6 +448,9 @@ async fn test_ticket_replay_purpose_origin_and_epoch_rejection() {
 async fn test_no_auth_guarded_loopback_and_header_rejection() {
     let tmp = tempdir().unwrap();
     let state = create_test_state(tmp.path().to_path_buf(), true);
+    state
+        .record_bound_listener("127.0.0.1:4801".parse().unwrap())
+        .expect("record listener");
     let headers = HeaderMap::new();
 
     // 1. Loopback peer address (127.0.0.1) -> allowed

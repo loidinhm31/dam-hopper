@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -18,7 +20,7 @@ use crate::api::auth::AuthenticatedActor;
 use crate::api::browser_host::global_session_registry;
 use crate::browser_debug::{
     ArtifactSource, BrowserDebugArtifactResponse, BrowserDebugError, BrowserSelectionBoundsV1,
-    BrowserSelectionV1, MAX_PNG_BYTES,
+    BrowserSelectionV1, HandoffFence, MAX_PNG_BYTES,
 };
 use crate::browser_host::auth::BrowserAdmission;
 use crate::browser_host::cdp::{CdpClient, CdpLifecycleEvent};
@@ -162,9 +164,35 @@ pub(crate) struct SessionSelectionState {
     pending_artifacts: Vec<(Uuid, AuthenticatedActor)>,
     cancel_token: Option<CancellationToken>,
     inspect_task: Option<JoinHandle<()>>,
+    /// Serializes overlay picker installation against late overlay teardown.
+    overlay_gate: Arc<tokio::sync::Mutex<()>>,
+    cleanup: Arc<CleanupQueue>,
 }
 
 impl SessionSelectionState {
+    fn new(owner_principal: &str, navigation_revision: u64) -> Self {
+        Self {
+            owner_principal: owner_principal.to_string(),
+            active: false,
+            selection_revision: 0,
+            navigation_revision,
+            backend_node_id: None,
+            preview: None,
+            pending_artifacts: Vec::new(),
+            cancel_token: None,
+            inspect_task: None,
+            overlay_gate: Arc::new(tokio::sync::Mutex::new(())),
+            cleanup: Arc::new(CleanupQueue::default()),
+        }
+    }
+
+    fn overlay_teardown(&self) -> OverlayTeardown {
+        OverlayTeardown {
+            gate: self.overlay_gate.clone(),
+            selection_revision: self.selection_revision,
+        }
+    }
+
     fn to_summary(&self) -> SelectionSummaryDto {
         SelectionSummaryDto {
             active: self.active,
@@ -182,8 +210,237 @@ pub struct SelectionManager {
 pub static GLOBAL_SELECTION_MANAGER: LazyLock<SelectionManager> =
     LazyLock::new(SelectionManager::new);
 
-static GLOBAL_NAV_WATCHERS: LazyLock<StdMutex<HashMap<String, CancellationToken>>> =
+struct NavWatcher {
+    id: u64,
+    token: CancellationToken,
+}
+
+static NAV_WATCHER_SEQ: AtomicU64 = AtomicU64::new(1);
+
+static GLOBAL_NAV_WATCHERS: LazyLock<StdMutex<HashMap<String, NavWatcher>>> =
     LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+/// Navigations observed per session, published synchronously at the instant the CDP event is
+/// seen, BEFORE the (possibly blocked) selection write lock is awaited. `applied` catches up once
+/// the registry revision and selection invalidation are recorded. A handoff fence refuses to
+/// start while a navigation is observed-but-unapplied, and its final PTY-lock check fails as
+/// soon as `observed` moves, so a navigation can never be hidden behind the selection lock.
+#[derive(Clone, Copy, Default)]
+struct NavigationObservations {
+    observed: u64,
+    applied: u64,
+}
+
+static NAVIGATION_OBSERVATIONS: LazyLock<StdMutex<HashMap<String, NavigationObservations>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+/// A published native navigation whose invalidation is not yet applied. Dropping it without
+/// `mark_applied` (cancelled recorder) deliberately leaves the session fail-closed for handoffs
+/// until its observation state is forgotten at session teardown.
+struct ObservedNavigation {
+    session_id: String,
+}
+
+impl ObservedNavigation {
+    fn publish(session_id: &str) -> Self {
+        let mut map = NAVIGATION_OBSERVATIONS.lock().unwrap();
+        map.entry(session_id.to_string()).or_default().observed += 1;
+        Self {
+            session_id: session_id.to_string(),
+        }
+    }
+
+    fn mark_applied(self) {
+        let mut map = NAVIGATION_OBSERVATIONS.lock().unwrap();
+        if let Some(entry) = map.get_mut(&self.session_id) {
+            entry.applied += 1;
+        }
+    }
+}
+
+/// Observed-navigation counter for a session when none is awaiting application.
+fn settled_navigation_observation(session_id: &str) -> Option<u64> {
+    let mut map = NAVIGATION_OBSERVATIONS.lock().unwrap();
+    let entry = map.entry(session_id.to_string()).or_default();
+    (entry.observed == entry.applied).then_some(entry.observed)
+}
+
+fn forget_navigation_observations(session_id: &str) {
+    NAVIGATION_OBSERVATIONS.lock().unwrap().remove(session_id);
+}
+
+/// Number of native navigations published for `session_id` so far.
+#[doc(hidden)]
+pub fn observed_navigation_count(session_id: &str) -> u64 {
+    NAVIGATION_OBSERVATIONS
+        .lock()
+        .unwrap()
+        .get(session_id)
+        .map_or(0, |entry| entry.observed)
+}
+
+/// Holds the selection read lock (postponing navigation bookkeeping) for a handoff and
+/// remembers the observed-navigation counter at acquisition.
+pub(crate) struct ManagedSelectionFence {
+    _guard: tokio::sync::OwnedRwLockReadGuard<HashMap<String, SessionSelectionState>>,
+    session_id: String,
+    observed: u64,
+}
+
+impl HandoffFence for ManagedSelectionFence {
+    /// Synchronous: no native navigation was observed since the fence was acquired.
+    fn is_current(&self) -> bool {
+        NAVIGATION_OBSERVATIONS
+            .lock()
+            .unwrap()
+            .get(&self.session_id)
+            .is_some_and(|entry| entry.observed == self.observed && entry.applied == self.observed)
+    }
+}
+
+/// Identity of the selection generation whose overlay a teardown may disable.
+#[derive(Clone)]
+struct OverlayTeardown {
+    gate: Arc<tokio::sync::Mutex<()>>,
+    selection_revision: u64,
+}
+
+/// Work to run after an in-memory selection invalidation released the selection lock.
+struct InvalidatedSelection {
+    token: Option<CancellationToken>,
+    task: Option<JoinHandle<()>>,
+    pending: Vec<(Uuid, AuthenticatedActor)>,
+    overlay: OverlayTeardown,
+    cleanup: Arc<CleanupQueue>,
+}
+
+impl InvalidatedSelection {
+    /// Cancels and aborts the invalidated picker immediately (cheap, never waits).
+    fn stop_picker(&mut self) {
+        if let Some(tok) = self.token.take() {
+            tok.cancel();
+        }
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+
+    /// Stops the picker now and hands the slow part (artifact unlinks, overlay CDP) to the
+    /// session's cleanup queue.
+    fn queue_teardown(mut self, state: &AppState, session_id: &str) {
+        self.stop_picker();
+        self.cleanup
+            .clone()
+            .submit(state, session_id, self.pending, self.overlay);
+    }
+}
+
+/// Teardown owed to invalidated selections of one session, coalesced to bounded state: the
+/// artifact ids still to retire (bounded by the artifact quota) plus at most one overlay
+/// teardown, always the latest generation. One worker drains it in order; `drain` lets session
+/// teardown and shutdown wait for it instead of leaving it detached.
+#[derive(Default)]
+struct CleanupQueue {
+    inner: StdMutex<QueuedCleanup>,
+    idle: tokio::sync::Notify,
+}
+
+#[derive(Default)]
+struct QueuedCleanup {
+    pending: Vec<(Uuid, AuthenticatedActor)>,
+    overlay: Option<OverlayTeardown>,
+    running: bool,
+}
+
+/// Marks the worker stopped (and wakes drainers) if it unwinds before finding the queue empty.
+struct CleanupWorkerExit {
+    queue: Arc<CleanupQueue>,
+    finished: bool,
+}
+
+impl Drop for CleanupWorkerExit {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.queue.inner.lock().unwrap().running = false;
+            self.queue.idle.notify_waiters();
+        }
+    }
+}
+
+impl CleanupQueue {
+    fn submit(
+        self: &Arc<Self>,
+        state: &AppState,
+        session_id: &str,
+        pending: Vec<(Uuid, AuthenticatedActor)>,
+        overlay: OverlayTeardown,
+    ) {
+        let start_worker = {
+            let mut queued = self.inner.lock().unwrap();
+            queued.pending.extend(pending);
+            queued.overlay = Some(overlay);
+            !std::mem::replace(&mut queued.running, true)
+        };
+        if start_worker {
+            let (queue, state, session_id) = (self.clone(), state.clone(), session_id.to_string());
+            tokio::spawn(async move { queue.run(state, session_id).await });
+        }
+    }
+
+    async fn run(self: Arc<Self>, state: AppState, session_id: String) {
+        let mut exit = CleanupWorkerExit {
+            queue: self.clone(),
+            finished: false,
+        };
+        loop {
+            let (pending, overlay) = {
+                let mut queued = self.inner.lock().unwrap();
+                if queued.pending.is_empty() && queued.overlay.is_none() {
+                    queued.running = false;
+                    exit.finished = true;
+                    drop(queued);
+                    self.idle.notify_waiters();
+                    return;
+                }
+                (std::mem::take(&mut queued.pending), queued.overlay.take())
+            };
+            cleanup_pending_artifacts(&state, pending).await;
+            if let Some(overlay) = overlay {
+                disable_overlay_if_current(&session_id, overlay).await;
+            }
+        }
+    }
+
+    /// Resolves once the worker has found the queue empty (immediately when none is running).
+    async fn drain(&self) {
+        loop {
+            let idle = self.idle.notified();
+            tokio::pin!(idle);
+            idle.as_mut().enable();
+            if !self.inner.lock().unwrap().running {
+                return;
+            }
+            idle.await;
+        }
+    }
+}
+
+/// Waits (bounded) for every session's queued navigation teardown; used at shutdown so no
+/// cleanup worker outlives the artifact store it unlinks from.
+pub async fn drain_navigation_cleanups() {
+    let queues: Vec<Arc<CleanupQueue>> = {
+        let map = GLOBAL_SELECTION_MANAGER.sessions.read().await;
+        map.values().map(|entry| entry.cleanup.clone()).collect()
+    };
+    for queue in queues {
+        if timeout(Duration::from_secs(5), queue.drain())
+            .await
+            .is_err()
+        {
+            warn!("queued navigation cleanup still running at shutdown deadline");
+        }
+    }
+}
 impl SelectionManager {
     pub fn new() -> Self {
         Self {
@@ -219,17 +476,7 @@ impl SelectionManager {
         let mut map = self.sessions.write().await;
         let entry = map
             .entry(session_id.to_string())
-            .or_insert_with(|| SessionSelectionState {
-                owner_principal: principal.to_string(),
-                active: false,
-                selection_revision: 0,
-                navigation_revision: nav_rev,
-                backend_node_id: None,
-                preview: None,
-                pending_artifacts: Vec::new(),
-                cancel_token: None,
-                inspect_task: None,
-            });
+            .or_insert_with(|| SessionSelectionState::new(principal, nav_rev));
         if entry.owner_principal != principal {
             return Err(SelectionError::Session(SessionError::Forbidden));
         }
@@ -280,7 +527,7 @@ pub(crate) async fn acquire_managed_selection_fence(
     nav_rev: u64,
     sel_rev: u64,
     artifact_id: Uuid,
-) -> Option<tokio::sync::OwnedRwLockReadGuard<HashMap<String, SessionSelectionState>>> {
+) -> Option<ManagedSelectionFence> {
     let guard = GLOBAL_SELECTION_MANAGER.sessions.clone().read_owned().await;
     let dto = global_session_registry()
         .get_session(session_id, principal)
@@ -290,17 +537,26 @@ pub(crate) async fn acquire_managed_selection_fence(
         return None;
     }
     let entry = guard.get(session_id)?;
-    if entry.owner_principal == principal
+    if !(entry.owner_principal == principal
         && !entry.active
         && entry.navigation_revision == nav_rev
         && entry.selection_revision == sel_rev
         && entry.preview.is_some()
-        && entry.pending_artifacts.iter().any(|(aid, _)| *aid == artifact_id)
+        && entry
+            .pending_artifacts
+            .iter()
+            .any(|(aid, _)| *aid == artifact_id))
     {
-        Some(guard)
-    } else {
-        None
+        return None;
     }
+    // A navigation observed natively but still queued behind this lock is not in the registry
+    // yet: refuse instead of validating against a stale revision.
+    let observed = settled_navigation_observation(session_id)?;
+    Some(ManagedSelectionFence {
+        _guard: guard,
+        session_id: session_id.to_string(),
+        observed,
+    })
 }
 
 /// Synchronously fences all selection sessions for `principal` in memory without waiting on network CDP,
@@ -315,6 +571,7 @@ pub async fn fence_principal_sessions_in_memory(principal: &str) -> Vec<Uuid> {
     let mut pending_ids = Vec::new();
     for sid in matching_ids {
         if let Some(entry) = map.remove(&sid) {
+            forget_navigation_observations(&sid);
             stop_session_navigation_watcher(&sid);
             if let Some(tok) = entry.cancel_token {
                 tok.cancel();
@@ -358,17 +615,7 @@ pub async fn start_selection(
         let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
         let entry = map
             .entry(session_id.to_string())
-            .or_insert_with(|| SessionSelectionState {
-                owner_principal: principal.to_string(),
-                active: false,
-                selection_revision: 0,
-                navigation_revision: current_nav_rev,
-                backend_node_id: None,
-                preview: None,
-                pending_artifacts: Vec::new(),
-                cancel_token: None,
-                inspect_task: None,
-            });
+            .or_insert_with(|| SessionSelectionState::new(principal, current_nav_rev));
         entry.owner_principal = principal.to_string();
         entry.navigation_revision = current_nav_rev;
         entry.selection_revision = entry.selection_revision.saturating_add(1);
@@ -391,10 +638,26 @@ pub async fn start_selection(
 
     if let Some(point) = inspect_point {
         let extracted = inspect_at_point(state, session_id, principal, is_dev, &point).await?;
-        if let Some(producer) = ensure_producer_for_session(state, session_id, principal, is_dev).await {
-            if let Ok(page_sid) = producer.ensure_page_session().await {
-                ensure_session_navigation_watcher(state, session_id, &producer.cdp_client, &page_sid).await;
-            }
+        let observing =
+            match ensure_producer_for_session(state, session_id, principal, is_dev).await {
+                Some(producer) => match producer.ensure_page_session().await {
+                    Ok(page_sid) => {
+                        ensure_session_navigation_watcher(
+                            state,
+                            session_id,
+                            &producer.cdp_client,
+                            &page_sid,
+                        )
+                        .await
+                    }
+                    Err(_) => false,
+                },
+                None => false,
+            };
+        if !observing {
+            return Err(SelectionError::Cdp(
+                "navigation observation unavailable for session".into(),
+            ));
         }
         let summary = {
             let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
@@ -449,7 +712,18 @@ pub async fn start_selection(
         entry.to_summary()
     };
 
-    let _ = timeout(Duration::from_secs(2), ready_rx).await;
+    if let Ok(Err(_)) = timeout(Duration::from_secs(2), ready_rx).await {
+        // The observer exited before becoming ready (no producer/page session/observation).
+        let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
+        if let Some(entry) = map.get_mut(session_id) {
+            if entry.selection_revision == start_sel_rev {
+                entry.active = false;
+            }
+        }
+        return Err(SelectionError::Cdp(
+            "selection observer could not start for session".into(),
+        ));
+    }
     Ok(summary)
 }
 
@@ -470,21 +744,11 @@ pub async fn cancel_selection(
         )));
     }
 
-    let (old_token, old_task, old_pending, summary) = {
+    let (old_token, old_task, old_pending, overlay, summary) = {
         let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
         let entry = map
             .entry(session_id.to_string())
-            .or_insert_with(|| SessionSelectionState {
-                owner_principal: principal.to_string(),
-                active: false,
-                selection_revision: 0,
-                navigation_revision: current_nav_rev,
-                backend_node_id: None,
-                preview: None,
-                pending_artifacts: Vec::new(),
-                cancel_token: None,
-                inspect_task: None,
-            });
+            .or_insert_with(|| SessionSelectionState::new(principal, current_nav_rev));
         entry.active = false;
         entry.preview = None;
         entry.backend_node_id = None;
@@ -492,44 +756,12 @@ pub async fn cancel_selection(
         let tok = entry.cancel_token.take();
         let task = entry.inspect_task.take();
         let pend = std::mem::take(&mut entry.pending_artifacts);
-        (tok, task, pend, entry.to_summary())
-    };
-
-    if let Some(tok) = old_token {
-        tok.cancel();
-    }
-    if let Some(task) = old_task {
-        task.abort();
-    }
-    cleanup_pending_artifacts(state, old_pending).await;
-    disable_overlay_inspect_best_effort(session_id).await;
-
-    Ok(summary)
-}
-
-pub async fn invalidate_on_navigation(
-    state: &AppState,
-    session_id: &str,
-    new_nav_rev: Option<u64>,
-) {
-    let (old_token, old_task, old_pending) = {
-        let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
-        let Some(entry) = map.get_mut(session_id) else {
-            return;
-        };
-        entry.active = false;
-        entry.preview = None;
-        entry.backend_node_id = None;
-        entry.selection_revision = entry.selection_revision.saturating_add(1);
-        if let Some(rev) = new_nav_rev {
-            entry.navigation_revision = rev;
-        } else {
-            entry.navigation_revision = entry.navigation_revision.saturating_add(1);
-        }
         (
-            entry.cancel_token.take(),
-            entry.inspect_task.take(),
-            std::mem::take(&mut entry.pending_artifacts),
+            tok,
+            task,
+            pend,
+            entry.overlay_teardown(),
+            entry.to_summary(),
         )
     };
 
@@ -540,11 +772,124 @@ pub async fn invalidate_on_navigation(
         task.abort();
     }
     cleanup_pending_artifacts(state, old_pending).await;
-    disable_overlay_inspect_best_effort(session_id).await;
+    disable_overlay_if_current(session_id, overlay).await;
+
+    Ok(summary)
+}
+
+/// Invalidates the selection of `session_id` for a navigation and returns what must be torn
+/// down afterwards. Pure in-memory: callers hold the selection lock so the invalidation is
+/// ordered with the navigation record and with the final handoff fence.
+fn apply_navigation_invalidation(
+    map: &mut HashMap<String, SessionSelectionState>,
+    session_id: &str,
+    new_nav_rev: Option<u64>,
+) -> Option<InvalidatedSelection> {
+    let entry = map.get_mut(session_id)?;
+    entry.active = false;
+    entry.preview = None;
+    entry.backend_node_id = None;
+    entry.selection_revision = entry.selection_revision.saturating_add(1);
+    if let Some(rev) = new_nav_rev {
+        entry.navigation_revision = rev;
+    } else {
+        entry.navigation_revision = entry.navigation_revision.saturating_add(1);
+    }
+    Some(InvalidatedSelection {
+        token: entry.cancel_token.take(),
+        task: entry.inspect_task.take(),
+        pending: std::mem::take(&mut entry.pending_artifacts),
+        overlay: entry.overlay_teardown(),
+        cleanup: entry.cleanup.clone(),
+    })
+}
+
+async fn finish_navigation_invalidation(
+    state: &AppState,
+    session_id: &str,
+    invalidated: Option<InvalidatedSelection>,
+) {
+    let Some(mut invalidated) = invalidated else {
+        return;
+    };
+    invalidated.stop_picker();
+    cleanup_pending_artifacts(state, invalidated.pending).await;
+    disable_overlay_if_current(session_id, invalidated.overlay).await;
+}
+
+pub async fn invalidate_on_navigation(
+    state: &AppState,
+    session_id: &str,
+    new_nav_rev: Option<u64>,
+) {
+    let invalidated = {
+        let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
+        apply_navigation_invalidation(&mut map, session_id, new_nav_rev)
+    };
+    finish_navigation_invalidation(state, session_id, invalidated).await;
+}
+
+/// Records a native navigation (or an observation gap that may hide one) and invalidates the
+/// selection under the selection write lock. Chromium navigates regardless of that lock, so
+/// the observation is first published synchronously (`ObservedNavigation`); the registry
+/// revision itself cannot advance while a handoff holds the selection fence, and the handoff's
+/// check under the PTY lock denies the write once the observation is published.
+///
+/// Returns the teardown owed to the invalidated selection (artifact unlinks, overlay CDP
+/// commands). It is deliberately NOT run here: callers that keep consuming CDP events must not
+/// stall on disk or CDP I/O, or a later navigation would stay unpublished behind it.
+async fn record_navigation_applied(
+    state: &AppState,
+    session_id: &str,
+    url: Option<&str>,
+) -> Option<InvalidatedSelection> {
+    // Published before any await: a handoff waiting on the PTY lock sees it even though the
+    // registry revision below cannot advance while the handoff holds the selection fence.
+    let observed = ObservedNavigation::publish(session_id);
+    let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
+    let new_rev = global_session_registry()
+        .record_cdp_navigation(
+            session_id,
+            url,
+            &state.browser_host.config().allowed_target_origins,
+        )
+        .await;
+    let invalidated = apply_navigation_invalidation(&mut map, session_id, new_rev);
+    observed.mark_applied();
+    invalidated
+}
+
+/// [`record_navigation_applied`] followed by its teardown, for one-shot callers.
+async fn record_navigation_fenced(state: &AppState, session_id: &str, url: Option<&str>) {
+    let invalidated = record_navigation_applied(state, session_id, url).await;
+    finish_navigation_invalidation(state, session_id, invalidated).await;
+}
+
+/// Runs an API-originated registry navigation (`navigate`/`history`/`reload`) under the
+/// selection write lock and invalidates the selection with the resulting revision, so the
+/// revision bump is ordered against the final handoff fence like a native navigation.
+pub(crate) async fn fence_registry_navigation<T, E>(
+    state: &AppState,
+    session_id: &str,
+    op: impl Future<Output = Result<T, E>>,
+    revision_of: impl FnOnce(&T) -> Option<u64>,
+) -> Result<T, E> {
+    let (result, invalidated) = {
+        let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
+        let result = op.await;
+        let invalidated = match &result {
+            Ok(value) => apply_navigation_invalidation(&mut map, session_id, revision_of(value)),
+            Err(_) => None,
+        };
+        (result, invalidated)
+    };
+    finish_navigation_invalidation(state, session_id, invalidated).await;
+    result
 }
 
 pub async fn cleanup_session(state: &AppState, session_id: &str) {
     stop_session_navigation_watcher(session_id);
+    forget_navigation_observations(session_id);
     let removed = {
         let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
         map.remove(session_id)
@@ -557,6 +902,8 @@ pub async fn cleanup_session(state: &AppState, session_id: &str) {
             task.abort();
         }
         cleanup_pending_artifacts(state, entry.pending_artifacts).await;
+        // Queued navigation teardown of this session finishes before the session is gone.
+        entry.cleanup.drain().await;
     }
 }
 
@@ -593,9 +940,9 @@ pub async fn create_managed_selection_artifact(
     // 2. Recheck selection preview & revision under lock
     let selection = {
         let map = GLOBAL_SELECTION_MANAGER.sessions.read().await;
-        let entry = map
-            .get(session_id)
-            .ok_or_else(|| SelectionError::NoSelection("no selection recorded for session".into()))?;
+        let entry = map.get(session_id).ok_or_else(|| {
+            SelectionError::NoSelection("no selection recorded for session".into())
+        })?;
         if entry.owner_principal != admission.principal {
             return Err(SelectionError::Session(SessionError::Forbidden));
         }
@@ -617,7 +964,9 @@ pub async fn create_managed_selection_artifact(
     };
 
     if !selection.is_valid() {
-        return Err(SelectionError::Artifact(BrowserDebugError::InvalidSelection));
+        return Err(SelectionError::Artifact(
+            BrowserDebugError::InvalidSelection,
+        ));
     }
 
     // 3. Recheck selected terminal & incarnation
@@ -631,7 +980,7 @@ pub async fn create_managed_selection_artifact(
 
     // 4. Create ManagedBrowser artifact atomically (rechecking admission, selection & terminal before publish)
     let profile_epoch = session_dto.profile_epoch.parse::<u64>().unwrap_or(1);
-    let browser_incarnation_u64 = hash_incarnation(&session_dto.browser_incarnation);
+    let browser_incarnation = session_dto.browser_incarnation.clone();
     let mut artifact = state
         .browser_debug_artifacts
         .create_managed_checked(
@@ -639,7 +988,7 @@ pub async fn create_managed_selection_artifact(
             ArtifactSource::ManagedBrowser {
                 principal: admission.principal.clone(),
                 profile_epoch,
-                browser_incarnation: browser_incarnation_u64,
+                browser_incarnation,
             },
             (session_id.to_string(), current_nav_rev, selection_revision),
             terminal_id.clone(),
@@ -663,18 +1012,13 @@ pub async fn create_managed_selection_artifact(
         });
         if !valid_now {
             drop(map);
-            state
-                .browser_debug_artifacts
-                .force_invalidate(artifact_uuid)
-                .await;
+            invalidate_artifact(state, artifact_uuid).await;
             return Err(SelectionError::Conflict(
                 "selection changed before artifact registration".to_string(),
             ));
         }
         if let Some(entry) = map.get_mut(session_id) {
-            entry
-                .pending_artifacts
-                .push((artifact_uuid, actor.clone()));
+            entry.pending_artifacts.push((artifact_uuid, actor.clone()));
         }
     }
 
@@ -706,10 +1050,7 @@ pub async fn create_managed_selection_artifact(
                 .await;
 
                 if let Err(err) = recheck_ok {
-                    state
-                        .browser_debug_artifacts
-                        .force_invalidate(artifact_uuid)
-                        .await;
+                    invalidate_artifact(state, artifact_uuid).await;
                     remove_pending_artifact(session_id, artifact_uuid).await;
                     return Err(err);
                 }
@@ -723,10 +1064,7 @@ pub async fn create_managed_selection_artifact(
                         artifact = updated;
                     }
                     Err(err) => {
-                        state
-                            .browser_debug_artifacts
-                            .force_invalidate(artifact_uuid)
-                            .await;
+                        invalidate_artifact(state, artifact_uuid).await;
                         remove_pending_artifact(session_id, artifact_uuid).await;
                         return Err(SelectionError::Artifact(err));
                     }
@@ -734,10 +1072,7 @@ pub async fn create_managed_selection_artifact(
             }
             Err(err) => {
                 if include_png == Some(true) {
-                    state
-                        .browser_debug_artifacts
-                        .force_invalidate(artifact_uuid)
-                        .await;
+                    invalidate_artifact(state, artifact_uuid).await;
                     remove_pending_artifact(session_id, artifact_uuid).await;
                     return Err(err);
                 }
@@ -782,9 +1117,9 @@ async fn recheck_before_png_completion(
     }
     {
         let map = GLOBAL_SELECTION_MANAGER.sessions.read().await;
-        let entry = map
-            .get(session_id)
-            .ok_or_else(|| SelectionError::NoSelection("selection cleared before PNG completion".into()))?;
+        let entry = map.get(session_id).ok_or_else(|| {
+            SelectionError::NoSelection("selection cleared before PNG completion".into())
+        })?;
         if entry.navigation_revision != expected_nav_rev
             || entry.selection_revision != expected_sel_rev
             || entry.preview.is_none()
@@ -804,18 +1139,48 @@ async fn recheck_before_png_completion(
     Ok(())
 }
 
-async fn remove_pending_artifact(session_id: &str, artifact_id: Uuid) {
+/// Drops a terminal artifact's live-selection registration (idempotent).
+pub(crate) async fn remove_pending_artifact(session_id: &str, artifact_id: Uuid) {
     let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
     if let Some(entry) = map.get_mut(session_id) {
         entry.pending_artifacts.retain(|(id, _)| *id != artifact_id);
     }
 }
 
-async fn cleanup_pending_artifacts(state: &AppState, pending: Vec<(Uuid, AuthenticatedActor)>) {
-    for (id, _) in pending {
-        state.browser_debug_artifacts.force_invalidate(id).await;
+/// Number of artifacts still registered against the session's live selection.
+pub async fn pending_artifact_registration_count(session_id: &str) -> usize {
+    let map = GLOBAL_SELECTION_MANAGER.sessions.read().await;
+    map.get(session_id)
+        .map_or(0, |entry| entry.pending_artifacts.len())
+}
+
+/// Invalidates an artifact; a denied unlink stays charged and retryable inside the store.
+async fn invalidate_artifact(state: &AppState, id: Uuid) {
+    if let Err(error) = state.browser_debug_artifacts.force_invalidate(id).await {
+        warn!(artifact_id = %id, error = %error, "selection artifact cleanup deferred for retry");
     }
 }
+
+async fn cleanup_pending_artifacts(state: &AppState, pending: Vec<(Uuid, AuthenticatedActor)>) {
+    for (id, _) in pending {
+        invalidate_artifact(state, id).await;
+    }
+}
+/// Disables native picking for a teardown, but only while the selection generation it was
+/// captured for is still current. Serialized with picker installation on the session's overlay
+/// gate, so a late teardown of an old selection never switches off a newer picker.
+async fn disable_overlay_if_current(session_id: &str, overlay: OverlayTeardown) {
+    let _gate = overlay.gate.lock().await;
+    if current_selection_revision(session_id).await == Some(overlay.selection_revision) {
+        disable_overlay_inspect_best_effort(session_id).await;
+    }
+}
+
+async fn current_selection_revision(session_id: &str) -> Option<u64> {
+    let map = GLOBAL_SELECTION_MANAGER.sessions.read().await;
+    map.get(session_id).map(|entry| entry.selection_revision)
+}
+
 async fn disable_overlay_inspect_best_effort(session_id: &str) {
     if let Some(producer) = get_producer(session_id).await {
         if let Ok(page_sid) = producer.ensure_page_session().await {
@@ -864,7 +1229,11 @@ async fn inspect_at_point(
         .await;
     let _ = producer
         .cdp_client
-        .send_command("DOM.getDocument", Some(json!({ "depth": 0 })), Some(&page_sid))
+        .send_command(
+            "DOM.getDocument",
+            Some(json!({ "depth": 0 })),
+            Some(&page_sid),
+        )
         .await;
 
     let node_res = producer
@@ -1008,10 +1377,9 @@ async fn capture_selection_png(
             .await
             .map_err(|e| SelectionError::Cdp(e.to_string()))?;
 
-        let b64 = res
-            .get("data")
-            .and_then(Value::as_str)
-            .ok_or_else(|| SelectionError::Cdp("Page.captureScreenshot missing base64 data".into()))?;
+        let b64 = res.get("data").and_then(Value::as_str).ok_or_else(|| {
+            SelectionError::Cdp("Page.captureScreenshot missing base64 data".into())
+        })?;
 
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(b64)
@@ -1026,36 +1394,86 @@ async fn capture_selection_png(
 }
 
 pub(crate) fn stop_session_navigation_watcher(session_id: &str) {
-    if let Some(tok) = GLOBAL_NAV_WATCHERS.lock().unwrap().remove(session_id) {
-        tok.cancel();
+    if let Some(watcher) = GLOBAL_NAV_WATCHERS.lock().unwrap().remove(session_id) {
+        watcher.token.cancel();
     }
+}
+
+/// Removes the exact watcher registration (matched by id) on every task exit: normal return,
+/// closed stream, panic or abort. A newer watcher registered for the same session is untouched.
+struct NavWatcherRegistration {
+    session_id: String,
+    id: u64,
+}
+
+impl Drop for NavWatcherRegistration {
+    fn drop(&mut self) {
+        let mut watchers = GLOBAL_NAV_WATCHERS.lock().unwrap();
+        if watchers
+            .get(&self.session_id)
+            .is_some_and(|w| w.id == self.id)
+        {
+            watchers.remove(&self.session_id);
+        }
+    }
+}
+
+fn nav_watcher_is_live(session_id: &str) -> bool {
+    GLOBAL_NAV_WATCHERS
+        .lock()
+        .unwrap()
+        .get(session_id)
+        .is_some_and(|w| !w.token.is_cancelled())
 }
 
 /// Starts a persistent session-lifetime CDP navigation watcher decoupled from the one-shot picker.
 /// Subscribes to projected `CdpLifecycleEvent`s and enables `Page` domain events before returning.
+///
+/// Returns whether navigation observation is live. A lagged or overflowed event stream may hide
+/// a navigation: it is treated as one (selection invalidated, revision advanced) and observation
+/// resumes on the same registration. A closed stream or a failed `Page.enable` leaves no
+/// registration behind and reports `false`, so callers keep selection unavailable until a later
+/// call restores observation.
 pub(crate) async fn ensure_session_navigation_watcher(
     state: &AppState,
     session_id: &str,
     cdp: &Arc<CdpClient>,
     page_sid: &str,
-) {
-    {
-        let watchers = GLOBAL_NAV_WATCHERS.lock().unwrap();
-        if watchers.contains_key(session_id) {
-            return;
-        }
+) -> bool {
+    if nav_watcher_is_live(session_id) {
+        return true;
     }
 
-    let mut event_rx = cdp.subscribe_events();
-    let _ = cdp.send_command("Page.enable", None, Some(page_sid)).await;
+    let event_rx = cdp.subscribe_events();
+    if cdp
+        .send_command("Page.enable", None, Some(page_sid))
+        .await
+        .is_err()
+    {
+        warn!(
+            session_id,
+            "Navigation watcher could not enable Page events; observation unavailable"
+        );
+        return false;
+    }
 
     let cancel_token = CancellationToken::new();
+    let watcher_id = NAV_WATCHER_SEQ.fetch_add(1, Ordering::Relaxed);
     {
         let mut watchers = GLOBAL_NAV_WATCHERS.lock().unwrap();
-        if watchers.contains_key(session_id) {
-            return;
+        if watchers
+            .get(session_id)
+            .is_some_and(|w| !w.token.is_cancelled())
+        {
+            return true;
         }
-        watchers.insert(session_id.to_string(), cancel_token.clone());
+        watchers.insert(
+            session_id.to_string(),
+            NavWatcher {
+                id: watcher_id,
+                token: cancel_token.clone(),
+            },
+        );
     }
 
     let state_clone = state.clone();
@@ -1063,24 +1481,36 @@ pub(crate) async fn ensure_session_navigation_watcher(
     let page_sid_owned = page_sid.to_string();
 
     tokio::spawn(async move {
+        let _registration = NavWatcherRegistration {
+            session_id: sid_owned.clone(),
+            id: watcher_id,
+        };
+        let mut event_rx = event_rx;
+        // Disk and CDP teardown of invalidated selections is queued on the session's bounded,
+        // coalescing cleanup queue (drained by session teardown and shutdown); ingestion never
+        // waits for it, so a navigation that lands during a slow unlink is observed (and
+        // published) immediately.
         loop {
             tokio::select! {
                 _ = cancel_token.cancelled() => break,
                 evt_res = event_rx.recv() => {
                     let evt = match evt_res {
                         Ok(e) => e,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            warn!(session_id = %sid_owned, "Navigation watcher CDP event stream lagged; invalidating selection");
-                            invalidate_on_navigation(&state_clone, &sid_owned, None).await;
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            warn!(session_id = %sid_owned, skipped, "Navigation watcher CDP event stream lagged; invalidating selection and resuming observation");
+                            record_navigation_queue_cleanup(&state_clone, &sid_owned, None).await;
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            warn!(session_id = %sid_owned, "Navigation watcher CDP event stream closed; invalidating selection");
+                            record_navigation_queue_cleanup(&state_clone, &sid_owned, None).await;
                             break;
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     };
                     match &*evt {
                         CdpLifecycleEvent::Overflow => {
-                            warn!(session_id = %sid_owned, "Lifecycle event budget overflowed; invalidating selection");
-                            invalidate_on_navigation(&state_clone, &sid_owned, None).await;
-                            break;
+                            warn!(session_id = %sid_owned, "Lifecycle event budget overflowed; invalidating selection and resuming observation");
+                            record_navigation_queue_cleanup(&state_clone, &sid_owned, None).await;
                         }
                         CdpLifecycleEvent::FrameNavigated { session_id: evt_sid, is_main_frame, url, .. } => {
                             if let Some(es) = evt_sid.as_deref() {
@@ -1089,10 +1519,7 @@ pub(crate) async fn ensure_session_navigation_watcher(
                                 }
                             }
                             if *is_main_frame {
-                                let new_rev = global_session_registry()
-                                    .record_cdp_navigation(&sid_owned, url.as_deref(), &state_clone.cors_origins)
-                                    .await;
-                                invalidate_on_navigation(&state_clone, &sid_owned, new_rev).await;
+                                record_navigation_queue_cleanup(&state_clone, &sid_owned, url.as_deref()).await;
                             }
                         }
                         CdpLifecycleEvent::NavigatedWithinDocument { session_id: evt_sid, url, .. } => {
@@ -1101,21 +1528,22 @@ pub(crate) async fn ensure_session_navigation_watcher(
                                     continue;
                                 }
                             }
-                            let new_rev = global_session_registry()
-                                .record_cdp_navigation(&sid_owned, url.as_deref(), &state_clone.cors_origins)
-                                .await;
-                            invalidate_on_navigation(&state_clone, &sid_owned, new_rev).await;
+                            record_navigation_queue_cleanup(&state_clone, &sid_owned, url.as_deref()).await;
                         }
                         CdpLifecycleEvent::InspectNodeRequested { .. } => {}
                     }
                 }
             }
         }
-        let mut watchers = GLOBAL_NAV_WATCHERS.lock().unwrap();
-        if watchers.get(&sid_owned).is_some_and(|t| t.is_cancelled()) {
-            watchers.remove(&sid_owned);
-        }
     });
+    true
+}
+
+/// Applies a native navigation and queues the teardown it owes instead of awaiting it.
+async fn record_navigation_queue_cleanup(state: &AppState, session_id: &str, url: Option<&str>) {
+    if let Some(invalidated) = record_navigation_applied(state, session_id, url).await {
+        invalidated.queue_teardown(state, session_id);
+    }
 }
 
 /// Runs a dedicated lightweight CDP Overlay event observer attached to the target.
@@ -1131,32 +1559,66 @@ async fn run_selection_cdp_observer(
     cancel_token: CancellationToken,
     ready_tx: oneshot::Sender<()>,
 ) {
-    let Some(producer) = ensure_producer_for_session(&state, &session_id, &principal, is_dev).await else {
-        debug!(session_id, "Selection observer: browser producer unavailable");
+    let Some(producer) = ensure_producer_for_session(&state, &session_id, &principal, is_dev).await
+    else {
+        debug!(
+            session_id,
+            "Selection observer: browser producer unavailable"
+        );
         return;
     };
     let Ok(page_sid) = producer.ensure_page_session().await else {
-        debug!(session_id, "Selection observer: failed to attach page session");
+        debug!(
+            session_id,
+            "Selection observer: failed to attach page session"
+        );
         return;
     };
 
     let cdp = producer.cdp_client.clone();
-    ensure_session_navigation_watcher(&state, &session_id, &cdp, &page_sid).await;
+    if !ensure_session_navigation_watcher(&state, &session_id, &cdp, &page_sid).await {
+        warn!(
+            session_id,
+            "Selection observer: navigation observation unavailable; selection stays unavailable"
+        );
+        record_navigation_fenced(&state, &session_id, None).await;
+        return;
+    }
     let mut event_rx = cdp.subscribe_events();
     if watch_inspect {
-        let dom_res = cdp.send_command("DOM.enable", None, Some(&page_sid)).await;
-        let ov_res = cdp.send_command("Overlay.enable", None, Some(&page_sid)).await;
-        let im_res = cdp
-            .send_command(
-                "Overlay.setInspectMode",
-                Some(json!({
-                    "mode": "searchForNode",
-                    "highlightConfig": default_highlight_config()
-                })),
-                Some(&page_sid),
-            )
-            .await;
-        debug!(session_id, ?dom_res, ?ov_res, ?im_res, "Overlay inspect mode initialized");
+        // Serialized with overlay teardown, and skipped once a newer selection replaced this
+        // picker, so an obsolete picker can never re-enable native picking over a newer state.
+        let gate = {
+            let map = GLOBAL_SELECTION_MANAGER.sessions.read().await;
+            map.get(&session_id).map(|entry| entry.overlay_gate.clone())
+        };
+        let _gate = match &gate {
+            Some(gate) => Some(gate.lock().await),
+            None => None,
+        };
+        if current_selection_revision(&session_id).await == Some(expected_sel_rev) {
+            let dom_res = cdp.send_command("DOM.enable", None, Some(&page_sid)).await;
+            let ov_res = cdp
+                .send_command("Overlay.enable", None, Some(&page_sid))
+                .await;
+            let im_res = cdp
+                .send_command(
+                    "Overlay.setInspectMode",
+                    Some(json!({
+                        "mode": "searchForNode",
+                        "highlightConfig": default_highlight_config()
+                    })),
+                    Some(&page_sid),
+                )
+                .await;
+            debug!(
+                session_id,
+                ?dom_res,
+                ?ov_res,
+                ?im_res,
+                "Overlay inspect mode initialized"
+            );
+        }
     }
     let _ = ready_tx.send(());
 
@@ -1179,14 +1641,14 @@ async fn run_selection_cdp_observer(
                     Ok(e) => e,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         warn!(session_id, "Selection CDP event stream lagged; invalidating selection");
-                        invalidate_on_navigation(&state, &session_id, None).await;
+                        record_navigation_fenced(&state, &session_id, None).await;
                         break;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
                 match &*evt {
                     CdpLifecycleEvent::Overflow => {
-                        invalidate_on_navigation(&state, &session_id, None).await;
+                        record_navigation_fenced(&state, &session_id, None).await;
                         break;
                     }
                     CdpLifecycleEvent::FrameNavigated { session_id: evt_sid, is_main_frame: true, .. }
@@ -1336,7 +1798,8 @@ pub fn extract_and_sanitize_selection(raw: &Value) -> Result<BrowserSelectionV1,
                 continue;
             }
             if let Some(val_str) = v.as_str() {
-                if let Some(clean_val) = sanitize_optional_text(val_str, MAX_ATTRIBUTE_VALUE_LENGTH) {
+                if let Some(clean_val) = sanitize_optional_text(val_str, MAX_ATTRIBUTE_VALUE_LENGTH)
+                {
                     attributes.insert(k.clone(), clean_val);
                 }
             }
@@ -1425,15 +1888,6 @@ fn sanitize_optional_text(value: &str, max_bytes: usize) -> Option<String> {
     }
 }
 
-fn hash_incarnation(inc: &str) -> u64 {
-    use sha2::{Digest, Sha256};
-    if let Ok(u) = inc.parse::<u64>() {
-        return u;
-    }
-    let digest = Sha256::digest(inc.as_bytes());
-    u64::from_le_bytes(digest[..8].try_into().unwrap_or([1; 8]))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1466,8 +1920,14 @@ mod tests {
         assert!(sel.text.is_none());
         // Only allowlisted attributes kept
         assert_eq!(sel.attributes.len(), 2);
-        assert_eq!(sel.attributes.get("id").map(String::as_str), Some("pwd-field"));
-        assert_eq!(sel.attributes.get("data-testid").map(String::as_str), Some("login-pwd"));
+        assert_eq!(
+            sel.attributes.get("id").map(String::as_str),
+            Some("pwd-field")
+        );
+        assert_eq!(
+            sel.attributes.get("data-testid").map(String::as_str),
+            Some("login-pwd")
+        );
         assert!(!sel.attributes.contains_key("type"));
         assert!(!sel.attributes.contains_key("data-secret"));
         assert!(!sel.attributes.contains_key("onclick"));

@@ -22,19 +22,31 @@ use crate::api::browser_host::{
     browser_error_response, global_attachment_manager, global_session_registry,
 };
 use crate::browser_host::attachments::AttachmentPurpose;
-use crate::browser_host::auth::{verify_live_admission, BrowserAdmission};
-use crate::browser_host::cdp::CdpClient;
-use crate::browser_host::diagnostics::{
-    global_stream_diagnostics, TrackedBhjfFrame,
+use crate::browser_host::auth::{
+    validate_request_origin, verify_dev_boundary, verify_live_admission, BrowserAdmission,
 };
+use crate::browser_host::cdp::{CdpClient, CdpLifecycleEvent};
+use crate::browser_host::diagnostics::{global_stream_diagnostics, TrackedBhjfFrame};
 use crate::browser_host::input::{InputEvent, InputMessage};
-use crate::browser_host::protocol::{
-    unpack_bhjf_frame, MediaClientControl, ServerControlEvent, TargetGeometry,
-    CONTROL_SUBPROTOCOL, MEDIA_SUBPROTOCOL, TICKET_SUBPROTOCOL_PREFIX,
+use crate::browser_host::manager::{
+    BrowserInstanceHandle, NativeCloseOutcome, NativeControl, NativeControlError,
+    NativeCreateError, NativeFaults, NativePumpRequest,
 };
-use crate::browser_host::screencast::ScreencastProducer;
+use crate::browser_host::network_policy::NetworkPolicy;
+use crate::browser_host::protocol::{
+    unpack_bhjf_frame, MediaClientControl, ServerControlEvent, TargetGeometry, CONTROL_SUBPROTOCOL,
+    MEDIA_SUBPROTOCOL, TICKET_SUBPROTOCOL_PREFIX,
+};
+use crate::browser_host::screencast::{ContainmentEscalation, ScreencastProducer};
+use crate::browser_host::session::{
+    BindOutcome, BrowserSessionDto, CloseAction, CreateParams, CreateReservation,
+    CreateSessionRequest, RollbackOutcome, SessionError, SessionSnapshot, SessionStatus,
+};
 use crate::state::AppState;
 
+/// Upper bound for observing the commit of a session's first managed navigation before the
+/// navigation watcher starts (the event normally precedes the `Page.navigate` response).
+const INITIAL_NAVIGATION_COMMIT_WAIT: Duration = Duration::from_millis(250);
 pub const MAX_OUTSTANDING_PER_VIEWER: usize = 2;
 pub const MAX_PENDING_PER_VIEWER: usize = 1;
 pub const MIN_DELIVERY_INTERVAL: Duration = Duration::from_millis(100); // Max 10 FPS
@@ -52,10 +64,10 @@ pub static ACTIVE_VIEWERS: LazyLock<AtomicUsize> = LazyLock::new(|| AtomicUsize:
 pub static GLOBAL_PRODUCERS: LazyLock<RwLock<HashMap<String, Arc<ScreencastProducer>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
-pub async fn get_or_register_producer(
-    session_id: &str,
-    producer: Arc<ScreencastProducer>,
-) {
+/// Longest a creation/close waits for a session's single-flight gate held by another caller.
+const SESSION_GATE_WAIT: Duration = Duration::from_secs(30);
+
+pub async fn get_or_register_producer(session_id: &str, producer: Arc<ScreencastProducer>) {
     let mut map = GLOBAL_PRODUCERS.write().await;
     map.insert(session_id.to_string(), producer);
 }
@@ -65,6 +77,9 @@ pub async fn get_producer(session_id: &str) -> Option<Arc<ScreencastProducer>> {
     map.get(session_id).cloned()
 }
 
+/// Drops a session's producer handle and stops its screencast and navigation watcher. It never
+/// closes the native page: that is owned by `close_native_session`, which keeps the producer
+/// until the page's absence is proven.
 pub async fn remove_producer(session_id: &str) {
     crate::browser_host::selection::stop_session_navigation_watcher(session_id);
     let removed = {
@@ -73,61 +88,609 @@ pub async fn remove_producer(session_id: &str) {
     };
     if let Some(producer) = removed {
         let _ = producer.stop_screencast().await;
-        let _ = producer.close_target().await;
     }
 }
-/// Lazily creates and registers a ScreencastProducer for a session in production if not present.
+
+/// A cached producer is only usable for the browser incarnation it was built for and while its
+/// CDP connection is alive.
+fn producer_is_current(producer: &ScreencastProducer, incarnation: &str) -> bool {
+    producer.browser_incarnation() == incarnation && !producer.cdp_client.is_closed()
+}
+
+/// Why a producer is being materialized; decides whether the initial managed navigation runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProducerOrigin {
+    /// REST create: publishes the session after setup and navigates to its URL.
+    Rest,
+    /// Existing session without a cached producer (re-attach, selection, input).
+    Lazy,
+    /// Admitted `window.open` popup: already navigating, published after policy install.
+    Popup,
+}
+
+/// Creates a session through the manager-owned native path: one single-flight creation per
+/// idempotency key, one native page, one published producer. A failed native creation is never
+/// reported as `Running`; a same-key retry reconciles instead of returning a stale DTO.
+/// Returns `(session, created_by_this_call)`.
+pub async fn create_native_session(
+    state: &AppState,
+    admission: &BrowserAdmission,
+    handle: &BrowserInstanceHandle,
+    request: &CreateSessionRequest,
+) -> Result<(BrowserSessionDto, bool), SessionError> {
+    ensure_native_pump(state);
+    NativeFaults::delay(&state.browser_host.native_faults.delay_before_reserve_ms).await;
+    let host = state.browser_host.clone();
+    let (principal, is_dev, epoch, incarnation) = (
+        admission.principal.clone(),
+        admission.is_dev,
+        handle.profile_epoch,
+        handle.browser_incarnation.clone(),
+    );
+    let live = move || host.is_instance_live_sync(&principal, is_dev, epoch, &incarnation);
+    let allowed = state.browser_host.config().allowed_target_origins.clone();
+    let params = CreateParams {
+        principal: &admission.principal,
+        is_dev: admission.is_dev,
+        browser_incarnation: &handle.browser_incarnation,
+        profile_epoch: handle.profile_epoch,
+        request,
+        allowed_origins: &allowed,
+        max_targets: state.browser_host.max_targets(),
+    };
+    match global_session_registry()
+        .reserve_creation(&params, &live)
+        .await?
+    {
+        CreateReservation::Existing(dto) => Ok((dto, false)),
+        CreateReservation::Pending { session_id } => {
+            // The creation runs in a task the client cannot cancel: a dropped connection must
+            // never leave a half-built session without its leader.
+            let state = state.clone();
+            let admission = admission.clone();
+            tokio::spawn(async move {
+                materialize_producer(
+                    &state,
+                    &session_id,
+                    &admission.principal,
+                    admission.is_dev,
+                    ProducerOrigin::Rest,
+                    Some(&admission),
+                )
+                .await
+                .map(|outcome| match outcome {
+                    Materialized::Published(published) => {
+                        (published.session, published.published_now)
+                    }
+                    Materialized::Retired(session) => (session, false),
+                })
+            })
+            .await
+            .map_err(|e| SessionError::Internal(format!("session creation task failed: {e}")))?
+        }
+    }
+}
+
+/// Lazily ensures the producer of an existing session (re-attach, selection, input).
 pub async fn ensure_producer_for_session(
     state: &AppState,
     session_id: &str,
     principal: &str,
     is_dev: bool,
 ) -> Option<Arc<ScreencastProducer>> {
-    if let Some(existing) = get_producer(session_id).await {
-        return Some(existing);
+    ensure_native_pump(state);
+    if let Ok(snapshot) = global_session_registry()
+        .snapshot(session_id, principal)
+        .await
+    {
+        if snapshot.status == SessionStatus::Running {
+            if let Some(existing) = get_producer(session_id).await {
+                if producer_is_current(&existing, &snapshot.browser_incarnation) {
+                    return Some(existing);
+                }
+            }
+        }
     }
+    match materialize_producer(
+        state,
+        session_id,
+        principal,
+        is_dev,
+        ProducerOrigin::Lazy,
+        None,
+    )
+    .await
+    {
+        Ok(Materialized::Published(published)) => Some(published.producer),
+        Ok(Materialized::Retired(_)) => None,
+        Err(err) => {
+            warn!(error = %err, "Browser producer unavailable for session");
+            None
+        }
+    }
+}
 
-    let handle = state.browser_host.ensure_running(principal, is_dev).await.ok()?;
-    let client = CdpClient::connect(&handle.ws_endpoint).await.ok()?;
-    let session = global_session_registry().get_session(session_id, principal).await.ok()?;
-    let v_epoch = session.viewport_epoch.parse::<u64>().unwrap_or(1);
+struct PublishedProducer {
+    producer: Arc<ScreencastProducer>,
+    session: BrowserSessionDto,
+    /// True when this call performed the `Initializing -> Running` publication.
+    published_now: bool,
+}
 
-    // Reconcile real native target via CDP (idempotent, reuse existing if established)
-    let native_target_id = match global_session_registry().get_native_target_id(session_id).await {
-        Some(tid) => tid,
-        None => {
-            let target_url = if session.url.is_empty() { "about:blank" } else { &session.url };
-            let create_target = chromiumoxide_cdp::cdp::browser_protocol::target::CreateTargetParams::builder()
-                .url(target_url)
-                .build()
-                .ok()?;
-            let target_res = client.send_typed(create_target, None).await.ok()?;
-            let tid: String = target_res.target_id.into();
-            global_session_registry().set_native_target_id(session_id, tid.clone()).await;
-            tid
+enum Materialized {
+    Published(PublishedProducer),
+    /// The session is already `Closing`/`Closed`/`Lost`: an idempotent retry observes it as is.
+    Retired(BrowserSessionDto),
+}
+
+/// Single publication path for producers. Under the session's gate it (1) acquires or
+/// reconciles the session's native page, (2) builds the producer and installs the request
+/// policy BEFORE the first navigation, (3) publishes `Running` only if the session, profile
+/// epoch, browser incarnation and live admission are still current, and (4) registers the one
+/// producer. Any failure after reservation rolls back what is provable and keeps the rest owned.
+async fn materialize_producer(
+    state: &AppState,
+    session_id: &str,
+    principal: &str,
+    is_dev: bool,
+    origin: ProducerOrigin,
+    admission: Option<&BrowserAdmission>,
+) -> Result<Materialized, SessionError> {
+    let registry = global_session_registry();
+    let gate = registry.session_gate(session_id, principal).await?;
+    let _gate = timeout(SESSION_GATE_WAIT, gate.lock())
+        .await
+        .map_err(|_| SessionError::Busy("session creation is still in progress".to_string()))?;
+
+    let snapshot = registry.snapshot(session_id, principal).await?;
+    let creating = match snapshot.status {
+        SessionStatus::Initializing => true,
+        SessionStatus::Running => false,
+        other => {
+            // Closed/Lost/Closing: an idempotent same-key retry observes the retired truth.
+            if origin == ProducerOrigin::Rest {
+                return Ok(Materialized::Retired(snapshot.dto));
+            }
+            return Err(SessionError::Conflict(format!("session is {other}")));
         }
     };
-    let producer = Arc::new(ScreencastProducer::new(
-        session_id.to_string(),
-        handle.browser_incarnation,
-        handle.profile_epoch,
-        v_epoch,
-        client,
-        native_target_id,
-        session.geometry,
-    ));
-
-    get_or_register_producer(session_id, producer.clone()).await;
-    if let Ok(page_sid) = producer.ensure_page_session().await {
-        crate::browser_host::selection::ensure_session_navigation_watcher(
-            state,
-            session_id,
-            &producer.cdp_client,
-            &page_sid,
-        )
-        .await;
+    if !creating {
+        if let Some(existing) = get_producer(session_id).await {
+            if producer_is_current(&existing, &snapshot.browser_incarnation) {
+                return Ok(Materialized::Published(PublishedProducer {
+                    producer: existing,
+                    session: snapshot.dto,
+                    published_now: false,
+                }));
+            }
+            remove_producer(session_id).await;
+        }
     }
-    Some(producer)
+
+    let control = match state.browser_host.native_control(principal, is_dev).await {
+        Ok(control) => control,
+        Err(NativeControlError::NotRunning) => {
+            return Err(fail_creation(
+                state,
+                None,
+                session_id,
+                creating,
+                SessionError::Conflict("browser instance is not running".to_string()),
+            )
+            .await);
+        }
+        Err(NativeControlError::Unavailable(msg)) => {
+            return Err(SessionError::NativeUnavailable(msg));
+        }
+    };
+    if control.browser_incarnation != snapshot.browser_incarnation {
+        return Err(fail_creation(
+            state,
+            Some(&control),
+            session_id,
+            creating,
+            SessionError::Conflict("session belongs to a previous browser incarnation".to_string()),
+        )
+        .await);
+    }
+
+    let (target_id, fresh) = acquire_native_target(&control, session_id, &snapshot).await?;
+    let (producer, _page_sid) = match build_producer(
+        state,
+        &control,
+        &snapshot,
+        session_id,
+        &target_id,
+        fresh && origin != ProducerOrigin::Popup,
+    )
+    .await
+    {
+        Ok(built) => built,
+        Err(err) => {
+            return Err(fail_creation(state, Some(&control), session_id, creating, err).await);
+        }
+    };
+
+    NativeFaults::delay(&state.browser_host.native_faults.delay_before_commit_ms).await;
+    let live = {
+        let host = state.browser_host.clone();
+        let principal = principal.to_string();
+        let incarnation = snapshot.browser_incarnation.clone();
+        let epoch = snapshot.profile_epoch;
+        move || host.is_instance_live_sync(&principal, is_dev, epoch, &incarnation)
+    };
+    let session = if creating {
+        if let Some(admission) = admission {
+            if verify_live_admission(state, admission).await.is_err() {
+                abort_producer(session_id, &producer).await;
+                return Err(fail_creation(
+                    state,
+                    Some(&control),
+                    session_id,
+                    true,
+                    SessionError::Conflict("live admission was revoked before publication".into()),
+                )
+                .await);
+            }
+        }
+        match registry.commit_running(session_id, &live).await {
+            Ok(dto) => dto,
+            Err(err) => {
+                abort_producer(session_id, &producer).await;
+                return Err(fail_creation(state, Some(&control), session_id, true, err).await);
+            }
+        }
+    } else {
+        snapshot.dto.clone()
+    };
+    get_or_register_producer(session_id, producer.clone()).await;
+    // A fence that closed the session before the producer became visible could not remove it.
+    let still_live = registry
+        .snapshot(session_id, principal)
+        .await
+        .is_ok_and(|s| s.status == SessionStatus::Running);
+    if !still_live {
+        remove_producer(session_id).await;
+        return Err(SessionError::Conflict(
+            "session was closed while it was being published".to_string(),
+        ));
+    }
+    Ok(Materialized::Published(PublishedProducer {
+        producer,
+        session,
+        published_now: creating,
+    }))
+}
+
+/// Acquires the native page of a session: bound identity first, then marker reconciliation
+/// (a lost create response), then exactly one create. Returns `(target_id, never_navigated)`.
+async fn acquire_native_target(
+    control: &NativeControl,
+    session_id: &str,
+    snapshot: &SessionSnapshot,
+) -> Result<(String, bool), SessionError> {
+    let registry = global_session_registry();
+    let creating = snapshot.status == SessionStatus::Initializing;
+    if let Some(target_id) = &snapshot.native_target_id {
+        return Ok((target_id.clone(), creating));
+    }
+    let incarnation = &snapshot.browser_incarnation;
+    if snapshot.native_create_attempted {
+        // An earlier attempt may have created a page whose response was lost.
+        match control.find_creation_page(session_id).await {
+            Ok(Some(target_id)) => {
+                return adopt_found_page(control, session_id, incarnation, target_id).await;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                let msg = format!("native target reconciliation failed: {err}");
+                registry.note_creation_error(session_id, &msg).await;
+                return Err(SessionError::NativeUnavailable(msg));
+            }
+        }
+    }
+    registry.mark_create_attempted(session_id).await;
+    match control.create_page(session_id).await {
+        Ok(target_id) => adopt_found_page(control, session_id, incarnation, target_id).await,
+        Err(NativeCreateError::Definitive(msg)) => {
+            // Chrome refused: no page exists, so the reservation is released (same-key retry
+            // starts fresh).
+            registry.rollback_creation(session_id).await;
+            Err(SessionError::NativeUnavailable(format!(
+                "native target creation was refused: {msg}"
+            )))
+        }
+        Err(NativeCreateError::Ambiguous(msg)) => {
+            // The page may exist: reconcile once. Otherwise the reservation (and its slot) stays
+            // Initializing so a same-key retry reconciles it; the observer also binds the page
+            // if it appears late.
+            match control.find_creation_page(session_id).await {
+                Ok(Some(target_id)) => {
+                    adopt_found_page(control, session_id, incarnation, target_id).await
+                }
+                _ => {
+                    let msg = format!("native target creation outcome is unknown: {msg}");
+                    registry.note_creation_error(session_id, &msg).await;
+                    Err(SessionError::NativeUnavailable(msg))
+                }
+            }
+        }
+    }
+}
+
+/// Binds a found/created page as the session's identity. A different already-bound page wins
+/// and the offered one (a proven surplus of this creation) is closed.
+async fn adopt_found_page(
+    control: &NativeControl,
+    session_id: &str,
+    incarnation: &str,
+    target_id: String,
+) -> Result<(String, bool), SessionError> {
+    match global_session_registry()
+        .bind_native_target(session_id, incarnation, &target_id)
+        .await
+    {
+        BindOutcome::Bound => Ok((target_id, true)),
+        BindOutcome::Surplus { existing } => {
+            let _ = control.close_page(&target_id).await;
+            Ok((existing, true))
+        }
+        BindOutcome::NotPending => {
+            let _ = control.close_page(&target_id).await;
+            Err(SessionError::Conflict(
+                "session is no longer awaiting a native target".to_string(),
+            ))
+        }
+    }
+}
+
+/// Attaches the producer (request policy installed before any navigation), runs the first
+/// managed navigation when the page was never navigated, and starts the navigation watcher.
+async fn build_producer(
+    state: &AppState,
+    control: &NativeControl,
+    snapshot: &SessionSnapshot,
+    session_id: &str,
+    target_id: &str,
+    navigate: bool,
+) -> Result<(Arc<ScreencastProducer>, String), SessionError> {
+    let policy = NetworkPolicy::from_config(state.browser_host.config(), snapshot.is_dev).map_err(
+        |err| SessionError::Internal(format!("invalid network policy configuration: {err}")),
+    )?;
+    let client = CdpClient::connect(&control.ws_endpoint)
+        .await
+        .map_err(|err| SessionError::NativeUnavailable(format!("CDP connect failed: {err}")))?;
+    let viewport_epoch = snapshot.dto.viewport_epoch.parse::<u64>().unwrap_or(1);
+    // Containment of a worker that cannot be policed or stopped belongs to the manager that
+    // owns the browser process, not to this producer (it is dropped with its page).
+    let escalate: ContainmentEscalation = {
+        let manager = state.browser_host.clone();
+        let subject = control.subject.clone();
+        let is_dev = control.is_dev;
+        let incarnation = control.browser_incarnation.clone();
+        Arc::new(move |reason: &str| {
+            manager.contain_incarnation(&subject, is_dev, &incarnation, reason)
+        })
+    };
+    let producer = Arc::new(
+        ScreencastProducer::new(
+            session_id.to_string(),
+            snapshot.browser_incarnation.clone(),
+            snapshot.profile_epoch,
+            viewport_epoch,
+            client,
+            target_id.to_string(),
+            snapshot.dto.geometry.clone(),
+        )
+        .with_request_policy(Arc::new(policy), escalate),
+    );
+    let page_sid = producer.ensure_page_session().await.map_err(|err| {
+        SessionError::NativeUnavailable(format!("browser page session setup failed: {err}"))
+    })?;
+    let initial_url = snapshot.dto.url.trim();
+    if navigate && !initial_url.is_empty() && initial_url != "about:blank" {
+        // First managed navigation: the request policy is already live on this page session.
+        // Subscribe before navigating, then wait (bounded) for the commit event BEFORE the
+        // navigation watcher starts, so the server-initiated initial load never counts as a
+        // renderer navigation (no revision bump).
+        let mut events = producer.cdp_client.subscribe_events();
+        match producer
+            .cdp_client
+            .send_command(
+                "Page.navigate",
+                Some(serde_json::json!({ "url": initial_url })),
+                Some(&page_sid),
+            )
+            .await
+        {
+            Ok(_) => {
+                let _ = tokio::time::timeout(INITIAL_NAVIGATION_COMMIT_WAIT, async {
+                    loop {
+                        match events.recv().await {
+                            Ok(ev)
+                                if matches!(
+                                    &*ev,
+                                    CdpLifecycleEvent::FrameNavigated {
+                                        is_main_frame: true,
+                                        ..
+                                    }
+                                ) =>
+                            {
+                                break
+                            }
+                            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                })
+                .await;
+            }
+            Err(err) => warn!(error = %err, "Initial managed navigation failed"),
+        }
+    }
+    crate::browser_host::selection::ensure_session_navigation_watcher(
+        state,
+        session_id,
+        &producer.cdp_client,
+        &page_sid,
+    )
+    .await;
+    Ok((producer, page_sid))
+}
+
+/// Drops an unpublished producer's watcher and screencast (it was never registered).
+async fn abort_producer(session_id: &str, producer: &Arc<ScreencastProducer>) {
+    crate::browser_host::selection::stop_session_navigation_watcher(session_id);
+    let _ = producer.stop_screencast().await;
+}
+
+/// Rolls back a failed creation as far as the native outcome is provable. Without native
+/// identity the pending session disappears (a same-key retry restarts); with one it becomes
+/// `Closing` and the page is closed, keeping slot and identity until absence is proven.
+async fn fail_creation(
+    _state: &AppState,
+    control: Option<&NativeControl>,
+    session_id: &str,
+    creating: bool,
+    error: SessionError,
+) -> SessionError {
+    if !creating {
+        return error;
+    }
+    let registry = global_session_registry();
+    if let RollbackOutcome::Closing { target_id } = registry.rollback_creation(session_id).await {
+        if let Some(control) = control {
+            if control.close_page(&target_id).await == NativeCloseOutcome::Absent {
+                registry.finish_close(session_id, true).await;
+            }
+        }
+    }
+    error
+}
+
+/// Closes a session and its native page. The session becomes `Closing` and keeps its identity,
+/// producer and capacity until the page's absence is PROVEN (inventory/destroyed); a failed or
+/// ambiguous close is reported and a repeated call resumes the same cleanup.
+pub async fn close_native_session(
+    state: &AppState,
+    session_id: &str,
+    principal: &str,
+) -> Result<(), SessionError> {
+    let registry = global_session_registry();
+    // Wait out an in-flight creation so close and publication cannot interleave.
+    let gate = registry.session_gate(session_id, principal).await;
+    let _gate = match &gate {
+        Ok(gate) => timeout(SESSION_GATE_WAIT, gate.lock()).await.ok(),
+        Err(_) => None,
+    };
+    let action = match registry.begin_close(session_id, principal).await {
+        Ok(action) => action,
+        Err(SessionError::NotFound) => {
+            // Idempotent delete of an absent (reaped) session; foreign sessions stay hidden.
+            return if registry
+                .session_exists_for_other(session_id, principal)
+                .await
+            {
+                Err(SessionError::NotFound)
+            } else {
+                Ok(())
+            };
+        }
+        Err(err) => return Err(err),
+    };
+    // Viewers, leases and selection state end immediately; the producer stays until absence.
+    crate::browser_host::selection::cleanup_session(state, session_id).await;
+    crate::api::browser_host::release_session_viewers(session_id).await;
+    if let Some(producer) = get_producer(session_id).await {
+        let _ = producer.stop_screencast().await;
+    }
+    let proven_absent = match action {
+        CloseAction::Retired => true,
+        CloseAction::Native {
+            target_id,
+            browser_incarnation,
+            is_dev,
+        } => match state.browser_host.native_control(principal, is_dev).await {
+            // No live process, or a newer incarnation: the page is proven gone.
+            Err(NativeControlError::NotRunning) => true,
+            Err(NativeControlError::Unavailable(msg)) => {
+                return Err(SessionError::NativeUnavailable(format!(
+                    "native close could not be attempted: {msg}"
+                )));
+            }
+            Ok(control) if control.browser_incarnation != browser_incarnation => true,
+            Ok(control) => {
+                let target = match target_id {
+                    Some(target) => Some(target),
+                    None => match control.find_creation_page(session_id).await {
+                        Ok(found) => found,
+                        Err(err) => {
+                            return Err(SessionError::NativeUnavailable(format!(
+                                "native target lookup failed: {err}"
+                            )));
+                        }
+                    },
+                };
+                match target {
+                    None => true,
+                    Some(target) => match control.close_page(&target).await {
+                        NativeCloseOutcome::Absent => true,
+                        NativeCloseOutcome::Unconfirmed(msg) => {
+                            return Err(SessionError::NativeUnavailable(format!(
+                                "native close is unconfirmed: {msg}"
+                            )));
+                        }
+                    },
+                }
+            }
+        },
+    };
+    if proven_absent {
+        registry.finish_close(session_id, false).await;
+        remove_producer(session_id).await;
+    }
+    Ok(())
+}
+
+/// Starts (once per manager) the task that serves the observer's requests that need
+/// application state: popup adoption (policy install before resume) and cleanup of retired
+/// sessions' selection state.
+pub fn ensure_native_pump(state: &AppState) {
+    if let Some(mut requests) = state.browser_host.claim_native_pump() {
+        let state = state.clone();
+        tokio::spawn(async move {
+            while let Some(request) = requests.recv().await {
+                match request {
+                    NativePumpRequest::AdoptPopup(adoption) => {
+                        let result = materialize_producer(
+                            &state,
+                            &adoption.session_id,
+                            &adoption.principal,
+                            adoption.is_dev,
+                            ProducerOrigin::Popup,
+                            None,
+                        )
+                        .await
+                        .and_then(|outcome| match outcome {
+                            Materialized::Published(published) => Ok(published.session),
+                            Materialized::Retired(session) => Err(SessionError::Conflict(format!(
+                                "popup session is {}",
+                                session.status
+                            ))),
+                        })
+                        .map_err(|err| err.to_string());
+                        let _ = adoption.reply.send(result);
+                    }
+                    NativePumpRequest::SessionsRetired(session_ids) => {
+                        for session_id in session_ids {
+                            crate::browser_host::selection::cleanup_session(&state, &session_id)
+                                .await;
+                        }
+                    }
+                }
+            }
+        });
+    }
 }
 
 /// Outstanding key for a single viewer delivery:
@@ -180,7 +743,9 @@ impl ViewerCreditController {
         };
 
         let now = Instant::now();
-        if self.outstanding.len() < MAX_OUTSTANDING_PER_VIEWER && now.duration_since(self.last_delivery) >= MIN_DELIVERY_INTERVAL {
+        if self.outstanding.len() < MAX_OUTSTANDING_PER_VIEWER
+            && now.duration_since(self.last_delivery) >= MIN_DELIVERY_INTERVAL
+        {
             let key = OutstandingKey {
                 subscription_epoch: self.subscription_epoch.clone(),
                 producer_run: header.producer_run,
@@ -255,10 +820,14 @@ impl ViewerCreditController {
         if self.outstanding.remove(&key).is_some() {
             if is_discard {
                 self.total_discarded += 1;
-                global_stream_diagnostics().discards_received.fetch_add(1, Ordering::Relaxed);
+                global_stream_diagnostics()
+                    .discards_received
+                    .fetch_add(1, Ordering::Relaxed);
             } else {
                 self.total_acked += 1;
-                global_stream_diagnostics().acks_received.fetch_add(1, Ordering::Relaxed);
+                global_stream_diagnostics()
+                    .acks_received
+                    .fetch_add(1, Ordering::Relaxed);
             }
 
             return self.check_flush_pending();
@@ -296,37 +865,27 @@ impl Drop for ViewerPermit {
     }
 }
 
-fn validate_browser_origin(origin_hdr: Option<&str>, state: &AppState, is_dev: bool) -> Result<(), Response> {
-    let Some(origin_str) = origin_hdr else {
-        return Ok(());
-    };
-    let trimmed = origin_str.trim();
-    if trimmed == "null" || trimmed.ends_with('/') || trimmed.contains(',') {
-        return Err(browser_error_response(
-            StatusCode::FORBIDDEN,
-            "forbiddenOrigin",
-            "invalid Origin header format",
-        ));
+/// Exact approved-origin check for media/control upgrades; Origin-less requests defer to the
+/// ticket's bound Origin (checked at consume time).
+fn unapproved_origin_response(state: &AppState, headers: &HeaderMap) -> Option<Response> {
+    validate_request_origin(state, headers).err().map(|err| {
+        browser_error_response(StatusCode::FORBIDDEN, "forbiddenOrigin", &err.to_string())
+    })
+}
+
+/// Development tickets require the real bound listener and the peer to be loopback.
+fn dev_boundary_violation_response(
+    state: &AppState,
+    is_dev: bool,
+    connect: Option<&Extension<ConnectInfo<SocketAddr>>>,
+) -> Option<Response> {
+    if !is_dev {
+        return None;
     }
-
-    if is_dev && state.no_auth {
-        return Ok(());
-    }
-
-    let matched = state
-        .cors_origins
-        .iter()
-        .any(|allowed| allowed.as_bytes() == trimmed.as_bytes());
-
-    if !matched {
-        return Err(browser_error_response(
-            StatusCode::FORBIDDEN,
-            "forbiddenOrigin",
-            "Origin does not match CORS allowlist",
-        ));
-    }
-
-    Ok(())
+    let peer = connect.map(|Extension(ConnectInfo(addr))| *addr);
+    verify_dev_boundary(state, peer)
+        .err()
+        .map(|err| browser_error_response(StatusCode::FORBIDDEN, "forbiddenPeer", &err.to_string()))
 }
 
 /// GET /api/browser/media WebSocket upgrade handler.
@@ -368,9 +927,7 @@ pub async fn media_ws_handler(
         None => return (StatusCode::UNAUTHORIZED, "missing ticket capability").into_response(),
     };
 
-    let origin = headers
-        .get(header::ORIGIN)
-        .and_then(|v| v.to_str().ok());
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
 
     let att_manager = global_attachment_manager();
     let admitted = match att_manager
@@ -379,30 +936,18 @@ pub async fn media_ws_handler(
     {
         Ok(a) => a,
         Err(e) => {
-            return browser_error_response(
-                StatusCode::FORBIDDEN,
-                "ticketInvalid",
-                &e.to_string(),
-            );
+            return browser_error_response(StatusCode::FORBIDDEN, "ticketInvalid", &e.to_string());
         }
     };
 
-    // Origin validation
-    if let Err(resp) = validate_browser_origin(origin, &state, admitted.is_dev) {
+    // Origin validation (shared exact approved-origin policy)
+    if let Some(resp) = unapproved_origin_response(&state, &headers) {
         return resp;
     }
 
-    // Dev loopback check
-    if admitted.is_dev {
-        if let Some(Extension(ConnectInfo(addr))) = connect {
-            if !addr.ip().is_loopback() {
-                return browser_error_response(
-                    StatusCode::FORBIDDEN,
-                    "forbiddenPeer",
-                    "dev access is restricted to loopback peer",
-                );
-            }
-        }
+    // Dev boundary: actual bound listener AND peer must be loopback
+    if let Some(resp) = dev_boundary_violation_response(&state, admitted.is_dev, connect.as_ref()) {
+        return resp;
     }
 
     // Live caller admission recheck
@@ -417,7 +962,11 @@ pub async fn media_ws_handler(
 
     if let Err(err) = verify_live_admission(&state, &adm).await {
         warn!(principal = %adm.principal, error = %err, "Ticket live auth check failed on media upgrade");
-        return browser_error_response(StatusCode::UNAUTHORIZED, "invalidSession", "live authentication validation failed");
+        return browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalidSession",
+            "live authentication validation failed",
+        );
     }
 
     // Capacity check
@@ -435,11 +984,7 @@ pub async fn media_ws_handler(
     let (conn_id, cancel_token) = match att_manager.register_connection(&admitted).await {
         Ok(c) => c,
         Err(e) => {
-            return browser_error_response(
-                StatusCode::FORBIDDEN,
-                "pairingFailed",
-                &e.to_string(),
-            );
+            return browser_error_response(StatusCode::FORBIDDEN, "pairingFailed", &e.to_string());
         }
     };
 
@@ -448,8 +993,28 @@ pub async fn media_ws_handler(
     let sub_epoch = admitted.subscription_epoch.clone().unwrap_or_default();
     let effective_deadline = admitted.effective_deadline;
 
-    // Lazily ensure ScreencastProducer exists for this session
-    let producer = ensure_producer_for_session(&state, &session_id, &admitted.principal, admitted.is_dev).await;
+    // Lazily ensure ScreencastProducer exists for this session. Setup can take long (browser
+    // launch, target creation), so it is raced against the supervisor's cancellation and live
+    // authority is re-verified afterwards; a revoked viewer never proceeds to the upgrade.
+    let producer = tokio::select! {
+        _ = cancel_token.cancelled() => {
+            att_manager.unregister_connection(conn_id).await;
+            return browser_error_response(
+                StatusCode::UNAUTHORIZED,
+                "invalidSession",
+                "attachment cancelled during setup",
+            );
+        }
+        producer = ensure_producer_for_session(&state, &session_id, &admitted.principal, admitted.is_dev) => producer,
+    };
+    if cancel_token.is_cancelled() || verify_live_admission(&state, &adm).await.is_err() {
+        att_manager.unregister_connection(conn_id).await;
+        return browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalidSession",
+            "live authentication validation failed",
+        );
+    }
 
     // Echo only fixed subprotocol with frame/message bounds
     ws.protocols([MEDIA_SUBPROTOCOL])
@@ -482,10 +1047,13 @@ async fn run_media_session(
     _permit: ViewerPermit,
 ) {
     let (mut ws_sink, mut ws_stream) = socket.split();
-    let controller = Arc::new(Mutex::new(ViewerCreditController::new(subscription_epoch.clone())));
+    let controller = Arc::new(Mutex::new(ViewerCreditController::new(
+        subscription_epoch.clone(),
+    )));
 
     let mut frame_rx = if let Some(prod) = &producer {
-        prod.register_viewer_demand(&viewer_id, &subscription_epoch, true).await;
+        prod.register_viewer_demand(&viewer_id, &subscription_epoch, true)
+            .await;
         // Deliver current valid cached frame on attach if present
         if let Some(cached) = prod.get_cached_frame().await {
             let mut ctrl = controller.lock().await;
@@ -509,7 +1077,9 @@ async fn run_media_session(
             if duration.num_milliseconds() <= 0 {
                 return;
             }
-            Some(sleep(Duration::from_millis(duration.num_milliseconds() as u64)))
+            Some(sleep(Duration::from_millis(
+                duration.num_milliseconds() as u64
+            )))
         }
         None => None,
     };
@@ -670,7 +1240,9 @@ async fn run_media_session(
     if let Some(prod) = &producer {
         prod.remove_viewer_demand(&subscription_epoch).await;
     }
-    global_attachment_manager().unregister_connection(conn_id).await;
+    global_attachment_manager()
+        .unregister_connection(conn_id)
+        .await;
 }
 
 async fn write_media_frame(
@@ -729,9 +1301,7 @@ pub async fn control_ws_handler(
         None => return (StatusCode::UNAUTHORIZED, "missing ticket capability").into_response(),
     };
 
-    let origin = headers
-        .get(header::ORIGIN)
-        .and_then(|v| v.to_str().ok());
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
 
     let att_manager = global_attachment_manager();
     let admitted = match att_manager
@@ -740,30 +1310,18 @@ pub async fn control_ws_handler(
     {
         Ok(a) => a,
         Err(e) => {
-            return browser_error_response(
-                StatusCode::FORBIDDEN,
-                "ticketInvalid",
-                &e.to_string(),
-            );
+            return browser_error_response(StatusCode::FORBIDDEN, "ticketInvalid", &e.to_string());
         }
     };
 
-    // Origin validation
-    if let Err(resp) = validate_browser_origin(origin, &state, admitted.is_dev) {
+    // Origin validation (shared exact approved-origin policy)
+    if let Some(resp) = unapproved_origin_response(&state, &headers) {
         return resp;
     }
 
-    // Dev loopback check
-    if admitted.is_dev {
-        if let Some(Extension(ConnectInfo(addr))) = connect {
-            if !addr.ip().is_loopback() {
-                return browser_error_response(
-                    StatusCode::FORBIDDEN,
-                    "forbiddenPeer",
-                    "dev access is restricted to loopback peer",
-                );
-            }
-        }
+    // Dev boundary: actual bound listener AND peer must be loopback
+    if let Some(resp) = dev_boundary_violation_response(&state, admitted.is_dev, connect.as_ref()) {
+        return resp;
     }
 
     let adm = BrowserAdmission {
@@ -777,17 +1335,17 @@ pub async fn control_ws_handler(
 
     if let Err(err) = verify_live_admission(&state, &adm).await {
         warn!(principal = %adm.principal, error = %err, "Ticket live auth check failed on control upgrade");
-        return browser_error_response(StatusCode::UNAUTHORIZED, "invalidSession", "live authentication validation failed");
+        return browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalidSession",
+            "live authentication validation failed",
+        );
     }
 
     let (conn_id, cancel_token) = match att_manager.register_connection(&admitted).await {
         Ok(c) => c,
         Err(e) => {
-            return browser_error_response(
-                StatusCode::FORBIDDEN,
-                "pairingFailed",
-                &e.to_string(),
-            );
+            return browser_error_response(StatusCode::FORBIDDEN, "pairingFailed", &e.to_string());
         }
     };
 
@@ -842,7 +1400,9 @@ async fn run_control_session(
             if duration.num_milliseconds() <= 0 {
                 return;
             }
-            Some(sleep(Duration::from_millis(duration.num_milliseconds() as u64)))
+            Some(sleep(Duration::from_millis(
+                duration.num_milliseconds() as u64
+            )))
         }
         None => None,
     };
@@ -942,13 +1502,16 @@ async fn run_control_session(
                 if let Ok(page_sid) = producer.ensure_page_session().await {
                     let geom = producer.geometry().await;
                     for rel in &releases {
-                        dispatch_input_event_to_cdp(&producer.cdp_client, &page_sid, &geom, rel).await;
+                        dispatch_input_event_to_cdp(&producer.cdp_client, &page_sid, &geom, rel)
+                            .await;
                     }
                 }
             }
         }
     }
-    global_attachment_manager().unregister_connection(conn_id).await;
+    global_attachment_manager()
+        .unregister_connection(conn_id)
+        .await;
 }
 
 pub async fn dispatch_input_event_to_cdp(
@@ -958,12 +1521,18 @@ pub async fn dispatch_input_event_to_cdp(
     event: &InputEvent,
 ) {
     match event {
-        InputEvent::PointerDown { button, u, v, modifiers } => {
+        InputEvent::PointerDown {
+            button,
+            u,
+            v,
+            modifiers,
+        } => {
             if *u < 0.0 || *u > 1.0 || *v < 0.0 || *v > 1.0 {
                 return;
             }
             let x = (u * geom.css_width).clamp(0.0, geom.css_width);
-            let y = (v * geom.css_height + geom.offset_top).clamp(0.0, geom.css_height + geom.offset_top);
+            let y = (v * geom.css_height + geom.offset_top)
+                .clamp(0.0, geom.css_height + geom.offset_top);
             let params = serde_json::json!({
                 "type": "mousePressed",
                 "x": x,
@@ -972,14 +1541,26 @@ pub async fn dispatch_input_event_to_cdp(
                 "clickCount": 1,
                 "modifiers": modifiers,
             });
-            let _ = client.send_command("Input.dispatchMouseEvent", Some(params), Some(page_session_id)).await;
+            let _ = client
+                .send_command(
+                    "Input.dispatchMouseEvent",
+                    Some(params),
+                    Some(page_session_id),
+                )
+                .await;
         }
-        InputEvent::PointerUp { button, u, v, modifiers } => {
+        InputEvent::PointerUp {
+            button,
+            u,
+            v,
+            modifiers,
+        } => {
             if *u < 0.0 || *u > 1.0 || *v < 0.0 || *v > 1.0 {
                 return;
             }
             let x = (u * geom.css_width).clamp(0.0, geom.css_width);
-            let y = (v * geom.css_height + geom.offset_top).clamp(0.0, geom.css_height + geom.offset_top);
+            let y = (v * geom.css_height + geom.offset_top)
+                .clamp(0.0, geom.css_height + geom.offset_top);
             let params = serde_json::json!({
                 "type": "mouseReleased",
                 "x": x,
@@ -988,28 +1569,48 @@ pub async fn dispatch_input_event_to_cdp(
                 "clickCount": 1,
                 "modifiers": modifiers,
             });
-            let _ = client.send_command("Input.dispatchMouseEvent", Some(params), Some(page_session_id)).await;
+            let _ = client
+                .send_command(
+                    "Input.dispatchMouseEvent",
+                    Some(params),
+                    Some(page_session_id),
+                )
+                .await;
         }
         InputEvent::PointerMove { u, v, modifiers } => {
             if *u < 0.0 || *u > 1.0 || *v < 0.0 || *v > 1.0 {
                 return;
             }
             let x = (u * geom.css_width).clamp(0.0, geom.css_width);
-            let y = (v * geom.css_height + geom.offset_top).clamp(0.0, geom.css_height + geom.offset_top);
+            let y = (v * geom.css_height + geom.offset_top)
+                .clamp(0.0, geom.css_height + geom.offset_top);
             let params = serde_json::json!({
                 "type": "mouseMoved",
                 "x": x,
                 "y": y,
                 "modifiers": modifiers,
             });
-            let _ = client.send_command("Input.dispatchMouseEvent", Some(params), Some(page_session_id)).await;
+            let _ = client
+                .send_command(
+                    "Input.dispatchMouseEvent",
+                    Some(params),
+                    Some(page_session_id),
+                )
+                .await;
         }
-        InputEvent::Wheel { u, v, delta_x, delta_y, modifiers } => {
+        InputEvent::Wheel {
+            u,
+            v,
+            delta_x,
+            delta_y,
+            modifiers,
+        } => {
             if *u < 0.0 || *u > 1.0 || *v < 0.0 || *v > 1.0 {
                 return;
             }
             let x = (u * geom.css_width).clamp(0.0, geom.css_width);
-            let y = (v * geom.css_height + geom.offset_top).clamp(0.0, geom.css_height + geom.offset_top);
+            let y = (v * geom.css_height + geom.offset_top)
+                .clamp(0.0, geom.css_height + geom.offset_top);
             let params = serde_json::json!({
                 "type": "mouseWheel",
                 "x": x,
@@ -1018,31 +1619,59 @@ pub async fn dispatch_input_event_to_cdp(
                 "deltaY": delta_y,
                 "modifiers": modifiers,
             });
-            let _ = client.send_command("Input.dispatchMouseEvent", Some(params), Some(page_session_id)).await;
+            let _ = client
+                .send_command(
+                    "Input.dispatchMouseEvent",
+                    Some(params),
+                    Some(page_session_id),
+                )
+                .await;
         }
-        InputEvent::KeyDown { key, code, modifiers } => {
+        InputEvent::KeyDown {
+            key,
+            code,
+            modifiers,
+        } => {
             let params = serde_json::json!({
                 "type": "rawKeyDown",
                 "key": key,
                 "code": code,
                 "modifiers": modifiers,
             });
-            let _ = client.send_command("Input.dispatchKeyEvent", Some(params), Some(page_session_id)).await;
+            let _ = client
+                .send_command(
+                    "Input.dispatchKeyEvent",
+                    Some(params),
+                    Some(page_session_id),
+                )
+                .await;
         }
-        InputEvent::KeyUp { key, code, modifiers } => {
+        InputEvent::KeyUp {
+            key,
+            code,
+            modifiers,
+        } => {
             let params = serde_json::json!({
                 "type": "keyUp",
                 "key": key,
                 "code": code,
                 "modifiers": modifiers,
             });
-            let _ = client.send_command("Input.dispatchKeyEvent", Some(params), Some(page_session_id)).await;
+            let _ = client
+                .send_command(
+                    "Input.dispatchKeyEvent",
+                    Some(params),
+                    Some(page_session_id),
+                )
+                .await;
         }
         InputEvent::InsertText { text } => {
             let params = serde_json::json!({
                 "text": text,
             });
-            let _ = client.send_command("Input.insertText", Some(params), Some(page_session_id)).await;
+            let _ = client
+                .send_command("Input.insertText", Some(params), Some(page_session_id))
+                .await;
         }
         InputEvent::PointerCancel => {}
     }

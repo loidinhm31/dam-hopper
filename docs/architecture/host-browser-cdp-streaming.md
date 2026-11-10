@@ -68,19 +68,19 @@ Process management (`server/src/browser_host/process.rs`) supervises Chromium ex
 
 ### Unix Process Group & Death-Pipe Watcher
 
-- **Process Group Isolation:** Spawns Chromium in a dedicated process group (`process_group(0)`).
-- **Bidirectional Death-Pipe Watcher:** Uses an anonymous POSIX pipe between supervisor and child watcher. Supervisor process termination automatically drops the write-end of the pipe; the watcher receives `EOF` on `death_r` and executes `killpg` against the process group, terminating all orphaned renderer, GPU, and utility processes immediately.
-- **Dual-Stage Liveness Verification:** `live_members(pgid)` verifies termination via both `killpg(pgid, 0)` kernel probe and `/proc` process-tree scanning.
+- **Linux 6.9+ Kernel Requirement (`PIDFD_SIGNAL_PROCESS_GROUP`):** Chromium process launch strictly requires Linux 6.9+ for process group pidfd signalling (`pidfd_send_signal(PIDFD_SIGNAL_PROCESS_GROUP)`) and `close_range` (5.9+). Spawns Chromium in a dedicated process group (`process_group(0)`).
+- **Bidirectional Death-Pipe Watcher:** The dedicated watcher process (`process/death_watcher.rs`) holds a leader pidfd acquired prior to fork and signals the kernel's process group object directly rather than a numerical PGID. Supervisor termination drops the anonymous POSIX death pipe; the watcher receives `EOF` on `death_r` and executes `pidfd_send_signal` against the process group, ensuring orphaned renderer and utility processes are terminated without risking signalling recycled process group IDs after leader reap. On kernels without `PIDFD_SIGNAL_PROCESS_GROUP` (< 6.9, e.g. Ubuntu 24.04 6.8), watcher arming fails with `EINVAL` and launch fails closed; legacy pre-6.9 killpg/procfs fallbacks are permanently deleted.
+- **Dual-Stage Liveness Verification:** `live_members(pgid)` verifies termination via pidfd probe and `/proc` process-tree scanning against captured launch token markers.
 - **Graceful Shutdown Protocol:** Sends `SIGTERM` with a 3-second grace period (`SHUTDOWN_GRACE_PERIOD_SECS`), followed by `SIGKILL` if processes survive.
-- **Non-Positive PGID Rejection:** During unmanaged prior process group cleanup (e.g. after daemon restart or crash recovery), any stored `process_pgid <= 1` (where `0` represents the current process group, `-1` all processes, and `1` init/systemd) is rejected fail-closed. Tombstone stage transitions to `ResetStage::Failed`, error records `invalid non-positive PGID {pgid}`, and the instance transitions to `InstanceLifecycleState::CleanupPending`, refusing to signal host or init processes.
-- **Durable Containment Fencing:** Process group containment is proven before completing process launch or profile wipe. If `live_members(pgid) > 0` survives the 3-second `SIGTERM` grace period and 2-second `SIGKILL` proof deadline, the process error is recorded in an atomic `reset.json` tombstone and the profile enters `CleanupPending`. On server restart, `load_tombstone` recovers this state and fences subsequent launch attempts until resolved.
+- **Non-Positive PGID Rejection:** During unmanaged prior process group cleanup (e.g. after daemon restart or crash recovery), any stored `process_pgid <= 1` (where `0` represents current process group, `-1` all processes, and `1` init/systemd) is rejected fail-closed. Tombstone stage transitions to `ResetStage::Failed`, error records `invalid non-positive PGID {pgid}`, and the instance transitions to `InstanceLifecycleState::CleanupPending`, refusing to signal host or init processes.
+- **Durable Containment Fencing:** Process group containment is proven before completing process launch or profile wipe. If processes survive the 3-second `SIGTERM` grace period and 2-second `SIGKILL` proof deadline, the failure is recorded in an atomic `reset.json` tombstone and the profile enters `CleanupPending`. On server restart, `load_tombstone` recovers this state and fences subsequent launch attempts until resolved.
 
 ### Endpoint Discovery and Loopback Validation
 
 - **Bounded Stream Reading:** Stderr is consumed in 1024-byte chunks up to a hard ceiling of 64 KiB (`MAX_STDERR_CAPTURE_BYTES = 65_536`). Oversized stderr streams without an endpoint token fail closed with `ProcessError::StderrOverflow`.
 - **DevToolsActivePort Corroboration:** When present, `DevToolsActivePort` (read up to 512 bytes) is corroborated against the stderr endpoint; mismatch between port file and stderr fails closed with `ProcessError::EndpointMismatch`.
 - **Loopback Enforcement (`validate_loopback_endpoint`):** Endpoints must parse as `ws://`, bind strictly to `127.0.0.1`, `[::1]`, or `localhost`, specify an explicit non-zero port, and match `/devtools/browser/<canonical-uuid>` where the UUID is a 36-character lowercase RFC 4122/9562 UUID.
-- **Non-Unix Platform Containment:** On non-Unix platforms (such as Windows), `BrowserProcess::launch` fails closed immediately with `ProcessError::ContainmentUnavailable`.
+- **Non-Unix Platform Containment:** On non-Unix platforms (such as Windows), `BrowserProcess::launch` fails closed immediately with `ProcessError::ContainmentUnavailable`. Windows containment remains unimplemented; no qualification is claimed.
 
 ## 4. Binary Wire Framing Protocol (BHJF v1)
 
@@ -129,7 +129,7 @@ The production CDP Gateway (`server/src/browser_host/cdp_gateway.rs`) exposes au
 ### Discovery Endpoint Rewriting
 
 CDP discovery routes (`GET /api/browser/cdp/json/version`, `GET /api/browser/cdp/json/list`, and `GET /api/browser/cdp/json`) authenticate callers and proxy metadata from the running Chromium instance:
-- **Gateway WS Base Resolution:** Rewrites internal `webSocketDebuggerUrl` and `devtoolsFrontendUrl` to public gateway WebSocket endpoints (`/api/browser/cdp/ws` or `/api/browser/cdp/ws/{target_id}`). The public URL is derived strictly from `DAM_HOPPER_PUBLIC_SERVER_ORIGIN` or the direct `Host` header. Forwarded headers (`X-Forwarded-Host`, `X-Forwarded-For`) are ignored to prevent URL poisoning.
+- **Gateway WS Base Resolution:** Rewrites internal `webSocketDebuggerUrl` and `devtoolsFrontendUrl` to public gateway WebSocket endpoints (`/api/browser/cdp/ws` or `/api/browser/cdp/ws/{target_id}`). The public URL is derived strictly from operator-configured `DAM_HOPPER_PUBLIC_SERVER_ORIGIN` (scheme and authority only, mapping `http` to `ws` and `https` to `wss`), or in guarded `--no-auth` development mode with a verified loopback bound listener socket. The request `Host` and forwarded headers (`X-Forwarded-Host`, `X-Forwarded-For`) are never consulted or reflected; an unconfigured origin rejects discovery with HTTP 503 Service Unavailable (`kind: "publicOriginUnavailable"`).
 - **Endpoint Sanitization:** Internal loopback DevTools ports (e.g. `127.0.0.1:xxxxx`) are stripped from frontend URLs before returning to callers.
 - **Payload Bounds:** Discovery target list payloads from Chromium are strictly bounded to 256 KiB; oversized responses fail closed with HTTP 502 Bad Gateway.
 
@@ -138,7 +138,7 @@ CDP discovery routes (`GET /api/browser/cdp/json/version`, `GET /api/browser/cdp
 Origin validation enforces strict single-origin invariants (`validate_cdp_origin`):
 1. **Single Header Enforcement:** Multiple `Origin` headers (`headers.get_all(header::ORIGIN).iter().count() > 1`) fail closed with HTTP 403 Forbidden (`kind: "forbiddenOrigin"`).
 2. **Format Sanitation:** Origins equal to `"null"`, ending in a trailing slash (`/`), or containing commas (`,`) fail closed with HTTP 403 Forbidden.
-3. **Allowlist Matching:** Evaluates byte-for-byte exact equality against `server.cors_origins` and `browser.allowed_dev_origins`.
+3. **Allowlist Matching:** Evaluates byte-for-byte exact equality against approved origins (`server.cors_origins`, `public_server_origin`, and in dev `browser.allowed_dev_origins`). An empty allowlist approves nothing (denies all Origin-bearing requests).
 4. **Origin-less Requests:** Permitted strictly for clients presenting bearer credentials (`Authorization: Bearer <token>`) or loopback development bypass. Origin-less requests without bearer authentication fail closed with HTTP 403 Forbidden.
 5. **Oracle Mitigation:** Discovery endpoints evaluate caller authentication before validating Origin headers; unauthenticated requests fail with HTTP 401 Unauthorized, preventing unauthenticated origin enumeration or probing.
 
@@ -259,16 +259,29 @@ Profiles are organized under `<profile_root>/` by namespace and hashed subject:
 - **Advisory OS Lock (`ProfileLock`):** Holds open `manager.lock` via non-blocking `flock(fd, LOCK_EX | LOCK_NB)` on Unix. Released automatically on drop (`LOCK_UN`). Lock wait timeout is bounded to 5 seconds (`DEFAULT_LOCK_TIMEOUT`). The lock file inode is preserved across profile resets.
 - **Profile Lock Retention Across Resets:** Exclusive OS advisory `flock` (`manager.lock`) is retained across resets and restarts on a stable file inode directly in the principal directory (`<profile_root>/<namespace>/<sha256(subject)>/manager.lock`). The lock file itself is never deleted during profile reset or credential wipe (only `user-data/` is purged and recreated), preventing file lock races, directory unlinking races, or concurrent process spawns during teardown.
 
-### Metadata Schema (`manager.json`)
+### Metadata Schema & Durable Persistence Pipeline (`manager.json`, `profile.rs`)
 
-Atomic writes via temporary file (`manager.json.tmp.<pid>.<uuid>`) and rename:
+Every persistent metadata and tombstone mutation executes a four-stage durability pipeline (`write_durably`):
+1. **Mode 0600 Temp File:** Serializes JSON into a unique temporary file (`.<name>.tmp.<pid>.<uuid>`) with mode `0600` (`rw-------`).
+2. **File Fsync:** Flushes bytes and file metadata to disk (`FileSync`).
+3. **Atomic Rename:** Renames the temp file over the final target (`Rename`).
+4. **Directory Fsync:** Calls `fsync` on the parent principal directory (`DirSync`) to make directory entry creation durable across system crashes. Tombstone unlinking similarly performs directory fsync.
+
+**Persisted Process Identity (`ContainmentIdentity`):**
+- `pid` and `pgid`: Numeric process and group identifiers.
+- `startTime`: Kernel start time read from field 22 of `/proc/<pid>/stat`, preventing PID recycling confusion.
+- `bootId`: System boot ID distinguishing restarts.
+- `launchToken`: Unique UUID token exported via environment variable `DAM_HOPPER_BROWSER_LAUNCH_TOKEN` to Chromium and all child processes. A launch intent marker is written and synced to `manager.json` *before* process spawn so crash recovery can reconcile surviving trees.
+- `ProfileFaults`: Test-only fault injector allowing automated suites to simulate step-specific I/O failures across `FileSync`, `Rename`, `DirSync`, `Unlink`, and `UserData` operations.
+
+**Metadata Fields (`manager.json`):**
 - `subject`: Principal identifier string.
 - `isDev`: Boolean distinguishing `--no-auth` dev mode from authenticated production profiles.
 - `profileEpoch`: Monotonic `u64` counter matching `[1-9][0-9]{0,19}`.
 - `browserIncarnation`: Fresh UUID minted on each process launch; `null` when dormant.
+- `containment`: Captured `ContainmentIdentity`.
 - `updatedAtUnixMs`: Millisecond Unix timestamp of last update.
 - `lastResetOperationId`: Optional UUID of last successfully completed reset operation (for idempotence).
-
 ## 8. Reset Reconciliation & Durable Tombstone Lifecycle (`manager.rs`)
 
 The reset state machine purges user credentials (`user-data/`) and recreates a fresh profile while maintaining process exclusivity and preventing concurrent operations.
@@ -280,8 +293,14 @@ The reset state machine purges user credentials (`user-data/`) and recreates a f
 3. **Advance Epoch & Persist Tombstone:** Increments `profileEpoch`, writes `reset.json` (`ResetStage::Initiated`) and `manager.json` atomically, updates `live_profile_epochs`, and spawns a manager-owned worker (returning `ResetOutcome::CleanupPending` after `DEFAULT_RESET_WAIT_TIMEOUT = 2s` while the worker continues).
 4. **Synchronous Fence & Bounded Async Teardown:** Inside worker ownership, runs `sync_fence` (revokes attachments, closes sessions/input managers, fences selection state and `ManagedBrowser` artifacts) followed by `async_teardown` (deletes fenced artifact files before bounded CDP/producer removal within 2s).
 5. **Terminate Process & Delete User Data:** Executes bounded 10s process termination (`DEFAULT_TERMINATE_TIMEOUT`), bounded 10s `user-data/` deletion (`DEFAULT_DELETE_TIMEOUT`), and `0700` `user-data/` recreation; failure persists `ResetStage::Failed` and `CleanupPending`.
-6. **Clear Tombstone & Status Polling:** Records `last_reset_operation_id`, clears `reset.json`, and returns `Dormant`; `GET /api/browser/profile/reset/{operationId}` inspects active workers, tombstones, and metadata via `get_reset_status`.
-### Tombstone Lifecycle & Crash Reconciliation
+6. **Clear Tombstone & Status Polling:** Records `last_reset_operation_id`, clears `reset.json` durably (unlink + dir fsync), and returns `Dormant`; `GET /api/browser/profile/reset/{operationId}` inspects active workers, tombstones, and metadata via `get_reset_status`.
+
+### Tombstone & Crash Reconciliation Recovery
+
+On server restart or subsequent launch attempts under exclusive `ProfileLock`:
+- **Prior Tree Reconciliation:** Scans processes carrying the matching `launchToken`, boot ID, and kernel start time before launching a new browser or running resets, safely signalling orphaned trees.
+- **Interrupted Resets:** Resumes interrupted operations from persisted `reset.json` stage markers without clobbering epochs.
+- **Creation Marker Reconciliation:** If a browser crashed during target creation, lost pages tagged with `about:blank#dh-<session_id>` are discovered and reconciled or safely cleaned up.
 
 | Stage | Trigger / Transition | Failure Behavior |
 | --- | --- | --- |
@@ -328,11 +347,10 @@ Every HTTP and WebSocket request to `/api/browser/*` undergoes strict admission 
   - Token `auth_version` and `credential_version` match active user and session database records.
   - Token `effective_deadline` has not passed.
 - **Development Bypass (`state.no_auth == true`):**
-  - Connecting peer socket address must be loopback (`127.0.0.1` or `::1`). Non-loopback fails closed with HTTP 403 `kind: "devBypassDenied"`.
-  - Forwarded headers (`X-Forwarded-For`, `X-Real-IP`) are explicitly ignored; only raw socket peer address is evaluated.
-  - If an `Origin` header is present, it must match configured `cors_origins` or standard local Vite dev ports (`http://127.0.0.1:5173`, `http://localhost:5173`).
+  - Requires `state.no_auth` AND an actually bound loopback listener address (`bound_listener`) AND a loopback peer socket (`127.0.0.1` or `::1`). If either listener or peer is non-loopback (or listener address is unknown), admission fails closed with HTTP 403 `kind: "devBypassDenied"`.
+  - Forwarded headers (`X-Forwarded-For`, `X-Real-IP`, `Forwarded`) are explicitly ignored; only raw socket addresses are evaluated.
+  - Any `Origin` header must strictly match approved origins (`server.cors_origins`, trusted `public_server_origin`, or `allowed_dev_origins`, falling back to local Vite ports `http://127.0.0.1:5173`, `http://localhost:5173` only when no dev origins are configured). An empty allowlist approves nothing.
   - Loopback requests without Origin (local native CLI/agents) are permitted. Assigned principal is `"dev-user"` with `is_dev: true`.
-
 ### Periodic Live Verification (`verify_live_admission`)
 
 Long-running streaming connections and active attachments do not rely on static handshake validation alone:
@@ -382,10 +400,12 @@ $$x = u \times \text{css\_width}, \quad y = v \times \text{css\_height} + \text{
 ## 13. Session Registry & Idempotent Target Management (`session.rs`)
 
 `SessionRegistry` manages target lifecycle and state transitions:
-- **Idempotent Creation:** `POST /api/browser/sessions` requires `creationKey`. Caches up to 128 idempotency records per principal for 10 minutes (`IDEMPOTENCY_TTL = 600s`). Retrying with the same key returns the existing session with HTTP 200 OK.
-- **Target Capacity Limits:** Bounded to `DEFAULT_MAX_TARGETS = 2` per principal. Over-capacity creates return HTTP 429 `kind: "browserBusy"`.
+- **Idempotent Creation & Reservation:** `POST /api/browser/sessions` requires `creationKey`. Caches up to 128 idempotency records per principal for 10 minutes (`IDEMPOTENCY_TTL = 600s`). Retrying with the same key returns the existing session with HTTP 200 OK.
+- **Shared Native Target Capacity:** Configured `max_targets` (default 2, 1..=16) is strictly honored across all shared native target consumers: startup pages, REST sessions (`reserve_creation`), raw CDP targets (`register_raw_target`), and admitted popups. When total occupied targets reach `max_targets`, new sessions fail with HTTP 429 `kind: "browserBusy"`, and popups are rejected with `popupBlocked: true`.
+- **Session Lifecycle Status Truth:** Server session status reflects five lifecycle states: `initializing`, `running`, `closing`, `lost`, and `closed`. A session in `closing` state holds its target capacity slot until native absence is proven via `finish_close` or native destruction events (`native_destroyed`). `lost` indicates unexpected native page destruction while freeing its slot.
+- **Failed Close Handling:** `DELETE /api/browser/sessions/{id}` returning an unconfirmed native close results in HTTP 502 Bad Gateway (`kind: "nativeCloseUnconfirmed"`), keeping the session in `closing` status with its target capacity held.
+- **Session Listing & TTL Reaping:** `GET /api/browser/sessions` lists all non-closed sessions (including `closing` and `lost`) so operators and UI observe truth. Retired sessions and idempotency records are reaped after `IDEMPOTENCY_TTL = 600s`. Note: UI TypeScript `BrowserSessionStatus` union does NOT yet include `closing` or `lost` (Phase 02/03 owns UI contract alignment).
 - **Independent Epochs:** Tracks `navigationRevision` independently of `viewportEpoch` and `profileEpoch`.
-- **Popup Management:** Native popup creation creates bounded server sessions; capacity overflow closes the popup and sets `popupBlocked: true`.
 
 ## 14. Navigation & HTTP Network Policy (`network_policy.rs`)
 
@@ -395,7 +415,8 @@ Navigation URLs are validated against `validate_navigation_url`:
 - **Credentials Prohibited:** Embedded usernames/passwords in URLs fail closed.
 - **Production Private & Metadata IP Blocking:** Rejects private IPv4/IPv6, link-local, loopback, and cloud metadata endpoints (`169.254.169.254`, `100.100.100.200`, `fd00:ec2::254`, `metadata.google.internal`) unless matching explicit project origin exceptions.
 - **Development Isolation:** Rejects general internet destinations; restricts navigation to loopback and configured `allowed_origins`.
-
+- **Fetch Request-Policy Interception:** CDP `Fetch` interception (`Fetch.enable` for all URL patterns at `Request` stage) is installed on the Page session before any navigation is initiated. Targets are initially created at `about:blank#dh-<session_id>` before navigating; server-initiated initial navigation awaits main-frame commit before the navigation watcher begins.
+- **Worker & Child Target Interception:** Flattened auto-attach pauses child targets (frames and workers) until request interception is established (`Runtime.runIfWaitingForDebugger`). Unpoliced child targets fail closed: if interception cannot be enabled, the child is contained immediately. Page-owned targets die with page close; detached service workers and shared workers are terminated explicitly via `Target.closeTarget` by native target ID, with proof of absence verified against `Target.getTargets`.
 ## 15. Native Screencast Producer & Bounded Ingress (`screencast.rs`)
 
 The screencast producer (`server/src/browser_host/screencast.rs`) manages native Chromium screencast streaming with bounded memory admission and strict lifecycle control:
@@ -524,9 +545,9 @@ The frontend client modules (`packages/ui/src/browser-host/`, `packages/ui/src/a
 
 Phase 08 integrates secure CDP DOM selection, actor-bound artifact authorization, revoke-first logout ordering, and confirmed profile reset UX:
 
-- **Actor-Bound Debug Artifacts (`browser_debug/`, `state.rs`):** Every artifact carries an immutable `owner` (`AuthenticatedActor.subject`) and internal `ArtifactSource` (`Cooperative` vs `ManagedBrowser { principal, profile_epoch, browser_incarnation }`). Public `POST /api/browser-debug/artifacts` (`deny_unknown_fields`) always assigns `Cooperative`; managed selection artifacts require live `AppStateBrowserAdmissionAuthority` checks (enabled Admin or `--no-auth` dev, matching `profileEpoch`, and zero active reset tombstones) across create, PNG upload, delete, and handoff—denying demoted Admins and foreign owners with indistinguishable `404`. Global quota enforces 64 records / 64 MiB via cancellation-safe `QuotaReservationGuard`, `UploadReservationGuard`, and `PublishedPathCleanupGuard`, while `revoke_managed_by_principal` purges artifacts prior to profile reset deletion.
+- **Actor-Bound Debug Artifacts & Handoff Authority Fences (`browser_debug/`, `state.rs`):** Every artifact carries an immutable `owner` (`AuthenticatedActor.subject`) and internal `ArtifactSource` (`Cooperative` vs `ManagedBrowser { principal, profile_epoch, browser_incarnation }`). Public `POST /api/browser-debug/artifacts` (`deny_unknown_fields`) always assigns `Cooperative`; managed selection artifacts require live `AppStateBrowserAdmissionAuthority` checks (enabled Admin or `--no-auth` dev, matching `profileEpoch`, and zero active reset tombstones) across create, PNG upload, delete, and handoff—denying demoted Admins and foreign owners with indistinguishable `404`. Global quota enforces 64 records / 64 MiB via cancellation-safe `QuotaReservationGuard`, `UploadReservationGuard`, and `PublishedPathCleanupGuard`. During PTY handoff writes, `HandoffAuthority::is_current` revalidates revocation epoch (`publish_revocation`), live browser incarnation, navigation revision, and actor deadline synchronously inside the PTY mutation lock without awaiting, denying stale writes. Unlink failures retain charged storage in the `pending_cleanups` set.
 - **CDP Selection Preview & Atomic Terminal Delivery (`selection.rs`, `cdp.rs`, `selection-controller.ts`, `BrowserApp.tsx`):** `Overlay` inspect mode (`Overlay.setInspectMode`) and one-shot `inspectPoint` (`DOM.getNodeForLocation` + allowlisted `Runtime.callFunctionOn`) sanitize DOM metadata into `BrowserSelectionV1` (omitting form values, passwords, raw HTML, and control bytes) with optional cropped CDP PNG capture (`<= 4 MiB` at `1.0x`/`0.5x` scale). A session-lifetime background navigation watcher subscribes to projected `CdpLifecycleEvent` records (`MAX_LIFECYCLE_EVENT_SLOTS = 8`, bounded via `MemoryAdmissionController`) to invalidate selections/pending artifacts on main-frame or same-document navigation. Atomic handoff holds `acquire_managed_selection_fence` and executes `pty_manager.write_if_incarnation` with server-generated reference paths only (`[DamHopper browser-debug artifact ...]`); UI `useHostBrowserSelection` enforces 409 `navigationRevision` sync recovery and preserves Cooperative extension/bridge flows (`use-browser-debug.ts`, `browser-bridge`).
-- **Revoke-First Logout & Profile Reset UX (`api/auth.rs`, `AccountLogoutDialog.tsx`, `ServerProfilesDialog.tsx`, `ServerSettingsDialog.tsx`, `BrowserStreamKeepAliveHost.tsx`):** `POST /api/auth/logout` captures pre-revocation live Admin admission, then **always executes session revocation, media-ticket revocation, Browser attachment/lease teardown (`revoke_auth_session_browser_resources`), and cookie clearing FIRST**, returning HTTP 200 `{ browserResetState: "retained", resetRequired: true }` for legacy/missing/stale-confirmation callers. Destructive reset additionally requires CSRF/Origin (`validate_destructive_browser_csrf`), `confirmed: true`, `expectedProfileEpoch`, `operationId`, and lock-guarded Admin recheck. Unified `AccountLogoutDialog` enforces Cancel-first focus with zero preselected actions (V1); cleartext non-loopback HTTP omits Bearer tokens in both `logoutAccount` and `revokeCurrentMediaSession` (`isSecureOrLoopbackOrigin`); `ServerSettingsDialog` provides standalone reset and `PendingBrowserResetContext` status resume alongside immediate view fencing (`fenceBrowserViewsForProfile`); and `ServerProfilesDialog` local profile deletion clarifies that server sessions and shared Browser credentials are retained.
+- **Revoke-First Logout & Truthful Outcome UX (`api/auth.rs`, `AccountLogoutDialog.tsx`, `ServerProfilesDialog.tsx`, `ServerSettingsDialog.tsx`, `BrowserStreamKeepAliveHost.tsx`):** `POST /api/auth/logout` captures pre-revocation live Admin admission, then **always executes session revocation, media-ticket revocation, Browser attachment/lease teardown (`revoke_auth_session_browser_resources`), and cookie clearing FIRST**, returning HTTP 200 `{ browserResetState: "retained", resetRequired: true }` for legacy/missing/stale-confirmation callers. The response sets `sessionRevoked: true` only when the request's own credential was identified and revoked (accompanied by explicit `sessionIdentified: bool`); client-side auth clients never treat `sessionRevoked: true` as confirmation for an unsent Bearer token. Destructive reset additionally requires CSRF/Origin (`validate_destructive_browser_csrf`), `confirmed: true`, `expectedProfileEpoch`, `operationId`, and lock-guarded Admin recheck; if private artifact file purge remains incomplete, the outcome reports `browserResetState: "cleanupPending"`.
 
 ## 21. Qualification Status & Open Proof Obligations
 
@@ -534,7 +555,7 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 
 | Gate | Status | Evidence / Invariant |
 | --- | --- | --- |
-| Linux Process Containment | **PASS** | Process group isolation, death-pipe watcher, and procfs scan verified |
+| Linux Process Containment | **PASS** | Process group pidfd signalling (`PIDFD_SIGNAL_PROCESS_GROUP`) and `close_range` verified on Linux 6.9+; older kernels fail closed |
 | Adapter Bounds & Budget | **PASS** | 64-command cap, 2 MiB RAII byte budget, 32-msg writer queue, 5s write deadline |
 | Coordinate Mapping | **PASS** | Authoritative marker centroids verified for DPR 1/2, scroll, pageScale, visual offsets |
 | Wire Codec (BHJF) | **PASS** | Roundtrip encode/decode, SOF dimension verification, decimal sequence validation |
@@ -555,7 +576,7 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Actor-Bound Artifacts, Selection & Logout Reset | **PASS** | Immutable owner/source class, live Admin demotion checks, bounded CDP selection + PNG + atomic terminal handoff, revoke-first logout, 2s bounded async reset worker, and Cancel-first UI (V1). Verified by 237/237 scoped Phase 08 checks + 3,718/3,718 full UI unit run; Cycle 3 approved (`7/10`, 0 critical issues; carryovers W1–W9). |
 | Live-Server Selection E2E (`selection.spec.ts`) | **DEFERRED (PHASE 09)** | `packages/ui/e2e/os-host-browser/selection.spec.ts` authored and E2E typechecked; live-server Playwright execution deferred to Phase 09 integrated qualification. |
 | Native Browser Zoom | **UNVERIFIED** | Unreachable via standard CDP in headless Chromium 157; `inputTrusted: false` enforced |
-| Windows Containment | **FAIL-CLOSED** | Windows Job Object containment unqualified; non-Unix launch returns `ContainmentUnavailable` |
+| Windows Containment | **FAIL-CLOSED** | Windows Job Object containment unimplemented; non-Unix launch returns `ContainmentUnavailable`. Retained fail-closed; no qualification claimed |
 ### Phase 05 Verification Summary
 
 - **Phase 05 Finalized (2026-11-09):** The user explicitly approved the code review with noted issues after Cycle 3 (70/70 checks passing across screencast, fanout, bounds, regressions, build, and TypeScript compile suites). Phase 06 (Frame Assembly & Decoder Pipeline) is unblocked.
@@ -638,6 +659,18 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
   - Desktop Chrome/Firefox human visual and agent interference ledger (A40, `reports/human-acceptance.md`).
   - Continuous 60s soak workloads, physical scanout latency, and production capture benchmarks (A37, `reports/performance-qualification.md`).
   - Dedicated native Windows release host runner for Job Object containment (A29, `reports/platform-qualification.md`).
+
+### Phase 01 Authority & Lifecycle Remediation (2026-11-10)
+
+Phase 01 remediates backend authority, lifecycle truth, durable reset recovery, and request-policy interception:
+- **Implemented Remediation Tasks:** Delivered `secure-browser-admission` (loopback listener + peer socket enforcement, exact Origin allowlist matching, trusted public origin resolution for raw CDP), `reconcile-native-targets` (shared `max_targets` capacity across startup/REST/raw/popups, `closing`/`lost` lifecycle statuses, 502 `nativeCloseUnconfirmed`, Fetch request-policy interception on pages/workers), `persist-reset-recovery` (0600 temp + fsync + rename + dir fsync, launch token reconciliation under flock, `ProfileFaults`), and `secure-artifact-logout` (in-lock PTY handoff authority revalidation, `sessionIdentified` logout truth, pending cleanup retention).
+- **Windows Platform Boundary:** Task `implement-windows-containment` remains blocked due to absence of a native Windows runner. Windows stays fail-closed (`ContainmentUnavailable`); no qualification is claimed.
+- **Tracked Known Limitations (Open Review Follow-ups):**
+  - **C1 (Recycled-Group Race):** Supervisor and recovery scanner (`process.rs:1233-1346`) uses lazy `/proc` traversal, introducing a potential race with recycled process group numbers during prior-tree termination after the original leader was reaped.
+  - **C2 (MFA StepUp Epoch Race):** Database credential commit precedes epoch publication (`auth_mfa.rs:939-969`), leaving an interval where cancellation or failure can lose publication.
+  - **C3 (Live Containment Capacity):** Failed live containment (`manager.rs:1947-1999`) invokes dead-browser retirement, potentially releasing target capacity before native child process teardown is confirmed.
+  - **Cleanup & Drain Bounds:** Queued artifact cleanup vector retains historical IDs without a hard bound; shutdown does not join every detached cleanup/escalation task; observer overlay mutations bypass the generation gate.
+  - **Accepted Design Limits:** Direct database demotion relies on 5s supervisor poll latency rather than synchronous push; cancelled handoff workers blocked on std Mutex release without writing; page-session overflow drops worker identity.
 
 ## 22. Source Map
 

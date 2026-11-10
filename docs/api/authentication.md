@@ -330,6 +330,7 @@ Executes **revoke-first** session teardown and optional confirmed shared-Browser
   "token": null,
   "role": null,
   "sessionRevoked": true,
+  "sessionIdentified": true,
   "revocationUncertain": false,
   "browserResetState": "cleared",
   "browserCredentialsRetained": false,
@@ -341,9 +342,10 @@ Executes **revoke-first** session teardown and optional confirmed shared-Browser
 
 | Field | Type | Semantics |
 | --- | --- | --- |
-| `sessionRevoked` | `boolean` | `false` when session storage revocation failed or backend was unavailable for a supplied token (note: Cycle 3 W4 tracks returning `true` when no usable credential was supplied). |
+| `sessionRevoked` | `boolean` | `true` only when the credential carried by THIS request was identified and its server session revoked; `false` for uncredentialed/anonymous logouts or when storage revocation failed. Clients never trust `sessionRevoked: true` for an unsent Bearer token. |
+| `sessionIdentified` | `boolean` | `true` when the request provided an identifiable session credential (Bearer token or cookie); `false` when no usable credential was present. |
 | `revocationUncertain` | `boolean` | `true` on storage revocation error or auth backend unavailability (and client-side when non-loopback cleartext HTTP withholds Bearer or HTTP fails). |
-| `browserResetState` | `string` | `"cleared"`, `"cleanupPending"` (bounded 2s wait elapsed or durable failure tombstone; includes `reason`), `"retained"`, or `"unknown"` (`--no-auth` or unadmitted/malformed cases). |
+| `browserResetState` | `string` | `"cleared"`, `"cleanupPending"` (bounded 2s wait elapsed, durable tombstone, or incomplete artifact purge; includes `reason`), `"retained"`, or `"unknown"` (`--no-auth` or unadmitted/malformed cases). |
 | `browserCredentialsRetained` | `boolean` | `false` only when `browserResetState === "cleared"`. |
 | `resetRequired` | `boolean` | `true` whenever reauthenticated Admin reset is still required (`false` only when `"cleared"`). |
 | `profileEpoch` | `number` *(optional)* | Resulting `profileEpoch` after confirmed reset (`"cleared"` or `"cleanupPending"`). |

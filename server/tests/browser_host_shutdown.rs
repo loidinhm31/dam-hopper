@@ -27,7 +27,11 @@ fn resolve_test_executable() -> Option<PathBuf> {
     if let Ok(p) = find_browser_executable(None) {
         return Some(p);
     }
-    for candidate in &["/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium"] {
+    for candidate in &[
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+    ] {
         let p = PathBuf::from(candidate);
         if p.is_file() {
             return Some(p);
@@ -114,12 +118,18 @@ async fn test_server_startup_without_browser_use_launches_no_engine() {
     );
 
     // 1. AppState::new creates lazy manager; NO Chromium engine is spawned
-    let caps = state.browser_host.capabilities("admin@example.com", false).await;
+    let caps = state
+        .browser_host
+        .capabilities("admin@example.com", false)
+        .await;
     assert_eq!(caps.protocol_version, 1);
     assert!(!caps.managed_profile_present);
     // 2. Profile root has not created any user-data or engine processes
     let profile = ManagedProfile::new(profile_tmp.path(), "admin@example.com", false).unwrap();
-    assert!(!profile.user_data_dir().exists(), "no user-data directory should be spawned");
+    assert!(
+        !profile.user_data_dir().exists(),
+        "no user-data directory should be spawned"
+    );
     // 3. Graceful shutdown completes immediately without stalling
     state.browser_host.shutdown_all().await;
 }
@@ -162,7 +172,10 @@ async fn test_shutdown_reaps_browser_descendants_and_preserves_credentials() {
         use nix::sys::signal::kill;
         use nix::unistd::Pid;
         let is_running = kill(Pid::from_raw(pid as i32), None).is_ok();
-        assert!(is_running, "browser process must be running before shutdown");
+        assert!(
+            is_running,
+            "browser process must be running before shutdown"
+        );
     }
 
     // 2. Write credential/cookie marker in user-data-dir
@@ -182,7 +195,10 @@ async fn test_shutdown_reaps_browser_descendants_and_preserves_credentials() {
         use nix::sys::signal::kill;
         use nix::unistd::Pid;
         let is_dead = kill(Pid::from_raw(pid as i32), None).is_err();
-        assert!(is_dead, "browser process must be dead after server shutdown");
+        assert!(
+            is_dead,
+            "browser process must be dead after server shutdown"
+        );
     }
 
     // 5. Verify user-data-dir credentials are preserved across server shutdown!
@@ -195,7 +211,8 @@ async fn test_shutdown_reaps_browser_descendants_and_preserves_credentials() {
 }
 
 #[tokio::test]
-async fn test_shutdown_timeout_leaves_recoverable_tombstone_and_never_reports_deleted_credentials() {
+async fn test_shutdown_timeout_leaves_recoverable_tombstone_and_never_reports_deleted_credentials()
+{
     let tmp = tempdir().unwrap();
     let profile_tmp = tempdir().unwrap();
 
@@ -213,8 +230,7 @@ async fn test_shutdown_timeout_leaves_recoverable_tombstone_and_never_reports_de
         created_at_unix_ms: now_unix_ms(),
         updated_at_unix_ms: now_unix_ms(),
         error: Some("shutdown watchdog interrupted reset".to_string()),
-        process_pid: None,
-        process_pgid: None,
+        containment: Default::default(),
     };
     profile.save_tombstone(&tombstone).unwrap();
 
@@ -232,11 +248,17 @@ async fn test_shutdown_timeout_leaves_recoverable_tombstone_and_never_reports_de
     state.browser_host.shutdown_all().await;
 
     // 1. Tombstone survives shutdown
-    let loaded_tombstone = profile.load_tombstone().unwrap().expect("tombstone must survive");
+    let loaded_tombstone = profile
+        .load_tombstone()
+        .unwrap()
+        .expect("tombstone must survive");
     assert_eq!(loaded_tombstone.operation_id, "op-unfinished-shutdown");
 
     // 2. Live credentials were NOT deleted
-    assert!(cred_file.exists(), "credentials must not be deleted on premature exit or timeout");
+    assert!(
+        cred_file.exists(),
+        "credentials must not be deleted on premature exit or timeout"
+    );
 
     // 3. Restart server and verify capabilities reflect recoverable cleanup pending
     let restarted_state = create_test_app_state(
@@ -244,7 +266,115 @@ async fn test_shutdown_timeout_leaves_recoverable_tombstone_and_never_reports_de
         browser_cfg,
         Some(profile_tmp.path().to_path_buf()),
     );
-    let caps = restarted_state.browser_host.capabilities("user_tombstone", false).await;
+    let caps = restarted_state
+        .browser_host
+        .capabilities("user_tombstone", false)
+        .await;
     assert!(!caps.available);
     assert!(caps.unavailable_reason.unwrap().contains("cleanup pending"));
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn test_restart_after_unclean_shutdown_reconciles_tombstone_identity_before_wipe() {
+    use dam_hopper_server::browser_host::manager::{ManagerError, ResetOutcome};
+    use dam_hopper_server::browser_host::process::{
+        live_members, ContainmentIdentity, LAUNCH_TOKEN_ENV,
+    };
+    use nix::sys::signal::{killpg, Signal};
+    use nix::unistd::Pid;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let tmp = tempdir().unwrap();
+    let profile_tmp = tempdir().unwrap();
+    let profile = ManagedProfile::new(profile_tmp.path(), "user_unclean", false).unwrap();
+    profile.ensure_user_data_dir().unwrap();
+    profile.load_or_init_metadata().unwrap();
+    let cred_file = profile.user_data_dir().join("Login Data");
+    fs::write(&cred_file, b"saved_login_records").unwrap();
+
+    // A browser tree that survived an unclean shutdown (shell leader + descendants).
+    let token = "unclean-shutdown-token";
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg("sleep 300 & sleep 300 & wait")
+        .env(LAUNCH_TOKEN_ENV, token)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let pgid = pid as i32;
+    let waiter = std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    for _ in 0..100 {
+        if live_members(pgid).unwrap() >= 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(live_members(pgid).unwrap() >= 3);
+
+    // The shutdown tombstone carries the containment identity of that tree.
+    profile
+        .save_tombstone(&ResetTombstone {
+            operation_id: "shutdown-unclean".to_string(),
+            target_profile_epoch: 1,
+            stage: ResetStage::Failed,
+            created_at_unix_ms: now_unix_ms(),
+            updated_at_unix_ms: now_unix_ms(),
+            error: Some("shutdown containment timed out".to_string()),
+            containment: ContainmentIdentity::capture(pid, Some(pgid), Some(token.to_string())),
+        })
+        .unwrap();
+
+    let browser_cfg = BrowserHostConfig {
+        enabled: true,
+        executable_path: resolve_test_executable(),
+        ..Default::default()
+    };
+    let state = create_test_app_state(
+        tmp.path().to_path_buf(),
+        browser_cfg,
+        Some(profile_tmp.path().to_path_buf()),
+    );
+    state
+        .browser_host
+        ._prior_tree_settle_ms
+        .store(150, std::sync::atomic::Ordering::SeqCst);
+
+    assert!(matches!(
+        state
+            .browser_host
+            .ensure_running("user_unclean", false)
+            .await,
+        Err(ManagerError::CleanupPending(_))
+    ));
+    assert!(
+        live_members(pgid).unwrap() > 0,
+        "restart alone never touches the old tree"
+    );
+    assert!(cred_file.exists());
+
+    // Confirmed recovery: the verified tree is terminated BEFORE credentials are deleted.
+    let out = state
+        .browser_host
+        .reset_profile("user_unclean", false, "shutdown-unclean", 1)
+        .await
+        .unwrap();
+    assert!(matches!(out, ResetOutcome::Completed { .. }), "{out:?}");
+    assert_eq!(
+        live_members(pgid).unwrap(),
+        0,
+        "all descendants absent after recovery"
+    );
+    assert!(!cred_file.exists());
+    assert!(profile.load_tombstone().unwrap().is_none());
+
+    let _ = killpg(Pid::from_raw(pgid), Signal::SIGKILL);
+    let _ = waiter.join();
 }

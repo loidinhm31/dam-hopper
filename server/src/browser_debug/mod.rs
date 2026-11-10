@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub use error::BrowserDebugError;
 pub use store::{
     ArtifactSource, BoxFuture, BrowserAdmissionAuthority, BrowserDebugArtifactManager,
-    MAX_GLOBAL_ARTIFACT_BYTES, MAX_GLOBAL_ARTIFACT_RECORDS,
+    HandoffFence, MAX_GLOBAL_ARTIFACT_BYTES, MAX_GLOBAL_ARTIFACT_RECORDS,
 };
 
 pub const MAX_SELECTION_JSON_BYTES: usize = 64 * 1024;
