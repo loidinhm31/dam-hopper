@@ -484,6 +484,9 @@ pub enum DiscardReason {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ServerControlEvent {
+    SessionUpdated {
+        session: Box<super::session::BrowserSessionDto>,
+    },
     DialogOpened {
         dialog_id: String,
         message: String,

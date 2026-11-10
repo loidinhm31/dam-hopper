@@ -21,6 +21,28 @@ export const MODIFIER_SHIFT = 8;
 
 export const MAX_QUEUE_RECORDS = 128;
 export const MAX_INSERT_TEXT_BYTES = 4096;
+export const MAX_HANDOFF_BYTES = 16 * 1024;
+// Leave headroom below the control channel's 100/s limit for pointer/cleanup records.
+const HANDOFF_INTERVAL_MS = 25;
+
+type KeyboardInput = Extract<InputEvent, { kind: "keyDown" | "keyUp" | "insertText" }>;
+
+interface ControlHandoff {
+  id: number;
+  isCurrent: () => boolean;
+  onCancel: () => void;
+  events: { event: KeyboardInput; bytes: number }[];
+  bytes: number;
+  draining?: boolean;
+  timer?: number;
+  onComplete?: () => void;
+}
+
+export type CanvasPointerInput = Pick<
+  PointerEvent,
+  "currentTarget" | "clientX" | "clientY" | "button" |
+  "altKey" | "ctrlKey" | "metaKey" | "shiftKey"
+>;
 
 export interface InputControllerOptions {
   getSessionId: () => string;
@@ -31,6 +53,7 @@ export interface InputControllerOptions {
   getViewportEpoch: () => number | string;
   getDrawnRect: () => DrawnRect | null;
   getControlSocket: () => WebSocket | null;
+  isInputAllowed?: () => boolean;
   onError?: (err: Error) => void;
 }
 
@@ -74,6 +97,7 @@ export class BrowserInputController {
   private readonly getViewportEpoch: () => number | string;
   private readonly getDrawnRect: () => DrawnRect | null;
   private readonly getControlSocket: () => WebSocket | null;
+  private readonly isInputAllowed?: () => boolean;
   private readonly onError?: (err: Error) => void;
 
   private inputSeq = 0;
@@ -83,6 +107,8 @@ export class BrowserInputController {
   private lastPointerCoords: { u: number; v: number } | null = null;
   private pendingCoalescable: InputMessage | null = null;
   private isDisposed = false;
+  private handoff: ControlHandoff | null = null;
+  private handoffId = 0;
   constructor(options: InputControllerOptions) {
     this.getSessionId = options.getSessionId;
     this.getIncarnation = options.getIncarnation;
@@ -92,6 +118,7 @@ export class BrowserInputController {
     this.getViewportEpoch = options.getViewportEpoch;
     this.getDrawnRect = options.getDrawnRect;
     this.getControlSocket = options.getControlSocket;
+    this.isInputAllowed = options.isInputAllowed;
     this.onError = options.onError;
   }
 
@@ -101,6 +128,90 @@ export class BrowserInputController {
 
   public getHeldButtons(): Set<MouseButton> {
     return new Set(this.heldButtons);
+  }
+
+  /** Retain typeahead only for an explicit, provenance-fenced click acquiring control. */
+  public beginControlHandoff(isCurrent: () => boolean, onCancel: () => void): number {
+    this.cancelControlHandoff();
+    this.syncLeaseState();
+    const id = ++this.handoffId;
+    if (!this.isDisposed) this.handoff = { id, isCurrent, onCancel, events: [], bytes: 0 };
+    return id;
+  }
+
+  public cancelControlHandoff(): void {
+    const handoff = this.handoff;
+    this.handoff = null;
+    handoff?.onCancel();
+    if (handoff?.timer !== undefined) clearTimeout(handoff.timer);
+    if (handoff) this.releaseDispatchedInput();
+  }
+
+  /** The host must replay the focusing pointer gesture before committing typeahead. */
+  public completeControlHandoff(id: number, onComplete?: () => void): boolean {
+    const handoff = this.handoff;
+    if (!handoff || handoff.id !== id || handoff.draining) return false;
+    handoff.draining = true;
+    handoff.onComplete = onComplete;
+    return this.drainControlHandoff(handoff);
+  }
+
+  private drainControlHandoff(handoff: ControlHandoff): boolean {
+    if (this.handoff !== handoff) return false;
+    handoff.timer = undefined;
+    if (this.isDisposed || !handoff.isCurrent()) {
+      this.cancelControlHandoff();
+      return false;
+    }
+    const next = handoff.events.shift();
+    if (next) {
+      handoff.bytes -= next.bytes;
+      if (!this.dispatchKeyboardInput(next.event)) {
+        this.cancelControlHandoff();
+        return false;
+      }
+    }
+    if (handoff.events.length === 0) {
+      this.handoff = null;
+      handoff.onComplete?.();
+    } else {
+      // Keep the same gesture queue active: fresh typing cannot overtake its tail.
+      handoff.timer = window.setTimeout(() => this.drainControlHandoff(handoff), HANDOFF_INTERVAL_MS);
+    }
+    return true;
+  }
+
+  private handleKeyboardInput(event: KeyboardInput): boolean {
+    if (this.isInputAllowed && !this.isInputAllowed()) {
+      this.cancelControlHandoff();
+      return false;
+    }
+    const handoff = this.handoff;
+    if (handoff) {
+      if (!handoff.isCurrent()) {
+        this.cancelControlHandoff();
+        return false;
+      }
+      const bytes = new TextEncoder().encode(JSON.stringify(event)).length;
+      if (handoff.events.length >= MAX_QUEUE_RECORDS || handoff.bytes + bytes > MAX_HANDOFF_BYTES) {
+        this.cancelControlHandoff();
+        this.onError?.(new Error("Click control handoff typeahead limit exceeded"));
+        return false;
+      }
+      handoff.events.push({ event, bytes });
+      handoff.bytes += bytes;
+      return true;
+    }
+    return this.dispatchKeyboardInput(event);
+  }
+
+  private dispatchKeyboardInput(event: KeyboardInput): boolean {
+    this.flushCoalescable();
+    if (!this.sendInputEvent(event)) return false;
+    // Only remotely dispatched keys belong in held-state cleanup.
+    if (event.kind === "keyDown") this.heldKeys.set(event.code, { key: event.key, code: event.code });
+    if (event.kind === "keyUp") this.heldKeys.delete(event.code);
+    return true;
   }
 
   /**
@@ -143,7 +254,7 @@ export class BrowserInputController {
   }
 
   public handlePointerDown(
-    e: PointerEvent | React.PointerEvent<HTMLCanvasElement>,
+    e: CanvasPointerInput,
   ): boolean {
     if (this.isDisposed) return false;
     const canvas = e.currentTarget as HTMLCanvasElement;
@@ -166,7 +277,7 @@ export class BrowserInputController {
   }
 
   public handlePointerUp(
-    e: PointerEvent | React.PointerEvent<HTMLCanvasElement>,
+    e: CanvasPointerInput,
   ): boolean {
     if (this.isDisposed) return false;
     const canvas = e.currentTarget as HTMLCanvasElement;
@@ -191,7 +302,7 @@ export class BrowserInputController {
   }
 
   public handlePointerMove(
-    e: PointerEvent | React.PointerEvent<HTMLCanvasElement>,
+    e: CanvasPointerInput,
   ): boolean {
     if (this.isDisposed) return false;
     const canvas = e.currentTarget as HTMLCanvasElement;
@@ -266,10 +377,7 @@ export class BrowserInputController {
       return false;
     }
     const codeKey = e.code || e.key;
-    this.heldKeys.set(codeKey, { key: e.key, code: codeKey });
-    this.flushCoalescable();
-
-    return this.sendInputEvent({
+    return this.handleKeyboardInput({
       kind: "keyDown",
       key: e.key,
       code: codeKey,
@@ -282,10 +390,7 @@ export class BrowserInputController {
   ): boolean {
     if (this.isDisposed) return false;
     const codeKey = e.code || e.key;
-    this.heldKeys.delete(codeKey);
-    this.flushCoalescable();
-
-    return this.sendInputEvent({
+    return this.handleKeyboardInput({
       kind: "keyUp",
       key: e.key,
       code: codeKey,
@@ -308,9 +413,7 @@ export class BrowserInputController {
       text = new TextDecoder("utf-8").decode(bytes.subarray(0, end));
     }
 
-    this.flushCoalescable();
-
-    return this.sendInputEvent({
+    return this.handleKeyboardInput({
       kind: "insertText",
       text,
     });
@@ -445,6 +548,11 @@ export class BrowserInputController {
    * Cleans up all held keys and pointer buttons to prevent stuck keys on blur/privacy/modal.
    */
   public releaseAllHeldInput(): void {
+    this.cancelControlHandoff();
+    this.releaseDispatchedInput();
+  }
+
+  private releaseDispatchedInput(): void {
     if (this.heldKeys.size > 0) {
       for (const { key, code } of this.heldKeys.values()) {
         this.sendInputEvent({

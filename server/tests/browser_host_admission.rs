@@ -859,10 +859,7 @@ async fn wait_until(what: &str, cond: impl Fn() -> bool) {
     }
 }
 
-async fn new_producer(
-    client: &Arc<CdpClient>,
-    policy: Option<Arc<NetworkPolicy>>,
-) -> ScreencastProducer {
+async fn new_producer(client: &Arc<CdpClient>) -> ScreencastProducer {
     use chromiumoxide_cdp::cdp::browser_protocol::target::CreateTargetParams;
     let target = client
         .send_typed(
@@ -885,7 +882,7 @@ async fn new_producer(
         visual_offset_y: 0.0,
         dpr: 1.0,
     };
-    let producer = ScreencastProducer::new(
+    ScreencastProducer::new(
         uuid::Uuid::new_v4().to_string(),
         uuid::Uuid::new_v4().to_string(),
         1,
@@ -893,11 +890,7 @@ async fn new_producer(
         client.clone(),
         target.target_id.into(),
         geometry,
-    );
-    match policy {
-        Some(policy) => producer.with_request_policy(policy, std::sync::Arc::new(|_: &str| {})),
-        None => producer,
-    }
+    )
 }
 
 async fn navigate(producer: &ScreencastProducer, url: &str) {
@@ -909,10 +902,9 @@ async fn navigate(producer: &ScreencastProducer, url: &str) {
         .expect("Page.navigate");
 }
 
-/// The policy is installed by `ensure_page_session` BEFORE the first navigation: a redirect to
-/// a forbidden origin and a forbidden subresource must never reach the forbidden server, while
-/// the configured target origin and its same-origin assets still load. A control target
-/// without a policy proves the forbidden server really is reachable and observed.
+/// Browser policy is installed before the policed target exists: forbidden redirect hops
+/// and subresources never reach the forbidden server, while configured assets still load.
+/// The earlier unpoliced navigation proves that server is reachable and observed.
 #[tokio::test]
 async fn test_request_policy_blocks_forbidden_redirect_and_subresource_on_chromium() {
     let Ok(exec) = find_browser_executable(None).or_else(|_| {
@@ -957,7 +949,7 @@ async fn test_request_policy_blocks_forbidden_redirect_and_subresource_on_chromi
         .expect("cdp connect");
 
     // Control: no policy → both the redirect landing and the subresource reach B.
-    let control = new_producer(&client, None).await;
+    let control = new_producer(&client).await;
     navigate(&control, &format!("http://127.0.0.1:{a_port}/redirect")).await;
     wait_until("control redirect landing", || {
         hit_count(&b_hits, "/landing") >= 1
@@ -974,8 +966,9 @@ async fn test_request_policy_blocks_forbidden_redirect_and_subresource_on_chromi
     let a_redirects_before = hit_count(&a_hits, "/redirect");
     let a_ok_before = hit_count(&a_hits, "/ok.png");
 
-    // Policed target: redirect hop to B is failed before it leaves the browser.
-    let policed = new_producer(&client, Some(policy)).await;
+    // The browser owner, not the producer, installs the policy before creating this target.
+    client.install_browser_request_policy(policy, Arc::new(|_| {})).await.unwrap();
+    let policed = new_producer(&client).await;
     navigate(&policed, &format!("http://127.0.0.1:{a_port}/redirect")).await;
     wait_until("policed redirect request", || {
         hit_count(&a_hits, "/redirect") > a_redirects_before

@@ -114,8 +114,8 @@ frame_rate_fps = 10 # Capture frame rate (1..=30)
 | `enabled` | bool | `false` | Defaults disabled. Requires valid executable and policy before enabling. |
 | `executable_path` | string/path | `None` | Must be a regular file with execute permissions (`mode & 0o111 != 0`) and not world-writable (`mode & 0o002 == 0`). |
 | `profile_root` | string/path | `None` | Defaults to `~/.config/dam-hopper/browser-profiles`. Must be a directory, not a symlink, with mode `0700` (`mode & 0o077 == 0`). |
-| `allowed_target_origins` | string[] | `[]` | Scheme (`http`/`https`) + host + optional port. Paths, queries, fragments, credentials, and trailing slashes are forbidden. Empty allowlist approves nothing (denies all navigations except `about:blank`). |
-| `allowed_asset_origins` | string[] | `[]` | Approved asset origins. Same strict validation as target origins. |
+| `allowed_target_origins` | string[] | `[]` | Scheme (`http`/`https`) + host + optional port. Paths, queries, fragments, credentials, and trailing slashes are forbidden. Public HTTP/HTTPS destinations are allowed by default; this list grants explicit navigation + subresource exceptions for local/private origins (e.g., `http://127.0.0.1:5173`). |
+| `allowed_asset_origins` | string[] | `[]` | Approved subresource-only local/private origins. Same strict validation as target origins. |
 | `allowed_dev_origins` | string[] | `[]` | Approved developer debug origins. Same strict validation as target origins. |
 | `denied_destinations` | string[] | Metadata IPs | Blocked destination addresses. Accepts IP, IP CIDR, hostname, or `host:port`. |
 

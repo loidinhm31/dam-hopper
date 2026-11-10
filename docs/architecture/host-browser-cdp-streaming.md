@@ -37,7 +37,7 @@ flowchart LR
 | Resource Ceiling | Limit | Enforcement Mechanism |
 | --- | --- | --- |
 | Writer Queue Channel | 32 messages | `mpsc::channel(32)`; saturation returns `CdpError::WriterQueueFull` |
-| Total Admitted Commands | 64 commands | Shared across queued and in-flight commands; returns `CdpError::TooManyPendingCommands` |
+| Total Admitted Caller RPCs | 64 commands | Shared across queued and in-flight caller requests; returns `CdpError::TooManyPendingCommands` |
 | Command Byte Budget | 2 MiB (2,097,152 bytes) | Shared RAII `CommandBudget` reservation held from pre-serialization until response or drop |
 | Single Command Payload | 64 KiB (65,536 bytes) | Serialization ceiling; payloads $> 64$ KiB return `CdpError::CommandTooLarge` |
 | Actor Write Deadline | 5 seconds | Stalled writes pause actor reads/sweeps; timeout aborts connection |
@@ -46,6 +46,8 @@ flowchart LR
 ### RAII Budget Lifecycle (`command_budget.rs`)
 
 `CommandReservation` guarantees that reserved command slots and payload bytes are atomically returned to `CommandBudget` when the reservation is dropped across any termination path: normal response receipt, caller deadline timeout, caller cancellation, or connection teardown.
+
+Browser-wide Fetch decisions are internal one-way release messages, not caller RPCs. The actor evaluates one paused request and writes its bounded decision before reading another event; it retains no request backlog or response-owner map. Unique negative command IDs separate these decisions from positive caller IDs. Each write holds a memory reservation and the normal write deadline. Malformed/unexpected decision responses fail closed; only Chromium's exact canceled-loader error (`-32602`, `Invalid InterceptionId.`) is tolerated because no intercepted loader remains.
 
 ### Response and Screencast Frame Routing
 
@@ -413,10 +415,9 @@ Navigation URLs are validated against `validate_navigation_url`:
 - **Length Ceilings:** URL length $\le 4096$ bytes (`MAX_URL_BYTES`), title length $\le 512$ bytes (`MAX_TITLE_BYTES`).
 - **Scheme Restrictions:** Only `http`, `https`, and `about:blank` are permitted; `file:`, `javascript:`, `chrome:`, `data:` are rejected.
 - **Credentials Prohibited:** Embedded usernames/passwords in URLs fail closed.
-- **Production Private & Metadata IP Blocking:** Rejects private IPv4/IPv6, link-local, loopback, and cloud metadata endpoints (`169.254.169.254`, `100.100.100.200`, `fd00:ec2::254`, `metadata.google.internal`) unless matching explicit project origin exceptions.
-- **Development Isolation:** Rejects general internet destinations; restricts navigation to loopback and configured `allowed_origins`.
-- **Fetch Request-Policy Interception:** CDP `Fetch` interception (`Fetch.enable` for all URL patterns at `Request` stage) is installed on the Page session before any navigation is initiated. Targets are initially created at `about:blank#dh-<session_id>` before navigating; server-initiated initial navigation awaits main-frame commit before the navigation watcher begins.
-- **Worker & Child Target Interception:** Flattened auto-attach pauses child targets (frames and workers) until request interception is established (`Runtime.runIfWaitingForDebugger`). Unpoliced child targets fail closed: if interception cannot be enabled, the child is contained immediately. Page-owned targets die with page close; detached service workers and shared workers are terminated explicitly via `Target.closeTarget` by native target ID, with proof of absence verified against `Target.getTargets`.
+- **Public Internet Allowed & Private/Metadata IP Blocking:** All public HTTP/HTTPS pages and assets are permitted by default in both production and development. Private IPv4/IPv6, link-local, loopback (`localhost`, `127.0.0.1`, `[::1]`), and cloud metadata endpoints (`169.254.169.254`, `100.100.100.200`, `fd00:ec2::254`, `metadata.google.internal`, `instance-data`) are rejected unless the local/private origin is explicitly listed in `allowed_target_origins` or `allowed_asset_origins` (cloud metadata and `denied_destinations` are always denied).
+- **Browser-Owned Fetch Policy:** One manager-owned CDP connection installs browser-session `Fetch.enable` before control publication. It checks document, asset, worker/nested-worker script, and redirect-hop requests with the existing navigation/subresource policy. Each Page producer keeps its own CDP transport and flattened session, isolating screencast credits and Page events from other targets and the manager observer. The browser-wide policy still covers their loader factories; dedicated workers are not sent unsupported `Fetch.enable` commands.
+- **Startup Worker Reconciliation:** Existing worker, shared-worker, and service-worker targets may retain pre-policy URL loader factories. On initial control setup, those running targets are stopped and their absence proven before exposing managed pages. Profile data and service-worker registrations are preserved; later workers run under the installed browser policy. Failure to prove absence contains the incarnation.
 ## 15. Native Screencast Producer & Bounded Ingress (`screencast.rs`)
 
 The screencast producer (`server/src/browser_host/screencast.rs`) manages native Chromium screencast streaming with bounded memory admission and strict lifecycle control:
@@ -424,6 +425,7 @@ The screencast producer (`server/src/browser_host/screencast.rs`) manages native
 ### Dedicated Page Session Attachment
 
 - **Explicit Page Session:** Subscribes to target via `Target.attachToTarget(flatten: true)` before starting screencast; enables the `Page` domain on the target session.
+- **Initial Viewport Synchronization:** Applies `Emulation.setDeviceMetricsOverride` with the requested CSS width, height, and DPR before publishing the Page session. Capture and pointer dispatch therefore use the same viewport from the first frame; initial setup does not advance `viewportEpoch`. CSS display scaling and letterboxing remain viewer-local.
 - **Serial Lifecycle Runs:** Starts, stops, and reconfigures with a fresh `producerRun` UUID and native `sessionId` learned from the ordered run. Reconnection or run abort generates a new `producerRun`.
 
 ### Prompt Exact-Once CDP ACK
@@ -518,7 +520,9 @@ The frontend client modules (`packages/ui/src/browser-host/`, `packages/ui/src/a
 
 - **Connection Ownership Validation:** Every asynchronous request and ticket minting operation asserts connection validity (`assertValidConnection`), verifying profile ID and generation before and after network operations.
 - **Session Lifecycle & Management:** Typed REST calls manage capabilities, session creation, navigation, history, reloads, viewport adjustments, control lease acquisition/renewal/release, dialog responses, page search, selected text, and profile resets.
-- **Atomic Ticket Minting (`mintViewerAttachmentTickets`):** Fetches session state, validates incarnation and profile epoch, issues matching single-use capability tickets for media and control WebSockets, and constructs WebSocket endpoints with ticket subprotocols without persisting credentials in URLs or local storage.
+- **Viewer Attachment Authority:** The keepalive host fetches the live session identity before minting matching media/control tickets. A newer navigation snapshot does not cancel an otherwise current-runtime attachment. Tickets stay in memory, never URLs or local storage.
+- **WebSocket Session Synchronization:** The existing authenticated control socket sends `{kind: "sessionUpdated", session: BrowserSessionDto}` initially and on registry changes. Each session retains only its latest snapshot for slow viewers; subscriptions and initial reads share the registry lock. Native URL/revision, viewport, input availability, and terminal status update presentation without replacing the attachment. Retired-socket/runtime/owner snapshots are rejected. REST GET remains for bootstrap, reconnect, and explicit CAS command preflight—not a recurring poll.
+- **Toolbar CAS Commands:** Navigate, reload, back, and forward fetch current authority before one mutation. Concurrent actions are serialized; owner/session replacement retires pending requests. A raced 409 refreshes state and displays the conflict without replaying the command.
 
 ### Target-Scoped Binary Frame Parser (`frame-protocol.ts`)
 
@@ -540,6 +544,9 @@ The frontend client modules (`packages/ui/src/browser-host/`, `packages/ui/src/a
 - **Lease Token Tracking & Held Input Cleanup:** Input messages carry the current 30-second control lease token and monotonic sequence counter (`inputSeq`). Loss of lease, blur, or disposal immediately sends synthetic release events (`releaseAllHeldInput`) to avoid stuck modifier keys or held mouse buttons.
 - **Pointer Move Coalescing:** Consecutive pointer move events within the same microtask coalesce into the latest coordinate, while discrete barriers (pointerDown, pointerUp, wheel) flush pending moves beforehand.
 - **Soft-Keyboard & IME Composition Proxy:** Focusable `TextInputProxy` manages virtual keyboard visibility on mobile and Android web, deduplicating Vietnamese and Japanese multi-stage IME compositions (`compositionstart`, `compositionend`, `beforeinput`) to prevent duplicate character insertions.
+- **Click-to-Type Focus & Control:** Canvas pointer-down prevents native focus transfer away from the text proxy. While control is acquired, one bounded gesture retains pointer down/latest-move/up plus up to 128 records / 16 KiB of ordered keyboard and text input. Retained input drains at 25 ms intervals ($\le 40$/s) after the focusing click, staying under the control socket's 100/s rate limit; arrivals during drain append behind it. Authoritative Cognito/lock/fence state, blur, navigation, runtime, viewport, subscription, owner, or viewer changes cancel the gesture and release any abandoned lease.
+- **Native Editing Keys:** CDP key down/up carry Windows virtual-key metadata; unmodified Enter also supplies its character phase for newline insertion and form submission. Ordinary printable/IME text remains `Input.insertText`, avoiding duplicate text.
+- **Local Paste Authority:** Ctrl/Meta+V and Shift+Insert are handled locally, not dispatched as remote native paste shortcuts. The proxy forwards local clipboard plain text once, independently of the remote browser clipboard.
 
 ## 20. Selection Artifacts, Actor Binding & Revoke-First Logout Reset (Phase 08)
 

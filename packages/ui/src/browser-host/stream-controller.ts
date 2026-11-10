@@ -42,7 +42,7 @@ export interface FramePresentMetrics {
 export interface StreamControllerOptions {
   canvas: HTMLCanvasElement;
   onGeometryChange?: (geom: TargetGeometry, inputTrusted: boolean) => void;
-  onControlEvent?: (event: ServerControlEvent) => void;
+  onControlEvent?: (event: ServerControlEvent, credentials: ViewerAttachmentCredentials) => void;
   onStatusChange?: (status: StreamStatus) => void;
   onError?: (err: Error) => void;
   onPresentFrame?: (metrics: FramePresentMetrics) => void;
@@ -72,7 +72,7 @@ export class BrowserStreamController {
     geom: TargetGeometry,
     inputTrusted: boolean,
   ) => void;
-  private readonly onControlEvent?: (event: ServerControlEvent) => void;
+  private readonly onControlEvent?: StreamControllerOptions["onControlEvent"];
   private readonly onStatusChange?: (status: StreamStatus) => void;
   private readonly onError?: (err: Error) => void;
   private readonly onPresentFrame?: (metrics: FramePresentMetrics) => void;
@@ -176,7 +176,7 @@ export class BrowserStreamController {
       };
 
       media.onmessage = (event: MessageEvent) => {
-        if (this.isDisposed || this.isPrivacyActive) return;
+        if (this.isDisposed || this.isPrivacyActive || this.mediaWs !== media) return;
         if (!(event.data instanceof ArrayBuffer)) return;
 
         this.handleIncomingMediaMessage(event.data, media, subEpoch);
@@ -192,16 +192,19 @@ export class BrowserStreamController {
       };
 
       media.onerror = (err) => {
+        if (this.isDisposed || this.mediaWs !== media) return;
         this.onError?.(
           new Error(`Media WebSocket error: ${String(err)}`),
         );
       };
 
       control.onmessage = (event: MessageEvent) => {
+        if (this.isDisposed || this.controlWs !== control ||
+            this.currentCredentials !== credentials) return;
         if (typeof event.data === "string") {
           try {
             const parsed = JSON.parse(event.data) as ServerControlEvent;
-            this.onControlEvent?.(parsed);
+            this.onControlEvent?.(parsed, credentials);
           } catch {
             // Ignore malformed control event
           }
@@ -587,22 +590,24 @@ export class BrowserStreamController {
   private detachSockets(): void {
     this.stopHeartbeat();
 
-    if (this.mediaWs) {
+    const media = this.mediaWs;
+    const control = this.controlWs;
+    // Retire authority before close: queued callbacks can run after detachment.
+    this.mediaWs = null;
+    this.controlWs = null;
+    if (media) {
       try {
-        this.mediaWs.close();
+        media.close();
       } catch {
         // Ignore close error
       }
-      this.mediaWs = null;
     }
-
-    if (this.controlWs) {
+    if (control) {
       try {
-        this.controlWs.close();
+        control.close();
       } catch {
         // Ignore close error
       }
-      this.controlWs = null;
     }
   }
 

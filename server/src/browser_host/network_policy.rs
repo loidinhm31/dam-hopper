@@ -245,8 +245,8 @@ fn is_metadata_destination(host: &Host<&str>) -> bool {
 
 /// Central Browser request policy built from the Browser host configuration.
 ///
-/// One instance gates REST navigation (`validate_navigation`) and, through the CDP Fetch
-/// interceptor, every browser-initiated request including redirects and subresources
+/// One instance gates REST navigation (`validate_navigation`) and the browser-owned CDP
+/// Fetch interceptor, including frames, worker scripts/fetches, redirects and subresources
 /// (`check_request`). Target and asset origins come from `allowed_target_origins` and
 /// `allowed_asset_origins`; web-UI/CORS origins are never request-policy inputs.
 ///
@@ -345,7 +345,7 @@ impl NetworkPolicy {
         match parsed.scheme() {
             "http" | "https" => self.evaluate_network_url(&parsed, kind),
             "data" | "blob" | "about" if kind == RequestKind::Subresource => Ok(()),
-            "about" if raw_url == "about:blank" => Ok(()),
+            "about" if raw_url == "about:blank" || raw_url == "about:srcdoc" => Ok(()),
             scheme => Err(NetworkPolicyError::UnsupportedScheme(scheme.to_string())),
         }
     }
@@ -375,23 +375,27 @@ impl NetworkPolicy {
             return Ok(());
         }
 
-        if self.is_dev {
-            // Development: only explicit target + asset origins; never the general Internet and
-            // never an implicit loopback/localhost port.
-            return Err(NetworkPolicyError::DevOriginNotAllowed(origin));
-        }
-
-        // Production: public internet is allowed; local/private/metadata destinations need an
-        // explicit project origin.
+        // Public internet is allowed in both production and development; local/private/metadata
+        // destinations need an explicit project origin.
         match &host {
-            Host::Domain(d) if is_local_hostname(&normalize_hostname(d)) => Err(
-                NetworkPolicyError::DeniedDestination(destination_label(&host)),
-            ),
+            Host::Domain(d) if is_local_hostname(&normalize_hostname(d)) => {
+                if self.is_dev {
+                    Err(NetworkPolicyError::DevOriginNotAllowed(origin))
+                } else {
+                    Err(NetworkPolicyError::DeniedDestination(destination_label(&host)))
+                }
+            }
             Host::Domain(_) => Ok(()),
             ip_host => match host_ip(ip_host) {
-                Some(ip) if is_private_or_metadata_ip(ip) => Err(
-                    NetworkPolicyError::DeniedDestination(format!("{ip} (private/metadata IP)")),
-                ),
+                Some(ip) if is_private_or_metadata_ip(ip) => {
+                    if self.is_dev {
+                        Err(NetworkPolicyError::DevOriginNotAllowed(origin))
+                    } else {
+                        Err(NetworkPolicyError::DeniedDestination(format!(
+                            "{ip} (private/metadata IP)"
+                        )))
+                    }
+                }
                 _ => Ok(()),
             },
         }
@@ -417,8 +421,8 @@ fn normalize_origin(raw: &str) -> Result<String, NetworkPolicyError> {
 /// Evaluates a navigation URL against the target-origin policy with only the built-in
 /// metadata denials (no asset origins, default denied destinations).
 ///
-/// In production only explicitly allowed origins may reach loopback/private destinations.
-/// In development (`is_dev`) only the explicit `allowed_origins` are permitted: there is no
+/// Public internet destinations are permitted in both production and development; only
+/// explicitly allowed origins may reach loopback/private destinations, and there is no
 /// implicit localhost/loopback permission. Callers holding the Browser config should build a
 /// [`NetworkPolicy`] with [`NetworkPolicy::from_config`] to include denied destinations and
 /// asset origins.
@@ -494,7 +498,7 @@ mod tests {
         assert!(validate_navigation_url("http://127.0.0.1:8080/app", true, &allowed).is_err());
         assert!(validate_navigation_url("http://localhost:3000/", true, &allowed).is_err());
         assert!(validate_navigation_url("http://localhost:5173/", true, &allowed).is_err());
-        assert!(validate_navigation_url("https://example.com/", true, &allowed).is_err());
+        assert!(validate_navigation_url("https://example.com/", true, &allowed).is_ok());
         // With no configuration nothing but about:blank is reachable.
         assert!(validate_navigation_url("http://127.0.0.1:5173/", true, &[]).is_err());
     }

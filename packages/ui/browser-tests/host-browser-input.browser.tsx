@@ -2,8 +2,9 @@ import * as React from "react";
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { userEvent } from "vitest/browser";
 import { CanvasView } from "@/browser-host/canvas-view.js";
-import { BrowserInputController } from "@/browser-host/input-controller.js";
+import { BrowserInputController, type CanvasPointerInput } from "@/browser-host/input-controller.js";
 import {
   TextInputProxy,
   type TextInputProxyHandle,
@@ -31,15 +32,21 @@ interface TestHarnessProps {
   ) => void;
   drawnRect: DrawnRect | null;
   socket: MockControlSocket;
+  controlReady?: Promise<void>;
+  onHandoffComplete?: () => void;
 }
 
 function TestHarness({
   onControllerReady,
   drawnRect,
   socket,
+  controlReady,
+  onHandoffComplete,
 }: TestHarnessProps) {
   const proxyRef = useRef<TextInputProxyHandle | null>(null);
   const controllerRef = useRef<BrowserInputController | null>(null);
+  const leaseRef = useRef<string | null>(controlReady ? null : "lease-test-1");
+  const pendingPointerRef = useRef<{ down: CanvasPointerInput; up?: CanvasPointerInput } | null>(null);
 
   if (!controllerRef.current) {
     controllerRef.current = new BrowserInputController({
@@ -47,7 +54,7 @@ function TestHarness({
       getIncarnation: () => "inc-test-1",
       getProfileEpoch: () => 1,
       getSubscriptionEpoch: () => "sub-test-1",
-      getLeaseToken: () => "lease-test-1",
+      getLeaseToken: () => leaseRef.current,
       getViewportEpoch: () => 1,
       getDrawnRect: () => drawnRect,
       getControlSocket: () => socket as unknown as WebSocket,
@@ -64,10 +71,38 @@ function TestHarness({
     <CanvasView
       controller={null}
       onCanvasPointerDown={(e) => {
-        controllerRef.current?.handlePointerDown(e);
+        const controller = controllerRef.current!;
         proxyRef.current?.focus();
+        if (!controlReady) { controller.handlePointerDown(e); return; }
+        const pending: { down: CanvasPointerInput; up?: CanvasPointerInput } = { down: {
+          currentTarget: e.currentTarget, clientX: e.clientX, clientY: e.clientY,
+          button: e.button, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey,
+        } };
+        pendingPointerRef.current = pending;
+        const handoff = controller.beginControlHandoff(
+          () => pendingPointerRef.current === pending && Boolean(proxyRef.current?.isFocused()),
+          () => { pendingPointerRef.current = null; },
+        );
+        void controlReady.then(() => {
+          if (pendingPointerRef.current !== pending) return;
+          leaseRef.current = "lease-test-1";
+          controller.handlePointerDown(pending.down);
+          const up = pendingPointerRef.current.up;
+          if (up) controller.handlePointerUp(up);
+          controller.completeControlHandoff(handoff, () => {
+            pendingPointerRef.current = null;
+            onHandoffComplete?.();
+          });
+        });
       }}
-      onCanvasPointerUp={(e) => controllerRef.current?.handlePointerUp(e)}
+      onCanvasPointerUp={(e) => {
+        if (pendingPointerRef.current) {
+          pendingPointerRef.current.up = {
+            currentTarget: e.currentTarget, clientX: e.clientX, clientY: e.clientY,
+            button: e.button, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey,
+          };
+        } else controllerRef.current?.handlePointerUp(e);
+      }}
       onCanvasPointerMove={(e) => controllerRef.current?.handlePointerMove(e)}
       onCanvasPointerCancel={() => controllerRef.current?.handlePointerCancel()}
       onCanvasWheel={(e) => controllerRef.current?.handleWheel(e)}
@@ -190,6 +225,91 @@ describe("host-browser-input in Chromium", () => {
     expect(upMsg.event.kind).toBe("pointerUp");
   });
 
+  it("retains proxy focus through a native canvas click and forwards ordinary typing once", async () => {
+    act(() => {
+      root.render(
+        <TestHarness
+          socket={socket}
+          drawnRect={mockDrawnRect}
+          onControllerReady={(ctrl, proxy) => {
+            activeController = ctrl;
+            activeProxy = proxy;
+          }}
+        />,
+      );
+    });
+
+    const canvas = container.querySelector("canvas")!;
+    await userEvent.click(canvas);
+    expect(activeProxy?.isFocused()).toBe(true);
+
+    // No focus()/fill() on the textarea: real typing must follow the canvas click.
+    await userEvent.keyboard("book");
+    const insertedText = socket.sentMessages
+      .map((message) => JSON.parse(message) as InputMessage)
+      .flatMap((message) =>
+        message.event.kind === "insertText" ? [message.event.text] : [],
+      )
+      .join("");
+    expect(insertedText).toBe("book");
+    expect(activeProxy?.isFocused()).toBe(true);
+  });
+
+  it("keeps native immediate typing and editing behind a deferred click lease", async () => {
+    const ready = Promise.withResolvers<void>();
+    const drained = Promise.withResolvers<void>();
+    act(() => root.render(
+      <TestHarness socket={socket} drawnRect={mockDrawnRect} controlReady={ready.promise}
+        onHandoffComplete={() => drained.resolve()}
+        onControllerReady={(controller, proxy) => { activeController = controller; activeProxy = proxy; }} />,
+    ));
+    await userEvent.click(container.querySelector("canvas")!);
+    await userEvent.keyboard("book{Backspace}k");
+    expect(socket.sentMessages).toEqual([]);
+    await act(async () => ready.resolve());
+    await drained.promise;
+    const events = socket.sentMessages.map(message => (JSON.parse(message) as InputMessage).event);
+    expect(events.slice(0, 2).map(event => event.kind)).toEqual(["pointerDown", "pointerUp"]);
+    expect(events.flatMap(event => event.kind === "insertText" ? [event.text] : []).join("")).toBe("bookk");
+    expect(events.filter(event => event.kind === "keyDown")).toEqual([
+      { kind: "keyDown", key: "Backspace", code: "Backspace", modifiers: 0 },
+    ]);
+    expect(socket.sentMessages.map(message => JSON.parse(message).inputSeq))
+      .toEqual(socket.sentMessages.map((_, index) => index + 1));
+  });
+
+  it("commits IME once during a handoff and cancels uncommitted composition on blur", async () => {
+    const ready = Promise.withResolvers<void>();
+    const drained = Promise.withResolvers<void>();
+    act(() => root.render(
+      <TestHarness socket={socket} drawnRect={mockDrawnRect} controlReady={ready.promise}
+        onHandoffComplete={() => drained.resolve()}
+        onControllerReady={(controller, proxy) => { activeController = controller; activeProxy = proxy; }} />,
+    ));
+    await userEvent.click(container.querySelector("canvas")!);
+    const proxy = container.querySelector("textarea")!;
+    proxy.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    proxy.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "tiếng Việt" }));
+    proxy.value = "tiếng Việt";
+    proxy.dispatchEvent(new InputEvent("input", { bubbles: true, data: "tiếng Việt", inputType: "insertCompositionText" }));
+    expect(socket.sentMessages).toEqual([]);
+    await act(async () => ready.resolve());
+    await drained.promise;
+    expect(socket.sentMessages.map(message => JSON.parse(message).event).filter(event => event.kind === "insertText"))
+      .toEqual([{ kind: "insertText", text: "tiếng Việt" }]);
+    socket.sentMessages = [];
+    proxy.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    activeProxy?.reset();
+    proxy.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "cancelled-navigation" }));
+    proxy.value = "cancelled-navigation";
+    proxy.dispatchEvent(new InputEvent("input", { bubbles: true, data: "cancelled-navigation", inputType: "insertCompositionText" }));
+    expect(socket.sentMessages).toEqual([]);
+    proxy.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    proxy.blur();
+    proxy.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "discarded" }));
+    expect(socket.sentMessages).toEqual([]);
+  });
+
   it("rejects pointerDown in letterbox margin without emitting messages", async () => {
     act(() => {
       root.render(
@@ -306,7 +426,12 @@ describe("host-browser-input in Chromium", () => {
     });
   });
 
-  it("handles plain text paste without HTML or binary", async () => {
+  it.each([
+    { name: "plain paste", key: "", code: "" },
+    { name: "Ctrl+V", key: "v", code: "KeyV", ctrlKey: true },
+    { name: "Meta+V", key: "v", code: "KeyV", metaKey: true },
+    { name: "Shift+Insert", key: "Insert", code: "Insert", shiftKey: true },
+  ])("inserts local plain text once for $name without triggering remote paste", async (shortcut) => {
     act(() => {
       root.render(
         <TestHarness
@@ -323,6 +448,11 @@ describe("host-browser-input in Chromium", () => {
     await vi.waitFor(() => expect(activeProxy).not.toBeNull());
     const textarea = container.querySelector("textarea")!;
     textarea.focus();
+    if (shortcut.key) {
+      const keyDown = new KeyboardEvent("keydown", { ...shortcut, bubbles: true, cancelable: true });
+      textarea.dispatchEvent(keyDown);
+      expect(keyDown.defaultPrevented).toBe(false);
+    }
 
     // Simulate paste event with text/plain
     const pasteEvent = new Event("paste", {
@@ -338,12 +468,11 @@ describe("host-browser-input in Chromium", () => {
 
     textarea.dispatchEvent(pasteEvent);
 
-    expect(socket.sentMessages.length).toBe(1);
-    const msg = JSON.parse(socket.sentMessages[0]) as InputMessage;
-    expect(msg.event).toEqual({
-      kind: "insertText",
-      text: "pasted-safe-text",
-    });
+    if (shortcut.key) {
+      textarea.dispatchEvent(new KeyboardEvent("keyup", { ...shortcut, bubbles: true, cancelable: true }));
+    }
+    expect(socket.sentMessages.map((message) => (JSON.parse(message) as InputMessage).event))
+      .toEqual([{ kind: "insertText", text: "pasted-safe-text" }]);
   });
 
   it("releases held input on blur without stuck keys or buttons", async () => {

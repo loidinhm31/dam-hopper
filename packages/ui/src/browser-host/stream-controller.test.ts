@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserStreamController } from "./stream-controller.js";
+import { BrowserInputController } from "./input-controller.js";
 import { packBhjfFrame } from "./frame-protocol.js";
 import { createMockJpeg } from "./frame-protocol.test.js";
 import type { TargetFrameHeader } from "../api/browser-host-types.js";
@@ -134,6 +135,52 @@ describe("stream-controller", () => {
 
     vi.useRealTimers();
   });
+
+  it("delivers pushed session state with its captured owner and attachment identity", () => {
+    const onControlEvent = vi.fn();
+    controller.dispose();
+    controller = new BrowserStreamController({ canvas, onControlEvent });
+    controller.attach(mockCreds);
+    const header = makeHeader("1");
+    const event = { kind: "sessionUpdated", session: {
+      browserSessionId: header.browserSessionId, browserIncarnation: header.browserIncarnation,
+      profileEpoch: "1", navigationRevision: "9007199254740993", viewportEpoch: "1",
+      url: "https://example.test/native", title: "Native", status: "running",
+      geometry: header.geometry, inputAvailable: true,
+    } };
+    MockWebSocket.instances[1].onmessage?.(
+      new MessageEvent("message", { data: JSON.stringify(event) }),
+    );
+    expect(onControlEvent).toHaveBeenCalledExactlyOnceWith(event, mockCreds);
+  });
+
+  it.each(["hidden", "privacy", "rebound", "disposed"])(
+    "rejects old socket snapshots after %s retirement",
+    (retirement) => {
+      const onControlEvent = vi.fn();
+      controller.dispose();
+      controller = new BrowserStreamController({ canvas, onControlEvent });
+      controller.attach(mockCreds);
+      const retiredMessage = MockWebSocket.instances[1].onmessage!;
+      if (retirement === "hidden") controller.setVisibility(false);
+      if (retirement === "privacy") controller.setPrivacyMode(true);
+      if (retirement === "disposed") controller.dispose();
+      if (retirement === "rebound") controller.attach({
+        ...mockCreds, owner: { ...mockCreds.owner, generation: 2 }, subscriptionEpoch: "replacement",
+      });
+      retiredMessage(new MessageEvent("message", {
+        data: JSON.stringify({ kind: "sessionUpdated", session: { url: "retired" } }),
+      }));
+      expect(onControlEvent).not.toHaveBeenCalled();
+      if (retirement === "rebound") {
+        MockWebSocket.instances[3].onmessage?.(new MessageEvent("message", {
+          data: JSON.stringify({ kind: "status", inputAvailable: true }),
+        }));
+        expect(onControlEvent).toHaveBeenCalledTimes(1);
+        expect(onControlEvent.mock.calls[0][1].owner.generation).toBe(2);
+      }
+    },
+  );
 
   it("enforces 1 active decode + 1 pending frame, discarding intermediate pending frames", async () => {
     // Stub createImageBitmap to control decode resolution
@@ -335,6 +382,84 @@ describe("stream-controller", () => {
     expect(redrawn).not.toBeNull();
     expect(redrawn?.inputTrusted).toBe(true);
     expect(redrawn?.viewportEpoch).toBe("7");
+  });
+
+  it.each([
+    { localDpr: 1, remoteDpr: 2 },
+    { localDpr: 1.5, remoteDpr: 1 },
+    { localDpr: 2, remoteDpr: 1.5 },
+  ])("maps displayed JPEG coordinates through letterboxing and resize at DPR $localDpr/$remoteDpr", async ({ localDpr, remoteDpr }) => {
+    const bitmap = {
+      width: 640,
+      height: 480,
+      close: vi.fn(),
+    } as unknown as ImageBitmap;
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => bitmap));
+    let displayWidth = 400;
+    let displayHeight = 300;
+    vi.spyOn(canvas, "getBoundingClientRect").mockImplementation(() => ({
+      left: 100, top: 50,
+      width: displayWidth, height: displayHeight,
+      right: 100 + displayWidth, bottom: 50 + displayHeight,
+      x: 100, y: 50, toJSON: () => {},
+    }));
+    canvas.width = displayWidth * localDpr;
+    canvas.height = displayHeight * localDpr;
+    controller.attach(mockCreds);
+    const mediaWs = MockWebSocket.instances[0];
+    const header = makeHeader("1");
+    // JPEG resolution and both devices' DPR are independent of the CSS input viewport.
+    header.geometry = {
+      ...header.geometry, cssWidth: 1280, cssHeight: 960, dpr: remoteDpr,
+    };
+    const frame = packBhjfFrame(header, createMockJpeg(640, 480));
+    mediaWs.onmessage?.({ data: frame.buffer } as MessageEvent);
+    await vi.waitFor(() => expect(controller.getDrawnRect()).not.toBeNull());
+
+    const input = new BrowserInputController({
+      getSessionId: () => header.browserSessionId,
+      getIncarnation: () => header.browserIncarnation,
+      getProfileEpoch: () => 1,
+      getSubscriptionEpoch: () => mockCreds.subscriptionEpoch,
+      getLeaseToken: () => "lease",
+      getViewportEpoch: () => 1,
+      getDrawnRect: () => controller.getDrawnRect(),
+      getControlSocket: () => controller.getControlSocket(),
+    });
+    expect(input.mapClientToFractions(400, 125, canvas)).toEqual({ u: 0.75, v: 0.25 });
+
+    // A wider canvas adds side bars, without changing the target's CSS viewport.
+    displayWidth = 600;
+    canvas.width = displayWidth * localDpr;
+    controller.redrawCachedFrame();
+    expect(input.mapClientToFractions(500, 125, canvas)).toEqual({ u: 0.75, v: 0.25 });
+    expect(input.mapClientToFractions(200, 50, canvas)).toEqual({ u: 0, v: 0 });
+    expect(input.mapClientToFractions(600, 350, canvas)).toEqual({ u: 1, v: 1 });
+    expect(input.mapClientToFractions(150, 200, canvas)).toBeNull();
+    expect(input.mapClientToFractions(650, 200, canvas)).toBeNull();
+
+    // A taller canvas adds top/bottom bars. Pointer dispatch uses the redrawn image rect.
+    displayWidth = 300;
+    displayHeight = 400;
+    canvas.width = displayWidth * localDpr;
+    canvas.height = displayHeight * localDpr;
+    controller.redrawCachedFrame();
+    expect(input.mapClientToFractions(325, 193.75, canvas)).toEqual({ u: 0.75, v: 0.25 });
+    expect(input.mapClientToFractions(100, 137.5, canvas)).toEqual({ u: 0, v: 0 });
+    expect(input.mapClientToFractions(400, 362.5, canvas)).toEqual({ u: 1, v: 1 });
+    expect(input.mapClientToFractions(250, 100, canvas)).toBeNull();
+    expect(input.mapClientToFractions(250, 390, canvas)).toBeNull();
+    expect(controller.getDrawnRect()?.geometry).toEqual(header.geometry);
+    expect(input.handlePointerDown({
+      currentTarget: canvas, clientX: 325, clientY: 193.75, button: 0,
+      altKey: false, ctrlKey: false, metaKey: false, shiftKey: false,
+    } as unknown as PointerEvent)).toBe(true);
+    const controlWs = MockWebSocket.instances[1];
+    expect(JSON.parse(controlWs.sentMessages.at(-1)!)).toMatchObject({
+      viewportEpoch: 1,
+      event: { kind: "pointerDown", button: "left", u: 0.75, v: 0.25 },
+    });
+    input.dispose();
   });
 
   it("cleans up on dispose", () => {

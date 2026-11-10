@@ -13,8 +13,9 @@ use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use super::cdp::{CdpClient, CdpError, CdpTargetEvent, NativeTargetInfo};
+use super::cdp::{CdpClient, CdpError, CdpTargetEvent, ContainmentEscalation, NativeTargetInfo};
 use super::config::{evaluate_capabilities, BrowserCapabilitiesDto, BrowserHostConfig};
+use super::network_policy::NetworkPolicy;
 use super::process::{
     reap_prior_tree, BrowserLaunchConfig, BrowserProcess, ContainmentIdentity, ProcessError,
     ReapTimings,
@@ -1502,6 +1503,8 @@ impl BrowserHostManager {
             subject: handle.subject.clone(),
             is_dev: handle.is_dev,
             max_targets: self.max_targets,
+            request_policy: Arc::new(NetworkPolicy::from_config(&self.config, handle.is_dev)
+                .map_err(|err| ManagerError::Internal(format!("invalid browser request policy: {err}")))?),
             inst: inst_arc.clone(),
             native: self.native.clone(),
             faults: self.native_faults.clone(),
@@ -2033,6 +2036,7 @@ struct ObserverShared {
     subject: String,
     is_dev: bool,
     max_targets: usize,
+    request_policy: Arc<NetworkPolicy>,
     inst: Arc<Mutex<InnerInstance>>,
     native: NativeHandles,
     faults: Arc<NativeFaults>,
@@ -2118,6 +2122,17 @@ async fn connect_control(
     })?;
     // Subscribed before discovery is enabled so no lifecycle event can precede the receiver.
     let events = client.subscribe_target_events();
+    // Fetch's browser handler applies to newly created factories; it does not refresh
+    // factories that existed before this connection. Establish policy before exposing
+    // any native control, then retire only the startup workers with unknown provenance.
+    let escalate = shared.policy_containment(&handle.browser_incarnation);
+    client.install_browser_request_policy(shared.request_policy.clone(), escalate.clone())
+        .await.map_err(|err| ManagerError::Internal(format!("browser request policy setup: {err}")))?;
+    if let Err(err) = retire_pre_policy_workers(&client).await {
+        escalate("pre-policy worker termination could not be proven");
+        client.close().await;
+        return Err(ManagerError::Internal(format!("browser startup worker reconciliation: {err}")));
+    }
     let control = Arc::new(NativeControl {
         subject: shared.subject.clone(),
         is_dev: shared.is_dev,
@@ -2129,6 +2144,55 @@ async fn connect_control(
         inventory_optional: false,
     });
     Ok((control, events))
+}
+
+/// Profile data/registrations stay intact. Only running workers that could retain a
+/// pre-policy loader factory are stopped; later page navigation restarts them under Fetch.
+async fn retire_pre_policy_workers(client: &CdpClient) -> Result<(), CdpError> {
+    let inventory = client.send_command("Target.getTargets", None, None).await?;
+    let infos = inventory.get("targetInfos").and_then(Value::as_array)
+        .ok_or_else(|| CdpError::MalformedResponse("getTargets without targetInfos".into()))?;
+    let mut workers = Vec::new();
+    for info in infos {
+        if matches!(info.get("type").and_then(Value::as_str),
+            Some("worker" | "service_worker" | "shared_worker")) {
+            if workers.len() >= MAX_REJECTED_TARGETS {
+                return Err(CdpError::MalformedResponse("startup worker inventory exceeds bound".into()));
+            }
+            let id = info.get("targetId").and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && id.len() <= MAX_TARGET_ID_LEN)
+                .ok_or_else(|| CdpError::MalformedResponse("startup worker has invalid targetId".into()))?;
+            workers.push(id.to_string());
+        }
+    }
+    if workers.is_empty() { return Ok(()); }
+    warn!(count = workers.len(), "retiring startup workers with pre-policy loader factories");
+    for id in &workers {
+        // The proof, not a successful close acknowledgement, establishes containment.
+        let _ = client.send_command("Target.closeTarget", Some(json!({"targetId": id})), None).await;
+    }
+    for attempt in 0..CLOSE_VERIFY_ATTEMPTS {
+        let inventory = client.send_command("Target.getTargets", None, None).await?;
+        let infos = inventory.get("targetInfos").and_then(Value::as_array)
+            .ok_or_else(|| CdpError::MalformedResponse("getTargets without targetInfos".into()))?;
+        workers.retain(|id| infos.iter().any(|info|
+            info.get("targetId").and_then(Value::as_str) == Some(id.as_str())));
+        if workers.is_empty() {
+            return Ok(());
+        }
+        if attempt + 1 < CLOSE_VERIFY_ATTEMPTS {
+            // A service worker can still be starting when the first close is accepted.
+            // Reclose only surviving original ids; workers born after policy installation
+            // have policed factories and must keep running. Absence remains the proof.
+            sleep(CLOSE_VERIFY_INTERVAL).await;
+            for id in &workers {
+                let _ = client.send_command(
+                    "Target.closeTarget", Some(json!({"targetId": id})), None,
+                ).await;
+            }
+        }
+    }
+    Err(CdpError::Transport("pre-policy worker remains in native inventory".into()))
 }
 
 async fn run_observer(
@@ -2187,6 +2251,42 @@ async fn run_observer(
 }
 
 impl ObserverShared {
+    /// Weak captures avoid a cycle through the observer's client and its actor policy.
+    fn policy_containment(&self, incarnation: &str) -> ContainmentEscalation {
+        let inst = Arc::downgrade(&self.inst);
+        let observers = Arc::downgrade(&self.native.observers);
+        let containments = Arc::downgrade(&self.native.containments);
+        let live_incarnations = Arc::downgrade(&self.native.live_incarnations);
+        let global_process_count = Arc::downgrade(&self.native.global_process_count);
+        let sinks = self.native.sinks.clone();
+        let key = self.key.clone();
+        let incarnation = incarnation.to_string();
+        Arc::new(move |reason| {
+            let (Some(inst), Some(observers), Some(containments), Some(live_incarnations), Some(global_process_count)) =
+                (inst.upgrade(), observers.upgrade(), containments.upgrade(), live_incarnations.upgrade(), global_process_count.upgrade())
+                else { return; };
+            let mut tasks = containments.lock().unwrap();
+            let slot = (key.clone(), incarnation.clone());
+            if tasks.get(&slot).is_some_and(|task| !task.is_finished()) { return; }
+            warn!(reason, "containing browser request-policy incarnation");
+            let native = NativeHandles {
+                observers, containments: containments.clone(), live_incarnations,
+                global_process_count, sinks: sinks.clone(),
+            };
+            let key = key.clone();
+            let incarnation = incarnation.clone();
+            tasks.insert(slot, tokio::spawn(async move {
+                let mut inst = inst.lock().await;
+                if inst.browser_incarnation.as_deref() != Some(incarnation.as_str()) || inst.process.is_none() {
+                    return;
+                }
+                if let Err(err) = native.reap_dead_instance(&key, &mut inst, true).await {
+                    warn!(error = %err, "request-policy containment left cleanup pending");
+                }
+            }));
+        })
+    }
+
     fn registry(&self) -> &'static super::session::SessionRegistry {
         crate::api::browser_host::global_session_registry()
     }
@@ -2722,4 +2822,74 @@ fn persist_stage(
     profile
         .save_tombstone(tombstone)
         .map_err(|e| format!("failed to persist reset stage {stage:?}: {e}"))
+}
+
+#[cfg(test)]
+mod startup_policy_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    async fn startup_browser(
+        disappears: bool,
+    ) -> (Arc<CdpClient>, mpsc::UnboundedReceiver<Value>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut closes = HashMap::<String, usize>::new();
+            let mut inventories = 0usize;
+            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                let command: Value = serde_json::from_str(&text).unwrap();
+                let result = match command["method"].as_str().unwrap() {
+                    "Target.getTargets" => {
+                        inventories += 1;
+                        let mut infos = vec![json!({"targetId":"PAGE","type":"page"})];
+                        for (id, kind) in [("OLD-SW", "service_worker"), ("OLD-SHARED", "shared_worker")] {
+                            if !disappears || closes.get(id).copied().unwrap_or(0) < 2 {
+                                infos.push(json!({"targetId":id,"type":kind}));
+                            }
+                        }
+                        if inventories > 1 {
+                            infos.push(json!({"targetId":"NEW-POLICED-SW","type":"service_worker"}));
+                        }
+                        json!({"targetInfos":infos})
+                    }
+                    "Target.closeTarget" => {
+                        *closes.entry(command["params"]["targetId"].as_str().unwrap().to_string())
+                            .or_default() += 1;
+                        // First close succeeds while still starting. Only a second close
+                        // stops it; persistent survivors never disappear.
+                        json!({"success":true})
+                    }
+                    _ => json!({}),
+                };
+                let reply = json!({"id":command["id"],"result":result});
+                tx.send(command).unwrap();
+                if ws.send(Message::Text(reply.to_string().into())).await.is_err() { break; }
+            }
+        });
+        (CdpClient::connect(&format!("ws://{addr}")).await.unwrap(), rx)
+    }
+
+    #[tokio::test]
+    async fn startup_reconciliation_recloses_only_starting_original_workers() {
+        let (client, mut commands) = startup_browser(true).await;
+        retire_pre_policy_workers(&client).await.unwrap();
+        let mut closed = Vec::new();
+        while let Ok(command) = commands.try_recv() {
+            if command["method"] == "Target.closeTarget" {
+                closed.push(command["params"]["targetId"].as_str().unwrap().to_string());
+            }
+        }
+        assert_eq!(closed, ["OLD-SW", "OLD-SHARED", "OLD-SW", "OLD-SHARED"]);
+    }
+
+    #[tokio::test]
+    async fn startup_reconciliation_rejects_worker_that_survives_successful_close() {
+        let (client, _commands) = startup_browser(false).await;
+        assert!(matches!(retire_pre_policy_workers(&client).await, Err(CdpError::Transport(_))));
+    }
 }

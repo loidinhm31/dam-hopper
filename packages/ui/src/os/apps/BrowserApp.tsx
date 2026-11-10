@@ -4,6 +4,7 @@ import { useWindowOwner, useWindowContext } from "../window-context.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { useResourceClaim } from "../resource-registry.js";
 import { useWindowStore } from "../window-store.js";
+import { syncBrowserSessionWindow } from "../browser-session-sync.js";
 import {
   clearBrowserViewFenceForProfile,
   registerBrowserStreamSlot,
@@ -14,6 +15,8 @@ import { getApi, getConnectionSnapshot, isCurrentConnection } from "@/api/connec
 import type { SessionInfo } from "@/api/client.js";
 import {
   acquireBrowserControl,
+  BrowserHostClientError,
+  getBrowserSession,
   historyBrowser,
   navigateBrowser,
   releaseBrowserControl,
@@ -25,6 +28,7 @@ import {
   useHostBrowserSelection,
   type HostTerminalCandidate,
 } from "@/browser-host/selection-controller.js";
+import type { BrowserSessionDto } from "@/api/browser-host-types.js";
 export interface BrowserAppProps {
   window: OsWindow;
 }
@@ -181,10 +185,24 @@ function BrowserResourceView({
   const [addressInput, setAddressInput] = useState(previewUrl);
   const [liveSessions, setLiveSessions] = useState<SessionInfo[]>([]);
   const [selectedTerminalId, setSelectedTerminalId] = useState<string>("");
+  const navigationActionRef = useRef<AbortController | null>(null);
+  const [navigationPending, setNavigationPending] = useState(false);
+  const [navigationError, setNavigationError] = useState<string | null>(null);
   const windows = useWindowStore((s) => s.session.windows);
   useEffect(() => {
     setAddressInput(previewUrl);
   }, [previewUrl]);
+
+  // A pending request belongs to one connection/session, not this component's
+  // entire lifetime. Retire it even if an aborted transport never settles.
+  useLayoutEffect(() => {
+    setNavigationPending(false);
+    setNavigationError(null);
+    return () => {
+      navigationActionRef.current?.abort();
+      navigationActionRef.current = null;
+    };
+  }, [owner.profileId, owner.generation, sessionId, window.id]);
 
   // Viewer-local presentation claim: each window has its own claim key,
   // allowing two windows to view the same target without resource collision.
@@ -219,77 +237,82 @@ function BrowserResourceView({
     updateBrowserStreamSlot(window.id, slotRef.current, isVisible);
   }, [window.id, isVisible]);
 
-  // Navigation callbacks
+  // Read authority before each explicit action; native navigation is independent
+  // of our last rendered snapshot. A raced CAS rejection is refreshed, never replayed.
+  const runNavigation = useCallback(async (
+    operation: (revision: string, signal: AbortSignal) => Promise<BrowserSessionDto>,
+  ) => {
+    if (!sessionId || navigationActionRef.current) return;
+    const action = new AbortController();
+    navigationActionRef.current = action;
+    const isActive = () => navigationActionRef.current === action && !action.signal.aborted;
+    setNavigationPending(true);
+    setNavigationError(null);
+    try {
+      const current = await getBrowserSession(owner, sessionId, action.signal);
+      if (!isActive()) return;
+      const sync = syncBrowserSessionWindow(owner, window.id, sessionId, current);
+      if (sync === "detached") return;
+      if (sync === "stale") {
+        throw new BrowserHostClientError("Page changed while preparing navigation; retry the action", "sessionConflict", 409);
+      }
+      const response = await operation(current.navigationRevision, action.signal);
+      if (isActive()) syncBrowserSessionWindow(owner, window.id, sessionId, response);
+    } catch (err) {
+      if (!isActive()) return;
+      console.warn("[BrowserApp] Navigation failed:", err);
+      if (err instanceof BrowserHostClientError && err.status === 409) {
+        try {
+          const current = await getBrowserSession(owner, sessionId, action.signal);
+          if (isActive()) syncBrowserSessionWindow(owner, window.id, sessionId, current);
+        } catch (refreshError) {
+          if (isActive()) console.warn("[BrowserApp] Navigation conflict refresh failed:", refreshError);
+        }
+      }
+      if (isActive() && isCurrentConnection(owner) &&
+          useWindowStore.getState().session.windows[window.id]?.appState?.sessionId === sessionId) {
+        setNavigationError(err instanceof Error ? err.message : "Navigation failed");
+      }
+    } finally {
+      if (navigationActionRef.current === action) {
+        navigationActionRef.current = null;
+        setNavigationPending(false);
+      }
+    }
+  }, [owner, sessionId, window.id]);
+
   const handleNavigate = useCallback(async () => {
     let trimmed = addressInput.trim();
     if (!trimmed || !sessionId) return;
     if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
       trimmed = `https://${trimmed}`;
     }
-    try {
-      const resp = await navigateBrowser(owner, sessionId, {
-        url: trimmed,
-        navigationRevision,
-      });
-      useWindowStore.getState().updateAppState(window.id, {
-        url: resp.url,
-        title: resp.title,
-        navigationRevision: resp.navigationRevision,
-        viewportEpoch: resp.viewportEpoch,
-      });
-    } catch (err) {
-      console.warn("[BrowserApp] Navigate failed:", err);
-    }
-  }, [addressInput, owner, sessionId, navigationRevision, window.id]);
+    await runNavigation((revision, signal) => navigateBrowser(owner, sessionId, {
+      url: trimmed,
+      navigationRevision: revision,
+    }, signal));
+  }, [addressInput, owner, sessionId, runNavigation]);
 
   const handleReload = useCallback(async () => {
     if (!sessionId) return;
-    try {
-      const resp = await reloadBrowser(owner, sessionId, { navigationRevision });
-      useWindowStore.getState().updateAppState(window.id, {
-        navigationRevision: resp.navigationRevision,
-        viewportEpoch: resp.viewportEpoch,
-      });
-    } catch (err) {
-      console.warn("[BrowserApp] Reload failed:", err);
-    }
-  }, [owner, sessionId, navigationRevision, window.id]);
+    await runNavigation((revision, signal) => reloadBrowser(owner, sessionId, { navigationRevision: revision }, signal));
+  }, [owner, sessionId, runNavigation]);
 
   const handleBack = useCallback(async () => {
     if (!sessionId) return;
-    try {
-      const resp = await historyBrowser(owner, sessionId, {
-        direction: "back",
-        navigationRevision,
-      });
-      useWindowStore.getState().updateAppState(window.id, {
-        url: resp.url,
-        title: resp.title,
-        navigationRevision: resp.navigationRevision,
-        viewportEpoch: resp.viewportEpoch,
-      });
-    } catch (err) {
-      console.warn("[BrowserApp] History back failed:", err);
-    }
-  }, [owner, sessionId, navigationRevision, window.id]);
+    await runNavigation((revision, signal) => historyBrowser(owner, sessionId, {
+      direction: "back",
+      navigationRevision: revision,
+    }, signal));
+  }, [owner, sessionId, runNavigation]);
 
   const handleForward = useCallback(async () => {
     if (!sessionId) return;
-    try {
-      const resp = await historyBrowser(owner, sessionId, {
-        direction: "forward",
-        navigationRevision,
-      });
-      useWindowStore.getState().updateAppState(window.id, {
-        url: resp.url,
-        title: resp.title,
-        navigationRevision: resp.navigationRevision,
-        viewportEpoch: resp.viewportEpoch,
-      });
-    } catch (err) {
-      console.warn("[BrowserApp] History forward failed:", err);
-    }
-  }, [owner, sessionId, navigationRevision, window.id]);
+    await runNavigation((revision, signal) => historyBrowser(owner, sessionId, {
+      direction: "forward",
+      navigationRevision: revision,
+    }, signal));
+  }, [owner, sessionId, runNavigation]);
 
   const handleAcquireControl = useCallback(async () => {
     if (!sessionId) return;
@@ -384,6 +407,9 @@ function BrowserResourceView({
       if (!isCurrentConnection(owner) || !sessionId) return;
       const latestWin = useWindowStore.getState().session.windows[window.id];
       if (!latestWin || latestWin.appState?.sessionId !== sessionId) return;
+      const currentRevision = latestWin.appState?.navigationRevision;
+      if (currentRevision !== undefined &&
+          BigInt(String(currentRevision)) > BigInt(update.navigationRevision)) return;
       useWindowStore.getState().updateAppState(window.id, {
         navigationRevision: update.navigationRevision,
         ...(update.url ? { url: update.url } : {}),
@@ -446,6 +472,11 @@ function BrowserResourceView({
           </span>
         </div>
       )}
+      {navigationError && (
+        <div role="alert" data-testid="browser-navigation-error" className="px-3 py-1 text-xs text-red-400">
+          {navigationError}
+        </div>
+      )}
 
       {/* Top Browser Controls Bar */}
       <div className="flex items-center gap-1.5 px-2 py-1 bg-[var(--color-surface)] border-b border-[var(--color-border)] text-xs text-[var(--color-text)] select-none">
@@ -454,7 +485,7 @@ function BrowserResourceView({
           data-testid="browser-back-btn"
           aria-label="Back"
           onClick={handleBack}
-          disabled={!sessionId}
+          disabled={!sessionId || navigationPending}
           className="p-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-40"
         >
           ←
@@ -464,7 +495,7 @@ function BrowserResourceView({
           data-testid="browser-forward-btn"
           aria-label="Forward"
           onClick={handleForward}
-          disabled={!sessionId}
+          disabled={!sessionId || navigationPending}
           className="p-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-40"
         >
           →
@@ -474,7 +505,7 @@ function BrowserResourceView({
           data-testid="browser-reload-btn"
           aria-label="Reload"
           onClick={handleReload}
-          disabled={!sessionId}
+          disabled={!sessionId || navigationPending}
           className="p-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-40"
         >
           ↻

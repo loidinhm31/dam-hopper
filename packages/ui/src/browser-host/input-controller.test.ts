@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BrowserInputController,
   extractModifiers,
@@ -8,6 +8,8 @@ import {
   MODIFIER_CTRL,
   MODIFIER_META,
   MODIFIER_SHIFT,
+  MAX_QUEUE_RECORDS,
+  MAX_HANDOFF_BYTES,
 } from "./input-controller.js";
 import type { DrawnRect } from "./stream-controller.js";
 import type { InputMessage } from "../api/browser-host-types.js";
@@ -409,6 +411,173 @@ describe("input-controller", () => {
         kind: "insertText",
         text: "hello world",
       });
+    });
+  });
+
+  describe("explicit click control handoff typeahead", () => {
+    beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] }));
+    afterEach(() => { controller.dispose(); vi.useRealTimers(); });
+
+    it("does not retain ordinary offline text without an active gesture", () => {
+      leaseToken = null;
+      expect(controller.handleInsertText("not-offline-queued")).toBe(false);
+      leaseToken = "new-lease";
+      controller.handleInsertText("live");
+      expect(socket.sentMessages.map(message => JSON.parse(message).event)).toEqual([
+        { kind: "insertText", text: "live" },
+      ]);
+    });
+
+    it("orders text, shortcuts, releases, and IME commits after pointer focus with contiguous sequence", async () => {
+      leaseToken = null;
+      const handoff = controller.beginControlHandoff(() => true, vi.fn());
+      const shortcut = new KeyboardEvent("keydown", { key: "a", code: "KeyA", ctrlKey: true });
+      expect(controller.handleKeyDown(shortcut)).toBe(true);
+      expect(controller.handleKeyUp(shortcut)).toBe(true);
+      expect(controller.handleInsertText("đặng")).toBe(true);
+      expect(controller.getHeldKeys().size).toBe(0);
+      expect(socket.sentMessages).toEqual([]);
+      leaseToken = "new-lease";
+      const pointer = { currentTarget: canvas, clientX: 320, clientY: 240, button: 0,
+        altKey: false, ctrlKey: false, metaKey: false, shiftKey: false } as unknown as PointerEvent;
+      controller.handlePointerDown(pointer);
+      controller.handlePointerUp(pointer);
+      expect(controller.completeControlHandoff(handoff)).toBe(true);
+      await vi.runAllTimersAsync();
+      expect(socket.sentMessages.map(message => JSON.parse(message).event.kind)).toEqual([
+        "pointerDown", "pointerUp", "keyDown", "keyUp", "insertText",
+      ]);
+      expect(socket.sentMessages.map(message => JSON.parse(message).inputSeq)).toEqual([1, 2, 3, 4, 5]);
+      expect(controller.getHeldKeys().size).toBe(0);
+      expect(controller.completeControlHandoff(handoff)).toBe(false);
+    });
+
+    it.each(["release", "dispose", "provenance", "socket"] as const)("drops queued text on %s without replay", (cancel) => {
+      leaseToken = null;
+      let current = true;
+      const onCancel = vi.fn();
+      const handoff = controller.beginControlHandoff(() => current, onCancel);
+      controller.handleInsertText("private");
+      controller.handleKeyDown(new KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft" }));
+      if (cancel === "release") controller.releaseAllHeldInput();
+      if (cancel === "dispose") controller.dispose();
+      if (cancel === "provenance") current = false;
+      if (cancel === "socket") socket.readyState = 3;
+      leaseToken = "new-lease";
+      expect(controller.completeControlHandoff(handoff)).toBe(false);
+      expect(socket.sentMessages).toEqual([]);
+      expect(controller.getHeldKeys().size).toBe(0);
+      if (cancel !== "socket") expect(onCancel).toHaveBeenCalledOnce();
+    });
+
+    it.each(["records", "bytes"] as const)("cancels the whole gesture when its %s bound is reached", (bound) => {
+      leaseToken = null;
+      const onCancel = vi.fn();
+      const handoff = controller.beginControlHandoff(() => true, onCancel);
+      if (bound === "records") {
+        const key = new KeyboardEvent("keyup", { key: "Enter", code: "Enter" });
+        for (let i = 0; i < MAX_QUEUE_RECORDS; i++) expect(controller.handleKeyUp(key)).toBe(true);
+        expect(controller.handleKeyUp(key)).toBe(false);
+      } else {
+        // UTF-8 accounting includes multibyte input, not just JS string length.
+        const text = "界".repeat(1000);
+        const bytes = new TextEncoder().encode(JSON.stringify({ kind: "insertText", text })).length;
+        for (let i = 0; i < Math.floor(MAX_HANDOFF_BYTES / bytes); i++) {
+          expect(controller.handleInsertText(text)).toBe(true);
+        }
+        expect(controller.handleInsertText(text)).toBe(false);
+      }
+      leaseToken = "new-lease";
+      expect(controller.completeControlHandoff(handoff)).toBe(false);
+      expect(onCancel).toHaveBeenCalledOnce();
+      expect(socket.sentMessages).toEqual([]);
+    });
+
+    it("does not let an old completion consume replacement-gesture text", () => {
+      leaseToken = null;
+      const old = controller.beginControlHandoff(() => true, vi.fn());
+      controller.handleInsertText("old");
+      const replacement = controller.beginControlHandoff(() => true, vi.fn());
+      controller.handleInsertText("replacement");
+      leaseToken = "new-lease";
+      expect(controller.completeControlHandoff(old)).toBe(false);
+      expect(controller.completeControlHandoff(replacement)).toBe(true);
+      expect(socket.sentMessages.map(message => JSON.parse(message).event)).toEqual([
+        { kind: "insertText", text: "replacement" },
+      ]);
+    });
+
+    it("delivers more than 100 records without closing a 100/s consumer, including arrivals during drain", async () => {
+      const arrivals: number[] = [];
+      let closed = false;
+      vi.spyOn(socket, "send").mockImplementation(message => {
+        const now = Date.now();
+        arrivals.push(now);
+        // Consumer's rolling admission limit, independent of the drain's interval.
+        if (arrivals.filter(time => now - time < 1000).length > 100) {
+          closed = true;
+          socket.readyState = 3;
+          throw new Error("Consumer rate limit exceeded");
+        }
+        socket.sentMessages.push(message);
+      });
+      leaseToken = null;
+      const complete = vi.fn();
+      const handoff = controller.beginControlHandoff(() => true, vi.fn());
+      for (let index = 0; index < 120; index++) controller.handleInsertText(String(index));
+      leaseToken = "paced-lease";
+      const pointer = { currentTarget: canvas, clientX: 320, clientY: 240, button: 0,
+        altKey: false, ctrlKey: false, metaKey: false, shiftKey: false } as unknown as PointerEvent;
+      controller.handlePointerDown(pointer);
+      controller.handlePointerUp(pointer);
+      expect(controller.completeControlHandoff(handoff, complete)).toBe(true);
+      expect(complete).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500);
+      const backspace = new KeyboardEvent("keydown", { key: "Backspace", code: "Backspace" });
+      controller.handleKeyDown(backspace);
+      controller.handleKeyUp(backspace);
+      controller.handleInsertText("new-arrival");
+      await vi.runAllTimersAsync();
+      const messages = socket.sentMessages.map(message => JSON.parse(message) as InputMessage);
+      expect(closed).toBe(false);
+      expect(messages).toHaveLength(125);
+      expect(messages.map(message => message.event)).toEqual([
+        { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+        { kind: "pointerUp", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+        ...Array.from({ length: 120 }, (_, index) => ({ kind: "insertText", text: String(index) })),
+        { kind: "keyDown", key: "Backspace", code: "Backspace", modifiers: 0 },
+        { kind: "keyUp", key: "Backspace", code: "Backspace", modifiers: 0 },
+        { kind: "insertText", text: "new-arrival" },
+      ]);
+      expect(messages.map(message => message.inputSeq)).toEqual(Array.from({ length: 125 }, (_, index) => index + 1));
+      expect(complete).toHaveBeenCalledOnce();
+    });
+
+    it.each(["provenance", "release"] as const)("cancels a paced tail on %s and releases only dispatched held keys", async (cause) => {
+      leaseToken = null;
+      let current = true;
+      const cancelled = vi.fn();
+      const complete = vi.fn();
+      const handoff = controller.beginControlHandoff(() => current, cancelled);
+      controller.handleKeyDown(new KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft" }));
+      for (let index = 0; index < 120; index++) controller.handleInsertText(`private-${index}`);
+      leaseToken = "paced-lease";
+      expect(controller.completeControlHandoff(handoff, complete)).toBe(true);
+      await vi.advanceTimersByTimeAsync(400);
+      const before = socket.sentMessages.map(message => JSON.parse(message) as InputMessage);
+      expect(before.some(message => message.event.kind === "insertText")).toBe(true);
+      expect(before.filter(message => message.event.kind === "insertText").length).toBeLessThan(120);
+      if (cause === "provenance") current = false;
+      else controller.releaseAllHeldInput();
+      await vi.runAllTimersAsync();
+      const after = socket.sentMessages.map(message => JSON.parse(message) as InputMessage);
+      expect(after.filter(message => message.event.kind === "insertText")).toEqual(
+        before.filter(message => message.event.kind === "insertText"),
+      );
+      expect(after.at(-1)?.event).toEqual({ kind: "keyUp", key: "Shift", code: "ShiftLeft", modifiers: 0 });
+      expect(controller.getHeldKeys().size).toBe(0);
+      expect(cancelled).toHaveBeenCalledOnce();
+      expect(complete).not.toHaveBeenCalled();
     });
   });
 

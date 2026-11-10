@@ -11,6 +11,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createBrowserStorageState } from "./application-storage-state.js";
+import { serveBrowserJourney } from "./host-browser-journey-target.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,11 +31,14 @@ export interface HostBrowserAppServer {
   readonly cleanup: () => Promise<void>;
   readonly browserExec: string;
   readonly tempRoot: string;
+  readonly deniedRequestCount: () => number;
+  readonly serverLog: () => string;
 }
 
 export interface HostBrowserAppOptions {
   allowedOrigins?: string[];
   maxTargets?: number;
+  allowAppOrigin?: boolean;
 }
 
 export function getFreePort(): Promise<number> {
@@ -173,12 +177,16 @@ export async function prebuildBinaries(): Promise<{
   return promise;
 }
 
-export async function ensureWebDistBuilt(): Promise<string> {
+let webDistBuild: Promise<string> | undefined;
+
+export function ensureWebDistBuilt(): Promise<string> {
+  webDistBuild ??= buildWebDist();
+  return webDistBuild;
+}
+
+async function buildWebDist(): Promise<string> {
   const webDist = path.resolve(REPO_ROOT, "apps/web/dist");
   const indexFile = path.join(webDist, "index.html");
-  if (fs.existsSync(indexFile)) {
-    return webDist;
-  }
   const { promise, resolve, reject } = Promise.withResolvers<string>();
   const proc = spawn("pnpm", ["--filter", "@dam-hopper/web", "build"], {
     cwd: REPO_ROOT,
@@ -245,7 +253,22 @@ export async function startHostBrowserAppServer(
 
   // Start mock target HTTP server
   const targetPort = await getFreePort();
+  const deniedPort = await getFreePort();
+  const deniedOrigin = `http://127.0.0.1:${deniedPort}`;
+  let deniedRequests = 0;
+  const deniedHttpServer = http.createServer((_request, response) => {
+    deniedRequests++;
+    response.writeHead(200, {
+      "Content-Type": "application/javascript",
+      "Access-Control-Allow-Origin": "*",
+    });
+    response.end("self.forbiddenScriptExecuted = true;");
+  });
+  const deniedListen = Promise.withResolvers<void>();
+  deniedHttpServer.listen(deniedPort, "127.0.0.1", () => deniedListen.resolve());
+  await deniedListen.promise;
   const targetHttpServer = http.createServer((_req, res) => {
+    if (serveBrowserJourney(_req, res, deniedOrigin)) return;
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(`<!doctype html>
 <html>
@@ -304,6 +327,7 @@ export async function startHostBrowserAppServer(
 
   const allowedOrigins = [
     `http://127.0.0.1:${targetPort}`,
+    ...(options.allowAppOrigin ? [appOrigin] : []),
     ...(options.allowedOrigins ?? []),
   ];
 
@@ -318,6 +342,8 @@ enabled = true
 executable_path = "${browserExec}"
 profile_root = "${browserProfileRoot}"
 allowed_target_origins = ${JSON.stringify(allowedOrigins)}
+
+[server.browser.budgets]
 max_targets = ${options.maxTargets ?? 2}
 
 [[projects]]
@@ -339,6 +365,7 @@ type = "custom"
     DAM_HOPPER_MFA_KEY_FILE: path.join(homeDir, "mfa.key"),
     DAM_HOPPER_CORS_ORIGINS: `${appOrigin},http://127.0.0.1:${targetPort}`,
     DAM_HOPPER_WEB_DIR: webDist,
+    DAM_HOPPER_PUBLIC_SERVER_ORIGIN: appOrigin,
   };
 
   // 1. Seed Admin user
@@ -379,7 +406,7 @@ type = "custom"
   // Update role to 'user' in SQLite auth database
   await runCommand(
     "sqlite3",
-    [sqlitePath, "UPDATE users SET role = 'user' WHERE username = 'member';"],
+    [sqlitePath, "UPDATE auth_users SET role = 'user' WHERE username = 'member';"],
     env,
   );
 
@@ -423,10 +450,13 @@ type = "custom"
     },
   );
 
-  let serverStderr = "";
-  serverProc.stderr?.on("data", (d) => {
-    serverStderr += d.toString();
-  });
+  let serverOutput = "";
+  const recordOutput = (data: Buffer) => {
+    serverOutput = (serverOutput + data.toString()).slice(-1_048_576);
+  };
+  // Drain both pipes: an unread stdout must never stall the isolated backend.
+  serverProc.stdout?.on("data", recordOutput);
+  serverProc.stderr?.on("data", recordOutput);
 
   // Wait for server health / readiness
   const deadline = Date.now() + 30_000;
@@ -452,7 +482,8 @@ type = "custom"
       serverProc.kill("SIGKILL");
     }
     targetHttpServer.close();
-    throw new Error(`Server failed to boot within 30s. Stderr: ${serverStderr}`);
+    deniedHttpServer.close();
+    throw new Error(`Server failed to boot within 30s. Output: ${serverOutput}`);
   }
 
   const cleanup = async () => {
@@ -466,6 +497,7 @@ type = "custom"
       }
     }
     targetHttpServer.close();
+    deniedHttpServer.close();
     try {
       await fsp.rm(tempRoot, { recursive: true, force: true });
     } catch {
@@ -487,6 +519,8 @@ type = "custom"
     cleanup,
     browserExec,
     tempRoot,
+    deniedRequestCount: () => deniedRequests,
+    serverLog: () => serverOutput,
   };
 }
 

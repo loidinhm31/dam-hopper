@@ -17,6 +17,12 @@ export interface TextInputProxyHandle {
   focus: () => void;
   blur: () => void;
   isFocused: () => boolean;
+  reset: () => void;
+}
+
+function isLocalPasteShortcut(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+  return ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") ||
+    (event.shiftKey && event.key === "Insert");
 }
 
 export const TextInputProxy = React.forwardRef<
@@ -28,7 +34,13 @@ export const TextInputProxy = React.forwardRef<
 ) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const isComposingRef = useRef(false);
-  const lastCommittedRef = useRef<{ text: string; time: number } | null>(null);
+  const pendingCommitRef = useRef<{ text: string; source: "composition" | "beforeInput" } | null>(null);
+
+  const reset = useCallback(() => {
+    isComposingRef.current = false;
+    pendingCommitRef.current = null;
+    if (textareaRef.current) textareaRef.current.value = "";
+  }, []);
 
   useImperativeHandle(
     forwardedRef,
@@ -42,20 +54,30 @@ export const TextInputProxy = React.forwardRef<
       isFocused: () => {
         return document.activeElement === textareaRef.current;
       },
+      reset,
     }),
-    [],
+    [reset],
   );
 
   const handleCompositionStart = useCallback(() => {
     isComposingRef.current = true;
+    pendingCommitRef.current = null;
   }, []);
 
   const handleCompositionEnd = useCallback(
     (e: React.CompositionEvent<HTMLTextAreaElement>) => {
+      if (!isComposingRef.current) {
+        // A cancelled composition can still emit compositionEnd + beforeInput + input.
+        // Consume that native commit sequence without forwarding it to a later gesture.
+        pendingCommitRef.current = { text: e.data, source: "composition" };
+        return;
+      }
+      if (document.activeElement !== textareaRef.current) return;
       isComposingRef.current = false;
       const text = e.data;
       if (text && controller) {
         controller.handleInsertText(text);
+        pendingCommitRef.current = { text, source: "composition" };
       }
       if (textareaRef.current) {
         textareaRef.current.value = "";
@@ -67,11 +89,16 @@ export const TextInputProxy = React.forwardRef<
   const handleBeforeInput = useCallback(
     (e: React.FormEvent<HTMLTextAreaElement> & { data?: string | null }) => {
       if (isComposingRef.current) return;
+      if (document.activeElement !== textareaRef.current) return;
 
       const data = e.data;
       if (data && controller) {
-        controller.handleInsertText(data);
-        lastCommittedRef.current = { text: data, time: Date.now() };
+        const pending = pendingCommitRef.current;
+        // React can synthesize beforeInput from the same compositionEnd.
+        if (pending?.source !== "composition" || pending.text !== data) {
+          controller.handleInsertText(data);
+        }
+        pendingCommitRef.current = { text: data, source: "beforeInput" };
         if (textareaRef.current) {
           textareaRef.current.value = "";
         }
@@ -83,27 +110,29 @@ export const TextInputProxy = React.forwardRef<
   const handleInput = useCallback(
     (e: React.FormEvent<HTMLTextAreaElement>) => {
       if (isComposingRef.current) return;
+      if (document.activeElement !== textareaRef.current) {
+        reset();
+        return;
+      }
 
       const val = e.currentTarget.value;
-      const last = lastCommittedRef.current;
-      const isDuplicate =
-        last &&
-        last.text === val &&
-        Date.now() - last.time < 100;
-
-      if (val && controller && !isDuplicate) {
+      const pending = pendingCommitRef.current;
+      pendingCommitRef.current = null;
+      if (val && controller && pending?.text !== val) {
         controller.handleInsertText(val);
-        lastCommittedRef.current = { text: val, time: Date.now() };
       }
       e.currentTarget.value = "";
     },
-    [controller],
+    [controller, reset],
   );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (isComposingRef.current) return;
       if (!controller) return;
+      // Local clipboard text is forwarded by onPaste. Never also trigger paste
+      // from the remote browser's independent clipboard.
+      if (isLocalPasteShortcut(e)) return;
 
       // Allow standard browser copy/paste/select-all
       const isClipboardShortcut =
@@ -122,6 +151,7 @@ export const TextInputProxy = React.forwardRef<
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (isComposingRef.current) return;
       if (!controller) return;
+      if (isLocalPasteShortcut(e)) return;
 
       const handled = controller.handleKeyUp(e);
       if (handled) {
@@ -148,9 +178,10 @@ export const TextInputProxy = React.forwardRef<
   );
 
   const handleBlur = useCallback(() => {
+    reset();
     controller?.releaseAllHeldInput();
     onBlur?.();
-  }, [controller, onBlur]);
+  }, [controller, onBlur, reset]);
 
   return (
     <textarea

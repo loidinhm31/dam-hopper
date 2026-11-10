@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 use uuid::Uuid;
 
 use super::network_policy::{validate_navigation_url, NetworkPolicyError, MAX_TITLE_BYTES};
-use super::protocol::TargetGeometry;
+use super::protocol::{ServerControlEvent, TargetGeometry};
 
 pub const MAX_IDEMPOTENCY_RECORDS_PER_PRINCIPAL: usize = 128;
 pub const IDEMPOTENCY_TTL: Duration = Duration::from_secs(600); // 10 minutes
@@ -139,7 +139,7 @@ pub struct CreateSessionRequest {
     pub viewport: ViewportRequest,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionLeaseSummary {
     pub viewer_id: String,
@@ -147,7 +147,7 @@ pub struct SessionLeaseSummary {
     pub expires_at_unix_ms: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionDialogSummary {
     pub dialog_id: String,
@@ -155,7 +155,7 @@ pub struct SessionDialogSummary {
     pub dialog_type: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserSessionDto {
     pub browser_session_id: String,
@@ -216,6 +216,8 @@ pub struct BrowserSession {
     /// A `Target.createTarget` was sent for this session: a page may exist even when the
     /// response was lost, so retries reconcile by creation marker before creating again.
     pub native_create_attempted: bool,
+    /// Lazily allocated, single latest-state slot; never a queue of navigation events.
+    updates: Option<watch::Sender<ServerControlEvent>>,
 }
 
 impl BrowserSession {
@@ -255,6 +257,27 @@ impl BrowserSession {
         }
     }
 
+    fn updated_event(&self) -> ServerControlEvent {
+        ServerControlEvent::SessionUpdated {
+            session: Box::new(self.to_dto()),
+        }
+    }
+
+    /// Called under the registry write lock, so snapshots and mutations share one ordering.
+    /// No DTO allocation without receivers. Terminal publication also closes their channel.
+    fn publish_update(&mut self) {
+        let Some(updates) = self.updates.take() else {
+            return;
+        };
+        if updates.receiver_count() == 0 {
+            return;
+        }
+        updates.send_replace(self.updated_event());
+        if self.status.holds_slot() {
+            self.updates = Some(updates);
+        }
+    }
+
     fn retire(&mut self, status: SessionStatus, reason: Option<String>) {
         self.status = status;
         self.input_available = false;
@@ -266,6 +289,7 @@ impl BrowserSession {
         if self.retired_at.is_none() {
             self.retired_at = Some(Instant::now());
         }
+        self.publish_update();
     }
 }
 
@@ -598,6 +622,7 @@ impl SessionRegistry {
             created_at: now,
             retired_at: None,
             native_create_attempted: false,
+            updates: None,
         };
         inner.sessions.insert(session_id.clone(), session);
         inner
@@ -651,6 +676,7 @@ impl SessionRegistry {
                 if fresh {
                     session.status = SessionStatus::Running;
                     session.input_available = true;
+                    session.publish_update();
                 }
                 Ok((session.to_dto(), fresh))
             }
@@ -672,6 +698,36 @@ impl SessionRegistry {
             return Err(SessionError::NotFound);
         }
         Ok(session.to_dto())
+    }
+
+    /// Subscribe to exactly the session/runtime authorized by a consumed attachment ticket.
+    /// Creating/subscribing under the mutation lock closes the snapshot/subscription race;
+    /// callers read the receiver's initial value before awaiting subsequent changes.
+    pub async fn subscribe_session(
+        &self,
+        session_id: &str,
+        principal: &str,
+        is_dev: bool,
+        profile_epoch: u64,
+        browser_incarnation: &str,
+    ) -> Result<watch::Receiver<ServerControlEvent>, SessionError> {
+        let mut inner = self.inner.write().await;
+        let session = inner.sessions.get_mut(session_id).ok_or(SessionError::NotFound)?;
+        if session.owner_principal != principal
+            || session.is_dev != is_dev
+            || session.profile_epoch != profile_epoch
+            || session.browser_incarnation != browser_incarnation
+        {
+            return Err(SessionError::NotFound);
+        }
+        if let Some(updates) = &session.updates {
+            return Ok(updates.subscribe());
+        }
+        let (updates, receiver) = watch::channel(session.updated_event());
+        if session.status.holds_slot() {
+            session.updates = Some(updates);
+        }
+        Ok(receiver)
     }
 
     pub async fn snapshot(
@@ -748,6 +804,7 @@ impl SessionRegistry {
             None => {
                 session.native_target_id = Some(target_id.to_string());
                 session.unavailable_reason = None;
+                session.publish_update();
                 BindOutcome::Bound
             }
         }
@@ -767,6 +824,7 @@ impl SessionRegistry {
         if let Some(session) = inner.sessions.get_mut(session_id) {
             if session.status == SessionStatus::Initializing {
                 session.unavailable_reason = Some(message.to_string());
+                session.publish_update();
             }
         }
     }
@@ -798,6 +856,7 @@ impl SessionRegistry {
         session.status = SessionStatus::Running;
         session.input_available = true;
         session.unavailable_reason = None;
+        session.publish_update();
         Ok(session.to_dto())
     }
 
@@ -815,11 +874,13 @@ impl SessionRegistry {
         if let Some(target_id) = session.native_target_id.clone() {
             session.status = SessionStatus::Closing;
             session.input_available = false;
+            session.publish_update();
             self.publish_count(&inner);
             return RollbackOutcome::Closing { target_id };
         }
         let principal = session.owner_principal.clone();
         let key = session.creation_key.clone();
+        session.retire(SessionStatus::Closed, None);
         inner.sessions.remove(session_id);
         inner.gates.remove(session_id);
         if let Some(recs) = inner.creation_records.get_mut(&principal) {
@@ -858,6 +919,7 @@ impl SessionRegistry {
                 session.input_available = false;
                 session.lease = None;
                 session.active_dialog = None;
+                session.publish_update();
                 let action = CloseAction::Native {
                     target_id: session.native_target_id.clone(),
                     browser_incarnation: session.browser_incarnation.clone(),
@@ -970,6 +1032,7 @@ impl SessionRegistry {
         if inner.occupied() >= max_targets {
             if let Some(parent) = inner.sessions.get_mut(&parent_id) {
                 parent.popup_blocked = true;
+                parent.publish_update();
             }
             return PopupAdmission::Blocked {
                 parent_session_id: parent_id,
@@ -1002,6 +1065,7 @@ impl SessionRegistry {
             created_at: Instant::now(),
             retired_at: None,
             native_create_attempted: false,
+            updates: None,
         };
         let dto = session.to_dto();
         inner.sessions.insert(session_id, session);
@@ -1194,6 +1258,7 @@ impl SessionRegistry {
         let parsed = validate_navigation_url(raw_url, session.is_dev, allowed_origins)?;
         session.url = parsed.to_string();
         session.navigation_revision = session.navigation_revision.saturating_add(1);
+        session.publish_update();
 
         Ok(session.to_dto())
     }
@@ -1235,6 +1300,7 @@ impl SessionRegistry {
 
         // In practice this triggers CDP Page.navigateToHistoryEntry; we advance revision
         session.navigation_revision = session.navigation_revision.saturating_add(1);
+        session.publish_update();
 
         Ok(session.to_dto())
     }
@@ -1268,6 +1334,7 @@ impl SessionRegistry {
         }
 
         session.navigation_revision = session.navigation_revision.saturating_add(1);
+        session.publish_update();
 
         Ok(session.to_dto())
     }
@@ -1311,6 +1378,7 @@ impl SessionRegistry {
         session.geometry.css_width = clamped_w as f64;
         session.geometry.css_height = clamped_h as f64;
         session.geometry.dpr = clamped_dpr;
+        session.publish_update();
 
         Ok(session.to_dto())
     }
@@ -1318,11 +1386,14 @@ impl SessionRegistry {
     pub async fn update_title(&self, session_id: &str, title: &str) {
         let mut inner = self.inner.write().await;
         if let Some(s) = inner.sessions.get_mut(session_id) {
-            let mut truncated = title.to_string();
-            if truncated.len() > MAX_TITLE_BYTES {
-                truncated.truncate(MAX_TITLE_BYTES);
+            let mut end = title.len().min(MAX_TITLE_BYTES);
+            while !title.is_char_boundary(end) {
+                end -= 1;
             }
-            s.title = truncated;
+            if s.title != title[..end] {
+                s.title = title[..end].to_string();
+                s.publish_update();
+            }
         }
     }
     /// Marks that an API-originated navigation (`navigate`/`history`/`reload`) just bumped
@@ -1364,6 +1435,7 @@ impl SessionRegistry {
                 session.url = parsed.to_string();
             }
         }
+        session.publish_update();
         Some(session.navigation_revision)
     }
 
@@ -1400,6 +1472,7 @@ impl SessionRegistry {
                     } else {
                         s.input_available = false;
                     }
+                    s.publish_update();
                 }
             }
         }
@@ -1603,3 +1676,7 @@ mod tests {
         assert_eq!(registry.retained_session_count().await, 0);
     }
 }
+
+#[cfg(test)]
+#[path = "session-state-tests.rs"]
+mod state_tests;

@@ -11,7 +11,7 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 use tokio::time::{interval, sleep, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -32,12 +32,11 @@ use crate::browser_host::manager::{
     BrowserInstanceHandle, NativeCloseOutcome, NativeControl, NativeControlError,
     NativeCreateError, NativeFaults, NativePumpRequest,
 };
-use crate::browser_host::network_policy::NetworkPolicy;
 use crate::browser_host::protocol::{
     unpack_bhjf_frame, MediaClientControl, ServerControlEvent, TargetGeometry, CONTROL_SUBPROTOCOL,
     MEDIA_SUBPROTOCOL, TICKET_SUBPROTOCOL_PREFIX,
 };
-use crate::browser_host::screencast::{ContainmentEscalation, ScreencastProducer};
+use crate::browser_host::screencast::ScreencastProducer;
 use crate::browser_host::session::{
     BindOutcome, BrowserSessionDto, CloseAction, CreateParams, CreateReservation,
     CreateSessionRequest, RollbackOutcome, SessionError, SessionSnapshot, SessionStatus,
@@ -444,8 +443,8 @@ async fn adopt_found_page(
     }
 }
 
-/// Attaches the producer (request policy installed before any navigation), runs the first
-/// managed navigation when the page was never navigated, and starts the navigation watcher.
+/// Attaches an isolated producer transport after the manager installed browser-wide policy,
+/// runs the first managed navigation, and starts the navigation watcher.
 async fn build_producer(
     state: &AppState,
     control: &NativeControl,
@@ -454,24 +453,12 @@ async fn build_producer(
     target_id: &str,
     navigate: bool,
 ) -> Result<(Arc<ScreencastProducer>, String), SessionError> {
-    let policy = NetworkPolicy::from_config(state.browser_host.config(), snapshot.is_dev).map_err(
-        |err| SessionError::Internal(format!("invalid network policy configuration: {err}")),
-    )?;
+    // Keep page events and screencast credits isolated from the manager's observer session
+    // and from other producers. Browser Fetch still wraps these pages' loader factories.
     let client = CdpClient::connect(&control.ws_endpoint)
         .await
         .map_err(|err| SessionError::NativeUnavailable(format!("CDP connect failed: {err}")))?;
     let viewport_epoch = snapshot.dto.viewport_epoch.parse::<u64>().unwrap_or(1);
-    // Containment of a worker that cannot be policed or stopped belongs to the manager that
-    // owns the browser process, not to this producer (it is dropped with its page).
-    let escalate: ContainmentEscalation = {
-        let manager = state.browser_host.clone();
-        let subject = control.subject.clone();
-        let is_dev = control.is_dev;
-        let incarnation = control.browser_incarnation.clone();
-        Arc::new(move |reason: &str| {
-            manager.contain_incarnation(&subject, is_dev, &incarnation, reason)
-        })
-    };
     let producer = Arc::new(
         ScreencastProducer::new(
             session_id.to_string(),
@@ -481,8 +468,7 @@ async fn build_producer(
             client,
             target_id.to_string(),
             snapshot.dto.geometry.clone(),
-        )
-        .with_request_policy(Arc::new(policy), escalate),
+        ),
     );
     let page_sid = producer.ensure_page_session().await.map_err(|err| {
         SessionError::NativeUnavailable(format!("browser page session setup failed: {err}"))
@@ -511,9 +497,10 @@ async fn build_producer(
                                 if matches!(
                                     &*ev,
                                     CdpLifecycleEvent::FrameNavigated {
+                                        session_id: event_session_id,
                                         is_main_frame: true,
                                         ..
-                                    }
+                                    } if event_session_id.as_deref() == Some(page_sid.as_str())
                                 ) =>
                             {
                                 break
@@ -1353,6 +1340,26 @@ pub async fn control_ws_handler(
     let viewer_id = admitted.viewer_id.clone().unwrap_or_default();
     let sub_epoch = admitted.subscription_epoch.clone().unwrap_or_default();
     let effective_deadline = admitted.effective_deadline;
+    let updates = match global_session_registry()
+        .subscribe_session(
+            &session_id,
+            &admitted.principal,
+            admitted.is_dev,
+            admitted.profile_epoch,
+            &admitted.browser_incarnation,
+        )
+        .await
+    {
+        Ok(updates) => updates,
+        Err(_) => {
+            att_manager.unregister_connection(conn_id).await;
+            return browser_error_response(
+                StatusCode::NOT_FOUND,
+                "sessionNotFound",
+                "browser session not found",
+            );
+        }
+    };
 
     ws.protocols([CONTROL_SUBPROTOCOL])
         .max_message_size(MAX_CONTROL_MESSAGE_BYTES)
@@ -1360,6 +1367,9 @@ pub async fn control_ws_handler(
         .on_upgrade(move |socket| {
             run_control_session(
                 socket,
+                state,
+                adm,
+                updates,
                 session_id,
                 viewer_id,
                 sub_epoch,
@@ -1372,6 +1382,9 @@ pub async fn control_ws_handler(
 
 async fn run_control_session(
     socket: WebSocket,
+    state: AppState,
+    admission: BrowserAdmission,
+    mut updates: watch::Receiver<ServerControlEvent>,
     session_id: String,
     viewer_id: String,
     subscription_epoch: String,
@@ -1382,27 +1395,15 @@ async fn run_control_session(
     let (mut ws_sink, mut ws_stream) = socket.split();
     let input_manager = crate::api::browser_host::get_or_create_input_manager(&session_id).await;
 
-    // Send initial status event
-    let status_evt = ServerControlEvent::Status {
-        input_available: true,
-        unavailable_reason: None,
-    };
-    if let Ok(json_text) = serde_json::to_string(&status_evt) {
-        let _ = ws_sink.send(AxumWsMessage::Text(json_text.into())).await;
-    }
-
     let mut message_count_in_sec = 0usize;
     let mut rate_window_start = Instant::now();
+    let mut initial_update = true;
 
     let deadline_sleep = match effective_deadline {
         Some(dl) => {
             let duration = dl.signed_duration_since(Utc::now());
-            if duration.num_milliseconds() <= 0 {
-                return;
-            }
-            Some(sleep(Duration::from_millis(
-                duration.num_milliseconds() as u64
-            )))
+            let duration = duration.to_std().unwrap_or(Duration::ZERO);
+            Some(sleep(duration))
         }
         None => None,
     };
@@ -1410,6 +1411,7 @@ async fn run_control_session(
 
     loop {
         tokio::select! {
+            biased;
             _ = cancel_token.cancelled() => {
                 debug!(viewer_id = %viewer_id, "control session cancelled by auth supervisor");
                 break;
@@ -1423,6 +1425,36 @@ async fn run_control_session(
             } => {
                 warn!(viewer_id = %viewer_id, "control session reached absolute auth deadline; closing");
                 break;
+            }
+            changed = async {
+                if initial_update {
+                    Ok(())
+                } else {
+                    updates.changed().await
+                }
+            } => {
+                initial_update = false;
+                if changed.is_err() {
+                    break;
+                }
+                // Release the watch borrow before the socket await: producers never wait on
+                // a slow viewer and only one latest-state slot is retained per session.
+                let Ok((json, retired)) = serialize_control_snapshot(&mut updates) else {
+                    break;
+                };
+                let Some(deadline) = control_write_deadline(effective_deadline) else {
+                    break;
+                };
+                let sent = tokio::select! {
+                    biased;
+                    _ = cancel_token.cancelled() => false,
+                    result = timeout(deadline, ws_sink.send(AxumWsMessage::Text(json.into()))) => {
+                        matches!(result, Ok(Ok(())))
+                    }
+                };
+                if !sent || retired {
+                    break;
+                }
             }
             msg = ws_stream.next() => {
                 let msg = match msg {
@@ -1494,6 +1526,34 @@ async fn run_control_session(
         }
     }
 
+    // Native retirement can publish and revoke attachments in the same scheduler turn.
+    // Best-effort final truth must not bypass auth revocation: recheck live admission,
+    // bounded by the existing write/auth deadline, before writing on a cancelled pair.
+    let non_running = matches!(
+        &*updates.borrow(),
+        ServerControlEvent::SessionUpdated { session } if session.status != "running"
+    );
+    if cancel_token.is_cancelled() && non_running {
+        if let Some(deadline) = control_write_deadline(effective_deadline) {
+            if matches!(
+                timeout(deadline, verify_live_admission(&state, &admission)).await,
+                Ok(Ok(()))
+            ) {
+                if let (Some(deadline), Ok((json, _))) = (
+                    control_write_deadline(effective_deadline),
+                    serialize_control_snapshot(&mut updates),
+                ) {
+                    let _ = timeout(
+                        deadline,
+                        ws_sink.send(AxumWsMessage::Text(json.into())),
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+    drop(updates);
+
     // Teardown: revoke lease only if this viewer is the current lease holder
     if input_manager.is_lease_holder(&viewer_id).await {
         let releases = input_manager.revoke_lease().await;
@@ -1512,6 +1572,115 @@ async fn run_control_session(
     global_attachment_manager()
         .unregister_connection(conn_id)
         .await;
+    let _ = timeout(WRITE_DEADLINE, ws_sink.send(AxumWsMessage::Close(None))).await;
+}
+
+fn serialize_control_snapshot(
+    updates: &mut watch::Receiver<ServerControlEvent>,
+) -> Result<(String, bool), serde_json::Error> {
+    let event = updates.borrow_and_update();
+    let retired = matches!(
+        &*event,
+        ServerControlEvent::SessionUpdated { session }
+            if session.status == "closed" || session.status == "lost"
+    );
+    serde_json::to_string(&*event).map(|json| (json, retired))
+}
+
+fn control_write_deadline(effective_deadline: Option<DateTime<Utc>>) -> Option<Duration> {
+    match effective_deadline {
+        Some(deadline) => deadline
+            .signed_duration_since(Utc::now())
+            .to_std()
+            .ok()
+            .filter(|remaining| !remaining.is_zero())
+            .map(|remaining| remaining.min(WRITE_DEADLINE)),
+        None => Some(WRITE_DEADLINE),
+    }
+}
+
+/// Chromium does not derive its Windows virtual key code from DOM `key`/`code`.
+/// Editing bindings and accelerators use this platform-independent value even on Linux;
+/// `nativeVirtualKeyCode` is deliberately omitted because it is host-platform specific.
+fn keyboard_virtual_key_code(key: &str, code: &str) -> u32 {
+    match key {
+        "Backspace" => return 8,
+        "Tab" => return 9,
+        "Enter" => return 13,
+        "Shift" => return 16,
+        "Control" => return 17,
+        "Alt" => return 18,
+        "Escape" => return 27,
+        " " => return 32,
+        "PageUp" => return 33,
+        "PageDown" => return 34,
+        "End" => return 35,
+        "Home" => return 36,
+        "ArrowLeft" => return 37,
+        "ArrowUp" => return 38,
+        "ArrowRight" => return 39,
+        "ArrowDown" => return 40,
+        "Insert" => return 45,
+        "Delete" => return 46,
+        "Dead" | "Process" | "Unidentified" => return 0,
+        _ => {}
+    }
+    // Prefer the layout-resolved letter for shortcuts (e.g. Ctrl+A on AZERTY).
+    if let [letter] = key.as_bytes() {
+        if letter.is_ascii_alphabetic() {
+            return u32::from(letter.to_ascii_uppercase());
+        }
+    }
+    match code.as_bytes() {
+        [b'K', b'e', b'y', letter @ b'A'..=b'Z'] => u32::from(*letter),
+        [b'D', b'i', b'g', b'i', b't', digit @ b'0'..=b'9'] => u32::from(*digit),
+        _ => match code {
+            "ShiftLeft" | "ShiftRight" => 16,
+            "ControlLeft" | "ControlRight" => 17,
+            "AltLeft" | "AltRight" => 18,
+            "MetaLeft" => 91,
+            "MetaRight" => 92,
+            "Space" => 32,
+            "Semicolon" => 186,
+            "Equal" => 187,
+            "Comma" => 188,
+            "Minus" => 189,
+            "Period" => 190,
+            "Slash" => 191,
+            "Backquote" => 192,
+            "BracketLeft" => 219,
+            "Backslash" => 220,
+            "BracketRight" => 221,
+            "Quote" => 222,
+            _ => 0,
+        },
+    }
+}
+
+fn keyboard_event_params(key: &str, code: &str, modifiers: u32, down: bool) -> serde_json::Value {
+    // Enter needs Chromium's character phase for newline insertion/form submission.
+    // All printable/IME text still arrives exclusively through Input.insertText.
+    let enter_text = down && key == "Enter" && modifiers & (1 | 2 | 4) == 0;
+    let mut params = serde_json::json!({
+        "type": if !down { "keyUp" } else if enter_text { "keyDown" } else { "rawKeyDown" },
+        "key": key,
+        "code": code,
+        "modifiers": modifiers,
+        "windowsVirtualKeyCode": keyboard_virtual_key_code(key, code),
+    });
+    if enter_text {
+        params["text"] = serde_json::json!("\r");
+        params["unmodifiedText"] = serde_json::json!("\r");
+    }
+    if code.starts_with("Numpad") {
+        params["isKeypad"] = serde_json::json!(true);
+        params["location"] = serde_json::json!(3);
+    } else if code.ends_with("Left") && matches!(key, "Shift" | "Control" | "Alt" | "Meta") {
+        params["location"] = serde_json::json!(1);
+    } else if code.ends_with("Right") && matches!(key, "Shift" | "Control" | "Alt" | "Meta") {
+        params["location"] = serde_json::json!(2);
+    }
+    params
 }
 
 pub async fn dispatch_input_event_to_cdp(
@@ -1632,12 +1801,7 @@ pub async fn dispatch_input_event_to_cdp(
             code,
             modifiers,
         } => {
-            let params = serde_json::json!({
-                "type": "rawKeyDown",
-                "key": key,
-                "code": code,
-                "modifiers": modifiers,
-            });
+            let params = keyboard_event_params(key, code, *modifiers, true);
             let _ = client
                 .send_command(
                     "Input.dispatchKeyEvent",
@@ -1651,12 +1815,7 @@ pub async fn dispatch_input_event_to_cdp(
             code,
             modifiers,
         } => {
-            let params = serde_json::json!({
-                "type": "keyUp",
-                "key": key,
-                "code": code,
-                "modifiers": modifiers,
-            });
+            let params = keyboard_event_params(key, code, *modifiers, false);
             let _ = client
                 .send_command(
                     "Input.dispatchKeyEvent",
@@ -1676,3 +1835,7 @@ pub async fn dispatch_input_event_to_cdp(
         InputEvent::PointerCancel => {}
     }
 }
+
+#[cfg(test)]
+#[path = "media_keyboard_tests.rs"]
+mod keyboard_tests;

@@ -1,0 +1,50 @@
+{
+  "run_id": "e2e-run-1794306711204-9a595ae0",
+  "command": "pnpm --filter @dam-hopper/ui test:e2e",
+  "started_at": "2026-11-10T10:31:51.204Z",
+  "completed_at": "2026-11-10T10:32:05.845Z",
+  "case_name": "navigation",
+  "route": "/os",
+  "git_head": "08901a146ce4dc5ecaeeff540c6669c500621f6e",
+  "source_fingerprint": "b3257ff4961d46f6a87ee14730a21ef77257b01f88f476f7a751fc77d48accf2",
+  "seed_digest": "isolated-browser-navigation-worker-fixture",
+  "browser": "chromium",
+  "browser_version": "157.0.8103.38",
+  "os": "linux",
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "device_pixel_ratio": 1,
+  "checkpoints": [
+    {
+      "checkpoint": "typed",
+      "file_name": "typed.png",
+      "sha256": "9faed2d7924d2e69968976659540192d2df2de9d99edf9ffa071cffd650a86ef",
+      "dimensions": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "checkpoint": "navigated",
+      "file_name": "navigated.png",
+      "sha256": "58cdcbb956c904bca770e0261486b2629632d24bd28b232b245602a7312cfd67",
+      "dimensions": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "checkpoint": "restored",
+      "file_name": "restored.png",
+      "sha256": "0a3656c7f9625b6c65df865412e948933956d9f1f4619ba94bcfac182cfd9d37",
+      "dimensions": {
+        "width": 1440,
+        "height": 1000
+      }
+    }
+  ],
+  "functional_outcome": "passed",
+  "cleanup_outcome": "passed"
+}

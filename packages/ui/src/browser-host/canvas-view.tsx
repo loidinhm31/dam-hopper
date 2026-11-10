@@ -92,7 +92,12 @@ export const CanvasView = React.forwardRef<HTMLCanvasElement, CanvasViewProps>(
         <canvas
           ref={setCanvasRef}
           className="absolute inset-0 w-full h-full touch-none"
-          onPointerDown={onCanvasPointerDown}
+          onPointerDown={(event) => {
+            // Preserve the consumer's text proxy focus: the native mouse-down default
+            // otherwise focuses this canvas's tabindex-bearing ancestor instead.
+            event.preventDefault();
+            onCanvasPointerDown?.(event);
+          }}
           onPointerUp={onCanvasPointerUp}
           onPointerMove={onCanvasPointerMove}
           onPointerCancel={onCanvasPointerCancel}

@@ -1513,20 +1513,16 @@ pub(crate) async fn ensure_session_navigation_watcher(
                             record_navigation_queue_cleanup(&state_clone, &sid_owned, None).await;
                         }
                         CdpLifecycleEvent::FrameNavigated { session_id: evt_sid, is_main_frame, url, .. } => {
-                            if let Some(es) = evt_sid.as_deref() {
-                                if es != page_sid_owned {
-                                    continue;
-                                }
+                            if evt_sid.as_deref() != Some(page_sid_owned.as_str()) {
+                                continue;
                             }
                             if *is_main_frame {
                                 record_navigation_queue_cleanup(&state_clone, &sid_owned, url.as_deref()).await;
                             }
                         }
                         CdpLifecycleEvent::NavigatedWithinDocument { session_id: evt_sid, url, .. } => {
-                            if let Some(es) = evt_sid.as_deref() {
-                                if es != page_sid_owned {
-                                    continue;
-                                }
+                            if evt_sid.as_deref() != Some(page_sid_owned.as_str()) {
+                                continue;
                             }
                             record_navigation_queue_cleanup(&state_clone, &sid_owned, url.as_deref()).await;
                         }
@@ -1653,7 +1649,7 @@ async fn run_selection_cdp_observer(
                     }
                     CdpLifecycleEvent::FrameNavigated { session_id: evt_sid, is_main_frame: true, .. }
                     | CdpLifecycleEvent::NavigatedWithinDocument { session_id: evt_sid, .. } => {
-                        if evt_sid.as_deref().is_none_or(|es| es == page_sid) {
+                        if evt_sid.as_deref() == Some(page_sid.as_str()) {
                             break;
                         }
                     }
@@ -1661,10 +1657,8 @@ async fn run_selection_cdp_observer(
                     CdpLifecycleEvent::InspectNodeRequested { session_id: evt_sid, backend_node_id, .. }
                         if watch_inspect =>
                     {
-                        if let Some(es) = evt_sid.as_deref() {
-                            if es != page_sid {
-                                continue;
-                            }
+                        if evt_sid.as_deref() != Some(page_sid.as_str()) {
+                            continue;
                         }
                         let bn_id = *backend_node_id;
                         if let Ok(resolved) = cdp

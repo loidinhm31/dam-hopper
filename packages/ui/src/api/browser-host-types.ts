@@ -67,10 +67,10 @@ export interface BrowserCapabilitiesResponse {
 }
 
 export type BrowserSessionStatus =
-  | "starting"
+  | "initializing"
   | "running"
-  | "stopping"
-  | "crashed"
+  | "closing"
+  | "lost"
   | "closed";
 
 export interface TargetGeometry {
@@ -259,6 +259,10 @@ export type MediaClientControl =
     };
 
 export type ServerControlEvent =
+  | {
+      kind: "sessionUpdated";
+      session: BrowserSessionDto;
+    }
   | {
       kind: "dialogOpened";
       dialogId: string;
