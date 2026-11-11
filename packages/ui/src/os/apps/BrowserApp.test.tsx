@@ -7,7 +7,16 @@ import type * as BrowserHostClientModule from "@/api/browser-host-client.js";
 import type { OsWindow } from "../types.js";
 import { BrowserHostClientError } from "@/api/browser-host-types.js";
 
-const { owner, store, api, requestProxyFocus } = vi.hoisted(() => ({
+const {
+  owner,
+  store,
+  api,
+  requestProxyFocus,
+  requestAudioUnlock,
+  registerStreamSlot,
+  updateStreamSlot,
+  audioBlockedState,
+} = vi.hoisted(() => ({
   owner: { profileId: "profile-1", generation: 1 },
   store: { session: { windows: {} as Record<string, OsWindow> }, updateAppState: vi.fn() },
   api: {
@@ -19,6 +28,10 @@ const { owner, store, api, requestProxyFocus } = vi.hoisted(() => ({
     releaseBrowserControl: vi.fn(),
   },
   requestProxyFocus: vi.fn(),
+  requestAudioUnlock: vi.fn(),
+  registerStreamSlot: vi.fn(() => () => {}),
+  updateStreamSlot: vi.fn(),
+  audioBlockedState: { blocked: false, listeners: new Set<() => void>() },
 }));
 vi.mock("@/api/browser-host-client.js", async (original) => ({
   ...await original<typeof BrowserHostClientModule>(), ...api,
@@ -36,10 +49,16 @@ vi.mock("../window-context.js", () => ({
 vi.mock("../resource-registry.js", () => ({ useResourceClaim: () => ({ success: true }) }));
 vi.mock("@/stores/cognito-mode.js", () => ({ useCognitoModeStore: () => false }));
 vi.mock("../BrowserStreamKeepAliveHost.js", () => ({
-  registerBrowserStreamSlot: () => () => {},
-  updateBrowserStreamSlot: () => {},
+  registerBrowserStreamSlot: registerStreamSlot,
+  updateBrowserStreamSlot: updateStreamSlot,
   clearBrowserViewFenceForProfile: () => {},
   requestBrowserProxyFocus: requestProxyFocus,
+  requestBrowserAudioUnlock: requestAudioUnlock,
+  isBrowserAudioBlocked: () => audioBlockedState.blocked,
+  subscribeBrowserAudioBlocked: (fn: () => void) => {
+    audioBlockedState.listeners.add(fn);
+    return () => audioBlockedState.listeners.delete(fn);
+  },
 }));
 vi.mock("@/browser-host/selection-controller.js", () => ({
   collectHostTerminalCandidates: () => [], useHostBrowserSelection: () => ({}),
@@ -80,6 +99,11 @@ beforeEach(async () => {
   });
   api.releaseBrowserControl.mockReset().mockResolvedValue({ released: true });
   requestProxyFocus.mockReset();
+  requestAudioUnlock.mockReset();
+  updateStreamSlot.mockReset();
+  registerStreamSlot.mockClear();
+  audioBlockedState.blocked = false;
+  audioBlockedState.listeners.clear();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -325,5 +349,64 @@ describe("BrowserApp native-navigation CAS", () => {
       url: "https://accounts.google.com",
     });
     expect(typeof store.session.windows["window-1"].appState?.creationKey).toBe("string");
+  });
+
+  it("toggles viewer-local audio mute without re-registering slot or requiring control lease, and surfaces Unlock Audio when blocked", async () => {
+    const audioBtn = container.querySelector(
+      '[data-testid="browser-audio-toggle-btn"]',
+    ) as HTMLButtonElement;
+    expect(audioBtn).toBeTruthy();
+    expect(audioBtn.getAttribute("aria-label")).toBe("Mute audio");
+    expect(audioBtn.getAttribute("aria-pressed")).toBe("false");
+    expect(audioBtn.textContent).toBe("Audio");
+    expect(registerStreamSlot).toHaveBeenCalledTimes(1);
+
+    updateStreamSlot.mockClear();
+    await act(async () => {
+      audioBtn.click();
+    });
+    expect(audioBtn.getAttribute("aria-label")).toBe("Unmute audio");
+    expect(audioBtn.getAttribute("aria-pressed")).toBe("true");
+    expect(audioBtn.textContent).toBe("Muted");
+    expect(registerStreamSlot).toHaveBeenCalledTimes(1);
+    expect(updateStreamSlot).toHaveBeenCalledWith(
+      "window-1",
+      expect.any(HTMLElement),
+      true,
+      true,
+    );
+    expect(api.acquireBrowserControl).not.toHaveBeenCalled();
+    expect(requestAudioUnlock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      audioBtn.click();
+    });
+    expect(audioBtn.getAttribute("aria-label")).toBe("Mute audio");
+    expect(audioBtn.getAttribute("aria-pressed")).toBe("false");
+    expect(registerStreamSlot).toHaveBeenCalledTimes(1);
+    expect(requestAudioUnlock).toHaveBeenCalledExactlyOnceWith(
+      "window-1",
+      owner,
+      "session-1",
+    );
+
+    // Autoplay blocked surfaces "Unlock Audio" and clicking unlocks without muting
+    requestAudioUnlock.mockClear();
+    await act(async () => {
+      audioBlockedState.blocked = true;
+      audioBlockedState.listeners.forEach((fn) => fn());
+    });
+    expect(audioBtn.getAttribute("aria-label")).toBe("Unlock audio");
+    expect(audioBtn.getAttribute("aria-pressed")).toBe("false");
+    expect(audioBtn.textContent).toBe("Unlock Audio");
+    await act(async () => {
+      audioBtn.click();
+    });
+    expect(audioBtn.getAttribute("aria-pressed")).toBe("false");
+    expect(requestAudioUnlock).toHaveBeenCalledExactlyOnceWith(
+      "window-1",
+      owner,
+      "session-1",
+    );
   });
 });

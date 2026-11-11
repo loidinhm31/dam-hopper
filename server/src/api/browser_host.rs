@@ -617,18 +617,31 @@ pub async fn navigate_session(
             let input_mgr = get_or_create_input_manager(&id).await;
             input_mgr.set_selected_text("").await;
             if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
+                let parsed_rev = dto.navigation_revision.parse::<u64>().ok();
+                if let Some(rev) = parsed_rev {
+                    prod.request_audio_doc_epoch(rev);
+                }
                 global_session_registry()
                     .mark_api_navigation_pending(&id)
                     .await;
                 if let Ok(page_sid) = prod.ensure_page_session().await {
-                    let _ = prod
-                        .cdp_client
-                        .send_command(
+                    let _ = if let Some(rev) = parsed_rev {
+                        prod.dispatch_navigation_for_epoch(
+                            rev,
                             "Page.navigate",
                             Some(json!({ "url": dto.url })),
-                            Some(&page_sid),
+                            &page_sid,
                         )
-                        .await;
+                        .await
+                    } else {
+                        prod.cdp_client
+                            .send_command(
+                                "Page.navigate",
+                                Some(json!({ "url": dto.url })),
+                                Some(&page_sid),
+                            )
+                            .await
+                    };
                 }
             }
             no_store_response(
@@ -684,9 +697,8 @@ pub async fn history_session(
     {
         Ok(dto) => {
             if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
-                global_session_registry()
-                    .mark_api_navigation_pending(&id)
-                    .await;
+                let parsed_rev = dto.navigation_revision.parse::<u64>().ok();
+                let mut dispatched = false;
                 if let Ok(page_sid) = prod.ensure_page_session().await {
                     if let Ok(hist) = prod
                         .cdp_client
@@ -703,21 +715,47 @@ pub async fn history_session(
                                 idx + 1
                             };
                             if target_idx >= 0 && (target_idx as usize) < entries.len() {
+                                let entry_url = entries[target_idx as usize]
+                                    .get("url")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_string);
                                 if let Some(entry_id) = entries[target_idx as usize]
                                     .get("id")
                                     .and_then(|v| v.as_i64())
                                 {
-                                    let _ = prod
-                                        .cdp_client
-                                        .send_command(
+                                    if let Some(rev) = parsed_rev {
+                                        prod.request_audio_doc_epoch(rev);
+                                    }
+                                    global_session_registry()
+                                        .mark_api_navigation_pending(&id)
+                                        .await;
+                                    dispatched = true;
+                                    let _ = if let Some(rev) = parsed_rev {
+                                        prod.dispatch_navigation_for_epoch_with_url(
+                                            rev,
                                             "Page.navigateToHistoryEntry",
                                             Some(json!({ "entryId": entry_id })),
-                                            Some(&page_sid),
+                                            &page_sid,
+                                            entry_url.as_deref(),
                                         )
-                                        .await;
+                                        .await
+                                    } else {
+                                        prod.cdp_client
+                                            .send_command(
+                                                "Page.navigateToHistoryEntry",
+                                                Some(json!({ "entryId": entry_id })),
+                                                Some(&page_sid),
+                                            )
+                                            .await
+                                    };
                                 }
                             }
                         }
+                    }
+                }
+                if !dispatched {
+                    if let Some(rev) = parsed_rev {
+                        prod.resolve_noop_audio_doc_epoch(rev);
                     }
                 }
             }
@@ -768,14 +806,22 @@ pub async fn reload_session(
     {
         Ok(dto) => {
             if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
+                let parsed_rev = dto.navigation_revision.parse::<u64>().ok();
+                if let Some(rev) = parsed_rev {
+                    prod.request_audio_doc_epoch(rev);
+                }
                 global_session_registry()
                     .mark_api_navigation_pending(&id)
                     .await;
                 if let Ok(page_sid) = prod.ensure_page_session().await {
-                    let _ = prod
-                        .cdp_client
-                        .send_command("Page.reload", None, Some(&page_sid))
-                        .await;
+                    let _ = if let Some(rev) = parsed_rev {
+                        prod.dispatch_navigation_for_epoch(rev, "Page.reload", None, &page_sid)
+                            .await
+                    } else {
+                        prod.cdp_client
+                            .send_command("Page.reload", None, Some(&page_sid))
+                            .await
+                    };
                 }
             }
             no_store_response(

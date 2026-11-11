@@ -3,18 +3,29 @@ import { act, createElement, type ReactNode, type Ref } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OsWindow } from "./types.js";
-import type { BrowserSessionDto, ServerControlEvent } from "@/api/browser-host-types.js";
+import type { BrowserAudioChunk, BrowserSessionDto, ServerControlEvent } from "@/api/browser-host-types.js";
 import type * as BrowserHostClientModule from "@/api/browser-host-client.js";
 import type { ViewerAttachmentCredentials } from "@/api/browser-host-client.js";
 import type { StreamControllerOptions } from "@/browser-host/stream-controller.js";
 import { BrowserHostClientError } from "@/api/browser-host-types.js";
 import type { CanvasViewProps } from "@/browser-host/canvas-view.js";
-import {
-  BrowserStreamKeepAliveHost,
-  registerBrowserStreamSlot,
-  requestBrowserProxyFocus,
-} from "./BrowserStreamKeepAliveHost.js";
-const { owner, store, getSession, mintTickets, attach, streamState, acquireControl, releaseControl, controlSocket } = vi.hoisted(() => ({
+const {
+  owner,
+  store,
+  getSession,
+  mintTickets,
+  attach,
+  streamState,
+  acquireControl,
+  releaseControl,
+  controlSocket,
+  pcmPlayerMocks,
+  storeListeners,
+  cognitoListeners,
+  lockListeners,
+  connListeners,
+  connState,
+} = vi.hoisted(() => ({
   owner: { profileId: "profile-1", generation: 1 },
   store: { session: { windows: {} as Record<string, OsWindow> }, updateAppState: vi.fn() },
   getSession: vi.fn(), mintTickets: vi.fn(), attach: vi.fn(),
@@ -24,26 +35,65 @@ const { owner, store, getSession, mintTickets, attach, streamState, acquireContr
     suppressed: false,
     locked: false,
     onControlEvent: undefined as StreamControllerOptions["onControlEvent"],
+    onAudioChunk: undefined as StreamControllerOptions["onAudioChunk"],
+    onAudioReset: undefined as StreamControllerOptions["onAudioReset"],
+    resetAudioAuthority: vi.fn(),
     credentials: null as ViewerAttachmentCredentials | null,
   },
   acquireControl: vi.fn(), releaseControl: vi.fn(),
   controlSocket: { readyState: 1, bufferedAmount: 0, send: vi.fn(),
     addEventListener: vi.fn(), removeEventListener: vi.fn() },
+  pcmPlayerMocks: {
+    prime: vi.fn(),
+    enqueue: vi.fn(),
+    flush: vi.fn(),
+    dispose: vi.fn(),
+  },
+  storeListeners: new Set<() => void>(),
+  cognitoListeners: new Set<() => void>(),
+  lockListeners: new Set<() => void>(),
+  connListeners: new Set<() => void>(),
+  connState: { status: "connected" as string, generation: 1 },
 }));
 vi.mock("@/api/connections.js", () => ({
   isCurrentConnection: (captured: { profileId: string; generation: number }) =>
     captured.profileId === owner.profileId && captured.generation === owner.generation,
-  getConnectionSnapshot: () => ({ owner, status: "connected" }),
-  useConnectionSnapshot: () => ({ owner, status: "connected" }),
+  getConnectionSnapshot: () => ({ owner, status: connState.status }),
+  useConnectionSnapshot: () => ({ owner, status: connState.status }),
+  subscribeConnections: (fn: () => void) => {
+    connListeners.add(fn);
+    return () => connListeners.delete(fn);
+  },
 }));
 vi.mock("./window-store.js", () => ({ useWindowStore: Object.assign(
-  (selector: (state: typeof store) => unknown) => selector(store), { getState: () => store },
+  (selector: (state: typeof store) => unknown) => selector(store),
+  {
+    getState: () => store,
+    subscribe: (fn: () => void) => {
+      storeListeners.add(fn);
+      return () => storeListeners.delete(fn);
+    },
+  },
 ) }));
 vi.mock("@/stores/cognito-mode.js", () => ({ useCognitoModeStore: Object.assign(
-  () => streamState.suppressed, { getState: () => ({ active: streamState.suppressed }) },
+  () => streamState.suppressed,
+  {
+    getState: () => ({ active: streamState.suppressed }),
+    subscribe: (fn: () => void) => {
+      cognitoListeners.add(fn);
+      return () => cognitoListeners.delete(fn);
+    },
+  },
 ) }));
 vi.mock("@/stores/lock-screen.js", () => ({ useLockScreenStore: Object.assign(
-  () => streamState.locked, { getState: () => ({ isLocked: streamState.locked }) },
+  () => streamState.locked,
+  {
+    getState: () => ({ isLocked: streamState.locked }),
+    subscribe: (fn: () => void) => {
+      lockListeners.add(fn);
+      return () => lockListeners.delete(fn);
+    },
+  },
 ) }));
 vi.mock("../api/browser-host-client.js", async (original) => ({
   ...await original<typeof BrowserHostClientModule>(), getBrowserSession: getSession, mintViewerAttachmentTickets: mintTickets,
@@ -59,14 +109,27 @@ vi.mock("../browser-host/canvas-view.js", () => ({
       onPointerCancel: props.onCanvasPointerCancel,
     }), children),
 }));
+vi.mock("../browser-host/pcm-player.js", () => ({
+  PcmPlayer: class {
+    prime() { pcmPlayerMocks.prime(); }
+    enqueue(data: string) { pcmPlayerMocks.enqueue(data); }
+    flush() { pcmPlayerMocks.flush(); }
+    dispose() { pcmPlayerMocks.dispose(); }
+  },
+}));
 vi.mock("../browser-host/stream-controller.js", () => ({
   BrowserStreamController: class {
-    constructor(options: StreamControllerOptions) { streamState.onControlEvent = options.onControlEvent; }
+    constructor(options: StreamControllerOptions) {
+      streamState.onControlEvent = options.onControlEvent;
+      streamState.onAudioChunk = options.onAudioChunk;
+      streamState.onAudioReset = options.onAudioReset;
+    }
     attach(credentials: ViewerAttachmentCredentials) {
       streamState.credentials = credentials;
       attach(credentials);
     }
     setPrivacyMode() {} setVisibility() {} dispose() {}
+    resetAudioAuthority(minDocEpoch?: string | number | bigint) { streamState.resetAudioAuthority(minDocEpoch); }
     getStatus() { return streamState.status; }
     getCurrentSubscriptionEpoch() { return streamState.subscriptionEpoch; }
     getControlSocket() { return controlSocket; }
@@ -82,6 +145,8 @@ import {
   fenceBrowserViewsForProfile,
   clearBrowserViewFenceForProfile,
   registerBrowserStreamSlot,
+  requestBrowserAudioUnlock,
+  requestBrowserProxyFocus,
   updateBrowserStreamSlot,
 } from "./BrowserStreamKeepAliveHost.js";
 
@@ -571,5 +636,126 @@ describe("browser first pointer gesture control handoff", () => {
       sessionId: "session-1",
       dismissedPopupSessionId: "popup-B",
     });
+  });
+
+  it("enqueues live audio chunks when visible/unmuted and synchronously flushes BEFORE React rerender on mute, hide, privacy, lock, fence, or navigation", async () => {
+    const chunk: BrowserAudioChunk = {
+      kind: "audioChunk",
+      browserSessionId: "session-1",
+      browserIncarnation: "live-runtime",
+      profileEpoch: "2",
+      producerRun: "11111111-2222-4333-8444-555555555555",
+      subscriptionEpoch: "subscription-1",
+      docEpoch: "1",
+      audioSeq: "1",
+      sampleRate: 24000,
+      channels: 1,
+      encoding: "pcm16le",
+      data: "AAAA",
+    };
+    pcmPlayerMocks.enqueue.mockClear();
+    pcmPlayerMocks.flush.mockClear();
+    pcmPlayerMocks.prime.mockClear();
+    streamState.resetAudioAuthority.mockClear();
+
+    // 1. Gesture unlock primes player when unmuted and visible
+    requestBrowserAudioUnlock("window-1", owner, "session-1");
+    expect(pcmPlayerMocks.prime).toHaveBeenCalledTimes(1);
+
+    // 2. Valid chunk enqueues to player
+    streamState.onAudioChunk?.(chunk, streamState.credentials!);
+    expect(pcmPlayerMocks.enqueue).toHaveBeenCalledExactlyOnceWith("AAAA");
+
+    // 3. Muting slot synchronously flushes player BEFORE any React render/act
+    pcmPlayerMocks.flush.mockClear();
+    updateBrowserStreamSlot("window-1", slot, true, true);
+    expect(pcmPlayerMocks.flush).toHaveBeenCalledTimes(1);
+    streamState.onAudioChunk?.(chunk, streamState.credentials!);
+    expect(pcmPlayerMocks.enqueue).toHaveBeenCalledTimes(1);
+
+    // 4. Unmuting restores playback for new chunks; hiding slot flushes synchronously BEFORE render
+    updateBrowserStreamSlot("window-1", slot, true, false);
+    streamState.onAudioChunk?.({ ...chunk, audioSeq: "2", data: "BBBB" }, streamState.credentials!);
+    expect(pcmPlayerMocks.enqueue).toHaveBeenLastCalledWith("BBBB");
+    pcmPlayerMocks.flush.mockClear();
+    updateBrowserStreamSlot("window-1", slot, false, false);
+    expect(pcmPlayerMocks.flush).toHaveBeenCalledTimes(1);
+    updateBrowserStreamSlot("window-1", slot, true, false);
+
+    // 5. Cognito / LockScreen / profile fence / navigation synchronously flush BEFORE any React render
+    pcmPlayerMocks.flush.mockClear();
+    streamState.suppressed = true;
+    cognitoListeners.forEach((fn) => fn());
+    expect(pcmPlayerMocks.flush).toHaveBeenCalledTimes(1);
+    streamState.onAudioChunk?.({ ...chunk, audioSeq: "3" }, streamState.credentials!);
+    expect(pcmPlayerMocks.enqueue).toHaveBeenCalledTimes(2);
+    streamState.suppressed = false;
+    cognitoListeners.forEach((fn) => fn());
+
+    pcmPlayerMocks.flush.mockClear();
+    streamState.locked = true;
+    lockListeners.forEach((fn) => fn());
+    expect(pcmPlayerMocks.flush).toHaveBeenCalledTimes(1);
+    streamState.onAudioChunk?.({ ...chunk, audioSeq: "4" }, streamState.credentials!);
+    expect(pcmPlayerMocks.enqueue).toHaveBeenCalledTimes(2);
+    streamState.locked = false;
+    lockListeners.forEach((fn) => fn());
+
+    // Window minimize in OS store flushes synchronously BEFORE slot update or React render
+    pcmPlayerMocks.flush.mockClear();
+    store.session.windows["window-1"] = {
+      ...store.session.windows["window-1"],
+      minimized: true,
+    };
+    storeListeners.forEach((fn) => fn());
+    expect(pcmPlayerMocks.flush).toHaveBeenCalledTimes(1);
+    store.session.windows["window-1"] = {
+      ...store.session.windows["window-1"],
+      minimized: false,
+    };
+    storeListeners.forEach((fn) => fn());
+
+    // Connection retirement (status drop) flushes synchronously BEFORE React render
+    pcmPlayerMocks.flush.mockClear();
+    connState.status = "disconnected";
+    connListeners.forEach((fn) => fn());
+    expect(pcmPlayerMocks.flush).toHaveBeenCalledTimes(1);
+    connState.status = "connected";
+    connListeners.forEach((fn) => fn());
+
+    // Navigation revision change flushes player and resets controller audio authority synchronously BEFORE render
+    pcmPlayerMocks.flush.mockClear();
+    streamState.resetAudioAuthority.mockClear();
+    store.session.windows["window-1"] = {
+      ...store.session.windows["window-1"],
+      appState: {
+        ...store.session.windows["window-1"].appState,
+        navigationRevision: "5",
+      },
+    };
+    storeListeners.forEach((fn) => fn());
+    expect(pcmPlayerMocks.flush).toHaveBeenCalledTimes(1);
+    expect(streamState.resetAudioAuthority).toHaveBeenCalledExactlyOnceWith("5");
+
+    // Media-before-control ordering: if docEpoch "6" arrives on media BEFORE navigationRevision "6" store update,
+    // the subsequent navigationRevision "6" update does NOT flush the already-playing docEpoch "6" audio!
+    streamState.onAudioChunk?.({ ...chunk, docEpoch: "6", audioSeq: "5", data: "CCCC" }, streamState.credentials!);
+    expect(pcmPlayerMocks.enqueue).toHaveBeenLastCalledWith("CCCC");
+    pcmPlayerMocks.flush.mockClear();
+    streamState.resetAudioAuthority.mockClear();
+    store.session.windows["window-1"] = {
+      ...store.session.windows["window-1"],
+      appState: {
+        ...store.session.windows["window-1"].appState,
+        navigationRevision: "6",
+      },
+    };
+    storeListeners.forEach((fn) => fn());
+    expect(pcmPlayerMocks.flush).not.toHaveBeenCalled();
+    expect(streamState.resetAudioAuthority).toHaveBeenCalledExactlyOnceWith("6");
+    // Profile reset fence flushes synchronously BEFORE render
+    pcmPlayerMocks.flush.mockClear();
+    fenceBrowserViewsForProfile(owner.profileId, "Reset", owner.generation);
+    expect(pcmPlayerMocks.flush).toHaveBeenCalled();
   });
 });

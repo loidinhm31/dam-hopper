@@ -155,6 +155,7 @@ pub enum CdpLifecycleEvent {
         session_id: Option<String>,
         is_main_frame: bool,
         url: Option<String>,
+        loader_id: Option<String>,
         _reservation: Option<Arc<MemoryReservation>>,
     },
     NavigatedWithinDocument {
@@ -228,9 +229,137 @@ struct BrowserRequestPolicy {
 
 type SharedRequestPolicy = Arc<std::sync::RwLock<Option<BrowserRequestPolicy>>>;
 
+pub trait CdpNavigationListener: Send + Sync {
+    fn on_navigation_dispatched(
+        &self,
+        session_id: Option<&str>,
+        call_id: usize,
+        method: &str,
+        explicit_epoch: Option<u64>,
+        expected_url: Option<&str>,
+    ) -> bool;
+    fn on_navigation_response(
+        &self,
+        session_id: Option<&str>,
+        call_id: usize,
+        method: &str,
+        loader_id: Option<&str>,
+        failed: bool,
+    );
+    fn on_frame_navigated(
+        &self,
+        session_id: Option<&str>,
+        is_main_frame: bool,
+        loader_id: Option<&str>,
+    );
+    fn on_navigated_within_document(
+        &self,
+        session_id: Option<&str>,
+        frame_id: Option<&str>,
+        url: Option<&str>,
+        navigation_type: Option<&str>,
+    );
+}
+
+type SharedNavListeners = Arc<std::sync::Mutex<Vec<std::sync::Weak<dyn CdpNavigationListener>>>>;
+
+fn classify_nav_method(method: &str) -> Option<&'static str> {
+    match method {
+        "Page.navigate" => Some("Page.navigate"),
+        "Page.reload" => Some("Page.reload"),
+        "Page.navigateToHistoryEntry" => Some("Page.navigateToHistoryEntry"),
+        "Page.stopLoading" => Some("Page.stopLoading"),
+        _ => None,
+    }
+}
+
+fn notify_nav_dispatched(
+    listeners: &SharedNavListeners,
+    session_id: Option<&str>,
+    call_id: usize,
+    method: &str,
+    explicit_epoch: Option<u64>,
+    expected_url: Option<&str>,
+) -> bool {
+    let mut admitted = true;
+    let mut guard = listeners.lock().unwrap_or_else(|e| e.into_inner());
+    guard.retain(|w| {
+        if let Some(l) = w.upgrade() {
+            if !l.on_navigation_dispatched(
+                session_id,
+                call_id,
+                method,
+                explicit_epoch,
+                expected_url,
+            ) {
+                admitted = false;
+            }
+            true
+        } else {
+            false
+        }
+    });
+    admitted
+}
+
+fn notify_nav_response(
+    listeners: &SharedNavListeners,
+    session_id: Option<&str>,
+    call_id: usize,
+    method: &str,
+    loader_id: Option<&str>,
+    failed: bool,
+) {
+    let mut guard = listeners.lock().unwrap_or_else(|e| e.into_inner());
+    guard.retain(|w| {
+        if let Some(l) = w.upgrade() {
+            l.on_navigation_response(session_id, call_id, method, loader_id, failed);
+            true
+        } else {
+            false
+        }
+    });
+}
+
+fn notify_frame_navigated(
+    listeners: &SharedNavListeners,
+    session_id: Option<&str>,
+    is_main_frame: bool,
+    loader_id: Option<&str>,
+) {
+    let mut guard = listeners.lock().unwrap_or_else(|e| e.into_inner());
+    guard.retain(|w| {
+        if let Some(l) = w.upgrade() {
+            l.on_frame_navigated(session_id, is_main_frame, loader_id);
+            true
+        } else {
+            false
+        }
+    });
+}
+
+fn notify_navigated_within_document(
+    listeners: &SharedNavListeners,
+    session_id: Option<&str>,
+    frame_id: Option<&str>,
+    url: Option<&str>,
+    navigation_type: Option<&str>,
+) {
+    let mut guard = listeners.lock().unwrap_or_else(|e| e.into_inner());
+    guard.retain(|w| {
+        if let Some(l) = w.upgrade() {
+            l.on_navigated_within_document(session_id, frame_id, url, navigation_type);
+            true
+        } else {
+            false
+        }
+    });
+}
+
 struct PendingRequest {
     sender: oneshot::Sender<Result<Value, CdpError>>,
     deadline: Instant,
+    nav_meta: Option<(Option<String>, &'static str)>,
     /// Keeps the command slot and payload bytes reserved until the request leaves the map.
     _reservation: CommandReservation,
 }
@@ -242,6 +371,7 @@ enum ActorMessage {
         reservation: CommandReservation,
         sender: oneshot::Sender<Result<Value, CdpError>>,
         deadline: Instant,
+        nav_meta: Option<(Option<String>, &'static str)>,
     },
 }
 
@@ -309,6 +439,7 @@ pub struct CdpClient {
     stats: Arc<CdpActorStats>,
     request_policy: SharedRequestPolicy,
     policy_setup: tokio::sync::Mutex<bool>,
+    nav_listeners: SharedNavListeners,
 }
 
 impl CdpClient {
@@ -357,6 +488,7 @@ impl CdpClient {
         let (target_tx, _) = tokio::sync::broadcast::channel(MAX_TARGET_EVENT_SLOTS);
         let stats = Arc::new(CdpActorStats::default());
         let close_notify = Arc::new(Notify::new());
+        let nav_listeners: SharedNavListeners = Arc::new(std::sync::Mutex::new(Vec::new()));
 
         let actor = CdpActor {
             ws_stream,
@@ -371,8 +503,8 @@ impl CdpClient {
             request_policy: request_policy.clone(),
             policy_write: None,
             next_policy_id: FIRST_POLICY_COMMAND_ID,
+            nav_listeners: nav_listeners.clone(),
         };
-
         tokio::spawn(actor.run());
 
         Arc::new(Self {
@@ -387,7 +519,17 @@ impl CdpClient {
             target_rx_broadcast: target_tx,
             memory_controller,
             stats,
+            nav_listeners,
         })
+    }
+
+    pub fn register_navigation_listener(
+        &self,
+        listener: std::sync::Weak<dyn CdpNavigationListener>,
+    ) {
+        let mut guard = self.nav_listeners.lock().unwrap_or_else(|e| e.into_inner());
+        guard.retain(|w| w.strong_count() > 0);
+        guard.push(listener);
     }
 
     pub fn stats(&self) -> &CdpActorStats {
@@ -473,17 +615,50 @@ impl CdpClient {
         params: Option<Value>,
         session_id: Option<&str>,
     ) -> Result<Value, CdpError> {
-        self.dispatch(method, params.as_ref(), session_id).await
+        let expected_url = params
+            .as_ref()
+            .and_then(|p| p.get("url"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        self.dispatch(
+            method,
+            params.as_ref(),
+            session_id,
+            None,
+            expected_url.as_deref(),
+        )
+        .await
+    }
+
+    /// Send a navigation CDP command bound to an explicit captured navigation revision epoch.
+    pub async fn send_navigation_command(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        session_id: Option<&str>,
+        explicit_epoch: Option<u64>,
+        expected_url: Option<&str>,
+    ) -> Result<Value, CdpError> {
+        let param_url = params
+            .as_ref()
+            .and_then(|p| p.get("url"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let eff_url = expected_url.or(param_url.as_deref());
+        self.dispatch(method, params.as_ref(), session_id, explicit_epoch, eff_url)
+            .await
     }
 
     /// Admission order: non-waiting slot reservation, byte-reserving bounded serialization,
-    /// non-waiting enqueue. Every failure drops the reservation, so nothing is retained
-    /// outside the shared 64-command / 2 MiB budget.
+    /// pre-enqueue navigation listener binding, and non-waiting enqueue. Every failure drops
+    /// the reservation and rolls back any registered navigation dispatch.
     async fn dispatch<P: Serialize>(
         &self,
         method: &str,
         params: Option<&P>,
         session_id: Option<&str>,
+        explicit_epoch: Option<u64>,
+        expected_url: Option<&str>,
     ) -> Result<Value, CdpError> {
         let mut reservation = self.budget.reserve_slot()?;
 
@@ -512,6 +687,23 @@ impl CdpClient {
         let (sender, receiver) = oneshot::channel();
         let deadline = Instant::now() + Duration::from_secs(COMMAND_TIMEOUT_SECS);
 
+        let nav_method = classify_nav_method(method);
+        let nav_meta = nav_method.map(|m| (session_id.map(str::to_string), m));
+        if let Some(m) = nav_method {
+            if !notify_nav_dispatched(
+                &self.nav_listeners,
+                session_id,
+                call_id,
+                m,
+                explicit_epoch,
+                expected_url,
+            ) {
+                return Err(CdpError::Protocol {
+                    code: -32000,
+                    message: "stale navigation epoch superseded before dispatch".to_string(),
+                });
+            }
+        }
         // The queue holds at most MAX_WRITER_QUEUE_MESSAGES unwritten commands; a full queue
         // is reported immediately rather than waiting with the payload retained.
         if let Err(err) = self.command_tx.try_send(ActorMessage::SendCommand {
@@ -520,7 +712,11 @@ impl CdpClient {
             reservation,
             sender,
             deadline,
+            nav_meta,
         }) {
+            if let Some(m) = nav_method {
+                notify_nav_response(&self.nav_listeners, session_id, call_id, m, None, true);
+            }
             return Err(match err {
                 mpsc::error::TrySendError::Full(_) => CdpError::WriterQueueFull {
                     messages: MAX_WRITER_QUEUE_MESSAGES,
@@ -529,7 +725,6 @@ impl CdpClient {
                 mpsc::error::TrySendError::Closed(_) => CdpError::ConnectionClosed,
             });
         }
-
         self.stats
             .total_commands_sent
             .fetch_add(1, Ordering::Relaxed);
@@ -554,7 +749,7 @@ impl CdpClient {
         session_id: Option<&str>,
     ) -> Result<C::Response, CdpError> {
         let method = cmd.identifier().to_string();
-        let res_val = self.dispatch(&method, Some(&cmd), session_id).await?;
+        let res_val = self.dispatch(&method, Some(&cmd), session_id, None, None).await?;
         C::response_from_value(res_val).map_err(|e| CdpError::MalformedResponse(e.to_string()))
     }
 
@@ -595,6 +790,7 @@ struct CdpActor<S> {
     /// At most one decision exists, and it is written before another event is read.
     policy_write: Option<(String, MemoryReservation)>,
     next_policy_id: i32,
+    nav_listeners: SharedNavListeners,
 }
 
 impl<S> CdpActor<S>
@@ -613,14 +809,20 @@ where
                 // Command submission from clients
                 cmd_opt = self.command_rx.recv() => {
                     match cmd_opt {
-                        Some(ActorMessage::SendCommand { id, json, reservation, sender, deadline }) => {
+                        Some(ActorMessage::SendCommand { id, json, reservation, sender, deadline, nav_meta }) => {
                             // Caller cancellation check: skip command if caller abandoned the request before dequeue
                             if sender.is_closed() {
+                                if let Some((ref sid, m)) = nav_meta {
+                                    notify_nav_response(&self.nav_listeners, sid.as_deref(), id, m, None, true);
+                                }
                                 debug!(id, "command caller cancelled before dequeue");
                                 continue;
                             }
 
                             if Instant::now() >= deadline {
+                                if let Some((ref sid, m)) = nav_meta {
+                                    notify_nav_response(&self.nav_listeners, sid.as_deref(), id, m, None, true);
+                                }
                                 let _ = sender.send(Err(CdpError::CommandTimeout));
                                 continue;
                             }
@@ -629,12 +831,18 @@ where
                             match self.write_message(Message::Text(json.into())).await {
                                 WriteOutcome::Done => {}
                                 WriteOutcome::Failed(e) => {
+                                    if let Some((ref sid, m)) = nav_meta {
+                                        notify_nav_response(&self.nav_listeners, sid.as_deref(), id, m, None, true);
+                                    }
                                     drop(reservation);
                                     let _ = sender.send(Err(e));
                                     self.shutdown(CdpError::ConnectionClosed, false).await;
                                     break;
                                 }
                                 WriteOutcome::Closed => {
+                                    if let Some((ref sid, m)) = nav_meta {
+                                        notify_nav_response(&self.nav_listeners, sid.as_deref(), id, m, None, true);
+                                    }
                                     drop(reservation);
                                     let _ = sender.send(Err(CdpError::ConnectionClosed));
                                     self.shutdown(CdpError::ConnectionClosed, true).await;
@@ -645,6 +853,7 @@ where
                             self.pending_commands.insert(id, PendingRequest {
                                 sender,
                                 deadline,
+                                nav_meta,
                                 _reservation: reservation,
                             });
                         }
@@ -719,6 +928,9 @@ where
                     }
                     for id in expired_or_closed {
                         if let Some(req) = self.pending_commands.remove(&id) {
+                            if let Some((ref sid, m)) = req.nav_meta {
+                                notify_nav_response(&self.nav_listeners, sid.as_deref(), id, m, None, true);
+                            }
                             if !req.sender.is_closed() {
                                 let _ = req.sender.send(Err(CdpError::CommandTimeout));
                             }
@@ -791,7 +1003,33 @@ where
                 ))?;
             // Unknown id: owner already timed out or was cancelled; nothing to fail.
             if let Some(pending) = self.pending_commands.remove(&id) {
-                let _ = pending.sender.send(response_outcome(env.result, env.error));
+                let outcome = response_outcome(env.result, env.error);
+                if let Some((ref sid, m)) = pending.nav_meta {
+                    match &outcome {
+                        Ok(val) => {
+                            let has_err = val
+                                .get("errorText")
+                                .and_then(Value::as_str)
+                                .is_some_and(|s| !s.is_empty());
+                            let loader_id = val
+                                .get("loaderId")
+                                .and_then(Value::as_str)
+                                .filter(|s| !s.is_empty() && s.len() <= MAX_EVENT_SESSION_ID_BYTES);
+                            notify_nav_response(
+                                &self.nav_listeners,
+                                sid.as_deref(),
+                                id,
+                                m,
+                                loader_id,
+                                has_err,
+                            );
+                        }
+                        Err(_) => {
+                            notify_nav_response(&self.nav_listeners, sid.as_deref(), id, m, None, true);
+                        }
+                    }
+                }
+                let _ = pending.sender.send(outcome);
             }
             return Ok(());
         }
@@ -827,25 +1065,53 @@ where
                             .and_then(Value::as_str)
                             .filter(|u| u.len() <= MAX_URL_BYTES)
                             .map(str::to_string);
+                        let loader_id = params
+                            .and_then(|p| p.pointer("/frame/loaderId"))
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty() && id.len() <= MAX_EVENT_SESSION_ID_BYTES)
+                            .map(str::to_string);
+                        notify_frame_navigated(
+                            &self.nav_listeners,
+                            session_id.as_deref(),
+                            is_main_frame,
+                            loader_id.as_deref(),
+                        );
                         let bytes = std::mem::size_of::<CdpLifecycleEvent>()
                             + session_id.as_ref().map_or(0, String::len)
-                            + url.as_ref().map_or(0, String::len);
+                            + url.as_ref().map_or(0, String::len)
+                            + loader_id.as_ref().map_or(0, String::len);
                         match self.memory_controller.try_reserve(bytes) {
                             Ok(res) => CdpLifecycleEvent::FrameNavigated {
                                 session_id,
                                 is_main_frame,
                                 url,
+                                loader_id,
                                 _reservation: Some(Arc::new(res)),
                             },
                             Err(_) => CdpLifecycleEvent::Overflow,
                         }
                     }
                     "Page.navigatedWithinDocument" => {
+                        let frame_id = params
+                            .and_then(|p| p.get("frameId"))
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty() && id.len() <= MAX_EVENT_SESSION_ID_BYTES);
                         let url = params
                             .and_then(|p| p.get("url"))
                             .and_then(Value::as_str)
                             .filter(|u| u.len() <= MAX_URL_BYTES)
                             .map(str::to_string);
+                        let nav_type = params
+                            .and_then(|p| p.get("navigationType"))
+                            .and_then(Value::as_str)
+                            .filter(|t| !t.is_empty() && t.len() <= 32);
+                        notify_navigated_within_document(
+                            &self.nav_listeners,
+                            session_id.as_deref(),
+                            frame_id,
+                            url.as_deref(),
+                            nav_type,
+                        );
                         let bytes = std::mem::size_of::<CdpLifecycleEvent>()
                             + session_id.as_ref().map_or(0, String::len)
                             + url.as_ref().map_or(0, String::len);
@@ -1195,10 +1461,16 @@ where
     /// submissions, so no caller waits on the (bounded) WS close or its own deadline.
     fn fail_all(&mut self, err: CdpError) {
         self.command_rx.close();
-        while let Ok(ActorMessage::SendCommand { sender, .. }) = self.command_rx.try_recv() {
+        while let Ok(ActorMessage::SendCommand { id, sender, nav_meta, .. }) = self.command_rx.try_recv() {
+            if let Some((ref sid, m)) = nav_meta {
+                notify_nav_response(&self.nav_listeners, sid.as_deref(), id, m, None, true);
+            }
             let _ = sender.send(Err(err.clone()));
         }
-        for (_, req) in self.pending_commands.drain() {
+        for (id, req) in self.pending_commands.drain() {
+            if let Some((ref sid, m)) = req.nav_meta {
+                notify_nav_response(&self.nav_listeners, sid.as_deref(), id, m, None, true);
+            }
             let _ = req.sender.send(Err(err.clone()));
         }
     }
@@ -1397,6 +1669,7 @@ mod tests {
                 reservation: budget.reserve_slot().unwrap(),
                 sender: sender1,
                 deadline: Instant::now() + Duration::from_secs(10),
+                nav_meta: None,
             })
             .await
             .unwrap();
@@ -1410,6 +1683,7 @@ mod tests {
                 reservation: budget.reserve_slot().unwrap(),
                 sender: sender2,
                 deadline: Instant::now() + Duration::from_secs(10),
+                nav_meta: None,
             })
             .await
             .unwrap();
@@ -1425,6 +1699,7 @@ mod tests {
             request_policy: Arc::new(std::sync::RwLock::new(None)),
             policy_write: None,
             next_policy_id: FIRST_POLICY_COMMAND_ID,
+            nav_listeners: Arc::new(std::sync::Mutex::new(Vec::new())),
             target_tx: tokio::sync::broadcast::channel(8).0,
             pending_commands: HashMap::with_capacity(MAX_PENDING_COMMANDS),
             memory_controller: global_memory_controller().clone(),
@@ -1707,7 +1982,7 @@ mod tests {
         }
 
         let res = client
-            .dispatch("Test.probe", Some(&SpySerialize(invoked.clone())), None)
+            .dispatch("Test.probe", Some(&SpySerialize(invoked.clone())), None, None, None)
             .await;
         assert!(matches!(
             res,

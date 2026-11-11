@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -17,13 +17,16 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use super::cdp::{CdpClient, CdpError, ScreencastFrameData};
+use super::cdp::{CdpClient, CdpError, CdpNavigationListener, ScreencastFrameData};
 use super::diagnostics::{global_memory_controller, global_stream_diagnostics, TrackedBhjfFrame};
 use super::protocol::{
-    pack_bhjf_frame, parse_jpeg_dimensions, TargetFrameHeader, TargetGeometry, MAX_IMAGE_HEIGHT,
-    MAX_IMAGE_WIDTH, MAX_JPEG_PAYLOAD_BYTES, MAX_PIXELS,
+    pack_bhjf_frame, parse_jpeg_dimensions, ProducerAudioChunk, TargetFrameHeader, TargetGeometry,
+    AUDIO_CHANNELS, AUDIO_ENCODING_PCM16LE, AUDIO_SAMPLE_RATE, MAX_AUDIO_BASE64_BYTES,
+    MAX_AUDIO_PCM_BYTES, MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH, MAX_JPEG_PAYLOAD_BYTES, MAX_PIXELS,
 };
 
+pub const DEFAULT_JPEG_QUALITY_LEGACY: u8 = 65;
+pub const AUDIO_DRAIN_INTERVAL: Duration = Duration::from_millis(50);
 pub const DEFAULT_GOVERNOR_INTERVAL: Duration = Duration::from_millis(100); // 10 FPS
 pub const SCREENSHOT_FALLBACK_DELAY: Duration = Duration::from_millis(250);
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -83,12 +86,464 @@ pub struct ScreencastLedger {
     pub demand_starts: AtomicU64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DispatchedNav {
+    pub call_id: usize,
+    pub epoch: u64,
+    pub method: &'static str,
+    pub expects_loader_id: bool,
+    pub expected_url: Option<Arc<str>>,
+    pub loader_id: Option<Arc<str>>,
+    pub response_ok: bool,
+    pub frame_committed: bool,
+    pub same_doc_committed: bool,
+    pub unclaimed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingNoopRestore {
+    pub prev_epoch: u64,
+    pub target_epoch: u64,
+    pub prev_doc_id: Option<Arc<str>>,
+    pub prev_sub_doc_gen: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioDocAuthority {
+    pub requested_epoch: u64,
+    pub committed_epoch: u64,
+    pub committed_doc_id: Option<Arc<str>>,
+    pub committed_sub_doc_gen: u64,
+    pub retired_doc_ids: Vec<Arc<str>>,
+    pub unassigned_requested_epochs: VecDeque<u64>,
+    pub dispatched_navs: VecDeque<DispatchedNav>,
+    pub unmatched_committed_loaders: VecDeque<Arc<str>>,
+    pub unclaimed_dispatch_epochs: usize,
+    pub pending_noop_restore: Option<PendingNoopRestore>,
+}
+
+impl AudioDocAuthority {
+    pub fn is_admissible(&self, epoch: u64) -> bool {
+        self.requested_epoch == self.committed_epoch && self.committed_epoch == epoch
+    }
+
+    pub fn active_committed_epoch(&self) -> Option<u64> {
+        if self.requested_epoch == self.committed_epoch {
+            Some(self.committed_epoch)
+        } else {
+            None
+        }
+    }
+}
+
+fn retire_doc_id_in_auth(auth: &mut AudioDocAuthority, doc_id: Arc<str>) {
+    if !auth.retired_doc_ids.iter().any(|d| d == &doc_id) {
+        if auth.retired_doc_ids.len() >= 16 {
+            auth.retired_doc_ids.remove(0);
+        }
+        auth.retired_doc_ids.push(doc_id);
+    }
+}
+
+fn commit_epoch_in_auth(
+    auth: &mut AudioDocAuthority,
+    audio_doc_epoch: &AtomicU64,
+    target_epoch: u64,
+) {
+    if let Some(prev_doc) = auth.committed_doc_id.take() {
+        retire_doc_id_in_auth(auth, prev_doc);
+    }
+    auth.committed_sub_doc_gen = 0;
+    auth.pending_noop_restore = None;
+    auth.committed_epoch = target_epoch;
+    if auth.committed_epoch > auth.requested_epoch {
+        auth.requested_epoch = auth.committed_epoch;
+    }
+    audio_doc_epoch.store(auth.committed_epoch, Ordering::Release);
+    auth.dispatched_navs
+        .retain(|d| d.epoch != target_epoch && (d.expects_loader_id || d.epoch > target_epoch));
+    auth.unassigned_requested_epochs
+        .retain(|&e| e > auth.committed_epoch);
+}
+
+fn commit_same_doc_dispatch_in_auth(
+    auth: &mut AudioDocAuthority,
+    audio_doc_epoch: &AtomicU64,
+    target_epoch: u64,
+) {
+    if let Some(restore) = auth.pending_noop_restore.take() {
+        if restore.target_epoch == target_epoch {
+            if let Some(ref doc) = restore.prev_doc_id {
+                auth.retired_doc_ids.retain(|d| d != doc);
+            }
+            auth.committed_doc_id = restore.prev_doc_id;
+            auth.committed_sub_doc_gen = restore.prev_sub_doc_gen.saturating_add(1).max(2);
+        }
+    } else if auth.committed_doc_id.is_some() {
+        auth.committed_sub_doc_gen = auth.committed_sub_doc_gen.saturating_add(1).max(2);
+    }
+    auth.committed_epoch = target_epoch;
+    if auth.committed_epoch > auth.requested_epoch {
+        auth.requested_epoch = auth.committed_epoch;
+    }
+    audio_doc_epoch.store(auth.committed_epoch, Ordering::Release);
+    auth.unassigned_requested_epochs
+        .retain(|&e| e > auth.committed_epoch);
+}
+
+struct ProducerNavListener {
+    doc_epoch_tx: Arc<tokio::sync::watch::Sender<AudioDocAuthority>>,
+    audio_doc_epoch: Arc<AtomicU64>,
+    target_id: String,
+    page_session_id: std::sync::RwLock<Option<String>>,
+}
+
+impl ProducerNavListener {
+    fn set_page_session_id(&self, sid: &str) {
+        let mut guard = self.page_session_id.write().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(sid.to_string());
+    }
+
+    fn matches_session(&self, session_id: Option<&str>) -> bool {
+        let Some(sid) = session_id else {
+            return false;
+        };
+        let guard = self.page_session_id.read().unwrap_or_else(|e| e.into_inner());
+        match guard.as_deref() {
+            Some(bound) => bound == sid,
+            None => true,
+        }
+    }
+}
+
+impl CdpNavigationListener for ProducerNavListener {
+    fn on_navigation_dispatched(
+        &self,
+        session_id: Option<&str>,
+        call_id: usize,
+        method: &str,
+        explicit_epoch: Option<u64>,
+        expected_url: Option<&str>,
+    ) -> bool {
+        if !self.matches_session(session_id) {
+            return true;
+        }
+        let mut admitted = true;
+        self.doc_epoch_tx.send_if_modified(|auth| {
+            if method == "Page.stopLoading" {
+                auth.pending_noop_restore = None;
+                let changed = !auth.dispatched_navs.is_empty()
+                    || !auth.unmatched_committed_loaders.is_empty()
+                    || !auth.unassigned_requested_epochs.is_empty();
+                auth.dispatched_navs.clear();
+                auth.unmatched_committed_loaders.clear();
+                auth.unassigned_requested_epochs.clear();
+                return changed;
+            }
+            let static_method: &'static str = match method {
+                "Page.navigate" => "Page.navigate",
+                "Page.reload" => "Page.reload",
+                "Page.navigateToHistoryEntry" => "Page.navigateToHistoryEntry",
+                _ => "Page.navigate",
+            };
+            let expects_loader_id = static_method == "Page.navigate";
+            let (ep, unclaimed) = if let Some(exp_ep) = explicit_epoch {
+                let is_initial_bootstrap = exp_ep == 1
+                    && auth.requested_epoch == 1
+                    && auth.committed_epoch == 1
+                    && auth.committed_doc_id.is_none()
+                    && auth.retired_doc_ids.is_empty()
+                    && auth.dispatched_navs.is_empty();
+                if !is_initial_bootstrap
+                    && (exp_ep <= auth.committed_epoch
+                        || auth.dispatched_navs.iter().any(|d| d.epoch > exp_ep))
+                {
+                    admitted = false;
+                    return false;
+                }
+                auth.unassigned_requested_epochs
+                    .retain(|&e| e != exp_ep && e > auth.committed_epoch);
+                if exp_ep > auth.requested_epoch {
+                    if auth.committed_epoch == auth.requested_epoch && auth.dispatched_navs.is_empty()
+                    {
+                        auth.pending_noop_restore = Some(PendingNoopRestore {
+                            prev_epoch: auth.committed_epoch,
+                            target_epoch: exp_ep,
+                            prev_doc_id: auth.committed_doc_id.clone(),
+                            prev_sub_doc_gen: auth.committed_sub_doc_gen,
+                        });
+                    } else {
+                        auth.pending_noop_restore = None;
+                    }
+                    if let Some(prev_doc) = auth.committed_doc_id.take() {
+                        retire_doc_id_in_auth(auth, prev_doc);
+                    }
+                    auth.committed_sub_doc_gen = 0;
+                    auth.requested_epoch = exp_ep;
+                    self.audio_doc_epoch
+                        .store(auth.committed_epoch, Ordering::Release);
+                } else if is_initial_bootstrap {
+                    auth.committed_epoch = 0;
+                    self.audio_doc_epoch.store(0, Ordering::Release);
+                }
+                (exp_ep, false)
+            } else if auth.requested_epoch == auth.committed_epoch {
+                auth.pending_noop_restore = Some(PendingNoopRestore {
+                    prev_epoch: auth.committed_epoch,
+                    target_epoch: auth.requested_epoch.saturating_add(1),
+                    prev_doc_id: auth.committed_doc_id.clone(),
+                    prev_sub_doc_gen: auth.committed_sub_doc_gen,
+                });
+                if let Some(prev_doc) = auth.committed_doc_id.take() {
+                    retire_doc_id_in_auth(auth, prev_doc);
+                }
+                auth.committed_sub_doc_gen = 0;
+                let next_ep = auth.requested_epoch.saturating_add(1);
+                auth.requested_epoch = next_ep;
+                auth.unclaimed_dispatch_epochs = auth.unclaimed_dispatch_epochs.saturating_add(1);
+                self.audio_doc_epoch
+                    .store(auth.committed_epoch, Ordering::Release);
+                (next_ep, true)
+            } else {
+                auth.unassigned_requested_epochs.clear();
+                (auth.requested_epoch, false)
+            };
+            let can_preserve_restore = static_method != "Page.reload"
+                && auth
+                    .pending_noop_restore
+                    .as_ref()
+                    .is_some_and(|r| r.target_epoch == ep)
+                && auth.dispatched_navs.is_empty();
+            if !can_preserve_restore {
+                auth.pending_noop_restore = None;
+            }
+            if auth.dispatched_navs.len() >= 16 {
+                auth.dispatched_navs.pop_front();
+            }
+            auth.dispatched_navs.push_back(DispatchedNav {
+                call_id,
+                epoch: ep,
+                method: static_method,
+                expects_loader_id,
+                expected_url: expected_url.filter(|u| !u.is_empty()).map(Arc::from),
+                loader_id: None,
+                response_ok: false,
+                frame_committed: false,
+                same_doc_committed: false,
+                unclaimed,
+            });
+            true
+        });
+        admitted
+    }
+
+    fn on_navigation_response(
+        &self,
+        session_id: Option<&str>,
+        call_id: usize,
+        _method: &str,
+        loader_id: Option<&str>,
+        failed: bool,
+    ) {
+        if !self.matches_session(session_id) {
+            return;
+        }
+        self.doc_epoch_tx.send_if_modified(|auth| {
+            if failed {
+                if let Some(pos) = auth.dispatched_navs.iter().position(|d| d.call_id == call_id) {
+                    auth.dispatched_navs.remove(pos);
+                    return true;
+                }
+                return false;
+            }
+            if let Some(lid) = loader_id {
+                // A returned loaderId proves this operation initiated a cross-document load,
+                // never a same-document transition!
+                let already_committed = if let Some(lpos) = auth
+                    .unmatched_committed_loaders
+                    .iter()
+                    .position(|l| l.as_ref() == lid)
+                {
+                    auth.unmatched_committed_loaders.remove(lpos);
+                    true
+                } else {
+                    false
+                };
+                if let Some(pos) = auth.dispatched_navs.iter().position(|d| d.call_id == call_id) {
+                    let ep = auth.dispatched_navs[pos].epoch;
+                    if auth
+                        .pending_noop_restore
+                        .as_ref()
+                        .is_some_and(|r| r.target_epoch == ep)
+                    {
+                        auth.pending_noop_restore = None;
+                    }
+                    auth.dispatched_navs[pos].loader_id = Some(Arc::from(lid));
+                    auth.dispatched_navs[pos].response_ok = true;
+                    auth.dispatched_navs[pos].same_doc_committed = false;
+                    if already_committed || auth.dispatched_navs[pos].frame_committed {
+                        auth.dispatched_navs.remove(pos);
+                        commit_epoch_in_auth(auth, &self.audio_doc_epoch, ep);
+                    }
+                    return true;
+                }
+                return false;
+            }
+            if let Some(pos) = auth.dispatched_navs.iter().position(|d| d.call_id == call_id) {
+                auth.dispatched_navs[pos].response_ok = true;
+                if auth.dispatched_navs[pos].frame_committed {
+                    let ep = auth.dispatched_navs[pos].epoch;
+                    auth.dispatched_navs.remove(pos);
+                    commit_epoch_in_auth(auth, &self.audio_doc_epoch, ep);
+                } else if auth.dispatched_navs[pos].same_doc_committed
+                    && auth.dispatched_navs[pos].method != "Page.reload"
+                    && auth.dispatched_navs[pos].loader_id.is_none()
+                {
+                    let ep = auth.dispatched_navs[pos].epoch;
+                    auth.dispatched_navs.remove(pos);
+                    commit_same_doc_dispatch_in_auth(auth, &self.audio_doc_epoch, ep);
+                }
+                return true;
+            }
+            false
+        });
+    }
+
+    fn on_frame_navigated(
+        &self,
+        session_id: Option<&str>,
+        is_main_frame: bool,
+        loader_id: Option<&str>,
+    ) {
+        if !is_main_frame || !self.matches_session(session_id) {
+            return;
+        }
+        self.doc_epoch_tx.send_if_modified(|auth| {
+            if let Some(lid) = loader_id {
+                if let Some(pos) = auth
+                    .dispatched_navs
+                    .iter()
+                    .position(|d| d.loader_id.as_deref() == Some(lid))
+                {
+                    let ep = auth.dispatched_navs[pos].epoch;
+                    auth.dispatched_navs.remove(pos);
+                    commit_epoch_in_auth(auth, &self.audio_doc_epoch, ep);
+                    return true;
+                }
+                if auth.dispatched_navs.len() == 1
+                    && !auth.dispatched_navs[0].expects_loader_id
+                    && auth.unassigned_requested_epochs.is_empty()
+                {
+                    if auth.dispatched_navs[0].response_ok {
+                        let ep = auth.dispatched_navs.pop_front().unwrap().epoch;
+                        commit_epoch_in_auth(auth, &self.audio_doc_epoch, ep);
+                    } else {
+                        auth.dispatched_navs[0].frame_committed = true;
+                    }
+                    return true;
+                }
+                if !auth.dispatched_navs.is_empty() || auth.requested_epoch > auth.committed_epoch {
+                    if !auth
+                        .unmatched_committed_loaders
+                        .iter()
+                        .any(|l| l.as_ref() == lid)
+                    {
+                        if auth.unmatched_committed_loaders.len() >= 16 {
+                            auth.unmatched_committed_loaders.pop_front();
+                        }
+                        auth.unmatched_committed_loaders.push_back(Arc::from(lid));
+                    }
+                    return true;
+                }
+                let next = auth.committed_epoch.saturating_add(1);
+                auth.requested_epoch = next;
+                commit_epoch_in_auth(auth, &self.audio_doc_epoch, next);
+                return true;
+            }
+            if auth.dispatched_navs.len() == 1
+                && !auth.dispatched_navs[0].expects_loader_id
+                && auth.unassigned_requested_epochs.is_empty()
+            {
+                if auth.dispatched_navs[0].response_ok {
+                    let ep = auth.dispatched_navs.pop_front().unwrap().epoch;
+                    commit_epoch_in_auth(auth, &self.audio_doc_epoch, ep);
+                } else {
+                    auth.dispatched_navs[0].frame_committed = true;
+                }
+                return true;
+            }
+            if auth.dispatched_navs.is_empty() && auth.requested_epoch == auth.committed_epoch {
+                let next = auth.committed_epoch.saturating_add(1);
+                auth.requested_epoch = next;
+                commit_epoch_in_auth(auth, &self.audio_doc_epoch, next);
+                return true;
+            }
+            false
+        });
+    }
+
+    fn on_navigated_within_document(
+        &self,
+        session_id: Option<&str>,
+        frame_id: Option<&str>,
+        url: Option<&str>,
+        navigation_type: Option<&str>,
+    ) {
+        if !self.matches_session(session_id) {
+            return;
+        }
+        if let Some(fid) = frame_id {
+            if fid != self.target_id {
+                return;
+            }
+        }
+        self.doc_epoch_tx.send_if_modified(|auth| {
+            if auth.dispatched_navs.len() == 1 && auth.unassigned_requested_epochs.is_empty() {
+                let d = &auth.dispatched_navs[0];
+                let method_allows = d.method != "Page.reload" && d.loader_id.is_none();
+                let nav_type_allows = navigation_type != Some("historyApi");
+                let url_matches = match (d.expected_url.as_deref(), url) {
+                    (Some(exp), Some(actual)) => exp == actual,
+                    (Some(_), None) => false,
+                    (None, _) => true,
+                };
+                if method_allows && nav_type_allows && url_matches {
+                    if auth.dispatched_navs[0].response_ok {
+                        let ep = auth.dispatched_navs.pop_front().unwrap().epoch;
+                        commit_same_doc_dispatch_in_auth(auth, &self.audio_doc_epoch, ep);
+                    } else {
+                        auth.dispatched_navs[0].same_doc_committed = true;
+                    }
+                    return true;
+                }
+                return false;
+            }
+            if auth.dispatched_navs.is_empty() && auth.requested_epoch == auth.committed_epoch {
+                auth.pending_noop_restore = None;
+                if auth.committed_doc_id.is_some() {
+                    auth.committed_sub_doc_gen = auth.committed_sub_doc_gen.saturating_add(1).max(2);
+                }
+                let next = auth.committed_epoch.saturating_add(1);
+                auth.requested_epoch = next;
+                auth.committed_epoch = next;
+                self.audio_doc_epoch.store(next, Ordering::Release);
+                return true;
+            }
+            false
+        });
+    }
+}
+
 pub struct ScreencastProducer {
     browser_session_id: String,
     browser_incarnation: String,
     profile_epoch: u64,
     viewport_epoch: Arc<AtomicU64>,
     frame_seq: Arc<AtomicU64>,
+    audio_seq: Arc<AtomicU64>,
+    audio_doc_epoch: Arc<AtomicU64>,
+    doc_epoch_tx: Arc<tokio::sync::watch::Sender<AudioDocAuthority>>,
+    nav_listener: Arc<ProducerNavListener>,
     pub cdp_client: Arc<CdpClient>,
     target_id: String,
     page_session_id: Arc<RwLock<Option<String>>>,
@@ -102,6 +557,8 @@ pub struct ScreencastProducer {
     pub ledger: Arc<ScreencastLedger>,
     screenshot_taken_in_epoch: Arc<AtomicBool>,
     governor_interval: Duration,
+    jpeg_quality: u8,
+    audio_broadcast: broadcast::Sender<ProducerAudioChunk>,
     frame_broadcast: broadcast::Sender<TrackedBhjfFrame>,
     active_run_cancel: Arc<Mutex<Option<CancellationToken>>>,
     geometry: Arc<RwLock<TargetGeometry>>,
@@ -120,12 +577,40 @@ impl ScreencastProducer {
         initial_geometry: TargetGeometry,
     ) -> Self {
         let (frame_broadcast, _) = broadcast::channel(2);
+        let (audio_broadcast, _) = broadcast::channel(4);
+        let (doc_epoch_tx, _) = tokio::sync::watch::channel(AudioDocAuthority {
+            requested_epoch: 1,
+            committed_epoch: 1,
+            committed_doc_id: None,
+            committed_sub_doc_gen: 0,
+            retired_doc_ids: Vec::new(),
+            unassigned_requested_epochs: VecDeque::new(),
+            dispatched_navs: VecDeque::new(),
+            unmatched_committed_loaders: VecDeque::new(),
+            unclaimed_dispatch_epochs: 0,
+            pending_noop_restore: None,
+        });
+        let doc_epoch_tx = Arc::new(doc_epoch_tx);
+        let audio_doc_epoch = Arc::new(AtomicU64::new(1));
+        let nav_listener = Arc::new(ProducerNavListener {
+            doc_epoch_tx: doc_epoch_tx.clone(),
+            audio_doc_epoch: audio_doc_epoch.clone(),
+            target_id: target_id.clone(),
+            page_session_id: std::sync::RwLock::new(None),
+        });
+        let listener_weak: std::sync::Weak<dyn CdpNavigationListener> =
+            Arc::downgrade(&nav_listener) as std::sync::Weak<dyn CdpNavigationListener>;
+        cdp_client.register_navigation_listener(listener_weak);
         Self {
             browser_session_id,
             browser_incarnation,
             profile_epoch,
             viewport_epoch: Arc::new(AtomicU64::new(viewport_epoch.max(1))),
             frame_seq: Arc::new(AtomicU64::new(0)),
+            audio_seq: Arc::new(AtomicU64::new(0)),
+            audio_doc_epoch,
+            doc_epoch_tx,
+            nav_listener,
             cdp_client,
             target_id,
             page_session_id: Arc::new(RwLock::new(None)),
@@ -139,11 +624,33 @@ impl ScreencastProducer {
             ledger: Arc::new(ScreencastLedger::default()),
             screenshot_taken_in_epoch: Arc::new(AtomicBool::new(false)),
             governor_interval: DEFAULT_GOVERNOR_INTERVAL,
+            jpeg_quality: DEFAULT_JPEG_QUALITY_LEGACY,
             frame_broadcast,
+            audio_broadcast,
             active_run_cancel: Arc::new(Mutex::new(None)),
             geometry: Arc::new(RwLock::new(initial_geometry)),
             page_setup: Arc::new(Mutex::new(())),
         }
+    }
+
+    /// Configures capture FPS (1..=30) and JPEG quality (10..=100) for production streaming.
+    pub fn with_capture_policy(mut self, fps: u32, jpeg_quality: u8) -> Self {
+        let clamped_fps = fps.clamp(1, 30);
+        self.governor_interval = Duration::from_secs_f64(1.0 / (clamped_fps as f64));
+        self.jpeg_quality = jpeg_quality.clamp(10, 100);
+        self
+    }
+
+    pub fn subscribe_audio(&self) -> broadcast::Receiver<ProducerAudioChunk> {
+        self.audio_broadcast.subscribe()
+    }
+
+    pub fn governor_interval(&self) -> Duration {
+        self.governor_interval
+    }
+
+    pub fn jpeg_quality(&self) -> u8 {
+        self.jpeg_quality
     }
 
     pub fn subscribe_frames(&self) -> broadcast::Receiver<TrackedBhjfFrame> {
@@ -222,7 +729,7 @@ impl ScreencastProducer {
                 let max_h = (new_geometry.css_height.round() as u32).clamp(64, MAX_IMAGE_HEIGHT);
                 let screencast_params = StartScreencastParams::builder()
                     .format(StartScreencastFormat::Jpeg)
-                    .quality(65)
+                    .quality(i64::from(self.jpeg_quality))
                     .max_width(max_w)
                     .max_height(max_h)
                     .every_nth_frame(1)
@@ -283,6 +790,7 @@ impl ScreencastProducer {
 
         let mut lock = self.page_session_id.write().await;
         *lock = Some(session_id.clone());
+        self.nav_listener.set_page_session_id(&session_id);
         Ok(session_id)
     }
 
@@ -473,6 +981,7 @@ impl ScreencastProducer {
             let mut run_lock = self.current_run.write().await;
             *run_lock = Some(producer_run);
         }
+        self.audio_seq.store(0, Ordering::SeqCst);
         {
             let mut native_sess = self.native_screencast_session_id.write().await;
             *native_sess = None;
@@ -512,7 +1021,7 @@ impl ScreencastProducer {
 
         let screencast_params = StartScreencastParams::builder()
             .format(StartScreencastFormat::Jpeg)
-            .quality(65)
+            .quality(i64::from(self.jpeg_quality))
             .max_width(max_w)
             .max_height(max_h)
             .every_nth_frame(1)
@@ -602,6 +1111,41 @@ impl ScreencastProducer {
         let mut heartbeat_ticker = interval(Duration::from_secs(1));
         let start_time = Instant::now();
 
+        let nav_this = self.clone_handle();
+        let nav_cancel = cancel_token.clone();
+        let nav_handle = tokio::spawn(async move {
+            let mut lifecycle_rx = nav_this.cdp_client.subscribe_events();
+            loop {
+                tokio::select! {
+                    _ = nav_cancel.cancelled() => break,
+                    ev = lifecycle_rx.recv() => {
+                        match ev {
+                            Ok(ev) => {
+                                if matches!(&*ev, super::cdp::CdpLifecycleEvent::Overflow) {
+                                    nav_this.fence_audio_doc_epoch_on_gap();
+                                }
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => {
+                                nav_this.fence_audio_doc_epoch_on_gap();
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                nav_this.fence_audio_doc_epoch_on_gap();
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let audio_this = self.clone_handle();
+        let audio_sid = page_session_id.clone();
+        let audio_cancel = cancel_token.clone();
+        let audio_handle = tokio::spawn(async move {
+            audio_this
+                .run_audio_drain_loop(audio_sid, producer_run, audio_cancel)
+                .await;
+        });
         loop {
             tokio::select! {
                 _ = cancel_token.cancelled() => {
@@ -640,6 +1184,458 @@ impl ScreencastProducer {
                 }
             }
         }
+
+        cancel_token.cancel();
+        let _ = nav_handle.await;
+        let _ = audio_handle.await;
+    }
+
+    /// Single-flight cancellable in-page PCM16 audio drain worker.
+    /// Runs independently of the video event drain so slow page evaluations never block ACKs.
+    async fn run_audio_drain_loop(
+        self: Arc<Self>,
+        page_session_id: String,
+        producer_run: Uuid,
+        cancel_token: CancellationToken,
+    ) {
+        let mut ticker = interval(AUDIO_DRAIN_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut doc_auth_rx = self.subscribe_audio_doc_authority();
+        let mut doc_watch_open = true;
+        let mut last_active_doc = doc_auth_rx.borrow_and_update().committed_epoch;
+
+        loop {
+            tokio::select! {
+                _ = cancel_token.cancelled() => break,
+                changed = doc_auth_rx.changed(), if doc_watch_open => {
+                    if changed.is_err() {
+                        doc_watch_open = false;
+                    } else {
+                        let cur_auth = doc_auth_rx.borrow_and_update().clone();
+                        if cur_auth.active_committed_epoch() != Some(last_active_doc) {
+                            let prev_token = format!("{producer_run}:{last_active_doc}");
+                            if let Some(active) = cur_auth.active_committed_epoch() {
+                                last_active_doc = active;
+                            }
+                            let stop_expr = format!(
+                                "(() => {{ const f = EventTarget.prototype[Symbol.for('dh.a')]; if (typeof f === 'function') f('stop', '{prev_token}'); }})()"
+                            );
+                            let _ = self.cdp_client.send_command(
+                                "Runtime.evaluate",
+                                Some(serde_json::json!({
+                                    "expression": stop_expr,
+                                    "returnByValue": true,
+                                })),
+                                Some(&page_session_id),
+                            ).await;
+                        }
+                    }
+                }
+                _ = ticker.tick() => {
+                    if cancel_token.is_cancelled()
+                        || *self.current_run.read().await != Some(producer_run)
+                        || self.cdp_client.is_closed()
+                    {
+                        break;
+                    }
+                    if self.visible_viewer_count().await == 0 {
+                        continue;
+                    }
+                    let Some(doc_epoch) = doc_auth_rx.borrow_and_update().active_committed_epoch() else {
+                        continue;
+                    };
+                    last_active_doc = doc_epoch;
+                    let run_token = format!("{producer_run}:{doc_epoch}");
+                    let drain_expr = format!(
+                        "(() => {{ const f = EventTarget.prototype[Symbol.for('dh.a')]; return typeof f === 'function' ? f('drainDoc', '{run_token}') : null; }})()"
+                    );
+                    let eval_fut = self.cdp_client.send_command(
+                        "Runtime.evaluate",
+                        Some(serde_json::json!({
+                            "expression": drain_expr,
+                            "returnByValue": true,
+                        })),
+                        Some(&page_session_id),
+                    );
+                    tokio::pin!(eval_fut);
+                    let mut nav_aborted = false;
+                    let eval_res = loop {
+                        tokio::select! {
+                            _ = cancel_token.cancelled() => break Err(CdpError::ConnectionClosed),
+                            changed = doc_auth_rx.changed(), if doc_watch_open => {
+                                if changed.is_err() {
+                                    doc_watch_open = false;
+                                } else {
+                                    nav_aborted = true;
+                                    break Err(CdpError::ConnectionClosed);
+                                }
+                            }
+                            res = &mut eval_fut => break res,
+                        }
+                    };
+                    if nav_aborted || !self.audio_doc_authority().is_admissible(doc_epoch) {
+                        continue;
+                    }
+                    let Ok(val) = eval_res else {
+                        continue;
+                    };
+                    if val.get("exceptionDetails").is_some() {
+                        continue;
+                    }
+                    let Some(res_val) = val.pointer("/result/value") else {
+                        continue;
+                    };
+                    let Some(items) = self.parse_and_verify_drain_doc_value(doc_epoch, res_val) else {
+                        continue;
+                    };
+                    for item in items.iter() {
+                        if !self.audio_doc_authority().is_admissible(doc_epoch) {
+                            break;
+                        }
+                        let Some(b64) = item.as_str() else {
+                            continue;
+                        };
+                        let _ = self
+                            .admit_and_broadcast_audio_chunk(producer_run, doc_epoch, b64)
+                            .await;
+                    }
+                }
+            }
+        }
+
+        if !self.cdp_client.is_closed() {
+            let doc_epoch = self.audio_doc_epoch.load(Ordering::Acquire);
+            let run_token = format!("{producer_run}:{doc_epoch}");
+            let stop_expr = format!(
+                "(() => {{ const f = EventTarget.prototype[Symbol.for('dh.a')]; if (typeof f === 'function') f('stop', '{run_token}'); }})()"
+            );
+            let _ = tokio::time::timeout(
+                Duration::from_millis(200),
+                self.cdp_client.send_command(
+                    "Runtime.evaluate",
+                    Some(serde_json::json!({
+                        "expression": stop_expr,
+                        "returnByValue": true,
+                    })),
+                    Some(&page_session_id),
+                ),
+            )
+            .await;
+        }
+    }
+
+    pub fn audio_doc_authority(&self) -> AudioDocAuthority {
+        self.doc_epoch_tx.borrow().clone()
+    }
+
+    pub fn audio_doc_epoch(&self) -> u64 {
+        self.doc_epoch_tx.borrow().committed_epoch
+    }
+
+    pub async fn dispatch_navigation_for_epoch(
+        &self,
+        epoch: u64,
+        method: &str,
+        params: Option<serde_json::Value>,
+        page_session_id: &str,
+    ) -> Result<serde_json::Value, CdpError> {
+        self.cdp_client
+            .send_navigation_command(method, params, Some(page_session_id), Some(epoch), None)
+            .await
+    }
+
+    pub async fn dispatch_navigation_for_epoch_with_url(
+        &self,
+        epoch: u64,
+        method: &str,
+        params: Option<serde_json::Value>,
+        page_session_id: &str,
+        expected_url: Option<&str>,
+    ) -> Result<serde_json::Value, CdpError> {
+        self.cdp_client
+            .send_navigation_command(
+                method,
+                params,
+                Some(page_session_id),
+                Some(epoch),
+                expected_url,
+            )
+            .await
+    }
+    pub fn init_audio_doc_epoch(&self, initial_epoch: u64) {
+        let ep = initial_epoch.max(1);
+        self.doc_epoch_tx.send_if_modified(|auth| {
+            if auth.requested_epoch != ep
+                || auth.committed_epoch != ep
+                || auth.committed_doc_id.is_some()
+                || auth.committed_sub_doc_gen != 0
+                || !auth.retired_doc_ids.is_empty()
+                || !auth.unassigned_requested_epochs.is_empty()
+                || !auth.dispatched_navs.is_empty()
+                || !auth.unmatched_committed_loaders.is_empty()
+                || auth.unclaimed_dispatch_epochs != 0
+                || auth.pending_noop_restore.is_some()
+            {
+                auth.requested_epoch = ep;
+                auth.committed_epoch = ep;
+                auth.committed_doc_id = None;
+                auth.committed_sub_doc_gen = 0;
+                auth.retired_doc_ids.clear();
+                auth.unassigned_requested_epochs.clear();
+                auth.dispatched_navs.clear();
+                auth.unmatched_committed_loaders.clear();
+                auth.unclaimed_dispatch_epochs = 0;
+                auth.pending_noop_restore = None;
+                self.audio_doc_epoch.store(ep, Ordering::Release);
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    pub fn request_audio_doc_epoch(&self, requested_rev: u64) {
+        self.doc_epoch_tx.send_if_modified(|auth| {
+            if auth.unclaimed_dispatch_epochs > 0 {
+                auth.unclaimed_dispatch_epochs -= 1;
+                if let Some(unclaimed_nav) = auth.dispatched_navs.iter_mut().find(|d| d.unclaimed) {
+                    unclaimed_nav.unclaimed = false;
+                    if requested_rev > unclaimed_nav.epoch {
+                        unclaimed_nav.epoch = requested_rev;
+                    }
+                } else if requested_rev > auth.requested_epoch
+                    && auth.committed_epoch == auth.requested_epoch
+                {
+                    auth.requested_epoch = requested_rev;
+                    auth.committed_epoch = requested_rev;
+                    self.audio_doc_epoch.store(requested_rev, Ordering::Release);
+                    return true;
+                }
+                if requested_rev <= auth.requested_epoch {
+                    return true;
+                }
+            }
+            if requested_rev > auth.requested_epoch {
+                if auth.committed_epoch == auth.requested_epoch && auth.dispatched_navs.is_empty() {
+                    auth.pending_noop_restore = Some(PendingNoopRestore {
+                        prev_epoch: auth.committed_epoch,
+                        target_epoch: requested_rev,
+                        prev_doc_id: auth.committed_doc_id.clone(),
+                        prev_sub_doc_gen: auth.committed_sub_doc_gen,
+                    });
+                } else {
+                    auth.pending_noop_restore = None;
+                }
+                if let Some(prev_doc) = auth.committed_doc_id.take() {
+                    retire_doc_id_in_auth(auth, prev_doc);
+                }
+                auth.committed_sub_doc_gen = 0;
+                auth.requested_epoch = requested_rev;
+                if auth.unassigned_requested_epochs.len() >= 16 {
+                    auth.unassigned_requested_epochs.pop_front();
+                }
+                auth.unassigned_requested_epochs.push_back(requested_rev);
+                self.audio_doc_epoch
+                    .store(auth.committed_epoch, Ordering::Release);
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    /// Resolves an out-of-bounds history action (`target_idx < 0` or `>= entries.len()`) where
+    /// `SessionRegistry::history` published `rev` without dispatching a native navigation, even
+    /// if the asynchronous session watcher already called `request_audio_doc_epoch(rev)`.
+    pub fn resolve_noop_audio_doc_epoch(&self, rev: u64) {
+        self.doc_epoch_tx.send_if_modified(|auth| {
+            if !auth.dispatched_navs.is_empty() {
+                return false;
+            }
+            if rev > auth.requested_epoch && auth.committed_epoch == auth.requested_epoch {
+                auth.requested_epoch = rev;
+                auth.committed_epoch = rev;
+                self.audio_doc_epoch.store(rev, Ordering::Release);
+                return true;
+            }
+            if auth.requested_epoch == rev && auth.committed_epoch < rev {
+                if let Some(restore) = auth.pending_noop_restore.take() {
+                    if restore.target_epoch == rev && auth.committed_epoch == restore.prev_epoch {
+                        if let Some(pos) = auth
+                            .unassigned_requested_epochs
+                            .iter()
+                            .position(|&e| e == rev)
+                        {
+                            auth.unassigned_requested_epochs.remove(pos);
+                        }
+                        if let Some(ref doc) = restore.prev_doc_id {
+                            auth.retired_doc_ids.retain(|d| d != doc);
+                        }
+                        auth.committed_doc_id = restore.prev_doc_id;
+                        auth.committed_sub_doc_gen = restore.prev_sub_doc_gen;
+                        auth.committed_epoch = rev;
+                        self.audio_doc_epoch.store(rev, Ordering::Release);
+                        return true;
+                    }
+                }
+            }
+            false
+        });
+    }
+
+    pub fn fence_audio_doc_epoch_on_gap(&self) {
+        self.doc_epoch_tx.send_if_modified(|auth| {
+            auth.pending_noop_restore = None;
+            let next_req = auth
+                .requested_epoch
+                .max(auth.committed_epoch)
+                .saturating_add(1);
+            if next_req != auth.requested_epoch {
+                if let Some(prev_doc) = auth.committed_doc_id.take() {
+                    retire_doc_id_in_auth(auth, prev_doc);
+                }
+                auth.committed_sub_doc_gen = 0;
+                auth.requested_epoch = next_req;
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    pub fn advance_audio_doc_epoch(&self) -> u64 {
+        let prev = self.audio_doc_epoch.load(Ordering::Acquire);
+        self.nav_listener
+            .on_frame_navigated(Some(&self.target_id), true, None);
+        prev
+    }
+
+    pub fn commit_same_document_audio_epoch(&self) -> u64 {
+        let prev = self.audio_doc_epoch.load(Ordering::Acquire);
+        self.nav_listener.on_navigated_within_document(
+            Some(&self.target_id),
+            Some(&self.target_id),
+            None,
+            Some("historyApi"),
+        );
+        prev
+    }
+
+    /// Verifies that a document drained via `drainDoc` was not already retired and satisfies
+    /// the active document and same-document capture generation authority.
+    pub fn verify_drained_document(
+        &self,
+        expected_epoch: u64,
+        doc_id: &str,
+        sub_doc_gen: u64,
+    ) -> bool {
+        if doc_id.is_empty() || doc_id.len() > 128 || sub_doc_gen == 0 {
+            return false;
+        }
+        let mut ok = false;
+        self.doc_epoch_tx.send_if_modified(|auth| {
+            if !auth.is_admissible(expected_epoch) {
+                return false;
+            }
+            if auth.retired_doc_ids.iter().any(|d| d.as_ref() == doc_id) {
+                return false;
+            }
+            if let Some(ref cur_doc) = auth.committed_doc_id {
+                if cur_doc.as_ref() != doc_id {
+                    let old = cur_doc.clone();
+                    retire_doc_id_in_auth(auth, old);
+                    auth.committed_doc_id = Some(Arc::<str>::from(doc_id));
+                    auth.committed_sub_doc_gen = sub_doc_gen;
+                    ok = true;
+                    return true;
+                }
+                if sub_doc_gen < auth.committed_sub_doc_gen {
+                    return false;
+                }
+                if sub_doc_gen > auth.committed_sub_doc_gen {
+                    auth.committed_sub_doc_gen = sub_doc_gen;
+                    ok = true;
+                    return true;
+                }
+                ok = true;
+                return false;
+            }
+            auth.committed_doc_id = Some(Arc::<str>::from(doc_id));
+            auth.committed_sub_doc_gen = sub_doc_gen;
+            ok = true;
+            true
+        });
+        ok
+    }
+
+    pub fn parse_and_verify_drain_doc_value<'a>(
+        &self,
+        doc_epoch: u64,
+        res_val: &'a serde_json::Value,
+    ) -> Option<&'a Vec<serde_json::Value>> {
+        let obj = res_val.as_object()?;
+        let doc_id = obj.get("docId").and_then(serde_json::Value::as_str)?;
+        let sub_doc_gen = obj.get("subDocGen").and_then(serde_json::Value::as_u64)?;
+        let items = obj.get("chunks").and_then(serde_json::Value::as_array)?;
+        if items.len() > 2 {
+            return None;
+        }
+        if !self.verify_drained_document(doc_epoch, doc_id, sub_doc_gen) {
+            return None;
+        }
+        Some(items)
+    }
+    pub fn subscribe_audio_doc_authority(&self) -> tokio::sync::watch::Receiver<AudioDocAuthority> {
+        self.doc_epoch_tx.subscribe()
+    }
+
+    /// Validates a single base64-encoded 24 kHz mono PCM16LE chunk against the caller's
+    /// captured `(producer_run, expected_doc_epoch)` and publishes it to current-run subscribers.
+    pub async fn admit_and_broadcast_audio_chunk(
+        &self,
+        producer_run: Uuid,
+        expected_doc_epoch: u64,
+        b64: &str,
+    ) -> Option<ProducerAudioChunk> {
+        if b64.is_empty() || b64.len() > MAX_AUDIO_BASE64_BYTES {
+            return None;
+        }
+        if !self.audio_doc_authority().is_admissible(expected_doc_epoch)
+            || *self.current_run.read().await != Some(producer_run)
+            || self.visible_viewer_count().await == 0
+        {
+            return None;
+        }
+        let reservation = global_memory_controller()
+            .try_reserve(b64.len() + 256)
+            .ok()?;
+        let decoded = BASE64_STANDARD.decode(b64).ok()?;
+        if decoded.is_empty() || decoded.len() % 2 != 0 || decoded.len() > MAX_AUDIO_PCM_BYTES {
+            return None;
+        }
+        if !self.audio_doc_authority().is_admissible(expected_doc_epoch) {
+            return None;
+        }
+        let prev_seq = self
+            .audio_seq
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
+            .ok()?;
+        let seq = prev_seq + 1;
+        let chunk = ProducerAudioChunk {
+            browser_session_id: self.browser_session_id.clone(),
+            browser_incarnation: self.browser_incarnation.clone(),
+            profile_epoch: self.profile_epoch.to_string(),
+            producer_run: producer_run.to_string(),
+            doc_epoch: expected_doc_epoch,
+            audio_seq: seq.to_string(),
+            sample_rate: AUDIO_SAMPLE_RATE,
+            channels: AUDIO_CHANNELS,
+            encoding: AUDIO_ENCODING_PCM16LE.to_string(),
+            data: Arc::<str>::from(b64),
+            reservation: Some(Arc::new(reservation)),
+        };
+        let _ = self.audio_broadcast.send(chunk.clone());
+        Some(chunk)
     }
     /// Process a single incoming screencast frame:
     /// - Validate length / bounds first.
@@ -929,7 +1925,7 @@ impl ScreencastProducer {
         // 2. Capture screenshot
         let shot_params = CaptureScreenshotParams::builder()
             .format(CaptureScreenshotFormat::Jpeg)
-            .quality(65)
+            .quality(i64::from(self.jpeg_quality))
             .build();
 
         let shot_res = match self
@@ -1030,6 +2026,10 @@ impl ScreencastProducer {
             profile_epoch: self.profile_epoch,
             viewport_epoch: self.viewport_epoch.clone(),
             frame_seq: self.frame_seq.clone(),
+            audio_seq: self.audio_seq.clone(),
+            audio_doc_epoch: self.audio_doc_epoch.clone(),
+            doc_epoch_tx: self.doc_epoch_tx.clone(),
+            nav_listener: self.nav_listener.clone(),
             cdp_client: self.cdp_client.clone(),
             target_id: self.target_id.clone(),
             page_session_id: self.page_session_id.clone(),
@@ -1043,7 +2043,9 @@ impl ScreencastProducer {
             ledger: self.ledger.clone(),
             screenshot_taken_in_epoch: self.screenshot_taken_in_epoch.clone(),
             governor_interval: self.governor_interval,
+            jpeg_quality: self.jpeg_quality,
             frame_broadcast: self.frame_broadcast.clone(),
+            audio_broadcast: self.audio_broadcast.clone(),
             active_run_cancel: self.active_run_cancel.clone(),
             geometry: self.geometry.clone(),
             page_setup: self.page_setup.clone(),
@@ -1544,5 +2546,519 @@ mod request_policy_tests {
             producer.apply_stealth_and_focus(&page_sid).await.is_err(),
             "stealth setup must return error when CDP session is closed/rejected"
         );
+    }
+
+    #[tokio::test]
+    async fn capture_policy_and_audio_chunk_admission_enforce_bounds_and_run_fencing() {
+        let mut browser = mock_browser(false).await;
+        let session_uuid = Uuid::new_v4().to_string();
+        let incarnation_uuid = Uuid::new_v4().to_string();
+        let producer = ScreencastProducer::new(
+            session_uuid.clone(),
+            incarnation_uuid.clone(),
+            2,
+            1,
+            browser.client.clone(),
+            "PAGE-AUDIO".to_string(),
+            TargetGeometry {
+                css_width: 1280.0,
+                css_height: 720.0,
+                dpr: 1.0,
+                offset_top: 0.0,
+                scroll_x: 0.0,
+                scroll_y: 0.0,
+                page_scale: 1.0,
+                visual_offset_x: 0.0,
+                visual_offset_y: 0.0,
+            },
+        )
+        .with_capture_policy(24, 75);
+        assert_eq!(producer.jpeg_quality(), 75);
+        assert_eq!(producer.governor_interval(), Duration::from_secs_f64(1.0 / 24.0));
+
+        let mut audio_rx = producer.subscribe_audio();
+        let sub_epoch = Uuid::new_v4().to_string();
+        producer.register_viewer_demand("v1", &sub_epoch, true).await;
+
+        // Drain attach + enable + deviceMetrics + startScreencast commands
+        let mut saw_start = false;
+        for _ in 0..4 {
+            let cmd = next_command(&mut browser).await;
+            if cmd["method"] == "Page.startScreencast" {
+                assert_eq!(cmd["params"]["quality"], 75);
+                saw_start = true;
+            }
+        }
+        assert!(saw_start, "Page.startScreencast must use configured quality 75");
+
+        let active_run = producer.current_run().await.expect("active producer run");
+        let valid_pcm_b64 = BASE64_STANDARD.encode([0x12u8, 0x34, 0x56, 0x78]);
+
+        // Valid chunk admitted and broadcast with monotonic audioSeq
+        let doc_epoch = producer.audio_doc_epoch();
+        let c1 = producer
+            .admit_and_broadcast_audio_chunk(active_run, doc_epoch, &valid_pcm_b64)
+            .await
+            .expect("admit valid chunk 1");
+        assert_eq!(c1.audio_seq, "1");
+        assert_eq!(c1.doc_epoch, doc_epoch);
+        assert_eq!(c1.sample_rate, 24_000);
+        assert_eq!(c1.channels, 1);
+        assert_eq!(c1.encoding, "pcm16le");
+
+        let received = timeout(Duration::from_secs(1), audio_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(received, c1);
+
+        // Stale captured doc_epoch rejected after navigation advances epoch even with 0 prior watch receivers (C5-M1)
+        producer.advance_audio_doc_epoch();
+        let late_watch_rx = producer.subscribe_audio_doc_authority();
+        assert_eq!(late_watch_rx.borrow().committed_epoch, 2, "watch value must retain update even when advanced with 0 receivers");
+        assert!(producer
+            .admit_and_broadcast_audio_chunk(active_run, doc_epoch, &valid_pcm_b64)
+            .await
+            .is_none());
+        let new_doc_epoch = late_watch_rx.borrow().committed_epoch;
+        let c2 = producer
+            .admit_and_broadcast_audio_chunk(active_run, new_doc_epoch, &valid_pcm_b64)
+            .await
+            .expect("admit valid chunk 2 on updated doc_epoch");
+        assert_eq!(c2.doc_epoch, 2);
+        assert_eq!(c2.audio_seq, "2");
+
+        // C6-H6, C7-H6, C8-H6, C9-H6, C10-H6, C10-H2:
+        // 1. Out-of-bounds no-op history resolution AFTER session watcher already fenced epoch 3:
+        assert!(producer.verify_drained_document(2, "doc-initial", 1));
+        producer.request_audio_doc_epoch(3);
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), None);
+        producer.resolve_noop_audio_doc_epoch(3);
+        assert_eq!(
+            producer.audio_doc_authority().active_committed_epoch(),
+            Some(3),
+            "no-op history resolution must restore settled authority and un-retire doc-initial (C10-H2)"
+        );
+        assert!(
+            producer.verify_drained_document(3, "doc-initial", 1),
+            "doc-initial must remain valid after out-of-bounds no-op history resolution"
+        );
+
+        // 2. C10-H6: API A requests epoch 4, yields before dispatch while API B supersedes with epoch 5;
+        //    API A then dispatches with explicit_epoch=Some(4) and commits loader "L-A4" (commit before RPC response!).
+        producer.request_audio_doc_epoch(4);
+        producer.request_audio_doc_epoch(5);
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), None);
+        // Unmatched loader commit when no response matches must fail closed:
+        producer
+            .nav_listener
+            .on_frame_navigated(Some("PAGE-AUDIO"), true, Some("L-UNRELATED"));
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), None);
+        // API A dispatches late with its own captured explicit_epoch = Some(4):
+        assert!(producer.nav_listener.on_navigation_dispatched(
+            Some("PAGE-AUDIO"),
+            101,
+            "Page.navigate",
+            Some(4),
+            Some("http://127.0.0.1/page-a"),
+        ));
+        // API B dispatches with its own captured explicit_epoch = Some(5) before either response arrives:
+        assert!(producer.nav_listener.on_navigation_dispatched(
+            Some("PAGE-AUDIO"),
+            102,
+            "Page.navigate",
+            Some(5),
+            Some("http://127.0.0.1/page-b"),
+        ));
+        producer
+            .nav_listener
+            .on_frame_navigated(Some("PAGE-AUDIO"), true, Some("L-A4"));
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), None);
+        producer.nav_listener.on_navigation_response(
+            Some("PAGE-AUDIO"),
+            101,
+            "Page.navigate",
+            Some("L-A4"),
+            false,
+        );
+        assert_eq!(
+            producer.audio_doc_authority().committed_epoch,
+            4,
+            "API A commit must only advance committed_epoch to 4, never 5"
+        );
+        assert_eq!(
+            producer.audio_doc_authority().active_committed_epoch(),
+            None,
+            "API A delayed dispatch/commit must NOT authorize superseding API B epoch 5"
+        );
+        assert!(!producer.verify_drained_document(5, "doc-a1-delayed", 1));
+        // Now API B's RPC response ("L-B5") and FrameNavigated ("L-B5") arrive -> establishes epoch 5!
+        producer.nav_listener.on_navigation_response(
+            Some("PAGE-AUDIO"),
+            102,
+            "Page.navigate",
+            Some("L-B5"),
+            false,
+        );
+        producer
+            .nav_listener
+            .on_frame_navigated(Some("PAGE-AUDIO"), true, Some("L-B5"));
+        assert!(producer.verify_drained_document(5, "doc-a2-fresh", 1));
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), Some(5));
+        // C11-H6 Subcase 1: Stale explicit dispatch with epoch <= committed_epoch (4 <= 5) is rejected BEFORE queue exposure!
+        assert!(
+            !producer.nav_listener.on_navigation_dispatched(
+                Some("PAGE-AUDIO"),
+                199,
+                "Page.navigate",
+                Some(4),
+                Some("http://127.0.0.1/page-a"),
+            ),
+            "stale explicit dispatch (epoch 4 <= committed 5) must be rejected before queue exposure (C11-H6)"
+        );
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), Some(5));
+        assert_eq!(
+            producer.audio_doc_authority().committed_doc_id.as_deref(),
+            Some("doc-a2-fresh"),
+            "rejected stale dispatch must leave doc-a2-fresh active at epoch 5"
+        );
+        // Stale drain from a retired docId ("doc-initial") is rejected WITHOUT demoting the active valid epoch 5!
+        assert!(!producer.verify_drained_document(5, "doc-initial", 1));
+        assert_eq!(
+            producer.audio_doc_authority().active_committed_epoch(),
+            Some(5),
+            "stale drain from retired document must not demote an already verified active document"
+        );
+        // Same-document transition (history.pushState / replaceState) preserves "doc-a2-fresh", advances subDocGen, and rejects pre-pushState subDocGen
+        producer.commit_same_document_audio_epoch();
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), Some(6));
+        assert!(
+            !producer.verify_drained_document(6, "doc-a2-fresh", 1),
+            "pre-pushState subDocGen=1 must be rejected after same-document transition"
+        );
+        assert!(
+            producer.verify_drained_document(6, "doc-a2-fresh", 2),
+            "same-document transition must keep doc-a2-fresh valid once subDocGen advances to 2"
+        );
+        let new_doc_epoch = producer.audio_doc_epoch();
+        assert_eq!(new_doc_epoch, 6);
+        let c3 = producer
+            .admit_and_broadcast_audio_chunk(active_run, new_doc_epoch, &valid_pcm_b64)
+            .await
+            .expect("admit valid chunk after matching native commit");
+        assert_eq!(c3.doc_epoch, 6);
+        assert_eq!(c3.audio_seq, "3");
+        // C9-H1: Legacy raw array responses and malformed drainDoc envelopes are rejected before chunk admission
+        let raw_arr = json!([valid_pcm_b64.clone()]);
+        assert!(
+            producer.parse_and_verify_drain_doc_value(6, &raw_arr).is_none(),
+            "legacy raw array response must be rejected (C9-H1)"
+        );
+        let missing_doc_id = json!({ "subDocGen": 2, "chunks": [valid_pcm_b64.clone()] });
+        assert!(producer.parse_and_verify_drain_doc_value(6, &missing_doc_id).is_none());
+        let missing_sub_gen = json!({ "docId": "doc-a2-fresh", "chunks": [valid_pcm_b64.clone()] });
+        assert!(producer.parse_and_verify_drain_doc_value(6, &missing_sub_gen).is_none());
+        let retired_env = json!({ "docId": "doc-initial", "subDocGen": 2, "chunks": [valid_pcm_b64.clone()] });
+        assert!(producer.parse_and_verify_drain_doc_value(6, &retired_env).is_none());
+        let valid_env = json!({ "docId": "doc-a2-fresh", "subDocGen": 2, "chunks": [valid_pcm_b64.clone()] });
+        assert_eq!(
+            producer.parse_and_verify_drain_doc_value(6, &valid_env).map(Vec::len),
+            Some(1)
+        );
+        // 3. C10-H6: Page.reload (expects_loader_id = false) single in-flight transition:
+        producer.request_audio_doc_epoch(7);
+        // C11-H2: Same-document event from old page while cross-document Page.reload is pending must NOT consume or authorize epoch 7!
+        assert!(producer.nav_listener.on_navigation_dispatched(
+            Some("PAGE-AUDIO"),
+            103,
+            "Page.reload",
+            Some(7),
+            None,
+        ));
+        producer.nav_listener.on_navigated_within_document(
+            Some("PAGE-AUDIO"),
+            Some("PAGE-AUDIO"),
+            Some("http://127.0.0.1/old#hash"),
+            Some("fragment"),
+        );
+        assert_eq!(
+            producer.audio_doc_authority().active_committed_epoch(),
+            None,
+            "old-page same-document event must not consume or authorize pending cross-document operation (C11-H2)"
+        );
+        producer
+            .nav_listener
+            .on_frame_navigated(Some("PAGE-AUDIO"), true, Some("L-RELOAD-7"));
+        assert_eq!(
+            producer.audio_doc_authority().active_committed_epoch(),
+            None,
+            "Page.reload must wait for both FrameNavigated and RPC response_ok before committing"
+        );
+        producer.nav_listener.on_navigation_response(
+            Some("PAGE-AUDIO"),
+            103,
+            "Page.reload",
+            None,
+            false,
+        );
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), Some(7));
+        assert!(producer.verify_drained_document(7, "doc-reloaded-7", 1));
+
+        // 4. C11-H2 & C12-H2: API-initiated same-document fragment addition (`#frag`) AND fragment removal (`/page#frag` -> `/page`)
+        //    with real same-document `Page.navigate` response (`loader_id = None`) restore `"doc-reloaded-7"` and fence old `subDocGen`!
+        producer.request_audio_doc_epoch(8);
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), None);
+        assert!(producer.nav_listener.on_navigation_dispatched(
+            Some("PAGE-AUDIO"),
+            104,
+            "Page.navigate",
+            Some(8),
+            Some("http://127.0.0.1/page#frag"),
+        ));
+        // Event-before-response ordering with `loader_id = None`:
+        producer.nav_listener.on_navigated_within_document(
+            Some("PAGE-AUDIO"),
+            Some("PAGE-AUDIO"),
+            Some("http://127.0.0.1/page#frag"),
+            Some("fragment"),
+        );
+        producer.nav_listener.on_navigation_response(
+            Some("PAGE-AUDIO"),
+            104,
+            "Page.navigate",
+            None,
+            false,
+        );
+        assert_eq!(
+            producer.audio_doc_authority().active_committed_epoch(),
+            Some(8),
+            "API fragment addition with loader_id=None must commit epoch 8 via NavigatedWithinDocument"
+        );
+        assert!(
+            !producer.verify_drained_document(8, "doc-reloaded-7", 1),
+            "pre-fragment subDocGen=1 must be rejected after API fragment navigation"
+        );
+        assert!(
+            producer.verify_drained_document(8, "doc-reloaded-7", 2),
+            "surviving document doc-reloaded-7 must be restored/un-retired with subDocGen=2 after API fragment navigation (C11-H2)"
+        );
+
+        // C12-H2: Fragment removal (`/page#frag` -> `/page`, no `#` in target URL!) in response-before-event ordering:
+        producer.request_audio_doc_epoch(9);
+        assert!(producer.nav_listener.on_navigation_dispatched(
+            Some("PAGE-AUDIO"),
+            105,
+            "Page.navigate",
+            Some(9),
+            Some("http://127.0.0.1/page"),
+        ));
+        producer.nav_listener.on_navigation_response(
+            Some("PAGE-AUDIO"),
+            105,
+            "Page.navigate",
+            None,
+            false,
+        );
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), None);
+        producer.nav_listener.on_navigated_within_document(
+            Some("PAGE-AUDIO"),
+            Some("PAGE-AUDIO"),
+            Some("http://127.0.0.1/page"),
+            Some("fragment"),
+        );
+        assert_eq!(
+            producer.audio_doc_authority().active_committed_epoch(),
+            Some(9),
+            "API fragment removal (/page#frag -> /page) must restore surviving document at epoch 9 (C12-H2)"
+        );
+        assert!(!producer.verify_drained_document(9, "doc-reloaded-7", 2));
+        assert!(producer.verify_drained_document(9, "doc-reloaded-7", 3));
+
+        // 5. C12-H6: Cross-document `Page.navigate` to `/other#anchor` (and cross-document history) where old page
+        //    fires `pushState`/same-document event before response, and response returns a new `loaderId = Some("L-CROSS-10")`!
+        producer.request_audio_doc_epoch(10);
+        assert!(producer.nav_listener.on_navigation_dispatched(
+            Some("PAGE-AUDIO"),
+            106,
+            "Page.navigate",
+            Some(10),
+            Some("http://127.0.0.1/other#anchor"),
+        ));
+        // Old page fires pushState AND even a spoofed same-URL fragment event before response:
+        producer.nav_listener.on_navigated_within_document(
+            Some("PAGE-AUDIO"),
+            Some("PAGE-AUDIO"),
+            Some("http://127.0.0.1/page-pushed"),
+            Some("historyApi"),
+        );
+        producer.nav_listener.on_navigated_within_document(
+            Some("PAGE-AUDIO"),
+            Some("PAGE-AUDIO"),
+            Some("http://127.0.0.1/other#anchor"),
+            Some("fragment"),
+        );
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), None);
+        // Actual Page.navigate response supplies new loaderId ("L-CROSS-10"): MUST clear same_doc_committed/restore and stay pending!
+        producer.nav_listener.on_navigation_response(
+            Some("PAGE-AUDIO"),
+            106,
+            "Page.navigate",
+            Some("L-CROSS-10"),
+            false,
+        );
+        assert_eq!(
+            producer.audio_doc_authority().active_committed_epoch(),
+            None,
+            "cross-document Page.navigate with loaderId must NOT be committed by old-page same-document event (C12-H6)"
+        );
+        assert!(!producer.verify_drained_document(10, "doc-reloaded-7", 4));
+        // Only when the matching cross-document FrameNavigated("L-CROSS-10") arrives does epoch 10 commit, and old doc-reloaded-7 stays retired:
+        producer
+            .nav_listener
+            .on_frame_navigated(Some("PAGE-AUDIO"), true, Some("L-CROSS-10"));
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), Some(10));
+        assert!(
+            !producer.verify_drained_document(10, "doc-reloaded-7", 4),
+            "old document must remain retired after cross-document /other#anchor commit (C12-H6)"
+        );
+        assert!(producer.verify_drained_document(10, "doc-other-10", 1));
+
+        // 6. C11-H6 Subcase 2: Already-admitted old operation (epoch 11) completing AFTER newer operation (epoch 12) already committed!
+        producer.request_audio_doc_epoch(11);
+        assert!(producer.nav_listener.on_navigation_dispatched(
+            Some("PAGE-AUDIO"),
+            107,
+            "Page.navigate",
+            Some(11),
+            Some("http://127.0.0.1/slow-11"),
+        ));
+        producer.request_audio_doc_epoch(12);
+        assert!(producer.nav_listener.on_navigation_dispatched(
+            Some("PAGE-AUDIO"),
+            108,
+            "Page.navigate",
+            Some(12),
+            Some("http://127.0.0.1/fast-12"),
+        ));
+        // Newer operation (108, epoch 12) commits FIRST and binds "doc-b12":
+        producer.nav_listener.on_navigation_response(
+            Some("PAGE-AUDIO"),
+            108,
+            "Page.navigate",
+            Some("L-B12"),
+            false,
+        );
+        producer
+            .nav_listener
+            .on_frame_navigated(Some("PAGE-AUDIO"), true, Some("L-B12"));
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), Some(12));
+        assert!(producer.verify_drained_document(12, "doc-b12", 1));
+        // Now already-admitted older operation (107, epoch 11) completes late and replaces native document:
+        producer.nav_listener.on_navigation_response(
+            Some("PAGE-AUDIO"),
+            107,
+            "Page.navigate",
+            Some("L-A11-LATE"),
+            false,
+        );
+        producer
+            .nav_listener
+            .on_frame_navigated(Some("PAGE-AUDIO"), true, Some("L-A11-LATE"));
+        assert_eq!(
+            producer.audio_doc_authority().active_committed_epoch(),
+            None,
+            "late completion of already-admitted older operation must fence authority rather than leaving epoch 12 open (C11-H6)"
+        );
+        assert!(
+            !producer.verify_drained_document(12, "doc-a11-late", 1),
+            "stale late page must NOT be accepted under newer epoch 12"
+        );
+        assert!(!producer.verify_drained_document(11, "doc-a11-late", 1));
+        // Recover cleanly on epoch 13:
+        producer.request_audio_doc_epoch(13);
+        assert!(producer.nav_listener.on_navigation_dispatched(
+            Some("PAGE-AUDIO"),
+            109,
+            "Page.navigate",
+            Some(13),
+            Some("http://127.0.0.1/recover-13"),
+        ));
+        producer.nav_listener.on_navigation_response(
+            Some("PAGE-AUDIO"),
+            109,
+            "Page.navigate",
+            Some("L-13"),
+            false,
+        );
+        producer
+            .nav_listener
+            .on_frame_navigated(Some("PAGE-AUDIO"), true, Some("L-13"));
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), Some(13));
+        assert!(producer.verify_drained_document(13, "doc-recover-13", 1));
+
+        // Cross-document Page.navigateToHistoryEntry with old-page pushState injection before FrameNavigated:
+        producer.request_audio_doc_epoch(14);
+        assert!(producer.nav_listener.on_navigation_dispatched(
+            Some("PAGE-AUDIO"),
+            110,
+            "Page.navigateToHistoryEntry",
+            Some(14),
+            Some("http://127.0.0.1/page#frag"),
+        ));
+        producer.nav_listener.on_navigated_within_document(
+            Some("PAGE-AUDIO"),
+            Some("PAGE-AUDIO"),
+            Some("http://127.0.0.1/other-pushed"),
+            Some("historyApi"),
+        );
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), None);
+        producer.nav_listener.on_navigation_response(
+            Some("PAGE-AUDIO"),
+            110,
+            "Page.navigateToHistoryEntry",
+            None,
+            false,
+        );
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), None);
+        producer
+            .nav_listener
+            .on_frame_navigated(Some("PAGE-AUDIO"), true, Some("L-HIST-14"));
+        assert_eq!(producer.audio_doc_authority().active_committed_epoch(), Some(14));
+        assert!(!producer.verify_drained_document(14, "doc-recover-13", 1));
+        assert!(producer.verify_drained_document(14, "doc-hist-14", 1));
+        let new_doc_epoch = producer.audio_doc_epoch();
+        assert_eq!(new_doc_epoch, 14);
+        // Odd byte count (3 bytes) rejected
+        let odd_b64 = BASE64_STANDARD.encode([1u8, 2, 3]);
+        assert!(producer
+            .admit_and_broadcast_audio_chunk(active_run, new_doc_epoch, &odd_b64)
+            .await
+            .is_none());
+
+        // Stale run rejected
+        let stale_run = Uuid::new_v4();
+        assert!(producer
+            .admit_and_broadcast_audio_chunk(stale_run, new_doc_epoch, &valid_pcm_b64)
+            .await
+            .is_none());
+
+        // u64::MAX sequence boundary never wraps to 0 or emits sequence 1
+        producer.audio_seq.store(u64::MAX, Ordering::SeqCst);
+        assert!(producer
+            .admit_and_broadcast_audio_chunk(active_run, new_doc_epoch, &valid_pcm_b64)
+            .await
+            .is_none());
+        assert_eq!(producer.audio_seq.load(Ordering::SeqCst), u64::MAX);
+
+        // Zero visible viewers rejects audio admission
+        producer.audio_seq.store(1, Ordering::SeqCst);
+        producer.remove_viewer_demand(&sub_epoch).await;
+        assert!(producer
+            .admit_and_broadcast_audio_chunk(active_run, new_doc_epoch, &valid_pcm_b64)
+            .await
+            .is_none());
+
+        let _ = producer.stop_screencast().await;
+        browser.client.close().await;
     }
 }

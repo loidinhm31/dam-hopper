@@ -101,10 +101,10 @@ max_targets = 2 # Shared native target capacity per principal across REST, raw C
 max_viewers = 2 # Max concurrent viewers per target (1..=16)
 max_raw_cdp_connections = 2 # Max raw CDP proxy connections (1..=8)
 memory_ceiling_bytes = 134217728 # Hard memory ceiling (default 128 MiB, 32 MiB..=1 GiB)
-jpeg_quality = 65 # Screencast JPEG quality (10..=100)
+jpeg_quality = 75 # Screencast JPEG quality (10..=100)
 max_width = 1280 # Capture frame width (64..=1920)
 max_height = 900 # Capture frame height (64..=1080)
-frame_rate_fps = 10 # Capture frame rate (1..=30)
+frame_rate_fps = 24 # Capture frame rate (1..=30)
 ```
 
 **Configuration Fields:**
@@ -119,9 +119,12 @@ frame_rate_fps = 10 # Capture frame rate (1..=30)
 | `allowed_dev_origins` | string[] | `[]` | Approved developer debug origins. Same strict validation as target origins. |
 | `denied_destinations` | string[] | Metadata IPs | Blocked destination addresses. Accepts IP, IP CIDR, hostname, or `host:port`. |
 
-**Validation & Operational Constraints:**
+**Validation, Streaming Policy & Operational Constraints:**
 
-- **Memory Ceiling Cross-Product:** Estimated reservation `(max_targets * 12.1 MiB) + (max_viewers * 4.2 MiB) + (max_raw_cdp_connections * 8.0 MiB)` must not exceed `memory_ceiling_bytes`. Overbudget configuration fails validation with `MemoryCeilingExceeded`.
+- **Video Capture & Delivery Policy (`budgets.frame_rate_fps`, `budgets.jpeg_quality`):** Production defaults are **24 FPS** and **JPEG quality 75** (`BrowserBudgetsConfig`, `EffectiveBounds`). Configured `frame_rate_fps` (`1..=30`) and `jpeg_quality` (`10..=100`) propagate end-to-end across `Page.startScreencast`, `Page.captureScreenshot` fallback, `ScreencastProducer::with_capture_policy`, and per-viewer `ViewerCreditController::with_min_interval` pacing, paired with a `15ms` pending-frame flush check in `run_media_session`. Direct `ScreencastProducer::new` and `ViewerCreditController::new` constructors retain legacy `100ms` (10 FPS) / JPEG `65` defaults for compatibility.
+- **Chromium Autoplay & Media Privacy Defaults:** Supervised Chromium launches with `--autoplay-policy=no-user-gesture-required` (exact allowlisted flag in `is_allowlisted_arg`; default sandboxing, TLS verification, and site isolation stay active). Document-start preload (`stealth.rs`) installs unified non-stacked `navigator.permissions.query` defaults (`27` entries + `Notification.permission` correlation + native fallback), privacy-fenced `navigator.mediaDevices.enumerateDevices()` (blanks `deviceId`, `label`, and `groupId` while preserving `kind` and count), and `HTMLMediaElement.prototype.canPlayType` / `MediaSource.isTypeSupported` codec normalization without advertising unsupported EME/DRM.
+- **Live Tab Audio Streaming & Viewer Controls:** Streams `24 kHz` mono PCM16LE (`pcm16le`) `audioChunk` JSON text frames over `/api/browser/media` while a visible viewer is attached, independently of BHJF video credits and without extra `config.toml` keys. Audio playback and Mute/Unmute (`"Unlock Audio"`) controls in `BrowserApp` are ephemeral and viewer-local (no control lease required), and synchronous `PcmPlayer.flush()` immediately silences queued playback on mute, hide, Cognito mode, LockScreen, profile reset, or navigation.
+- **Memory Ceiling Cross-Product:** Estimated reservation `(max_targets * 12.1 MiB) + (max_viewers * 4.2 MiB) + (max_raw_cdp_connections * 8.0 MiB)`—covering the per-target `broadcast::channel(4)` shared `Arc<str>` audio ring (`<= 26,624 B` inside `103,792 B` target headroom) and per-viewer `<= 8 KiB` serialized `audioChunk` envelope—must not exceed `memory_ceiling_bytes`. Overbudget configuration fails validation with `MemoryCeilingExceeded`.
 - **Permissions Enforcement:** Unsafe executable permissions (missing execute bit, world-writable) or profile root permissions (symlink, group/world accessible) fail validation.
 - **Restart Boundaries:** Changes to `enabled`, `executable_path`, `profile_root`, or `budgets.max_processes` require a server restart and do not hot-swap active directories.
 - **Shared Target Capacity:** `budgets.max_targets` bounds total concurrent native pages (REST sessions, raw CDP instances, and popups). Exceeding this limit returns HTTP 429 `kind: "browserBusy"`.

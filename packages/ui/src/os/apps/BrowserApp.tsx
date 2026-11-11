@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { generateUUID } from "@/lib/utils.js";
 import type { OsWindow, ResourceClaimKey } from "../types.js";
 import { useWindowOwner, useWindowContext } from "../window-context.js";
@@ -11,8 +11,11 @@ import {
 } from "../browser-session-sync.js";
 import {
   clearBrowserViewFenceForProfile,
+  isBrowserAudioBlocked,
   registerBrowserStreamSlot,
+  requestBrowserAudioUnlock,
   requestBrowserProxyFocus,
+  subscribeBrowserAudioBlocked,
   updateBrowserStreamSlot,
 } from "../BrowserStreamKeepAliveHost.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
@@ -197,6 +200,12 @@ function BrowserResourceView({
   const navigationActionRef = useRef<AbortController | null>(null);
   const [navigationPending, setNavigationPending] = useState(false);
   const [navigationError, setNavigationError] = useState<string | null>(null);
+  const [audioMuted, setAudioMuted] = useState(false);
+  const audioBlocked = useSyncExternalStore(
+    subscribeBrowserAudioBlocked,
+    () => isBrowserAudioBlocked(window.id),
+    () => false,
+  );
   const windows = useWindowStore((s) => s.session.windows);
   useEffect(() => {
     setAddressInput(previewUrl);
@@ -234,17 +243,43 @@ function BrowserResourceView({
     !isCognitoActive;
 
   // Register slot with root keep-alive host
+  const isVisibleRef = useRef(isVisible);
+  isVisibleRef.current = isVisible;
+  const audioMutedRef = useRef(audioMuted);
+  audioMutedRef.current = audioMuted;
+
+  // Register slot once per window lifetime; mute/visibility changes use updateBrowserStreamSlot
   useEffect(() => {
     const el = slotRef.current;
-    const unregister = registerBrowserStreamSlot(window.id, el, isVisible);
+    const unregister = registerBrowserStreamSlot(
+      window.id,
+      el,
+      isVisibleRef.current,
+      audioMutedRef.current,
+    );
     return () => {
       unregister();
     };
-  }, [window.id, isVisible]);
+  }, [window.id]);
 
   useLayoutEffect(() => {
-    updateBrowserStreamSlot(window.id, slotRef.current, isVisible);
-  }, [window.id, isVisible]);
+    updateBrowserStreamSlot(window.id, slotRef.current, isVisible, audioMuted);
+  }, [window.id, isVisible, audioMuted]);
+
+  const handleToggleAudio = useCallback(() => {
+    if (!audioMuted && audioBlocked) {
+      if (sessionId && isVisible) {
+        requestBrowserAudioUnlock(window.id, owner, sessionId);
+      }
+      return;
+    }
+    const nextMuted = !audioMuted;
+    setAudioMuted(nextMuted);
+    updateBrowserStreamSlot(window.id, slotRef.current, isVisible, nextMuted);
+    if (!nextMuted && sessionId && isVisible) {
+      requestBrowserAudioUnlock(window.id, owner, sessionId);
+    }
+  }, [audioBlocked, audioMuted, isVisible, owner, sessionId, window.id]);
 
   // Read authority before each explicit action; native navigation is independent
   // of our last rendered snapshot. A raced CAS rejection is refreshed, never replayed.
@@ -756,6 +791,34 @@ function BrowserResourceView({
           />
         </div>
 
+        <button
+          type="button"
+          data-testid="browser-audio-toggle-btn"
+          aria-label={
+            audioMuted
+              ? "Unmute audio"
+              : audioBlocked
+                ? "Unlock audio"
+                : "Mute audio"
+          }
+          aria-pressed={audioMuted}
+          disabled={!sessionId}
+          onClick={handleToggleAudio}
+          title={
+            audioMuted
+              ? "Unmute tab audio (viewer-local)"
+              : audioBlocked
+                ? "Click to unlock tab audio playback"
+                : "Mute tab audio (viewer-local)"
+          }
+          className={`px-2 py-0.5 rounded text-[10px] font-medium border ${
+            audioMuted || audioBlocked
+              ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+              : "bg-[var(--color-surface-2)] hover:bg-[var(--color-surface-3)] text-[var(--color-text)] border-[var(--color-border)]"
+          } disabled:opacity-40`}
+        >
+          {audioMuted ? "Muted" : audioBlocked ? "Unlock Audio" : "Audio"}
+        </button>
         {/* View-only vs Controller Indicator */}
         {isController ? (
           <div className="flex items-center gap-1">

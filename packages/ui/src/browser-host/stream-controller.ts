@@ -11,6 +11,13 @@
  */
 
 import {
+  AUDIO_CHANNELS,
+  AUDIO_ENCODING_PCM16LE,
+  AUDIO_SAMPLE_RATE,
+  MAX_AUDIO_BASE64_BYTES,
+  MAX_AUDIO_MESSAGE_BYTES,
+  MAX_AUDIO_PCM_BYTES,
+  type BrowserAudioChunk,
   type MediaClientControl,
   type ServerControlEvent,
   type TargetFrameHeader,
@@ -18,6 +25,37 @@ import {
 } from "../api/browser-host-types.js";
 import type { ViewerAttachmentCredentials } from "../api/browser-host-client.js";
 import { unpackBhjfFrame } from "./frame-protocol.js";
+
+const DECIMAL_SEQ_PATTERN = /^[1-9][0-9]{0,19}$/;
+const CANONICAL_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const textEncoder = new TextEncoder();
+const BASE64_CHUNK_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+const MAX_U64 = 18446744073709551615n;
+
+function parsePositiveU64(value: unknown): bigint | null {
+  if (typeof value !== "string" || !DECIMAL_SEQ_PATTERN.test(value)) return null;
+  const parsed = BigInt(value);
+  return parsed > 0n && parsed <= MAX_U64 ? parsed : null;
+}
+
+function isValidPcmBase64(b64: string): boolean {
+  if (
+    !b64 ||
+    b64.length > MAX_AUDIO_BASE64_BYTES ||
+    b64.length % 4 !== 0 ||
+    !BASE64_CHUNK_PATTERN.test(b64)
+  ) {
+    return false;
+  }
+  const pad = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+  const decodedBytes = (b64.length * 3) / 4 - pad;
+  return (
+    decodedBytes > 0 &&
+    decodedBytes % 2 === 0 &&
+    decodedBytes <= MAX_AUDIO_PCM_BYTES
+  );
+}
 
 export interface DrawnRect {
   drawX: number;
@@ -43,6 +81,8 @@ export interface StreamControllerOptions {
   canvas: HTMLCanvasElement;
   onGeometryChange?: (geom: TargetGeometry, inputTrusted: boolean) => void;
   onControlEvent?: (event: ServerControlEvent, credentials: ViewerAttachmentCredentials) => void;
+  onAudioChunk?: (chunk: BrowserAudioChunk, credentials: ViewerAttachmentCredentials) => void;
+  onAudioReset?: () => void;
   onStatusChange?: (status: StreamStatus) => void;
   onError?: (err: Error) => void;
   onPresentFrame?: (metrics: FramePresentMetrics) => void;
@@ -73,10 +113,11 @@ export class BrowserStreamController {
     inputTrusted: boolean,
   ) => void;
   private readonly onControlEvent?: StreamControllerOptions["onControlEvent"];
+  private readonly onAudioChunk?: StreamControllerOptions["onAudioChunk"];
+  private readonly onAudioReset?: StreamControllerOptions["onAudioReset"];
   private readonly onStatusChange?: (status: StreamStatus) => void;
   private readonly onError?: (err: Error) => void;
   private readonly onPresentFrame?: (metrics: FramePresentMetrics) => void;
-
   private mediaWs: WebSocket | null = null;
   private controlWs: WebSocket | null = null;
   private currentCredentials: ViewerAttachmentCredentials | null = null;
@@ -94,12 +135,22 @@ export class BrowserStreamController {
   private lastFrameHeader: TargetFrameHeader | null = null;
   private lastCachedBitmap: ImageBitmap | null = null;
   private status: StreamStatus = "idle";
+  private currentProducerRun: string | null = null;
+  private lastKnownProducerRun: string | null = null;
+  private lastAudioSeq = 0n;
+  private lastAudioDocEpoch = 1n;
+  private retiredAudioDocEpoch = 0n;
+  private seenAudioInCurrentDoc = false;
+  private audioAttachmentRetired = false;
+  private readonly retiredProducerRuns = new Set<string>();
 
   constructor(options: StreamControllerOptions) {
     this.canvas = options.canvas;
     this.ctx = this.canvas.getContext("2d");
     this.onGeometryChange = options.onGeometryChange;
     this.onControlEvent = options.onControlEvent;
+    this.onAudioChunk = options.onAudioChunk;
+    this.onAudioReset = options.onAudioReset;
     this.onStatusChange = options.onStatusChange;
     this.onError = options.onError;
     this.onPresentFrame = options.onPresentFrame;
@@ -135,8 +186,16 @@ export class BrowserStreamController {
   public attach(credentials: ViewerAttachmentCredentials): void {
     if (this.isDisposed) return;
 
-    // Invalidate active decode and previous pending frame on reattach
+    // Invalidate active decode, audio state, and previous pending frame on reattach
     this.decodeEpoch++;
+    this.audioAttachmentRetired = false;
+    this.retiredProducerRuns.clear();
+    this.lastKnownProducerRun = null;
+    this.lastAudioSeq = 0n;
+    this.lastAudioDocEpoch = 1n;
+    this.retiredAudioDocEpoch = 0n;
+    this.seenAudioInCurrentDoc = false;
+    this.resetAudioState();
     if (this.pending) {
       const prev = this.pending;
       this.pending = null;
@@ -151,6 +210,7 @@ export class BrowserStreamController {
     }
 
     this.detachSockets();
+    this.audioAttachmentRetired = false;
     this.currentCredentials = credentials;
     this.setStatus("connecting");
     try {
@@ -176,7 +236,19 @@ export class BrowserStreamController {
       };
 
       media.onmessage = (event: MessageEvent) => {
-        if (this.isDisposed || this.isPrivacyActive || this.mediaWs !== media) return;
+        if (
+          this.isDisposed ||
+          this.isPrivacyActive ||
+          !this.isVisible ||
+          this.mediaWs !== media ||
+          this.currentCredentials !== credentials
+        ) {
+          return;
+        }
+        if (typeof event.data === "string") {
+          this.handleIncomingMediaText(event.data, media, credentials);
+          return;
+        }
         if (!(event.data instanceof ArrayBuffer)) return;
 
         this.handleIncomingMediaMessage(event.data, media, subEpoch);
@@ -185,6 +257,8 @@ export class BrowserStreamController {
       media.onclose = () => {
         if (this.mediaWs === media) {
           this.mediaWs = null;
+          this.audioAttachmentRetired = true;
+          this.resetAudioState();
           if (this.status === "streaming") {
             this.setStatus("disconnected");
           }
@@ -214,6 +288,8 @@ export class BrowserStreamController {
       control.onclose = () => {
         if (this.controlWs === control) {
           this.controlWs = null;
+          this.audioAttachmentRetired = true;
+          this.resetAudioState();
         }
       };
     } catch (err) {
@@ -251,6 +327,144 @@ export class BrowserStreamController {
     }
   }
 
+  public resetAudioAuthority(minDocEpoch?: string | number | bigint): void {
+    if (minDocEpoch !== undefined) {
+      const targetEpoch = parsePositiveU64(String(minDocEpoch));
+      if (targetEpoch !== null) {
+        const retireBelow = targetEpoch - 1n;
+        const alreadyOnTargetDoc =
+          this.seenAudioInCurrentDoc && this.lastAudioDocEpoch >= targetEpoch;
+        const alreadyResetForTarget =
+          !this.seenAudioInCurrentDoc &&
+          this.retiredAudioDocEpoch >= retireBelow &&
+          this.lastAudioDocEpoch >= targetEpoch &&
+          this.currentProducerRun === null;
+        if (retireBelow > this.retiredAudioDocEpoch) {
+          this.retiredAudioDocEpoch = retireBelow;
+        }
+        if (alreadyOnTargetDoc || alreadyResetForTarget) {
+          return;
+        }
+        if (targetEpoch > this.lastAudioDocEpoch) {
+          this.lastAudioDocEpoch = targetEpoch;
+        }
+        this.seenAudioInCurrentDoc = false;
+        this.resetAudioState();
+        return;
+      }
+    }
+    if (this.lastAudioDocEpoch > this.retiredAudioDocEpoch) {
+      this.retiredAudioDocEpoch = this.lastAudioDocEpoch;
+    }
+    this.seenAudioInCurrentDoc = false;
+    this.resetAudioState();
+  }
+
+  private retireProducerRun(run: string): void {
+    if (this.retiredProducerRuns.size >= 16) {
+      const oldest = this.retiredProducerRuns.values().next().value;
+      if (oldest !== undefined) {
+        this.retiredProducerRuns.delete(oldest);
+      }
+    }
+    this.retiredProducerRuns.add(run);
+  }
+
+  private resetAudioState(): void {
+    this.currentProducerRun = null;
+    this.onAudioReset?.();
+  }
+
+  private handleIncomingMediaText(
+    raw: string,
+    socket: WebSocket,
+    credentials: ViewerAttachmentCredentials,
+  ): void {
+    if (
+      this.isDisposed ||
+      this.isPrivacyActive ||
+      !this.isVisible ||
+      this.audioAttachmentRetired ||
+      this.mediaWs !== socket ||
+      !this.controlWs ||
+      this.currentCredentials !== credentials ||
+      raw.length === 0 ||
+      raw.length > MAX_AUDIO_MESSAGE_BYTES ||
+      textEncoder.encode(raw).byteLength > MAX_AUDIO_MESSAGE_BYTES
+    ) {
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!parsed || typeof parsed !== "object") return;
+    const rec = parsed as Record<string, unknown>;
+    if (
+      rec.kind !== "audioChunk" ||
+      rec.browserSessionId !== credentials.browserSessionId ||
+      rec.browserIncarnation !== credentials.browserIncarnation ||
+      rec.profileEpoch !== String(credentials.profileEpoch) ||
+      rec.subscriptionEpoch !== credentials.subscriptionEpoch ||
+      typeof rec.producerRun !== "string" ||
+      !CANONICAL_UUID_PATTERN.test(rec.producerRun) ||
+      this.currentProducerRun === null ||
+      rec.producerRun !== this.currentProducerRun ||
+      this.retiredProducerRuns.has(rec.producerRun) ||
+      rec.sampleRate !== AUDIO_SAMPLE_RATE ||
+      rec.channels !== AUDIO_CHANNELS ||
+      rec.encoding !== AUDIO_ENCODING_PCM16LE ||
+      typeof rec.data !== "string" ||
+      !isValidPcmBase64(rec.data)
+    ) {
+      return;
+    }
+    const profileEpochVal = parsePositiveU64(rec.profileEpoch);
+    const docEpochVal = parsePositiveU64(rec.docEpoch);
+    const seqVal = parsePositiveU64(rec.audioSeq);
+    if (
+      typeof rec.docEpoch !== "string" ||
+      profileEpochVal === null ||
+      docEpochVal === null ||
+      docEpochVal <= this.retiredAudioDocEpoch ||
+      docEpochVal < this.lastAudioDocEpoch ||
+      seqVal === null ||
+      seqVal <= this.lastAudioSeq
+    ) {
+      return;
+    }
+    if (docEpochVal > this.lastAudioDocEpoch) {
+      if (docEpochVal - 1n > this.retiredAudioDocEpoch) {
+        this.retiredAudioDocEpoch = docEpochVal - 1n;
+      }
+      this.onAudioReset?.();
+    } else if (this.seenAudioInCurrentDoc && this.lastAudioSeq > 0n && seqVal > this.lastAudioSeq + 1n) {
+      this.onAudioReset?.();
+    }
+    this.lastAudioDocEpoch = docEpochVal;
+    this.seenAudioInCurrentDoc = true;
+    this.lastAudioSeq = seqVal;
+    this.onAudioChunk?.(
+      {
+        kind: "audioChunk",
+        browserSessionId: rec.browserSessionId,
+        browserIncarnation: rec.browserIncarnation,
+        profileEpoch: rec.profileEpoch,
+        producerRun: rec.producerRun,
+        subscriptionEpoch: rec.subscriptionEpoch,
+        docEpoch: rec.docEpoch,
+        audioSeq: rec.audioSeq as string,
+        sampleRate: AUDIO_SAMPLE_RATE,
+        channels: AUDIO_CHANNELS,
+        encoding: AUDIO_ENCODING_PCM16LE,
+        data: rec.data,
+      },
+      credentials,
+    );
+  }
+
   /**
    * Dispatches incoming raw BHJF frame with 1-active-decode + 1-pending-frame boundedness.
    */
@@ -272,7 +486,8 @@ export class BrowserStreamController {
     if (
       this.currentCredentials &&
       (header.browserSessionId !== this.currentCredentials.browserSessionId ||
-        header.browserIncarnation !== this.currentCredentials.browserIncarnation)
+        header.browserIncarnation !== this.currentCredentials.browserIncarnation ||
+        String(header.profileEpoch) !== String(this.currentCredentials.profileEpoch))
     ) {
       this.sendMediaControl(socket, {
         kind: "frameDiscarded",
@@ -284,7 +499,32 @@ export class BrowserStreamController {
       });
       return;
     }
+    if (this.retiredProducerRuns.has(header.producerRun)) {
+      this.sendMediaControl(socket, {
+        kind: "frameDiscarded",
+        subscriptionEpoch,
+        producerRun: header.producerRun,
+        viewportEpoch: header.viewportEpoch,
+        frameSeq: header.frameSeq,
+        reason: "obsolete",
+      });
+      return;
+    }
 
+    if (!this.audioAttachmentRetired) {
+      if (this.lastKnownProducerRun !== header.producerRun) {
+        if (this.lastKnownProducerRun !== null) {
+          this.retireProducerRun(this.lastKnownProducerRun);
+          this.onAudioReset?.();
+        }
+        this.lastKnownProducerRun = header.producerRun;
+        this.lastAudioSeq = 0n;
+        this.lastAudioDocEpoch = 1n;
+        this.retiredAudioDocEpoch = 0n;
+        this.seenAudioInCurrentDoc = false;
+      }
+      this.currentProducerRun = header.producerRun;
+    }
     // Geometry callback
     this.onGeometryChange?.(header.geometry, header.inputTrusted);
     if (this.isDecoding) {
@@ -589,6 +829,7 @@ export class BrowserStreamController {
 
   private detachSockets(): void {
     this.stopHeartbeat();
+    this.resetAudioState();
 
     const media = this.mediaWs;
     const control = this.controlWs;

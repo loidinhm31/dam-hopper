@@ -1,7 +1,7 @@
 # Host Browser CDP Streaming Architecture
 
 **Authority:** Backend Subsystem (`server/src/browser_host/`, `server/examples/browser_host_qualification.rs`)  
-**Status:** Supervised Principal Profiles, Admission Control, Leased Input, Raw CDP Gateway, Screencast Producer, Bounded Media Fanout, Decoder Pipeline, OS Root Lifecycle Cutover, Secure Selection / Confirmed Logout Reset, and Integrated Security & Platform Qualification (Phases 01–09 Automated Checks Qualified; Physical Device & Windows Release Host Gates Pending; Phase 10 Unblocked)
+**Status:** Supervised Principal Profiles, Admission Control, Leased Input, Raw CDP Gateway, Screencast & Live Tab Audio Streaming, Bounded Media Fanout, Decoder & WebAudio PCM Pipeline, OS Root Lifecycle Cutover, Secure Selection / Confirmed Logout Reset, and Cycle 13 Video/Audio Streaming Remediation (Automated Checks Qualified; Code Review 9/10 Approved With Notes; Live Output-Browser Qualification & Physical/Windows Gates Pending)
 
 This specification defines the architectural contracts, process containment boundaries, bounded CDP actor lifecycle, and binary wire framing for the Host Browser CDP Streaming subsystem.
 
@@ -13,7 +13,7 @@ The Host Browser subsystem provides candidate headless Chromium process manageme
 - **Identity Hierarchy:**
   - `browserSessionId`: Authoritative server-issued UUID representing a single logical page target, distinct from native Chromium target IDs.
   - `browserIncarnation`: Fresh UUID minted on each browser process launch.
-  - `profileEpoch`, `viewportEpoch`, `frameSeq`: Canonical decimal `u64` string counters matching `[1-9][0-9]{0,19}` with numeric values $\le 18446744073709551615$. Zero, leading zeros, signs, whitespace, and non-ASCII characters are rejected. Counters never wrap; exhaustion requires identity recreation.
+  - `profileEpoch`, `viewportEpoch`, `frameSeq`, `docEpoch`, `audioSeq`: Canonical decimal `u64` string counters matching `[1-9][0-9]{0,19}` with numeric values $\le 18446744073709551615$. Zero, leading zeros, signs, whitespace, and non-ASCII characters are rejected. Counters never wrap; exhaustion requires identity recreation. Within-page same-document audio transitions also track `subDocGen` (`>= 1`).
   - `producerRun`, `subscriptionEpoch`: Fresh UUIDs for screencast runs and viewer subscriptions.
 - **Trust Boundaries:** Raw CDP exposes full native browser and host privileges. Cooperative leases and target mappings do not sandbox an untrusted agent. Loopback debugging assumes local processes with loopback access can reach debug ports; stronger isolation requires external containerization.
 
@@ -64,9 +64,9 @@ Process management (`server/src/browser_host/process.rs`) supervises Chromium ex
 
 - **No Automatic Discovery:** `find_browser_executable(None)` fails closed with `ProcessError::ExecutableNotFound` when `DAM_HOPPER_BROWSER_EXECUTABLE` is not explicitly set. Automatic PATH or standard-directory scanning is prohibited.
 - **Strict Argument Allowlist (`is_allowlisted_arg`):**
-  - **Permitted Exact Flag & Prefixes:** Exact `--disable-blink-features=AutomationControlled` (prevents `navigator.webdriver = true` across main frames, cross-origin OOPIF iframes, and workers), plus prefixes `--window-size=`, `--user-agent=`, `--lang=`, `--force-device-scale-factor=`, `--default-background-color=`. Any other `--disable-blink-features*` value is rejected fail-closed.
+  - **Permitted Exact Flags & Prefixes:** Exact `--disable-blink-features=AutomationControlled` (prevents `navigator.webdriver = true` across main frames, cross-origin OOPIF iframes, and workers) and exact `--autoplay-policy=no-user-gesture-required` (applied by `BrowserProcess::launch` and allowlisted in `is_allowlisted_arg`), plus prefixes `--window-size=`, `--user-agent=`, `--lang=`, `--force-device-scale-factor=`, `--default-background-color=`. Other `--disable-blink-features*` or autoplay policy values fail closed.
   - **Explicitly Forbidden Flags:** `--remote-debugging*`, `--remote-allow-origins*`, `--user-data-dir*`, `--load-extension*`, `no-sandbox`, `disable-web-security`, `ignore-certificate-errors`, `disable-site-isolation`, `password-store`, `use-mock-keychain`, `disable-hang-monitor`, `disable-ipc-flooding`, `disable-renderer-backgrounding`, `disable-backgrounding-occluded`, `disable-background-timer-throttling`.
-  - **Platform-Coherent Chrome Identity & Focus Emulation (`server/src/browser_host/stealth.rs`):** On page session setup and cross-origin OOPIF `iframe` attachment (`Target.setAutoAttach`), `ScreencastProducer::apply_stealth_and_focus` queries `Browser.getVersion`, normalizes `HeadlessChrome/<ver>` to a frozen desktop Chrome User-Agent (`Chrome/<major>.0.0.0`) with matching `sec-ch-ua` Client Hints (`Emulation.setUserAgentOverride`), enables `Emulation.setFocusEmulationEnabled`, and injects a document-start anti-detection preload (`Page.addScriptToEvaluateOnNewDocument`). Allowed `Fetch.requestPaused` subresource/worker requests carrying `HeadlessChrome` headers are sanitized on `Fetch.continueRequest`.
+  - **Platform-Coherent Chrome Identity, Media Stealth & Audio Bridge (`server/src/browser_host/stealth.rs`):** On page session setup and cross-origin OOPIF `iframe` attachment (`Target.setAutoAttach`), `ScreencastProducer::apply_stealth_and_focus` preserves the exact command order `Browser.getVersion` $\rightarrow$ `Emulation.setFocusEmulationEnabled` $\rightarrow$ `Emulation.setUserAgentOverride` (`Chrome/<major>.0.0.0` + `sec-ch-ua`) $\rightarrow$ `Page.addScriptToEvaluateOnNewDocument` $\rightarrow$ `Runtime.evaluate` $\rightarrow$ `Target.setAutoAttach`, with zero `Runtime.enable` or `Runtime.addBinding`. `ANTI_DETECTION_SCRIPT` additionally installs: (1) a unified non-stacked `Permissions.prototype.query` hook (`27` defaults, `Notification.permission` correlation normalizing `'denied'` to `'default'`, native fallback); (2) privacy-fenced `navigator.mediaDevices.enumerateDevices()` blanking `deviceId`, `label`, and `groupId` while preserving `kind` and count; (3) `HTMLMediaElement.prototype.canPlayType` and `MediaSource.isTypeSupported` codec normalization (`video/mp4`, `audio/mp4`, `video/webm`, `audio/webm`, `audio/mpeg`, `audio/ogg`, `audio/wav`, `audio/flac` for H.264/AAC/AV1/VP8/VP9/Opus/Vorbis/Theora/FLAC/MP3 without advertising EME/DRM); and (4) a non-enumerable `EventTarget.prototype[Symbol.for('dh.a')]` 24 kHz mono PCM16LE capture bridge (`start`, `drain`, `drainDoc`, `drainPcm`, `stop`, `stopDoc`) tapping `<audio>`/`<video>` via `captureStream()` (with `createMediaElementSource` deduplication), `AudioNode.prototype.connect`/`disconnect` destination graphs, and child iframes (direct or bounded `postMessage` relay across up to 8 frames), mixing into a 24,000-sample `Int32Array` ring (16-source cap, 5-chunk ready queue up to 2,400 samples / 100 ms each, 3s drain lease, `rms < 0.0002` silence skip) and advancing `subDocGen` while clearing pre-transition chunks on `hashchange`, `popstate`, `History.prototype.pushState`/`replaceState`, and `runToken` rotation. Allowed `Fetch.requestPaused` subresource/worker requests carrying `HeadlessChrome` headers are sanitized on `Fetch.continueRequest`.
   - All default Chromium sandboxing, certificate verification, and site isolation protections remain active.
 
 ### Unix Process Group & Death-Pipe Watcher
@@ -211,18 +211,18 @@ The browser host subsystem is configured under `[server.browser]` in `config.tom
 | `max_viewers` | `2` | `1 ..= 16` | Maximum concurrent streaming viewers per target |
 | `max_raw_cdp_connections` | `2` | `1 ..= 8` | Maximum concurrent raw CDP proxy WebSocket connections |
 | `memory_ceiling_bytes` | `134,217,728` (128 MiB) | `33,554,432` (32 MiB) ..= `1,073,741,824` (1 GiB) | Hard memory ceiling checked against worst-case allocation |
-| `jpeg_quality` | `65` | `10 ..= 100` | Screencast JPEG encoding quality |
+| `jpeg_quality` | `75` | `10 ..= 100` | Screencast JPEG encoding quality |
 | `max_width` | `1280` | `64 ..= 1920` | Maximum capture frame width |
 | `max_height` | `900` | `64 ..= 1080` | Maximum capture frame height |
-| `frame_rate_fps` | `10` | `1 ..= 30` | Maximum screencast capture frame rate |
+| `frame_rate_fps` | `24` | `1 ..= 30` | Maximum screencast capture frame rate |
 
 ### Memory Reservation Bounds Calculation
 
 The budget validator enforces an analytical ceiling check:
 $$\text{estimated} = (\text{max\_targets} \times 12.1\text{ MiB}) + (\text{max\_viewers} \times 4.2\text{ MiB}) + (\text{max\_raw\_cdp} \times 8.0\text{ MiB}) \le \text{memory\_ceiling\_bytes}$$
 
-- **Per-Target (~12.1 MiB):** 2 MiB command budget + 4 MiB WS event buffer + 4 MiB candidate buffer + ~2.1 MiB complete BHJF buffer.
-- **Per-Viewer (~4.2 MiB):** 2 outstanding + 1 pending Bytes handles (buffered) + writer queue.
+- **Per-Target (~12.1 MiB):** 2 MiB command budget + 4 MiB WS event buffer + 4 MiB candidate buffer + ~2.1 MiB complete BHJF buffer + 103,792 B headroom covering the `broadcast::channel(4)` shared `Arc<str>` audio ring ($\le 26,624$ B).
+- **Per-Viewer (~4.2 MiB):** 2 outstanding + 1 pending Bytes handles (buffered) + writer queue (including $\le 8$ KiB serialized `audioChunk` envelope).
 - **Per-Raw-CDP (8.0 MiB):** 4 MiB frame buffer per direction.
 Configurations exceeding the memory ceiling fail validation with `BrowserConfigError::MemoryCeilingExceeded`.
 
@@ -439,7 +439,7 @@ The screencast producer (`server/src/browser_host/screencast.rs`) manages native
 
 - **No Task-per-Event:** Event ingress drains into one replaceable candidate mailbox without spawning background tasks per incoming frame.
 - **Base64 Bounds Enforcement:** Enforces base64 size ceiling (`MAX_BASE64_BYTES = 2_796_204`, corresponding to 2 MiB decoded payload) before admission.
-- **Late Base64 Decoding:** Overwritten candidates are dropped and ACKed immediately. Base64 is decoded only once when the governor selects the latest candidate at the 10 FPS boundary.
+- **Late Base64 Decoding & Configurable Capture Policy:** Overwritten candidates are dropped and ACKed immediately. Base64 is decoded once when the governor ticks at `self.governor_interval`. Production builds producers via `ScreencastProducer::with_capture_policy(fps, jpeg_quality)` (`1..=30` FPS, `10..=100` quality; defaults `24 FPS` / `JPEG 75` across `Page.startScreencast`, `update_geometry`, governor interval `Duration::from_secs_f64(1.0 / fps)`, and `Page.captureScreenshot` fallback), while `ScreencastProducer::new` preserves legacy `DEFAULT_GOVERNOR_INTERVAL = 100ms` (10 FPS) and `DEFAULT_JPEG_QUALITY_LEGACY = 65`.
 - **SOF Dimension Validation:** Parses JPEG SOF0/SOF2 marker (`parse_jpeg_dimensions`) directly to inspect image dimensions ($\le 1920 \times 1080$, $\le 2,073,600$ pixels). Never decodes uncompressed pixels or re-encodes JPEG images.
 
 ### Viewport Epoch & Geometry Reconciliation
@@ -455,6 +455,13 @@ The screencast producer (`server/src/browser_host/screencast.rs`) manages native
 - **Zero-Demand Teardown:** When visible demand drops to zero (or all viewer heartbeats expire), screencast stops immediately (`zero_demand_stops`).
 - **Final Frame Retention:** The final published frame is retained in cache without withholding ACKs from Chromium.
 
+### Audio Capture Drain & `AudioDocAuthority` Navigation Correlation
+
+- **Single-Flight Audio Drain Worker (`run_audio_drain_loop`):** Owned by `run_producer_tasks` (`AUDIO_DRAIN_INTERVAL = 50ms`, `MissedTickBehavior::Skip`), polling `EventTarget.prototype[Symbol.for('dh.a')]('drainDoc', runToken)` only when `visible_viewer_count() > 0` and `active_committed_epoch().is_some()`. `doc_auth_rx.changed()` or `cancel_token` aborts active waits and emits `stop` to the page so slow page evaluations never block native video ACKs.
+- **Synchronous Pre-Enqueue Epoch Binding (`cdp.rs`, `screencast.rs`, `api/browser_host.rs`):** `ScreencastProducer::new` registers `ProducerNavListener` (`CdpNavigationListener`) on `CdpClient` and binds `page_session_id` in `ensure_page_session()`. `build_producer`, `navigate_session`, `history_session`, and `reload_session` call `request_audio_doc_epoch(rev)` + `dispatch_navigation_for_epoch` / `dispatch_navigation_for_epoch_with_url` (with `resolve_noop_audio_doc_epoch(rev)` for out-of-bounds history). `CdpClient::dispatch` invokes `notify_nav_dispatched(session_id, call_id, method, explicit_epoch, expected_url)` synchronously before `command_tx.try_send`, rejecting stale epochs fail-closed with `CdpError::Protocol(-32000)`.
+- **Native `loaderId` & `NavigatedWithinDocument` Disambiguation:** `CdpActor` extracts `loaderId` on `Page.navigate` responses and main-frame `Page.frameNavigated`, and `(frameId, url, navigationType)` on `Page.navigatedWithinDocument`. Returned `Some(loaderId)` proves a cross-document load, clears `PendingNoopRestore` and `same_doc_committed`, and commits only when the matching `loaderId` finishes. Same-document `Page.navigate` (fragment add or removal without `#`) completes with `loaderId: None` and matching main-frame `Page.navigatedWithinDocument` (`frame_id == target_id`, `navigationType != "historyApi"`, matching `expected_url`), restoring `PendingNoopRestore`, unretiring `prev_doc_id`, and advancing `committed_sub_doc_gen`.
+- **Strict Drain Verification & Bounded Fanout:** `parse_and_verify_drain_doc_value` / `verify_drained_document` require `{ docId, subDocGen, chunks }` ($\le 2$ chunks/poll), reject raw arrays, retired `docId`s (16-entry ring), and backward `subDocGen`, reserve memory, validate base64 PCM16LE ($\le 4,800$ B), increment checked `audioSeq`, and broadcast `ProducerAudioChunk` (`Arc<str>`) on `broadcast::channel(4)`.
+
 ## 16. Binary Media Fanout & Independent Credit Governor (`media.rs`)
 
 The media fanout layer (`server/src/browser_host/media.rs`) delivers atomic binary frames to multiple concurrent viewers with independent credit flow control:
@@ -466,12 +473,13 @@ The media fanout layer (`server/src/browser_host/media.rs`) delivers atomic bina
 
 ### Independent Per-Viewer Credit Governor
 
-- **Rate Ceiling:** Governed to maximum 10 deliveries per second (`MIN_DELIVERY_INTERVAL = 100ms`).
+- **Configurable Rate Ceiling:** Production `media_ws_handler` configures `ViewerCreditController::with_min_interval(subscription_epoch, min_delivery_interval)` from `budgets.frame_rate_fps` (`1..=30`, default `24 FPS` / $\approx 41.67\text{ ms}$), while `ViewerCreditController::new` retains legacy `MIN_DELIVERY_INTERVAL = 100ms` (10 FPS).
 - **Credit Budget:** Maximum 2 outstanding frames (`MAX_OUTSTANDING_PER_VIEWER = 2`) + 1 latest pending frame (`MAX_PENDING_PER_VIEWER = 1`) per viewer.
 - **Outstanding Key:** Each delivery is tracked by `OutstandingKey(subscriptionEpoch, producerRun, viewportEpoch, frameSeq)`.
 - **Originating Socket Subscription Authority:** Incoming `frameAck` and `frameDiscarded` messages must match the connected socket's `subscriptionEpoch` (`control_sub == self.subscription_epoch`). Foreign, duplicate, future, or old-socket traffic cannot alter credit or clear replacement entries.
-- **Settled-Frame Flush:** Releasing credit immediately flushes any buffered pending frame if the rate governor interval has elapsed.
+- **Settled-Frame & 15 ms Pending Flush:** Releasing credit immediately flushes any buffered pending frame, and `run_media_session` ticks `flush_ticker` every `15ms` (`Duration::from_millis(15)`) to dispatch rate-governed pending frames promptly.
 - **Deadlines & Timeouts:** 30-second outstanding frame timeout (`OUTSTANDING_TIMEOUT = 30s`) and 5-second physical socket write deadline (`WRITE_DEADLINE = 5s`). Failed writes close the subscription, while buffer reservations survive until the last clone drops.
+- **Independent Audio Text Fanout:** `run_media_session` forwards `ProducerAudioChunk` as `BrowserAudioChunk` JSON text (`write_media_text`, 5s `WRITE_DEADLINE` raced against `cancel_token` and `doc_auth_rx.changed()`) without consuming video credits, skipping `!viewer_visible` or inadmissible `doc_epoch` chunks and dropping oldest on `RecvError::Lagged`.
 
 ### Pause & Rebind Protocol
 
@@ -508,7 +516,7 @@ The streaming interface exposes two paired WebSocket routes:
 
 ### Dual-Transport Separation
 
-- **Media Transport (`GET /api/browser/media`):** Dedicated binary delivery socket for BHJF v1 frames. Subprotocol: `damhopper.browser.media.v1`. Max control message/frame size: 1024 bytes (`MAX_MEDIA_CONTROL_BYTES`). Receives client `frameAck`, `frameDiscarded`, `pause`, and `heartbeat`.
+- **Media Transport (`GET /api/browser/media`):** Dedicated delivery socket for binary BHJF v1 video frames and validated `audioChunk` JSON text frames (`24 kHz`, mono, `pcm16le`, `docEpoch`, monotonic `audioSeq`, max `4,800` decoded PCM bytes / `6,400` base64 chars / `8,192` B JSON envelope). Subprotocol: `damhopper.browser.media.v1`. Inbound client controls (`frameAck`, `frameDiscarded`, `pause`, `heartbeat`) remain capped at `MAX_MEDIA_CONTROL_BYTES = 1024`.
 - **Control Transport (`GET /api/browser/control`):** Dedicated ordered text socket for input dispatch and browser events. Subprotocol: `damhopper.browser.control.v1`. Max message/frame size: 16 KiB (`MAX_CONTROL_MESSAGE_BYTES`). Rate limited: burst 200, sustained 100/s. Transmits `InputMessage` records; receives `ServerControlEvent` notifications. Zero JPEG bytes.
 - **Capability Ticket Authentication:** Both sockets require single-use capability tickets (`damhopper.ticket.<base64url>`) with respective purposes (`media`, `control`).
 - **Socket Pairing:** Paired via `AttachmentManager` requiring identical `viewerId` and `subscriptionEpoch` with a 15-second wait timeout.
@@ -539,6 +547,12 @@ The frontend client modules (`packages/ui/src/browser-host/`, `packages/ui/src/a
 - **Synchronous Privacy Blackening:** Triggering privacy mode (`setPrivacyMode(true)`) synchronously clears and blacks the canvas, advances the decode epoch to invalidate in-flight decode completions, cancels queued frames, and closes active media and control WebSockets.
 - **Visibility & Detachment Lifecycle:** Hiding the viewer (`setVisibility(false)`) pauses stream delivery, detaches demand, and closes both WebSockets. Resuming requires fresh capability tickets, a new subscription epoch, and paired WebSocket handshakes.
 - **ImageBitmap Cleanup:** Guarantees `ImageBitmap.close()` execution across normal render, exceptional draw, and disposal paths.
+
+### WebAudio `PcmPlayer` & Root Audio Ownership (`pcm-player.ts`, `stream-controller.ts`, `BrowserStreamKeepAliveHost.tsx`, `BrowserApp.tsx`)
+
+- **Gapless `PcmPlayer` (`pcm-player.ts`, 199 LOC):** Dependency-free `24 kHz` mono WebAudio scheduler owning one lazy `AudioContext`, master `GainNode`, `nextStartTime` scheduling (`20ms` lead), `MAX_AUDIO_QUEUE_SECONDS = 0.5` ceiling (flushing or evicting aged/overflow pending chunks while suspended), explicit little-endian PCM16LE decode, single-flight `playbackEpoch`-fenced `resume()` with `canPlay` revalidation, autoplay-blocked state callbacks, and synchronous `flush()` (advancing `playbackEpoch`, zeroing `masterGain`, and stopping/disconnecting active `AudioBufferSourceNode`s).
+- **Audio Fencing in `BrowserStreamController` (`stream-controller.ts`):** Opens media WebSocket before control WebSocket; learns active `currentProducerRun` from validated BHJF frames; validates incoming `BrowserAudioChunk` payloads (`8 KiB` cap, identity match, `docEpoch > retiredAudioDocEpoch && docEpoch >= lastAudioDocEpoch`, monotonic `audioSeq > lastAudioSeq`); invokes `onAudioReset()` on `docEpoch` advances, `audioSeq` gaps, `producerRun` rotation, `resetAudioAuthority()`, detach, socket close (`audioAttachmentRetired` without blacklisting active producer runs across reattachment), privacy, hide, or disposal.
+- **Root Sync Flush & Viewer-Local Toolbar Toggle (`BrowserStreamKeepAliveHost.tsx`, `BrowserApp.tsx`):** `ParkedBrowserStreamItem` owns one `PcmPlayer` and subscribes synchronously to `subscribeBrowserViewFences`, `subscribeConnections`, `useCognitoModeStore`, `useLockScreenStore`, and `useWindowStore` to execute `flush()` and `resetAudioAuthority()` BEFORE React commits on Cognito mode, LockScreen, reset fences, disconnect, hide/minimize, session replacement, or navigation changes. `BrowserApp` renders `data-testid="browser-audio-toggle-btn"` (`"Audio"` / `"Muted"` / `"Unlock Audio"`, ephemeral viewer-local `useState(false)`, zero control lease required).
 
 ### Virtual Pointer, Keyboard & IME Input Controller (`input-controller.ts`, `text-input-proxy.tsx`)
 
@@ -577,93 +591,22 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 | Single-Use Capability Tickets | **PASS** | 256-bit OsRng, SHA-256 memory store, 30s TTL, single-use atomic consume, pair matching |
 | Leased Input Queue & Releases | **PASS** | 30s lease, 128-record queue, contiguous inputSeq, stuck key auto-release, aspect-fit mapping |
 | Agent CDP Gateway & Relay | **PASS** | Authenticated discovery URL rewriting, dedicated upstream relay, 4 MiB frame/message cap, 5s write timeout, exact Origin policy, dynamic connection budget (`budgets.max_raw_cdp_connections`, cap 8), manager target tracking (64 targets), viewport epoch fencing with stale input Conflict (409), live auth cancellation racing with socket writes and absolute deadline, and fast socket drop on revocation. Verified by 14 Rust gateway tests and 8 Playwright E2E tests in `agent.spec.ts` against production gateway mode. User approved after Cycle 3 (score 7/10; 57/57 tests passing). |
-| Screencast Producer & Ingress | **PASS** | Dedicated Page session, serial `producerRun`, prompt exact-once CDP ACK, single replaceable candidate, JPEG SOF dimension validation, zero periodic screenshots, and 15s visible demand stop |
-| Binary Media Fanout & Credits | **PASS** | Immutable BHJF v1 fanout via Axum `Binary(Bytes)` with zero per-viewer JPEG copies, independent credit governor (max 10 FPS, 2 outstanding + 1 pending), originating socket subscription authority, 30s outstanding timeout, 5s write deadline, pause detaching demand, and max 2 global viewers |
-| Stream Memory Admission | **PASS** | Hard 128 MiB global memory reservation ceiling across ingress, commands, raw gateway, and frames; `TrackedBhjfFrame` shared RAII reservation held until last clone drops; bounded stream diagnostics counters and ring buffer |
-| Viewer Client Decoder & Input | **PASS** | 1-active + 1-pending frame decode governor, captured subscription credit ACKs, synchronous privacy blackening, letterbox coordinate mapping, and IME deduplication. Verified by 60 unit tests, 8 Chromium browser tests, clean UI build, and clean E2E typecheck. User approved after Cycle 3 (score 4/10; technical carryovers C1, C3, W1–W8). |
-| Root Browser Keep-Alive & OS Cutover | **PASS** | Root keepalive host, canvas slot reparenting, viewer-local claims, explicit target close, recipe sanitization, and retired iframe path. Verified by 206 test cases + 2 typecheck suites. User approved after Cycle 2 (score 4/10; technical carryovers W1–W10; unblocks Phase 08). |
-| Actor-Bound Artifacts, Selection & Logout Reset | **PASS** | Immutable owner/source class, live Admin demotion checks, bounded CDP selection + PNG + atomic terminal handoff, revoke-first logout, 2s bounded async reset worker, and Cancel-first UI (V1). Verified by 237/237 scoped Phase 08 checks + 3,718/3,718 full UI unit run; Cycle 3 approved (`7/10`, 0 critical issues; carryovers W1–W9). |
-| Live-Server Selection E2E (`selection.spec.ts`) | **DEFERRED (PHASE 09)** | `packages/ui/e2e/os-host-browser/selection.spec.ts` authored and E2E typechecked; live-server Playwright execution deferred to Phase 09 integrated qualification. |
+| Screencast Producer & Ingress | **PASS** | Dedicated Page session, serial `producerRun`, prompt exact-once CDP ACK, single replaceable candidate, JPEG SOF dimension validation, `with_capture_policy` (24 FPS/JPEG 75 default, `100ms`/65 legacy preserved), zero periodic screenshots, and 15s visible demand stop |
+| Binary Media Fanout & Credits | **PASS** | Immutable BHJF v1 fanout via Axum `Binary(Bytes)` with zero per-viewer JPEG copies, `ViewerCreditController::with_min_interval` (24 FPS default, `100ms` legacy preserved), `15ms` pending flush, 2 outstanding + 1 pending, originating socket authority, 5s write deadline, and max 2 global viewers |
+| Video/Audio Streaming & Media Stealth (Cycle 13) | **AUTOMATED PASS / LIVE PENDING** | 40 Rust tests (`browser_host_{process,media,screencast}`), config & `AudioDocAuthority` (`C12-H2`/`C12-H6`) unit tests, 89 UI Vitest tests (`pcm-player`, `stream-controller`, `BrowserStreamKeepAliveHost`, `BrowserApp`), clean `@dam-hopper/ui build`, `pcm-player.ts` 199 LOC; Code Review 9/10 APPROVED WITH NOTES. Real output-browser live audible/privacy/two-viewer/FPS/latency qualification pending |
+| Stream Memory Admission | **PASS** | Hard 128 MiB global memory reservation ceiling across ingress, commands, raw gateway, BHJF frames, and audio chunks; `TrackedBhjfFrame` shared RAII reservation held until last clone drops; bounded stream diagnostics counters and ring buffer |
+| Viewer Client Decoder & Input | **PASS** | 1-active + 1-pending frame decode governor, captured subscription credit ACKs, `PcmPlayer` 24 kHz scheduling + sync flush, letterbox coordinate mapping, and IME deduplication. Verified by unit tests, Chromium browser tests, and UI builds (Phase 06 review 4/10 carryovers remediated in Phases 07–09 and Cycle 13) |
+| Root Browser Keep-Alive & OS Cutover | **PASS** | Root keepalive host, canvas slot reparenting, viewer-local presentation/audio claims, explicit target close, recipe sanitization, and retired iframe path (Phase 07: 208/208 checks; Phase 09 E2E continuity) |
+| Actor-Bound Artifacts, Selection & Logout Reset | **PASS** | Immutable owner/source class, live Admin demotion checks, bounded CDP selection + PNG + atomic terminal handoff, revoke-first logout, 2s bounded async reset worker, and Cancel-first UI (`selection.spec.ts` authored & E2E typechecked; Phase 08: 237/237 checks + 3,718 UI unit tests; Cycle 3 approved 7/10) |
+| Integrated Security, Platform & Android E2E | **PASS** | Phase 09 (54/54 checks, Cycle 3 approved 4/10): `browser_host_security.rs` (7/7), `browser_host_platform.rs` (5/5), `host-browser-android.browser.tsx` (6/6), 36 core regressions, and Playwright E2E specs (`same-target`, `performance`, `android`, `host-browser`) |
 | Native Browser Zoom | **UNVERIFIED** | Unreachable via standard CDP in headless Chromium 157; `inputTrusted: false` enforced |
 | Windows Containment | **FAIL-CLOSED** | Windows Job Object containment unimplemented; non-Unix launch returns `ContainmentUnavailable`. Retained fail-closed; no qualification claimed |
-### Phase 05 Verification Summary
 
-- **Phase 05 Finalized (2026-11-09):** The user explicitly approved the code review with noted issues after Cycle 3 (70/70 checks passing across screencast, fanout, bounds, regressions, build, and TypeScript compile suites). Phase 06 (Frame Assembly & Decoder Pipeline) is unblocked.
-- **Test Evidence:** Verified by real Google Chrome screencast tests (`server/tests/browser_host_screencast.rs` [3/3]), media fanout and credit governor tests (`server/tests/browser_host_media.rs` [7/7]), and memory admission bounds tests (`server/tests/browser_host_bounds.rs` [3/3]), alongside 57 regression tests.
+### Phase Verification & Open Release Gates
 
-### Phase 06 Verification Summary
-
-- **Phase 06 Finalized (2026-11-09):** The user explicitly approved the code review with noted issues after Cycle 3 (70/70 validation checks passing across unit, Chromium browser component, package build, and E2E typecheck suites). Phase 07 (OS Shell Cutover & Legacy Frame Deletion) is unblocked.
-- **Test Evidence:**
-  - Unit tests (60 passed, 0 failed, 0 skipped): `src/api/browser-host-client.test.ts` (8), `src/browser-host/frame-protocol.test.ts` (16), `src/browser-host/stream-controller.test.ts` (21), `src/browser-host/input-controller.test.ts` (15).
-  - Chromium browser tests (8 passed, 0 failed, 0 skipped): `browser-tests/host-browser-decoder.browser.tsx` (2), `browser-tests/host-browser-input.browser.tsx` (6).
-  - TypeScript build & typechecks (2 passed): `pnpm --filter @dam-hopper/ui build` (clean, 0 errors), `pnpm --filter @dam-hopper/ui test:e2e:typecheck` (clean, 0 errors).
-- **Noted Technical Carryovers:** Cycle 3 code review scored 4/10; unresolved carryovers tracked for subsequent phases include:
-  - C1: Live owner and cache boundary fences to eliminate potential stale private pixel redrawing on attachment changes.
-  - C3: Release ordering and ambient identity on the leased input stream to prevent command sequence corruption and dropped releases under queue saturation.
-  - W1–W8: Input trust fencing against stale geometry, canonical numeric counter precision, exactly-once IME text commit state machine, draw/decode exceptional bitmap cleanup, REST DTO schema alignment, explicit copy/find/touch controls, and half-pair transport teardown bounds.
-
-### Phase 07 Verification Summary
-
-- **Phase 07 Finalized (2026-11-09):** The user explicitly approved the code review with noted issues after Cycle 2 (208/208 validation checks passing across unit, Chromium browser component, package build, and E2E typecheck suites). Phase 08 (Authentication, Client Integration & Artifacts) is unblocked.
-- **Architectural Deliverables:**
-  - **Root Keep-Alive Host (`BrowserStreamKeepAliveHost.tsx`):** Mounted at the top level within `OsResourceHost`. Manages persistent off-screen parked containers (`data-os-browser-parking-host="true"`), transferring container DOM elements between visible window frames and parking slots via `registerBrowserStreamSlot` and `updateBrowserStreamSlot`.
-  - **Viewer-Local Presentation Claims:** Claim key derives from `resourceId: window.id` instead of URL, allowing multiple OS windows to view the same target session simultaneously without collision or claim denial.
-  - **Interactive Controls & Dialog Overlay:** Top toolbar providing Back, Forward, Reload, URL address bar with Enter navigation, Controllable vs View-only indicators with interactive lease acquisition button, short session ID display, and active CDP dialog modals (`BrowserDialogModal`).
-  - **Window Lifecycle Binding:** Explicit window close (`closeWindow(windowId)`) resolves owner connection and dispatches backend target deletion (`closeBrowserSession`) once, preserving sibling and shared target sessions. Placement changes (tile, float, max, min, restore, desktop switch) and component unmount retain canvas DOM continuity without destruction.
-  - **Persistence & Recipe Sanitization:** Persisted session state allows non-secret references (`url`, `sessionId`, `logicalSessionId`) while stripping capability tickets, tokens, and credentials. Recipe schema and engine sanitize browser steps strictly to `{ url }`, guaranteeing that recipe launches spawn independent targets.
-  - **Obsolete Iframe Path Retirement:** Complete removal of `OsBrowserIframe`, `OsBrowserKeepAliveHost`, `browserSlots`, `registerBrowserSlot`, and `updateBrowserSlot` symbols across production and browser test suites.
-- **Test Evidence:**
-  - OS unit & regression tests (124 passed, 0 failed): `src/os/resource-registry.test.ts`, `src/os/deep-links.test.ts`, `src/os/persistence.test.ts`, `src/os/recipes/recipe-source-context.test.ts`, `src/os/recipes/recipe-engine.test.ts`, `src/os/recipes/schema.test.ts`, `src/os/window-ops.test.ts`.
-  - Chromium browser tests (22 passed, 0 failed): `browser-tests/os-lifecycle.browser.tsx`, `browser-tests/os-input-isolation.browser.tsx`, `browser-tests/host-browser-lifecycle.browser.tsx`.
-  - Decoder & client unit tests (60 passed, 0 failed): `src/api/browser-host-client.test.ts`, `src/browser-host/frame-protocol.test.ts`, `src/browser-host/stream-controller.test.ts`, `src/browser-host/input-controller.test.ts`.
-  - TypeScript build & typechecks (2 passed): `pnpm --filter @dam-hopper/ui build` (clean, 0 errors), `pnpm --filter @dam-hopper/ui test:e2e:typecheck` (clean, 0 errors).
-- **Noted Technical Carryovers:** Cycle 2 code review scored 4/10; unresolved carryovers tracked for subsequent phases include:
-  - W1: Authoritative navigation revision wire format (JSON u64 number vs decimal string).
-  - W2: Persisted live target adoption on SPA reload (`listBrowserSessions`/`getBrowserSession` consumption).
-  - W3: Restore ticket demand-fencing and generation-reactivity.
-  - W4: Control lease renewal and deadline tracking across pause/restore.
-  - W5: Shell-modal/document visibility aggregation and deliberate text focus.
-  - W6: Explicit close pending-create and failed-delete ownership finalization.
-  - W7: Popup projection/overflow notification and Radix modal migration.
-  - W8: Connected-boundary behavioral integration test requirements.
-  - W9: React-owned DOM movement vs imperative host portal convention.
-  - W10: Capability and transport error handling in UI.
-
-### Phase 08 Verification Summary
-
-- **Phase 08 Finalized (2026-11-09):** User approved Cycle 3 code review (`7/10`, 0 critical issues). Unblocks Phase 09 integrated qualification.
-- **Test Evidence:** `237/237` scoped Phase 08 checks passing: `78/78` Rust across 7 targets (`browser_debug` [13], `browser_host` [27], `browser_debug_artifacts` [7], `browser_host_selection` [7], `browser_host_logout` [8], `browser_host_lifecycle` [10], `auth_device_sessions` [6]); `121/121` scoped UI Vitest across 9 files (plus `3,718/3,718` full UI unit run); `19/19` scoped Chromium browser tests across 5 files (`host-browser-selection.browser.tsx`, `host-browser-logout.browser.tsx`, `browser-debug-panel.browser.tsx`, `browser-debug-keep-alive.browser.tsx`, `host-browser-lifecycle.browser.tsx`); `19/19` `browser-bridge`; clean UI/extension/E2E typechecks, UI/web builds, and 15-file ESLint. (Accidental `--` full-browser expansion showed 3 pre-existing failures in 2 untouched files; live-server `selection.spec.ts` execution deferred to Phase 09.)
-- **Noted Technical Carryovers (Cycle 3 W1–W9 tracked into Phase 09):**
-  - **W1 (High):** Serialize handoff final validation/write and authoritative navigation/reset epoch updates through one ordered fence (`state.rs`, `selection.rs`, `browser_debug/store.rs`).
-  - **W2 (High):** Check complete captured owner/generation/token/operation across every standalone reset/status mutation (`ServerSettingsDialog.tsx`).
-  - **W3 (High):** Clear/replace `GLOBAL_NAV_WATCHERS` entry or retire target authority on lifecycle overflow/lag (`selection.rs`).
-  - **W4 (High):** Return `sessionRevoked: false` / uncertain when public logout receives no usable credential so cleartext non-loopback HTTP without cookie cannot misreport revocation (`auth.rs`, `auth-client.ts`).
-  - **W5 (High):** Preserve pending reset operation identity on post-commit `409 resetFailed` and reconcile surviving `reset.json` before completion replay (`manager.rs`, `browser_host.rs`, `ServerSettingsDialog.tsx`).
-  - **W6 (Medium):** Correlate `pending_api_navigation_at` suppression with dispatched navigation rather than a 5s timer (`session.rs`, `api/browser_host.rs`).
-  - **W7 (Medium):** Hold quota charges until artifact deletion/expiry file removal succeeds (`browser_debug/store.rs`).
-  - **W8 (Medium):** Make selection status polling single-flight with abort/deadline and revision ordering checks (`selection-controller.ts`).
-  - **W9 (Medium):** Restore `setIsDeleting(true)` busy-state guard in `handleConfirmDelete` (`ServerProfilesDialog.tsx`).
-### Finalization & Roadmap Status
-
-- **Phase 04 Finalized (2026-11-09):** The user explicitly approved the code review with noted issues after Cycle 3 (score 7/10; 57/57 tests passing across Rust gateway, regressions, example build, TypeScript compile, and Playwright E2E suites). Phase 05 (Screencast Producer Actor & JPEG Fragmentation) is unblocked.
-- **Noted Issues Carried Forward:** Architectural review noted follow-up areas for subsequent phases: correlating wire session IDs to native target IDs across flattened Playwright sessions (C2), wiring authoritative input manager epoch synchronization directly into production layout reconciliation (C2), and strictly deriving public server WS URLs exclusively from configured origins without request-Host fallback under complex TLS topologies (W4).
-- **Observed Implementation vs Full System Qualification:** Component, gateway, and Playwright qualification pass against the production gateway mode (`browser_host_qualification.rs`), but end-to-end multi-client system qualification across concurrent human viewers, screencast streaming producers (Phase 05), decoder UI (Phase 06), and production container load (Phase 09) remains scheduled for later phases.
-- **Teardown Timing Under Congestion:** While `write_with_cancel` races auth cancellation and absolute deadline against in-flight writes, actual kernel socket buffer draining and upstream termination remain subject to OS scheduler scheduling and network latency; immediate teardown is bounded by local runtime aborts, not an absolute wall-clock guarantee.
-- **Windows Platform Boundary:** Windows process containment remains unimplemented and fails closed with `ContainmentUnavailable`.
-### Phase 09 Integrated Qualification Summary
-
-- **Phase 09 Finalized (2026-11-09):** User approved with noted issues after Cycle 3 code review (score 4/10; 54/54 automated checks passing across 5 validation gates). Phase 10 (Documentation & Controlled Rollout Reconciliation) is unblocked.
-- **Test Evidence & Validation Gates:**
-  - `server/tests/browser_host_security.rs` (7/7 passed): Proves role denial matrix across Unauthenticated, Ordinary Member (`UserRole::User`), and Admin (`UserRole::Admin`) principals (A16); capability ticket replay, purpose (`Media` vs `Control`), and exact-Origin fencing (A18); `--no-auth` loopback socket enforcement (`127.0.0.1` or `::1`) with forwarded header rejection (A17); URL safety, forbidden schemes (`javascript:`, `data:`, `file:`, `view-source:`, `chrome:`), and metadata protection (A04); multi-target (max 2) and multi-viewer (max 2) concurrency with zero-copy shared BHJF Bytes fanout, credit isolation, and PTY event decoupling (A26); viewport epoch input fencing with `StaleViewportEpoch` rejection and input lease conflict handling (A08); and live Admin role demotion termination (A19).
-  - `server/tests/browser_host_platform.rs` (5/5 passed): Chromium launch flag security allowlist rejecting dangerous overrides (`--no-sandbox`, `--disable-web-security`, `--remote-debugging-address=0.0.0.0`, etc.) (A29); loopback endpoint canonical UUID validation; advisory OS locking (`flock` on `manager.lock`) and Chromium `SingletonLock` cleanup (A28, A30); durable `reset.json` tombstones preventing dirty-profile relaunch (`CleanupPending`, A34); dev/prod directory isolation; and crash recovery with PTY isolation.
-  - `packages/ui/browser-tests/host-browser-android.browser.tsx` (6/6 passed): Vitest browser mode testing virtual touch tap and soft-keyboard proxy focus, touch drag/pan gesture handling, touch cancel cleanup, Vietnamese Telex and Japanese Kana IME composition deduplication with exactly-once commit, and clipboard plain-text paste (A09).
-  - `packages/ui/e2e/fixtures/host-browser-app.ts`: Authenticated multi-principal test fixture (`admin`, `ordinary`, `foreign`) with isolated port allocation and process supervision.
-  - `packages/ui/e2e/os-lifecycle/host-browser.spec.ts`: OS window placement continuity across Float, Tile, Maximize, and Minimize preserving canvas DOM elements and presentation state without fiber crashes (A11); target capacity ceiling (max 2 targets, 429 `browserBusy` A05); target close isolation (A14); session reconnect idempotency (A12); and Cognito privacy mode canvas blanking (A15).
-  - `packages/ui/e2e/os-host-browser/same-target.spec.ts`: CDP agent same-target interference coexistence contract (A02). Proves that external agent `Page.disable` and `Page.stopScreencast` commands do not disrupt the production screencast stream.
-  - `packages/ui/e2e/os-host-browser/performance.spec.ts`: Performance benchmarks and bounded tuning grid evaluation (A37, A38). Evaluates 12 configurations; exactly 6 eligible with `everyNthFrame = 1`; setting #7 (`q65`, `1280x900`, `everyNthFrame = 1`) proposed default; `everyNthFrame = 2` disqualified to avoid stranded final frames; proves static page emits zero periodic `Page.captureScreenshot` calls.
-  - `packages/ui/e2e/os-host-browser/android.spec.ts`: Full-SPA Android touch/IME journey sequence (A09).
-- **Open Release Gates & Truth Governance:**
+- **Completed Automated Gates (Phases 04–09 & Cycle 13):** Phase 04 (57/57, score 7/10), Phase 05 (70/70, score 4/10), Phase 06 (70/70, score 4/10), Phase 07 (208/208, score 4/10), Phase 08 (237/237, score 7/10), Phase 09 (54/54 across 5 gates, score 4/10), and Browser Video/Audio Streaming Cycle 13 (42 Rust + 89 UI tests, clean UI build, Code Review 9/10 APPROVED WITH NOTES).
+- **Open Release & Qualification Gates:**
+  - Real output-browser audible/gapless playback, privacy/retirement silence, autoplay gesture recovery, two-viewer independence, and measured FPS/audio latency under live load (`plans/261111-0220-browser-video-audio-streaming/reports/code-review-report.md`).
   - Physical Android device receipts with Gboard Vietnamese Telex and Japanese Kana IME (A09, `reports/human-acceptance.md`).
   - Desktop Chrome/Firefox human visual and agent interference ledger (A40, `reports/human-acceptance.md`).
   - Continuous 60s soak workloads, physical scanout latency, and production capture benchmarks (A37, `reports/performance-qualification.md`).
@@ -700,6 +643,7 @@ Phase 01 remediates backend authority, lifecycle truth, durable reset recovery, 
 | Browser Host REST API Handlers | `server/src/api/browser_host.rs` |
 | Agent CDP Gateway & Upstream Relay | `server/src/browser_host/cdp_gateway.rs` |
 | Module Exports | `server/src/browser_host/mod.rs` |
+| Media Stealth & Audio Capture Bridge | `server/src/browser_host/stealth.rs` |
 | Screencast Producer Actor | `server/src/browser_host/screencast.rs` |
 | Binary Media Fanout & Transports | `server/src/browser_host/media.rs` |
 | Stream Diagnostics & Memory Admission | `server/src/browser_host/diagnostics.rs` |
@@ -730,17 +674,15 @@ Phase 01 remediates backend authority, lifecycle truth, durable reset recovery, 
 | Browser Host Client & Wire Types | `packages/ui/src/api/browser-host-types.ts` |
 | Binary BHJF Frame Codec & Parser | `packages/ui/src/browser-host/frame-protocol.ts` |
 | Bounded Canvas Stream Controller | `packages/ui/src/browser-host/stream-controller.ts` |
+| WebAudio Gapless PCM Player | `packages/ui/src/browser-host/pcm-player.ts` |
 | Bounded Canvas View Component | `packages/ui/src/browser-host/canvas-view.tsx` |
 | Virtual Input Controller | `packages/ui/src/browser-host/input-controller.ts` |
 | Soft-Keyboard & IME Text Proxy | `packages/ui/src/browser-host/text-input-proxy.tsx` |
-| Browser Host Client Test Suite | `packages/ui/src/api/browser-host-client.test.ts` |
-| BHJF Frame Protocol Test Suite | `packages/ui/src/browser-host/frame-protocol.test.ts` |
-| Stream Controller Test Suite | `packages/ui/src/browser-host/stream-controller.test.ts` |
-| Input Controller Test Suite | `packages/ui/src/browser-host/input-controller.test.ts` |
-| Chromium Decoder Browser Test | `packages/ui/browser-tests/host-browser-decoder.browser.tsx` |
-| Chromium Input Browser Test | `packages/ui/browser-tests/host-browser-input.browser.tsx` |
-| Root Browser Keep-Alive Host | `packages/ui/src/os/BrowserStreamKeepAliveHost.tsx` |
-| Host Browser Lifecycle Browser Test | `packages/ui/browser-tests/host-browser-lifecycle.browser.tsx` |
+| Browser Host Client & Protocol Tests | `packages/ui/src/api/browser-host-client.test.ts`, `packages/ui/src/browser-host/frame-protocol.test.ts` |
+| Stream, Audio & Input Controller Tests | `packages/ui/src/browser-host/{stream-controller,pcm-player,input-controller}.test.ts` |
+| Chromium Decoder & Input Browser Tests | `packages/ui/browser-tests/host-browser-{decoder,input}.browser.tsx` |
+| Root Browser Keep-Alive Host & App | `packages/ui/src/os/BrowserStreamKeepAliveHost.tsx`, `packages/ui/src/os/apps/BrowserApp.tsx` |
+| Keep-Alive & BrowserApp Unit/Browser Tests | `packages/ui/src/os/BrowserStreamKeepAliveHost.test.tsx`, `packages/ui/src/os/apps/BrowserApp.test.tsx`, `packages/ui/browser-tests/host-browser-lifecycle.browser.tsx` |
 | Playwright Selection E2E Spec | `packages/ui/e2e/os-host-browser/selection.spec.ts` |
 | Selection Preview & Handoff Controller | `packages/ui/src/browser-host/selection-controller.ts` |
 | Unified Cancel-First Logout Dialog | `packages/ui/src/components/organisms/AccountLogoutDialog.tsx` |

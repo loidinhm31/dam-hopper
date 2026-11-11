@@ -10,10 +10,10 @@ pub const DEFAULT_MAX_TARGETS: usize = 2;
 pub const DEFAULT_MAX_VIEWERS: usize = 2;
 pub const DEFAULT_MAX_RAW_CDP_CONNECTIONS: usize = 2;
 pub const DEFAULT_MEMORY_CEILING_BYTES: u64 = 134_217_728; // 128 MiB
-pub const DEFAULT_JPEG_QUALITY: u8 = 65;
+pub const DEFAULT_JPEG_QUALITY: u8 = 75;
 pub const DEFAULT_MAX_WIDTH: u32 = 1280;
 pub const DEFAULT_MAX_HEIGHT: u32 = 900;
-pub const DEFAULT_FRAME_RATE_FPS: u32 = 10;
+pub const DEFAULT_FRAME_RATE_FPS: u32 = 24;
 
 pub const MIN_MEMORY_CEILING_BYTES: u64 = 33_554_432; // 32 MiB
 pub const MAX_MEMORY_CEILING_BYTES: u64 = 1_073_741_824; // 1 GiB
@@ -138,8 +138,8 @@ impl BrowserBudgetsConfig {
     /// Calculate estimated worst-case memory reservation across configured bounds.
     ///
     /// Per architecture-contracts.md §3:
-    /// - Each target: 2 MiB command budget + 4 MiB WS event buffer + 4 MiB candidate buffer + ~2.1 MiB complete BHJF buffer ≈ 12.1 MiB
-    /// - Each viewer: 2 outstanding + 1 pending Bytes handles (buffered) + writer queue ≈ 4.2 MiB
+    /// - Each target: 2 MiB command budget + 4 MiB WS event buffer + 4 MiB candidate buffer + 2,098,192 B complete BHJF buffer = 12,583,952 B, plus 103,792 B headroom covering the 4-slot power-of-two `broadcast::channel(4)` shared `Arc<str>` audio ring (<= 26,624 B) = 12,687,744 B (~12.1 MiB)
+    /// - Each viewer: 2 outstanding + 1 pending Bytes handles (buffered) + writer queue (including <= 8 KiB serialized audioChunk frame buffer) = 4,404,019 B (~4.2 MiB)
     /// - Each raw CDP connection: 4 MiB per direction = 8 MiB
     pub fn estimate_reservation_bytes(&self) -> u64 {
         let per_target = 12_687_744u64; // ~12.1 MiB

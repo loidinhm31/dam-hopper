@@ -19,6 +19,7 @@ import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import {
   getConnectionSnapshot,
   isCurrentConnection,
+  subscribeConnections,
   useConnectionSnapshot,
 } from "@/api/connections.js";
 import type { ConnectionRef } from "@/api/ownership.js";
@@ -27,6 +28,7 @@ import {
   BrowserStreamController,
 } from "../browser-host/stream-controller.js";
 import { BrowserInputController, type CanvasPointerInput } from "../browser-host/input-controller.js";
+import { PcmPlayer } from "../browser-host/pcm-player.js";
 import {
   TextInputProxy,
   type TextInputProxyHandle,
@@ -43,6 +45,7 @@ import {
   type ViewerAttachmentCredentials,
 } from "../api/browser-host-client.js";
 import type {
+  BrowserAudioChunk,
   ServerControlEvent,
 } from "../api/browser-host-types.js";
 import type { OsWindow } from "./types.js";
@@ -55,6 +58,7 @@ export interface BrowserStreamSlot {
   windowId: string;
   element: HTMLElement | null;
   isVisible: boolean;
+  audioMuted?: boolean;
 }
 
 const slotRegistry = new Map<string, BrowserStreamSlot>();
@@ -70,6 +74,44 @@ const proxyFocusListeners = new Map<
   string,
   (owner: ConnectionRef, sessionId: string, leaseToken: string) => void
 >();
+
+const audioUnlockListeners = new Map<
+  string,
+  (owner: ConnectionRef, sessionId: string) => void
+>();
+
+const audioBlockedWindows = new Set<string>();
+const audioBlockedListeners = new Set<() => void>();
+
+function setBrowserAudioBlocked(windowId: string, blocked: boolean): void {
+  const had = audioBlockedWindows.has(windowId);
+  if (blocked === had) return;
+  if (blocked) {
+    audioBlockedWindows.add(windowId);
+  } else {
+    audioBlockedWindows.delete(windowId);
+  }
+  audioBlockedListeners.forEach((l) => l());
+}
+
+export function subscribeBrowserAudioBlocked(listener: () => void): () => void {
+  audioBlockedListeners.add(listener);
+  return () => {
+    audioBlockedListeners.delete(listener);
+  };
+}
+
+export function isBrowserAudioBlocked(windowId: string): boolean {
+  return audioBlockedWindows.has(windowId);
+}
+
+export function requestBrowserAudioUnlock(
+  windowId: string,
+  owner: ConnectionRef,
+  sessionId: string,
+): void {
+  audioUnlockListeners.get(windowId)?.(owner, sessionId);
+}
 
 export function requestBrowserProxyFocus(
   windowId: string,
@@ -108,6 +150,8 @@ export function fenceBrowserViewsForProfile(
     return;
   }
   fencedBrowserProfiles.set(profileId, { generation: gen, reason });
+  // Notify fence listeners FIRST so active audio flushes synchronously before store mutations
+  fenceListeners.forEach((l) => l());
   const state = useWindowStore.getState();
   const windows = state.session?.windows ?? {};
   for (const win of Object.values(windows)) {
@@ -121,7 +165,6 @@ export function fenceBrowserViewsForProfile(
       });
     }
   }
-  fenceListeners.forEach((l) => l());
 }
 
 export function clearBrowserViewFenceForProfile(
@@ -150,12 +193,22 @@ export function registerBrowserStreamSlot(
   windowId: string,
   element: HTMLElement | null,
   isVisible: boolean,
+  audioMuted = false,
 ): () => void {
-  slotRegistry.set(windowId, { windowId, element, isVisible });
+  const existing = slotRegistry.get(windowId);
+  slotRegistry.set(windowId, {
+    windowId,
+    element,
+    isVisible,
+    audioMuted: existing?.audioMuted ?? audioMuted,
+  });
   slotListeners.forEach((l) => l());
   return () => {
-    slotRegistry.delete(windowId);
-    slotListeners.forEach((l) => l());
+    const cur = slotRegistry.get(windowId);
+    if (!cur || cur.element === element) {
+      slotRegistry.delete(windowId);
+      slotListeners.forEach((l) => l());
+    }
   };
 }
 
@@ -163,12 +216,19 @@ export function updateBrowserStreamSlot(
   windowId: string,
   element: HTMLElement | null,
   isVisible: boolean,
+  audioMuted = false,
 ): void {
   const existing = slotRegistry.get(windowId);
-  if (existing?.element === element && existing.isVisible === isVisible) return;
+  if (
+    existing?.element === element &&
+    existing.isVisible === isVisible &&
+    Boolean(existing.audioMuted) === audioMuted
+  ) {
+    return;
+  }
   // Subscribers store the slot snapshot in React state. Publish a new identity
-  // so a visibility-only transition actually runs pause/restore effects.
-  slotRegistry.set(windowId, { windowId, element, isVisible });
+  // so a visibility-only or mute transition actually runs pause/restore effects.
+  slotRegistry.set(windowId, { windowId, element, isVisible, audioMuted });
   slotListeners.forEach((l) => l());
 }
 
@@ -307,6 +367,7 @@ function ParkedBrowserStreamItem({
   const streamControllerRef = useRef<BrowserStreamController | null>(null);
   const inputControllerRef = useRef<BrowserInputController | null>(null);
   const pendingPointerRef = useRef<PendingBrowserPointer | null>(null);
+  const pcmPlayerRef = useRef<PcmPlayer | null>(null);
   const pointerVisibleRef = useRef(false);
 
   const [streamController, setStreamController] = useState<BrowserStreamController | null>(null);
@@ -323,6 +384,18 @@ function ParkedBrowserStreamItem({
     inputControllerRef.current?.cancelControlHandoff();
     textInputProxyRef.current?.reset();
   }, []);
+  const canPlayAudioRef = useRef<() => boolean>(() => false);
+  const ensurePcmPlayer = useCallback((): PcmPlayer => {
+    if (!pcmPlayerRef.current) {
+      pcmPlayerRef.current = new PcmPlayer({
+        canPlay: () => canPlayAudioRef.current(),
+        onAutoplayBlockedChange: (blocked) =>
+          setBrowserAudioBlocked(win.id, blocked),
+      });
+    }
+    return pcmPlayerRef.current;
+  }, [win.id]);
+
 
   useEffect(() => {
     const handleWindowBlur = () => {
@@ -351,11 +424,144 @@ function ParkedBrowserStreamItem({
     }),
     [win.ctx.profileId, currentGen],
   );
+  const lastAudioDocEpochRef = useRef<string | null>(null);
 
-  // Track slot registration updates
+  const canPlayAudio = useCallback(
+    (creds?: ViewerAttachmentCredentials): boolean => {
+      const liveSlot = slotRegistry.get(win.id);
+      if (!liveSlot?.isVisible || !liveSlot.element || liveSlot.audioMuted) {
+        return false;
+      }
+      if (
+        useCognitoModeStore.getState().active ||
+        useLockScreenStore.getState().isLocked
+      ) {
+        return false;
+      }
+      const targetOwner = creds?.owner ?? owner;
+      if (
+        isBrowserViewFenced(targetOwner.profileId, targetOwner.generation) ||
+        !isCurrentConnection(targetOwner)
+      ) {
+        return false;
+      }
+      const winState = useWindowStore.getState();
+      const current = winState.session?.windows?.[win.id];
+      const activeDesktopId = winState.session?.activeDesktopId;
+      if (
+        !current ||
+        current.minimized ||
+        (activeDesktopId &&
+          current.desktopId &&
+          current.desktopId !== activeDesktopId) ||
+        current.ctx.profileId !== targetOwner.profileId ||
+        current.appState?.browserSessionStatus !== "running"
+      ) {
+        return false;
+      }
+      const connSnapLive = getConnectionSnapshot(targetOwner.profileId);
+      if (connSnapLive && connSnapLive.status !== "connected") {
+        return false;
+      }
+      if (creds) {
+        return (
+          current.appState?.sessionId === creds.browserSessionId &&
+          current.appState?.browserIncarnation === creds.browserIncarnation &&
+          String(current.appState?.profileEpoch) === String(creds.profileEpoch) &&
+          streamControllerRef.current?.getCurrentSubscriptionEpoch() ===
+            creds.subscriptionEpoch
+        );
+      }
+      return Boolean(current.appState?.sessionId);
+    },
+    [owner, win.id],
+  );
+  canPlayAudioRef.current = () => canPlayAudio();
+
+  // Direct synchronous source subscriptions so Cognito, LockScreen, profile fence,
+  // and window/session/navigation changes flush scheduled audio BEFORE React commits.
+  useLayoutEffect(() => {
+    const readIdentityKey = (): string => {
+      const w = useWindowStore.getState().session?.windows?.[win.id];
+      if (!w) return "";
+      const a = w.appState;
+      return `${w.ctx.profileId}:${a?.sessionId ?? ""}:${a?.browserIncarnation ?? ""}:${a?.profileEpoch ?? ""}`;
+    };
+    const readNavRev = (): string => {
+      const w = useWindowStore.getState().session?.windows?.[win.id];
+      return `${w?.appState?.navigationRevision ?? ""}`;
+    };
+    const readViewportKey = (): string => {
+      const w = useWindowStore.getState().session?.windows?.[win.id];
+      return `${w?.appState?.viewportEpoch ?? ""}`;
+    };
+    let prevIdentity = readIdentityKey();
+    let prevNavRev = readNavRev();
+    let prevViewport = readViewportKey();
+    const syncInvalidate = () => {
+      const nextIdentity = readIdentityKey();
+      const nextNavRev = readNavRev();
+      const nextViewport = readViewportKey();
+      if (nextIdentity !== prevIdentity) {
+        prevIdentity = nextIdentity;
+        prevNavRev = nextNavRev;
+        prevViewport = nextViewport;
+        lastAudioDocEpochRef.current = null;
+        pcmPlayerRef.current?.flush();
+        streamControllerRef.current?.resetAudioAuthority();
+        cancelPendingGesture();
+      } else if (nextNavRev !== prevNavRev) {
+        prevNavRev = nextNavRev;
+        prevViewport = nextViewport;
+        if (String(lastAudioDocEpochRef.current ?? "") !== String(nextNavRev)) {
+          pcmPlayerRef.current?.flush();
+        }
+        streamControllerRef.current?.resetAudioAuthority(nextNavRev);
+        cancelPendingGesture();
+      } else if (nextViewport !== prevViewport) {
+        prevViewport = nextViewport;
+        cancelPendingGesture();
+      } else if (!canPlayAudio()) {
+        pcmPlayerRef.current?.flush();
+      }
+    };
+    const unsubFence = subscribeBrowserViewFences(syncInvalidate);
+    const unsubConn =
+      typeof subscribeConnections === "function"
+        ? subscribeConnections(syncInvalidate)
+        : undefined;
+    const cognitoSub = (
+      useCognitoModeStore as unknown as {
+        subscribe?: (fn: () => void) => () => void;
+      }
+    ).subscribe?.(syncInvalidate);
+    const lockSub = (
+      useLockScreenStore as unknown as {
+        subscribe?: (fn: () => void) => () => void;
+      }
+    ).subscribe?.(syncInvalidate);
+    const winSub = (
+      useWindowStore as unknown as {
+        subscribe?: (fn: () => void) => () => void;
+      }
+    ).subscribe?.(syncInvalidate);
+    return () => {
+      unsubFence();
+      unsubConn?.();
+      cognitoSub?.();
+      lockSub?.();
+      winSub?.();
+    };
+  }, [win.id, canPlayAudio, cancelPendingGesture]);
+
+  // Track slot registration updates and synchronously flush audio on hide/mute
   useEffect(() => {
     const update = () => {
-      setSlot(slotRegistry.get(win.id) ?? null);
+      const next = slotRegistry.get(win.id) ?? null;
+      if (!next?.isVisible || !next.element || next.audioMuted) {
+        pcmPlayerRef.current?.flush();
+      }
+      setSlot(next);
     };
     slotListeners.add(update);
     update();
@@ -404,6 +610,9 @@ function ParkedBrowserStreamItem({
 
   // Synchronous privacy / visibility updates to stream controller
   useLayoutEffect(() => {
+    if (isSuppressed) {
+      pcmPlayerRef.current?.flush();
+    }
     if (streamControllerRef.current) {
       streamControllerRef.current.setPrivacyMode(isSuppressed);
       if (isSuppressed) {
@@ -415,6 +624,9 @@ function ParkedBrowserStreamItem({
   }, [isSuppressed, cancelPendingGesture]);
 
   useLayoutEffect(() => {
+    if (!isEffectiveVisible || slot?.audioMuted) {
+      pcmPlayerRef.current?.flush();
+    }
     if (!isEffectiveVisible) {
       cancelPendingGesture();
       inputControllerRef.current?.releaseAllHeldInput();
@@ -422,18 +634,37 @@ function ParkedBrowserStreamItem({
     if (streamControllerRef.current) {
       streamControllerRef.current.setVisibility(isEffectiveVisible);
     }
-  }, [isEffectiveVisible, cancelPendingGesture]);
+  }, [isEffectiveVisible, slot?.audioMuted, cancelPendingGesture]);
 
-  // Retire an old acquisition immediately, even if its request never settles.
+  // Retire an old acquisition and flush audio/authority immediately on session identity change.
   useLayoutEffect(() => {
+    lastAudioDocEpochRef.current = null;
+    pcmPlayerRef.current?.flush();
+    streamControllerRef.current?.resetAudioAuthority();
     cancelPendingGesture();
-    return cancelPendingGesture;
+    return () => {
+      lastAudioDocEpochRef.current = null;
+      pcmPlayerRef.current?.flush();
+      streamControllerRef.current?.resetAudioAuthority();
+      cancelPendingGesture();
+    };
   }, [
     owner, win.appState?.sessionId, win.appState?.viewerId,
     win.appState?.browserIncarnation, win.appState?.profileEpoch,
-    win.appState?.navigationRevision, win.appState?.viewportEpoch,
     cancelPendingGesture,
   ]);
+
+  useLayoutEffect(() => {
+    const navRev = win.appState?.navigationRevision;
+    streamControllerRef.current?.resetAudioAuthority(
+      navRev !== undefined && navRev !== null ? String(navRev) : undefined,
+    );
+    cancelPendingGesture();
+  }, [win.appState?.navigationRevision, cancelPendingGesture]);
+
+  useLayoutEffect(() => {
+    cancelPendingGesture();
+  }, [win.appState?.viewportEpoch, cancelPendingGesture]);
   useLayoutEffect(() => {
     const handler = (
       reqOwner: ConnectionRef,
@@ -489,6 +720,27 @@ function ParkedBrowserStreamItem({
       }
     };
   }, [win.id, isEffectiveVisible, activeDialog]);
+  useLayoutEffect(() => {
+    const unlockHandler = (reqOwner: ConnectionRef, reqSessionId: string) => {
+      const current = useWindowStore.getState().session.windows[win.id];
+      if (
+        !canPlayAudio() ||
+        !isCurrentConnection(reqOwner) ||
+        current?.ctx.profileId !== reqOwner.profileId ||
+        current.appState?.sessionId !== reqSessionId
+      ) {
+        pcmPlayerRef.current?.flush();
+        return;
+      }
+      ensurePcmPlayer().prime();
+    };
+    audioUnlockListeners.set(win.id, unlockHandler);
+    return () => {
+      if (audioUnlockListeners.get(win.id) === unlockHandler) {
+        audioUnlockListeners.delete(win.id);
+      }
+    };
+  }, [win.id, canPlayAudio, ensurePcmPlayer]);
 
 
   // Initialize controllers when canvas is ready
@@ -499,6 +751,17 @@ function ParkedBrowserStreamItem({
       const streamCtrl = new BrowserStreamController({
         canvas: canvasEl,
         onGeometryChange: () => {},
+        onAudioChunk: (chunk: BrowserAudioChunk, credentials) => {
+          if (!canPlayAudio(credentials)) {
+            pcmPlayerRef.current?.flush();
+            return;
+          }
+          lastAudioDocEpochRef.current = chunk.docEpoch;
+          ensurePcmPlayer().enqueue(chunk.data);
+        },
+        onAudioReset: () => {
+          pcmPlayerRef.current?.flush();
+        },
         onControlEvent: (event: ServerControlEvent, credentials) => {
           const current = useWindowStore.getState().session.windows[win.id];
           if (!isCurrentConnection(credentials.owner) ||
@@ -507,12 +770,30 @@ function ParkedBrowserStreamItem({
               current.appState.browserIncarnation !== credentials.browserIncarnation ||
               String(current.appState.profileEpoch) !== String(credentials.profileEpoch)) return;
           if (event.kind === "sessionUpdated") {
+            const prevNavRev = current?.appState?.navigationRevision;
+            const prevViewport = current?.appState?.viewportEpoch;
             const result = syncBrowserSessionWindow(
               credentials.owner, win.id, credentials.browserSessionId, event.session, credentials,
             );
+            if (
+              result === "detached" ||
+              event.session.status !== "running"
+            ) {
+              lastAudioDocEpochRef.current = null;
+              pcmPlayerRef.current?.flush();
+              streamControllerRef.current?.resetAudioAuthority();
+            } else if (String(event.session.navigationRevision) !== String(prevNavRev)) {
+              if (String(lastAudioDocEpochRef.current ?? "") !== String(event.session.navigationRevision)) {
+                pcmPlayerRef.current?.flush();
+              }
+              streamControllerRef.current?.resetAudioAuthority(event.session.navigationRevision);
+            } else if (String(event.session.viewportEpoch) !== String(prevViewport)) {
+              cancelPendingGesture();
+            }
             if (result !== "detached" &&
                 (event.session.status !== "running" || !event.session.inputAvailable)) {
               cancelPendingGesture();
+              pcmPlayerRef.current?.flush();
               inputControllerRef.current?.releaseAllHeldInput();
               setActiveDialog(null);
             }
@@ -980,6 +1261,9 @@ function ParkedBrowserStreamItem({
   useEffect(() => {
     return () => {
       cancelPendingGesture();
+      setBrowserAudioBlocked(win.id, false);
+      pcmPlayerRef.current?.dispose();
+      pcmPlayerRef.current = null;
       streamControllerRef.current?.dispose();
       inputControllerRef.current?.dispose();
       streamControllerRef.current = null;
@@ -1028,6 +1312,9 @@ function ParkedBrowserStreamItem({
       if (useCognitoModeStore.getState().active || useLockScreenStore.getState().isLocked ||
           isBrowserViewFenced(owner.profileId, owner.generation)) return;
       textInputProxyRef.current?.focus();
+      if (canPlayAudio()) {
+        ensurePcmPlayer().prime();
+      }
       const input = inputControllerRef.current;
       if (!input || !pointerVisibleRef.current || !isCurrentConnection(owner) ||
           !input.mapClientToFractions(e.clientX, e.clientY, e.currentTarget)) return;

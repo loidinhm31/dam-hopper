@@ -29,6 +29,14 @@ pub const MAX_PIXELS: u64 = 2_073_600; // 1920 * 1080
 pub const MAX_VIEWPORT_CSS_WIDTH: f64 = 1920.0;
 pub const MAX_VIEWPORT_CSS_HEIGHT: f64 = 1080.0;
 
+pub const AUDIO_SAMPLE_RATE: u32 = 24_000;
+pub const AUDIO_CHANNELS: u8 = 1;
+pub const AUDIO_ENCODING_PCM16LE: &str = "pcm16le";
+pub const MAX_AUDIO_CHUNK_SAMPLES: usize = 2_400; // 100 ms @ 24 kHz
+pub const MAX_AUDIO_PCM_BYTES: usize = MAX_AUDIO_CHUNK_SAMPLES * 2; // 4,800 bytes
+pub const MAX_AUDIO_BASE64_BYTES: usize = 6_400;
+pub const MAX_AUDIO_MESSAGE_BYTES: usize = 8_192; // 8 KiB
+
 pub const MEDIA_SUBPROTOCOL: &str = "damhopper.browser.media.v1";
 pub const CONTROL_SUBPROTOCOL: &str = "damhopper.browser.control.v1";
 pub const CDP_SUBPROTOCOL: &str = "damhopper.browser.cdp.v1";
@@ -481,6 +489,156 @@ pub enum DiscardReason {
     OwnerChanged,
 }
 
+
+fn serialize_arc_str<S>(val: &std::sync::Arc<str>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(val)
+}
+
+fn deserialize_arc_str<'de, D>(deserializer: D) -> Result<std::sync::Arc<str>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Ok(std::sync::Arc::<str>::from(s))
+}
+
+/// Target-scoped PCM16 audio chunk broadcast by `ScreencastProducer`.
+#[derive(Debug, Clone)]
+pub struct ProducerAudioChunk {
+    pub browser_session_id: String,
+    pub browser_incarnation: String,
+    pub profile_epoch: String,
+    pub producer_run: String,
+    pub doc_epoch: u64,
+    pub audio_seq: String,
+    pub sample_rate: u32,
+    pub channels: u8,
+    pub encoding: String,
+    pub data: std::sync::Arc<str>,
+    pub reservation: Option<std::sync::Arc<super::diagnostics::MemoryReservation>>,
+}
+
+impl PartialEq for ProducerAudioChunk {
+    fn eq(&self, other: &Self) -> bool {
+        self.browser_session_id == other.browser_session_id
+            && self.browser_incarnation == other.browser_incarnation
+            && self.profile_epoch == other.profile_epoch
+            && self.producer_run == other.producer_run
+            && self.doc_epoch == other.doc_epoch
+            && self.audio_seq == other.audio_seq
+            && self.sample_rate == other.sample_rate
+            && self.channels == other.channels
+            && self.encoding == other.encoding
+            && self.data == other.data
+    }
+}
+
+impl Eq for ProducerAudioChunk {}
+impl ProducerAudioChunk {
+    pub fn to_viewer_envelope(&self, subscription_epoch: &str) -> BrowserAudioChunk {
+        BrowserAudioChunk {
+            kind: "audioChunk".to_string(),
+            browser_session_id: self.browser_session_id.clone(),
+            browser_incarnation: self.browser_incarnation.clone(),
+            profile_epoch: self.profile_epoch.clone(),
+            producer_run: self.producer_run.clone(),
+            subscription_epoch: subscription_epoch.to_string(),
+            doc_epoch: self.doc_epoch.to_string(),
+            audio_seq: self.audio_seq.clone(),
+            sample_rate: self.sample_rate,
+            channels: self.channels,
+            encoding: self.encoding.clone(),
+            data: self.data.clone(),
+        }
+    }
+}
+/// Server -> Client JSON text envelope sent over `/api/browser/media` alongside binary BHJF frames.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserAudioChunk {
+    pub kind: String,
+    pub browser_session_id: String,
+    pub browser_incarnation: String,
+    pub profile_epoch: String,
+    pub producer_run: String,
+    pub subscription_epoch: String,
+    pub doc_epoch: String,
+    pub audio_seq: String,
+    pub sample_rate: u32,
+    pub channels: u8,
+    pub encoding: String,
+    #[serde(
+        serialize_with = "serialize_arc_str",
+        deserialize_with = "deserialize_arc_str"
+    )]
+    pub data: std::sync::Arc<str>,
+}
+impl BrowserAudioChunk {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.kind != "audioChunk" {
+            return Err(ProtocolError::InvalidJson(format!(
+                "invalid audio envelope kind '{}'",
+                self.kind
+            )));
+        }
+        validate_decimal_sequence("profileEpoch", &self.profile_epoch)?;
+        validate_decimal_sequence("docEpoch", &self.doc_epoch)?;
+        validate_decimal_sequence("audioSeq", &self.audio_seq)?;
+        for (field, val) in [
+            ("browserSessionId", &self.browser_session_id),
+            ("browserIncarnation", &self.browser_incarnation),
+            ("producerRun", &self.producer_run),
+        ] {
+            let parsed = uuid::Uuid::parse_str(val)
+                .map_err(|e| ProtocolError::InvalidJson(format!("invalid {field} UUID: {e}")))?;
+            if val != &parsed.to_string() {
+                return Err(ProtocolError::InvalidJson(format!(
+                    "{field} UUID '{val}' is not canonical lowercase hyphenated"
+                )));
+            }
+        }
+        if self.subscription_epoch.is_empty() || self.subscription_epoch.len() > 128 {
+            return Err(ProtocolError::InvalidJson(
+                "invalid subscriptionEpoch".to_string(),
+            ));
+        }
+        if self.sample_rate != AUDIO_SAMPLE_RATE {
+            return Err(ProtocolError::InvalidJson(format!(
+                "unsupported audio sampleRate: {}",
+                self.sample_rate
+            )));
+        }
+        if self.channels != AUDIO_CHANNELS {
+            return Err(ProtocolError::InvalidJson(format!(
+                "unsupported audio channels: {}",
+                self.channels
+            )));
+        }
+        if self.encoding != AUDIO_ENCODING_PCM16LE {
+            return Err(ProtocolError::InvalidJson(format!(
+                "unsupported audio encoding: {}",
+                self.encoding
+            )));
+        }
+        if self.data.is_empty()
+            || self.data.len() > MAX_AUDIO_BASE64_BYTES
+            || self.data.len() % 4 != 0
+        {
+            return Err(ProtocolError::InvalidPayloadLength(self.data.len()));
+        }
+        use base64::Engine as _;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(self.data.as_ref())
+            .map_err(|_| ProtocolError::InvalidPayloadLength(self.data.len()))?;
+        if decoded.is_empty() || decoded.len() % 2 != 0 || decoded.len() > MAX_AUDIO_PCM_BYTES {
+            return Err(ProtocolError::InvalidPayloadLength(decoded.len()));
+        }
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ServerControlEvent {
@@ -549,8 +707,8 @@ impl Default for EffectiveBounds {
             command_timeout_secs: COMMAND_TIMEOUT_SECS,
             max_command_bytes: MAX_COMMAND_BYTES,
             max_ws_message_bytes: MAX_WS_MESSAGE_BYTES,
-            target_fps: 10,
-            default_jpeg_quality: 65,
+            target_fps: 24,
+            default_jpeg_quality: 75,
         }
     }
 }

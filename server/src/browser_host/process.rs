@@ -319,7 +319,8 @@ impl BrowserProcess {
             ))
             .arg("--no-first-run")
             .arg("--no-default-browser-check")
-            .arg("--disable-blink-features=AutomationControlled");
+            .arg("--disable-blink-features=AutomationControlled")
+            .arg("--autoplay-policy=no-user-gesture-required");
         if config.headless {
             cmd.arg("--headless=new");
         }
@@ -935,7 +936,9 @@ fn is_allowlisted_arg(arg: &str) -> bool {
         return false;
     }
 
-    if arg == "--disable-blink-features=AutomationControlled" {
+    if arg == "--disable-blink-features=AutomationControlled"
+        || arg == "--autoplay-policy=no-user-gesture-required"
+    {
         return true;
     }
 

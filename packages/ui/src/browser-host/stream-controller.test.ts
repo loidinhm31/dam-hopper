@@ -471,4 +471,168 @@ describe("stream-controller", () => {
     expect(controller.getStatus()).toBe("disconnected");
     expect(mediaWs.readyState).toBe(MockWebSocket.CLOSED);
   });
+
+  it("delivers validated current-run audioChunk messages after frame authority and resets on sequence gaps or retirement", async () => {
+    const onAudioChunk = vi.fn();
+    const onAudioReset = vi.fn();
+    controller.dispose();
+    controller = new BrowserStreamController({
+      canvas,
+      onAudioChunk,
+      onAudioReset,
+    });
+    controller.attach(mockCreds);
+    const mediaWs = MockWebSocket.instances[0];
+    mediaWs.onopen?.();
+    onAudioReset.mockClear();
+
+    const validPcmB64 = btoa(String.fromCharCode(0x10, 0x20, 0x30, 0x40));
+    const makeAudioMsg = (overrides: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        kind: "audioChunk",
+        browserSessionId: mockCreds.browserSessionId,
+        browserIncarnation: mockCreds.browserIncarnation,
+        profileEpoch: "1",
+        producerRun: "fedcba98-7654-4321-8901-abcdef012345",
+        subscriptionEpoch: mockCreds.subscriptionEpoch,
+        docEpoch: "1",
+        audioSeq: "1",
+        sampleRate: 24000,
+        channels: 1,
+        encoding: "pcm16le",
+        data: validPcmB64,
+        ...overrides,
+      });
+
+    // 1. Audio arriving before validated BHJF frame establishes producerRun is ignored
+    mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "1" }) }));
+    expect(onAudioChunk).not.toHaveBeenCalled();
+
+    // 2. Valid BHJF frame establishes currentProducerRun
+    const jpeg = createMockJpeg(640, 480);
+    const frame1 = packBhjfFrame(makeHeader("1"), jpeg);
+    mediaWs.onmessage?.(new MessageEvent("message", { data: frame1.buffer }));
+
+    // 3. Valid audioChunk for current run is delivered
+    mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "1" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(1);
+    expect(onAudioChunk.mock.calls[0][0]).toMatchObject({
+      kind: "audioChunk",
+      audioSeq: "1",
+      sampleRate: 24000,
+      channels: 1,
+      encoding: "pcm16le",
+    });
+
+    // 4. Duplicate or out-of-order audioSeq is dropped without resetting
+    mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "1" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(1);
+    expect(onAudioReset).not.toHaveBeenCalled();
+
+    // 5. Sequence gap (1 -> 3) triggers synchronous onAudioReset before delivering fresh chunk
+    mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "3" }) }));
+    expect(onAudioReset).toHaveBeenCalledTimes(1);
+    expect(onAudioChunk).toHaveBeenCalledTimes(2);
+
+    // 6. Foreign subscription, wrong session, malformed JSON, or odd-byte base64 are ignored and never affect video credits
+    mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "4", subscriptionEpoch: "foreign" }) }));
+    mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "4", sampleRate: 48000 }) }));
+    mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "4", data: btoa("odd") }) }));
+    mediaWs.onmessage?.(new MessageEvent("message", { data: "{malformed" }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(2);
+
+    // 7. Producer run change flushes audio and retires the old run
+    onAudioReset.mockClear();
+    const nextRun = "11111111-2222-4333-8444-555555555555";
+    const frameNextRun = packBhjfFrame({ ...makeHeader("2"), producerRun: nextRun }, jpeg);
+    mediaWs.onmessage?.(new MessageEvent("message", { data: frameNextRun.buffer }));
+    expect(onAudioReset).toHaveBeenCalledTimes(1);
+
+    // Old run audio is rejected
+    mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ audioSeq: "4" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(2);
+
+    // New run audio starting at seq 1 is accepted
+    mediaWs.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, audioSeq: "1" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(3);
+
+    // 8. Privacy and visibility false synchronously reset audio without blacklisting live producerRun on reattach
+    onAudioReset.mockClear();
+    controller.setPrivacyMode(true);
+    expect(onAudioReset).toHaveBeenCalled();
+    controller.setPrivacyMode(false);
+
+    const reattachedCreds = {
+      ...mockCreds,
+      subscriptionEpoch: "sub-epoch-reattached-2",
+    };
+    controller.attach(reattachedCreds);
+    const mediaWs2 = MockWebSocket.instances[2];
+    mediaWs2.onopen?.();
+
+    // Frame with wrong profileEpoch is rejected with ownerChanged and does not establish producerRun
+    const badEpochFrame = packBhjfFrame({ ...makeHeader("3"), producerRun: nextRun, profileEpoch: "99" }, jpeg);
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: badEpochFrame.buffer }));
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, audioSeq: "2" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(3);
+
+    // Frame with valid profileEpoch and SAME live producerRun (kept alive by another viewer) restores audio authority
+    const validReattachFrame = packBhjfFrame({ ...makeHeader("4"), producerRun: nextRun }, jpeg);
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: validReattachFrame.buffer }));
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, audioSeq: "2" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(4);
+
+    // 9. Navigation resetAudioAuthority(navRev) is idempotent across repeated calls (store listener + control callback + layout effect)
+    //    and fences queued old-document PCM even after a queued same-run BHJF frame arrives
+    onAudioReset.mockClear();
+    controller.resetAudioAuthority("2");
+    controller.resetAudioAuthority("2");
+    controller.resetAudioAuthority("2");
+    expect(onAudioReset).toHaveBeenCalledTimes(1);
+    // Queued pre-navigation BHJF frame arrives after resetAudioAuthority(): video continues and restores run authority
+    const queuedPreNavFrame = packBhjfFrame({ ...makeHeader("5"), producerRun: nextRun }, jpeg);
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: queuedPreNavFrame.buffer }));
+    // Missing docEpoch is rejected
+    const noDocEpoch = JSON.parse(makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, audioSeq: "3" })) as Record<string, unknown>;
+    delete noDocEpoch.docEpoch;
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: JSON.stringify(noDocEpoch) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(4);
+    // Previously unseen pre-navigation audioChunk (audioSeq: "3", docEpoch: "1") arriving AFTER the BHJF frame is still rejected!
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "1", audioSeq: "3" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(4);
+    // Post-navigation audioChunk with advanced docEpoch ("2") and monotonic audioSeq ("4") is accepted
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "2", audioSeq: "4" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(5);
+
+    // 9b. Media-before-control ordering: new-document audio (docEpoch: "3") arrives BEFORE control resetAudioAuthority("3")
+    onAudioReset.mockClear();
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "3", audioSeq: "5" }) }));
+    expect(onAudioReset).toHaveBeenCalledTimes(1);
+    expect(onAudioChunk).toHaveBeenCalledTimes(6);
+    onAudioReset.mockClear();
+    controller.resetAudioAuthority("3");
+    expect(onAudioReset).not.toHaveBeenCalled();
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "3", audioSeq: "6" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(7);
+
+    // 9c. Silent intermediate document (doc 3 -> doc 4 silent -> doc 5) retires doc 4 and admits doc 5
+    controller.resetAudioAuthority("4");
+    controller.resetAudioAuthority("5");
+    const postNavFrame5 = packBhjfFrame({ ...makeHeader("6"), producerRun: nextRun }, jpeg);
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: postNavFrame5.buffer }));
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "4", audioSeq: "7" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(7);
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "5", audioSeq: "8" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(8);
+
+    // 10. Control socket close permanently retires audio attachment authority even if media frames continue
+    const controlWs2 = MockWebSocket.instances[3];
+    onAudioReset.mockClear();
+    controlWs2.onclose?.();
+    expect(onAudioReset).toHaveBeenCalledTimes(1);
+    const frameAfterControlClose = packBhjfFrame({ ...makeHeader("7"), producerRun: nextRun }, jpeg);
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: frameAfterControlClose.buffer }));
+    mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "5", audioSeq: "9" }) }));
+    expect(onAudioChunk).toHaveBeenCalledTimes(8);
+  });
 });

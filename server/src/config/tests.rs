@@ -2293,10 +2293,10 @@ fn browser_host_config_defaults_and_validation() {
     assert_eq!(default_cfg.budgets.max_viewers, 2);
     assert_eq!(default_cfg.budgets.max_raw_cdp_connections, 2);
     assert_eq!(default_cfg.budgets.memory_ceiling_bytes, DEFAULT_MEMORY_CEILING_BYTES);
-    assert_eq!(default_cfg.budgets.jpeg_quality, 65);
+    assert_eq!(default_cfg.budgets.jpeg_quality, 75);
     assert_eq!(default_cfg.budgets.max_width, 1280);
     assert_eq!(default_cfg.budgets.max_height, 900);
-    assert_eq!(default_cfg.budgets.frame_rate_fps, 10);
+    assert_eq!(default_cfg.budgets.frame_rate_fps, 24);
     assert!(default_cfg.validate().is_ok());
 
     // Direct domain capabilities DTO probe (no Chromium spawn)

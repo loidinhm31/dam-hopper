@@ -1,5 +1,10 @@
 # Unreleased
 
+- **feat(host-browser): Wire higher-FPS video streaming, media codec stealth, and privacy-fenced gapless tab audio (`server/src/browser_host/`, `server/src/api/browser_host.rs`, `packages/ui/src/browser-host/`, `packages/ui/src/os/`).**
+  - **Higher-FPS Screencast & Configurable Capture Policy (`server/src/browser_host/config.rs`, `protocol.rs`, `screencast.rs`, `media.rs`):** Updated `BrowserBudgetsConfig` (`DEFAULT_FRAME_RATE_FPS = 24`, `DEFAULT_JPEG_QUALITY = 75`) and `EffectiveBounds` (`target_fps: 24`, `default_jpeg_quality: 75`) defaults from 10 FPS / 65 JPEG quality to **24 FPS / 75 JPEG quality**. Added `ScreencastProducer::with_capture_policy(fps, jpeg_quality)` and `ViewerCreditController::with_min_interval(subscription_epoch, min_interval)` plus a `15ms` pending-frame flush ticker (`flush_ticker`) in `run_media_session`, propagating configured `frame_rate_fps` (`1..=30`) and `jpeg_quality` (`10..=100`) across `Page.startScreencast`, `update_geometry`, `Page.captureScreenshot` fallback, producer governor cadence, and viewer delivery pacing while preserving legacy `100ms` / JPEG `65` defaults on `::new(...)` constructors.
+  - **Autoplay Launch Policy & Selective Media Stealth (`server/src/browser_host/process.rs`, `stealth.rs`):** Added `--autoplay-policy=no-user-gesture-required` to `BrowserProcess::launch` and allowlisted the exact flag in `is_allowlisted_arg` while keeping sandboxing, TLS verification, and site isolation active. Extended `ANTI_DETECTION_SCRIPT` with a unified non-stacked `Permissions.prototype.query` hook (`27` defaults, `Notification.permission` correlation normalizing `'denied'` to `'default'`, and native fallback), privacy-fenced `navigator.mediaDevices.enumerateDevices()` blanking `deviceId`, `label`, and `groupId` while preserving `kind` and device count, and `HTMLMediaElement.prototype.canPlayType` / `MediaSource.isTypeSupported` codec normalization (`video/mp4`, `audio/mp4`, `video/webm`, `audio/webm`, `audio/mpeg`, `audio/ogg`, `audio/wav`, `audio/flac` without advertising unsupported EME/DRM), preserving the exact stealth command order with zero `Runtime.enable` or `Runtime.addBinding`.
+  - **In-Page PCM16LE Audio Bridge, `AudioDocAuthority` & Media Fanout (`server/src/browser_host/stealth.rs`, `cdp.rs`, `screencast.rs`, `media.rs`, `protocol.rs`, `server/src/api/browser_host.rs`):** Installed non-enumerable `EventTarget.prototype[Symbol.for('dh.a')]` (`start`, `drain`, `drainDoc`, `drainPcm`, `stop`, `stopDoc`) capturing `<audio>`/`<video>` via `captureStream()` (with `createMediaElementSource` deduplication), `AudioNode.prototype.connect`/`disconnect` destination graphs, and same-/cross-origin child iframes (up to 8 frames) into a 24 kHz mono `Int32Array` ring (`RING_LEN = 24000`, 16 sources, 5-chunk ready queue up to 2,400 samples / 100 ms / 4,800 B PCM16LE, 3s drain lease, `rms < 0.0002` silence skip, advancing `subDocGen` and clearing pre-transition chunks on `hashchange`/`popstate`/`pushState`/`replaceState` and `runToken` rotation). Added `CdpNavigationListener` + `ProducerNavListener` (`AudioDocAuthority`, `PendingNoopRestore`, `DispatchedNav`), binding navigation epochs synchronously pre-enqueue (`notify_nav_dispatched` returning `-32000` when stale) across `build_producer`, `navigate_session`, `history_session`, and `reload_session` (`resolve_noop_audio_doc_epoch` on out-of-bounds history) and correlating native `loaderId` (`Page.navigate` / `Page.frameNavigated`) and main-frame `Page.navigatedWithinDocument` (`C12-H2` fragment add/removal & `C12-H6` `#anchor`/history disambiguation). Drained chunks every `50ms` via single-flight `run_audio_drain_loop` only when visible viewers exist and `active_committed_epoch().is_some()`, broadcasting `BrowserAudioChunk` text frames (`24 kHz`, mono, `pcm16le`, `docEpoch`, monotonic `audioSeq`, `<= 8 KiB` envelope) over `/api/browser/media` (`write_media_text`, 5s `WRITE_DEADLINE` raced with `cancel_token` and `doc_auth_rx.changed()`) independently of BHJF video credits.
+  - **WebAudio `PcmPlayer` & Viewer-Local Toolbar Audio Controls (`packages/ui/src/api/browser-host-types.ts`, `packages/ui/src/browser-host/pcm-player.ts`, `stream-controller.ts`, `packages/ui/src/os/BrowserStreamKeepAliveHost.tsx`, `apps/BrowserApp.tsx`):** Added dependency-free `PcmPlayer` (199 LOC) with 24 kHz `AudioContext` + `GainNode`, `nextStartTime` scheduling (`20ms` lead), `MAX_AUDIO_QUEUE_SECONDS = 0.5` ceiling, single-flight `playbackEpoch`-fenced `resume()` with `canPlay` revalidation, autoplay-blocked state tracking, and synchronous `flush()` (zeroing `masterGain` and stopping active `AudioBufferSourceNode`s). Extended `BrowserStreamController` with media-before-control WebSocket pairing, BHJF-established `producerRun` validation, strict `BrowserAudioChunk` / `docEpoch` / monotonic `audioSeq` fencing, and `onAudioReset()` / `resetAudioAuthority()` transitions without blacklisting active producer runs across reattachment. Wired `BrowserStreamKeepAliveHost` direct synchronous subscriptions (flushing audio before React commits on mute, hide, Cognito mode, LockScreen, profile reset fence, disconnect, navigation, or session change) and `BrowserApp` viewer-local Mute/Unmute/`"Unlock Audio"` toggle (`data-testid="browser-audio-toggle-btn"`, no control lease required). **Cycle 13 Status:** Automated QA PASS (40 integration + 2 focused Rust tests; 89 UI Vitest tests; clean `@dam-hopper/ui build`; `pcm-player.ts` 199 LOC) and Code Review 9/10 APPROVED WITH NOTES; real output-browser live audible/privacy/two-viewer/FPS/latency qualification remains open.
 - **feat(host-browser): Improve Browser App compatibility for Cloudflare challenges and Google account login (`server/src/browser_host/`, `packages/ui/src/os/`).**
   - **Engine Automation Flag & Coherent Chrome Identity (`server/src/browser_host/process.rs`, `stealth.rs`, `screencast.rs`, `cdp.rs`, `media.rs`):** Added exact `--disable-blink-features=AutomationControlled` launch flag and allowlist exception (`is_allowlisted_arg`) while keeping all other `--disable-blink-features*` values and security flags rejected fail-closed. Added `ChromeIdentity` and document-start `ANTI_DETECTION_SCRIPT` (adapted from `aicoworker`), applying `Emulation.setFocusEmulationEnabled`, `Emulation.setUserAgentOverride` (`Chrome/<major>.0.0.0` + `sec-ch-ua` Client Hints metadata), and `Page.addScriptToEvaluateOnNewDocument` on page sessions and auto-attached cross-origin OOPIF `iframe` targets (`Target.setAutoAttach`). Sanitized `HeadlessChrome` request headers on allowed `Fetch.continueRequest` worker/subresource decisions.
   - **OAuth Popup Lifecycle & Toolbar Control Focus (`server/src/browser_host/session.rs`, `packages/ui/src/os/browser-session-sync.ts`, `BrowserStreamKeepAliveHost.tsx`, `apps/BrowserApp.tsx`):** Added optional `activePopupSessionId` and `parentSessionId` fields to `BrowserSessionDto`, published via `sessionUpdated` when an admitted popup reaches `running` and cleared when the popup retires. Updated `BrowserStreamKeepAliveHost` and `BrowserApp` to automatically switch into admitted OAuth popups, restore the live opener when the popup closes (`window.close()`), provide manual **Return to Page** / **Open Popup** controls and `popupBlocked` alerts, and focus `TextInputProxy` upon toolbar **Control** acquisition without stealing focus from active input elements.
@@ -556,35 +561,11 @@
 
 - **Configured-agent activity idle suspend — integrated qualification complete (2026-09-11).** Qualified managed PTY output/input, attributable TCP traffic, protected status/API warnings, Chromium rendering, fake suspend admission, recovery, and shutdown.
 - Validation passed: backend/PTY/API/integration **323 passed**, security boundary **14/14**, Chromium **16/16**, and the ignored live Linux PTY/TCP smoke **1/1 in 0.72s**; code review approved **9.4/10**. Automated evidence used fake suspend outcomes and did not invoke host suspend, RTC programming, helper execution, sudo, or root installation.
-- **Configured-agent activity idle suspend — complete.** Added a
-  strict `unknown`-to-`IdleSuspendStatusV1` decoder with exact two-field
-  old-server normalization and fail-closed malformed/partial response
-  handling. The protected status remains version 1, authenticated, and
-  `Cache-Control: no-store`.
-- Extended `HostIdleSuspendStatus` with policy, aggregate measurement state and
-  reason, nullable/unknown counts, TCP4/TCP6 coverage, persistent heuristic
-  limits, bounded measurement-warning duration and PID/safe identity examples,
-  and the sole `armDeadlineMs` countdown. Manual force confirmation still uses
-  actual fleet counts and existing handoff/409/no-retry behavior.
-- Validation passed: protected API **9/9**, frontend unit **41/41**, Chromium
-  **13/13**; code review approved **9.7/10**. Warning serialization tests
-  reject command arguments, matcher data, socket details, terminal/session
-  identities, and tokens. Integrated real-observer qualification remains integrated
-  verification work.
-
-- **Configured-agent activity idle suspend — complete.** Added the
-  dedicated joinable transactional sampler worker, sequential process/TCP
-  prepare with raw-output and manager invalidation fences, one-deep
-  retryable-close-race retry, back-to-back baseline commit, and opaque final
-  admission tickets.
-- Added manager-locked automatic admission for policy, request/activity/epoch/
-  timing revisions, quiet deadline, observation age, input/generation/root/
-  output fences, and PTY lifecycle blockers. Public status now requires
-  `automaticPolicy`, reports nullable `activity`, and projects bounded
-  `measurementWarning` process identities (maximum 32, no args or socket
-  details). Coordinator recovery latches spent epochs and joins the sampler
-  before PTY teardown.
-
+- **Configured-agent activity idle suspend — complete.** Added a strict `unknown`-to-`IdleSuspendStatusV1` decoder with exact two-field old-server normalization and fail-closed malformed/partial response handling. The protected status remains version 1, authenticated, and `Cache-Control: no-store`.
+- Extended `HostIdleSuspendStatus` with policy, aggregate measurement state and reason, nullable/unknown counts, TCP4/TCP6 coverage, persistent heuristic limits, bounded measurement-warning duration and PID/safe identity examples, and the sole `armDeadlineMs` countdown. Manual force confirmation still uses actual fleet counts and existing handoff/409/no-retry behavior.
+- Validation passed: protected API **9/9**, frontend unit **41/41**, Chromium **13/13**; code review approved **9.7/10**. Warning serialization tests reject command arguments, matcher data, socket details, terminal/session identities, and tokens. Integrated real-observer qualification remains integrated verification work.
+- **Configured-agent activity idle suspend — complete.** Added the dedicated joinable transactional sampler worker, sequential process/TCP prepare with raw-output and manager invalidation fences, one-deep retryable-close-race retry, back-to-back baseline commit, and opaque final admission tickets.
+- Added manager-locked automatic admission for policy, request/activity/epoch/timing revisions, quiet deadline, observation age, input/generation/root/output fences, and PTY lifecycle blockers. Public status now requires `automaticPolicy`, reports nullable `activity`, and projects bounded `measurementWarning` process identities (maximum 32, no args or socket details). Coordinator recovery latches spent epochs and joins the sampler before PTY teardown.
 - **Configured-agent activity idle suspend — complete.** PTY sessions now capture qualified root `(pid, start_ticks)` identity per incarnation, count raw PTY reads with a saturating counter, fence accepted input before writer dispatch, reject writes during handoff, and expose bounded private observation snapshots without leaking terminal content.
 - Validation passed: focused PTY activity tests **8/8**; PTY module suite **159 passed, 1 ignored** (pre-existing performance gate). Code review scored **9.5/10** with no critical issues.
 - **Configured-agent activity idle suspend — complete.** Added private bounded `ProcessDiscovery<S>` over `ProcessSource`/`LinuxProcSource`, exact identity-safe root/retained descendant attribution, finite executable matching, same-namespace socket ownership, and transactional prepared samples.
@@ -609,127 +590,42 @@
 - **Plan item notes and editing.** Restored selected Plan item note rendering with multiline bodies, semantic timestamps, and per-note deletion. Added inline title/summary editing across desktop Deck and compact Sheet, reusing existing workflow PATCH/delete-note mutations with fresh request IDs and exact CAS timestamps.
 - Validation: focused workflow Vitest suites **27/27 passed** across action hooks, selected-item UI, responsive Surface, Deck, and Sheet. Changed-file TypeScript checks passed; coverage provider unavailable and an unrelated `use-clipboard.ts` type error remains. Code review 8.5/10, no critical issues; asynchronous edit rejection retention remains a non-blocking follow-up.
 
-- **Cross-Origin Port Transport Guard Fix.**
-  Aligned privileged mutation CSRF guards on idle-suspend (`force-suspend`, `timing`) and host actions (`intents`, `approve`, `executions`) with validated Bearer authentication and the server's exact CORS origin allowlist (`AppState::origin_is_allowed`).
-  Resolved `403 invalidOrigin` failure on split-port architectures (e.g. UAT web `:4804` / API `:4803`; production `:4802` / `:4801`) where browsers send `credentials: "include"`.
-  Applied zero-allocation iterator checks to header cardinality validation; strict foreign, duplicate-Origin, and userinfo rejection preserved.
+- **Cross-Origin Port Transport Guard Fix.** Aligned privileged mutation CSRF guards on idle-suspend (`force-suspend`, `timing`) and host actions (`intents`, `approve`, `executions`) with validated Bearer authentication and the server's exact CORS origin allowlist (`AppState::origin_is_allowed`). Resolved `403 invalidOrigin` failure on split-port architectures (e.g. UAT web `:4804` / API `:4803`; production `:4802` / `:4801`) where browsers send `credentials: "include"`. Applied zero-allocation iterator checks to header cardinality validation; strict foreign, duplicate-Origin, and userinfo rejection preserved.
 
 # 2026-09-06
 
-- **Authenticated Manual Force Sleep — protocol/helper complete.**
-  Extended the version-1 enrolled helper execution domain to accept
-  `wakeAfterSeconds: 0` as an indefinite-sleep sentinel while keeping persisted
-  automatic timing at `60.=86400`.
-- Zero converts to clear-only RTC behavior: write and verify `0`, with no
-  target-epoch arithmetic or write. Timed values clear and verify, calculate a
-  checked target, write it, and verify the readback.
-- Added fail-closed RTC ownership preflight (`RtcAlarmBusy`), explicit
-  zero-valued helper intent/completion audit records, and no-suspend behavior
-  for RTC, audit, capability, inhibitor, or preflight failures.
-- Added protocol, backend, preflight, helper IPC, audit, and automatic timing
-  regression coverage using temporary files and fake backends only; tests never
-  invoke host suspend, logind, or real RTC hardware.
-
-- **Authenticated Manual Force Sleep — coordinator/fleet complete.**
-  Added generation-fenced forced fleet admission that bypasses only active-fleet
-  quiescence, preserves audit/capability/inhibitor/RTC/peer gates, serializes
-  manual work with automatic timing, and releases the handoff on every outcome.
-- **Authenticated Manual Force Sleep — REST API complete (2026-09-06 12:00:21 +07:00).**
-  Added the protected `POST /api/system/idle-suspend/v1/force-suspend` endpoint
-  with strict DTOs and wake bounds, cookie same-origin and enabled-actor
-  enforcement, a 16 KiB body cap, coordinator-only dispatch, audited `202`
-  admission, typed fleet/handoff conflicts, sanitized closed errors, and
-  `Cache-Control: no-store` responses.
-- **Authenticated Manual Force Sleep — host popover UI and confirmation dialog complete (2026-09-06 12:20:00 +07:00).**
-  Added the destructive "Force Machine to Sleep" action within
-  HostIdleSuspendStatus and HostResourcePopover with clean modal handoff to
-  Radix ForceSleepDialog, indefinite default (`wakeAfterSeconds: 0`), optional
-  bounded RTC wake duration input, active managed session warning and
-  confirmation checkbox, authoritative 409 conflict refresh, disabled
-  controls during pending mutation, live regions, and 44px touch targets.
-- **Authenticated Manual Force Sleep — integration, qualification, and documentation complete (2026-09-06 15:45:00 +07:00).**
-  Closed the requirements-to-evidence matrix, protocol/coordinator/REST/UI integration gates, non-privileged boundary verifier, rollback review, and synchronized architecture, API, configuration, security, operations, product, and codebase documentation.
+- **Authenticated Manual Force Sleep — protocol/helper complete.** Extended the version-1 enrolled helper execution domain to accept `wakeAfterSeconds: 0` as an indefinite-sleep sentinel while keeping persisted automatic timing at `60.=86400`.
+- Zero converts to clear-only RTC behavior: write and verify `0`, with no target-epoch arithmetic or write. Timed values clear and verify, calculate a checked target, write it, and verify the readback.
+- Added fail-closed RTC ownership preflight (`RtcAlarmBusy`), explicit zero-valued helper intent/completion audit records, and no-suspend behavior for RTC, audit, capability, inhibitor, or preflight failures.
+- Added protocol, backend, preflight, helper IPC, audit, and automatic timing regression coverage using temporary files and fake backends only; tests never invoke host suspend, logind, or real RTC hardware.
+- **Authenticated Manual Force Sleep — coordinator/fleet complete.** Added generation-fenced forced fleet admission that bypasses only active-fleet quiescence, preserves audit/capability/inhibitor/RTC/peer gates, serializes manual work with automatic timing, and releases the handoff on every outcome.
+- **Authenticated Manual Force Sleep — REST API complete (2026-09-06 12:00:21 +07:00).** Added the protected `POST /api/system/idle-suspend/v1/force-suspend` endpoint with strict DTOs and wake bounds, cookie same-origin and enabled-actor enforcement, a 16 KiB body cap, coordinator-only dispatch, audited `202` admission, typed fleet/handoff conflicts, sanitized closed errors, and `Cache-Control: no-store` responses.
+- **Authenticated Manual Force Sleep — host popover UI and confirmation dialog complete (2026-09-06 12:20:00 +07:00).** Added the destructive "Force Machine to Sleep" action within HostIdleSuspendStatus and HostResourcePopover with clean modal handoff to Radix ForceSleepDialog, indefinite default (`wakeAfterSeconds: 0`), optional bounded RTC wake duration input, active managed session warning and confirmation checkbox, authoritative 409 conflict refresh, disabled controls during pending mutation, live regions, and 44px touch targets.
+- **Authenticated Manual Force Sleep — integration, qualification, and documentation complete (2026-09-06 15:45:00 +07:00).** Closed the requirements-to-evidence matrix, protocol/coordinator/REST/UI integration gates, non-privileged boundary verifier, rollback review, and synchronized architecture, API, configuration, security, operations, product, and codebase documentation.
 - Validation passed: 81/81 Rust idle-suspend tests, 3/3 UI Vitest tests, 10/10 Chromium browser tests, 12/12 boundary checks, and `cargo check`. Automated evidence uses fakes and temporary files only; the indefinite real-host canary remains explicitly deferred pending Operations approval and verified physical/out-of-band recovery.
 
 # 2026-09-02
 
-- **Workflow tracking domain and relational persistence.** Added the
-  additive `010_workflow_tracking.sql` migration for workspace identities,
-  Plan/Phase/Task items, manual sessions, terminal/agent resource links,
-  durable notes, and append-only activity events. Existing terminal-session
-  tables remain unchanged and all workflow tables share the configured
-  `sessions.db`.
-- Added serializable workflow models and closed enums for item kind/status,
-  session lifecycle, resource observations, provenance, and event types.
-  Validation enforces bounded titles/bodies/identifiers/payloads, timestamps,
-  transitions, and the Plan-first hierarchy (Plan root → Phase → Task, with
-  standalone or Plan-level tasks).
-- Added `WorkflowStore` repositories for workspace/item/session/resource/note/
-  event CRUD, bounded overview aggregation, keyset history, and retention.
-  Mutations use SQLite transactions; optional audit events commit atomically,
-  event IDs are retry-idempotent, and resource observations never rewrite
-  session lifecycle state.
-- `server/src/workflow/tests.rs` covers model rules, migration preservation,
-  hierarchy/scope checks, idempotency, overlapping sessions, note retention,
-  overview progress, pagination, and purge. Workflow HTTP/WebSocket routes
-  remain outside this scope.
-- **Workflow service and REST API.** Added the profile/workspace-
-  scoped `WorkflowService` and protected `/api/workflow/*` routes for bounded
-  overview/history, Plan-first item CRUD, manual session lifecycle,
-  terminal/agent links, durable notes, and explicit history purge.
-- REST mutations use strict camelCase DTOs, UUID request replay keys,
-  optimistic `updatedAt` CAS for item/note/link updates, typed sanitized
-  workflow errors, and a focused 32 KiB body limit. Events use opaque keyset
-  cursors; automatic retention purges in bounded batches.
-- Added API integration coverage in `server/tests/workflow_api.rs` for auth,
-  hierarchy, overview, replay/CAS, sessions, links, notes, pagination, limits,
-  invalid transitions, and purge. [See workflow API reference](./workflow-api.md).
-- **Terminal lifecycle correlation and agent adapter.** Added the
-  closed `WorkflowObservation` contract and clone-cheap PTY recorder. A bounded
-  `sync_channel(256)` worker keeps workflow SQLite off PTY input/output/restart
-  hot paths; queue-full and storage failures are counted/logged without
-  blocking terminal operation.
-- Lifecycle payloads are strictly allowlisted (terminal ID, incarnation,
-  configured project, validated worktree target, server time, exit/restart
-  metadata, and action). Command lines, arguments, CWD, environment, prompts,
-  output, and arbitrary adapter payloads are excluded.
-- Terminal links transition through `attached`, `stale`, `exited`, `crashed`,
-  and `detached` with incarnation ordering and deterministic replay
-  suppression. Final exit/removal may suggest an end time but never changes
-  manual session status or `startedAt`/`endedAt`.
-- Startup restores PTYs before reconciling persisted terminal links against
-  live `(sessionId, incarnation)` identities. Agent links remain bounded manual
-  `harnessLabel`/`runId` metadata; no automatic harness producer or generic
-  observation endpoint was added. Direct Plan sessions do not synthesize
-  Phase/Task children.
-- Workflow service review reports 28 workflow tests and 907 full-server tests passing;
-  review approved 9.8/10.
+- **Workflow tracking domain and relational persistence.** Added the additive `010_workflow_tracking.sql` migration for workspace identities, Plan/Phase/Task items, manual sessions, terminal/agent resource links, durable notes, and append-only activity events. Existing terminal-session tables remain unchanged and all workflow tables share the configured `sessions.db`.
+- Added serializable workflow models and closed enums for item kind/status, session lifecycle, resource observations, provenance, and event types. Validation enforces bounded titles/bodies/identifiers/payloads, timestamps, transitions, and the Plan-first hierarchy (Plan root → Phase → Task, with standalone or Plan-level tasks).
+- Added `WorkflowStore` repositories for workspace/item/session/resource/note/event CRUD, bounded overview aggregation, keyset history, and retention. Mutations use SQLite transactions; optional audit events commit atomically, event IDs are retry-idempotent, and resource observations never rewrite session lifecycle state.
+- `server/src/workflow/tests.rs` covers model rules, migration preservation, hierarchy/scope checks, idempotency, overlapping sessions, note retention, overview progress, pagination, and purge. Workflow HTTP/WebSocket routes remain outside this scope.
+- **Workflow service and REST API.** Added the profile/workspace-scoped `WorkflowService` and protected `/api/workflow/*` routes for bounded overview/history, Plan-first item CRUD, manual session lifecycle, terminal/agent links, durable notes, and explicit history purge.
+- REST mutations use strict camelCase DTOs, UUID request replay keys, optimistic `updatedAt` CAS for item/note/link updates, typed sanitized workflow errors, and a focused 32 KiB body limit. Events use opaque keyset cursors; automatic retention purges in bounded batches.
+- Added API integration coverage in `server/tests/workflow_api.rs` for auth, hierarchy, overview, replay/CAS, sessions, links, notes, pagination, limits, invalid transitions, and purge. [See workflow API reference](./workflow-api.md).
+- **Terminal lifecycle correlation and agent adapter.** Added the closed `WorkflowObservation` contract and clone-cheap PTY recorder. A bounded `sync_channel(256)` worker keeps workflow SQLite off PTY input/output/restart hot paths; queue-full and storage failures are counted/logged without blocking terminal operation.
+- Lifecycle payloads are strictly allowlisted (terminal ID, incarnation, configured project, validated worktree target, server time, exit/restart metadata, and action). Command lines, arguments, CWD, environment, prompts, output, and arbitrary adapter payloads are excluded.
+- Terminal links transition through `attached`, `stale`, `exited`, `crashed`, and `detached` with incarnation ordering and deterministic replay suppression. Final exit/removal may suggest an end time but never changes manual session status or `startedAt`/`endedAt`.
+- Startup restores PTYs before reconciling persisted terminal links against live `(sessionId, incarnation)` identities. Agent links remain bounded manual `harnessLabel`/`runId` metadata; no automatic harness producer or generic observation endpoint was added. Direct Plan sessions do not synthesize Phase/Task children.
+- Workflow service review reports 28 workflow tests and 907 full-server tests passing; review approved 9.8/10.
 - **Client types, transport, and query state.** Added strict shared-UI workflow DTOs and domain helpers, all 13 protected REST operation mappings, profile/transport-generation-isolated React Query hooks, mutation invalidation and request-ID replay handling, and manual timestamp/resource-observation helpers. Existing terminal navigation and localStorage state remain unchanged.
 - Validation: Targeted workflow client UI tests 51/51, full UI suite 1,452/1,452, and Rust server 907/907 executed tests passed (2 ignored); code review approved 10/10. Formal source coverage was not generated because the UI coverage provider is unavailable, and the existing React `act(..)` warning is non-blocking.
 - **Responsive workflow context surface.** Added the Plan-first ambient context ribbon, responsive desktop deck, mobile segmented safe-area sheet, optional Phase/Task capture, direct notes/sessions/execution links, manual timestamp/**Now** controls, observed terminal suggestions, focus-safe shortcut ownership, and loading/error/empty states.
 - Validation: targeted workflow surface UI tests passed 62/62 (100%), full UI suite passed 1,493/1,493 (100%), and Rust server executed tests passed 907/907 (2 ignored). Review approved 9.8/10. Responsive browser geometry, safe-area, and terminal/editor continuity remain subsequent integration validation work.
-- **WorkspacePage and shell integration.** Complete /
-  2026-09-02. Mounted one `WorkflowContextSurface` through the existing
-  `toolbarActions` companion row in `IdeShell`, `TerminalWorkspaceShell`, and
-  `MobileWorkspaceShell`; no route, activity-bar tool, mobile surface, TopNav
-  item, or duplicate PTY lifecycle.
-- Added pure `packages/ui/src/lib/workflow-workspace-integration.ts` decisions:
-  `deriveWorkflowTerminalCandidates` merges mounted/session-map observations
-  with target-unavailable state without command, CWD, or output;
-  `resolveWorkflowTerminalReveal` rejects missing/profile-mismatched/stale IDs,
-  reuses `handleSelectTerminal`, and requests the compact Terminal surface only
-  in compact mode; `resolveWorkflowTargetSelection` validates configured
-  project/worktree availability before using existing workspace and
-  project-target stores.
-- Wired `onOpenTerminal` through `WorkflowContextSurface`,
-  `WorkflowContextDeck`, `WorkflowContextSheet`, `WorkflowExecutionList`, and
-  `WorkflowSessionCard`; wired `onSelectTarget` through the surface,
-  deck/sheet, and `WorkflowProjectList`. Keyed the surface by
-  `activeProfileId` so profile changes reset workflow presentation state while
-  terminal/editor/Browser keep-alive state remains mounted.
-- Validation: targeted UI 62/62, full UI 1,515/1,515, relevant Chromium
-  smoke 8/8, Rust 907/907 executed (2 ignored), and UI TypeScript compilation
-  passed; review approved 9.8/10.
+- **WorkspacePage and shell integration.** Complete / 2026-09-02. Mounted one `WorkflowContextSurface` through the existing `toolbarActions` companion row in `IdeShell`, `TerminalWorkspaceShell`, and `MobileWorkspaceShell`; no route, activity-bar tool, mobile surface, TopNav item, or duplicate PTY lifecycle.
+- Added pure `packages/ui/src/lib/workflow-workspace-integration.ts` decisions: `deriveWorkflowTerminalCandidates` merges mounted/session-map observations with target-unavailable state without command, CWD, or output; `resolveWorkflowTerminalReveal` rejects missing/profile-mismatched/stale IDs, reuses `handleSelectTerminal`, and requests the compact Terminal surface only in compact mode; `resolveWorkflowTargetSelection` validates configured project/worktree availability before using existing workspace and project-target stores.
+- Wired `onOpenTerminal` through `WorkflowContextSurface`, `WorkflowContextDeck`, `WorkflowContextSheet`, `WorkflowExecutionList`, and `WorkflowSessionCard`; wired `onSelectTarget` through the surface, deck/sheet, and `WorkflowProjectList`. Keyed the surface by `activeProfileId` so profile changes reset workflow presentation state while terminal/editor/Browser keep-alive state remains mounted.
+- Validation: targeted UI 62/62, full UI 1,515/1,515, relevant Chromium smoke 8/8, Rust 907/907 executed (2 ignored), and UI TypeScript compilation passed; review approved 9.8/10.
 - **Verification, rollout, observability, and docs.** Completed the additive migration/restart/rollback rehearsal, privacy-safe workflow diagnostics, old-server compatibility, responsive accessibility contracts, real-terminal continuity, and documentation gates. Migration 010 remains additive; rollback retains workflow tables/data, and older binaries ignore them.
 - Added fixed-cardinality workflow diagnostics in `DiagnosticStore`: `workflow_operation_duration_seconds` (duration capped at 60 seconds), `workflow_queue_dropped_total` (non-blocking 256-entry observation queue drops), `workflow_reconciliation_total` (attached/detached counts capped at 1,000), and `workflow_storage_errors_total` (bounded store-failure outcomes). Operation/result dimensions are enums; duration, row, event, and count fields are bounded. No IDs, projects, paths, notes, external runs, commands, CWD, environment, prompts, or output are recorded.
 - Older servers that return HTTP 404 for `GET /api/workflow/overview` now produce a profile-scoped feature-unavailable state, suppress query retries, close/hide workflow controls, and announce the unavailable state. Authentication and 5xx failures remain explicit errors with retry behavior; other workflow 404s retain their API semantics.
@@ -746,33 +642,14 @@
 - **Runtime terminal custom-name persistence.** Added nullable runtime `name` independent of configured profile names, SQLite migration 009, and persistence-first acknowledgements for rename, removal, and reusable `dispose`; replacement/restore cleanup is race-safe.
 - Create and authenticated `PATCH` rename trim/validate names (≤64 Unicode scalars, no control characters) and blank/`null` clear overrides. Names flow through respawn/restore, API/WebSocket, and frontend terminal labels; rename UX is durable and cleared names return to existing fallback labels.
 - Validation: backend full `cargo test` **874 tests, 2 ignored**; UI full **212 files / 1,411 tests**; production build and focused browser smoke passed. Broad browser remains **183/187**, with four failures in unchanged baseline areas: `app-zoom` (320×180 expected, 352×198 received), `ssh-forward-multi-connection` (switches expected disabled, enabled), and `terminal-panel-replay-notifications` (activity expected inactive, active). No restart-persistence manual claim: graceful stop removes sessions by design.
-- **Traditional-mode Global Search focus retention.** Callback-only pane
-  rerenders no longer move focus from Global Search to xterm while typing;
-  semantic pane/session focus and native-input suppression remain intact.
-- **Traditional active-pane floating scroll controls.** Enabled
-  `TerminalScrollButtons` now render only for the active Traditional pane above
-  `MobileTerminalAccessoryBar` with the Runtime-compatible accessory-rail
-  contract; inactive panes and Browser remain excluded. Runtime source and
-  behavior remain unchanged.
-- Focused validation passed: UI TypeScript build, focused unit tests (2 files/5
-  tests), focused Chromium tests (2 files/8 tests), and actual-app smoke
-  confirming three-character search focus retention, scroll trigger/group
-  placement above keyboard controls, no xterm focus on scroll activation, and
-  Runtime contrast. Final code review found no issues; no broad repository-suite
-  or production/cross-platform release validation is claimed.
-- **Traditional terminal close selection fix.** Closing a Traditional terminal now
-  keeps the selected terminal within the same project instead of selecting one
-  from another project; Runtime behavior is preserved. Focused validation passed:
-  23 unit tests, 9 Traditional Chromium tests, and the UI TypeScript build.
-  Production-like callback integration coverage remains a follow-up.
+- **Traditional-mode Global Search focus retention.** Callback-only pane rerenders no longer move focus from Global Search to xterm while typing; semantic pane/session focus and native-input suppression remain intact.
+- **Traditional active-pane floating scroll controls.** Enabled `TerminalScrollButtons` now render only for the active Traditional pane above `MobileTerminalAccessoryBar` with the Runtime-compatible accessory-rail contract; inactive panes and Browser remain excluded. Runtime source and behavior remain unchanged.
+- Focused validation passed: UI TypeScript build, focused unit tests (2 files/5 tests), focused Chromium tests (2 files/8 tests), and actual-app smoke confirming three-character search focus retention, scroll trigger/group placement above keyboard controls, no xterm focus on scroll activation, and Runtime contrast. Final code review found no issues; no broad repository-suite or production/cross-platform release validation is claimed.
+- **Traditional terminal close selection fix.** Closing a Traditional terminal now keeps the selected terminal within the same project instead of selecting one from another project; Runtime behavior is preserved. Focused validation passed: 23 unit tests, 9 Traditional Chromium tests, and the UI TypeScript build. Production-like callback integration coverage remains a follow-up.
 
 # 2026-08-30
 
-- **Browser Debug/native support documentation refresh.** Recorded the Windows
-  WebView2 v1 gate, Linux runtime-unverified status, macOS deferral, Android
-  iframe fallback, profile-scoped storage, generation/nonce/request validation,
-  raw bounds plus mirrored app zoom, relay capabilities, and popup/download/
-  permission/console boundaries (former native desktop support retired in Phase 02).
+- **Browser Debug/native support documentation refresh.** Recorded the Windows WebView2 v1 gate, Linux runtime-unverified status, macOS deferral, Android iframe fallback, profile-scoped storage, generation/nonce/request validation, raw bounds plus mirrored app zoom, relay capabilities, and popup/download/permission/console boundaries (former native desktop support retired in Phase 02).
 
 ## Older Releases
 

@@ -1401,6 +1401,38 @@ async fn test_automation_controlled_allowlist_and_chrome_identity() {
     assert!(map["sec-ch-ua"].contains("Google Chrome"));
     assert!(!map["sec-ch-ua"].contains("HeadlessChrome"));
     assert_eq!(map["Accept"], "text/html");
+    let mut autoplay_ok = BrowserLaunchConfig::new(tmp.path().to_path_buf());
+    autoplay_ok.executable_path = Some(Path::new("/nonexistent/dam_hopper_chrome_bin").to_path_buf());
+    autoplay_ok
+        .additional_args
+        .push("--autoplay-policy=no-user-gesture-required".to_string());
+    assert!(
+        matches!(
+            BrowserProcess::launch(autoplay_ok).await,
+            Err(ProcessError::ExecutableNotFound(_))
+        ),
+        "--autoplay-policy=no-user-gesture-required must pass allowlist"
+    );
+
+    for rejected_autoplay in [
+        "--autoplay-policy=document-user-activation-required",
+        "--autoplay-policy=user-gesture-required",
+        "--autoplay-policy=",
+    ] {
+        let mut bad = BrowserLaunchConfig::new(tmp.path().to_path_buf());
+        bad.additional_args.push(rejected_autoplay.to_string());
+        assert!(
+            matches!(
+                BrowserProcess::launch(bad).await,
+                Err(ProcessError::LaunchFailed(_))
+            ),
+            "{rejected_autoplay} must be rejected by allowlist"
+        );
+    }
+
     assert!(ANTI_DETECTION_SCRIPT.contains("webdriver"));
     assert!(ANTI_DETECTION_SCRIPT.contains("Google Chrome"));
+    assert!(ANTI_DETECTION_SCRIPT.contains("canPlayType"));
+    assert!(ANTI_DETECTION_SCRIPT.contains("isTypeSupported"));
+    assert!(ANTI_DETECTION_SCRIPT.contains("Symbol.for('dh.a')"));
 }

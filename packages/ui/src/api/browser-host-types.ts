@@ -29,6 +29,13 @@ export const MAX_MEDIA_CONTROL_BYTES = 1024;
 export const MAX_CONTROL_MESSAGE_BYTES = 16 * 1024;
 export const MAX_FIND_QUERY_CHARS = 256;
 export const MAX_SELECTED_TEXT_BYTES = 64 * 1024;
+export const AUDIO_SAMPLE_RATE = 24_000;
+export const AUDIO_CHANNELS = 1;
+export const AUDIO_ENCODING_PCM16LE = "pcm16le";
+export const MAX_AUDIO_CHUNK_SAMPLES = 2_400; // 100 ms @ 24 kHz
+export const MAX_AUDIO_PCM_BYTES = MAX_AUDIO_CHUNK_SAMPLES * 2; // 4,800 bytes
+export const MAX_AUDIO_BASE64_BYTES = 6_400;
+export const MAX_AUDIO_MESSAGE_BYTES = 8_192; // 8 KiB
 
 // ---------------------------------------------------------------------------
 // REST DTOs
@@ -260,6 +267,21 @@ export type MediaClientControl =
       subscriptionEpoch: string;
       visible: boolean;
     };
+
+export interface BrowserAudioChunk {
+  kind: "audioChunk";
+  browserSessionId: string;
+  browserIncarnation: string;
+  profileEpoch: string;
+  producerRun: string;
+  subscriptionEpoch: string;
+  docEpoch: string;
+  audioSeq: string;
+  sampleRate: number;
+  channels: number;
+  encoding: "pcm16le";
+  data: string;
+}
 
 export type ServerControlEvent =
   | {
