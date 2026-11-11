@@ -4,8 +4,14 @@ import { Terminal } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { TerminalScrollButtons } from "@/components/organisms/TerminalScrollButtons.js";
-import { terminalRegistry } from "@/lib/terminal-registry.js";
+import {
+  registerTerminal,
+  removeTerminal,
+  terminalRegistry,
+} from "@/lib/terminal-registry.js";
 import { bindTerminalTouchScroll } from "@/lib/terminal-touch-scroll.js";
+import { terminalKey } from "@/api/ownership.js";
+import type { TerminalTarget } from "@/api/terminal-session-contract.js";
 import "@/index.css";
 
 vi.mock("@/stores/settings.js", () => ({
@@ -304,6 +310,103 @@ describe("Terminal scroll buttons in Chromium", () => {
       terminal?.dispose();
       host.remove();
     }
+  });
+
+  it("interacts with scroll buttons in Agent Hub when sessionId is a qualified JSON key", async () => {
+    const target: TerminalTarget = {
+      profileId: "hub-profile",
+      generation: 1,
+      serverEpoch: "epoch-1",
+      terminalId: "hub-term-1",
+      incarnation: "inc-1",
+    };
+    const qKey = terminalKey({ profileId: "hub-profile", id: "hub-term-1" });
+    registerTerminal(
+      target,
+      { scrollToTop, scrollToBottom, scrollLines } as never,
+      {} as never,
+      {} as never,
+    );
+
+    try {
+      await act(async () =>
+        root.render(<TerminalScrollButtons sessionId={qKey} />),
+      );
+
+      await userEvent.click(
+        page.getByRole("button", { name: "Show terminal scroll buttons" }),
+      );
+      await userEvent.click(page.getByRole("button", { name: "Jump to top" }));
+      await userEvent.click(
+        page.getByRole("button", { name: "Scroll up 3 lines" }),
+      );
+      await userEvent.click(
+        page.getByRole("button", { name: "Scroll down 3 lines" }),
+      );
+      await userEvent.click(
+        page.getByRole("button", { name: "Jump to bottom" }),
+      );
+
+      expect(scrollToTop).toHaveBeenCalledOnce();
+      expect(scrollLines).toHaveBeenNthCalledWith(1, -3);
+      expect(scrollLines).toHaveBeenNthCalledWith(2, 3);
+      expect(scrollToBottom).toHaveBeenCalledOnce();
+    } finally {
+      removeTerminal(target);
+    }
+  });
+
+  it("exercises resolveTerminal gate with trusted user clicks and honors claim denial", async () => {
+    const hubScrollToTop = vi.fn();
+    const hubScrollLines = vi.fn();
+    const hubScrollToBottom = vi.fn();
+    let claimHeld = true;
+
+    const resolveTerminal = (sid: string) => {
+      if (!claimHeld || sid !== "hub:claim-test") return undefined;
+      return {
+        terminal: {
+          scrollToTop: hubScrollToTop,
+          scrollLines: hubScrollLines,
+          scrollToBottom: hubScrollToBottom,
+        },
+      } as never;
+    };
+
+    await act(async () =>
+      root.render(
+        <TerminalScrollButtons
+          sessionId="hub:claim-test"
+          resolveTerminal={resolveTerminal}
+        />,
+      ),
+    );
+
+    await userEvent.click(
+      page.getByRole("button", { name: "Show terminal scroll buttons" }),
+    );
+
+    await userEvent.click(page.getByRole("button", { name: "Jump to top" }));
+    await userEvent.click(
+      page.getByRole("button", { name: "Scroll up 3 lines" }),
+    );
+    await userEvent.click(
+      page.getByRole("button", { name: "Scroll down 3 lines" }),
+    );
+    await userEvent.click(page.getByRole("button", { name: "Jump to bottom" }));
+
+    expect(hubScrollToTop).toHaveBeenCalledOnce();
+    expect(hubScrollLines).toHaveBeenNthCalledWith(1, -3);
+    expect(hubScrollLines).toHaveBeenNthCalledWith(2, 3);
+    expect(hubScrollToBottom).toHaveBeenCalledOnce();
+
+    claimHeld = false;
+    await userEvent.click(page.getByRole("button", { name: "Jump to top" }));
+    await userEvent.click(
+      page.getByRole("button", { name: "Scroll up 3 lines" }),
+    );
+    expect(hubScrollToTop).toHaveBeenCalledOnce();
+    expect(hubScrollLines).toHaveBeenCalledTimes(2);
   });
 });
 

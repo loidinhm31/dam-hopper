@@ -37,6 +37,7 @@ vi.mock("./TerminalScrollButtons.js", () => ({
     sessionId: string;
     reserveAccessoryRail?: boolean;
     accessoryPanelOpen?: boolean;
+    resolveTerminal?: unknown;
   }) => (
     <div
       data-testid="terminal-scroll-buttons"
@@ -46,7 +47,6 @@ vi.mock("./TerminalScrollButtons.js", () => ({
     />
   ),
 }));
-
 
 vi.mock("@/lib/terminal-input-policy.js", () => ({
   syncTerminalInputSuppression: vi.fn(),
@@ -368,7 +368,13 @@ describe("PaneContainer browser integration", () => {
       attachCustomKeyEventHandler: vi.fn(),
       blur: vi.fn(),
     };
-    registerTerminal("shell:demo", terminal as never, {} as never, { close: vi.fn() } as never, element);
+    registerTerminal(
+      "shell:demo",
+      terminal as never,
+      {} as never,
+      { close: vi.fn() } as never,
+      element,
+    );
 
     const gate: TerminalAttachGate = {
       resolveTerminal: vi.fn(() => undefined),
@@ -397,12 +403,16 @@ describe("PaneContainer browser integration", () => {
       );
     });
 
-    const host = container.querySelector("[data-testid=terminal-pane-output-host]");
+    const host = container.querySelector(
+      "[data-testid=terminal-pane-output-host]",
+    );
     expect(host).not.toBeNull();
     // Terminal element should NOT be attached into host
     expect(element.parentElement).not.toBe(host);
     // Placeholder should be rendered
-    expect(container.querySelector("[data-testid=denied-placeholder]")).not.toBeNull();
+    expect(
+      container.querySelector("[data-testid=denied-placeholder]"),
+    ).not.toBeNull();
   });
 
   it("acquires presentation on attach and cleans up on unmount or successor acquisition", async () => {
@@ -454,12 +464,19 @@ describe("PaneContainer browser integration", () => {
       );
     });
 
-    const host = container.querySelector("[data-testid=terminal-pane-output-host]");
+    const host = container.querySelector(
+      "[data-testid=terminal-pane-output-host]",
+    );
     expect(element.parentElement).toBe(host);
 
     // Successor acquires presentation before old pane unmounts
-    const successorToken = acquireTerminalPresentation(terminal as never, "standalone-win-1");
-    expect(isCurrentTerminalPresenter(terminal as never, successorToken)).toBe(true);
+    const successorToken = acquireTerminalPresentation(
+      terminal as never,
+      "standalone-win-1",
+    );
+    expect(isCurrentTerminalPresenter(terminal as never, successorToken)).toBe(
+      true,
+    );
 
     // Clear mock calls to verify unmount behavior
     attachCustomKeyEventHandler.mockClear();
@@ -471,7 +488,9 @@ describe("PaneContainer browser integration", () => {
 
     // Since successor acquired presentation, the old pane's cleanup must be a no-op!
     // Keyboard handler should NOT be reset to baseKeyEventHandler
-    expect(attachCustomKeyEventHandler).not.toHaveBeenCalledWith(baseKeyEventHandler);
+    expect(attachCustomKeyEventHandler).not.toHaveBeenCalledWith(
+      baseKeyEventHandler,
+    );
     // Element should NOT be parked back to originHost
     expect(element.parentElement).toBe(host);
   });
