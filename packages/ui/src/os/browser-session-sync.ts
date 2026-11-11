@@ -1,138 +1,178 @@
 import { isCurrentConnection } from "@/api/connections.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import type { BrowserSessionDto } from "@/api/browser-host-types.js";
+import { areBrowserOwnerScopesEqual, captureVerifiedBrowserOwner, createBrowserNativeTargetKey, isCanonicalPositiveU64Decimal } from "./browser/browser-owner-scope.js";
+import { isNativeTargetClosing } from "./browser/browser-closing-gates.js";
+import { findBrowserTab, patchBrowserTab } from "./browser/browser-tab-state.js";
+import { normalizeBrowserCommittedUrl } from "./browser/browser-url-normalization.js";
+import type { BrowserTabPhase, BrowserWindowState } from "./browser/browser-tab-types.js";
 import { useWindowStore } from "./window-store.js";
+
+export interface BrowserSessionDialogSummary {
+  readonly dialogId: string;
+  readonly message: string;
+  readonly dialogType: string;
+}
+
+declare module "@/api/browser-host-types.js" {
+  interface BrowserSessionDto {
+    dialog?: BrowserSessionDialogSummary | null;
+  }
+}
+
+declare module "./browser/browser-tab-types.js" {
+  interface BrowserTabRuntime {
+    readonly isController?: boolean;
+    readonly leaseToken?: string;
+    readonly viewerId?: string;
+    readonly unsupportedReason?: string;
+    readonly unavailableReason?: string;
+    readonly dismissedPopupSessionId?: string;
+  }
+}
 
 export type BrowserSessionSyncResult = "applied" | "stale" | "detached";
 
 export interface BrowserSessionRuntime {
   browserIncarnation: string;
   profileEpoch: string | number;
-}
-
-export interface SwitchBrowserSessionOptions {
-  openerSessionId?: string;
-  dismissedPopupSessionId?: string;
-}
-
-/** Apply a live snapshot only to the window/session/connection that requested it. */
-export function syncBrowserSessionWindow(
-  owner: ConnectionRef,
-  windowId: string,
-  sessionId: string,
-  snapshot: BrowserSessionDto,
-  expectedRuntime?: BrowserSessionRuntime,
-): BrowserSessionSyncResult {
-  if (!isCurrentConnection(owner) || snapshot.browserSessionId !== sessionId) return "detached";
-  const state = useWindowStore.getState();
-  const win = state.session.windows[windowId];
-  if (!win || win.ctx.profileId !== owner.profileId || win.appState?.sessionId !== sessionId) {
-    return "detached";
-  }
-  const current = win.appState;
-  if (expectedRuntime && (
-    current.browserIncarnation !== expectedRuntime.browserIncarnation ||
-    String(current.profileEpoch) !== String(expectedRuntime.profileEpoch) ||
-    snapshot.browserIncarnation !== expectedRuntime.browserIncarnation ||
-    snapshot.profileEpoch !== String(expectedRuntime.profileEpoch)
-  )) return "detached";
-  const sameRuntime = current.browserIncarnation === snapshot.browserIncarnation &&
-    String(current.profileEpoch) === snapshot.profileEpoch;
-  // Decimal revisions are u64s: Number would lose the CAS token's precision.
-  const profileEpoch = Number(snapshot.profileEpoch);
-  if (!Number.isSafeInteger(profileEpoch) || profileEpoch <= 0) {
-    throw new Error("Browser profile epoch cannot be represented exactly");
-  }
-  const staleNavigation = sameRuntime && current.navigationRevision !== undefined &&
-    BigInt(String(current.navigationRevision)) > BigInt(snapshot.navigationRevision);
-  const staleViewport = sameRuntime && current.viewportEpoch !== undefined &&
-    BigInt(String(current.viewportEpoch)) > BigInt(snapshot.viewportEpoch);
-  const currentGeometry = current.geometry as BrowserSessionDto["geometry"] | undefined;
-  const geometry = staleViewport ? currentGeometry :
-    currentGeometry && Object.entries(snapshot.geometry).every(
-      ([key, value]) => currentGeometry[key as keyof BrowserSessionDto["geometry"]] === value,
-    ) ? currentGeometry : snapshot.geometry;
-  const popupBlocked = snapshot.popupBlocked ? true : undefined;
-  const activePopupSessionId = snapshot.activePopupSessionId ?? undefined;
-  const parentSessionId = snapshot.parentSessionId ?? undefined;
-  const dismissedPopupSessionId =
-    activePopupSessionId && current.dismissedPopupSessionId === activePopupSessionId
-      ? current.dismissedPopupSessionId
-      : undefined;
-  const update = {
-    browserIncarnation: snapshot.browserIncarnation,
-    profileEpoch,
-    browserSessionStatus: snapshot.status,
-    navigationRevision: staleNavigation ? current.navigationRevision : snapshot.navigationRevision,
-    viewportEpoch: staleViewport ? current.viewportEpoch : snapshot.viewportEpoch,
-    geometry,
-    url: staleNavigation ? current.url : snapshot.url,
-    title: staleNavigation ? current.title : snapshot.title,
-    inputAvailable: snapshot.status === "running" && snapshot.inputAvailable,
-    unsupportedReason: snapshot.status === "running" ? undefined : `Browser session is ${snapshot.status}`,
-    unavailableReason: snapshot.unavailableReason,
-    popupBlocked,
-    activePopupSessionId,
-    parentSessionId,
-    dismissedPopupSessionId,
-    ...(!sameRuntime ? { openerSessionId: undefined } : {}),
-    ...(!sameRuntime || snapshot.status !== "running" ? { isController: false, leaseToken: undefined } : {}),
-  };
-  if (Object.entries(update).some(([key, value]) => current[key] !== value)) {
-    state.updateAppState(windowId, update);
-  }
-  return staleNavigation ? "stale" : "applied";
+  actionSequence?: number;
+  subscriptionEpoch?: string;
+  currentSubscriptionEpoch?: string;
 }
 
 /**
- * Atomically switches a browser window from `expectedSessionId` to `targetSnapshot` (either
- * entering an admitted OAuth popup or returning to its live opener) within the same runtime.
+ * Apply a live snapshot only to the exact (owner, windowId, tabId, sessionId)
+ * that requested or subscribed to it. Never overwrites dirty drafts or clears
+ * durable address suppression.
  */
-export function switchBrowserWindowSession(
-  owner: ConnectionRef,
-  windowId: string,
-  expectedSessionId: string,
-  targetSnapshot: BrowserSessionDto,
-  options?: SwitchBrowserSessionOptions,
+export function syncBrowserSessionWindow(
+  owner: ConnectionRef, windowId: string, tabId: string,
+  sessionId: string, snapshot: BrowserSessionDto, expectedRuntime?: BrowserSessionRuntime,
 ): BrowserSessionSyncResult {
-  if (!isCurrentConnection(owner) || targetSnapshot.status !== "running") return "detached";
+  if (!isCurrentConnection(owner) || !windowId || !tabId || !sessionId || snapshot.browserSessionId !== sessionId) return "detached";
+  const verified = captureVerifiedBrowserOwner(owner.profileId);
+  if (!verified || verified.owner.generation !== owner.generation) return "detached";
+
   const state = useWindowStore.getState();
-  const win = state.session.windows[windowId];
-  if (!win || win.ctx.profileId !== owner.profileId || win.appState?.sessionId !== expectedSessionId) {
+  const win = state.session?.windows?.[windowId];
+  if (!win || win.appId !== "browser" || win.ctx.profileId !== owner.profileId || !win.appState) return "detached";
+
+  const appState = win.appState as unknown as BrowserWindowState;
+  if (!Array.isArray(appState.tabs) || appState.closing) return "detached";
+  if (appState.ownerScope && !areBrowserOwnerScopesEqual(appState.ownerScope, verified.scope)) return "detached";
+
+  const tab = findBrowserTab(appState, tabId);
+  if (!tab || tab.sessionId !== sessionId || tab.phase === "closing" || tab.phase === "close-unknown" || tab.phase === "creating" || tab.phase === "create-unknown") {
     return "detached";
   }
-  const current = win.appState;
-  if (
-    current.browserIncarnation !== targetSnapshot.browserIncarnation ||
-    String(current.profileEpoch) !== targetSnapshot.profileEpoch
-  ) {
-    return "detached";
+
+  const targetKey = createBrowserNativeTargetKey(verified.scope, sessionId);
+  if (!targetKey || (isNativeTargetClosing(targetKey) && snapshot.status === "running")) return "detached";
+
+  if (!isCanonicalPositiveU64Decimal(snapshot.profileEpoch)) throw new Error("Browser profile epoch cannot be represented exactly");
+  if (!isCanonicalPositiveU64Decimal(snapshot.navigationRevision) || !isCanonicalPositiveU64Decimal(snapshot.viewportEpoch)) {
+    throw new Error("Browser revision epoch cannot be represented exactly");
   }
-  const profileEpoch = Number(targetSnapshot.profileEpoch);
-  if (!Number.isSafeInteger(profileEpoch) || profileEpoch <= 0) {
-    throw new Error("Browser profile epoch cannot be represented exactly");
+
+  const currentSnap = tab.snapshot;
+  if (expectedRuntime) {
+    const expectedEpoch = String(expectedRuntime.profileEpoch);
+    if (
+      !isCanonicalPositiveU64Decimal(expectedEpoch) ||
+      (expectedRuntime.actionSequence !== undefined && tab.actionSequence !== expectedRuntime.actionSequence) ||
+      (expectedRuntime.subscriptionEpoch !== undefined && expectedRuntime.currentSubscriptionEpoch !== undefined && expectedRuntime.subscriptionEpoch !== expectedRuntime.currentSubscriptionEpoch) ||
+      !currentSnap || currentSnap.browserIncarnation !== expectedRuntime.browserIncarnation ||
+      String(currentSnap.profileEpoch) !== expectedEpoch ||
+      snapshot.browserIncarnation !== expectedRuntime.browserIncarnation || snapshot.profileEpoch !== expectedEpoch
+    ) return "detached";
   }
-  state.updateAppState(windowId, {
-    sessionId: targetSnapshot.browserSessionId,
-    browserIncarnation: targetSnapshot.browserIncarnation,
-    profileEpoch,
-    browserSessionStatus: targetSnapshot.status,
-    navigationRevision: targetSnapshot.navigationRevision,
-    viewportEpoch: targetSnapshot.viewportEpoch,
-    geometry: targetSnapshot.geometry,
-    url: targetSnapshot.url,
-    title: targetSnapshot.title,
-    inputAvailable: targetSnapshot.inputAvailable,
-    unsupportedReason: undefined,
-    unavailableReason: targetSnapshot.unavailableReason,
-    popupBlocked: targetSnapshot.popupBlocked ? true : undefined,
-    activePopupSessionId: targetSnapshot.activePopupSessionId ?? undefined,
-    parentSessionId: targetSnapshot.parentSessionId ?? undefined,
-    openerSessionId: options?.openerSessionId,
-    dismissedPopupSessionId: options?.dismissedPopupSessionId,
-    isController: false,
-    leaseToken: undefined,
-    viewerId: undefined,
-  });
-  return "applied";
+
+  const sameRuntime = Boolean(currentSnap && currentSnap.browserIncarnation === snapshot.browserIncarnation && String(currentSnap.profileEpoch) === snapshot.profileEpoch);
+  const staleNavigation = Boolean(sameRuntime && currentSnap?.navigationRevision !== undefined && BigInt(String(currentSnap.navigationRevision)) > BigInt(snapshot.navigationRevision));
+  const staleViewport = Boolean(sameRuntime && currentSnap?.viewportEpoch !== undefined && BigInt(String(currentSnap.viewportEpoch)) > BigInt(snapshot.viewportEpoch));
+
+  const currentGeometry = currentSnap?.geometry;
+  const geometry = staleViewport && currentGeometry
+    ? currentGeometry
+    : currentGeometry && Object.entries(snapshot.geometry).every(([k, v]) => currentGeometry[k as keyof BrowserSessionDto["geometry"]] === v)
+      ? currentGeometry : snapshot.geometry;
+
+  const popupBlocked = snapshot.popupBlocked ? true : undefined;
+  const activePopupSessionId = snapshot.activePopupSessionId ?? undefined;
+  const parentSessionId = snapshot.parentSessionId ?? undefined;
+  const dismissedPopupSessionId = activePopupSessionId && activePopupSessionId !== tab.dismissedPopupSessionId
+    ? undefined : tab.dismissedPopupSessionId;
+
+  const rawDialog = snapshot.dialog;
+  const nextDialogCandidate =
+    snapshot.status === "running" && rawDialog && typeof rawDialog.dialogId === "string" && typeof rawDialog.message === "string" && typeof rawDialog.dialogType === "string"
+      ? { dialogId: rawDialog.dialogId, message: rawDialog.message, dialogType: rawDialog.dialogType }
+      : rawDialog === undefined && sameRuntime && currentSnap?.dialog && snapshot.status === "running" ? currentSnap.dialog : undefined;
+  const prevDialog = currentSnap?.dialog ?? undefined;
+  const dialog = prevDialog && nextDialogCandidate && prevDialog.dialogId === nextDialogCandidate.dialogId && prevDialog.message === nextDialogCandidate.message && prevDialog.dialogType === nextDialogCandidate.dialogType
+    ? prevDialog : nextDialogCandidate;
+
+  const effectiveUrl = staleNavigation && currentSnap ? currentSnap.url : snapshot.url;
+  const effectiveTitle = staleNavigation && currentSnap ? currentSnap.title : snapshot.title;
+  const effectiveNavRev = staleNavigation && currentSnap ? String(currentSnap.navigationRevision) : snapshot.navigationRevision;
+  const effectiveViewportEpoch = staleViewport && currentSnap ? String(currentSnap.viewportEpoch) : snapshot.viewportEpoch;
+  const effectiveInputAvailable = snapshot.status === "running" && snapshot.inputAvailable;
+
+  const nextSnapCandidate: BrowserSessionDto = {
+    browserSessionId: snapshot.browserSessionId, browserIncarnation: snapshot.browserIncarnation,
+    profileEpoch: snapshot.profileEpoch, navigationRevision: effectiveNavRev,
+    viewportEpoch: effectiveViewportEpoch, url: effectiveUrl, title: effectiveTitle,
+    status: snapshot.status, inputAvailable: effectiveInputAvailable,
+    unavailableReason: snapshot.unavailableReason, geometry,
+    ...(dialog !== undefined ? { dialog } : {}),
+    popupBlocked, activePopupSessionId, parentSessionId,
+  };
+
+  const nextSnap =
+    currentSnap && currentSnap.browserSessionId === nextSnapCandidate.browserSessionId &&
+    currentSnap.browserIncarnation === nextSnapCandidate.browserIncarnation &&
+    String(currentSnap.profileEpoch) === nextSnapCandidate.profileEpoch &&
+    String(currentSnap.navigationRevision) === nextSnapCandidate.navigationRevision &&
+    String(currentSnap.viewportEpoch) === nextSnapCandidate.viewportEpoch &&
+    currentSnap.url === nextSnapCandidate.url && currentSnap.title === nextSnapCandidate.title &&
+    currentSnap.status === nextSnapCandidate.status && currentSnap.inputAvailable === nextSnapCandidate.inputAvailable &&
+    currentSnap.unavailableReason === nextSnapCandidate.unavailableReason && currentSnap.geometry === nextSnapCandidate.geometry &&
+    (currentSnap.dialog ?? undefined) === dialog && currentSnap.popupBlocked === nextSnapCandidate.popupBlocked &&
+    currentSnap.activePopupSessionId === nextSnapCandidate.activePopupSessionId && currentSnap.parentSessionId === nextSnapCandidate.parentSessionId
+      ? currentSnap : nextSnapCandidate;
+
+  const nextCommittedUrl = tab.kind === "popup" ? undefined : staleNavigation ? tab.committedUrl : normalizeBrowserCommittedUrl(effectiveUrl);
+  const cleanDraftValue = nextCommittedUrl ?? effectiveUrl;
+  const nextDraft = tab.draft.dirty || staleNavigation
+    ? tab.draft : tab.draft.value === cleanDraftValue && !tab.draft.dirty ? tab.draft : { value: cleanDraftValue, dirty: false };
+
+  const nextPhase: BrowserTabPhase = snapshot.status === "running" ? "live" : snapshot.status === "initializing" ? "connecting" : "unavailable";
+  const retainControl = sameRuntime && snapshot.status === "running";
+  const nextIsController = retainControl ? Boolean(tab.isController) : false;
+  const nextLeaseToken = retainControl ? tab.leaseToken : undefined;
+  const nextUnsupportedReason = snapshot.status === "running" ? undefined : `Browser session is ${snapshot.status}`;
+  const nextUnavailableReason = snapshot.unavailableReason;
+
+  const tabUnchanged =
+    tab.committedUrl === nextCommittedUrl && tab.title === effectiveTitle &&
+    tab.phase === nextPhase && tab.draft === nextDraft && tab.snapshot === nextSnap &&
+    Boolean(tab.isController) === nextIsController && tab.leaseToken === nextLeaseToken &&
+    tab.unsupportedReason === nextUnsupportedReason && tab.unavailableReason === nextUnavailableReason &&
+    tab.dismissedPopupSessionId === dismissedPopupSessionId;
+
+  if (!tabUnchanged || !areBrowserOwnerScopesEqual(appState.ownerScope, verified.scope)) {
+    const nextState = {
+      ...patchBrowserTab(appState, tabId, {
+        committedUrl: nextCommittedUrl, title: effectiveTitle, phase: nextPhase,
+        draft: nextDraft, snapshot: nextSnap, isController: nextIsController,
+        leaseToken: nextLeaseToken, unsupportedReason: nextUnsupportedReason,
+        unavailableReason: nextUnavailableReason, dismissedPopupSessionId,
+      }),
+      ownerScope: verified.scope,
+    };
+    state.updateAppState(windowId, nextState as unknown as Record<string, unknown>);
+  }
+
+  return staleNavigation ? "stale" : "applied";
 }

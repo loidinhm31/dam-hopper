@@ -5,10 +5,12 @@ import { useWindowOwner, useWindowContext } from "../window-context.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { useResourceClaim } from "../resource-registry.js";
 import { useWindowStore } from "../window-store.js";
+import { syncBrowserSessionWindow } from "../browser-session-sync.js";
+import { browserTabSlotKey } from "../browser/browser-tab-state.js";
 import {
-  switchBrowserWindowSession,
-  syncBrowserSessionWindow,
-} from "../browser-session-sync.js";
+  completeBrowserPopupTab,
+  reconcileOpenerPopupSnapshot,
+} from "../browser/browser-popup-tabs.js";
 import {
   clearBrowserViewFenceForProfile,
   isBrowserAudioBlocked,
@@ -183,6 +185,15 @@ function BrowserResourceView({
   const slotRef = useRef<HTMLDivElement>(null);
   const context = useWindowContext();
   const isCognitoActive = useCognitoModeStore((state) => state.active);
+  const activeTabId = useMemo(() => {
+    const rawTabs = window.appState?.tabs;
+    const rawActive = window.appState?.activeTabId;
+    if (typeof rawActive === "string" && rawActive.length > 0) return rawActive;
+    if (Array.isArray(rawTabs) && rawTabs[0] && typeof rawTabs[0] === "object" && "tabId" in rawTabs[0] && typeof rawTabs[0].tabId === "string") {
+      return rawTabs[0].tabId;
+    }
+    return "default-tab";
+  }, [window.appState?.activeTabId, window.appState?.tabs]);
   const previewUrl = (window.appState?.url as string | undefined) ?? "";
   const sessionId = window.appState?.sessionId as string | undefined;
   const navigationRevision = (window.appState?.navigationRevision as number | string | undefined) ?? 1;
@@ -203,7 +214,7 @@ function BrowserResourceView({
   const [audioMuted, setAudioMuted] = useState(false);
   const audioBlocked = useSyncExternalStore(
     subscribeBrowserAudioBlocked,
-    () => isBrowserAudioBlocked(window.id),
+    () => isBrowserAudioBlocked(window.id, activeTabId),
     () => false,
   );
   const windows = useWindowStore((s) => s.session.windows);
@@ -229,9 +240,9 @@ function BrowserResourceView({
       resourceKind: "browser",
       profileId: owner.profileId,
       generation: owner.generation,
-      resourceId: window.id,
+      resourceId: browserTabSlotKey(window.id, activeTabId),
     }),
-    [owner.profileId, owner.generation, window.id],
+    [activeTabId, owner.profileId, owner.generation, window.id],
   );
 
   const claimStatus = useResourceClaim(claimKey, window.id);
@@ -253,6 +264,7 @@ function BrowserResourceView({
     const el = slotRef.current;
     const unregister = registerBrowserStreamSlot(
       window.id,
+      activeTabId,
       el,
       isVisibleRef.current,
       audioMutedRef.current,
@@ -260,26 +272,26 @@ function BrowserResourceView({
     return () => {
       unregister();
     };
-  }, [window.id]);
+  }, [activeTabId, window.id]);
 
   useLayoutEffect(() => {
-    updateBrowserStreamSlot(window.id, slotRef.current, isVisible, audioMuted);
-  }, [window.id, isVisible, audioMuted]);
+    updateBrowserStreamSlot(window.id, activeTabId, slotRef.current, isVisible, audioMuted);
+  }, [activeTabId, window.id, isVisible, audioMuted]);
 
   const handleToggleAudio = useCallback(() => {
     if (!audioMuted && audioBlocked) {
       if (sessionId && isVisible) {
-        requestBrowserAudioUnlock(window.id, owner, sessionId);
+        requestBrowserAudioUnlock(window.id, activeTabId, owner, sessionId);
       }
       return;
     }
     const nextMuted = !audioMuted;
     setAudioMuted(nextMuted);
-    updateBrowserStreamSlot(window.id, slotRef.current, isVisible, nextMuted);
+    updateBrowserStreamSlot(window.id, activeTabId, slotRef.current, isVisible, nextMuted);
     if (!nextMuted && sessionId && isVisible) {
-      requestBrowserAudioUnlock(window.id, owner, sessionId);
+      requestBrowserAudioUnlock(window.id, activeTabId, owner, sessionId);
     }
-  }, [audioBlocked, audioMuted, isVisible, owner, sessionId, window.id]);
+  }, [activeTabId, audioBlocked, audioMuted, isVisible, owner, sessionId, window.id]);
 
   // Read authority before each explicit action; native navigation is independent
   // of our last rendered snapshot. A raced CAS rejection is refreshed, never replayed.
@@ -329,14 +341,14 @@ function BrowserResourceView({
         recreateDeadSession(recoveryUrl);
         return;
       }
-      const sync = syncBrowserSessionWindow(owner, window.id, sessionId, current);
+      const sync = syncBrowserSessionWindow(owner, window.id, activeTabId, sessionId, current);
       if (sync === "detached") return;
       if (sync === "stale") {
         throw new BrowserHostClientError("Page changed while preparing navigation; retry the action", "sessionConflict", 409);
       }
       const response = await operation(current.navigationRevision, action.signal);
       if (navigationActionRef.current === action && !action.signal.aborted) {
-        syncBrowserSessionWindow(owner, window.id, sessionId, response);
+        syncBrowserSessionWindow(owner, window.id, activeTabId, sessionId, response);
       }
     } catch (err) {
       if (navigationActionRef.current !== action || action.signal.aborted) return;
@@ -355,7 +367,7 @@ function BrowserResourceView({
         try {
           const current = await getBrowserSession(owner, sessionId, action.signal);
           if (navigationActionRef.current === action && !action.signal.aborted) {
-            syncBrowserSessionWindow(owner, window.id, sessionId, current);
+            syncBrowserSessionWindow(owner, window.id, activeTabId, sessionId, current);
           }
         } catch (refreshError) {
           if (navigationActionRef.current === action && !action.signal.aborted) {
@@ -373,7 +385,7 @@ function BrowserResourceView({
         setNavigationPending(false);
       }
     }
-  }, [owner, recreateDeadSession, sessionId, window.id]);
+  }, [activeTabId, owner, recreateDeadSession, sessionId, window.id]);
 
   const handleNavigate = useCallback(async () => {
     let trimmed = addressInput.trim();
@@ -478,11 +490,12 @@ function BrowserResourceView({
         isController: true,
         leaseToken: resp.leaseToken,
       });
-      requestBrowserProxyFocus(window.id, owner, sessionId, resp.leaseToken);
+      requestBrowserProxyFocus(window.id, activeTabId, owner, sessionId, resp.leaseToken);
     } catch (err) {
       console.warn("[BrowserApp] Acquire control failed:", err);
     }
   }, [
+    activeTabId,
     owner,
     sessionId,
     window.id,
@@ -493,27 +506,10 @@ function BrowserResourceView({
 
   const handleReturnToOpener = useCallback(async () => {
     if (!sessionId || !parentSessionId) return;
-    const fallbackOpenerId = window.appState?.openerSessionId as string | undefined;
-    const candidates =
-      fallbackOpenerId && fallbackOpenerId !== parentSessionId
-        ? [parentSessionId, fallbackOpenerId]
-        : [parentSessionId];
-    for (const candidateId of candidates) {
-      try {
-        const openerSnap = await getBrowserSession(owner, candidateId);
-        if (openerSnap.status === "running") {
-          const switched = switchBrowserWindowSession(owner, window.id, sessionId, openerSnap, {
-            openerSessionId: openerSnap.parentSessionId ?? undefined,
-            dismissedPopupSessionId: sessionId,
-          });
-          if (switched === "applied") {
-            setNavigationError(null);
-            return;
-          }
-        }
-      } catch {
-        // Try fallback ancestor if available
-      }
+    const res = completeBrowserPopupTab(owner, window.id, activeTabId, sessionId);
+    if (res === "removed") {
+      setNavigationError(null);
+      return;
     }
     if (
       isCurrentConnection(owner) &&
@@ -525,18 +521,20 @@ function BrowserResourceView({
       });
       setNavigationError("Opener page is no longer running");
     }
-  }, [owner, parentSessionId, sessionId, window.appState?.openerSessionId, window.id]);
+  }, [activeTabId, owner, parentSessionId, sessionId, window.id]);
 
   const handleOpenActivePopup = useCallback(async () => {
     if (!sessionId || !activePopupSessionId) return;
     try {
-      const popupSnap = await getBrowserSession(owner, activePopupSessionId);
-      if (popupSnap.status === "running" && popupSnap.parentSessionId === sessionId) {
-        switchBrowserWindowSession(owner, window.id, sessionId, popupSnap, {
-          openerSessionId:
-            (window.appState?.openerSessionId as string | undefined) ?? sessionId,
-          dismissedPopupSessionId: undefined,
-        });
+      const openerSnap = await getBrowserSession(owner, sessionId);
+      const res = await reconcileOpenerPopupSnapshot({
+        owner,
+        windowId: window.id,
+        openerTabId: activeTabId,
+        openerSessionId: sessionId,
+        openerSnapshot: openerSnap,
+      });
+      if (res === "admitted") {
         setNavigationError(null);
       }
     } catch (err) {
@@ -547,7 +545,7 @@ function BrowserResourceView({
         setNavigationError(err instanceof Error ? err.message : "Popup window is no longer available");
       }
     }
-  }, [activePopupSessionId, owner, sessionId, window.appState?.openerSessionId, window.id]);
+  }, [activePopupSessionId, activeTabId, owner, sessionId, window.id]);
   const handleReleaseControl = useCallback(async () => {
     if (!sessionId || !leaseToken) return;
     try {

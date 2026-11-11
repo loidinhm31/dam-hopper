@@ -1,6 +1,6 @@
 # Phase 03 — Tab-scoped root resources
 
-Priority P2 · Pending · 10h (3h sync/popups, 7h host). Owner: BrowserIntegrator; both tasks sequential. Depends on phase 02 lifecycle and projections. [Design](design.md) sections 2, 4–5; A01/A03/A07–A09/A11/A14.
+Priority P2 · DONE (completed, 2026-11-11) · 10h (3h sync/popups, 7h host). Owner: BrowserIntegrator; both tasks sequential. Depends on phase 02 lifecycle and projections. [Design](design.md) sections 2, 4–5; A01/A03/A07–A09/A11/A14.
 
 ## Existing source and changes
 - Modify `packages/ui/src/os/browser-session-sync.ts` + existing test: replace flat state application with `(owner,windowId,tabId,sessionId,snapshot,expectedRuntime)` contract. Remove `switchBrowserWindowSession`; no re-export/shim. Tests must target actual nested tabs.
@@ -84,5 +84,18 @@ Host and sync no longer read/write Browser flat aliases or swap opener session i
 ]
 ```
 
-- [ ] <!-- evcrate-task:tab-fence-snapshots-popups --> Scope snapshots and popup lifecycle to exact tabs
-- [ ] <!-- evcrate-task:tab-key-root-viewers --> Retain stable root resources and active-only streaming per tab
+- [x] <!-- evcrate-task:tab-fence-snapshots-popups --> Scope snapshots and popup lifecycle to exact tabs
+- [x] <!-- evcrate-task:tab-key-root-viewers --> Retain stable root resources and active-only streaming per tab
+
+### Progress note (2026-11-11)
+- Phase 03 status: **DONE (`completed`, 2026-11-11)**. Both tasks (`tab-fence-snapshots-popups`, `tab-key-root-viewers`) completed and verified; Phase 04 unblocked.
+- Implementation:
+  - `packages/ui/src/os/browser-session-sync.ts`: scoped sync to `(owner, windowId, tabId, sessionId, snapshot, expectedRuntime)`, eliminated `switchBrowserWindowSession`, preserved canonical decimal epochs above `MAX_SAFE_INTEGER`, protected dirty drafts, and preserved/cleared server dialog state.
+  - `packages/ui/src/os/browser/browser-popup-tabs.ts`: new module (<200 LOC) handling parent-link verification, adjacent insertion, sticky popup provenance (excluded from disk persistence), cross-profile native-key admission gates, and opener-linked activation reconciliation without background sockets.
+  - `packages/ui/src/os/BrowserStreamKeepAliveHost.tsx`: converted host keying, registry, audio, and focus to tuple `(windowId, tabId)`; preserved stable canvas/controller/proxy across placement & tab switches; enforced zero streaming viewers and flushed PCM/audio on hidden tabs; retired sockets before ticket minting; protected reconnect against duplicate create POST replay; immediately tore down runtime and modal state on pushed runtime mismatch.
+  - `packages/ui/src/os/apps/BrowserApp.tsx`: updated host slot/audio/focus registrations to tuple API callsites.
+- Code review: Cycle 3 code review scored **8/10 (approved by user)** with 0 critical issues; static concurrency and subscription edge cases (W1 deferred popup GET ordering and H2 attached-credential dialog guard) tracked into Phase 05.
+- Validation (`Phase03FinalTester` / Cycle 3):
+  - `pnpm --filter @dam-hopper/ui build` (`tsc -p tsconfig.json`): exit 0 (0 compilation errors, clean build in 9.38s).
+  - `pnpm --filter @dam-hopper/ui test src/os/browser-session-sync.test.ts src/os/browser/browser-popup-tabs.test.ts src/os/BrowserStreamKeepAliveHost.test.tsx src/os/browser/ src/os/persistence.test.ts`: exit 0 — **12/12 files, 103/103 passed, 0 failed, 0 skipped** in 1.30s (`BrowserStreamKeepAliveHost.test.tsx` 30/30, `browser-session-sync.test.ts` 6/6, `browser-popup-tabs.test.ts` 3/3, `browser-tab-state.test.ts` 6/6, `browser-persistence.test.ts` 13/13, `browser-owner-scope.test.ts` 5/5, `browser-recovery-store.test.ts` 6/6, `persistence.test.ts` 21/21, `browser-session-inventory.test.ts` 4/4, `browser-close-lifecycle.test.ts` 3/3, `browser-create-lifecycle.test.ts` 4/4, `browser-window-lifecycle.test.ts` 2/2).
+- Boundary: Downstream Phases 04–05 (native tab chrome UI, drafts, recovery UI, launch/recipe callers, full-app live visual acceptance with mandatory human visual receipt `packages/ui/e2e/os-host-browser/tabs-visual/review.md`) remain pending.

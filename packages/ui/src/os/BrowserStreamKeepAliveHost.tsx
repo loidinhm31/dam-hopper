@@ -9,12 +9,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useLockScreenStore } from "@/stores/lock-screen.js";
-import { generateUUID } from "../lib/utils.js";
 import { useWindowStore } from "./window-store.js";
-import {
-  switchBrowserWindowSession,
-  syncBrowserSessionWindow,
-} from "./browser-session-sync.js";
+import { syncBrowserSessionWindow } from "./browser-session-sync.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import {
   getConnectionSnapshot,
@@ -24,10 +20,11 @@ import {
 } from "@/api/connections.js";
 import type { ConnectionRef } from "@/api/ownership.js";
 import { CanvasView } from "../browser-host/canvas-view.js";
+import { BrowserStreamController } from "../browser-host/stream-controller.js";
 import {
-  BrowserStreamController,
-} from "../browser-host/stream-controller.js";
-import { BrowserInputController, type CanvasPointerInput } from "../browser-host/input-controller.js";
+  BrowserInputController,
+  type CanvasPointerInput,
+} from "../browser-host/input-controller.js";
 import { PcmPlayer } from "../browser-host/pcm-player.js";
 import {
   TextInputProxy,
@@ -36,8 +33,6 @@ import {
 import {
   acquireBrowserControl,
   BrowserHostClientError,
-  createBrowserSession,
-  getBrowserCapabilities,
   getBrowserSession,
   mintViewerAttachmentTickets,
   releaseBrowserControl,
@@ -46,16 +41,45 @@ import {
 } from "../api/browser-host-client.js";
 import type {
   BrowserAudioChunk,
+  BrowserSessionDto,
   ServerControlEvent,
 } from "../api/browser-host-types.js";
 import type { OsWindow } from "./types.js";
+import {
+  browserTabSlotKey,
+  findBrowserTab,
+  patchBrowserTab,
+} from "./browser/browser-tab-state.js";
+import {
+  areBrowserOwnerScopesEqual,
+  captureVerifiedBrowserOwner,
+  createBrowserNativeTargetKey,
+  isCapturedBrowserOwnerCurrent,
+} from "./browser/browser-owner-scope.js";
+import { commitNativeTargetAdmission } from "./browser/browser-admission-guard.js";
+import { isNativeTargetClosing } from "./browser/browser-closing-gates.js";
+import {
+  dispatchBrowserCreateIntent,
+  processWithheldCleanups,
+} from "./browser/browser-create-lifecycle.js";
+import {
+  completeBrowserPopupTab,
+  reconcileOpenerPopupSnapshot,
+  reconcilePopupTabCompletion,
+} from "./browser/browser-popup-tabs.js";
+import type {
+  BrowserOwnerScope,
+  BrowserTabRuntime,
+  BrowserWindowState,
+} from "./browser/browser-tab-types.js";
 
 // ============================================================================
-// Slot Registry for Root-Owned Browser Keep-Alive
+// Tuple-Keyed Slot Registry for Root-Owned Browser Keep-Alive
 // ============================================================================
 
 export interface BrowserStreamSlot {
   windowId: string;
+  tabId: string;
   element: HTMLElement | null;
   isVisible: boolean;
   audioMuted?: boolean;
@@ -80,16 +104,29 @@ const audioUnlockListeners = new Map<
   (owner: ConnectionRef, sessionId: string) => void
 >();
 
-const audioBlockedWindows = new Set<string>();
+const audioBlockedTabs = new Set<string>();
 const audioBlockedListeners = new Set<() => void>();
 
-function setBrowserAudioBlocked(windowId: string, blocked: boolean): void {
-  const had = audioBlockedWindows.has(windowId);
+interface DispatchedTabCreateRecord {
+  readonly actionSequence: number;
+  readonly owner: ConnectionRef;
+  readonly scope: BrowserOwnerScope;
+}
+
+const dispatchedTabCreates = new Map<string, DispatchedTabCreateRecord>();
+
+function setBrowserAudioBlocked(
+  windowId: string,
+  tabId: string,
+  blocked: boolean,
+): void {
+  const key = browserTabSlotKey(windowId, tabId);
+  const had = audioBlockedTabs.has(key);
   if (blocked === had) return;
   if (blocked) {
-    audioBlockedWindows.add(windowId);
+    audioBlockedTabs.add(key);
   } else {
-    audioBlockedWindows.delete(windowId);
+    audioBlockedTabs.delete(key);
   }
   audioBlockedListeners.forEach((l) => l());
 }
@@ -101,25 +138,37 @@ export function subscribeBrowserAudioBlocked(listener: () => void): () => void {
   };
 }
 
-export function isBrowserAudioBlocked(windowId: string): boolean {
-  return audioBlockedWindows.has(windowId);
+export function isBrowserAudioBlocked(
+  windowId: string,
+  tabId: string,
+): boolean {
+  return audioBlockedTabs.has(browserTabSlotKey(windowId, tabId));
 }
 
 export function requestBrowserAudioUnlock(
   windowId: string,
+  tabId: string,
   owner: ConnectionRef,
   sessionId: string,
 ): void {
-  audioUnlockListeners.get(windowId)?.(owner, sessionId);
+  audioUnlockListeners.get(browserTabSlotKey(windowId, tabId))?.(
+    owner,
+    sessionId,
+  );
 }
 
 export function requestBrowserProxyFocus(
   windowId: string,
+  tabId: string,
   owner: ConnectionRef,
   sessionId: string,
   leaseToken: string,
 ): void {
-  proxyFocusListeners.get(windowId)?.(owner, sessionId, leaseToken);
+  proxyFocusListeners.get(browserTabSlotKey(windowId, tabId))?.(
+    owner,
+    sessionId,
+    leaseToken,
+  );
 }
 
 function subscribeBrowserViewFences(listener: () => void): () => void {
@@ -150,19 +199,28 @@ export function fenceBrowserViewsForProfile(
     return;
   }
   fencedBrowserProfiles.set(profileId, { generation: gen, reason });
-  // Notify fence listeners FIRST so active audio flushes synchronously before store mutations
+  // Notify fence listeners FIRST so active audio/sockets flush synchronously before store mutations
   fenceListeners.forEach((l) => l());
   const state = useWindowStore.getState();
   const windows = state.session?.windows ?? {};
   for (const win of Object.values(windows)) {
-    if (win.appId === "browser" && win.ctx.profileId === profileId) {
-      state.updateAppState(win.id, {
-        sessionId: undefined,
-        leaseToken: undefined,
-        isController: false,
-        browserIncarnation: undefined,
-        unsupportedReason: reason,
-      });
+    if (win.appId === "browser" && win.ctx.profileId === profileId && win.appState) {
+      const appState = win.appState as unknown as BrowserWindowState;
+      if (Array.isArray(appState.tabs)) {
+        state.updateAppState(win.id, {
+          ...appState,
+          tabs: appState.tabs.map((t) => ({
+            ...t,
+            sessionId: undefined,
+            phase: t.committedUrl ? "unavailable" : "new-tab",
+            snapshot: undefined,
+            isController: false,
+            leaseToken: undefined,
+            viewerId: undefined,
+            unsupportedReason: reason,
+          })),
+        } as unknown as Record<string, unknown>);
+      }
     }
   }
 }
@@ -180,10 +238,17 @@ export function clearBrowserViewFenceForProfile(
   const state = useWindowStore.getState();
   const windows = state.session?.windows ?? {};
   for (const win of Object.values(windows)) {
-    if (win.appId === "browser" && win.ctx.profileId === profileId) {
-      state.updateAppState(win.id, {
-        unsupportedReason: undefined,
-      });
+    if (win.appId === "browser" && win.ctx.profileId === profileId && win.appState) {
+      const appState = win.appState as unknown as BrowserWindowState;
+      if (Array.isArray(appState.tabs)) {
+        state.updateAppState(win.id, {
+          ...appState,
+          tabs: appState.tabs.map((t) => ({
+            ...t,
+            unsupportedReason: undefined,
+          })),
+        } as unknown as Record<string, unknown>);
+      }
     }
   }
   fenceListeners.forEach((l) => l());
@@ -191,22 +256,25 @@ export function clearBrowserViewFenceForProfile(
 
 export function registerBrowserStreamSlot(
   windowId: string,
+  tabId: string,
   element: HTMLElement | null,
   isVisible: boolean,
   audioMuted = false,
 ): () => void {
-  const existing = slotRegistry.get(windowId);
-  slotRegistry.set(windowId, {
+  const key = browserTabSlotKey(windowId, tabId);
+  const existing = slotRegistry.get(key);
+  slotRegistry.set(key, {
     windowId,
+    tabId,
     element,
     isVisible,
     audioMuted: existing?.audioMuted ?? audioMuted,
   });
   slotListeners.forEach((l) => l());
   return () => {
-    const cur = slotRegistry.get(windowId);
+    const cur = slotRegistry.get(key);
     if (!cur || cur.element === element) {
-      slotRegistry.delete(windowId);
+      slotRegistry.delete(key);
       slotListeners.forEach((l) => l());
     }
   };
@@ -214,11 +282,13 @@ export function registerBrowserStreamSlot(
 
 export function updateBrowserStreamSlot(
   windowId: string,
+  tabId: string,
   element: HTMLElement | null,
   isVisible: boolean,
   audioMuted = false,
 ): void {
-  const existing = slotRegistry.get(windowId);
+  const key = browserTabSlotKey(windowId, tabId);
+  const existing = slotRegistry.get(key);
   if (
     existing?.element === element &&
     existing.isVisible === isVisible &&
@@ -226,16 +296,43 @@ export function updateBrowserStreamSlot(
   ) {
     return;
   }
-  // Subscribers store the slot snapshot in React state. Publish a new identity
-  // so a visibility-only or mute transition actually runs pause/restore effects.
-  slotRegistry.set(windowId, { windowId, element, isVisible, audioMuted });
+  slotRegistry.set(key, { windowId, tabId, element, isVisible, audioMuted });
   slotListeners.forEach((l) => l());
 }
 
 export function getBrowserStreamSlot(
   windowId: string,
+  tabId: string,
 ): BrowserStreamSlot | undefined {
-  return slotRegistry.get(windowId);
+  return slotRegistry.get(browserTabSlotKey(windowId, tabId));
+}
+
+function readBrowserWindowAndTab(
+  windowId: string,
+  tabId: string,
+): { win: OsWindow; appState: BrowserWindowState; tab: BrowserTabRuntime } | null {
+  const win = useWindowStore.getState().session?.windows?.[windowId];
+  if (!win || win.appId !== "browser" || !win.appState) return null;
+  const appState = win.appState as unknown as BrowserWindowState;
+  if (!Array.isArray(appState.tabs)) return null;
+  const tab = findBrowserTab(appState, tabId);
+  if (!tab) return null;
+  return { win, appState, tab };
+}
+
+function updateBrowserTabInStore(
+  windowId: string,
+  tabId: string,
+  patch: Partial<Omit<BrowserTabRuntime, "tabId">>,
+  nextOwnerScope?: BrowserOwnerScope,
+): void {
+  const current = readBrowserWindowAndTab(windowId, tabId);
+  if (!current || current.appState.closing) return;
+  const nextState = patchBrowserTab(current.appState, tabId, patch);
+  useWindowStore.getState().updateAppState(windowId, {
+    ...nextState,
+    ...(nextOwnerScope ? { ownerScope: nextOwnerScope } : {}),
+  } as unknown as Record<string, unknown>);
 }
 
 // ============================================================================
@@ -246,6 +343,9 @@ export interface ActiveDialogState {
   dialogId: string;
   message: string;
   dialogType: string;
+  sessionId: string;
+  browserIncarnation: string;
+  profileEpoch: string;
 }
 
 interface BrowserDialogModalProps {
@@ -325,17 +425,18 @@ function BrowserDialogModal({
 }
 
 // ============================================================================
-// Single Parked Browser Stream Item
+// Single Parked Browser Stream Item (Per Window + Tab Tuple)
 // ============================================================================
 
 interface ParkedBrowserStreamItemProps {
   window: OsWindow;
+  tab: BrowserTabRuntime;
   parkingHost: HTMLElement;
 }
 
-// React clears currentTarget after dispatch. Retain only the fields input uses
-// while the first pointer gesture waits for its control lease.
-function snapshotBrowserPointer(event: React.PointerEvent<HTMLCanvasElement>): CanvasPointerInput {
+function snapshotBrowserPointer(
+  event: React.PointerEvent<HTMLCanvasElement>,
+): CanvasPointerInput {
   return {
     currentTarget: event.currentTarget,
     clientX: event.clientX,
@@ -358,11 +459,18 @@ interface PendingBrowserPointer {
 
 function ParkedBrowserStreamItem({
   window: win,
+  tab,
   parkingHost,
 }: ParkedBrowserStreamItemProps) {
+  const slotKey = useMemo(
+    () => browserTabSlotKey(win.id, tab.tabId),
+    [win.id, tab.tabId],
+  );
   const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null);
   const [canvasEl, setCanvasEl] = useState<HTMLCanvasElement | null>(null);
   const pendingCredsRef = useRef<ViewerAttachmentCredentials | null>(null);
+  const currentAttachedCredsRef =
+    useRef<ViewerAttachmentCredentials | null>(null);
   const textInputProxyRef = useRef<TextInputProxyHandle | null>(null);
   const streamControllerRef = useRef<BrowserStreamController | null>(null);
   const inputControllerRef = useRef<BrowserInputController | null>(null);
@@ -370,32 +478,40 @@ function ParkedBrowserStreamItem({
   const pcmPlayerRef = useRef<PcmPlayer | null>(null);
   const pointerVisibleRef = useRef(false);
 
-  const [streamController, setStreamController] = useState<BrowserStreamController | null>(null);
-  const [inputController, setInputController] = useState<BrowserInputController | null>(null);
+  const [streamController, setStreamController] =
+    useState<BrowserStreamController | null>(null);
+  const [inputController, setInputController] =
+    useState<BrowserInputController | null>(null);
 
-  const [slot, setSlot] = useState<BrowserStreamSlot | null>(() =>
-    slotRegistry.get(win.id) ?? null,
+  const [slot, setSlot] = useState<BrowserStreamSlot | null>(
+    () => slotRegistry.get(slotKey) ?? null,
   );
-  const [activeDialog, setActiveDialog] = useState<ActiveDialogState | null>(null);
+  const [activeDialog, setActiveDialog] = useState<ActiveDialogState | null>(
+    null,
+  );
   const [controlError, setControlError] = useState<string | null>(null);
+  const [viewerCapacityError, setViewerCapacityError] = useState<string | null>(
+    null,
+  );
+  const [retryNonce, setRetryNonce] = useState(0);
 
   const cancelPendingGesture = useCallback(() => {
     pendingPointerRef.current = null;
     inputControllerRef.current?.cancelControlHandoff();
     textInputProxyRef.current?.reset();
   }, []);
+
   const canPlayAudioRef = useRef<() => boolean>(() => false);
   const ensurePcmPlayer = useCallback((): PcmPlayer => {
     if (!pcmPlayerRef.current) {
       pcmPlayerRef.current = new PcmPlayer({
         canPlay: () => canPlayAudioRef.current(),
         onAutoplayBlockedChange: (blocked) =>
-          setBrowserAudioBlocked(win.id, blocked),
+          setBrowserAudioBlocked(win.id, tab.tabId, blocked),
       });
     }
     return pcmPlayerRef.current;
-  }, [win.id]);
-
+  }, [win.id, tab.tabId]);
 
   useEffect(() => {
     const handleWindowBlur = () => {
@@ -424,12 +540,14 @@ function ParkedBrowserStreamItem({
     }),
     [win.ctx.profileId, currentGen],
   );
+  const ownerRef = useRef<ConnectionRef>(owner);
+  ownerRef.current = owner;
   const lastAudioDocEpochRef = useRef<string | null>(null);
 
-  const canPlayAudio = useCallback(
-    (creds?: ViewerAttachmentCredentials): boolean => {
-      const liveSlot = slotRegistry.get(win.id);
-      if (!liveSlot?.isVisible || !liveSlot.element || liveSlot.audioMuted) {
+  const canConnectTab = useCallback(
+    (targetOwner: ConnectionRef = ownerRef.current): boolean => {
+      const liveSlot = slotRegistry.get(slotKey);
+      if (!liveSlot?.isVisible || !liveSlot.element) {
         return false;
       }
       if (
@@ -438,70 +556,186 @@ function ParkedBrowserStreamItem({
       ) {
         return false;
       }
-      const targetOwner = creds?.owner ?? owner;
       if (
         isBrowserViewFenced(targetOwner.profileId, targetOwner.generation) ||
         !isCurrentConnection(targetOwner)
       ) {
         return false;
       }
+      const verified = captureVerifiedBrowserOwner(targetOwner.profileId);
+      if (!verified || verified.owner.generation !== targetOwner.generation) {
+        return false;
+      }
       const winState = useWindowStore.getState();
-      const current = winState.session?.windows?.[win.id];
+      const currentWin = winState.session?.windows?.[win.id];
       const activeDesktopId = winState.session?.activeDesktopId;
       if (
-        !current ||
-        current.minimized ||
+        !currentWin ||
+        currentWin.appId !== "browser" ||
+        currentWin.minimized ||
         (activeDesktopId &&
-          current.desktopId &&
-          current.desktopId !== activeDesktopId) ||
-        current.ctx.profileId !== targetOwner.profileId ||
-        current.appState?.browserSessionStatus !== "running"
+          currentWin.desktopId &&
+          currentWin.desktopId !== activeDesktopId) ||
+        currentWin.ctx.profileId !== targetOwner.profileId ||
+        !currentWin.appState
       ) {
         return false;
       }
-      const connSnapLive = getConnectionSnapshot(targetOwner.profileId);
-      if (connSnapLive && connSnapLive.status !== "connected") {
+      const currentApp = currentWin.appState as unknown as BrowserWindowState;
+      if (
+        !Array.isArray(currentApp.tabs) ||
+        currentApp.closing ||
+        currentApp.activeTabId !== tab.tabId ||
+        (currentApp.ownerScope &&
+          !areBrowserOwnerScopesEqual(currentApp.ownerScope, verified.scope))
+      ) {
         return false;
       }
-      if (creds) {
+      const currentTab = findBrowserTab(currentApp, tab.tabId);
+      if (
+        !currentTab ||
+        !currentTab.sessionId ||
+        (currentTab.phase !== "connecting" && currentTab.phase !== "live")
+      ) {
+        return false;
+      }
+      const targetKey = createBrowserNativeTargetKey(
+        verified.scope,
+        currentTab.sessionId,
+      );
+      return Boolean(targetKey && !isNativeTargetClosing(targetKey));
+    },
+    [slotKey, tab.tabId, win.id],
+  );
+
+  const canStreamTab = useCallback(
+    (creds?: ViewerAttachmentCredentials): boolean => {
+      const targetCreds = creds ?? currentAttachedCredsRef.current ?? undefined;
+      const targetOwner = targetCreds?.owner ?? ownerRef.current;
+      if (!canConnectTab(targetOwner)) {
+        return false;
+      }
+      const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+      if (!cur) return false;
+      if (targetCreds) {
         return (
-          current.appState?.sessionId === creds.browserSessionId &&
-          current.appState?.browserIncarnation === creds.browserIncarnation &&
-          String(current.appState?.profileEpoch) === String(creds.profileEpoch) &&
+          cur.tab.phase === "live" &&
+          cur.tab.snapshot?.status === "running" &&
+          cur.tab.sessionId === targetCreds.browserSessionId &&
+          cur.tab.snapshot.browserIncarnation ===
+            targetCreds.browserIncarnation &&
+          String(cur.tab.snapshot.profileEpoch) ===
+            String(targetCreds.profileEpoch) &&
           streamControllerRef.current?.getCurrentSubscriptionEpoch() ===
-            creds.subscriptionEpoch
+            targetCreds.subscriptionEpoch
         );
       }
-      return Boolean(current.appState?.sessionId);
+      return (
+        cur.tab.phase === "live" && cur.tab.snapshot?.status === "running"
+      );
     },
-    [owner, win.id],
+    [canConnectTab, tab.tabId, win.id],
   );
-  canPlayAudioRef.current = () => canPlayAudio();
+  const canStreamTabRef = useRef(canStreamTab);
+  canStreamTabRef.current = canStreamTab;
+
+  const canPlayAudio = useCallback(
+    (creds?: ViewerAttachmentCredentials): boolean => {
+      const liveSlot = slotRegistry.get(slotKey);
+      if (!liveSlot || liveSlot.audioMuted || !canStreamTab(creds)) {
+        return false;
+      }
+      return true;
+    },
+    [canStreamTab, slotKey],
+  );
+  canPlayAudioRef.current = (creds?: ViewerAttachmentCredentials) => canPlayAudio(creds);
+
+  const syncDialogFromSnapshot = useCallback(
+    (snap: BrowserSessionDto, creds?: ViewerAttachmentCredentials) => {
+      if (!canStreamTabRef.current(creds)) {
+        setActiveDialog(null);
+        return;
+      }
+      if (
+        snap.status === "running" &&
+        snap.dialog &&
+        typeof snap.dialog.dialogId === "string"
+      ) {
+        setActiveDialog({
+          dialogId: snap.dialog.dialogId,
+          message: snap.dialog.message,
+          dialogType: snap.dialog.dialogType,
+          sessionId: snap.browserSessionId,
+          browserIncarnation: snap.browserIncarnation,
+          profileEpoch: String(snap.profileEpoch),
+        });
+      } else if (
+        snap.status !== "running" ||
+        snap.dialog === null ||
+        ("dialog" in snap && !snap.dialog)
+      ) {
+        setActiveDialog(null);
+      }
+    },
+    [],
+  );
 
   // Direct synchronous source subscriptions so Cognito, LockScreen, profile fence,
-  // and window/session/navigation changes flush scheduled audio BEFORE React commits.
+  // tab selection, slot hide, and window/session/navigation/terminal-status changes
+  // flush scheduled audio, release held input/lease, and detach media/control sockets BEFORE React commits.
   useLayoutEffect(() => {
     const readIdentityKey = (): string => {
-      const w = useWindowStore.getState().session?.windows?.[win.id];
-      if (!w) return "";
-      const a = w.appState;
-      return `${w.ctx.profileId}:${a?.sessionId ?? ""}:${a?.browserIncarnation ?? ""}:${a?.profileEpoch ?? ""}`;
+      const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+      if (!cur) return "";
+      const scopeStr = cur.appState.ownerScope
+        ? JSON.stringify(cur.appState.ownerScope)
+        : "";
+      return `${cur.win.ctx.profileId}:${scopeStr}:${cur.tab.sessionId ?? ""}:${cur.tab.snapshot?.browserIncarnation ?? ""}:${cur.tab.snapshot?.profileEpoch ?? ""}`;
     };
     const readNavRev = (): string => {
-      const w = useWindowStore.getState().session?.windows?.[win.id];
-      return `${w?.appState?.navigationRevision ?? ""}`;
+      const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+      return `${cur?.tab.snapshot?.navigationRevision ?? ""}`;
     };
     const readViewportKey = (): string => {
-      const w = useWindowStore.getState().session?.windows?.[win.id];
-      return `${w?.appState?.viewportEpoch ?? ""}`;
+      const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+      return `${cur?.tab.snapshot?.viewportEpoch ?? ""}`;
     };
     let prevIdentity = readIdentityKey();
     let prevNavRev = readNavRev();
     let prevViewport = readViewportKey();
+    let prevConnectable = canConnectTab();
+    let prevStreamable = canStreamTab();
+
+    const detachActiveStreamSynchronously = () => {
+      pendingCredsRef.current = null;
+      currentAttachedCredsRef.current = null;
+      pointerVisibleRef.current = false;
+      streamControllerRef.current?.setVisibility(false);
+      setActiveDialog(null);
+      const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+      if (cur && (cur.tab.isController || cur.tab.leaseToken)) {
+        const lease = cur.tab.leaseToken;
+        const sessId = cur.tab.sessionId;
+        updateBrowserTabInStore(win.id, tab.tabId, {
+          isController: false,
+          leaseToken: undefined,
+        });
+        if (lease && sessId && isCurrentConnection(ownerRef.current)) {
+          void releaseBrowserControl(ownerRef.current, sessId, {
+            leaseToken: lease,
+          }).catch(() => {});
+        }
+      }
+    };
+
     const syncInvalidate = () => {
       const nextIdentity = readIdentityKey();
       const nextNavRev = readNavRev();
       const nextViewport = readViewportKey();
+      const nextConnectable = canConnectTab();
+      const nextStreamable = canStreamTab();
+
       if (nextIdentity !== prevIdentity) {
         prevIdentity = nextIdentity;
         prevNavRev = nextNavRev;
@@ -510,6 +744,10 @@ function ParkedBrowserStreamItem({
         pcmPlayerRef.current?.flush();
         streamControllerRef.current?.resetAudioAuthority();
         cancelPendingGesture();
+        if (currentAttachedCredsRef.current) {
+          detachActiveStreamSynchronously();
+          setRetryNonce((n) => n + 1);
+        }
       } else if (nextNavRev !== prevNavRev) {
         prevNavRev = nextNavRev;
         prevViewport = nextViewport;
@@ -524,7 +762,26 @@ function ParkedBrowserStreamItem({
       } else if (!canPlayAudio()) {
         pcmPlayerRef.current?.flush();
       }
+
+      if (!nextConnectable || !nextStreamable) {
+        pcmPlayerRef.current?.flush();
+        cancelPendingGesture();
+        textInputProxyRef.current?.blur();
+        inputControllerRef.current?.releaseAllHeldInput();
+        if (
+          prevConnectable ||
+          prevStreamable ||
+          currentAttachedCredsRef.current !== null
+        ) {
+          detachActiveStreamSynchronously();
+        }
+      } else if (!prevConnectable && nextConnectable) {
+        setRetryNonce((n) => n + 1);
+      }
+      prevConnectable = nextConnectable;
+      prevStreamable = nextStreamable;
     };
+
     const unsubFence = subscribeBrowserViewFences(syncInvalidate);
     const unsubConn =
       typeof subscribeConnections === "function"
@@ -545,19 +802,28 @@ function ParkedBrowserStreamItem({
         subscribe?: (fn: () => void) => () => void;
       }
     ).subscribe?.(syncInvalidate);
+    slotListeners.add(syncInvalidate);
     return () => {
+      slotListeners.delete(syncInvalidate);
       unsubFence();
       unsubConn?.();
       cognitoSub?.();
       lockSub?.();
       winSub?.();
     };
-  }, [win.id, canPlayAudio, cancelPendingGesture]);
+  }, [
+    win.id,
+    tab.tabId,
+    canConnectTab,
+    canPlayAudio,
+    canStreamTab,
+    cancelPendingGesture,
+  ]);
 
   // Track slot registration updates and synchronously flush audio on hide/mute
   useEffect(() => {
     const update = () => {
-      const next = slotRegistry.get(win.id) ?? null;
+      const next = slotRegistry.get(slotKey) ?? null;
       if (!next?.isVisible || !next.element || next.audioMuted) {
         pcmPlayerRef.current?.flush();
       }
@@ -568,14 +834,20 @@ function ParkedBrowserStreamItem({
     return () => {
       slotListeners.delete(update);
     };
-  }, [win.id]);
+  }, [slotKey]);
 
   // Imperatively create host element inside parkingHost so React never manages hostEl's parent
   useLayoutEffect(() => {
     const el = document.createElement("div");
-    el.setAttribute("data-os-browser-stream-container", win.id);
-    el.setAttribute("data-testid", `browser-stream-container-${win.id}`);
-    el.className = "relative w-full h-full bg-black overflow-hidden select-none";
+    el.setAttribute("data-os-browser-stream-container", slotKey);
+    el.setAttribute("data-os-browser-window-id", win.id);
+    el.setAttribute("data-os-browser-tab-id", tab.tabId);
+    el.setAttribute(
+      "data-testid",
+      `browser-stream-container-${win.id}-${tab.tabId}`,
+    );
+    el.className =
+      "relative w-full h-full bg-black overflow-hidden select-none";
     el.style.width = "100%";
     el.style.height = "100%";
     parkingHost.appendChild(el);
@@ -585,26 +857,50 @@ function ParkedBrowserStreamItem({
       el.remove();
       setHostEl(null);
     };
-  }, [parkingHost, win.id]);
+  }, [parkingHost, slotKey, win.id, tab.tabId]);
+
+  const currentWindowAndTab = readBrowserWindowAndTab(win.id, tab.tabId);
+  const verifiedOwner = captureVerifiedBrowserOwner(win.ctx.profileId);
+  const isOwnerScopeValid = Boolean(
+    verifiedOwner &&
+      verifiedOwner.owner.generation === owner.generation &&
+      (!currentWindowAndTab?.appState.ownerScope ||
+        areBrowserOwnerScopesEqual(
+          currentWindowAndTab.appState.ownerScope,
+          verifiedOwner.scope,
+        )),
+  );
+  const isActiveTabInWindow =
+    currentWindowAndTab?.appState.activeTabId === tab.tabId;
 
   // Reparent container node between slot.element and parkingHost
   useLayoutEffect(() => {
     if (!hostEl) return;
-
-    const destination = slot?.element ?? parkingHost;
+    const destination =
+      isActiveTabInWindow && slot?.element ? slot.element : parkingHost;
     if (destination && hostEl.parentElement !== destination) {
       destination.appendChild(hostEl);
     }
-  }, [slot?.element, parkingHost, hostEl]);
+  }, [isActiveTabInWindow, slot?.element, parkingHost, hostEl]);
 
-  // Derived effective visibility
-  const isEffectiveVisible = Boolean(slot?.isVisible && slot?.element && !isSuppressed);
+  // Derived effective visibility for active streaming/bootstrap
+  const isEffectiveVisible = Boolean(
+    slot?.isVisible &&
+      slot?.element &&
+      !isSuppressed &&
+      isOwnerScopeValid &&
+      isActiveTabInWindow &&
+      !currentWindowAndTab?.win.minimized &&
+      !currentWindowAndTab?.appState.closing &&
+      (tab.phase === "connecting" || tab.phase === "live"),
+  );
   pointerVisibleRef.current = isEffectiveVisible;
 
   // Synchronous style updates for suppression and visibility
   useLayoutEffect(() => {
     if (!hostEl) return;
-    hostEl.style.pointerEvents = isSuppressed ? "none" : "auto";
+    hostEl.style.pointerEvents =
+      isSuppressed || !isEffectiveVisible ? "none" : "auto";
     hostEl.style.visibility = isEffectiveVisible ? "visible" : "hidden";
   }, [hostEl, isSuppressed, isEffectiveVisible]);
 
@@ -612,6 +908,7 @@ function ParkedBrowserStreamItem({
   useLayoutEffect(() => {
     if (isSuppressed) {
       pcmPlayerRef.current?.flush();
+      currentAttachedCredsRef.current = null;
     }
     if (streamControllerRef.current) {
       streamControllerRef.current.setPrivacyMode(isSuppressed);
@@ -628,8 +925,12 @@ function ParkedBrowserStreamItem({
       pcmPlayerRef.current?.flush();
     }
     if (!isEffectiveVisible) {
+      currentAttachedCredsRef.current = null;
       cancelPendingGesture();
+      textInputProxyRef.current?.blur();
       inputControllerRef.current?.releaseAllHeldInput();
+      setActiveDialog(null);
+      setControlError(null);
     }
     if (streamControllerRef.current) {
       streamControllerRef.current.setVisibility(isEffectiveVisible);
@@ -649,22 +950,26 @@ function ParkedBrowserStreamItem({
       cancelPendingGesture();
     };
   }, [
-    owner, win.appState?.sessionId, win.appState?.viewerId,
-    win.appState?.browserIncarnation, win.appState?.profileEpoch,
+    owner,
+    tab.sessionId,
+    tab.viewerId,
+    tab.snapshot?.browserIncarnation,
+    tab.snapshot?.profileEpoch,
     cancelPendingGesture,
   ]);
 
   useLayoutEffect(() => {
-    const navRev = win.appState?.navigationRevision;
+    const navRev = tab.snapshot?.navigationRevision;
     streamControllerRef.current?.resetAudioAuthority(
       navRev !== undefined && navRev !== null ? String(navRev) : undefined,
     );
     cancelPendingGesture();
-  }, [win.appState?.navigationRevision, cancelPendingGesture]);
+  }, [tab.snapshot?.navigationRevision, cancelPendingGesture]);
 
   useLayoutEffect(() => {
     cancelPendingGesture();
-  }, [win.appState?.viewportEpoch, cancelPendingGesture]);
+  }, [tab.snapshot?.viewportEpoch, cancelPendingGesture]);
+
   useLayoutEffect(() => {
     const handler = (
       reqOwner: ConnectionRef,
@@ -685,18 +990,23 @@ function ParkedBrowserStreamItem({
       const activeDesktop = storeState.session?.desktops?.find(
         (d) => d.id === storeState.session.activeDesktopId,
       );
-      if (activeDesktop?.focusedWindowId && activeDesktop.focusedWindowId !== win.id) {
+      if (
+        activeDesktop?.focusedWindowId &&
+        activeDesktop.focusedWindowId !== win.id
+      ) {
         return;
       }
-      const current = storeState.session.windows[win.id];
+      const cur = readBrowserWindowAndTab(win.id, tab.tabId);
       if (
-        current?.ctx.profileId !== reqOwner.profileId ||
-        current.appState?.sessionId !== reqSessionId ||
-        current.appState?.leaseToken !== reqLeaseToken ||
-        !current.appState?.isController ||
-        (current.appState?.browserSessionStatus !== undefined &&
-          current.appState.browserSessionStatus !== "running") ||
-        current.appState?.inputAvailable === false
+        !cur ||
+        cur.win.ctx.profileId !== reqOwner.profileId ||
+        cur.appState.activeTabId !== tab.tabId ||
+        cur.tab.sessionId !== reqSessionId ||
+        cur.tab.leaseToken !== reqLeaseToken ||
+        !cur.tab.isController ||
+        cur.tab.phase !== "live" ||
+        cur.tab.snapshot?.status !== "running" ||
+        cur.tab.snapshot.inputAvailable === false
       ) {
         return;
       }
@@ -713,37 +1023,39 @@ function ParkedBrowserStreamItem({
       }
       textInputProxyRef.current?.focus();
     };
-    proxyFocusListeners.set(win.id, handler);
+    proxyFocusListeners.set(slotKey, handler);
     return () => {
-      if (proxyFocusListeners.get(win.id) === handler) {
-        proxyFocusListeners.delete(win.id);
+      if (proxyFocusListeners.get(slotKey) === handler) {
+        proxyFocusListeners.delete(slotKey);
       }
     };
-  }, [win.id, isEffectiveVisible, activeDialog]);
+  }, [slotKey, win.id, tab.tabId, isEffectiveVisible, activeDialog]);
+
   useLayoutEffect(() => {
     const unlockHandler = (reqOwner: ConnectionRef, reqSessionId: string) => {
-      const current = useWindowStore.getState().session.windows[win.id];
+      const cur = readBrowserWindowAndTab(win.id, tab.tabId);
       if (
         !canPlayAudio() ||
         !isCurrentConnection(reqOwner) ||
-        current?.ctx.profileId !== reqOwner.profileId ||
-        current.appState?.sessionId !== reqSessionId
+        !cur ||
+        cur.win.ctx.profileId !== reqOwner.profileId ||
+        cur.appState.activeTabId !== tab.tabId ||
+        cur.tab.sessionId !== reqSessionId
       ) {
         pcmPlayerRef.current?.flush();
         return;
       }
       ensurePcmPlayer().prime();
     };
-    audioUnlockListeners.set(win.id, unlockHandler);
+    audioUnlockListeners.set(slotKey, unlockHandler);
     return () => {
-      if (audioUnlockListeners.get(win.id) === unlockHandler) {
-        audioUnlockListeners.delete(win.id);
+      if (audioUnlockListeners.get(slotKey) === unlockHandler) {
+        audioUnlockListeners.delete(slotKey);
       }
     };
-  }, [win.id, canPlayAudio, ensurePcmPlayer]);
+  }, [slotKey, win.id, tab.tabId, canPlayAudio, ensurePcmPlayer]);
 
-
-  // Initialize controllers when canvas is ready
+  // Initialize controllers when canvas is ready (live ref bridges preserve latest generation authority)
   useLayoutEffect(() => {
     if (!canvasEl) return;
 
@@ -752,7 +1064,7 @@ function ParkedBrowserStreamItem({
         canvas: canvasEl,
         onGeometryChange: () => {},
         onAudioChunk: (chunk: BrowserAudioChunk, credentials) => {
-          if (!canPlayAudio(credentials)) {
+          if (!canPlayAudioRef.current() || !canStreamTabRef.current(credentials)) {
             pcmPlayerRef.current?.flush();
             return;
           }
@@ -763,174 +1075,178 @@ function ParkedBrowserStreamItem({
           pcmPlayerRef.current?.flush();
         },
         onControlEvent: (event: ServerControlEvent, credentials) => {
-          const current = useWindowStore.getState().session.windows[win.id];
-          if (!isCurrentConnection(credentials.owner) ||
-              current?.ctx.profileId !== credentials.owner.profileId ||
-              current.appState?.sessionId !== credentials.browserSessionId ||
-              current.appState.browserIncarnation !== credentials.browserIncarnation ||
-              String(current.appState.profileEpoch) !== String(credentials.profileEpoch)) return;
+          const verified = captureVerifiedBrowserOwner(
+            credentials.owner.profileId,
+          );
+          if (
+            !verified ||
+            verified.owner.generation !== credentials.owner.generation ||
+            !isCurrentConnection(credentials.owner)
+          ) {
+            return;
+          }
+          const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+          if (
+            !cur ||
+            cur.win.ctx.profileId !== credentials.owner.profileId ||
+            cur.appState.closing ||
+            (cur.appState.ownerScope &&
+              !areBrowserOwnerScopesEqual(
+                cur.appState.ownerScope,
+                verified.scope,
+              )) ||
+            cur.tab.sessionId !== credentials.browserSessionId ||
+            cur.tab.snapshot?.browserIncarnation !==
+              credentials.browserIncarnation ||
+            String(cur.tab.snapshot?.profileEpoch) !==
+              String(credentials.profileEpoch) ||
+            streamControllerRef.current?.getCurrentSubscriptionEpoch() !==
+              credentials.subscriptionEpoch
+          ) {
+            return;
+          }
+
           if (event.kind === "sessionUpdated") {
-            const prevNavRev = current?.appState?.navigationRevision;
-            const prevViewport = current?.appState?.viewportEpoch;
+            const prevNavRev = cur.tab.snapshot?.navigationRevision;
+            const prevViewport = cur.tab.snapshot?.viewportEpoch;
             const result = syncBrowserSessionWindow(
-              credentials.owner, win.id, credentials.browserSessionId, event.session, credentials,
+              credentials.owner,
+              win.id,
+              tab.tabId,
+              credentials.browserSessionId,
+              event.session,
+              {
+                browserIncarnation: credentials.browserIncarnation,
+                profileEpoch: credentials.profileEpoch,
+                subscriptionEpoch: credentials.subscriptionEpoch,
+                currentSubscriptionEpoch:
+                  streamControllerRef.current?.getCurrentSubscriptionEpoch() ??
+                  undefined,
+              },
             );
-            if (
-              result === "detached" ||
-              event.session.status !== "running"
-            ) {
+            if (result === "detached" || event.session.status !== "running") {
               lastAudioDocEpochRef.current = null;
               pcmPlayerRef.current?.flush();
               streamControllerRef.current?.resetAudioAuthority();
-            } else if (String(event.session.navigationRevision) !== String(prevNavRev)) {
-              if (String(lastAudioDocEpochRef.current ?? "") !== String(event.session.navigationRevision)) {
+              currentAttachedCredsRef.current = null;
+              streamControllerRef.current?.setVisibility(false);
+              cancelPendingGesture();
+              textInputProxyRef.current?.blur();
+              inputControllerRef.current?.releaseAllHeldInput();
+              setActiveDialog(null);
+              if (result === "detached") {
+                const lease = cur.tab.leaseToken;
+                const sessId = cur.tab.sessionId;
+                updateBrowserTabInStore(win.id, tab.tabId, {
+                  isController: false,
+                  leaseToken: undefined,
+                  phase: "unavailable",
+                  unsupportedReason: "Browser runtime changed on host",
+                });
+                if (lease && sessId && isCurrentConnection(credentials.owner)) {
+                  void releaseBrowserControl(credentials.owner, sessId, { leaseToken: lease }).catch(() => {});
+                }
+              }
+            } else if (
+              String(event.session.navigationRevision) !== String(prevNavRev)
+            ) {
+              if (
+                String(lastAudioDocEpochRef.current ?? "") !==
+                String(event.session.navigationRevision)
+              ) {
                 pcmPlayerRef.current?.flush();
               }
-              streamControllerRef.current?.resetAudioAuthority(event.session.navigationRevision);
-            } else if (String(event.session.viewportEpoch) !== String(prevViewport)) {
+              streamControllerRef.current?.resetAudioAuthority(
+                event.session.navigationRevision,
+              );
+            } else if (
+              String(event.session.viewportEpoch) !== String(prevViewport)
+            ) {
               cancelPendingGesture();
             }
-            if (result !== "detached" &&
-                (event.session.status !== "running" || !event.session.inputAvailable)) {
+            if (
+              result !== "detached" &&
+              (event.session.status !== "running" ||
+                !event.session.inputAvailable)
+            ) {
               cancelPendingGesture();
               pcmPlayerRef.current?.flush();
               inputControllerRef.current?.releaseAllHeldInput();
               setActiveDialog(null);
             }
             if (result !== "detached") {
-              const latest = useWindowStore.getState().session.windows[win.id];
-              const popupId = event.session.activePopupSessionId;
-              const returnParentId = (latest?.appState?.parentSessionId ??
-                latest?.appState?.openerSessionId) as string | undefined;
+              syncDialogFromSnapshot(event.session, credentials);
               if (
-                event.session.status === "running" &&
-                popupId &&
-                latest?.appState?.dismissedPopupSessionId !== popupId
+                cur.tab.kind === "popup" &&
+                (event.session.status === "closed" ||
+                  event.session.status === "lost")
               ) {
-                void (async () => {
-                  try {
-                    const popupSnap = await getBrowserSession(credentials.owner, popupId);
-                    const cur = useWindowStore.getState().session.windows[win.id];
-                    if (
-                      !isCurrentConnection(credentials.owner) ||
-                      cur?.ctx.profileId !== credentials.owner.profileId ||
-                      cur.appState?.sessionId !== credentials.browserSessionId ||
-                      cur.appState?.browserIncarnation !== credentials.browserIncarnation ||
-                      String(cur.appState?.profileEpoch) !== String(credentials.profileEpoch) ||
-                      cur.appState?.activePopupSessionId !== popupId ||
-                      cur.appState?.dismissedPopupSessionId === popupId ||
-                      popupSnap.status !== "running" ||
-                      popupSnap.parentSessionId !== credentials.browserSessionId
-                    ) {
-                      return;
-                    }
-                    cancelPendingGesture();
-                    inputControllerRef.current?.releaseAllHeldInput();
-                    setActiveDialog(null);
-                    switchBrowserWindowSession(
-                      credentials.owner,
-                      win.id,
-                      credentials.browserSessionId,
-                      popupSnap,
-                      {
-                        openerSessionId:
-                          (cur.appState?.openerSessionId as string | undefined) ??
-                          credentials.browserSessionId,
-                      },
-                    );
-                  } catch {
-                    // Popup may have closed before lookup completed
-                  }
-                })();
-              } else if (
-                (event.session.status === "closed" || event.session.status === "lost") &&
-                returnParentId
-              ) {
-                void (async () => {
-                  const fallbackOpenerId = latest?.appState?.openerSessionId as string | undefined;
-                  const candidates =
-                    fallbackOpenerId && fallbackOpenerId !== returnParentId
-                      ? [returnParentId, fallbackOpenerId]
-                      : [returnParentId];
-                  for (const candidateId of candidates) {
-                    try {
-                      const openerSnap = await getBrowserSession(credentials.owner, candidateId);
-                      const cur = useWindowStore.getState().session.windows[win.id];
-                      if (
-                        !isCurrentConnection(credentials.owner) ||
-                        cur?.ctx.profileId !== credentials.owner.profileId ||
-                        cur.appState?.sessionId !== credentials.browserSessionId ||
-                        cur.appState?.browserIncarnation !== credentials.browserIncarnation ||
-                        String(cur.appState?.profileEpoch) !== String(credentials.profileEpoch)
-                      ) {
-                        return;
-                      }
-                      if (openerSnap.status === "running") {
-                        cancelPendingGesture();
-                        inputControllerRef.current?.releaseAllHeldInput();
-                        setActiveDialog(null);
-                        const switched = switchBrowserWindowSession(
-                          credentials.owner,
-                          win.id,
-                          credentials.browserSessionId,
-                          openerSnap,
-                          {
-                            openerSessionId: openerSnap.parentSessionId ?? undefined,
-                            dismissedPopupSessionId: credentials.browserSessionId,
-                          },
-                        );
-                        if (switched === "applied") return;
-                      }
-                    } catch {
-                      // Try next ancestor if available
-                    }
-                  }
-                  const cur = useWindowStore.getState().session.windows[win.id];
-                  if (
-                    isCurrentConnection(credentials.owner) &&
-                    cur?.ctx.profileId === credentials.owner.profileId &&
-                    cur.appState?.sessionId === credentials.browserSessionId &&
-                    cur.appState?.browserIncarnation === credentials.browserIncarnation &&
-                    String(cur.appState?.profileEpoch) === String(credentials.profileEpoch)
-                  ) {
-                    useWindowStore.getState().updateAppState(win.id, {
-                      parentSessionId: undefined,
-                      openerSessionId: undefined,
-                    });
-                  }
-                })();
+                cancelPendingGesture();
+                inputControllerRef.current?.releaseAllHeldInput();
+                setActiveDialog(null);
+                completeBrowserPopupTab(
+                  credentials.owner,
+                  win.id,
+                  tab.tabId,
+                  credentials.browserSessionId,
+                );
+              } else {
+                void reconcileOpenerPopupSnapshot({
+                  owner: credentials.owner,
+                  windowId: win.id,
+                  openerTabId: tab.tabId,
+                  openerSessionId: credentials.browserSessionId,
+                  openerSnapshot: event.session,
+                  isOpenerVisible: canStreamTabRef.current(credentials),
+                });
               }
             }
           } else if (event.kind === "dialogOpened") {
+            if (!canStreamTabRef.current(credentials)) return;
             cancelPendingGesture();
             inputControllerRef.current?.releaseAllHeldInput();
             setActiveDialog({
               dialogId: event.dialogId,
               message: event.message,
               dialogType: event.dialogType,
+              sessionId: credentials.browserSessionId,
+              browserIncarnation: credentials.browserIncarnation,
+              profileEpoch: String(credentials.profileEpoch),
             });
           } else if (event.kind === "dialogClosed") {
             setActiveDialog(null);
           } else if (event.kind === "leaseRevoked") {
             cancelPendingGesture();
             inputControllerRef.current?.releaseAllHeldInput();
-            useWindowStore.getState().updateAppState(win.id, {
+            updateBrowserTabInStore(win.id, tab.tabId, {
               isController: false,
               leaseToken: undefined,
             });
-            // Dismiss pending dialog on controller loss per contract §9
             setActiveDialog(null);
           } else if (event.kind === "status") {
             if (!event.inputAvailable) {
               cancelPendingGesture();
               inputControllerRef.current?.releaseAllHeldInput();
             }
-            useWindowStore.getState().updateAppState(win.id, {
-              inputAvailable: current.appState.browserSessionStatus === "running" && event.inputAvailable,
-              unavailableReason: event.unavailableReason,
-            });
+            const latest = readBrowserWindowAndTab(win.id, tab.tabId);
+            if (latest?.tab.snapshot) {
+              const nextInputAvailable =
+                latest.tab.snapshot.status === "running" &&
+                event.inputAvailable;
+              updateBrowserTabInStore(win.id, tab.tabId, {
+                unavailableReason: event.unavailableReason,
+                snapshot: {
+                  ...latest.tab.snapshot,
+                  inputAvailable: nextInputAvailable,
+                  unavailableReason: event.unavailableReason,
+                },
+              });
+            }
           } else if (event.kind === "error") {
-            console.error("[BrowserStream] Control socket error:", event.message);
+            console.error(
+              "[BrowserStream] Control socket error:",
+              event.message,
+            );
           }
         },
         onError: (err) => {
@@ -938,10 +1254,13 @@ function ParkedBrowserStreamItem({
         },
       });
 
+      streamCtrl.setPrivacyMode(isSuppressed);
+      streamCtrl.setVisibility(isEffectiveVisible);
       streamControllerRef.current = streamCtrl;
       setStreamController(streamCtrl);
 
       if (pendingCredsRef.current) {
+        currentAttachedCredsRef.current = pendingCredsRef.current;
         streamCtrl.attach(pendingCredsRef.current);
       }
     }
@@ -949,23 +1268,30 @@ function ParkedBrowserStreamItem({
     if (!inputControllerRef.current) {
       const inputCtrl = new BrowserInputController({
         getSessionId: () =>
-          (useWindowStore.getState().session.windows[win.id]?.appState?.sessionId as string | undefined) ?? "",
+          readBrowserWindowAndTab(win.id, tab.tabId)?.tab.sessionId ?? "",
         getIncarnation: () =>
-          (useWindowStore.getState().session.windows[win.id]?.appState?.browserIncarnation as string | undefined) ?? "",
-        getProfileEpoch: () =>
-          (useWindowStore.getState().session.windows[win.id]?.appState?.profileEpoch as number | undefined) ?? 0,
+          readBrowserWindowAndTab(win.id, tab.tabId)?.tab.snapshot
+            ?.browserIncarnation ?? "",
+        getProfileEpoch: () => {
+          const raw = readBrowserWindowAndTab(win.id, tab.tabId)?.tab.snapshot
+            ?.profileEpoch;
+          const num = raw !== undefined ? Number(raw) : 0;
+          return Number.isSafeInteger(num) && num > 0 ? num : 0;
+        },
         getSubscriptionEpoch: () =>
           streamControllerRef.current?.getCurrentSubscriptionEpoch() ?? null,
         getLeaseToken: () =>
-          (useWindowStore.getState().session.windows[win.id]?.appState?.leaseToken as string | undefined) ?? null,
+          readBrowserWindowAndTab(win.id, tab.tabId)?.tab.leaseToken ?? null,
         getViewportEpoch: () =>
-          (useWindowStore.getState().session.windows[win.id]?.appState?.viewportEpoch as string | number | undefined) ?? 0,
+          readBrowserWindowAndTab(win.id, tab.tabId)?.tab.snapshot
+            ?.viewportEpoch ?? 0,
         getDrawnRect: () => streamControllerRef.current?.getDrawnRect() ?? null,
         getControlSocket: () =>
           streamControllerRef.current?.getControlSocket() ?? null,
         isInputAllowed: () =>
-          !useCognitoModeStore.getState().active && !useLockScreenStore.getState().isLocked &&
-          !isBrowserViewFenced(win.ctx.profileId, getConnectionSnapshot(win.ctx.profileId)?.owner.generation),
+          canStreamTabRef.current(
+            currentAttachedCredsRef.current ?? undefined,
+          ),
         onError: (err) => {
           console.error("[BrowserInput] Controller error:", err);
           setControlError(err.message);
@@ -975,260 +1301,439 @@ function ParkedBrowserStreamItem({
       inputControllerRef.current = inputCtrl;
       setInputController(inputCtrl);
     }
-  }, [canvasEl, win.id, win.ctx.profileId, cancelPendingGesture]);
+  }, [
+    canvasEl,
+    win.id,
+    tab.tabId,
+    win.ctx.profileId,
+    isSuppressed,
+    isEffectiveVisible,
+    cancelPendingGesture,
+    ensurePcmPlayer,
+    syncDialogFromSnapshot,
+  ]);
 
-  // A live URL is presentation state, not an attachment identity. Only a new,
-  // not-yet-created target consumes it in the connection lifecycle below.
-  const creationUrl = win.appState?.sessionId ? undefined : win.appState?.url;
+  // Process withheld late-create cleanups when a verified owner connects
+  useEffect(() => {
+    const verified = captureVerifiedBrowserOwner(win.ctx.profileId);
+    if (verified && verified.owner.generation === owner.generation) {
+      processWithheldCleanups(verified.scope, verified.owner);
+    }
+  }, [owner, win.ctx.profileId]);
 
+  // Explicit root lifecycle create hook (independent of stream visibility; never replays on reconnect)
+  useEffect(() => {
+    const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+    if (!cur || cur.appState.closing || cur.tab.phase !== "creating" || cur.tab.sessionId) {
+      dispatchedTabCreates.delete(slotKey);
+      return;
+    }
 
-  // Server session connection / creation lifecycle
+    const existing = dispatchedTabCreates.get(slotKey);
+    const verified = captureVerifiedBrowserOwner(win.ctx.profileId);
+    if (existing && existing.actionSequence === cur.tab.actionSequence) {
+      if (
+        !verified ||
+        !isCurrentConnection(existing.owner) ||
+        verified.owner.generation !== existing.owner.generation ||
+        !areBrowserOwnerScopesEqual(verified.scope, existing.scope)
+      ) {
+        updateBrowserTabInStore(win.id, tab.tabId, {
+          phase: "create-unknown",
+          unsupportedReason:
+            "Connection changed before browser page creation settled",
+        });
+      }
+      return;
+    }
+
+    if (
+      !verified ||
+      verified.owner.generation !== owner.generation ||
+      !isCurrentConnection(owner) ||
+      (cur.appState.ownerScope &&
+        !areBrowserOwnerScopesEqual(cur.appState.ownerScope, verified.scope))
+    ) {
+      return;
+    }
+    const targetUrl =
+      cur.tab.createIntent?.request.url ?? cur.tab.committedUrl;
+    if (!targetUrl) return;
+    const capturedActionSeq = cur.tab.actionSequence;
+    dispatchedTabCreates.set(slotKey, {
+      actionSequence: capturedActionSeq,
+      owner: { profileId: verified.owner.profileId, generation: verified.owner.generation },
+      scope: verified.scope,
+    });
+
+    void dispatchBrowserCreateIntent({
+      owner: verified.owner,
+      scope: verified.scope,
+      windowId: win.id,
+      tabId: tab.tabId,
+      actionSequence: capturedActionSeq,
+      url: targetUrl,
+      viewport: cur.tab.createIntent?.request.viewport ?? {
+        width: 1280,
+        height: 900,
+        dpr: window.devicePixelRatio || 1,
+      },
+      isTabCurrent: () => {
+        const latest = readBrowserWindowAndTab(win.id, tab.tabId);
+        return Boolean(
+          latest &&
+            !latest.appState.closing &&
+            (!latest.appState.ownerScope ||
+              areBrowserOwnerScopesEqual(
+                latest.appState.ownerScope,
+                verified.scope,
+              )) &&
+            latest.tab.actionSequence === capturedActionSeq &&
+            latest.tab.phase === "creating" &&
+            !latest.tab.sessionId,
+        );
+      },
+      onLateCleanup: (cleanupScope) => {
+        const live = captureVerifiedBrowserOwner(win.ctx.profileId);
+        if (live && areBrowserOwnerScopesEqual(live.scope, cleanupScope)) {
+          processWithheldCleanups(live.scope, live.owner);
+        }
+      },
+    }).then((outcome) => {
+      const latest = readBrowserWindowAndTab(win.id, tab.tabId);
+      const isOwnerCurrent = isCapturedBrowserOwnerCurrent(verified.owner, verified.scope);
+      if (!isOwnerCurrent) {
+        if (latest && latest.tab.actionSequence === capturedActionSeq && latest.tab.phase === "creating") {
+          updateBrowserTabInStore(
+            win.id,
+            tab.tabId,
+            {
+              phase: "create-unknown",
+              unsupportedReason: "Connection generation changed before target creation settled",
+            },
+            verified.scope,
+          );
+        }
+        return;
+      }
+      if (
+        dispatchedTabCreates.get(slotKey)?.actionSequence === capturedActionSeq
+      ) {
+        dispatchedTabCreates.delete(slotKey);
+      }
+      if (
+        !latest ||
+        latest.appState.closing ||
+        latest.tab.actionSequence !== capturedActionSeq ||
+        latest.tab.phase !== "creating" ||
+        latest.tab.sessionId
+      ) {
+        return;
+      }
+      if (outcome.kind === "success" && outcome.adopted) {
+        updateBrowserTabInStore(
+          win.id,
+          tab.tabId,
+          {
+            sessionId: outcome.session.browserSessionId,
+            createIntent: undefined,
+            phase: "connecting",
+          },
+          verified.scope,
+        );
+        syncBrowserSessionWindow(
+          verified.owner,
+          win.id,
+          tab.tabId,
+          outcome.session.browserSessionId,
+          outcome.session,
+        );
+      } else if (outcome.kind === "rejected") {
+        updateBrowserTabInStore(
+          win.id,
+          tab.tabId,
+          {
+            phase: outcome.capacity ? "capacity" : "unavailable",
+            createIntent: undefined,
+            unsupportedReason: outcome.error,
+          },
+          verified.scope,
+        );
+      } else if (outcome.kind === "unknown") {
+        updateBrowserTabInStore(
+          win.id,
+          tab.tabId,
+          {
+            phase: "create-unknown",
+            unsupportedReason: outcome.error,
+          },
+          verified.scope,
+        );
+      }
+    });
+  }, [
+    owner,
+    slotKey,
+    win.id,
+    win.ctx.profileId,
+    tab.tabId,
+    tab.phase,
+    tab.sessionId,
+    tab.actionSequence,
+    tab.committedUrl,
+    tab.createIntent,
+  ]);
+
+  // Reconcile hidden popup completion on tab activation even before slot attachment
+  useEffect(() => {
+    if (
+      !isActiveTabInWindow ||
+      isEffectiveVisible ||
+      tab.kind !== "popup" ||
+      !tab.sessionId
+    ) {
+      return;
+    }
+    if (!isOwnerScopeValid || !isCurrentConnection(owner)) return;
+    void reconcilePopupTabCompletion({
+      owner,
+      windowId: win.id,
+      popupTabId: tab.tabId,
+      popupSessionId: tab.sessionId,
+    });
+  }, [
+    isActiveTabInWindow,
+    isEffectiveVisible,
+    isOwnerScopeValid,
+    owner,
+    tab.kind,
+    tab.sessionId,
+    tab.tabId,
+    win.id,
+  ]);
+
+  // Server session connection / stream attachment lifecycle (known sessionId only; never creates)
   useEffect(() => {
     let isCancelled = false;
     pendingCredsRef.current = null;
-    if (!isEffectiveVisible) return;
+    if (!isEffectiveVisible || !tab.sessionId) return;
+
+    const rawSessionId = tab.sessionId;
+    const verified = captureVerifiedBrowserOwner(owner.profileId);
+    if (
+      !verified ||
+      verified.owner.generation !== owner.generation ||
+      !isCurrentConnection(owner)
+    ) {
+      return;
+    }
+    const initial = readBrowserWindowAndTab(win.id, tab.tabId);
+    if (
+      !initial ||
+      initial.appState.closing ||
+      initial.appState.activeTabId !== tab.tabId ||
+      (initial.tab.phase !== "connecting" && initial.tab.phase !== "live") ||
+      (initial.appState.ownerScope &&
+        !areBrowserOwnerScopesEqual(
+          initial.appState.ownerScope,
+          verified.scope,
+        ))
+    ) {
+      return;
+    }
+    const targetKey = createBrowserNativeTargetKey(
+      verified.scope,
+      rawSessionId,
+    );
+    if (!targetKey || isNativeTargetClosing(targetKey)) {
+      return;
+    }
+
+    setViewerCapacityError(null);
     streamControllerRef.current?.setVisibility(true);
-    const initialWindow = useWindowStore.getState().session.windows[win.id];
-    if (initialWindow?.ctx.profileId === owner.profileId) {
-      useWindowStore.getState().updateAppState(win.id, {
+    if (initial.tab.isController || initial.tab.leaseToken) {
+      updateBrowserTabInStore(win.id, tab.tabId, {
         isController: false,
         leaseToken: undefined,
       });
     }
+
     const abortCtrl = new AbortController();
 
     const connectSession = async () => {
-      const rawSessionId = win.appState?.sessionId as string | undefined;
-      const url = creationUrl as string | undefined;
-
-      if (!url && !rawSessionId) return;
-
       try {
-        let activeSessionId = rawSessionId;
-
-        // If no session created yet, verify capabilities then create session
-        if (!activeSessionId && url) {
-          try {
-            const caps = await getBrowserCapabilities(owner, abortCtrl.signal);
-            if (!caps.available) {
-              if (!isCancelled && isCurrentConnection(owner)) {
-                useWindowStore.getState().updateAppState(win.id, {
-                  unsupportedReason:
-                    caps.reason ?? "Browser capability unavailable on this host",
-                });
-              }
-              return;
-            }
-          } catch {
-            // Capability check endpoint might not be available in mock/test environment
-          }
-
-          const creationKey =
-            (win.appState?.creationKey as string | undefined) ?? generateUUID();
-          try {
-            const created = await createBrowserSession(
-              owner,
-              {
-                creationKey,
-                url,
-                viewport: {
-                  width: 1280,
-                  height: 900,
-                  dpr: window.devicePixelRatio || 1,
-                },
-              },
-              abortCtrl.signal,
-            );
-
-            if (isCancelled || !isCurrentConnection(owner)) return;
-
-
-            useWindowStore.getState().updateAppState(win.id, {
-              creationKey,
-              sessionId: created.browserSessionId,
-            });
-            syncBrowserSessionWindow(owner, win.id, created.browserSessionId, created);
-            // The state update triggers a re-render with the new sessionId,
-            // which handles minting tickets without racing against this effect instance.
-            return;
-          } catch (createErr) {
-            if (
-              !isCancelled &&
-              !abortCtrl.signal.aborted &&
-              (createErr as Error)?.name !== "AbortError"
-            ) {
-              console.warn(
-                "[BrowserStream] Session creation request skipped/failed in current environment:",
-                createErr,
-              );
-            }
-            return;
-          }
+        const snapshot = await getBrowserSession(
+          owner,
+          rawSessionId,
+          abortCtrl.signal,
+        );
+        if (
+          isCancelled ||
+          !isCapturedBrowserOwnerCurrent(owner, verified.scope) ||
+          !canConnectTab(owner) ||
+          isNativeTargetClosing(targetKey)
+        ) {
+          return;
         }
 
-        if (activeSessionId && !isCancelled) {
-          // Persisted windows are hints, never authority for runtime identity.
-          const snapshot = await getBrowserSession(owner, activeSessionId, abortCtrl.signal);
-          if (isCancelled || !isCurrentConnection(owner)) return;
-          const sync = syncBrowserSessionWindow(owner, win.id, activeSessionId, snapshot);
-          if (sync === "detached") return;
-          const syncedWin = useWindowStore.getState().session.windows[win.id];
-          if (snapshot.status !== "running") {
-            const returnParentId = (syncedWin?.appState?.parentSessionId ??
-              syncedWin?.appState?.openerSessionId) as string | undefined;
-            if (returnParentId) {
-              try {
-                const openerSnap = await getBrowserSession(owner, returnParentId, abortCtrl.signal);
-                if (!isCancelled && openerSnap.status === "running") {
-                  switchBrowserWindowSession(owner, win.id, activeSessionId, openerSnap, {
-                    openerSessionId: openerSnap.parentSessionId ?? undefined,
-                    dismissedPopupSessionId: activeSessionId,
-                  });
-                }
-              } catch {
-                // Fall through to terminal state on current session
-              }
-            }
+        const latestBeforeSync = readBrowserWindowAndTab(win.id, tab.tabId);
+        if (
+          latestBeforeSync?.tab.kind === "popup" &&
+          (snapshot.status === "closed" || snapshot.status === "lost")
+        ) {
+          completeBrowserPopupTab(owner, win.id, tab.tabId, rawSessionId);
+          return;
+        }
+
+        const sync = syncBrowserSessionWindow(
+          owner,
+          win.id,
+          tab.tabId,
+          rawSessionId,
+          snapshot,
+        );
+        if (sync === "detached" || snapshot.status !== "running") {
+          currentAttachedCredsRef.current = null;
+          streamControllerRef.current?.setVisibility(false);
+          return;
+        }
+
+        void reconcileOpenerPopupSnapshot({
+          owner,
+          windowId: win.id,
+          openerTabId: tab.tabId,
+          openerSessionId: rawSessionId,
+          openerSnapshot: snapshot,
+          isOpenerVisible: true,
+          signal: abortCtrl.signal,
+        });
+
+        if (!canConnectTab(owner) || isNativeTargetClosing(targetKey)) {
+          return;
+        }
+
+        const profileEpochNum = Number(snapshot.profileEpoch);
+        if (
+          !Number.isSafeInteger(profileEpochNum) ||
+          profileEpochNum <= 0 ||
+          String(profileEpochNum) !== snapshot.profileEpoch
+        ) {
+          updateBrowserTabInStore(win.id, tab.tabId, {
+            unavailableReason:
+              "Browser profile epoch cannot be represented exactly",
+          });
+          return;
+        }
+
+        try {
+          const creds = await mintViewerAttachmentTickets(
+            owner,
+            rawSessionId,
+            snapshot.browserIncarnation,
+            profileEpochNum,
+            abortCtrl.signal,
+          );
+
+          const current = readBrowserWindowAndTab(win.id, tab.tabId);
+          if (
+            isCancelled ||
+            !isCapturedBrowserOwnerCurrent(owner, verified.scope) ||
+            !canConnectTab(owner) ||
+            isNativeTargetClosing(targetKey) ||
+            !current ||
+            current.appState.activeTabId !== tab.tabId ||
+            current.tab.sessionId !== rawSessionId ||
+            current.tab.phase !== "live" ||
+            current.tab.snapshot?.status !== "running" ||
+            current.tab.snapshot.browserIncarnation !==
+              creds.browserIncarnation ||
+            String(current.tab.snapshot.profileEpoch) !==
+              String(creds.profileEpoch)
+          ) {
             return;
           }
-          const popupId = snapshot.activePopupSessionId;
-          if (popupId && syncedWin?.appState?.dismissedPopupSessionId !== popupId) {
-            try {
-              const popupSnap = await getBrowserSession(owner, popupId, abortCtrl.signal);
-              if (
-                !isCancelled &&
-                popupSnap.status === "running" &&
-                popupSnap.parentSessionId === activeSessionId
-              ) {
-                const switched = switchBrowserWindowSession(owner, win.id, activeSessionId, popupSnap, {
-                  openerSessionId:
-                    (syncedWin?.appState?.openerSessionId as string | undefined) ?? activeSessionId,
-                });
-                if (switched === "applied") return;
-              }
-            } catch {
-              // Attach to opener if popup closed before lookup
-            }
-          }
-          if (useWindowStore.getState().session.windows[win.id]?.appState?.browserSessionStatus !== "running") return;
-          try {
-            const creds = await mintViewerAttachmentTickets(
-              owner,
-              activeSessionId,
-              snapshot.browserIncarnation,
-              Number(snapshot.profileEpoch),
-              abortCtrl.signal,
-            );
 
-            const current = useWindowStore.getState().session.windows[win.id];
-            if (isCancelled || !isCurrentConnection(owner) ||
-                current?.ctx.profileId !== owner.profileId ||
-                current.appState?.sessionId !== activeSessionId ||
-                current.appState.browserIncarnation !== creds.browserIncarnation ||
-                String(current.appState.profileEpoch) !== String(creds.profileEpoch) ||
-                current.appState.browserSessionStatus !== "running") return;
+          commitNativeTargetAdmission(verified.scope, rawSessionId, () => {
             pendingCredsRef.current = creds;
-
-            useWindowStore.getState().updateAppState(win.id, {
+            currentAttachedCredsRef.current = creds;
+            updateBrowserTabInStore(win.id, tab.tabId, {
               viewerId: creds.viewerId,
             });
-
-            if (streamControllerRef.current) {
-              streamControllerRef.current.attach(creds);
+            streamControllerRef.current?.attach(creds);
+            syncDialogFromSnapshot(snapshot, creds);
+          });
+        } catch (ticketErr) {
+          if (
+            !isCancelled &&
+            !abortCtrl.signal.aborted &&
+            (ticketErr as Error)?.name !== "AbortError"
+          ) {
+            const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+            if (cur?.tab.kind === "popup") {
+              const comp = await reconcilePopupTabCompletion({
+                owner,
+                windowId: win.id,
+                popupTabId: tab.tabId,
+                popupSessionId: rawSessionId,
+                signal: abortCtrl.signal,
+              });
+              if (comp === "removed") return;
             }
-          } catch (ticketErr) {
             if (
-              !isCancelled &&
-              !abortCtrl.signal.aborted &&
-              (ticketErr as Error)?.name !== "AbortError"
+              ticketErr instanceof BrowserHostClientError &&
+              (ticketErr.status === 429 || ticketErr.kind === "browserBusy")
             ) {
-              const cur = useWindowStore.getState().session.windows[win.id];
-              const returnParentId = (cur?.appState?.parentSessionId ??
-                cur?.appState?.openerSessionId) as string | undefined;
-              if (
-                returnParentId &&
-                isCurrentConnection(owner) &&
-                cur?.ctx.profileId === owner.profileId &&
-                cur.appState?.sessionId === activeSessionId
-              ) {
-                let childStillRunning = false;
-                try {
-                  const latestChild = await getBrowserSession(owner, activeSessionId, abortCtrl.signal);
-                  if (!isCancelled) {
-                    syncBrowserSessionWindow(owner, win.id, activeSessionId, latestChild);
-                  }
-                  childStillRunning = latestChild.status === "running";
-                } catch {
-                  childStillRunning = false;
-                }
-                if (!childStillRunning && !isCancelled && isCurrentConnection(owner)) {
-                  try {
-                    const openerSnap = await getBrowserSession(owner, returnParentId, abortCtrl.signal);
-                    if (!isCancelled && openerSnap.status === "running") {
-                      const switched = switchBrowserWindowSession(
-                        owner,
-                        win.id,
-                        activeSessionId,
-                        openerSnap,
-                        {
-                          openerSessionId: openerSnap.parentSessionId ?? undefined,
-                          dismissedPopupSessionId: activeSessionId,
-                        },
-                      );
-                      if (switched === "applied") return;
-                    }
-                  } catch {
-                    // Fall through to warning if opener is also unavailable
-                  }
-                }
-              }
-              console.warn(
-                "[BrowserStream] Ticket minting skipped/failed in current environment:",
-                ticketErr,
-              );
+              const msg =
+                ticketErr.message ||
+                "Viewer attachment capacity reached — retry stream attachment";
+              setViewerCapacityError(msg);
+              updateBrowserTabInStore(win.id, tab.tabId, {
+                unavailableReason: msg,
+              });
+              return;
             }
+            console.warn(
+              "[BrowserStream] Ticket minting skipped/failed in current environment:",
+              ticketErr,
+            );
           }
         }
       } catch (err) {
-        if (!isCancelled && isCurrentConnection(owner)) {
-          const current = useWindowStore.getState().session.windows[win.id];
-          const expectedIncarnation = current?.appState?.browserIncarnation;
-          const expectedProfileEpoch = current?.appState?.profileEpoch;
-          if (current?.ctx.profileId === owner.profileId && current.appState?.sessionId === rawSessionId) {
-            const returnParentId = (current.appState?.parentSessionId ??
-              current.appState?.openerSessionId) as string | undefined;
-            if (returnParentId && rawSessionId) {
-              try {
-                const openerSnap = await getBrowserSession(owner, returnParentId, abortCtrl.signal);
-                if (!isCancelled && openerSnap.status === "running") {
-                  const switched = switchBrowserWindowSession(owner, win.id, rawSessionId, openerSnap, {
-                    openerSessionId: openerSnap.parentSessionId ?? undefined,
-                    dismissedPopupSessionId: rawSessionId,
-                  });
-                  if (switched === "applied") return;
-                }
-              } catch {
-                // Opener also unavailable
-              }
+        if (
+          !isCancelled &&
+          isCapturedBrowserOwnerCurrent(owner, verified.scope)
+        ) {
+          const current = readBrowserWindowAndTab(win.id, tab.tabId);
+          const expectedIncarnation = current?.tab.snapshot?.browserIncarnation;
+          const expectedProfileEpoch = current?.tab.snapshot?.profileEpoch;
+          if (current && current.tab.sessionId === rawSessionId) {
+            const isNotFound =
+              err instanceof BrowserHostClientError && err.status === 404;
+            if (current.tab.kind === "popup" && isNotFound) {
+              completeBrowserPopupTab(owner, win.id, tab.tabId, rawSessionId);
+              return;
             }
-            const latest = useWindowStore.getState().session.windows[win.id];
+            const latest = readBrowserWindowAndTab(win.id, tab.tabId);
             if (
               !isCancelled &&
-              isCurrentConnection(owner) &&
-              latest?.ctx.profileId === owner.profileId &&
-              latest.appState?.sessionId === rawSessionId &&
-              latest.appState?.browserIncarnation === expectedIncarnation &&
-              latest.appState?.profileEpoch === expectedProfileEpoch
+              latest &&
+              latest.tab.sessionId === rawSessionId &&
+              latest.tab.snapshot?.browserIncarnation === expectedIncarnation &&
+              latest.tab.snapshot?.profileEpoch === expectedProfileEpoch
             ) {
-              useWindowStore.getState().updateAppState(win.id, {
-                unsupportedReason: err instanceof BrowserHostClientError && err.status === 404
+              currentAttachedCredsRef.current = null;
+              streamControllerRef.current?.setVisibility(false);
+              updateBrowserTabInStore(win.id, tab.tabId, {
+                phase: "unavailable",
+                unsupportedReason: isNotFound
                   ? "Browser session no longer exists on this host"
                   : "Browser session could not be connected",
-                inputAvailable: false,
                 isController: false,
                 leaseToken: undefined,
-                parentSessionId: undefined,
-                openerSessionId: undefined,
+                viewerId: undefined,
+                snapshot: latest.tab.snapshot
+                  ? { ...latest.tab.snapshot, inputAvailable: false }
+                  : undefined,
               });
             }
           }
@@ -1244,24 +1749,28 @@ function ParkedBrowserStreamItem({
       cancelPendingGesture();
       abortCtrl.abort();
       pendingCredsRef.current = null;
+      currentAttachedCredsRef.current = null;
       streamControllerRef.current?.setVisibility(false);
     };
   }, [
     owner,
     isEffectiveVisible,
     win.id,
-    creationUrl,
-    win.appState?.sessionId,
-    win.appState?.creationKey,
+    tab.tabId,
+    tab.sessionId,
+    retryNonce,
+    canConnectTab,
     cancelPendingGesture,
+    syncDialogFromSnapshot,
   ]);
 
-
-  // Cleanup controllers on final component unmount (when window is closed)
+  // Cleanup controllers on final component unmount (when tab or window is closed)
   useEffect(() => {
     return () => {
       cancelPendingGesture();
-      setBrowserAudioBlocked(win.id, false);
+      dispatchedTabCreates.delete(slotKey);
+      currentAttachedCredsRef.current = null;
+      setBrowserAudioBlocked(win.id, tab.tabId, false);
       pcmPlayerRef.current?.dispose();
       pcmPlayerRef.current = null;
       streamControllerRef.current?.dispose();
@@ -1269,17 +1778,28 @@ function ParkedBrowserStreamItem({
       streamControllerRef.current = null;
       inputControllerRef.current = null;
     };
-  }, [cancelPendingGesture]);
+  }, [slotKey, win.id, tab.tabId, cancelPendingGesture]);
 
-  // Dialog handlers
+  // Dialog handlers (validated against current visibility/privacy and captured dialog authority)
   const handleDialogConfirm = useCallback(
     (promptText?: string) => {
       if (!activeDialog) return;
-      const latestWin = useWindowStore.getState().session.windows[win.id];
-      const sessionId = (latestWin?.appState?.sessionId as string | undefined) ?? "";
-      const currentLeaseToken = (latestWin?.appState?.leaseToken as string | undefined) ?? "";
-      if (sessionId) {
-        void respondBrowserDialog(owner, sessionId, {
+      const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+      const currentLeaseToken = cur?.tab.leaseToken ?? "";
+      if (
+        canStreamTabRef.current(
+          currentAttachedCredsRef.current ?? undefined,
+        ) &&
+        cur &&
+        cur.appState.activeTabId === tab.tabId &&
+        cur.tab.phase === "live" &&
+        cur.tab.sessionId === activeDialog.sessionId &&
+        cur.tab.snapshot?.browserIncarnation ===
+          activeDialog.browserIncarnation &&
+        String(cur.tab.snapshot?.profileEpoch) === activeDialog.profileEpoch &&
+        currentLeaseToken
+      ) {
+        void respondBrowserDialog(ownerRef.current, activeDialog.sessionId, {
           leaseToken: currentLeaseToken,
           dialogId: activeDialog.dialogId,
           accept: true,
@@ -1288,55 +1808,82 @@ function ParkedBrowserStreamItem({
       }
       setActiveDialog(null);
     },
-    [activeDialog, owner, win.id],
+    [activeDialog, win.id, tab.tabId],
   );
 
   const handleDialogCancel = useCallback(() => {
     if (!activeDialog) return;
-    const latestWin = useWindowStore.getState().session.windows[win.id];
-    const sessionId = (latestWin?.appState?.sessionId as string | undefined) ?? "";
-    const currentLeaseToken = (latestWin?.appState?.leaseToken as string | undefined) ?? "";
-    if (sessionId) {
-      void respondBrowserDialog(owner, sessionId, {
+    const cur = readBrowserWindowAndTab(win.id, tab.tabId);
+    const currentLeaseToken = cur?.tab.leaseToken ?? "";
+    if (
+      canStreamTabRef.current(currentAttachedCredsRef.current ?? undefined) &&
+      cur &&
+      cur.appState.activeTabId === tab.tabId &&
+      cur.tab.phase === "live" &&
+      cur.tab.sessionId === activeDialog.sessionId &&
+      cur.tab.snapshot?.browserIncarnation ===
+        activeDialog.browserIncarnation &&
+      String(cur.tab.snapshot?.profileEpoch) === activeDialog.profileEpoch &&
+      currentLeaseToken
+    ) {
+      void respondBrowserDialog(ownerRef.current, activeDialog.sessionId, {
         leaseToken: currentLeaseToken,
         dialogId: activeDialog.dialogId,
         accept: false,
       });
     }
     setActiveDialog(null);
-  }, [activeDialog, owner, win.id]);
+  }, [activeDialog, win.id, tab.tabId]);
 
   // Input event dispatchers to input controller
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (useCognitoModeStore.getState().active || useLockScreenStore.getState().isLocked ||
-          isBrowserViewFenced(owner.profileId, owner.generation)) return;
+      if (
+        !canStreamTabRef.current(currentAttachedCredsRef.current ?? undefined)
+      ) {
+        return;
+      }
       textInputProxyRef.current?.focus();
       if (canPlayAudio()) {
         ensurePcmPlayer().prime();
       }
       const input = inputControllerRef.current;
-      if (!input || !pointerVisibleRef.current || !isCurrentConnection(owner) ||
-          !input.mapClientToFractions(e.clientX, e.clientY, e.currentTarget)) return;
-      const latestWin = useWindowStore.getState().session.windows[win.id];
-      if (latestWin?.appState?.browserSessionStatus !== "running" ||
-          !latestWin.appState.inputAvailable) return;
-      if (latestWin?.appState?.isController && latestWin.appState.leaseToken) {
-        // A new explicit focusing gesture retires the prior gesture's paced tail.
+      const liveOwner = ownerRef.current;
+      if (
+        !input ||
+        !pointerVisibleRef.current ||
+        !isCurrentConnection(liveOwner) ||
+        !input.mapClientToFractions(e.clientX, e.clientY, e.currentTarget)
+      ) {
+        return;
+      }
+      const latest = readBrowserWindowAndTab(win.id, tab.tabId);
+      if (
+        !latest ||
+        latest.appState.activeTabId !== tab.tabId ||
+        latest.tab.phase !== "live" ||
+        latest.tab.snapshot?.status !== "running" ||
+        !latest.tab.snapshot.inputAvailable
+      ) {
+        return;
+      }
+      if (latest.tab.isController && latest.tab.leaseToken) {
         if (pendingPointerRef.current?.replayed) cancelPendingGesture();
         input.handlePointerDown(e);
         return;
       }
-      const viewerId = latestWin?.appState?.viewerId as string | undefined;
-      const sessionId = latestWin?.appState?.sessionId as string | undefined;
-      if (!latestWin?.appState || !sessionId || !viewerId || pendingPointerRef.current) return;
+      const viewerId = latest.tab.viewerId;
+      const sessionId = latest.tab.sessionId;
+      if (!sessionId || !viewerId || pendingPointerRef.current) return;
       setControlError(null);
       const provenance = {
-        navigationRevision: latestWin.appState?.navigationRevision,
-        viewportEpoch: latestWin.appState?.viewportEpoch,
-        browserIncarnation: latestWin.appState?.browserIncarnation,
-        profileEpoch: latestWin.appState?.profileEpoch,
-        subscriptionEpoch: streamControllerRef.current?.getCurrentSubscriptionEpoch(),
+        actionSequence: latest.tab.actionSequence,
+        navigationRevision: latest.tab.snapshot.navigationRevision,
+        viewportEpoch: latest.tab.snapshot.viewportEpoch,
+        browserIncarnation: latest.tab.snapshot.browserIncarnation,
+        profileEpoch: latest.tab.snapshot.profileEpoch,
+        subscriptionEpoch:
+          streamControllerRef.current?.getCurrentSubscriptionEpoch(),
       };
       const controlSocket = streamControllerRef.current?.getControlSocket();
 
@@ -1346,22 +1893,36 @@ function ParkedBrowserStreamItem({
       };
       pendingPointerRef.current = pending;
       const isCurrentGesture = () => {
-        const current = useWindowStore.getState().session.windows[win.id];
-        return pendingPointerRef.current === pending && pointerVisibleRef.current &&
-          !useCognitoModeStore.getState().active && !useLockScreenStore.getState().isLocked &&
-          !isBrowserViewFenced(owner.profileId, owner.generation) &&
-          Boolean(slotRegistry.get(win.id)?.isVisible) &&
+        const current = readBrowserWindowAndTab(win.id, tab.tabId);
+        return (
+          pendingPointerRef.current === pending &&
+          pointerVisibleRef.current &&
+          isCurrentConnection(liveOwner) &&
+          canStreamTabRef.current(
+            currentAttachedCredsRef.current ?? undefined,
+          ) &&
           Boolean(textInputProxyRef.current?.isFocused()) &&
-          isCurrentConnection(owner) && inputControllerRef.current === input &&
-          current?.ctx.profileId === owner.profileId &&
-          current.appState?.browserSessionStatus === "running" && Boolean(current.appState.inputAvailable) &&
-          current.appState.sessionId === sessionId && current.appState.viewerId === viewerId &&
-          current.appState.navigationRevision === provenance.navigationRevision &&
-          String(current.appState.viewportEpoch) === String(provenance.viewportEpoch) &&
-          current.appState.browserIncarnation === provenance.browserIncarnation &&
-          String(current.appState.profileEpoch) === String(provenance.profileEpoch) &&
-          streamControllerRef.current?.getCurrentSubscriptionEpoch() === provenance.subscriptionEpoch &&
-          streamControllerRef.current?.getControlSocket() === controlSocket;
+          inputControllerRef.current === input &&
+          Boolean(current) &&
+          current!.appState.activeTabId === tab.tabId &&
+          current!.tab.phase === "live" &&
+          current!.tab.snapshot?.status === "running" &&
+          Boolean(current!.tab.snapshot.inputAvailable) &&
+          current!.tab.sessionId === sessionId &&
+          current!.tab.viewerId === viewerId &&
+          current!.tab.actionSequence === provenance.actionSequence &&
+          String(current!.tab.snapshot.navigationRevision) ===
+            String(provenance.navigationRevision) &&
+          String(current!.tab.snapshot.viewportEpoch) ===
+            String(provenance.viewportEpoch) &&
+          current!.tab.snapshot.browserIncarnation ===
+            provenance.browserIncarnation &&
+          String(current!.tab.snapshot.profileEpoch) ===
+            String(provenance.profileEpoch) &&
+          streamControllerRef.current?.getCurrentSubscriptionEpoch() ===
+            provenance.subscriptionEpoch &&
+          streamControllerRef.current?.getControlSocket() === controlSocket
+        );
       };
       const handleControlClose = () => {
         if (pendingPointerRef.current === pending) cancelPendingGesture();
@@ -1373,67 +1934,104 @@ function ParkedBrowserStreamItem({
           textInputProxyRef.current?.reset();
         }
       });
-      controlSocket?.addEventListener("close", handleControlClose, { once: true });
-      void acquireBrowserControl(owner, sessionId, { viewerId, holderKind: "human" })
+      controlSocket?.addEventListener("close", handleControlClose, {
+        once: true,
+      });
+      void acquireBrowserControl(liveOwner, sessionId, {
+        viewerId,
+        holderKind: "human",
+      })
         .then((response) => {
           if (!isCurrentGesture()) {
             if (pendingPointerRef.current === pending) cancelPendingGesture();
-            if (isCurrentConnection(owner)) {
-              void releaseBrowserControl(owner, sessionId, { leaseToken: response.leaseToken })
-                .catch((error) => console.warn("[BrowserStream] Abandoned control release failed:", error));
+            if (isCurrentConnection(liveOwner)) {
+              void releaseBrowserControl(liveOwner, sessionId, {
+                leaseToken: response.leaseToken,
+              }).catch((error) =>
+                console.warn(
+                  "[BrowserStream] Abandoned control release failed:",
+                  error,
+                ),
+              );
             }
             return;
           }
-          useWindowStore.getState().updateAppState(win.id, {
+          updateBrowserTabInStore(win.id, tab.tabId, {
             isController: true,
             leaseToken: response.leaseToken,
           });
-          const focused = input.handlePointerDown(pending.down) &&
+          const focused =
+            input.handlePointerDown(pending.down) &&
             (!pending.move || input.handlePointerMove(pending.move)) &&
             (!pending.up || input.handlePointerUp(pending.up));
           pending.replayed = true;
-          if (!focused || !input.completeControlHandoff(handoff, () => {
-            if (pendingPointerRef.current === pending) pendingPointerRef.current = null;
-            controlSocket?.removeEventListener("close", handleControlClose);
-          })) {
+          if (
+            !focused ||
+            !input.completeControlHandoff(handoff, () => {
+              if (pendingPointerRef.current === pending)
+                pendingPointerRef.current = null;
+              controlSocket?.removeEventListener("close", handleControlClose);
+            })
+          ) {
             cancelPendingGesture();
             input.releaseAllHeldInput();
-            useWindowStore.getState().updateAppState(win.id, {
-              isController: false, leaseToken: undefined,
+            updateBrowserTabInStore(win.id, tab.tabId, {
+              isController: false,
+              leaseToken: undefined,
             });
-            void releaseBrowserControl(owner, sessionId, { leaseToken: response.leaseToken })
-              .catch((error) => console.warn("[BrowserStream] Unused control release failed:", error));
+            void releaseBrowserControl(liveOwner, sessionId, {
+              leaseToken: response.leaseToken,
+            }).catch((error) =>
+              console.warn(
+                "[BrowserStream] Unused control release failed:",
+                error,
+              ),
+            );
           }
         })
         .catch((error) => {
           if (pendingPointerRef.current === pending) {
             cancelPendingGesture();
-            setControlError(error instanceof BrowserHostClientError && error.status === 409
-              ? "Browser control is held by another viewer"
-              : "Browser control could not be acquired");
+            setControlError(
+              error instanceof BrowserHostClientError && error.status === 409
+                ? "Browser control is held by another viewer"
+                : "Browser control could not be acquired",
+            );
           }
-          console.warn("[BrowserStream] Click control acquisition failed:", error);
+          console.warn(
+            "[BrowserStream] Click control acquisition failed:",
+            error,
+          );
         });
     },
-    [owner, win.id, cancelPendingGesture],
+    [win.id, tab.tabId, canPlayAudio, cancelPendingGesture, ensurePcmPlayer],
   );
-  const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-    const pending = pendingPointerRef.current;
-    if (pending && !pending.replayed) {
-      if (pending.pointerId === e.pointerId) pending.up = snapshotBrowserPointer(e);
-      return;
-    }
-    inputControllerRef.current?.handlePointerUp(e);
-  }, []);
 
-  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-    const pending = pendingPointerRef.current;
-    if (pending && !pending.replayed) {
-      if (pending.pointerId === e.pointerId) pending.move = snapshotBrowserPointer(e);
-      return;
-    }
-    inputControllerRef.current?.handlePointerMove(e);
-  }, []);
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const pending = pendingPointerRef.current;
+      if (pending && !pending.replayed) {
+        if (pending.pointerId === e.pointerId)
+          pending.up = snapshotBrowserPointer(e);
+        return;
+      }
+      inputControllerRef.current?.handlePointerUp(e);
+    },
+    [],
+  );
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const pending = pendingPointerRef.current;
+      if (pending && !pending.replayed) {
+        if (pending.pointerId === e.pointerId)
+          pending.move = snapshotBrowserPointer(e);
+        return;
+      }
+      inputControllerRef.current?.handlePointerMove(e);
+    },
+    [],
+  );
 
   const handlePointerCancel = useCallback(() => {
     cancelPendingGesture();
@@ -1444,9 +2042,12 @@ function ParkedBrowserStreamItem({
     inputControllerRef.current?.handleWheel(e);
   }, []);
 
-  const handleContextMenu = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-  }, []);
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      e.preventDefault();
+    },
+    [],
+  );
 
   if (!hostEl) return null;
 
@@ -1466,8 +2067,28 @@ function ParkedBrowserStreamItem({
         controller={inputController}
         onBlur={cancelPendingGesture}
       />
+      {viewerCapacityError && (
+        <div
+          role="alert"
+          data-testid={`browser-viewer-capacity-error-${win.id}-${tab.tabId}`}
+          className="absolute top-0 inset-x-0 bg-amber-900/90 p-2 text-xs text-amber-100 flex items-center justify-between gap-2 pointer-events-auto"
+        >
+          <span>{viewerCapacityError}</span>
+          <button
+            type="button"
+            data-testid={`browser-viewer-retry-btn-${win.id}-${tab.tabId}`}
+            onClick={() => setRetryNonce((n) => n + 1)}
+            className="px-2 py-0.5 rounded bg-amber-700 hover:bg-amber-600 text-white font-medium"
+          >
+            Retry stream
+          </button>
+        </div>
+      )}
       {controlError && (
-        <div role="alert" className="absolute bottom-0 inset-x-0 bg-black/80 p-2 text-xs text-white pointer-events-none">
+        <div
+          role="alert"
+          className="absolute bottom-0 inset-x-0 bg-black/80 p-2 text-xs text-white pointer-events-none"
+        >
           {controlError}
         </div>
       )}
@@ -1496,11 +2117,19 @@ export function BrowserStreamKeepAliveHost() {
     setParkingEl(parkingRef.current);
   }, []);
 
-  const browserWindows = useMemo(
-    () =>
-      Object.values(sessionWindows).filter((w) => w.appId === "browser"),
-    [sessionWindows],
-  );
+  const browserWindowTabs = useMemo(() => {
+    const items: { window: OsWindow; tab: BrowserTabRuntime }[] = [];
+    for (const win of Object.values(sessionWindows)) {
+      if (win.appId !== "browser" || !win.appState) continue;
+      const appState = win.appState as unknown as BrowserWindowState;
+      if (!Array.isArray(appState.tabs)) continue;
+      for (const tab of appState.tabs) {
+        if (!tab || typeof tab.tabId !== "string" || !tab.tabId) continue;
+        items.push({ window: win, tab });
+      }
+    }
+    return items;
+  }, [sessionWindows]);
 
   return (
     <div
@@ -1520,22 +2149,14 @@ export function BrowserStreamKeepAliveHost() {
       }}
     >
       {parkingEl &&
-        browserWindows.map((win) => {
-          if (
-            (win.appState?.presentation as { kind?: string } | undefined)?.kind ===
-              "choose-target" ||
-            (!win.appState?.url && !win.appState?.sessionId)
-          ) {
-            return null;
-          }
-          return (
-            <ParkedBrowserStreamItem
-              key={win.id}
-              window={win}
-              parkingHost={parkingEl}
-            />
-          );
-        })}
+        browserWindowTabs.map(({ window: win, tab }) => (
+          <ParkedBrowserStreamItem
+            key={browserTabSlotKey(win.id, tab.tabId)}
+            window={win}
+            tab={tab}
+            parkingHost={parkingEl}
+          />
+        ))}
     </div>
   );
 }
