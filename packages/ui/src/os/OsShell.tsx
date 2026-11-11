@@ -71,11 +71,18 @@ import {
 import {
   BROWSER_RECOVERY_STORAGE_KEY,
   loadBrowserRecoveryDisk,
+  resetAddressSuppression,
   withBrowserRecoveryLock,
 } from "./browser/browser-recovery-store.js";
 import { restoreClosingGatesFromRecovery } from "./browser/browser-close-lifecycle.js";
 import { processWithheldCleanups } from "./browser/browser-create-lifecycle.js";
-import { extractBrowserOwnerScopeFromSnapshot } from "./browser/browser-owner-scope.js";
+import {
+  captureVerifiedBrowserOwner,
+  extractBrowserOwnerScopeFromSnapshot,
+  isCapturedBrowserOwnerCurrent,
+} from "./browser/browser-owner-scope.js";
+import { createBlankBrowserTab, createInitialBrowserWindowState } from "./browser/browser-tab-state.js";
+import { normalizeBrowserCommittedUrl } from "./browser/browser-url-normalization.js";
 import { recoverDurableLaunchRecordsOnStartup } from "./recipes/launch-records.js";
 import { generateUUID } from "@/lib/utils.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
@@ -457,6 +464,48 @@ export function OsShell() {
   useEffect(() => {
     const getPlacement = () =>
       useSettingsStore.getState().defaultWindowPlacement ?? "float";
+    const openCanonicalBrowserIntentWindow = async (targetProfileId: string, rawUrl: string) => {
+      const validUrl = normalizeBrowserCommittedUrl(rawUrl);
+      const verified = captureVerifiedBrowserOwner(targetProfileId);
+      const id = `browser-${generateUUID().slice(0, 8)}`;
+      if (!validUrl) {
+        const tab = createBlankBrowserTab();
+        const appState = createInitialBrowserWindowState({
+          ...(verified ? { ownerScope: verified.scope } : {}),
+          tabs: [tab],
+          activeTabId: tab.tabId,
+        });
+        openWindow(
+          { id, appId: "browser", title: "Browser Preview", ctx: { profileId: targetProfileId }, mode: getPlacement(), appState: appState as unknown as Record<string, unknown> },
+          useWindowStore.getState().session.activeDesktopId,
+        );
+        return { status: "handled" as const, targetWindowId: id };
+      }
+      if (!verified) {
+        return { status: "unhandled" as const, reason: "Profile must be connected and verified before opening a browser URL" };
+      }
+      const capturedGen = verified.owner.generation;
+      const capturedScope = verified.scope;
+      try { await resetAddressSuppression(capturedScope); } catch (err) {
+        return { status: "unhandled" as const, reason: err instanceof Error ? err.message : "Browser recovery unavailable" };
+      }
+      if (!isCapturedBrowserOwnerCurrent(verified.owner, capturedScope) || getConnectionSnapshot(targetProfileId)?.owner.generation !== capturedGen) {
+        return { status: "unhandled" as const, reason: "Connection changed or disconnected before opening browser URL" };
+      }
+      const creationKey = generateUUID();
+      const tab = {
+        ...createBlankBrowserTab({ draftValue: validUrl, dirty: false }),
+        committedUrl: validUrl,
+        phase: "creating" as const,
+        createIntent: { operationId: generateUUID(), creationKey, request: { creationKey, url: validUrl, viewport: { width: 1280, height: 800, dpr: 1 } } },
+      };
+      const appState = createInitialBrowserWindowState({ ownerScope: capturedScope, tabs: [tab], activeTabId: tab.tabId });
+      openWindow(
+        { id, appId: "browser", title: "Browser Preview", ctx: { profileId: targetProfileId, generation: capturedGen }, mode: getPlacement(), appState: appState as unknown as Record<string, unknown> },
+        useWindowStore.getState().session.activeDesktopId,
+      );
+      return { status: "handled" as const, targetWindowId: id };
+    };
 
     const unregisterList: Array<() => void> = [
       registerIntentHandler("terminal:open", async (intent) => {
@@ -729,36 +778,8 @@ export function OsShell() {
         );
         return { status: "handled", targetWindowId: id };
       }),
-      registerIntentHandler("browser:open", (intent) => {
-        const id = `browser-${generateUUID().slice(0, 8)}`;
-        openWindow(
-          {
-            id,
-            appId: "browser",
-            title: "Browser Preview",
-            ctx: { profileId: intent.payload.profileId },
-            mode: getPlacement(),
-            appState: { url: intent.payload.url },
-          },
-          useWindowStore.getState().session.activeDesktopId,
-        );
-        return { status: "handled", targetWindowId: id };
-      }),
-      registerIntentHandler("browser:preview", (intent) => {
-        const id = `browser-${generateUUID().slice(0, 8)}`;
-        openWindow(
-          {
-            id,
-            appId: "browser",
-            title: "Browser Preview",
-            ctx: { profileId: intent.payload.profileId },
-            mode: getPlacement(),
-            appState: { url: intent.payload.url },
-          },
-          useWindowStore.getState().session.activeDesktopId,
-        );
-        return { status: "handled", targetWindowId: id };
-      }),
+      registerIntentHandler("browser:open", (intent) => openCanonicalBrowserIntentWindow(intent.payload.profileId, intent.payload.url)),
+      registerIntentHandler("browser:preview", (intent) => openCanonicalBrowserIntentWindow(intent.payload.profileId, intent.payload.url)),
       registerIntentHandler("conflict:resolve", (intent) => {
         const targetCtx: WindowContext = {
           profileId: intent.payload.profileId,

@@ -203,4 +203,73 @@ describe("recipes schema validation", () => {
       expect(res.errors[0]).toContain("Malformed JSON");
     }
   });
+
+  it("warns about plaintext ordinary browser addresses including query/hash and strips injected authority on validate/export", () => {
+    expect(RECIPE_EXPORT_WARNING).toContain("ordinary browser addresses");
+    const withBrowser = {
+      ...validRecipe(),
+      appSteps: [
+        ...validRecipe().appSteps,
+        {
+          key: "browser-app",
+          appId: "browser" as const,
+          appState: {
+            browserStateVersion: 1,
+            ownerScope: { profileId: "evil", endpoint: "https://evil.test", principal: "mallory", namespace: "prod" },
+            tabs: [
+              { tabId: "t1", kind: "ordinary", committedUrl: "https://app.test/view?tok=1#sec", sessionId: "sess-injected" },
+              { tabId: "p1", kind: "popup", committedUrl: "https://oauth.secret.test/cb", sessionId: "pop-1" },
+            ],
+            activeTabId: "p1",
+          },
+        },
+      ],
+      layout: {
+        tree: {
+          type: "pane" as const,
+          id: "pane-1",
+          items: ["api-term", "web-term", "editor-app", "browser-app"],
+          active: "api-term",
+        },
+        floating: [],
+      },
+    };
+    const validated = validateRecipeV1(withBrowser);
+    expect(validated.valid).toBe(true);
+    if (validated.valid) {
+      const bStep = validated.recipe.appSteps.find((s) => s.appId === "browser");
+      expect(bStep?.appState).toEqual({
+        browserStateVersion: 1,
+        tabs: [{ tabId: "t1", committedUrl: "https://app.test/view?tok=1#sec" }],
+        activeTabId: "t1",
+      });
+      const exported = exportRecipeJson(validated.recipe);
+      expect(exported.json).not.toContain("sess-injected");
+      expect(exported.json).not.toContain("oauth.secret.test");
+      expect(exported.json).not.toContain("mallory");
+    }
+
+    // Legacy URL-only conversion at input only
+    const legacy = {
+      ...validRecipe(),
+      appSteps: [{ key: "browser-leg", appId: "browser" as const, appState: { url: "https://legacy.test/a?b=2#c" } }],
+      layout: { tree: { type: "pane" as const, id: "p", items: ["api-term", "browser-leg"] }, floating: [] },
+    };
+    const legRes = validateRecipeV1(legacy);
+    expect(legRes.valid).toBe(true);
+    if (legRes.valid) {
+      expect(legRes.recipe.appSteps[0]?.appState).toMatchObject({
+        browserStateVersion: 1,
+        tabs: [{ committedUrl: "https://legacy.test/a?b=2#c" }],
+      });
+    }
+
+    // Rejects corrupt browserStateVersion
+    const badVer = {
+      ...validRecipe(),
+      appSteps: [{ key: "browser-bad", appId: "browser" as const, appState: { browserStateVersion: 99, tabs: [] } }],
+      layout: { tree: { type: "pane" as const, id: "p", items: ["api-term", "browser-bad"] }, floating: [] },
+    };
+    expect(validateRecipeV1(badVer).valid).toBe(false);
+  });
 });

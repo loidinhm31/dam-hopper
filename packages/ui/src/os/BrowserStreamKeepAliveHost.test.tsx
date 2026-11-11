@@ -311,6 +311,7 @@ import {
   updateBrowserStreamSlot,
 } from "./BrowserStreamKeepAliveHost.js";
 import { countRetainedNativeReferences } from "./browser/browser-native-reference-census.js";
+import { clearBrowserControlGateForTesting, runSerializedBrowserControlAcquire } from "./browser/browser-control-gate.js";
 
 const snapshot: BrowserSessionDto = {
   browserSessionId: "session-1",
@@ -376,6 +377,7 @@ beforeEach(async () => {
   localStorage.clear();
   clearClosingGatesForTesting();
   clearPopupTabStateForTesting();
+  clearBrowserControlGateForTesting();
   Object.defineProperty(navigator, "locks", {
     configurable: true,
     value: {
@@ -1295,5 +1297,33 @@ describe("browser first pointer gesture control handoff & popup tabs", () => {
     fenceBrowserViewsForProfile(owner.profileId, "Reset", owner.generation);
     expect(pcmPlayerMocks.flush).toHaveBeenCalled();
     expect(browserTabSlotKey("window-1", "tab-1")).toBe('["window-1","tab-1"]');
+  });
+
+  it("serializes pointerdown behind an in-flight toolbar acquisition and reuses toolbar lease without double-acquiring", async () => {
+    const toolbarGate = Promise.withResolvers<void>();
+    const viewerId = "viewer-profile-1-session-1";
+    const toolbarTask = runSerializedBrowserControlAcquire(owner, "session-1", viewerId, async () => {
+      await toolbarGate.promise;
+      patchTabInTest("tab-1", { isController: true, leaseToken: "lease-toolbar" });
+    });
+
+    await act(async () => {
+      clickCanvas();
+      typeText("after-toolbar");
+    });
+    expect(acquireControl).not.toHaveBeenCalled();
+
+    await act(async () => {
+      toolbarGate.resolve();
+      await toolbarTask;
+    });
+    await act(async () => vi.runAllTimersAsync());
+    expect(acquireControl).not.toHaveBeenCalled();
+    expect(readTab("tab-1").leaseToken).toBe("lease-toolbar");
+    expect(sentInput().map((m) => m.event)).toEqual([
+      { kind: "pointerDown", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "pointerUp", button: "left", u: 0.5, v: 0.5, modifiers: 0 },
+      { kind: "insertText", text: "after-toolbar" },
+    ]);
   });
 });

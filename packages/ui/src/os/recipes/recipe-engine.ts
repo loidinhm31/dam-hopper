@@ -28,6 +28,7 @@ import {
   collectDesktopWindowIds,
   evaluateSourceWindow,
 } from "./recipe-source-context.js";
+import { sanitizeBrowserRecipeAppState } from "./schema.js";
 
 /**
  * Calculates matching and excluded windows for the chosen server/profile + project.
@@ -248,8 +249,9 @@ export function buildRecipeFromDesktopSubset(
       });
     } else {
       let sanitizedState = win.appState ? { ...win.appState } : undefined;
-      if (win.appId === "browser" && sanitizedState) {
-        sanitizedState = typeof sanitizedState.url === "string" ? { url: sanitizedState.url } : undefined;
+      if (win.appId === "browser") {
+        const projected = sanitizeBrowserRecipeAppState(win.appState);
+        sanitizedState = projected.ok ? projected.appState : undefined;
       }
       appSteps.push({
         key: m.stepKey,

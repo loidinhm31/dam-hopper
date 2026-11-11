@@ -1,6 +1,6 @@
 # Phase 04 — Native chrome and launch cutover
 
-Priority P2 · Pending · 10h (6h chrome, 4h launch/recipes). Owner: BrowserIntegrator, sequential edits. Depends on phase 03. [Design](design.md) sections 3–6; acceptance A02/A05/A06/A09–A15. All source paths below under `packages/ui/src/`.
+Priority P2 · DONE (completed, 2026-11-11) · 10h (6h chrome, 4h launch/recipes). Owner: BrowserIntegrator, sequential edits. Depends on phase 03. [Design](design.md) sections 3–6; acceptance A02/A05/A06/A09–A15. All source paths below under `packages/ui/src/`.
 
 ## compose-native-browser-chrome
 1. In `os/apps/BrowserApp.tsx`, replace whole-window chooser/flat session lookup and session-swap banners with canonical tab shell. Keep existing selection/terminal handoff logic with exact active-tab scope. Remove obsolete chooser Cancel→window-close behavior and old popup swap actions. Do not blanket-rewrite remaining large module.
@@ -96,5 +96,18 @@ All production Browser state writers use one canonical schema and every visible 
 ]
 ```
 
-- [ ] <!-- evcrate-task:compose-native-browser-chrome --> Compose native tab chrome, address drafts and recovery controls
-- [ ] <!-- evcrate-task:cutover-browser-launch-recipes --> Cut over every Browser launch, deep-link and recipe producer
+- [x] <!-- evcrate-task:compose-native-browser-chrome --> Compose native tab chrome, address drafts and recovery controls
+- [x] <!-- evcrate-task:cutover-browser-launch-recipes --> Cut over every Browser launch, deep-link and recipe producer
+
+### Progress note (2026-11-11)
+- Phase 04 status: **DONE (`completed`, 2026-11-11)**. Both tasks (`compose-native-browser-chrome`, `cutover-browser-launch-recipes`) completed and verified; Phase 05 (`phase-05-qualification-and-docs.md`) unblocked.
+- Implementation:
+  - Native tab chrome & navigation (`packages/ui/src/os/apps/BrowserApp.tsx`, `os/os.css`, `os/browser/browser-tab-strip.tsx`, `browser-address-bar.tsx`, `browser-new-tab-page.tsx`, `browser-navigation.ts`, `browser-tools.tsx`, `browser-recovery-panel.tsx`, `browser-control-gate.ts`): replaced whole-window chooser/session-swap UX with canonical tab shell, roving ARIA tab strip, compact address bar, shared in-tab New Tab draft, per-tab single-flight navigation/CAS handling, scoped tools/selection/clear controls, owner-verified cross-profile recovery inventory/acknowledgment UI, shared toolbar/canvas control acquisition serialization (`runSerializedBrowserControlAcquire`), and static allowlist diagnostic sanitization (`sanitizeBrowserError`).
+  - Launch, deep-link, and recipe callers (`packages/ui/src/os/action-executor.ts`, `OsShell.tsx`, `deep-links.ts`, `recipes/recipe-engine.ts`, `recipes/schema.ts`, and unit test suites): cut over existing-window focus and locked single-consume group restore, explicit URL suppression resets, blank New Window and missing-URL deep-link initialization, and portable committed-tab recipe projection without app-step execution changes.
+- Code review: Cycle 1 (**5/10**, 2 Critical) -> Cycle 2 (**7/10**, 0 Critical) -> Cycle 3 (**8/10**, 0 Critical) -> Cycle 3 fixes applied (`browser-control-gate.ts` shared serialization, `BrowserApp.tsx` typing, `sanitizeBrowserError` static allowlists, `BrowserStreamKeepAliveHost.test.tsx` pointer serialization test) & verified -> **User approved after 3 review cycles**. Remaining test-oracle polish, real two-document interleaving, and retained-selection browser checks tracked into Phase 05.
+- Validation (`Phase04TesterCycle4Clean`, PASS):
+  - `pnpm --filter @dam-hopper/ui build` (`tsc -p tsconfig.json`): exit 0 (0 diagnostics).
+  - `pnpm --filter @dam-hopper/web build` (`stage:browser-extension` + `vite build`): exit 0 (6120 modules).
+  - `pnpm --filter @dam-hopper/ui test` (`vitest run`): exit 0 — **396/396 files passed, 3877/3877 tests passed, 0 failed, 0 skipped**.
+  - Verbose 7-file check (`pnpm --filter @dam-hopper/ui exec vitest run --reporter=verbose src/os/apps/BrowserApp.test.tsx src/os/browser/browser-navigation.test.ts src/os/action-executor.test.ts src/os/deep-links.test.ts src/os/recipes/schema.test.ts src/os/recipes/recipe-engine.test.ts src/os/BrowserStreamKeepAliveHost.test.tsx`): exit 0 — **7/7 files passed, 113/113 tests passed, 0 failed, 0 skipped** (`BrowserApp.test.tsx` 19/19, `browser-navigation.test.ts` 7/7, `action-executor.test.ts` 12/12, `deep-links.test.ts` 23/23, `schema.test.ts` 9/9, `recipe-engine.test.ts` 12/12, `BrowserStreamKeepAliveHost.test.tsx` 31/31).
+- Boundary: Phase 05 (`author-browser-qualification`, `verify-browser-acceptance`, `reconcile-browser-docs`), integrated Chromium browser-mode (`vitest.browser.config.ts`) and Playwright E2E (`e2e/**`) runs, real two-document/server-restart/audio/visual journeys, mandatory colocated human visual receipt (`packages/ui/e2e/os-host-browser/tabs-visual/review.md`), Gate 2 docs reconciliation, `pnpm lint`, and `cargo test` remain pending and unexecuted.

@@ -45,6 +45,7 @@ import type {
   ServerControlEvent,
 } from "../api/browser-host-types.js";
 import type { OsWindow } from "./types.js";
+import { runSerializedBrowserControlAcquire } from "./browser/browser-control-gate.js";
 import {
   browserTabSlotKey,
   findBrowserTab,
@@ -1882,6 +1883,8 @@ function ParkedBrowserStreamItem({
         viewportEpoch: latest.tab.snapshot.viewportEpoch,
         browserIncarnation: latest.tab.snapshot.browserIncarnation,
         profileEpoch: latest.tab.snapshot.profileEpoch,
+        isController: Boolean(latest.tab.isController),
+        leaseToken: latest.tab.leaseToken,
         subscriptionEpoch:
           streamControllerRef.current?.getCurrentSubscriptionEpoch(),
       };
@@ -1892,36 +1895,36 @@ function ParkedBrowserStreamItem({
         down: snapshotBrowserPointer(e),
       };
       pendingPointerRef.current = pending;
+      let acquiredLeaseToken: string | undefined;
+      const isGestureBaseValid = (current: { appState: { activeTabId: string }; tab: { phase: string; snapshot?: { status?: string; inputAvailable?: boolean; navigationRevision: string; viewportEpoch: string; browserIncarnation: string; profileEpoch: string }; sessionId?: string; viewerId?: string; actionSequence: number } } | null) =>
+        pendingPointerRef.current === pending &&
+        pointerVisibleRef.current &&
+        isCurrentConnection(liveOwner) &&
+        canStreamTabRef.current(currentAttachedCredsRef.current ?? undefined) &&
+        Boolean(textInputProxyRef.current?.isFocused()) &&
+        inputControllerRef.current === input &&
+        Boolean(current) &&
+        current!.appState.activeTabId === tab.tabId &&
+        current!.tab.phase === "live" &&
+        current!.tab.snapshot?.status === "running" &&
+        Boolean(current!.tab.snapshot.inputAvailable) &&
+        current!.tab.sessionId === sessionId &&
+        current!.tab.viewerId === viewerId &&
+        current!.tab.actionSequence === provenance.actionSequence &&
+        String(current!.tab.snapshot.navigationRevision) === String(provenance.navigationRevision) &&
+        String(current!.tab.snapshot.viewportEpoch) === String(provenance.viewportEpoch) &&
+        current!.tab.snapshot.browserIncarnation === provenance.browserIncarnation &&
+        String(current!.tab.snapshot.profileEpoch) === String(provenance.profileEpoch) &&
+        streamControllerRef.current?.getCurrentSubscriptionEpoch() === provenance.subscriptionEpoch &&
+        streamControllerRef.current?.getControlSocket() === controlSocket;
       const isCurrentGesture = () => {
         const current = readBrowserWindowAndTab(win.id, tab.tabId);
         return (
-          pendingPointerRef.current === pending &&
-          pointerVisibleRef.current &&
-          isCurrentConnection(liveOwner) &&
-          canStreamTabRef.current(
-            currentAttachedCredsRef.current ?? undefined,
-          ) &&
-          Boolean(textInputProxyRef.current?.isFocused()) &&
-          inputControllerRef.current === input &&
-          Boolean(current) &&
-          current!.appState.activeTabId === tab.tabId &&
-          current!.tab.phase === "live" &&
-          current!.tab.snapshot?.status === "running" &&
-          Boolean(current!.tab.snapshot.inputAvailable) &&
-          current!.tab.sessionId === sessionId &&
-          current!.tab.viewerId === viewerId &&
-          current!.tab.actionSequence === provenance.actionSequence &&
-          String(current!.tab.snapshot.navigationRevision) ===
-            String(provenance.navigationRevision) &&
-          String(current!.tab.snapshot.viewportEpoch) ===
-            String(provenance.viewportEpoch) &&
-          current!.tab.snapshot.browserIncarnation ===
-            provenance.browserIncarnation &&
-          String(current!.tab.snapshot.profileEpoch) ===
-            String(provenance.profileEpoch) &&
-          streamControllerRef.current?.getCurrentSubscriptionEpoch() ===
-            provenance.subscriptionEpoch &&
-          streamControllerRef.current?.getControlSocket() === controlSocket
+          isGestureBaseValid(current) &&
+          (acquiredLeaseToken !== undefined
+            ? Boolean(current!.tab.isController) && current!.tab.leaseToken === acquiredLeaseToken
+            : Boolean(current!.tab.isController) === provenance.isController &&
+              current!.tab.leaseToken === provenance.leaseToken)
         );
       };
       const handleControlClose = () => {
@@ -1934,75 +1937,70 @@ function ParkedBrowserStreamItem({
           textInputProxyRef.current?.reset();
         }
       });
-      controlSocket?.addEventListener("close", handleControlClose, {
-        once: true,
-      });
-      void acquireBrowserControl(liveOwner, sessionId, {
-        viewerId,
-        holderKind: "human",
-      })
-        .then((response) => {
+      controlSocket?.addEventListener("close", handleControlClose, { once: true });
+      void runSerializedBrowserControlAcquire(liveOwner, sessionId, viewerId, async () => {
+        const latestInQueue = readBrowserWindowAndTab(win.id, tab.tabId);
+        if (!isGestureBaseValid(latestInQueue)) {
+          if (pendingPointerRef.current === pending) cancelPendingGesture();
+          return;
+        }
+        let leaseTokenToUse: string;
+        let acquiredLocally = false;
+        if (latestInQueue!.tab.isController && latestInQueue!.tab.leaseToken) {
+          leaseTokenToUse = latestInQueue!.tab.leaseToken;
+          acquiredLeaseToken = leaseTokenToUse;
+        } else {
+          if (!isCurrentGesture()) {
+            if (pendingPointerRef.current === pending) cancelPendingGesture();
+            return;
+          }
+          const response = await acquireBrowserControl(liveOwner, sessionId, { viewerId, holderKind: "human" });
           if (!isCurrentGesture()) {
             if (pendingPointerRef.current === pending) cancelPendingGesture();
             if (isCurrentConnection(liveOwner)) {
-              void releaseBrowserControl(liveOwner, sessionId, {
-                leaseToken: response.leaseToken,
-              }).catch((error) =>
-                console.warn(
-                  "[BrowserStream] Abandoned control release failed:",
-                  error,
-                ),
+              void releaseBrowserControl(liveOwner, sessionId, { leaseToken: response.leaseToken }).catch((error) =>
+                console.warn("[BrowserStream] Abandoned control release failed:", error),
               );
             }
             return;
           }
-          updateBrowserTabInStore(win.id, tab.tabId, {
-            isController: true,
-            leaseToken: response.leaseToken,
-          });
-          const focused =
-            input.handlePointerDown(pending.down) &&
-            (!pending.move || input.handlePointerMove(pending.move)) &&
-            (!pending.up || input.handlePointerUp(pending.up));
-          pending.replayed = true;
-          if (
-            !focused ||
-            !input.completeControlHandoff(handoff, () => {
-              if (pendingPointerRef.current === pending)
-                pendingPointerRef.current = null;
-              controlSocket?.removeEventListener("close", handleControlClose);
-            })
-          ) {
-            cancelPendingGesture();
-            input.releaseAllHeldInput();
-            updateBrowserTabInStore(win.id, tab.tabId, {
-              isController: false,
-              leaseToken: undefined,
-            });
-            void releaseBrowserControl(liveOwner, sessionId, {
-              leaseToken: response.leaseToken,
-            }).catch((error) =>
-              console.warn(
-                "[BrowserStream] Unused control release failed:",
-                error,
-              ),
+          acquiredLocally = true;
+          leaseTokenToUse = response.leaseToken;
+          acquiredLeaseToken = leaseTokenToUse;
+          updateBrowserTabInStore(win.id, tab.tabId, { isController: true, leaseToken: leaseTokenToUse });
+        }
+        const focused =
+          input.handlePointerDown(pending.down) &&
+          (!pending.move || input.handlePointerMove(pending.move)) &&
+          (!pending.up || input.handlePointerUp(pending.up));
+        pending.replayed = true;
+        if (
+          !focused ||
+          !input.completeControlHandoff(handoff, () => {
+            if (pendingPointerRef.current === pending) pendingPointerRef.current = null;
+            controlSocket?.removeEventListener("close", handleControlClose);
+          })
+        ) {
+          cancelPendingGesture();
+          input.releaseAllHeldInput();
+          if (acquiredLocally) {
+            updateBrowserTabInStore(win.id, tab.tabId, { isController: false, leaseToken: undefined });
+            void releaseBrowserControl(liveOwner, sessionId, { leaseToken: leaseTokenToUse }).catch((error) =>
+              console.warn("[BrowserStream] Unused control release failed:", error),
             );
           }
-        })
-        .catch((error) => {
-          if (pendingPointerRef.current === pending) {
-            cancelPendingGesture();
-            setControlError(
-              error instanceof BrowserHostClientError && error.status === 409
-                ? "Browser control is held by another viewer"
-                : "Browser control could not be acquired",
-            );
-          }
-          console.warn(
-            "[BrowserStream] Click control acquisition failed:",
-            error,
+        }
+      }).catch((error) => {
+        if (pendingPointerRef.current === pending) {
+          cancelPendingGesture();
+          setControlError(
+            error instanceof BrowserHostClientError && error.status === 409
+              ? "Browser control is held by another viewer"
+              : "Browser control could not be acquired",
           );
-        });
+        }
+        console.warn("[BrowserStream] Click control acquisition failed:", error);
+      });
     },
     [win.id, tab.tabId, canPlayAudio, cancelPendingGesture, ensurePcmPlayer],
   );
