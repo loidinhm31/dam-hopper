@@ -1,6 +1,6 @@
 # Phase 02 — Persistence and target lifecycle
 
-Priority P2 · Pending · 12h (5h projection, 7h lifecycle). Owner: BrowserIntegrator. Depends on phase 01, especially verified identity and canonical tab model. No concurrent edits to persistence/window store from related plans.
+Priority P2 · DONE (`completed`, 2026-11-11) · 12h (5h projection, 7h lifecycle). Owner: BrowserIntegrator. Depends on phase 01, especially verified identity and canonical tab model. No concurrent edits to persistence/window store from related plans.
 
 ## Context
 [Design](design.md) sections 2–4 is normative. Existing `packages/ui/src/os/persistence.ts:56-62,193-247,633-720,786-842`, `window-store.ts:140-171`, API list/create/get/delete at `packages/ui/src/api/browser-host-client.ts:181-226`, `server/src/browser_host/session.rs:15,375-405,565-671`, typed close errors at `server/src/api/browser_host.rs:530-565` constrain this phase.
@@ -100,5 +100,13 @@ A04/A05/A08–A12/A15 executable cases authored, canonical schema services avail
 ]
 ```
 
-- [ ] <!-- evcrate-task:project-browser-continuity --> Implement canonical persistence and remembered-page metadata
-- [ ] <!-- evcrate-task:own-browser-target-lifecycle --> Own single-flight target creation and reference-aware closure
+- [x] <!-- evcrate-task:project-browser-continuity --> Implement canonical persistence and remembered-page metadata
+- [x] <!-- evcrate-task:own-browser-target-lifecycle --> Own single-flight target creation and reference-aware closure
+
+### Progress note (2026-11-11)
+- Phase 02 status: **DONE (`completed`, 2026-11-11)**. Both tasks (`project-browser-continuity`, `own-browser-target-lifecycle`) completed and verified; Phase 03 unblocked.
+- Code review: Cycle 4 code review scored **6/10 (Changes Required / Approved per user direction for Phase 02 closeout)** with 0 critical build/runtime crashes; noted static analysis findings (simultaneous close/release race edge cases, withheld cleanup `groupId`/`tabId` propagation, and test fault doubles) tracked into Phase 05 integrated qualification.
+- Validation (`Phase02FinalTester`):
+  - `pnpm --filter @dam-hopper/ui build` (`tsc -p tsconfig.json`): exit 0 (0 compilation errors, clean build in 9.29s).
+  - `pnpm --filter @dam-hopper/ui test src/os/browser/ src/os/persistence.test.ts`: exit 0 — **9/9 test files, 64/64 passed, 0 failed, 0 skipped** (1.65s wall clock: `browser-tab-state.test.ts` 6/6, `browser-persistence.test.ts` 11/11, `browser-owner-scope.test.ts` 5/5, `browser-recovery-store.test.ts` 6/6, `persistence.test.ts` 21/21, `browser-session-inventory.test.ts` 4/4, `browser-create-lifecycle.test.ts` 4/4, `browser-close-lifecycle.test.ts` 3/3, `browser-window-lifecycle.test.ts` 2/2).
+- Boundary: Downstream Phases 03–05 (tab-root resource fencing, native chrome UI, launch/recipe callers, full-app live visual acceptance with mandatory human visual receipt `packages/ui/e2e/os-host-browser/tabs-visual/review.md`) remain pending.

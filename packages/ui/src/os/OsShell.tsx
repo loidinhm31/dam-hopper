@@ -68,6 +68,14 @@ import {
   saveOsSession,
   type PersistenceNotice,
 } from "./persistence.js";
+import {
+  BROWSER_RECOVERY_STORAGE_KEY,
+  loadBrowserRecoveryDisk,
+  withBrowserRecoveryLock,
+} from "./browser/browser-recovery-store.js";
+import { restoreClosingGatesFromRecovery } from "./browser/browser-close-lifecycle.js";
+import { processWithheldCleanups } from "./browser/browser-create-lifecycle.js";
+import { extractBrowserOwnerScopeFromSnapshot } from "./browser/browser-owner-scope.js";
 import { recoverDurableLaunchRecordsOnStartup } from "./recipes/launch-records.js";
 import { generateUUID } from "@/lib/utils.js";
 import { useServerProfile } from "@/hooks/use-server-profile.js";
@@ -191,41 +199,98 @@ export function OsShell() {
     ingestIpcActivityEvent(e);
   });
 
+  const [hydrated, setHydrated] = useState(false);
+
   // Initial load
   useEffect(() => {
+    let cancelled = false;
     recoverDurableLaunchRecordsOnStartup();
-    const loaded = loadOsSession(undefined, setNotice);
-    setSession(loaded);
+    void loadOsSession(undefined, setNotice).then((loaded) => {
+      if (!cancelled) {
+        setSession(loaded);
+        restoreClosingGatesFromRecovery();
+        setHydrated(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [setSession]);
 
   // Autosave
   const prevWindowCountRef = useRef(Object.keys(session.windows).length);
   useEffect(() => {
+    if (!hydrated) return;
     const currentWindowCount = Object.keys(session.windows).length;
     const delay = currentWindowCount < prevWindowCountRef.current ? 0 : 300;
     prevWindowCountRef.current = currentWindowCount;
     const timer = window.setTimeout(() => {
-      saveOsSession(session, undefined, setNotice);
+      void saveOsSession(session, undefined, setNotice);
     }, delay);
     return () => {
       clearTimeout(timer);
     };
-  }, [session]);
+  }, [session, hydrated]);
 
   useEffect(() => {
+    if (!hydrated) return;
     const handleFlush = () => {
-      saveOsSession(useWindowStore.getState().session);
+      void saveOsSession(useWindowStore.getState().session, undefined, setNotice);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        void saveOsSession(useWindowStore.getState().session, undefined, setNotice);
+      }
     };
     window.addEventListener("beforeunload", handleFlush);
     window.addEventListener("pagehide", handleFlush);
+    document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       window.removeEventListener("beforeunload", handleFlush);
       window.removeEventListener("pagehide", handleFlush);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [hydrated]);
+
+  // Recovery storage event notification: locked reread of suppression/notices only
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === BROWSER_RECOVERY_STORAGE_KEY) {
+        void withBrowserRecoveryLock(() => {
+          const disk = loadBrowserRecoveryDisk();
+          restoreClosingGatesFromRecovery(disk);
+          const hasUnknown = disk.operations.some((op) => op.status === "unknown");
+          if (hasUnknown) {
+            setNotice({
+              kind: "storage-error",
+              message: "One or more browser target operations are in an unresolved recovery state",
+            });
+          }
+        }).catch((err: unknown) => {
+          setNotice({
+            kind: "storage-error",
+            message: `Failed to refresh browser recovery state: ${String(err)}`,
+          });
+        });
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
     };
   }, []);
+  // Process withheld late-create cleanups when connection scope becomes active
+  useEffect(() => {
+    if (connectionSnap?.status === "connected") {
+      const scope = extractBrowserOwnerScopeFromSnapshot(connectionSnap);
+      if (scope) {
+        processWithheldCleanups(scope, connectionSnap.owner);
+      }
+    }
+  }, [connectionSnap]);
   // Handle /os deep links once intent handlers are registered and ready
   useEffect(() => {
-    if (!handlersReady) return;
+    if (!hydrated || !handlersReady) return;
     if (typeof window === "undefined" || !window.location.search) return;
     if (lastProcessedSearchRef.current === window.location.search) return;
 
@@ -326,8 +391,8 @@ export function OsShell() {
       }
     }
   }, [
+    hydrated,
     handlersReady,
-    openWindow,
     focusWindow,
     restoreWindow,
     profileId,

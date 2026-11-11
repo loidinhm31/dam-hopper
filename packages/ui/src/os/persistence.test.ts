@@ -19,21 +19,28 @@ import {
   saveOsSession,
   validateOsSession,
 } from "./persistence.js";
+import type { BrowserWindowDisk } from "./browser/browser-tab-types.js";
 import { createDefaultOsSession, openWindow } from "./window-ops.js";
 
 describe("persistence", () => {
   beforeEach(() => {
     localStorage.clear();
     resumeAutosave();
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: async (_name: string, _opts: unknown, callback: () => Promise<unknown>) => callback(),
+      },
+    });
   });
 
-  it("loads a default session when localStorage is empty", () => {
-    const session = loadOsSession();
+  it("loads a default session when localStorage is empty", async () => {
+    const session = await loadOsSession();
     expect(session.schema).toBe(1);
     expect(session.desktops.length).toBe(1);
   });
 
-  it("saves and reloads a session roundtrip", () => {
+  it("saves and reloads a session roundtrip", async () => {
     let session = createDefaultOsSession("d1", "Main");
     session = openWindow(session, {
       id: "w1",
@@ -43,15 +50,14 @@ describe("persistence", () => {
       mode: "tile",
     });
 
-    const saved = saveOsSession(session);
+    const saved = await saveOsSession(session);
     expect(saved).toBe(true);
 
-    const reloaded = loadOsSession();
+    const reloaded = await loadOsSession();
     expect(reloaded.schema).toBe(1);
     expect(reloaded.windows["w1"]).toBeDefined();
     expect(reloaded.windows["w1"].appId).toBe("terminals");
   });
-
   it("sanitizes appState to only allowlisted view fields", () => {
     let session = createDefaultOsSession("d1", "Main");
     session = openWindow(session, {
@@ -155,11 +161,11 @@ describe("persistence", () => {
     });
   });
 
-  it("suspends autosave and preserves corrupt bytes when JSON is malformed", () => {
+  it("suspends autosave and preserves corrupt bytes when JSON is malformed", async () => {
     const noticeHandler = vi.fn();
     localStorage.setItem(OS_SESSION_STORAGE_KEY, "not-valid-json{[[");
 
-    const session = loadOsSession(OS_SESSION_STORAGE_KEY, noticeHandler);
+    const session = await loadOsSession(OS_SESSION_STORAGE_KEY, noticeHandler);
     expect(session.schema).toBe(1);
     expect(isAutosaveSuspended()).toBe(true);
     expect(getPreservedCorruptBytes()).toBe("not-valid-json{[[");
@@ -167,7 +173,7 @@ describe("persistence", () => {
       expect.objectContaining({ kind: "corrupt-data" }),
     );
 
-    const saveAttempt = saveOsSession(session);
+    const saveAttempt = await saveOsSession(session);
     expect(saveAttempt).toBe(false);
 
     resumeAutosave();
@@ -308,7 +314,7 @@ describe("persistence", () => {
     expect(validateOsSession(valid).valid).toBe(false);
   });
 
-  it("roundtrips desktop defaultCtx with worktreeId", () => {
+  it("roundtrips desktop defaultCtx with worktreeId", async () => {
     const session = createDefaultOsSession("d1", "Main");
     session.desktops[0].defaultCtx = {
       profileId: "p1",
@@ -323,8 +329,8 @@ describe("persistence", () => {
       worktreeId: "wt-feature-login",
     });
 
-    saveOsSession(session);
-    const reloaded = loadOsSession();
+    await saveOsSession(session);
+    const reloaded = await loadOsSession();
     expect(reloaded.desktops[0].defaultCtx?.worktreeId).toBe("wt-feature-login");
   });
 
@@ -424,7 +430,7 @@ describe("persistence", () => {
     unregister();
   });
 
-  it("explicitly strips runtimeIdentity and protected Review tuple fields from persistence and imports", () => {
+  it("explicitly strips runtimeIdentity and protected Review tuple fields from persistence and imports", async () => {
     let session = createDefaultOsSession("d1", "Main");
     session = openWindow(session, {
       id: "w-term",
@@ -503,8 +509,8 @@ describe("persistence", () => {
     expect(sanitized.windows["w-review"].appState).toBeUndefined();
 
     // Save and load roundtrip
-    saveOsSession(session);
-    const reloaded = loadOsSession();
+    await saveOsSession(session);
+    const reloaded = await loadOsSession();
     expect(reloaded.windows["w-term"].runtimeIdentity).toBeUndefined();
     expect(reloaded.windows["w-review"].runtimeIdentity).toBeUndefined();
     expect(reloaded.windows["w-review"].appState).toBeUndefined();
@@ -540,5 +546,87 @@ describe("persistence", () => {
     const sanitizedImport = importOsSessionJson(maliciousJson);
     expect(sanitizedImport.success).toBe(true);
     expect(sanitizedImport.session?.windows["w-term"].runtimeIdentity).toBeUndefined();
+  });
+
+  it("roundtrips browser window state with local ownerScope and ordinary tabs", async () => {
+    let session = createDefaultOsSession("d1", "Main");
+    session = openWindow(session, {
+      id: "w-browser",
+      appId: "browser",
+      title: "Browser",
+      ctx: { profileId: "p1" },
+      mode: "tile",
+      appState: {
+        browserStateVersion: 1,
+        ownerScope: {
+          profileId: "p1",
+          endpoint: "https://hub.example.com",
+          principal: "alice",
+          namespace: "prod",
+        },
+        tabs: [
+          {
+            tabId: "tab-1",
+            kind: "ordinary",
+            committedUrl: "https://example.com/docs",
+            sessionId: "sess-1",
+            phase: "live",
+            draft: { value: "https://example.com/docs", dirty: false },
+            actionSequence: 0,
+          },
+          {
+            tabId: "tab-popup",
+            kind: "popup",
+            committedUrl: "https://example.com/popup",
+            sessionId: "sess-2",
+            parentTabId: "tab-1",
+            phase: "live",
+            draft: { value: "", dirty: false },
+            actionSequence: 0,
+          },
+        ],
+        activeTabId: "tab-popup",
+      },
+    });
+
+    const saved = await saveOsSession(session);
+    expect(saved).toBe(true);
+
+    const reloaded = await loadOsSession();
+    const browserWin = reloaded.windows["w-browser"];
+    expect(browserWin).toBeDefined();
+    const state = browserWin.appState as BrowserWindowDisk;
+    expect(state.browserStateVersion).toBe(1);
+    expect(state.tabs).toHaveLength(1); // popup excluded
+    expect(state.tabs[0].tabId).toBe("tab-1");
+    expect(state.tabs[0].committedUrl).toBe("https://example.com/docs");
+    expect(state.tabs[0].sessionId).toBe("sess-1");
+    expect(state.activeTabId).toBe("tab-1"); // remapped from popup
+  });
+
+  it("withholds browser URLs when recovery lock fails on load", async () => {
+    let session = createDefaultOsSession("d1", "Main");
+    session = openWindow(session, {
+      id: "w-browser",
+      appId: "browser",
+      title: "Browser",
+      ctx: { profileId: "p1" },
+      mode: "tile",
+      appState: {
+        browserStateVersion: 1,
+        tabs: [{ tabId: "t1", committedUrl: "https://example.com/secret", phase: "live", draft: { value: "", dirty: false }, actionSequence: 0 }],
+        activeTabId: "t1",
+      },
+    });
+    await saveOsSession(session);
+
+    // Simulate lock failure
+    Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
+    const noticeHandler = vi.fn();
+    const reloaded = await loadOsSession(OS_SESSION_STORAGE_KEY, noticeHandler);
+    expect(noticeHandler).toHaveBeenCalledWith(expect.objectContaining({ kind: "storage-error" }));
+    const browserWin = reloaded.windows["w-browser"];
+    const state = browserWin.appState as BrowserWindowDisk;
+    expect(state.tabs[0]?.committedUrl).toBeUndefined();
   });
 });
