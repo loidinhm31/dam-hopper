@@ -1,0 +1,81 @@
+# Phase 05 — Calibration, qualification and docs
+
+## Context links
+[Overview](plan.md) · [Server ladder/calibration targets](phase-03-server-adaptive-capture-tiers.md) · [UI contract](phase-04-viewer-quality-controls.md) · [Network matrix proposal](../reports/researcher-261112-1205-network-adaptive-screencast-quality.md) · [Chromium caveats](../reports/researcher-261112-1205-cdp-screencast-performance-best-practices.md) · [Prerequisite qualification plan](../261109-2251-host-browser-review-remediation/plan.md) · [Repository commands](../../AGENTS.md).
+
+## Overview
+Date: 2026-11-12 · Priority: P2 · Implementation status: pending (0/2) · Review status: coordinator review pending · Effort: 12h.
+Depends on complete Phase 04 and upstream remediation receipts for all eight named tasks. Existing remediation Phase 04 remains owner of its broader platform/security release evidence; do not claim this matrix replaces Windows, physical Android, human or soak gates. Shared docs writers serialized by coordinator.
+
+## Key Insights
+- Proposal Mbps classes are not guaranteed frame-size budgets. Real JPEG bytes, busy/idle periods, two-credit RTT ceiling, PCM and TCP head-of-line behavior decide useful service.
+- CDP tip-of-tree/pinned generated types are not deployed-engine proof. Measure stop/start gap and downscale metadata on actual supported binary/build/mode.
+- Lower JPEG size is useful only if text remains usable and normalized input remains correct. No percentage bandwidth/CPU improvement is known yet.
+- Architecture/config/API docs must report actual enforced limits, effective shared policy and audio behavior, not copied research proposals or obsolete 10fps-constructor wording.
+
+## Requirements
+- Reproducible **32-cell minimum**: 0.5/1/3/10Mbps × low/high RTT × audio requested on/off × single/two unequal visible viewers. Use 40ms/300ms RTT as starting profiles. Two-viewer cells pair target rate with 10Mbps peer, except target10Mbps pairs with1Mbps peer; vary which holds control. Record both directions and actual shaping, never call two equal viewers unequal.
+- Each cell: static text idle, changing code/scroll text and motion/video; warmup then ≥60s busy workload. Record policy trajectory, bytes/frame, BHJF/audio wire rate, delivered/drawn/discarded FPS, ACK baseline/EWMA/p95, oldest age, write time, pending replacement/lag, decode p50/p95, capture count, native encode/wasted candidates and reservation high-water. No per-frame content/URL logging.
+- Baseline matched build/config with static policy versus adaptive on same workload/shape; no inferred percentage gains. Browser NetworkInformation/synthetic download cannot substitute media delivery measurement. Shape real WebSocket TCP traffic (isolated namespace/proxy), confirm measured rate/RTT; browser DevTools HTTP throttling alone is not proof of WS shaping.
+- Actual Chromium qualification: version/path hash/headless mode/flags and SPA/server identity, serialized stop/start gap p50/p95, first new-tier frame/native IDs, late old-run frame disposition, fallback dimensions and CSS `innerWidth/innerHeight/devicePixelRatio` plus metadata before/after1x/0.75x/0.5x. DOM marker click/selection oracle at center/corners under multiple DPR/letterbox layouts; runtime geometry invariant before trusting downscaled input.
+- Legibility: human-reviewed 12/14/16px code/body text, colored syntax, thin borders at each quality/scale. High/Medium must support ordinary 12px code reading; Low/Constrained remain honestly labeled reduced detail and must retain readable 16px navigation/body text at test display size. Capture crop/text task evidence with sanitized local fixtures; no production page content.
+- Audio: wire chunks cease for muted/Constrained viewer after server gate ack, other capable viewer may keep audio despite shared low pixels; report actual audio budget. Verify immediate local silence across privacy/hidden/owner, fresh unmute no backlog, no unnecessary audio source reset during video tier change; measure jitter/gap separately from visual stream.
+- Fault/race regressions: rapid resize plus preference, hidden/stalled/expired voter removal/rejoin, 240Hz input + wheel/key, late old socket/frame/status, blocked media write, actor loss, privacy/reset/navigation, missing createImageBitmap/draw error upstream receipt. No skipped prerequisite safety test may be recast as performance pass.
+- Calibrate ladder/headroom/pressure/dwell and record final values with evidence. Native everyNthFrame stays1 unless measured wasted encode benefit outweighs added latency; no dependency on maxFramesInFlight/sendLastFrame. Keep deferred alternatives out.
+
+## Architecture
+Reuse existing Rust integration tests and Vitest browser-mode/app runners, isolated local deterministic page fixtures and production transport. Create one focused `browser-adaptive-stream.browser.tsx` for real canvas/input/UI contract checks (<200-line aim); extend existing `server/tests/browser_host_media.rs` / `browser_host_screencast.rs` and existing qualification example. Runtime shaper belongs to disposable external qualification environment, not production service or new permanent benchmark framework.
+Store raw sanitized matrix and binary identity in selected plan's calibration report; docs link concise outcomes, no screenshots/tokens/page content in normal diagnostics. Final constants are changed only in small controller/tier modules and their boundary fixtures, not ad-hoc overrides in media/screencast.
+Coordinator-owned Gate 1: before implementation reconcile this intended design into maintained architecture with docs owner; this scoped authoring makes no docs write/approval claim. Gate 2 here: actual state machine/wire/config vs implementation and measured evidence. Do not invent missing architecture.md.
+
+## Related code files
+Exact task allowlists below. Create future `packages/ui/browser-tests/browser-adaptive-stream.browser.tsx` and `plans/261112-1205-browser-adaptive-stream-quality-and-performance/reports/calibration-qualification.md`; no such execution evidence is created during planning. Modify existing qualification/test fixtures and calibrated small modules only. Docs task modifies existing architecture/API/runtime-config reference/roadmap/changelog, not original/overlapping plans. No source deletion or standalone speed-test script.
+
+## Implementation Steps
+### qualify-adaptive-streaming
+1. Coordinator obtains upstream remediation receipts and matched deployable backend/UI, identifies actual engine/output-browser matrix and isolation/shaping capabilities; record unavailable required environment as blocked, never infer passes.
+2. Author focused regressions for 4 tiers, mixed viewers, no-persistence/view-only selector, exact credit/sample/status validation, stable CSS/input geometry and audioRun; keep native/real socket boundary meaningful, do not mock away the behavior being claimed.
+3. Execute commands below once coherent shared changes land, then 32-cell matrix and fault/visibility/input sequences. Record commands/exits, versions, profile parameters, warmup/workload/sample intervals and raw observations, with failures/skips intact.
+4. Compare static baseline and adaptive runs; tune calibration modules only. Recheck affected focused tests after tuning; no claim of raw available Mbps from achieved goodput. Any required safety/legibility failure blocks release instead of silently lowering acceptance.
+5. Set final supported settings/objectives from evidence; record restart gap/latency, text floors and optional native divisor decision. Unsupported engine behavior keeps downscale input-untrusted or blocks rollout—never changes CSS viewport to hide failure.
+### document-adaptive-streaming
+6. Reconcile architecture state/dataflow, separate CSS/image geometry, shared slowest-visible votes/per-viewer FPS and stable audio source identity; publish confirmed tiers and sampling/unknown semantics.
+7. API docs: exact qualityPreference/muteState/streamQuality and telemetry bounds, audioRun clean cutover, subscription/version/rate constraints, no lease/persistence. Runtime config reference: effective existing FPS/quality/image/viewer/memory ceilings and clamps; no invented knobs.
+8. Roadmap/changelog: actual measured outcomes, limitations/deferred alternatives, version/support prerequisites and honest remaining platform gates. Document Tools journey, shared limitation, muted/lowest-tier server suppression and rollback static policy/matched deployment.
+
+## Todo list
+```evcrate-tasks
+[
+  {
+    "id": "qualify-adaptive-streaming", "title": "Calibrate tiers and qualify real throttled-link, geometry, audio and mixed-viewer behavior", "blocked_by": ["expose-browser-quality-tools"],
+    "allowed_files": ["server/src/browser_host/capture_tier.rs", "server/src/browser_host/adaptive_stream_controller.rs", "server/src/browser_host/viewer_delivery_estimator.rs", "server/tests/browser_host_media.rs", "server/tests/browser_host_screencast.rs", "server/tests/browser_host_input.rs", "server/examples/browser_host_qualification.rs", "packages/ui/src/browser-host/stream-controller.test.ts", "packages/ui/browser-tests/browser-adaptive-stream.browser.tsx", "packages/ui/browser-tests/host-browser-lifecycle.browser.tsx", "packages/ui/browser-tests/host-browser-input.browser.tsx", "plans/261112-1205-browser-adaptive-stream-quality-and-performance/reports/calibration-qualification.md"],
+    "constraints": ["All upstream eight remediation tasks need coordinator-verified evidence; broader existing Phase 04 platform qualification stays external, not duplicated or waived.", "Actual deployed Chromium and real WS shaping required; no synthetic speed test, production data fixture, fabricated pass or raw-capacity claim; controller constants only calibrated with recorded observations."],
+    "acceptance": ["All 32 matrix cells, text tiers and mixed-viewer/audio/visibility/failure paths recorded with binary/version/shape identity; effective settings remain within all caps and shared/per-viewer policy matches UI.", "Downscale leaves CSS/DPR/viewport epoch invariant and center/corner DOM input oracle correct; video-only switch preserves audioRun; stop/start gap and latency measured, old-run data never grants input.", "Final threshold/legibility/latency objectives justified by evidence, failures/skips remain explicit and required gates block rollout; optional native divisor enabled only with measured benefit."],
+    "verification": ["Future: cd server && cargo test --test browser_host_media --test browser_host_screencast --test browser_host_input --test browser_host_bounds --test browser_host_admission", "Future: pnpm --filter @dam-hopper/ui test src/browser-host src/api/browser-host-client.test.ts src/os/browser src/os/BrowserStreamKeepAliveHost.test.tsx src/os/apps/BrowserApp.test.tsx", "Future: pnpm --filter @dam-hopper/ui test:browser browser-tests/browser-adaptive-stream.browser.tsx browser-tests/host-browser-lifecycle.browser.tsx browser-tests/host-browser-input.browser.tsx; pnpm --filter @dam-hopper/ui build", "Future: cd server && cargo build; run isolated production server/SPA and actual Chromium qualification with recorded netem/proxy commands for 32 shaped cells, text/input/audio/foreground/privacy and tier-switch oracles; record receipts in calibration-qualification.md."]
+  },
+  {
+    "id": "document-adaptive-streaming", "title": "Reconcile Browser architecture, API, effective config and release notes", "blocked_by": ["qualify-adaptive-streaming"],
+    "allowed_files": ["docs/architecture/host-browser-cdp-streaming.md", "docs/api/browser-host.md", "docs/configuration/server-runtime-settings.md", "docs/project-roadmap.md", "docs/CHANGELOG.md"],
+    "constraints": ["Single docs owner serialized with existing remediation Phase 04; no other plan edits, new doc tree, implementation or platform approval inferred.", "Document implemented behavior and actual receipts only; retain unexecuted platform/human gates, shared-quality limitations and explicit YAGNI deferrals."],
+    "acceptance": ["Architecture/API/config agree on effective limits, versioned tiers, unchanged CSS geometry, session-only UI and independent audioRun with no legacy aliases.", "Roadmap/changelog describe measured calibration, no raw-speed guarantee, server audio suppression, safe matched rollback and all remaining release prerequisites; related docs links resolve."],
+    "verification": ["Future coordinator docs review: compare exact Rust/TS fields, defaults/clamps and calibrated constants against maintained architecture/API/config; inspect links and roadmap/changelog evidence references; no build/test rerun for prose-only reconciliation."]
+  }
+]
+```
+- [ ] <!-- evcrate-task:qualify-adaptive-streaming --> Qualify throttled links, deployed engine, text, input and audio
+- [ ] <!-- evcrate-task:document-adaptive-streaming --> Reconcile maintained contracts and release notes
+
+## Success Criteria
+- Every matrix cell records achieved **wire** budget, useful FPS, queue age and switch trajectory; no unbounded backlog or configured-cap breach. Static content never inferred to be a slow link; high RTT alone never shrinks text.
+- Starting acceptance targets, to calibrate transparently: pacing responds ≤3s of sustained pressure; staged fidelity settles ≤20s; no capture switches closer than5s; recovery only after ≥10 healthy busy seconds per probe. Proposed p95 frame service ≤2s at0.5/1Mbps and ≤1s at3/10Mbps; record infeasible cases and adjust ladder/ceilings, not hide failure behind idle samples. These are candidate product-service targets, not measured promises or waivers.
+- Human legibility and invariant CSS/metadata/click oracles pass all supported scales; downscaled input cannot become trusted until actual engine qualification. Capture-switch gap reported p50/p95; unexpected loss/freeze blocks, no universal millisecond claim.
+- No new audio after suppression acknowledgement, no backlog replay or capture-only audio identity reset; exact numerical memory/slot limits preserved. Focused automated, live runtime and docs receipts all present; existing broader release prerequisites remain separate.
+
+## Risk Assessment
+Shaping wrong traffic or using unsynchronized wall clocks can generate false conclusions; record topology, actual bytes/RTT, monotonic service measurements and matched identities. Text readability requires human task evidence, not JPEG byte savings alone. Calibration cannot erase required safety/platform gates. Rollback: stop/drain Browser pairs, matched prior backend/UI/static configured policy while preserving secure-origin/remediation protections, profiles/locks/tombstones; never reset user data or permit stale input to mask a switch failure.
+
+## Security Considerations
+Client telemetry/preference remains untrusted, validated, bounded, rate-limited and subscription-fenced; cannot raise admin ceilings. No new unauthenticated surface. Use local sanitized fixtures and isolated test credentials; shaping must affect disposable namespace/proxy only, never host-wide production networking. Reports/diagnostics omit page pixels, URLs, tickets, bearer/lease secrets; capture only explicit sanitized visual fixtures for human text evidence.
+
+## Next steps
+Coordinator reconciles final receipts, independent review and validation, then decides rollout against all remaining Browser gates. Unresolved engine/legibility/latency observations stay explicit blockers; this plan authoring runs no builds/tests or live probes.

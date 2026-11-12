@@ -27,6 +27,11 @@ export const TICKET_SUBPROTOCOL_PREFIX = "damhopper.ticket.";
 
 export const MAX_MEDIA_CONTROL_BYTES = 1024;
 export const MAX_CONTROL_MESSAGE_BYTES = 16 * 1024;
+export const MAX_CLIENT_DECODE_MS = 60_000;
+export const MAX_HEARTBEAT_SAMPLE_MS = 60_000;
+export const MAX_HEARTBEAT_FRAME_COUNT = 10_000;
+export const MAX_MEDIA_CONTROL_REASON_BYTES = 64;
+export const MAX_SUBSCRIPTION_EPOCH_BYTES = 128;
 export const MAX_FIND_QUERY_CHARS = 256;
 export const MAX_SELECTED_TEXT_BYTES = 64 * 1024;
 export const AUDIO_SAMPLE_RATE = 24_000;
@@ -241,6 +246,13 @@ export type DiscardReason =
   | "decodeFailed"
   | "ownerChanged";
 
+export interface HeartbeatTelemetry {
+  sampleMs: number;
+  decodedFrames: number;
+  replacedFrames: number;
+  decodeMsEwma?: number;
+}
+
 export type MediaClientControl =
   | {
       kind: "frameAck";
@@ -249,6 +261,7 @@ export type MediaClientControl =
       viewportEpoch: string;
       frameSeq: string;
       reason?: string;
+      decodeMs?: number;
     }
   | {
       kind: "frameDiscarded";
@@ -266,8 +279,225 @@ export type MediaClientControl =
       kind: "heartbeat";
       subscriptionEpoch: string;
       visible: boolean;
+      telemetry?: HeartbeatTelemetry;
     };
 
+const MEDIA_CONTROL_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const MEDIA_CONTROL_SEQ_RE = /^[1-9][0-9]{0,19}$/;
+const MEDIA_CONTROL_MAX_U64 = 18446744073709551615n;
+const mediaControlTextEncoder = new TextEncoder();
+const VALID_DISCARD_REASONS: Record<string, true> = {
+  replaced: true,
+  obsolete: true,
+  hidden: true,
+  decodeFailed: true,
+  ownerChanged: true,
+};
+
+function isValidPositiveDecimalU64(val: unknown): val is string {
+  if (typeof val !== "string" || !MEDIA_CONTROL_SEQ_RE.test(val)) return false;
+  try {
+    const n = BigInt(val);
+    return n > 0n && n <= MEDIA_CONTROL_MAX_U64;
+  } catch {
+    return false;
+  }
+}
+
+export function isValidHeartbeatTelemetry(
+  val: unknown,
+): val is HeartbeatTelemetry {
+  if (!val || typeof val !== "object" || Array.isArray(val)) return false;
+  const rec = val as Record<string, unknown>;
+  for (const key of Object.keys(rec)) {
+    if (
+      key !== "sampleMs" &&
+      key !== "decodedFrames" &&
+      key !== "replacedFrames" &&
+      key !== "decodeMsEwma"
+    ) {
+      return false;
+    }
+  }
+  if (
+    typeof rec.sampleMs !== "number" ||
+    !Number.isInteger(rec.sampleMs) ||
+    rec.sampleMs < 0 ||
+    rec.sampleMs > MAX_HEARTBEAT_SAMPLE_MS
+  ) {
+    return false;
+  }
+  if (
+    typeof rec.decodedFrames !== "number" ||
+    !Number.isInteger(rec.decodedFrames) ||
+    rec.decodedFrames < 0 ||
+    rec.decodedFrames > MAX_HEARTBEAT_FRAME_COUNT
+  ) {
+    return false;
+  }
+  if (
+    typeof rec.replacedFrames !== "number" ||
+    !Number.isInteger(rec.replacedFrames) ||
+    rec.replacedFrames < 0 ||
+    rec.replacedFrames > MAX_HEARTBEAT_FRAME_COUNT
+  ) {
+    return false;
+  }
+  if (rec.decodeMsEwma !== undefined) {
+    if (
+      typeof rec.decodeMsEwma !== "number" ||
+      !Number.isFinite(rec.decodeMsEwma) ||
+      rec.decodeMsEwma < 0 ||
+      rec.decodeMsEwma > MAX_CLIENT_DECODE_MS
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function validateMediaClientControlFields(val: unknown): val is MediaClientControl {
+  if (!val || typeof val !== "object" || Array.isArray(val)) return false;
+  const rec = val as Record<string, unknown>;
+  if (
+    typeof rec.subscriptionEpoch !== "string" ||
+    rec.subscriptionEpoch.length === 0 ||
+    mediaControlTextEncoder.encode(rec.subscriptionEpoch).byteLength >
+      MAX_SUBSCRIPTION_EPOCH_BYTES
+  ) {
+    return false;
+  }
+  switch (rec.kind) {
+    case "frameAck": {
+      for (const k of Object.keys(rec)) {
+        if (
+          k !== "kind" &&
+          k !== "subscriptionEpoch" &&
+          k !== "producerRun" &&
+          k !== "viewportEpoch" &&
+          k !== "frameSeq" &&
+          k !== "reason" &&
+          k !== "decodeMs"
+        ) {
+          return false;
+        }
+      }
+      if (
+        typeof rec.producerRun !== "string" ||
+        !MEDIA_CONTROL_UUID_RE.test(rec.producerRun) ||
+        !isValidPositiveDecimalU64(rec.viewportEpoch) ||
+        !isValidPositiveDecimalU64(rec.frameSeq)
+      ) {
+        return false;
+      }
+      if (rec.reason !== undefined) {
+        if (
+          typeof rec.reason !== "string" ||
+          rec.reason.length === 0 ||
+          mediaControlTextEncoder.encode(rec.reason).byteLength >
+            MAX_MEDIA_CONTROL_REASON_BYTES
+        ) {
+          return false;
+        }
+      }
+      if (rec.decodeMs !== undefined) {
+        if (
+          typeof rec.decodeMs !== "number" ||
+          !Number.isFinite(rec.decodeMs) ||
+          rec.decodeMs < 0 ||
+          rec.decodeMs > MAX_CLIENT_DECODE_MS
+        ) {
+          return false;
+        }
+      }
+      return true;
+    }
+    case "frameDiscarded": {
+      for (const k of Object.keys(rec)) {
+        if (
+          k !== "kind" &&
+          k !== "subscriptionEpoch" &&
+          k !== "producerRun" &&
+          k !== "viewportEpoch" &&
+          k !== "frameSeq" &&
+          k !== "reason"
+        ) {
+          return false;
+        }
+      }
+      if (
+        typeof rec.producerRun !== "string" ||
+        !MEDIA_CONTROL_UUID_RE.test(rec.producerRun) ||
+        !isValidPositiveDecimalU64(rec.viewportEpoch) ||
+        !isValidPositiveDecimalU64(rec.frameSeq)
+      ) {
+        return false;
+      }
+      if (
+        rec.reason !== undefined &&
+        (typeof rec.reason !== "string" ||
+          !Object.hasOwn(VALID_DISCARD_REASONS, rec.reason))
+      ) {
+        return false;
+      }
+      return true;
+    }
+    case "pause": {
+      return Object.keys(rec).every(
+        (k) => k === "kind" || k === "subscriptionEpoch",
+      );
+    }
+    case "heartbeat": {
+      for (const k of Object.keys(rec)) {
+        if (
+          k !== "kind" &&
+          k !== "subscriptionEpoch" &&
+          k !== "visible" &&
+          k !== "telemetry"
+        ) {
+          return false;
+        }
+      }
+      if (typeof rec.visible !== "boolean") return false;
+      if (
+        rec.telemetry !== undefined &&
+        !isValidHeartbeatTelemetry(rec.telemetry)
+      ) {
+        return false;
+      }
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+export function serializeMediaClientControl(
+  val: unknown,
+): string | null {
+  if (!validateMediaClientControlFields(val)) return null;
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(val);
+  } catch {
+    return null;
+  }
+  if (
+    !serialized ||
+    mediaControlTextEncoder.encode(serialized).byteLength >
+      MAX_MEDIA_CONTROL_BYTES
+  ) {
+    return null;
+  }
+  return serialized;
+}
+
+export function isValidMediaClientControl(
+  val: unknown,
+): val is MediaClientControl {
+  return serializeMediaClientControl(val) !== null;
+}
 export interface BrowserAudioChunk {
   kind: "audioChunk";
   browserSessionId: string;

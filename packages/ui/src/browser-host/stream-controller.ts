@@ -14,10 +14,16 @@ import {
   AUDIO_CHANNELS,
   AUDIO_ENCODING_PCM16LE,
   AUDIO_SAMPLE_RATE,
+  serializeMediaClientControl,
   MAX_AUDIO_BASE64_BYTES,
   MAX_AUDIO_MESSAGE_BYTES,
   MAX_AUDIO_PCM_BYTES,
+  MAX_CLIENT_DECODE_MS,
+  MAX_HEARTBEAT_FRAME_COUNT,
+  MAX_HEARTBEAT_SAMPLE_MS,
+  MAX_MEDIA_CONTROL_BYTES,
   type BrowserAudioChunk,
+  type HeartbeatTelemetry,
   type MediaClientControl,
   type ServerControlEvent,
   type TargetFrameHeader,
@@ -75,6 +81,15 @@ export interface FramePresentMetrics {
   producerRun: string;
   captureTimeUnixMs: number;
   presentTimeUnixMs: number;
+}
+
+export interface StreamTelemetrySnapshot {
+  windowDecodedFrames: number;
+  windowReplacedFrames: number;
+  totalDecodedFrames: number;
+  totalReplacedFrames: number;
+  lastDecodeMs: number | null;
+  decodeMsEwma: number | null;
 }
 
 export interface StreamControllerOptions {
@@ -144,6 +159,13 @@ export class BrowserStreamController {
   private audioAttachmentRetired = false;
   private readonly retiredProducerRuns = new Set<string>();
 
+  private telemetryWindowStartMonoMs = 0;
+  private windowDecodedFrames = 0;
+  private windowReplacedFrames = 0;
+  private totalDecodedFrames = 0;
+  private totalReplacedFrames = 0;
+  private lastDecodeMs: number | null = null;
+  private decodeMsEwma: number | null = null;
   constructor(options: StreamControllerOptions) {
     this.canvas = options.canvas;
     this.ctx = this.canvas.getContext("2d");
@@ -172,6 +194,41 @@ export class BrowserStreamController {
     return this.currentCredentials?.subscriptionEpoch ?? null;
   }
 
+  public getTelemetrySnapshot(): StreamTelemetrySnapshot {
+    return {
+      windowDecodedFrames: this.windowDecodedFrames,
+      windowReplacedFrames: this.windowReplacedFrames,
+      totalDecodedFrames: this.totalDecodedFrames,
+      totalReplacedFrames: this.totalReplacedFrames,
+      lastDecodeMs: this.lastDecodeMs,
+      decodeMsEwma: this.decodeMsEwma,
+    };
+  }
+
+  private nowMonoMs(): number {
+    return typeof performance !== "undefined" &&
+      typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+  }
+
+  private resetTelemetryAggregates(): void {
+    this.telemetryWindowStartMonoMs = this.nowMonoMs();
+    this.windowDecodedFrames = 0;
+    this.windowReplacedFrames = 0;
+    this.totalDecodedFrames = 0;
+    this.totalReplacedFrames = 0;
+    this.lastDecodeMs = null;
+    this.decodeMsEwma = null;
+  }
+
+  private sanitizeDecodeMs(rawMs: number): number | null {
+    if (typeof rawMs !== "number" || !Number.isFinite(rawMs) || rawMs < 0) {
+      return null;
+    }
+    const clamped = Math.min(MAX_CLIENT_DECODE_MS, rawMs);
+    return Math.round(clamped * 100) / 100;
+  }
   private setStatus(newStatus: StreamStatus): void {
     if (this.status !== newStatus) {
       this.status = newStatus;
@@ -196,6 +253,7 @@ export class BrowserStreamController {
     this.retiredAudioDocEpoch = 0n;
     this.seenAudioInCurrentDoc = false;
     this.resetAudioState();
+    this.resetTelemetryAggregates();
     if (this.pending) {
       const prev = this.pending;
       this.pending = null;
@@ -299,12 +357,48 @@ export class BrowserStreamController {
   }
   private startHeartbeat(socket: WebSocket, subscriptionEpoch: string): void {
     this.stopHeartbeat();
+    this.telemetryWindowStartMonoMs = this.nowMonoMs();
     this.heartbeatTimer = setInterval(() => {
       if (socket.readyState === WebSocket.OPEN && !this.isPrivacyActive) {
+        const now = this.nowMonoMs();
+        const hasSamples =
+          this.windowDecodedFrames > 0 ||
+          this.windowReplacedFrames > 0 ||
+          this.decodeMsEwma !== null;
+        let telemetry: HeartbeatTelemetry | undefined;
+        if (hasSamples) {
+          const rawSampleMs = Math.round(
+            Math.max(0, now - this.telemetryWindowStartMonoMs),
+          );
+          const sampleMs = Math.min(
+            MAX_HEARTBEAT_SAMPLE_MS,
+            Number.isFinite(rawSampleMs) ? rawSampleMs : 0,
+          );
+          const ewma =
+            this.decodeMsEwma !== null
+              ? this.sanitizeDecodeMs(this.decodeMsEwma)
+              : null;
+          telemetry = {
+            sampleMs,
+            decodedFrames: Math.min(
+              MAX_HEARTBEAT_FRAME_COUNT,
+              this.windowDecodedFrames,
+            ),
+            replacedFrames: Math.min(
+              MAX_HEARTBEAT_FRAME_COUNT,
+              this.windowReplacedFrames,
+            ),
+            ...(ewma !== null ? { decodeMsEwma: ewma } : {}),
+          };
+          this.windowDecodedFrames = 0;
+          this.windowReplacedFrames = 0;
+        }
+        this.telemetryWindowStartMonoMs = now;
         this.sendMediaControl(socket, {
           kind: "heartbeat",
           subscriptionEpoch,
           visible: this.isVisible,
+          ...(telemetry ? { telemetry } : {}),
         });
       }
     }, 5000);
@@ -319,8 +413,12 @@ export class BrowserStreamController {
 
   private sendMediaControl(socket: WebSocket, ctrl: MediaClientControl): void {
     if (socket.readyState === WebSocket.OPEN) {
+      const serialized = serializeMediaClientControl(ctrl);
+      if (serialized === null) {
+        return;
+      }
       try {
-        socket.send(JSON.stringify(ctrl));
+        socket.send(serialized);
       } catch {
         // Socket send error handled by ws lifecycle
       }
@@ -516,6 +614,22 @@ export class BrowserStreamController {
         if (this.lastKnownProducerRun !== null) {
           this.retireProducerRun(this.lastKnownProducerRun);
           this.onAudioReset?.();
+          this.resetTelemetryAggregates();
+          if (
+            this.pending &&
+            this.pending.header.producerRun !== header.producerRun
+          ) {
+            const stalePending = this.pending;
+            this.pending = null;
+            this.sendMediaControl(stalePending.socket, {
+              kind: "frameDiscarded",
+              subscriptionEpoch: stalePending.subscriptionEpoch,
+              producerRun: stalePending.header.producerRun,
+              viewportEpoch: stalePending.header.viewportEpoch,
+              frameSeq: stalePending.header.frameSeq,
+              reason: "obsolete",
+            });
+          }
         }
         this.lastKnownProducerRun = header.producerRun;
         this.lastAudioSeq = 0n;
@@ -531,13 +645,24 @@ export class BrowserStreamController {
       // Decode is already active: replace pending frame if present
       if (this.pending) {
         const prev = this.pending;
+        const isSameRunAndEpoch =
+          prev.header.producerRun === header.producerRun &&
+          prev.header.viewportEpoch === header.viewportEpoch &&
+          !this.retiredProducerRuns.has(prev.header.producerRun);
+        if (isSameRunAndEpoch) {
+          this.windowReplacedFrames = Math.min(
+            MAX_HEARTBEAT_FRAME_COUNT,
+            this.windowReplacedFrames + 1,
+          );
+          this.totalReplacedFrames += 1;
+        }
         this.sendMediaControl(prev.socket, {
           kind: "frameDiscarded",
           subscriptionEpoch: prev.subscriptionEpoch,
           producerRun: prev.header.producerRun,
           viewportEpoch: prev.header.viewportEpoch,
           frameSeq: prev.header.frameSeq,
-          reason: "replaced",
+          reason: isSameRunAndEpoch ? "replaced" : "obsolete",
         });
       }
       this.pending = { data, socket, subscriptionEpoch, header };
@@ -554,10 +679,10 @@ export class BrowserStreamController {
   ): Promise<void> {
     this.isDecoding = true;
     const currentEpoch = ++this.decodeEpoch;
+    const decodeStartMonoMs = this.nowMonoMs();
 
     let bitmap: ImageBitmap | null = null;
     let decodeSucceeded = false;
-
     try {
       // Unpack JPEG slice for decoding
       const unpacked = unpackBhjfFrame(data);
@@ -597,9 +722,29 @@ export class BrowserStreamController {
         currentEpoch === this.decodeEpoch &&
         this.mediaWs === originatingSocket &&
         this.currentCredentials?.subscriptionEpoch === originatingSubEpoch &&
-        originatingSocket.readyState === WebSocket.OPEN;
+        originatingSocket.readyState === WebSocket.OPEN &&
+        !this.retiredProducerRuns.has(header.producerRun) &&
+        (this.lastKnownProducerRun === null ||
+          this.lastKnownProducerRun === header.producerRun);
       if (decodeSucceeded && bitmap && isStillValid) {
         this.drawBitmapToCanvas(bitmap, header);
+        const decodeMs = this.sanitizeDecodeMs(
+          this.nowMonoMs() - decodeStartMonoMs,
+        );
+        if (decodeMs !== null) {
+          this.lastDecodeMs = decodeMs;
+          this. decodeMsEwma =
+            this.decodeMsEwma === null
+              ? decodeMs
+              : Math.round(
+                  (0.25 * decodeMs + 0.75 * this.decodeMsEwma) * 100,
+                ) / 100;
+        }
+        this.windowDecodedFrames = Math.min(
+          MAX_HEARTBEAT_FRAME_COUNT,
+          this.windowDecodedFrames + 1,
+        );
+        this.totalDecodedFrames += 1;
         // Keep cached bitmap for layout redraws
         if (this.lastCachedBitmap && this.lastCachedBitmap !== bitmap) {
           try {
@@ -617,8 +762,8 @@ export class BrowserStreamController {
           producerRun: header.producerRun,
           viewportEpoch: header.viewportEpoch,
           frameSeq: header.frameSeq,
+          ...(decodeMs !== null ? { decodeMs } : {}),
         });
-
         this.onPresentFrame?.({
           frameSeq: header.frameSeq,
           viewportEpoch: header.viewportEpoch,
@@ -748,6 +893,7 @@ export class BrowserStreamController {
 
     if (active) {
       this.setStatus("privacy");
+      this.resetTelemetryAggregates();
 
       // Synchronously clear canvas to black
       if (this.ctx) {
@@ -789,6 +935,7 @@ export class BrowserStreamController {
     if (!visible) {
       this.setStatus("paused");
       this.decodeEpoch++;
+      this.resetTelemetryAggregates();
 
       if (this.lastCachedBitmap) {
         try {
@@ -859,6 +1006,7 @@ export class BrowserStreamController {
     if (this.isDisposed) return;
     this.isDisposed = true;
     this.decodeEpoch++;
+    this.resetTelemetryAggregates();
 
     this.detachSockets();
 

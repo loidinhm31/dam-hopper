@@ -56,12 +56,13 @@ impl fmt::Display for ScreencastState {
 struct EncodedCandidate {
     _frame_session_id: i64,
     data_base64: String,
-    capture_time_unix_ms: u64,
+    native_capture_time_unix_ms: Option<u64>,
+    server_received_unix_ms: u64,
+    received_at: Instant,
     metadata_geometry: Option<TargetGeometry>,
     producer_run: Uuid,
     viewport_epoch: u64,
 }
-
 #[derive(Debug, Clone)]
 pub struct ViewerDemand {
     pub viewer_id: String,
@@ -1729,16 +1730,29 @@ impl ScreencastProducer {
         }
         // Extract metadata geometry if present and valid
         let metadata_geometry = self.extract_geometry_from_metadata(&frame_data.metadata);
+        let diag = global_stream_diagnostics();
+        diag.last_server_receipt_unix_ms
+            .store(frame_data.server_received_unix_ms, Ordering::Relaxed);
+        if let Some(native_ms) = frame_data.native_capture_time_unix_ms {
+            diag.last_native_capture_unix_ms
+                .store(native_ms, Ordering::Relaxed);
+            diag.native_capture_timestamps_valid
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            diag.native_capture_timestamps_unavailable
+                .fetch_add(1, Ordering::Relaxed);
+        }
 
         let candidate = EncodedCandidate {
             _frame_session_id: frame_session_id,
             data_base64: frame_data.data_base64.clone(),
-            capture_time_unix_ms: chrono::Utc::now().timestamp_millis() as u64,
+            native_capture_time_unix_ms: frame_data.native_capture_time_unix_ms,
+            server_received_unix_ms: frame_data.server_received_unix_ms,
+            received_at: frame_data.received_at,
             metadata_geometry,
             producer_run: expected_producer_run,
             viewport_epoch: self.viewport_epoch.load(Ordering::Relaxed),
         };
-
         // Replace candidate atomically
         let mut cand_lock = self.current_candidate.lock().await;
         if cand_lock.is_some() {
@@ -1866,7 +1880,7 @@ impl ScreencastProducer {
             frame_seq: next_seq.to_string(),
             width,
             height,
-            capture_time_unix_ms: candidate.capture_time_unix_ms,
+            capture_time_unix_ms: candidate.native_capture_time_unix_ms.unwrap_or(0),
             geometry: geom,
             input_trusted: true,
         };
@@ -1880,7 +1894,8 @@ impl ScreencastProducer {
                 global_stream_diagnostics()
                     .jpeg_bytes_total
                     .fetch_add(jpeg_bytes.len() as u64, Ordering::Relaxed);
-                let tracked = TrackedBhjfFrame::new(packed_bytes, reservation);
+                let tracked = TrackedBhjfFrame::new(packed_bytes, reservation)
+                    .with_receipt_time(candidate.server_received_unix_ms, candidate.received_at);
                 {
                     let mut frame_cache = self.cached_frame.write().await;
                     *frame_cache = Some(tracked.clone());
@@ -1981,7 +1996,13 @@ impl ScreencastProducer {
 
         let geom = self.geometry.read().await.clone();
         let next_seq = self.frame_seq.fetch_add(1, Ordering::SeqCst) + 1;
-
+        let fallback_received_at = Instant::now();
+        let fallback_receipt_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        let diag = global_stream_diagnostics();
+        diag.last_server_receipt_unix_ms
+            .store(fallback_receipt_ms, Ordering::Relaxed);
+        diag.native_capture_timestamps_unavailable
+            .fetch_add(1, Ordering::Relaxed);
         let header = TargetFrameHeader {
             browser_session_id: self.browser_session_id.clone(),
             browser_incarnation: self.browser_incarnation.clone(),
@@ -1991,12 +2012,11 @@ impl ScreencastProducer {
             frame_seq: next_seq.to_string(),
             width,
             height,
-            capture_time_unix_ms: chrono::Utc::now().timestamp_millis() as u64,
+            capture_time_unix_ms: 0,
             geometry: geom,
             // Uncertain snapshot is display-only; inputTrusted = false
             input_trusted: false,
         };
-
         if let Ok(packed_bytes) = pack_bhjf_frame(&header, &jpeg_bytes) {
             if let Err(e) = reservation.adjust(packed_bytes.len()) {
                 warn!(error = %e, "dropping fallback screenshot: memory ceiling exceeded on adjust");
@@ -2005,7 +2025,8 @@ impl ScreencastProducer {
             global_stream_diagnostics()
                 .screenshot_count
                 .fetch_add(1, Ordering::Relaxed);
-            let tracked = TrackedBhjfFrame::new(packed_bytes, reservation);
+            let tracked = TrackedBhjfFrame::new(packed_bytes, reservation)
+                .with_receipt_time(fallback_receipt_ms, fallback_received_at);
             {
                 let mut frame_cache = self.cached_frame.write().await;
                 *frame_cache = Some(tracked.clone());

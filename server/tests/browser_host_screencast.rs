@@ -256,3 +256,71 @@ async fn test_screencast_burst_events_and_candidate_replacement() {
     let _ = producer.stop_screencast().await;
     let _ = process.terminate().await;
 }
+
+#[tokio::test]
+async fn test_screencast_native_capture_timestamp_validation_and_preservation() {
+    use dam_hopper_server::browser_host::cdp::parse_native_capture_time_unix_ms;
+    use dam_hopper_server::browser_host::diagnostics::global_stream_diagnostics;
+    use serde_json::json;
+
+    // 1. Unit verification of native metadata timestamp parsing and invalid rejection
+    assert_eq!(
+        parse_native_capture_time_unix_ms(&json!({ "timestamp": 1731050000.125 })),
+        Some(1_731_050_000_125)
+    );
+    assert_eq!(parse_native_capture_time_unix_ms(&json!({})), None);
+    assert_eq!(
+        parse_native_capture_time_unix_ms(&json!({ "timestamp": null })),
+        None
+    );
+    assert_eq!(
+        parse_native_capture_time_unix_ms(&json!({ "timestamp": 0.0 })),
+        None
+    );
+    assert_eq!(
+        parse_native_capture_time_unix_ms(&json!({ "timestamp": -12.5 })),
+        None
+    );
+    assert_eq!(
+        parse_native_capture_time_unix_ms(&json!({ "timestamp": 9_007_199_254_741.0 })),
+        None
+    );
+
+    // 2. Real Chromium screencast preserves valid native timestamp and records separate server receipt
+    let (mut process, _client, producer, _tmp) = match setup_producer().await {
+        Some(s) => s,
+        None => return,
+    };
+    let diag = global_stream_diagnostics();
+    let valid_before = diag.native_capture_timestamps_valid.load(Ordering::Relaxed);
+
+    let sub_epoch = Uuid::new_v4().to_string();
+    let mut frame_rx = producer.subscribe_frames();
+    producer
+        .register_viewer_demand("viewer-ts", &sub_epoch, true)
+        .await;
+
+    let frame = timeout(Duration::from_secs(10), frame_rx.recv())
+        .await
+        .expect("timed out waiting for frame")
+        .expect("frame_rx closed");
+    let (header, _) = unpack_bhjf_frame(frame.data()).expect("valid BHJF frame");
+
+    let receipt_ms = diag.last_server_receipt_unix_ms.load(Ordering::Relaxed);
+    assert!(receipt_ms > 0, "server receipt timestamp must be recorded");
+    assert!(
+        header.capture_time_unix_ms > 0,
+        "real Chromium screencast frame must preserve positive native metadata timestamp"
+    );
+    assert_eq!(
+        header.native_capture_time_unix_ms(),
+        Some(header.capture_time_unix_ms)
+    );
+    assert!(
+        diag.native_capture_timestamps_valid.load(Ordering::Relaxed) > valid_before,
+        "valid native capture timestamp counter must advance"
+    );
+    producer.remove_viewer_demand(&sub_epoch).await;
+    let _ = producer.stop_screencast().await;
+    let _ = process.terminate().await;
+}

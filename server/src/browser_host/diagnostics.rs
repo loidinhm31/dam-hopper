@@ -1,15 +1,17 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
-
+use std::time::{Duration, Instant};
 use bytes::Bytes;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use super::viewer_delivery_estimator::ViewerDeliverySnapshot;
+
 pub const MAX_BROWSER_PAYLOAD_MEMORY_BYTES: usize = 128 * 1024 * 1024; // 128 MiB
 pub const MAX_QUALIFICATION_EVENTS: usize = 256;
-
+pub const MAX_ADMITTED_VIEWER_SNAPSHOTS: usize = 16;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryExhausted {
     pub requested_bytes: usize,
@@ -123,6 +125,8 @@ pub struct TrackedBhjfFrame {
     data: Bytes,
     owner: Arc<FrameReservationOwner>,
     controller: Arc<MemoryAdmissionController>,
+    server_received_unix_ms: Option<u64>,
+    received_at: Option<Instant>,
 }
 
 impl TrackedBhjfFrame {
@@ -138,7 +142,27 @@ impl TrackedBhjfFrame {
             data,
             owner,
             controller,
+            server_received_unix_ms: None,
+            received_at: None,
         }
+    }
+
+    pub fn with_receipt_time(
+        mut self,
+        server_received_unix_ms: u64,
+        received_at: Instant,
+    ) -> Self {
+        self.server_received_unix_ms = Some(server_received_unix_ms);
+        self.received_at = Some(received_at);
+        self
+    }
+
+    pub fn server_received_unix_ms(&self) -> Option<u64> {
+        self.server_received_unix_ms
+    }
+
+    pub fn received_at(&self) -> Option<Instant> {
+        self.received_at
     }
 
     pub fn data(&self) -> &Bytes {
@@ -161,6 +185,8 @@ impl Clone for TrackedBhjfFrame {
             data: self.data.clone(),
             owner: self.owner.clone(),
             controller: self.controller.clone(),
+            server_received_unix_ms: self.server_received_unix_ms,
+            received_at: self.received_at,
         }
     }
 }
@@ -285,6 +311,12 @@ pub struct QualificationEvent {
     pub frame_seq: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct OwnedViewerSnapshot {
+    principal: String,
+    snapshot: ViewerDeliverySnapshot,
+}
+
 pub struct StreamDiagnostics {
     pub events_received: AtomicU64,
     pub events_admitted: AtomicU64,
@@ -300,7 +332,15 @@ pub struct StreamDiagnostics {
     pub periodic_screenshot_violations: AtomicU64,
     pub zero_demand_stops: AtomicU64,
     pub demand_starts: AtomicU64,
+    pub native_capture_timestamps_valid: AtomicU64,
+    pub native_capture_timestamps_unavailable: AtomicU64,
+    pub last_native_capture_unix_ms: AtomicU64,
+    pub last_server_receipt_unix_ms: AtomicU64,
+    pub last_local_send_unix_ms: AtomicU64,
+    pub broadcast_lagged_frames: AtomicU64,
     events_ring: Mutex<VecDeque<QualificationEvent>>,
+    viewer_snapshots: Mutex<HashMap<String, OwnedViewerSnapshot>>,
+    pending_control_writes: Mutex<HashMap<String, (usize, Duration)>>,
 }
 
 impl Default for StreamDiagnostics {
@@ -320,7 +360,17 @@ impl Default for StreamDiagnostics {
             periodic_screenshot_violations: AtomicU64::new(0),
             zero_demand_stops: AtomicU64::new(0),
             demand_starts: AtomicU64::new(0),
+            native_capture_timestamps_valid: AtomicU64::new(0),
+            native_capture_timestamps_unavailable: AtomicU64::new(0),
+            last_native_capture_unix_ms: AtomicU64::new(0),
+            last_server_receipt_unix_ms: AtomicU64::new(0),
+            last_local_send_unix_ms: AtomicU64::new(0),
+            broadcast_lagged_frames: AtomicU64::new(0),
             events_ring: Mutex::new(VecDeque::with_capacity(MAX_QUALIFICATION_EVENTS)),
+            viewer_snapshots: Mutex::new(HashMap::with_capacity(MAX_ADMITTED_VIEWER_SNAPSHOTS)),
+            pending_control_writes: Mutex::new(HashMap::with_capacity(
+                MAX_ADMITTED_VIEWER_SNAPSHOTS,
+            )),
         }
     }
 }
@@ -347,6 +397,145 @@ impl StreamDiagnostics {
     pub fn export_qualification_events(&self) -> Vec<QualificationEvent> {
         let ring = self.events_ring.lock();
         ring.iter().cloned().collect()
+    }
+
+    /// Registers an admitted viewer subscription snapshot if within bounded capacity.
+    pub fn register_viewer_snapshot(&self, snapshot: ViewerDeliverySnapshot) -> bool {
+        self.register_viewer_snapshot_for_owner("", snapshot)
+    }
+
+    /// Registers an owner-qualified admitted viewer subscription snapshot within bounded capacity.
+    pub fn register_viewer_snapshot_for_owner(
+        &self,
+        principal: &str,
+        snapshot: ViewerDeliverySnapshot,
+    ) -> bool {
+        let mut map = self.viewer_snapshots.lock();
+        if !map.contains_key(&snapshot.subscription_epoch)
+            && map.len() >= MAX_ADMITTED_VIEWER_SNAPSHOTS
+        {
+            return false;
+        }
+        map.insert(
+            snapshot.subscription_epoch.clone(),
+            OwnedViewerSnapshot {
+                principal: principal.to_string(),
+                snapshot,
+            },
+        );
+        true
+    }
+
+    /// Updates an already-admitted viewer snapshot; unknown/forged subscriptions are ignored.
+    pub fn update_viewer_snapshot(&self, mut snapshot: ViewerDeliverySnapshot) -> bool {
+        let mut map = self.viewer_snapshots.lock();
+        if let Some(entry) = map.get_mut(&snapshot.subscription_epoch) {
+            snapshot.control_bytes_written = snapshot
+                .control_bytes_written
+                .max(entry.snapshot.control_bytes_written);
+            entry.snapshot = snapshot;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Records control-socket bytes and write duration for an admitted pair's subscription.
+    pub fn record_control_write(
+        &self,
+        subscription_epoch: &str,
+        bytes: usize,
+        write_duration: Duration,
+    ) {
+        {
+            let mut pending = self.pending_control_writes.lock();
+            if let Some((b, d)) = pending.get_mut(subscription_epoch) {
+                *b = b.saturating_add(bytes);
+                *d = write_duration;
+            } else if pending.len() < MAX_ADMITTED_VIEWER_SNAPSHOTS * 2 {
+                pending.insert(subscription_epoch.to_string(), (bytes, write_duration));
+            }
+        }
+        let mut map = self.viewer_snapshots.lock();
+        if let Some(entry) = map.get_mut(subscription_epoch) {
+            entry.snapshot.control_bytes_written = entry
+                .snapshot
+                .control_bytes_written
+                .saturating_add(bytes as u64);
+            let ms = write_duration.as_secs_f64() * 1000.0;
+            entry.snapshot.last_write_duration_ms = Some(ms);
+        }
+    }
+
+    pub fn take_pending_control_write(&self, subscription_epoch: &str) -> Option<(usize, Duration)> {
+        self.pending_control_writes.lock().remove(subscription_epoch)
+    }
+
+    pub fn clear_pending_control_write(&self, subscription_epoch: &str) {
+        self.pending_control_writes.lock().remove(subscription_epoch);
+    }
+    /// Removes a viewer snapshot on pair/session teardown.
+    pub fn remove_viewer_snapshot(&self, subscription_epoch: &str) -> Option<ViewerDeliverySnapshot> {
+        self.pending_control_writes.lock().remove(subscription_epoch);
+        self.viewer_snapshots
+            .lock()
+            .remove(subscription_epoch)
+            .map(|e| e.snapshot)
+    }
+
+    pub fn viewer_snapshot(&self, subscription_epoch: &str) -> Option<ViewerDeliverySnapshot> {
+        self.viewer_snapshots
+            .lock()
+            .get(subscription_epoch)
+            .map(|e| e.snapshot.clone())
+    }
+
+    pub fn viewer_snapshot_for_owner(
+        &self,
+        principal: &str,
+        subscription_epoch: &str,
+    ) -> Option<ViewerDeliverySnapshot> {
+        self.viewer_snapshots
+            .lock()
+            .get(subscription_epoch)
+            .filter(|e| e.principal == principal)
+            .map(|e| e.snapshot.clone())
+    }
+
+    pub fn viewer_snapshots_for_session(&self, browser_session_id: &str) -> Vec<ViewerDeliverySnapshot> {
+        self.viewer_snapshots
+            .lock()
+            .values()
+            .filter(|e| e.snapshot.browser_session_id == browser_session_id)
+            .map(|e| e.snapshot.clone())
+            .collect()
+    }
+
+    pub fn viewer_snapshots_for_owner_session(
+        &self,
+        principal: &str,
+        browser_session_id: &str,
+    ) -> Vec<ViewerDeliverySnapshot> {
+        self.viewer_snapshots
+            .lock()
+            .values()
+            .filter(|e| {
+                e.principal == principal && e.snapshot.browser_session_id == browser_session_id
+            })
+            .map(|e| e.snapshot.clone())
+            .collect()
+    }
+
+    pub fn export_viewer_snapshots(&self) -> Vec<ViewerDeliverySnapshot> {
+        self.viewer_snapshots
+            .lock()
+            .values()
+            .map(|e| e.snapshot.clone())
+            .collect()
+    }
+
+    pub fn viewer_snapshot_count(&self) -> usize {
+        self.viewer_snapshots.lock().len()
     }
 }
 

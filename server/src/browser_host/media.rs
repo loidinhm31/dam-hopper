@@ -33,10 +33,14 @@ use crate::browser_host::manager::{
     NativeCreateError, NativeFaults, NativePumpRequest,
 };
 use crate::browser_host::protocol::{
-    unpack_bhjf_frame, MediaClientControl, ServerControlEvent, TargetGeometry, CONTROL_SUBPROTOCOL,
-    MAX_AUDIO_MESSAGE_BYTES, MEDIA_SUBPROTOCOL, TICKET_SUBPROTOCOL_PREFIX,
+    unpack_bhjf_frame, DiscardReason, HeartbeatTelemetry, MediaClientControlWire,
+    ServerControlEvent, TargetGeometry, CONTROL_SUBPROTOCOL, MAX_AUDIO_MESSAGE_BYTES,
+    MEDIA_SUBPROTOCOL, TICKET_SUBPROTOCOL_PREFIX,
 };
 use crate::browser_host::screencast::ScreencastProducer;
+use crate::browser_host::viewer_delivery_estimator::{
+    ViewerDeliveryEstimator, ViewerDeliverySnapshot,
+};
 use crate::browser_host::session::{
     BindOutcome, BrowserSessionDto, CloseAction, CreateParams, CreateReservation,
     CreateSessionRequest, RollbackOutcome, SessionError, SessionSnapshot, SessionStatus,
@@ -740,9 +744,10 @@ pub struct OutstandingKey {
 pub struct ViewerCreditController {
     subscription_epoch: String,
     outstanding: HashMap<OutstandingKey, (TrackedBhjfFrame, Instant)>,
-    pending_frame: Option<TrackedBhjfFrame>,
+    pending_frame: Option<(TrackedBhjfFrame, Instant)>,
     min_delivery_interval: Duration,
     last_delivery: Instant,
+    estimator: ViewerDeliveryEstimator,
     pub total_delivered: usize,
     pub total_acked: usize,
     pub total_discarded: usize,
@@ -754,17 +759,27 @@ impl ViewerCreditController {
     }
 
     pub fn with_min_interval(subscription_epoch: String, min_interval: Duration) -> Self {
+        Self::with_min_interval_at(subscription_epoch, min_interval, Instant::now())
+    }
+
+    pub fn with_min_interval_at(
+        subscription_epoch: String,
+        min_interval: Duration,
+        now: Instant,
+    ) -> Self {
         let effective_interval = if min_interval.is_zero() {
             Duration::from_millis(1)
         } else {
             min_interval
         };
+        let last_delivery = now.checked_sub(effective_interval).unwrap_or(now);
         Self {
+            estimator: ViewerDeliveryEstimator::new(subscription_epoch.clone(), now),
             subscription_epoch,
             outstanding: HashMap::with_capacity(MAX_OUTSTANDING_PER_VIEWER),
             pending_frame: None,
             min_delivery_interval: effective_interval,
-            last_delivery: Instant::now() - effective_interval,
+            last_delivery,
             total_delivered: 0,
             total_acked: 0,
             total_discarded: 0,
@@ -779,21 +794,88 @@ impl ViewerCreditController {
         self.outstanding.len()
     }
 
+    pub fn outstanding_bytes(&self) -> usize {
+        self.outstanding
+            .values()
+            .map(|(frame, _)| frame.byte_length())
+            .sum()
+    }
+
+    pub fn oldest_outstanding_age_at(&self, now: Instant) -> Duration {
+        self.outstanding
+            .values()
+            .map(|(_, sent_at)| now.saturating_duration_since(*sent_at))
+            .max()
+            .unwrap_or(Duration::ZERO)
+    }
+
     pub fn has_pending(&self) -> bool {
         self.pending_frame.is_some()
+    }
+
+    pub fn estimator(&self) -> &ViewerDeliveryEstimator {
+        &self.estimator
+    }
+
+    pub fn snapshot(&mut self, browser_session_id: &str, viewer_id: &str) -> ViewerDeliverySnapshot {
+        self.snapshot_at(browser_session_id, viewer_id, Instant::now())
+    }
+
+    pub fn snapshot_at(
+        &mut self,
+        browser_session_id: &str,
+        viewer_id: &str,
+        now: Instant,
+    ) -> ViewerDeliverySnapshot {
+        if let Some((ctrl_bytes, ctrl_dur)) =
+            global_stream_diagnostics().take_pending_control_write(&self.subscription_epoch)
+        {
+            self.record_control_write(ctrl_bytes, ctrl_dur);
+        }
+        let out_frames = self.outstanding.len();
+        let out_bytes = self.outstanding_bytes();
+        let oldest = self.oldest_outstanding_age_at(now);
+        let has_pending = self.pending_frame.is_some();
+        self.estimator.snapshot(
+            browser_session_id,
+            viewer_id,
+            out_frames,
+            out_bytes,
+            oldest,
+            has_pending,
+            now,
+        )
+    }
+
+    pub fn publish_diagnostics(&mut self, browser_session_id: &str, viewer_id: &str) {
+        let snap = self.snapshot(browser_session_id, viewer_id);
+        global_stream_diagnostics().update_viewer_snapshot(snap);
     }
 
     /// Tries to admit an incoming frame for immediate transmission, or stores it as pending.
     /// Returns `Some(frame_to_send)` if credit and rate governor permit immediate send.
     pub fn on_incoming_frame(&mut self, frame: TrackedBhjfFrame) -> Option<TrackedBhjfFrame> {
+        self.on_incoming_frame_at(frame, Instant::now())
+    }
+
+    pub fn on_incoming_frame_at(
+        &mut self,
+        frame: TrackedBhjfFrame,
+        now: Instant,
+    ) -> Option<TrackedBhjfFrame> {
         let (header, _) = match unpack_bhjf_frame(frame.data()) {
             Ok(h) => h,
             Err(_) => return None,
         };
+        self.estimator.on_frame_candidate(
+            &header.producer_run,
+            header.native_capture_time_unix_ms(),
+            frame.server_received_unix_ms(),
+            now,
+        );
 
-        let now = Instant::now();
         if self.outstanding.len() < MAX_OUTSTANDING_PER_VIEWER
-            && now.duration_since(self.last_delivery) >= self.min_delivery_interval
+            && now.saturating_duration_since(self.last_delivery) >= self.min_delivery_interval
         {
             let key = OutstandingKey {
                 subscription_epoch: self.subscription_epoch.clone(),
@@ -806,21 +888,35 @@ impl ViewerCreditController {
             self.total_delivered += 1;
             // Sending a newer frame directly clears any prior pending frame
             self.pending_frame = None;
+            self.estimator.on_frame_admitted(
+                Some(Duration::ZERO),
+                self.outstanding.len() >= MAX_OUTSTANDING_PER_VIEWER,
+            );
             Some(frame)
         } else {
+            let credit_blocked = self.outstanding.len() >= MAX_OUTSTANDING_PER_VIEWER;
+            let replaced_pending = self.pending_frame.is_some();
+            if credit_blocked {
+                self.estimator.record_credit_pending_hold(replaced_pending);
+            } else {
+                self.estimator.record_intentional_pacing_hold();
+            }
             // Buffer latest frame as pending (replacing any prior pending frame)
-            self.pending_frame = Some(frame);
+            self.pending_frame = Some((frame, now));
             None
         }
     }
 
     /// Checks if a buffered pending frame can now be delivered (e.g. rate governor interval elapsed).
     pub fn check_flush_pending(&mut self) -> Option<TrackedBhjfFrame> {
-        let now = Instant::now();
+        self.check_flush_pending_at(Instant::now())
+    }
+
+    pub fn check_flush_pending_at(&mut self, now: Instant) -> Option<TrackedBhjfFrame> {
         if self.outstanding.len() < MAX_OUTSTANDING_PER_VIEWER
-            && now.duration_since(self.last_delivery) >= self.min_delivery_interval
+            && now.saturating_duration_since(self.last_delivery) >= self.min_delivery_interval
         {
-            if let Some(pending) = self.pending_frame.take() {
+            if let Some((pending, queued_at)) = self.pending_frame.take() {
                 if let Ok((header, _)) = unpack_bhjf_frame(pending.data()) {
                     let key = OutstandingKey {
                         subscription_epoch: self.subscription_epoch.clone(),
@@ -831,6 +927,11 @@ impl ViewerCreditController {
                     self.outstanding.insert(key, (pending.clone(), now));
                     self.last_delivery = now;
                     self.total_delivered += 1;
+                    let queued_dur = now.saturating_duration_since(queued_at);
+                    self.estimator.on_frame_admitted(
+                        Some(queued_dur),
+                        self.outstanding.len() >= MAX_OUTSTANDING_PER_VIEWER,
+                    );
                     return Some(pending);
                 }
             }
@@ -849,6 +950,30 @@ impl ViewerCreditController {
         frame_seq: &str,
         is_discard: bool,
     ) -> Option<TrackedBhjfFrame> {
+        self.on_credit_return_with_feedback_at(
+            control_sub,
+            producer_run,
+            viewport_epoch,
+            frame_seq,
+            is_discard,
+            None,
+            None,
+            Instant::now(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn on_credit_return_with_feedback_at(
+        &mut self,
+        control_sub: &str,
+        producer_run: &str,
+        viewport_epoch: &str,
+        frame_seq: &str,
+        is_discard: bool,
+        discard_reason: Option<DiscardReason>,
+        decode_ms: Option<f64>,
+        now: Instant,
+    ) -> Option<TrackedBhjfFrame> {
         // Exact socket subscription authority check
         if control_sub != self.subscription_epoch {
             warn!(
@@ -866,7 +991,7 @@ impl ViewerCreditController {
             frame_seq: frame_seq.to_string(),
         };
 
-        if self.outstanding.remove(&key).is_some() {
+        if let Some((frame, admitted_at)) = self.outstanding.remove(&key) {
             if is_discard {
                 self.total_discarded += 1;
                 global_stream_diagnostics()
@@ -879,18 +1004,71 @@ impl ViewerCreditController {
                     .fetch_add(1, Ordering::Relaxed);
             }
 
-            return self.check_flush_pending();
+            let service_duration = now.saturating_duration_since(admitted_at);
+            self.estimator.on_credit_completed(
+                producer_run,
+                frame.byte_length(),
+                service_duration,
+                is_discard,
+                discard_reason,
+                decode_ms,
+            );
+
+            return self.check_flush_pending_at(now);
         }
 
         None
     }
 
+    pub fn record_heartbeat_telemetry(&mut self, telemetry: HeartbeatTelemetry) {
+        self.estimator.record_heartbeat_telemetry(telemetry);
+    }
+
+    pub fn record_broadcast_lag(&mut self, lagged_frames: u64) {
+        self.estimator.record_broadcast_lag(lagged_frames);
+        global_stream_diagnostics()
+            .broadcast_lagged_frames
+            .fetch_add(lagged_frames, Ordering::Relaxed);
+    }
+
+    pub fn record_frame_write(
+        &mut self,
+        bytes: usize,
+        write_duration: Duration,
+        local_send_unix_ms: u64,
+    ) {
+        self.estimator
+            .record_frame_write(bytes, write_duration, local_send_unix_ms);
+        global_stream_diagnostics()
+            .delivered_frames
+            .fetch_add(1, Ordering::Relaxed);
+        global_stream_diagnostics()
+            .last_local_send_unix_ms
+            .store(local_send_unix_ms, Ordering::Relaxed);
+    }
+
+    pub fn record_audio_write(&mut self, bytes: usize, write_duration: Duration) {
+        self.estimator.record_audio_write(bytes, write_duration);
+    }
+
+    pub fn record_control_write(&mut self, bytes: usize, write_duration: Duration) {
+        self.estimator.record_control_write(bytes, write_duration);
+    }
+
     /// Returns whether any outstanding frame has exceeded OUTSTANDING_TIMEOUT (> 30s).
     pub fn prune_timeouts(&mut self) -> bool {
-        let now = Instant::now();
-        self.outstanding
-            .values()
-            .any(|(_, sent_at)| now.duration_since(*sent_at) > OUTSTANDING_TIMEOUT)
+        self.prune_timeouts_at(Instant::now())
+    }
+
+    pub fn prune_timeouts_at(&mut self, now: Instant) -> bool {
+        let oldest = self.oldest_outstanding_age_at(now);
+        self.estimator.advance_window_if_due(
+            self.outstanding.len(),
+            oldest,
+            self.pending_frame.is_some(),
+            now,
+        );
+        oldest > OUTSTANDING_TIMEOUT
     }
 }
 
@@ -1076,6 +1254,7 @@ pub async fn media_ws_handler(
         .clamp(1, 30);
     let min_delivery_interval = Duration::from_secs_f64(1.0 / (configured_fps as f64));
 
+    let principal = adm.principal.clone();
     // Echo only fixed subprotocol with frame/message bounds
     ws.protocols([MEDIA_SUBPROTOCOL])
         .max_message_size(MAX_MEDIA_CONTROL_BYTES)
@@ -1083,6 +1262,7 @@ pub async fn media_ws_handler(
         .on_upgrade(move |socket| {
             run_media_session(
                 socket,
+                principal,
                 session_id,
                 viewer_id,
                 sub_epoch,
@@ -1096,9 +1276,11 @@ pub async fn media_ws_handler(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_media_session(
     socket: WebSocket,
-    _session_id: String,
+    principal: String,
+    session_id: String,
     viewer_id: String,
     subscription_epoch: String,
     producer: Option<Arc<ScreencastProducer>>,
@@ -1113,6 +1295,11 @@ async fn run_media_session(
         subscription_epoch.clone(),
         min_delivery_interval,
     )));
+    {
+        let mut ctrl = controller.lock().await;
+        let init_snap = ctrl.snapshot(&session_id, &viewer_id);
+        global_stream_diagnostics().register_viewer_snapshot_for_owner(&principal, init_snap);
+    }
     let mut viewer_visible = true;
 
     let (mut frame_rx, mut audio_rx) = if let Some(prod) = &producer {
@@ -1120,10 +1307,19 @@ async fn run_media_session(
             .await;
         // Deliver current valid cached frame on attach if present
         if let Some(cached) = prod.get_cached_frame().await {
-            let mut ctrl = controller.lock().await;
-            if let Some(to_send) = ctrl.on_incoming_frame(cached) {
-                drop(ctrl);
-                let _ = write_media_frame(&mut ws_sink, to_send.clone_data(), &cancel_token).await;
+            let to_send = {
+                let mut ctrl = controller.lock().await;
+                ctrl.on_incoming_frame(cached)
+            };
+            if let Some(to_send) = to_send {
+                let byte_len = to_send.byte_length();
+                if let Ok(write_dur) =
+                    write_media_frame(&mut ws_sink, to_send.clone_data(), &cancel_token).await
+                {
+                    let send_ms = Utc::now().timestamp_millis().max(0) as u64;
+                    let mut ctrl = controller.lock().await;
+                    ctrl.record_frame_write(byte_len, write_dur, send_ms);
+                }
             }
         }
         (Some(prod.subscribe_frames()), Some(prod.subscribe_audio()))
@@ -1139,10 +1335,11 @@ async fn run_media_session(
         Some(dl) => {
             let duration = dl.signed_duration_since(Utc::now());
             if duration.num_milliseconds() <= 0 {
+                global_stream_diagnostics().remove_viewer_snapshot(&subscription_epoch);
                 return;
             }
             Some(sleep(Duration::from_millis(
-                duration.num_milliseconds() as u64
+                duration.num_milliseconds() as u64,
             )))
         }
         None => None,
@@ -1156,7 +1353,7 @@ async fn run_media_session(
                 break;
             }
             _ = async {
-                if let Some(ref mut sleep_fut) = deadline_sleep.as_mut().as_pin_mut() {
+                if let Some(sleep_fut) = deadline_sleep.as_mut().as_pin_mut() {
                     sleep_fut.await;
                 } else {
                     futures_util::future::pending::<()>().await;
@@ -1167,38 +1364,66 @@ async fn run_media_session(
             }
             _ = timeout_ticker.tick() => {
                 let mut ctrl = controller.lock().await;
-                if ctrl.prune_timeouts() {
+                let timed_out = ctrl.prune_timeouts();
+                ctrl.publish_diagnostics(&session_id, &viewer_id);
+                if timed_out {
                     warn!(subscription_epoch = %subscription_epoch, "outstanding frame exceeded 30s timeout; tearing down stalled subscription");
                     break;
                 }
             }
             _ = flush_ticker.tick() => {
-                let mut ctrl = controller.lock().await;
-                if let Some(flush_frame) = ctrl.check_flush_pending() {
-                    drop(ctrl);
-                    if write_media_frame(&mut ws_sink, flush_frame.clone_data(), &cancel_token).await.is_err() {
-                        break;
+                let flush_frame = {
+                    let mut ctrl = controller.lock().await;
+                    ctrl.check_flush_pending()
+                };
+                if let Some(flush_frame) = flush_frame {
+                    let byte_len = flush_frame.byte_length();
+                    match write_media_frame(&mut ws_sink, flush_frame.clone_data(), &cancel_token).await {
+                        Ok(write_dur) => {
+                            let send_ms = Utc::now().timestamp_millis().max(0) as u64;
+                            let mut ctrl = controller.lock().await;
+                            ctrl.record_frame_write(byte_len, write_dur, send_ms);
+                        }
+                        Err(_) => break,
                     }
                 }
             }
             // Incoming broadcast frame from screencast producer
             frame_res = async {
                 match frame_rx.as_mut() {
-                    Some(rx) => rx.recv().await.ok(),
+                    Some(rx) => Some(rx.recv().await),
                     None => {
                         sleep(Duration::from_secs(10)).await;
                         None
                     }
                 }
             } => {
-                if let Some(frame) = frame_res {
-                    let mut ctrl = controller.lock().await;
-                    if let Some(to_send) = ctrl.on_incoming_frame(frame) {
-                        drop(ctrl);
-                        if write_media_frame(&mut ws_sink, to_send.clone_data(), &cancel_token).await.is_err() {
-                            break;
+                match frame_res {
+                    Some(Ok(frame)) => {
+                        let to_send = {
+                            let mut ctrl = controller.lock().await;
+                            ctrl.on_incoming_frame(frame)
+                        };
+                        if let Some(to_send) = to_send {
+                            let byte_len = to_send.byte_length();
+                            match write_media_frame(&mut ws_sink, to_send.clone_data(), &cancel_token).await {
+                                Ok(write_dur) => {
+                                    let send_ms = Utc::now().timestamp_millis().max(0) as u64;
+                                    let mut ctrl = controller.lock().await;
+                                    ctrl.record_frame_write(byte_len, write_dur, send_ms);
+                                }
+                                Err(_) => break,
+                            }
                         }
                     }
+                    Some(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                        let mut ctrl = controller.lock().await;
+                        ctrl.record_broadcast_lag(n);
+                    }
+                    Some(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                        frame_rx = None;
+                    }
+                    None => {}
                 }
             }
             // Incoming broadcast audio chunk from screencast producer
@@ -1233,7 +1458,8 @@ async fn run_media_session(
                         let envelope = chunk.to_viewer_envelope(&subscription_epoch);
                         if envelope.validate().is_ok() {
                             if let Ok(json) = serde_json::to_string(&envelope) {
-                                if json.len() <= MAX_AUDIO_MESSAGE_BYTES {
+                                let json_len = json.len();
+                                if json_len <= MAX_AUDIO_MESSAGE_BYTES {
                                     let write_res = if let Some(rx) = doc_rx.as_mut() {
                                         tokio::select! {
                                             res = write_media_text(&mut ws_sink, json, &cancel_token) => Some(res),
@@ -1242,14 +1468,22 @@ async fn run_media_session(
                                     } else {
                                         Some(write_media_text(&mut ws_sink, json, &cancel_token).await)
                                     };
-                                    if let Some(Err(_)) = write_res {
-                                        break;
+                                    match write_res {
+                                        Some(Ok(write_dur)) => {
+                                            let mut ctrl = controller.lock().await;
+                                            ctrl.record_audio_write(json_len, write_dur);
+                                        }
+                                        Some(Err(_)) => break,
+                                        None => {}
                                     }
                                 }
                             }
                         }
                     }
-                    Some(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+                    Some(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                        let mut ctrl = controller.lock().await;
+                        ctrl.record_broadcast_lag(n);
+                    }
                     Some(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
                         audio_rx = None;
                     }
@@ -1283,69 +1517,105 @@ async fn run_media_session(
                             break;
                         }
 
-                        let ctrl_msg: Result<MediaClientControl, _> = serde_json::from_str(&text);
+                        let ctrl_msg = match MediaClientControlWire::parse_and_validate(&text) {
+                            Ok(m) => m,
+                            Err(e) => {
+                                warn!(error = %e, "invalid media client control message; disconnecting");
+                                break;
+                            }
+                        };
                         match &ctrl_msg {
-                            Ok(MediaClientControl::FrameAck {
+                            MediaClientControlWire::FrameAck {
                                 subscription_epoch: s_epoch,
                                 producer_run,
                                 viewport_epoch,
                                 frame_seq,
+                                decode_ms,
                                 ..
-                            }) => {
-                                let mut ctrl = controller.lock().await;
-                                if let Some(pending_to_send) = ctrl.on_credit_return(
-                                    s_epoch,
-                                    producer_run,
-                                    viewport_epoch,
-                                    frame_seq,
-                                    false,
-                                ) {
-                                    drop(ctrl);
-                                    if write_media_frame(&mut ws_sink, pending_to_send.clone_data(), &cancel_token).await.is_err() {
-                                        break;
+                            } => {
+                                let pending_to_send = {
+                                    let mut ctrl = controller.lock().await;
+                                    ctrl.on_credit_return_with_feedback_at(
+                                        s_epoch,
+                                        producer_run,
+                                        viewport_epoch,
+                                        frame_seq,
+                                        false,
+                                        None,
+                                        *decode_ms,
+                                        Instant::now(),
+                                    )
+                                };
+                                if let Some(pending_to_send) = pending_to_send {
+                                    let byte_len = pending_to_send.byte_length();
+                                    match write_media_frame(&mut ws_sink, pending_to_send.clone_data(), &cancel_token).await {
+                                        Ok(write_dur) => {
+                                            let send_ms = Utc::now().timestamp_millis().max(0) as u64;
+                                            let mut ctrl = controller.lock().await;
+                                            ctrl.record_frame_write(byte_len, write_dur, send_ms);
+                                        }
+                                        Err(_) => break,
                                     }
                                 }
                             }
-                            Ok(MediaClientControl::FrameDiscarded {
+                            MediaClientControlWire::FrameDiscarded {
                                 subscription_epoch: s_epoch,
                                 producer_run,
                                 viewport_epoch,
                                 frame_seq,
-                                ..
-                            }) => {
-                                let mut ctrl = controller.lock().await;
-                                if let Some(pending_to_send) = ctrl.on_credit_return(
-                                    s_epoch,
-                                    producer_run,
-                                    viewport_epoch,
-                                    frame_seq,
-                                    true,
-                                ) {
-                                    drop(ctrl);
-                                    if write_media_frame(&mut ws_sink, pending_to_send.clone_data(), &cancel_token).await.is_err() {
-                                        break;
+                                reason,
+                            } => {
+                                let pending_to_send = {
+                                    let mut ctrl = controller.lock().await;
+                                    ctrl.on_credit_return_with_feedback_at(
+                                        s_epoch,
+                                        producer_run,
+                                        viewport_epoch,
+                                        frame_seq,
+                                        true,
+                                        *reason,
+                                        None,
+                                        Instant::now(),
+                                    )
+                                };
+                                if let Some(pending_to_send) = pending_to_send {
+                                    let byte_len = pending_to_send.byte_length();
+                                    match write_media_frame(&mut ws_sink, pending_to_send.clone_data(), &cancel_token).await {
+                                        Ok(write_dur) => {
+                                            let send_ms = Utc::now().timestamp_millis().max(0) as u64;
+                                            let mut ctrl = controller.lock().await;
+                                            ctrl.record_frame_write(byte_len, write_dur, send_ms);
+                                        }
+                                        Err(_) => break,
                                     }
                                 }
                             }
-                            Ok(MediaClientControl::Heartbeat { subscription_epoch: s_epoch, visible }) => {
+                            MediaClientControlWire::Heartbeat {
+                                subscription_epoch: s_epoch,
+                                visible,
+                                telemetry,
+                            } => {
                                 if s_epoch == &subscription_epoch {
                                     viewer_visible = *visible;
+                                    {
+                                        let mut ctrl = controller.lock().await;
+                                        if let Some(t) = telemetry {
+                                            ctrl.record_heartbeat_telemetry(*t);
+                                        }
+                                        ctrl.publish_diagnostics(&session_id, &viewer_id);
+                                    }
                                     if let Some(prod) = &producer {
                                         prod.heartbeat(&subscription_epoch, *visible).await;
                                     }
                                 }
                             }
-                            Ok(MediaClientControl::Pause { subscription_epoch: s_epoch }) => {
+                            MediaClientControlWire::Pause { subscription_epoch: s_epoch } => {
                                 if s_epoch == &subscription_epoch {
                                     if let Some(prod) = &producer {
                                         prod.remove_viewer_demand(&subscription_epoch).await;
                                     }
                                     break;
                                 }
-                            }
-                            Err(e) => {
-                                warn!(error = %e, "invalid media client control JSON; disconnecting");
-                                break;
                             }
                         }
                     }
@@ -1356,7 +1626,8 @@ async fn run_media_session(
         }
     }
 
-    // Cleanup viewer demand and attachment connection on session exit
+    // Cleanup viewer demand, diagnostics snapshot, and attachment connection on session exit
+    global_stream_diagnostics().remove_viewer_snapshot(&subscription_epoch);
     if let Some(prod) = &producer {
         prod.remove_viewer_demand(&subscription_epoch).await;
     }
@@ -1369,12 +1640,13 @@ async fn write_media_frame(
     ws_sink: &mut futures_util::stream::SplitSink<WebSocket, AxumWsMessage>,
     data: bytes::Bytes,
     cancel_token: &CancellationToken,
-) -> Result<(), &'static str> {
+) -> Result<Duration, &'static str> {
+    let started = Instant::now();
     tokio::select! {
         _ = cancel_token.cancelled() => Err("cancelled"),
         res = timeout(WRITE_DEADLINE, ws_sink.send(AxumWsMessage::Binary(data))) => {
             match res {
-                Ok(Ok(())) => Ok(()),
+                Ok(Ok(())) => Ok(Instant::now().saturating_duration_since(started)),
                 Ok(Err(_)) => Err("transport_error"),
                 Err(_) => Err("timeout"),
             }
@@ -1386,12 +1658,13 @@ async fn write_media_text(
     ws_sink: &mut futures_util::stream::SplitSink<WebSocket, AxumWsMessage>,
     text: String,
     cancel_token: &CancellationToken,
-) -> Result<(), &'static str> {
+) -> Result<Duration, &'static str> {
+    let started = Instant::now();
     tokio::select! {
         _ = cancel_token.cancelled() => Err("cancelled"),
         res = timeout(WRITE_DEADLINE, ws_sink.send(AxumWsMessage::Text(text.into()))) => {
             match res {
-                Ok(Ok(())) => Ok(()),
+                Ok(Ok(())) => Ok(Instant::now().saturating_duration_since(started)),
                 Ok(Err(_)) => Err("transport_error"),
                 Err(_) => Err("timeout"),
             }
@@ -1567,7 +1840,7 @@ async fn run_control_session(
                 break;
             }
             _ = async {
-                if let Some(ref mut sleep_fut) = deadline_sleep.as_mut().as_pin_mut() {
+                if let Some(sleep_fut) = deadline_sleep.as_mut().as_pin_mut() {
                     sleep_fut.await;
                 } else {
                     futures_util::future::pending::<()>().await;
@@ -1592,9 +1865,11 @@ async fn run_control_session(
                 let Ok((json, retired)) = serialize_control_snapshot(&mut updates) else {
                     break;
                 };
+                let json_len = json.len();
                 let Some(deadline) = control_write_deadline(effective_deadline) else {
                     break;
                 };
+                let write_started = Instant::now();
                 let sent = tokio::select! {
                     biased;
                     _ = cancel_token.cancelled() => false,
@@ -1602,6 +1877,11 @@ async fn run_control_session(
                         matches!(result, Ok(Ok(())))
                     }
                 };
+                if sent {
+                    let write_dur = Instant::now().saturating_duration_since(write_started);
+                    global_stream_diagnostics()
+                        .record_control_write(&subscription_epoch, json_len, write_dur);
+                }
                 if !sent || retired {
                     break;
                 }
@@ -1693,11 +1973,20 @@ async fn run_control_session(
                     control_write_deadline(effective_deadline),
                     serialize_control_snapshot(&mut updates),
                 ) {
-                    let _ = timeout(
-                        deadline,
-                        ws_sink.send(AxumWsMessage::Text(json.into())),
-                    )
-                    .await;
+                    let json_len = json.len();
+                    let write_started = Instant::now();
+                    if matches!(
+                        timeout(
+                            deadline,
+                            ws_sink.send(AxumWsMessage::Text(json.into())),
+                        )
+                        .await,
+                        Ok(Ok(()))
+                    ) {
+                        let write_dur = Instant::now().saturating_duration_since(write_started);
+                        global_stream_diagnostics()
+                            .record_control_write(&subscription_epoch, json_len, write_dur);
+                    }
                 }
             }
         }
@@ -1719,6 +2008,7 @@ async fn run_control_session(
             }
         }
     }
+    global_stream_diagnostics().clear_pending_control_write(&subscription_epoch);
     global_attachment_manager()
         .unregister_connection(conn_id)
         .await;

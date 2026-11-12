@@ -147,8 +147,30 @@ pub struct ScreencastFrameData {
     pub frame_session_id: i64,
     pub data_base64: String,
     pub metadata: Value,
+    pub native_capture_time_unix_ms: Option<u64>,
+    pub received_at: std::time::Instant,
+    pub server_received_unix_ms: u64,
 }
 
+/// Extracts and validates optional CDP `Page.ScreencastFrameMetadata.timestamp` (seconds since Unix
+/// epoch) into finite positive milliseconds within a plausible upper envelope (`<= 2100-01-01 UTC`,
+/// well within JS safe integer range). Missing, non-finite, non-positive, or implausible values
+/// return `None` rather than fabricating capture time.
+pub fn parse_native_capture_time_unix_ms(metadata: &Value) -> Option<u64> {
+    const MAX_PLAUSIBLE_CAPTURE_UNIX_MS: u64 = 4_102_444_800_000; // 2100-01-01T00:00:00Z
+    let raw_ts = metadata.get("timestamp")?.as_f64()?;
+    if !raw_ts.is_finite() || raw_ts <= 0.0 {
+        return None;
+    }
+    let ms_f64 = (raw_ts * 1000.0).round();
+    if !ms_f64.is_finite()
+        || ms_f64 < 1.0
+        || ms_f64 > (MAX_PLAUSIBLE_CAPTURE_UNIX_MS as f64)
+    {
+        return None;
+    }
+    Some(ms_f64 as u64)
+}
 #[derive(Debug, Clone)]
 pub enum CdpLifecycleEvent {
     FrameNavigated {
@@ -1414,11 +1436,17 @@ where
                 )));
             }
         }
+        let native_capture_time_unix_ms = parse_native_capture_time_unix_ms(&metadata);
+        let received_at = std::time::Instant::now();
+        let server_received_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
         let frame = Arc::new(ScreencastFrameData {
             session_id,
             frame_session_id,
             data_base64,
             metadata,
+            native_capture_time_unix_ms,
+            received_at,
+            server_received_unix_ms,
         });
         self.stats
             .screencast_frames_received

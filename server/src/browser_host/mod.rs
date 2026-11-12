@@ -16,3 +16,4 @@ pub mod media;
 pub mod diagnostics;
 pub mod selection;
 pub mod stealth;
+pub mod viewer_delivery_estimator;

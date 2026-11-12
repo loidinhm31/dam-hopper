@@ -41,6 +41,11 @@ pub const MEDIA_SUBPROTOCOL: &str = "damhopper.browser.media.v1";
 pub const CONTROL_SUBPROTOCOL: &str = "damhopper.browser.control.v1";
 pub const CDP_SUBPROTOCOL: &str = "damhopper.browser.cdp.v1";
 pub const TICKET_SUBPROTOCOL_PREFIX: &str = "damhopper.ticket.";
+pub const MAX_CLIENT_DECODE_MS: f64 = 60_000.0;
+pub const MAX_HEARTBEAT_SAMPLE_MS: u32 = 60_000;
+pub const MAX_HEARTBEAT_FRAME_COUNT: u32 = 10_000;
+pub const MAX_MEDIA_CONTROL_REASON_BYTES: usize = 64;
+pub const MAX_SUBSCRIPTION_EPOCH_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -214,6 +219,10 @@ pub struct TargetFrameHeader {
 }
 
 impl TargetFrameHeader {
+    pub fn native_capture_time_unix_ms(&self) -> Option<u64> {
+        (self.capture_time_unix_ms > 0).then_some(self.capture_time_unix_ms)
+    }
+
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_decimal_sequence("profileEpoch", &self.profile_epoch)?;
         validate_decimal_sequence("viewportEpoch", &self.viewport_epoch)?;
@@ -451,8 +460,182 @@ pub fn unpack_bhjf_frame(data: &[u8]) -> Result<(TargetFrameHeader, &[u8]), Prot
 }
 
 // Media text control envelopes (Client -> Server)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HeartbeatTelemetry {
+    pub sample_ms: u32,
+    pub decoded_frames: u32,
+    pub replaced_frames: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decode_ms_ewma: Option<f64>,
+}
+
+impl HeartbeatTelemetry {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.sample_ms > MAX_HEARTBEAT_SAMPLE_MS {
+            return Err(ProtocolError::InvalidJson(format!(
+                "heartbeat sampleMs exceeds bound: {}",
+                self.sample_ms
+            )));
+        }
+        if self.decoded_frames > MAX_HEARTBEAT_FRAME_COUNT {
+            return Err(ProtocolError::InvalidJson(format!(
+                "heartbeat decodedFrames exceeds bound: {}",
+                self.decoded_frames
+            )));
+        }
+        if self.replaced_frames > MAX_HEARTBEAT_FRAME_COUNT {
+            return Err(ProtocolError::InvalidJson(format!(
+                "heartbeat replacedFrames exceeds bound: {}",
+                self.replaced_frames
+            )));
+        }
+        if let Some(ewma) = self.decode_ms_ewma {
+            if !ewma.is_finite() || !(0.0..=MAX_CLIENT_DECODE_MS).contains(&ewma) {
+                return Err(ProtocolError::InvalidJson(format!(
+                    "heartbeat decodeMsEwma out of bounds: {ewma}"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum MediaClientControlWire {
+    FrameAck {
+        subscription_epoch: String,
+        producer_run: String,
+        viewport_epoch: String,
+        frame_seq: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        decode_ms: Option<f64>,
+    },
+    FrameDiscarded {
+        subscription_epoch: String,
+        producer_run: String,
+        viewport_epoch: String,
+        frame_seq: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<DiscardReason>,
+    },
+    Pause {
+        subscription_epoch: String,
+    },
+    Heartbeat {
+        subscription_epoch: String,
+        visible: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        telemetry: Option<HeartbeatTelemetry>,
+    },
+}
+
+impl MediaClientControlWire {
+    pub fn parse_and_validate(text: &str) -> Result<Self, ProtocolError> {
+        if text.is_empty() || text.len() > MAX_JSON_HEADER_BYTES {
+            return Err(ProtocolError::MessageTooLarge {
+                got: text.len(),
+                max: MAX_JSON_HEADER_BYTES,
+            });
+        }
+        let wire: Self =
+            serde_json::from_str(text).map_err(|e| ProtocolError::InvalidJson(e.to_string()))?;
+        wire.validate()?;
+        Ok(wire)
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let check_sub = |sub: &str| -> Result<(), ProtocolError> {
+            if sub.is_empty() || sub.len() > MAX_SUBSCRIPTION_EPOCH_BYTES {
+                return Err(ProtocolError::InvalidJson(
+                    "invalid subscriptionEpoch".to_string(),
+                ));
+            }
+            Ok(())
+        };
+        let check_run = |run: &str| -> Result<(), ProtocolError> {
+            let parsed = uuid::Uuid::parse_str(run)
+                .map_err(|e| ProtocolError::InvalidJson(format!("invalid producerRun UUID: {e}")))?;
+            if run != parsed.to_string() {
+                return Err(ProtocolError::InvalidJson(format!(
+                    "producerRun UUID '{run}' is not canonical lowercase hyphenated"
+                )));
+            }
+            Ok(())
+        };
+        match self {
+            Self::FrameAck {
+                subscription_epoch,
+                producer_run,
+                viewport_epoch,
+                frame_seq,
+                reason,
+                decode_ms,
+            } => {
+                check_sub(subscription_epoch)?;
+                check_run(producer_run)?;
+                validate_decimal_sequence("viewportEpoch", viewport_epoch)?;
+                validate_decimal_sequence("frameSeq", frame_seq)?;
+                if let Some(r) = reason {
+                    if r.is_empty() || r.len() > MAX_MEDIA_CONTROL_REASON_BYTES {
+                        return Err(ProtocolError::InvalidJson(
+                            "frameAck reason out of bounds".to_string(),
+                        ));
+                    }
+                }
+                if let Some(ms) = decode_ms {
+                    if !ms.is_finite() || !(0.0..=MAX_CLIENT_DECODE_MS).contains(ms) {
+                        return Err(ProtocolError::InvalidJson(format!(
+                            "frameAck decodeMs out of bounds: {ms}"
+                        )));
+                    }
+                }
+                Ok(())
+            }
+            Self::FrameDiscarded {
+                subscription_epoch,
+                producer_run,
+                viewport_epoch,
+                frame_seq,
+                ..
+            } => {
+                check_sub(subscription_epoch)?;
+                check_run(producer_run)?;
+                validate_decimal_sequence("viewportEpoch", viewport_epoch)?;
+                validate_decimal_sequence("frameSeq", frame_seq)?;
+                Ok(())
+            }
+            Self::Pause { subscription_epoch } => check_sub(subscription_epoch),
+            Self::Heartbeat {
+                subscription_epoch,
+                telemetry,
+                ..
+            } => {
+                check_sub(subscription_epoch)?;
+                if let Some(t) = telemetry {
+                    t.validate()?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    try_from = "MediaClientControlWire"
+)]
 pub enum MediaClientControl {
     FrameAck {
         subscription_epoch: String,
@@ -476,7 +659,108 @@ pub enum MediaClientControl {
     Heartbeat {
         subscription_epoch: String,
         visible: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        telemetry: Option<HeartbeatTelemetry>,
     },
+}
+
+impl TryFrom<MediaClientControlWire> for MediaClientControl {
+    type Error = ProtocolError;
+
+    fn try_from(wire: MediaClientControlWire) -> Result<Self, Self::Error> {
+        wire.validate()?;
+        Ok(match wire {
+            MediaClientControlWire::FrameAck {
+                subscription_epoch,
+                producer_run,
+                viewport_epoch,
+                frame_seq,
+                reason,
+                ..
+            } => Self::FrameAck {
+                subscription_epoch,
+                producer_run,
+                viewport_epoch,
+                frame_seq,
+                reason,
+            },
+            MediaClientControlWire::FrameDiscarded {
+                subscription_epoch,
+                producer_run,
+                viewport_epoch,
+                frame_seq,
+                reason,
+            } => Self::FrameDiscarded {
+                subscription_epoch,
+                producer_run,
+                viewport_epoch,
+                frame_seq,
+                reason,
+            },
+            MediaClientControlWire::Pause { subscription_epoch } => Self::Pause {
+                subscription_epoch,
+            },
+            MediaClientControlWire::Heartbeat {
+                subscription_epoch,
+                visible,
+                telemetry,
+            } => Self::Heartbeat {
+                subscription_epoch,
+                visible,
+                telemetry,
+            },
+        })
+    }
+}
+
+impl MediaClientControl {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        match self {
+            Self::FrameAck {
+                subscription_epoch,
+                producer_run,
+                viewport_epoch,
+                frame_seq,
+                reason,
+            } => MediaClientControlWire::FrameAck {
+                subscription_epoch: subscription_epoch.clone(),
+                producer_run: producer_run.clone(),
+                viewport_epoch: viewport_epoch.clone(),
+                frame_seq: frame_seq.clone(),
+                reason: reason.clone(),
+                decode_ms: None,
+            }
+            .validate(),
+            Self::FrameDiscarded {
+                subscription_epoch,
+                producer_run,
+                viewport_epoch,
+                frame_seq,
+                reason,
+            } => MediaClientControlWire::FrameDiscarded {
+                subscription_epoch: subscription_epoch.clone(),
+                producer_run: producer_run.clone(),
+                viewport_epoch: viewport_epoch.clone(),
+                frame_seq: frame_seq.clone(),
+                reason: *reason,
+            }
+            .validate(),
+            Self::Pause { subscription_epoch } => MediaClientControlWire::Pause {
+                subscription_epoch: subscription_epoch.clone(),
+            }
+            .validate(),
+            Self::Heartbeat {
+                subscription_epoch,
+                visible,
+                telemetry,
+            } => MediaClientControlWire::Heartbeat {
+                subscription_epoch: subscription_epoch.clone(),
+                visible: *visible,
+                telemetry: *telemetry,
+            }
+            .validate(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

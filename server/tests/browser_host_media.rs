@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -248,7 +247,7 @@ async fn test_full_ticket_pairing_and_lease_scoping_journey() {
     let viewer_a = "viewer-a";
     let viewer_b = "viewer-b";
     let sub_a = Uuid::new_v4().to_string();
-    let sub_b = Uuid::new_v4().to_string();
+    let _sub_b = Uuid::new_v4().to_string();
     let inc = Uuid::new_v4().to_string();
 
     // 1. Issue media and control tickets for viewer A
@@ -347,7 +346,6 @@ async fn test_live_axum_media_and_control_websocket_journey() {
     use futures_util::{SinkExt, StreamExt};
     use opaque_ke::ServerSetup;
     use rand::rngs::OsRng;
-    use std::path::PathBuf;
     use tempfile::tempdir;
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -514,7 +512,7 @@ async fn test_live_axum_media_and_control_websocket_journey() {
         Some("damhopper.browser.control.v1")
     );
 
-    // 4. Verify initial Status message on control WS
+    // 4. Verify initial Status message on control WS and live media feedback on media WS
     let init_msg = tokio::time::timeout(Duration::from_secs(3), ctrl_ws.next())
         .await
         .expect("timeout on control ws initial status")
@@ -523,9 +521,56 @@ async fn test_live_axum_media_and_control_websocket_journey() {
     let text = init_msg.into_text().expect("status text message");
     assert!(text.contains("\"status\"") || text.contains("\"inputAvailable\""));
 
-    // 5. Clean close
+    let hb_payload = serde_json::json!({
+        "kind": "heartbeat",
+        "subscriptionEpoch": sub_epoch,
+        "visible": true,
+        "telemetry": {
+            "sampleMs": 5000,
+            "decodedFrames": 12,
+            "replacedFrames": 1,
+            "decodeMsEwma": 4.25
+        }
+    })
+    .to_string();
+    media_ws
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            hb_payload.into(),
+        ))
+        .await
+        .expect("send media heartbeat telemetry");
+
+    let diag = dam_hopper_server::browser_host::diagnostics::global_stream_diagnostics();
+    for _ in 0..20 {
+        if let Some(snap) = diag.viewer_snapshot(&sub_epoch) {
+            if snap.client_corroboration.decoded_frames_total == 12
+                && snap.control_bytes_written > 0
+            {
+                break;
+            }
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
+    let live_snap = diag
+        .viewer_snapshot(&sub_epoch)
+        .expect("live viewer snapshot registered");
+    assert_eq!(live_snap.browser_session_id, session_id);
+    assert_eq!(live_snap.viewer_id, viewer_id);
+    assert!(live_snap.control_bytes_written > 0);
+    assert_eq!(live_snap.client_corroboration.decoded_frames_total, 12);
+    assert_eq!(live_snap.client_corroboration.replaced_frames_total, 1);
+    assert_eq!(live_snap.client_corroboration.decode_ms_ewma, Some(4.25));
+
+    // 5. Clean close and verify diagnostic snapshot removal on teardown
     let _ = media_ws.close(None).await;
     let _ = ctrl_ws.close(None).await;
+    for _ in 0..20 {
+        if diag.viewer_snapshot(&sub_epoch).is_none() {
+            break;
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
+    assert!(diag.viewer_snapshot(&sub_epoch).is_none());
 }
 
 #[tokio::test]
@@ -1654,4 +1699,414 @@ async fn test_real_chromium_media_stealth_and_pcm_audio_bridge() {
 
     producer.remove_viewer_demand("sub-live-2").await;
     let _ = process.terminate().await;
+}
+
+#[test]
+fn viewer_delivery_estimator_overlapping_credits_and_busy_window_rate() {
+    use dam_hopper_server::browser_host::protocol::{DiscardReason, HeartbeatTelemetry};
+    use dam_hopper_server::browser_host::viewer_delivery_estimator::SampleProvenance;
+    use std::time::Instant;
+
+    let sub = Uuid::new_v4().to_string();
+    let run = Uuid::new_v4().to_string();
+    let t0 = Instant::now();
+    let interval_24fps = Duration::from_secs_f64(1.0 / 24.0);
+    let mut ctrl = ViewerCreditController::with_min_interval_at(sub.clone(), interval_24fps, t0);
+
+    let frame1 = make_test_frame(&run, "1", "1");
+    let frame2 = make_test_frame(&run, "1", "2");
+    let frame3 = make_test_frame(&run, "1", "3");
+    let f_bytes = frame1.byte_length() as u64;
+
+    // Admit frame 1 at t=0ms and frame 2 at t=50ms -> both in flight concurrently (overlapping credits!)
+    assert!(ctrl.on_incoming_frame_at(frame1, t0).is_some());
+    ctrl.record_frame_write(f_bytes as usize, Duration::from_millis(4), 1700000000010);
+    assert!(
+        ctrl.on_incoming_frame_at(frame2, t0 + Duration::from_millis(50))
+            .is_some()
+    );
+    ctrl.record_frame_write(f_bytes as usize, Duration::from_millis(8), 1700000000060);
+    assert_eq!(ctrl.outstanding_count(), 2);
+    assert_eq!(ctrl.outstanding_bytes(), (f_bytes * 2) as usize);
+
+    // Both overlapping frames complete at t=850ms (service times: 850ms and 800ms).
+    // Windowed accounting must compute (2 * f_bytes) over the 1.0s window, NEVER sum(bytes / frameRTT)!
+    let _ = ctrl.on_credit_return_with_feedback_at(
+        &sub,
+        &run,
+        "1",
+        "1",
+        false,
+        None,
+        Some(6.5),
+        t0 + Duration::from_millis(850),
+    );
+    // Frame 2 is discarded due to client replacement (still consumed wire bytes, but not useful drawn)
+    let _ = ctrl.on_credit_return_with_feedback_at(
+        &sub,
+        &run,
+        "1",
+        "2",
+        true,
+        Some(DiscardReason::Replaced),
+        None,
+        t0 + Duration::from_millis(850),
+    );
+
+    // Frame 3 admitted at t=900ms and discarded due to privacy/hidden -> excluded from congestion window
+    assert!(
+        ctrl.on_incoming_frame_at(frame3, t0 + Duration::from_millis(900))
+            .is_some()
+    );
+    let _ = ctrl.on_credit_return_with_feedback_at(
+        &sub,
+        &run,
+        "1",
+        "3",
+        true,
+        Some(DiscardReason::Hidden),
+        None,
+        t0 + Duration::from_millis(920),
+    );
+
+    ctrl.record_audio_write(1200, Duration::from_millis(2));
+    ctrl.record_control_write(128, Duration::from_millis(1));
+    ctrl.record_heartbeat_telemetry(HeartbeatTelemetry {
+        sample_ms: 1000,
+        decoded_frames: 1,
+        replaced_frames: 1,
+        decode_ms_ewma: Some(6.5),
+    });
+
+    let snap = ctrl.snapshot_at("sess-1", "viewer-1", t0 + Duration::from_secs(1));
+    assert_eq!(snap.sample_provenance, SampleProvenance::Busy);
+    assert!(!snap.application_limited);
+    assert!(!snap.ack_starved_pressure);
+    assert!(!snap.warming);
+    assert_eq!(snap.window_acked_drawn_bytes, f_bytes);
+    assert_eq!(snap.window_discarded_bytes, f_bytes);
+    assert_eq!(snap.total_acked_drawn_bytes, f_bytes);
+    assert_eq!(snap.total_discarded_bytes, f_bytes * 2);
+
+    let expected_delivered_kbps = ((f_bytes * 2) as f64 * 8.0) / 1000.0;
+    let expected_useful_kbps = (f_bytes as f64 * 8.0) / 1000.0;
+    let sum_over_rtt_kbps =
+        ((f_bytes as f64 * 8.0) / 850.0) + ((f_bytes as f64 * 8.0) / 800.0);
+    let actual_delivered = snap.estimated_delivered_kbps.expect("busy delivered kbps");
+    let actual_useful = snap.useful_drawn_kbps.expect("busy useful kbps");
+    assert!((actual_delivered - expected_delivered_kbps).abs() < 1e-6);
+    assert!((actual_useful - expected_useful_kbps).abs() < 1e-6);
+    assert!(
+        actual_delivered < sum_over_rtt_kbps,
+        "must not double-count overlapping credits via sum(bytes/frameRTT)"
+    );
+    assert_eq!(snap.min_service_baseline_ms, Some(800.0));
+    assert!(snap.service_ewma_ms.unwrap() >= 800.0 && snap.service_ewma_ms.unwrap() <= 850.0);
+    assert_eq!(snap.video_bytes_written, f_bytes * 2);
+    assert_eq!(snap.audio_bytes_written, 1200);
+    assert_eq!(snap.control_bytes_written, 128);
+    assert_eq!(snap.last_local_send_unix_ms, Some(1700000000060));
+    assert_eq!(snap.client_corroboration.decoded_frames_total, 1);
+    assert_eq!(snap.client_corroboration.replaced_frames_total, 1);
+    assert_eq!(snap.client_corroboration.last_decode_ms, Some(6.5));
+}
+
+#[test]
+fn viewer_delivery_estimator_sparse_idle_and_ack_starvation_pressure() {
+    use dam_hopper_server::browser_host::viewer_delivery_estimator::SampleProvenance;
+    use std::time::Instant;
+
+    let sub = Uuid::new_v4().to_string();
+    let run = Uuid::new_v4().to_string();
+    let t0 = Instant::now();
+    let mut ctrl =
+        ViewerCreditController::with_min_interval_at(sub.clone(), Duration::from_millis(100), t0);
+
+    // 1. Two sparse frames in one 1s window (each ACKed promptly before next arrives, never saturating credits)
+    //    plus 30s of idle windows must remain ApplicationLimited/Idle with unknown capacity (None, never 0).
+    let f1 = make_test_frame(&run, "1", "1").with_receipt_time(1_731_050_000_010, t0);
+    let f1_second = make_test_frame(&run, "1", "2")
+        .with_receipt_time(1_731_050_000_410, t0 + Duration::from_millis(400));
+    assert!(ctrl.on_incoming_frame_at(f1, t0).is_some());
+    let _ = ctrl.on_credit_return_with_feedback_at(
+        &sub,
+        &run,
+        "1",
+        "1",
+        false,
+        None,
+        Some(4.0),
+        t0 + Duration::from_millis(20),
+    );
+    assert!(
+        ctrl.on_incoming_frame_at(f1_second, t0 + Duration::from_millis(400))
+            .is_some()
+    );
+    let _ = ctrl.on_credit_return_with_feedback_at(
+        &sub,
+        &run,
+        "1",
+        "2",
+        false,
+        None,
+        Some(4.0),
+        t0 + Duration::from_millis(420),
+    );
+    // Even if global receipt atomic is overwritten by another session, viewer retains its frame-local receipt time!
+    dam_hopper_server::browser_host::diagnostics::global_stream_diagnostics()
+        .last_server_receipt_unix_ms
+        .store(9_999_999_999_999, std::sync::atomic::Ordering::Relaxed);
+    let snap_sparse = ctrl.snapshot_at("sess-static", "v1", t0 + Duration::from_secs(1));
+    assert_eq!(
+        snap_sparse.sample_provenance,
+        SampleProvenance::ApplicationLimited
+    );
+    assert!(snap_sparse.application_limited);
+    assert_eq!(
+        snap_sparse.estimated_delivered_kbps, None,
+        "sparse two-update window without credit saturation must retain unknown capacity rather than Busy/0"
+    );
+    assert_eq!(
+        snap_sparse.last_server_receipt_unix_ms,
+        Some(1_731_050_000_410),
+        "viewer estimator must record frame-local receipt time, not global atomic"
+    );
+
+    for sec in 2..=30 {
+        let snap_idle = ctrl.snapshot_at("sess-static", "v1", t0 + Duration::from_secs(sec));
+        assert_eq!(snap_idle.sample_provenance, SampleProvenance::Idle);
+        assert!(snap_idle.application_limited);
+        assert!(!snap_idle.ack_starved_pressure);
+        assert_eq!(snap_idle.estimated_delivered_kbps, None);
+    }
+    // 2. Intentional governor pacing with prompt ACK and a pacing-held pending frame at the 1s boundary
+    //    must still report ApplicationLimited and unknown capacity (None), never Busy!
+    let t_pace = t0 + Duration::from_secs(31);
+    let f2 = make_test_frame(&run, "1", "2");
+    let f3 = make_test_frame(&run, "1", "3");
+    assert!(ctrl.on_incoming_frame_at(f2, t_pace).is_some());
+    let _ = ctrl.on_credit_return_with_feedback_at(
+        &sub,
+        &run,
+        "1",
+        "2",
+        false,
+        None,
+        Some(3.0),
+        t_pace + Duration::from_millis(5),
+    );
+    // f3 arrives at +10ms while credits are free (0 outstanding), so it is held ONLY for 100ms governor pacing
+    assert!(
+        ctrl.on_incoming_frame_at(f3.clone(), t_pace + Duration::from_millis(10))
+            .is_none()
+    );
+    assert!(ctrl.has_pending());
+    // Sample across the 1s window boundary while f3 is still pending solely due to pacing:
+    let snap_paced = ctrl.snapshot_at("sess-static", "v1", t_pace + Duration::from_secs(1));
+    assert_eq!(snap_paced.intentional_pacing_holds, 1);
+    assert_eq!(snap_paced.pending_replacements, 0);
+    assert_eq!(
+        snap_paced.sample_provenance,
+        SampleProvenance::ApplicationLimited,
+        "pacing-held pending frame at 1s boundary without credit saturation must remain ApplicationLimited"
+    );
+    assert_eq!(snap_paced.estimated_delivered_kbps, None);
+
+    // Now admit a new frame at t_sat = t_pace + 1s and flush pending to reach 2 outstanding credits (credit saturated)
+    let t_sat = t_pace + Duration::from_secs(1);
+    let f2_sat = make_test_frame(&run, "1", "20");
+    assert!(ctrl.on_incoming_frame_at(f2_sat, t_sat).is_some());
+    assert!(
+        ctrl.on_incoming_frame_at(f3, t_sat + Duration::from_millis(10))
+            .is_none()
+    );
+    // Flush pending f3 at t_sat + 100ms -> now 2 credits are outstanding (credit saturated)
+    let flushed = ctrl
+        .check_flush_pending_at(t_sat + Duration::from_millis(100))
+        .expect("flush f3");
+    assert_eq!(ctrl.outstanding_count(), 2);
+    let _ = flushed;
+
+    // Arrival of f4 and f5 while 2 credits remain unACKed triggers pending hold + replacement
+    let f4 = make_test_frame(&run, "1", "4");
+    let f5 = make_test_frame(&run, "1", "5");
+    assert!(
+        ctrl.on_incoming_frame_at(f4, t_sat + Duration::from_millis(200))
+            .is_none()
+    );
+    assert!(
+        ctrl.on_incoming_frame_at(f5, t_sat + Duration::from_millis(250))
+            .is_none()
+    );
+    ctrl.record_broadcast_lag(3);
+
+    // Advance >1s with zero ACKs while 2 frames remain outstanding -> ACK starvation pressure!
+    let snap_starved = ctrl.snapshot_at("sess-static", "v1", t_sat + Duration::from_millis(1200));
+    assert_eq!(snap_starved.sample_provenance, SampleProvenance::AckStarved);
+    assert!(snap_starved.ack_starved_pressure);
+    assert!(!snap_starved.application_limited);
+    assert_eq!(snap_starved.pending_replacements, 1);
+    assert_eq!(snap_starved.broadcast_lagged_frames, 3);
+    assert!(snap_starved.oldest_outstanding_age_ms >= 1200);
+    // Control-only pending write buffer is cleaned on control teardown
+    let diag = dam_hopper_server::browser_host::diagnostics::global_stream_diagnostics();
+    diag.record_control_write("ctrl-only-sub", 256, Duration::from_millis(2));
+    diag.clear_pending_control_write("ctrl-only-sub");
+    assert!(diag.take_pending_control_write("ctrl-only-sub").is_none());
+}
+
+#[test]
+fn viewer_delivery_estimator_duplicate_foreign_and_run_rotation_fences() {
+    use dam_hopper_server::browser_host::diagnostics::MAX_ADMITTED_VIEWER_SNAPSHOTS;
+    use dam_hopper_server::browser_host::protocol::{
+        HeartbeatTelemetry, MediaClientControl, MediaClientControlWire, MAX_CLIENT_DECODE_MS,
+        MAX_HEARTBEAT_FRAME_COUNT, MAX_HEARTBEAT_SAMPLE_MS,
+    };
+    use dam_hopper_server::browser_host::viewer_delivery_estimator::SampleProvenance;
+    use std::time::Instant;
+
+    let sub = Uuid::new_v4().to_string();
+    let run1 = Uuid::new_v4().to_string();
+    let run2 = Uuid::new_v4().to_string();
+    let t0 = Instant::now();
+    let mut ctrl =
+        ViewerCreditController::with_min_interval_at(sub.clone(), Duration::from_millis(10), t0);
+
+    let f1 = make_test_frame(&run1, "1", "1");
+    let f2 = make_test_frame(&run1, "1", "2");
+    let f_bytes = f1.byte_length() as u64;
+    assert!(ctrl.on_incoming_frame_at(f1, t0).is_some());
+    assert!(
+        ctrl.on_incoming_frame_at(f2, t0 + Duration::from_millis(20))
+            .is_some()
+    );
+
+    // Foreign subscription ACK is rejected and changes neither occupancy nor estimate
+    assert!(
+        ctrl.on_credit_return_with_feedback_at(
+            "foreign-sub",
+            &run1,
+            "1",
+            "1",
+            false,
+            None,
+            Some(5.0),
+            t0 + Duration::from_millis(30),
+        )
+        .is_none()
+    );
+    assert_eq!(ctrl.outstanding_count(), 2);
+
+    // Valid first ACK for f1
+    let _ = ctrl.on_credit_return_with_feedback_at(
+        &sub,
+        &run1,
+        "1",
+        "1",
+        false,
+        None,
+        Some(5.0),
+        t0 + Duration::from_millis(35),
+    );
+    // Duplicate ACK for f1 is a complete no-op
+    let _ = ctrl.on_credit_return_with_feedback_at(
+        &sub,
+        &run1,
+        "1",
+        "1",
+        false,
+        None,
+        Some(999.0),
+        t0 + Duration::from_millis(40),
+    );
+    let snap1 = ctrl.snapshot_at("sess-1", "v1", t0 + Duration::from_millis(50));
+    assert_eq!(snap1.total_acked_drawn_bytes, f_bytes);
+    assert_eq!(snap1.min_service_baseline_ms, Some(35.0));
+    assert_eq!(snap1.client_corroboration.last_decode_ms, Some(5.0));
+
+    // Rotate to run2 while f2 (from run1) is still outstanding
+    let f_run2 = make_test_frame(&run2, "1", "1");
+    assert!(
+        ctrl.on_incoming_frame_at(f_run2, t0 + Duration::from_millis(100))
+            .is_some()
+    );
+    // Old-run completion frees credit for f2, but cannot enter run2's window or service estimate
+    let _ = ctrl.on_credit_return_with_feedback_at(
+        &sub,
+        &run1,
+        "1",
+        "2",
+        false,
+        None,
+        Some(500.0),
+        t0 + Duration::from_millis(150),
+    );
+    let snap_run2 = ctrl.snapshot_at("sess-1", "v1", t0 + Duration::from_millis(200));
+    assert_eq!(snap_run2.producer_run.as_deref(), Some(run2.as_str()));
+    assert!(snap_run2.warming);
+    assert_eq!(snap_run2.sample_provenance, SampleProvenance::Warming);
+    assert_eq!(snap_run2.window_acked_drawn_bytes, 0);
+    assert_eq!(
+        snap_run2.min_service_baseline_ms,
+        Some(35.0),
+        "subscription-local min baseline survives run rotation while old-run completion is ignored"
+    );
+    assert_eq!(snap_run2.service_ewma_ms, None);
+    assert_eq!(snap_run2.client_corroboration.last_decode_ms, None);
+
+    // Diagnostics registry bounds and forged-update protection
+    let diag = dam_hopper_server::browser_host::diagnostics::global_stream_diagnostics();
+    let forged_sub = format!("forged-{}", Uuid::new_v4());
+    let mut forged_snap = snap_run2.clone();
+    forged_snap.subscription_epoch = forged_sub.clone();
+    assert!(
+        !diag.update_viewer_snapshot(forged_snap),
+        "unregistered subscription must not create diagnostic registry entry"
+    );
+    assert!(diag.register_viewer_snapshot(snap_run2.clone()));
+    assert_eq!(
+        diag.viewer_snapshot(&sub).unwrap().producer_run,
+        Some(run2.clone())
+    );
+    assert_eq!(diag.viewer_snapshots_for_session("sess-1").len(), 1);
+    assert!(diag.remove_viewer_snapshot(&sub).is_some());
+    assert!(diag.viewer_snapshot(&sub).is_none());
+    assert!(MAX_ADMITTED_VIEWER_SNAPSHOTS <= 16);
+
+    // Wire validation bounds parity
+    let valid_ack = format!(
+        r#"{{"kind":"frameAck","subscriptionEpoch":"{sub}","producerRun":"{run2}","viewportEpoch":"1","frameSeq":"1","decodeMs":{MAX_CLIENT_DECODE_MS}}}"#
+    );
+    assert!(MediaClientControlWire::parse_and_validate(&valid_ack).is_ok());
+    assert!(serde_json::from_str::<MediaClientControl>(&valid_ack).is_ok());
+
+    let bad_ack_neg = format!(
+        r#"{{"kind":"frameAck","subscriptionEpoch":"{sub}","producerRun":"{run2}","viewportEpoch":"1","frameSeq":"1","decodeMs":-0.1}}"#
+    );
+    assert!(MediaClientControlWire::parse_and_validate(&bad_ack_neg).is_err());
+    assert!(serde_json::from_str::<MediaClientControl>(&bad_ack_neg).is_err());
+
+    let bad_ack_over = format!(
+        r#"{{"kind":"frameAck","subscriptionEpoch":"{sub}","producerRun":"{run2}","viewportEpoch":"1","frameSeq":"1","decodeMs":60000.01}}"#
+    );
+    assert!(MediaClientControlWire::parse_and_validate(&bad_ack_over).is_err());
+
+    let valid_hb = serde_json::to_string(&MediaClientControl::Heartbeat {
+        subscription_epoch: sub.clone(),
+        visible: true,
+        telemetry: Some(HeartbeatTelemetry {
+            sample_ms: MAX_HEARTBEAT_SAMPLE_MS,
+            decoded_frames: MAX_HEARTBEAT_FRAME_COUNT,
+            replaced_frames: MAX_HEARTBEAT_FRAME_COUNT,
+            decode_ms_ewma: Some(MAX_CLIENT_DECODE_MS),
+        }),
+    })
+    .unwrap();
+    assert!(valid_hb.len() <= 1024);
+    assert!(MediaClientControlWire::parse_and_validate(&valid_hb).is_ok());
+
+    let bad_hb = format!(
+        r#"{{"kind":"heartbeat","subscriptionEpoch":"{sub}","visible":true,"telemetry":{{"sampleMs":60001,"decodedFrames":1,"replacedFrames":0}}}}"#
+    );
+    assert!(MediaClientControlWire::parse_and_validate(&bad_hb).is_err());
 }

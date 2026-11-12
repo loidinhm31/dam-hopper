@@ -1,7 +1,7 @@
 # Host Browser CDP Streaming Architecture
 
 **Authority:** Backend Subsystem (`server/src/browser_host/`, `server/examples/browser_host_qualification.rs`)  
-**Status:** Supervised Principal Profiles, Admission Control, Leased Input, Raw CDP Gateway, Screencast & Live Tab Audio Streaming, Bounded Media Fanout, Decoder & WebAudio PCM Pipeline, OS Root Lifecycle Cutover, Secure Selection / Confirmed Logout Reset, and Cycle 13 Video/Audio Streaming Remediation (Automated Checks Qualified; Code Review 9/10 Approved With Notes; Live Output-Browser Qualification & Physical/Windows Gates Pending). Native Browser Tabs & Session Continuity Phases 01–04 owner contracts, canonical persistence, Web Locks recovery, target lifecycle, tuple-keyed tab resource slots, active-only stream attachments, popup admission guard, live authority bridges, native tab chrome UI, navigation CAS, serialized control gate, launch/deep-link/recipe cutover, and Phase 05 targeted qualification fixtures, E2E specs, and Gate 2 docs reconciliation implemented (`verifiedBrowserIdentity`, `browser/*`, `BrowserApp.tsx`, `BrowserStreamKeepAliveHost.tsx`, `action-executor.ts`, `OsShell.tsx`, `deep-links.ts`, `recipes/{schema,recipe-engine}.ts`, `os.css`, `browser-native-tabs.browser.tsx`, `e2e/os-host-browser/tabs-{session,recovery,visual}.spec.ts`); live full-app visual acceptance and human decision receipt remain the final pending execution gate.
+**Status:** Supervised Principal Profiles, Admission Control, Leased Input, Raw CDP Gateway, Screencast & Live Tab Audio Streaming, Bounded Media Fanout, Decoder & WebAudio PCM Pipeline, OS Root Lifecycle Cutover, Secure Selection / Confirmed Logout Reset, Cycle 13 Video/Audio Streaming Remediation, Native Browser Tabs & Session Continuity Phases 01–05 (live visual acceptance receipt pending), and Adaptive Stream Quality Phase 01 — Measurement and Feedback (implemented 2026-11-12; Cycle 3 reviewed 8/10; HTTP diagnostics export & Phase 02 reader separation follow-ups pending).
 
 This specification defines the architectural contracts, process containment boundaries, bounded CDP actor lifecycle, and binary wire framing for the Host Browser CDP Streaming subsystem.
 
@@ -124,6 +124,7 @@ Streaming frames from the server to viewers use the atomic `BHJF` binary envelop
 - **Scale Bounds:** `dpr` $\in [0.1, 10.0]$, `pageScale` $\in [0.1, 10.0]$.
 - **Offset Bounds:** Absolute offsets $\le 10,000,000$ CSS px.
 - **Payload Consistency:** Declared header `width` and `height` must match JPEG SOF0/SOF2 marker dimensions exactly.
+- **Native Capture Timestamp Preservation:** `TargetFrameHeader.captureTimeUnixMs` preserves plausible CDP `Page.ScreencastFrameMetadata.timestamp` (`<= 2100-01-01 UTC`, JS safe integer `<= 2^53 - 1`, `native_capture_time_unix_ms()`) and records `0` when unavailable rather than fabricating `Utc::now()`.
 
 ## 5. Authenticated Agent CDP Gateway & Upstream Relay (`cdp_gateway.rs`)
 
@@ -441,6 +442,7 @@ The screencast producer (`server/src/browser_host/screencast.rs`) manages native
 - **Base64 Bounds Enforcement:** Enforces base64 size ceiling (`MAX_BASE64_BYTES = 2_796_204`, corresponding to 2 MiB decoded payload) before admission.
 - **Late Base64 Decoding & Configurable Capture Policy:** Overwritten candidates are dropped and ACKed immediately. Base64 is decoded once when the governor ticks at `self.governor_interval`. Production builds producers via `ScreencastProducer::with_capture_policy(fps, jpeg_quality)` (`1..=30` FPS, `10..=100` quality; defaults `24 FPS` / `JPEG 75` across `Page.startScreencast`, `update_geometry`, governor interval `Duration::from_secs_f64(1.0 / fps)`, and `Page.captureScreenshot` fallback), while `ScreencastProducer::new` preserves legacy `DEFAULT_GOVERNOR_INTERVAL = 100ms` (10 FPS) and `DEFAULT_JPEG_QUALITY_LEGACY = 65`.
 - **SOF Dimension Validation:** Parses JPEG SOF0/SOF2 marker (`parse_jpeg_dimensions`) directly to inspect image dimensions ($\le 1920 \times 1080$, $\le 2,073,600$ pixels). Never decodes uncompressed pixels or re-encodes JPEG images.
+- **Timestamp Separation (`cdp.rs`, `screencast.rs`):** `parse_native_capture_time_unix_ms` validates optional CDP metadata timestamps (`<= 2100-01-01 UTC`); `ScreencastProducer` propagates `Some(ms)` or `0` (including `0` on `Page.captureScreenshot` fallbacks) into `TargetFrameHeader` while recording `server_received_unix_ms` and monotonic `received_at: Instant` separately on `TrackedBhjfFrame` (`with_receipt_time`).
 
 ### Viewport Epoch & Geometry Reconciliation
 
@@ -481,6 +483,7 @@ The media fanout layer (`server/src/browser_host/media.rs`) delivers atomic bina
 - **Settled-Frame & 15 ms Pending Flush:** Releasing credit immediately flushes any buffered pending frame, and `run_media_session` ticks `flush_ticker` every `15ms` (`Duration::from_millis(15)`) to dispatch rate-governed pending frames promptly.
 - **Deadlines & Timeouts:** 30-second outstanding frame timeout (`OUTSTANDING_TIMEOUT = 30s`) and 5-second physical socket write deadline (`WRITE_DEADLINE = 5s`). Failed writes close the subscription, while buffer reservations survive until the last clone drops.
 - **Independent Audio Text Fanout:** `run_media_session` forwards `ProducerAudioChunk` as `BrowserAudioChunk` JSON text (`write_media_text`, 5s `WRITE_DEADLINE` raced against `cancel_token` and `doc_auth_rx.changed()`) without consuming video credits, skipping `!viewer_visible` or inadmissible `doc_epoch` chunks and dropping oldest on `RecvError::Lagged`.
+- **Per-Viewer Delivery Estimator (`viewer_delivery_estimator.rs`):** `ViewerCreditController` embeds `ViewerDeliveryEstimator` (`OBSERVATION_WINDOW = 1s`, `EWMA_ALPHA = 0.25`) classifying `SampleProvenance` (`Warming`, `Idle`, `ApplicationLimited`, `Busy`, `AckStarved`) with explicit `application_limited` and `ack_starved_pressure` flags. Tracks busy-window ACKed vs. congestion-discarded bytes (excluding `Hidden`/`Obsolete`/`OwnerChanged`), `min_service_baseline_ms` / `service_ewma_ms`, `oldest_outstanding_age_ms`, `pending_replacements`, `intentional_pacing_holds`, `broadcast_lagged_frames`, video/audio/control write bytes and durations (`record_frame_write`, `record_audio_write`, `record_control_write`), native capture vs. server receipt vs. local send timestamps, and `ClientTelemetryCorroboration`. Resets transient run samples on `producerRun` rotation and ignores mismatched-run or foreign-socket credit returns.
 
 ### Pause & Rebind Protocol
 
@@ -507,9 +510,8 @@ The memory admission controller (`server/src/browser_host/diagnostics.rs`) enfor
 
 ### Bounded Operational Stream Diagnostics (`StreamDiagnostics`)
 
-- **Operational Counters:** Reports bounded-label atomic counters: `events_received`, `events_admitted`, `events_dropped`, `acks_enqueued`, `acks_failed`, `base64_decoded_bytes`, `jpeg_bytes_total`, `frames_delivered`, `acks_received`, `discards_received`, `timeouts_occurred`, `reservations_denied`.
-- **Capture vs Delivery Distinction:** Distinguishes native engine capture rate from viewer delivery rate.
-- **Synthetic Qualification Ring:** Bounded ring buffer for qualification event timestamps (`MAX_QUALIFICATION_EVENTS = 256`).
+- **Operational Counters & Timestamp Separation:** Reports bounded-label atomic counters (`events_received`, `events_admitted`, `events_dropped`, `acks_enqueued`, `acks_failed`, `base64_decoded_bytes`, `jpeg_bytes_total`, `delivered_frames`, `acks_received`, `discards_received`, `timeouts_occurred`, `reservations_denied`, `native_capture_timestamps_valid`, `native_capture_timestamps_unavailable`, `last_native_capture_unix_ms`, `last_server_receipt_unix_ms`, `last_local_send_unix_ms`, `broadcast_lagged_frames`) distinguishing native capture from viewer delivery.
+- **Owner-Scoped Viewer Snapshot Registry & Qualification Ring:** `TrackedBhjfFrame` retains `server_received_unix_ms` and `received_at`; `StreamDiagnostics` maintains a bounded registry (`MAX_ADMITTED_VIEWER_SNAPSHOTS = 16`, `register_viewer_snapshot_for_owner`, `update_viewer_snapshot`, `remove_viewer_snapshot`, `viewer_snapshot_for_owner`), pending control-write accounting (`record_control_write`), and a 256-entry qualification ring (`MAX_QUALIFICATION_EVENTS = 256`).
 
 ## 18. Streaming WebSocket Transports (`/api/browser/media` and `/api/browser/control`)
 
@@ -517,7 +519,7 @@ The streaming interface exposes two paired WebSocket routes:
 
 ### Dual-Transport Separation
 
-- **Media Transport (`GET /api/browser/media`):** Dedicated delivery socket for binary BHJF v1 video frames and validated `audioChunk` JSON text frames (`24 kHz`, mono, `pcm16le`, `docEpoch`, monotonic `audioSeq`, max `4,800` decoded PCM bytes / `6,400` base64 chars / `8,192` B JSON envelope). Subprotocol: `damhopper.browser.media.v1`. Inbound client controls (`frameAck`, `frameDiscarded`, `pause`, `heartbeat`) remain capped at `MAX_MEDIA_CONTROL_BYTES = 1024`.
+- **Media Transport (`GET /api/browser/media`):** Dedicated delivery socket for binary BHJF v1 video frames and validated `audioChunk` JSON text frames (`24 kHz`, mono, `pcm16le`, `docEpoch`, monotonic `audioSeq`, max `4,800` decoded PCM bytes / `6,400` base64 chars / `8,192` B JSON envelope). Subprotocol: `damhopper.browser.media.v1`. Inbound client controls (`MediaClientControlWire` with `deny_unknown_fields`, validated via `TryFrom` into `MediaClientControl`) remain capped at `MAX_MEDIA_CONTROL_BYTES = 1024`, accepting optional bounded `frameAck.decodeMs` (`0..=60_000`) and `heartbeat.telemetry` (`HeartbeatTelemetry { sampleMs, decodedFrames, replacedFrames, decodeMsEwma }`; `sampleMs <= 60_000`, counts `<= 10_000`, finite `decodeMsEwma` in `0..=60_000`).
 - **Control Transport (`GET /api/browser/control`):** Dedicated ordered text socket for input dispatch and browser events. Subprotocol: `damhopper.browser.control.v1`. Max message/frame size: 16 KiB (`MAX_CONTROL_MESSAGE_BYTES`). Rate limited: burst 200, sustained 100/s. Transmits `InputMessage` records; receives `ServerControlEvent` notifications. Zero JPEG bytes.
 - **Capability Ticket Authentication:** Both sockets require single-use capability tickets (`damhopper.ticket.<base64url>`) with respective purposes (`media`, `control`).
 - **Socket Pairing:** Paired via `AttachmentManager` requiring identical `viewerId` and `subscriptionEpoch` with a 15-second wait timeout.
@@ -548,6 +550,7 @@ The frontend client modules (`packages/ui/src/browser-host/`, `packages/ui/src/a
 - **Synchronous Privacy Blackening:** Triggering privacy mode (`setPrivacyMode(true)`) synchronously clears and blacks the canvas, advances the decode epoch to invalidate in-flight decode completions, cancels queued frames, and closes active media and control WebSockets.
 - **Visibility & Detachment Lifecycle:** Hiding the viewer (`setVisibility(false)`) pauses stream delivery, detaches demand, and closes both WebSockets. Resuming requires fresh capability tickets, a new subscription epoch, and paired WebSocket handshakes.
 - **ImageBitmap Cleanup:** Guarantees `ImageBitmap.close()` execution across normal render, exceptional draw, and disposal paths.
+- **Bounded Client Telemetry (`stream-controller.ts`, `browser-host-types.ts`):** Measures monotonic `performance.now()` decode+draw duration (`decodeMs`, `0.25` EWMA `decodeMsEwma`), counts same-run/same-epoch congestion replacements (`windowReplacedFrames`, excluding `obsolete`/retired runs via `retiredProducerRuns`), fences old-run decode/pending completions, validates serialized controls within `1024` bytes via `serializeMediaClientControl`/`isValidMediaClientControl`, and attaches `heartbeat.telemetry` on the existing 5s heartbeat without per-frame React state updates.
 
 ### WebAudio `PcmPlayer` & Root Audio Ownership (`pcm-player.ts`, `stream-controller.ts`, `BrowserStreamKeepAliveHost.tsx`, `BrowserApp.tsx`)
 
@@ -626,6 +629,7 @@ Qualification was executed on Linux x86_64 (`Linux 7.2.15-200.fc44.x86_64`) agai
 ### Phase Verification & Open Release Gates
 
 - **Completed Automated Gates (Phases 04–09 & Cycle 13):** Phase 04 (57/57, score 7/10), Phase 05 (70/70, score 4/10), Phase 06 (70/70, score 4/10), Phase 07 (208/208, score 4/10), Phase 08 (237/237, score 7/10), Phase 09 (54/54 across 5 gates, score 4/10), and Browser Video/Audio Streaming Cycle 13 (42 Rust + 89 UI tests, clean UI build, Code Review 9/10 APPROVED WITH NOTES).
+- **Adaptive Stream Quality Phase 01 (2026-11-12):** Implemented per-viewer delivery estimation (`viewer_delivery_estimator.rs`), native capture vs. server receipt timestamp separation, owner-scoped snapshot diagnostics, and bounded `frameAck.decodeMs` / `heartbeat.telemetry` feedback (Cycle 3 reviewed 8/10, 0 critical; HTTP diagnostics export & Phase 02 reader separation follow-ups pending).
 - **Open Release & Qualification Gates:**
   - Real output-browser audible/gapless playback, privacy/retirement silence, autoplay gesture recovery, two-viewer independence, and measured FPS/audio latency under live load (`plans/261111-0220-browser-video-audio-streaming/reports/code-review-report.md`).
   - Physical Android device receipts with Gboard Vietnamese Telex and Japanese Kana IME (A09, `reports/human-acceptance.md`).
@@ -672,6 +676,7 @@ Phase 01 remediates backend authority, lifecycle truth, durable reset recovery, 
 | Media Stealth & Audio Capture Bridge | `server/src/browser_host/stealth.rs` |
 | Screencast Producer Actor | `server/src/browser_host/screencast.rs` |
 | Binary Media Fanout & Transports | `server/src/browser_host/media.rs` |
+| Per-Viewer Delivery Estimator | `server/src/browser_host/viewer_delivery_estimator.rs` |
 | Stream Diagnostics & Memory Admission | `server/src/browser_host/diagnostics.rs` |
 | Managed Selection & Nav Watcher | `server/src/browser_host/selection.rs` |
 | Actor-Bound Debug Artifact Store | `server/src/browser_debug/{mod,store,error}.rs`, `server/src/api/browser_debug.rs` |

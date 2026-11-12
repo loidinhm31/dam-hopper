@@ -4,7 +4,14 @@ import { BrowserStreamController } from "./stream-controller.js";
 import { BrowserInputController } from "./input-controller.js";
 import { packBhjfFrame } from "./frame-protocol.js";
 import { createMockJpeg } from "./frame-protocol.test.js";
-import type { TargetFrameHeader } from "../api/browser-host-types.js";
+import {
+  isValidMediaClientControl,
+  MAX_CLIENT_DECODE_MS,
+  MAX_HEARTBEAT_FRAME_COUNT,
+  MAX_HEARTBEAT_SAMPLE_MS,
+  MAX_MEDIA_CONTROL_BYTES,
+  type TargetFrameHeader,
+} from "../api/browser-host-types.js";
 import type { ViewerAttachmentCredentials } from "../api/browser-host-client.js";
 
 // Mock WebSocket
@@ -264,6 +271,7 @@ describe("stream-controller", () => {
       producerRun: "fedcba98-7654-4321-8901-abcdef012345",
       viewportEpoch: "1",
       frameSeq: "1",
+      decodeMs: expect.any(Number),
     });
 
     // Frame 3 should now start decoding
@@ -634,5 +642,258 @@ describe("stream-controller", () => {
     mediaWs2.onmessage?.(new MessageEvent("message", { data: frameAfterControlClose.buffer }));
     mediaWs2.onmessage?.(new MessageEvent("message", { data: makeAudioMsg({ producerRun: nextRun, subscriptionEpoch: reattachedCreds.subscriptionEpoch, docEpoch: "5", audioSeq: "9" }) }));
     expect(onAudioChunk).toHaveBeenCalledTimes(8);
+  });
+
+  it("attaches bounded decodeMs to frameAck, aggregates heartbeat telemetry, and resets on identity changes", async () => {
+    vi.useFakeTimers();
+    let resolveDecode1: ((bitmap: ImageBitmap) => void) | null = null;
+    let resolveDecode3: ((bitmap: ImageBitmap) => void) | null = null;
+    let callIdx = 0;
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockImplementation(() => {
+        callIdx += 1;
+        const { promise, resolve } = Promise.withResolvers<ImageBitmap>();
+        if (callIdx === 1) {
+          resolveDecode1 = resolve;
+        } else {
+          resolveDecode3 = resolve;
+        }
+        return promise;
+      }),
+    );
+
+    controller.attach(mockCreds);
+    const mediaWs = MockWebSocket.instances[0];
+    mediaWs.onopen?.();
+
+    const jpeg = createMockJpeg(640, 480);
+    const frame1 = packBhjfFrame(makeHeader("1"), jpeg);
+    const frame2 = packBhjfFrame(makeHeader("2"), jpeg);
+    const frame3 = packBhjfFrame(makeHeader("3"), jpeg);
+    const wrongOwnerFrame = packBhjfFrame(
+      { ...makeHeader("4"), profileEpoch: "99" },
+      jpeg,
+    );
+
+    // Frame 1 starts decoding; Frame 2 queues as pending; Frame 3 replaces Frame 2 (congestion replacement)
+    mediaWs.onmessage?.(new MessageEvent("message", { data: frame1.buffer }));
+    mediaWs.onmessage?.(new MessageEvent("message", { data: frame2.buffer }));
+    mediaWs.onmessage?.(new MessageEvent("message", { data: frame3.buffer }));
+    // Non-congestion ownerChanged discard must NOT increment replacedFrames
+    mediaWs.onmessage?.(
+      new MessageEvent("message", { data: wrongOwnerFrame.buffer }),
+    );
+
+    vi.advanceTimersByTime(12);
+    resolveDecode1!({
+      width: 640,
+      height: 480,
+      close: vi.fn(),
+    } as unknown as ImageBitmap);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    vi.advanceTimersByTime(8);
+    resolveDecode3!({
+      width: 640,
+      height: 480,
+      close: vi.fn(),
+    } as unknown as ImageBitmap);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const snapBeforeHb = controller.getTelemetrySnapshot();
+    expect(snapBeforeHb.windowDecodedFrames).toBe(2);
+    expect(snapBeforeHb.windowReplacedFrames).toBe(1);
+    expect(snapBeforeHb.lastDecodeMs).toBeGreaterThanOrEqual(0);
+    expect(snapBeforeHb.decodeMsEwma).toBeGreaterThanOrEqual(0);
+
+    // Trigger 5s heartbeat and verify bounded telemetry payload
+    vi.advanceTimersByTime(5000);
+    const hbMsg = mediaWs.sentMessages
+      .map((raw) => JSON.parse(raw))
+      .find((m) => m.kind === "heartbeat");
+    expect(hbMsg).toEqual({
+      kind: "heartbeat",
+      subscriptionEpoch: "sub-epoch-uuid-1",
+      visible: true,
+      telemetry: {
+        sampleMs: expect.any(Number),
+        decodedFrames: 2,
+        replacedFrames: 1,
+        decodeMsEwma: expect.any(Number),
+      },
+    });
+    expect(hbMsg.telemetry.sampleMs).toBeGreaterThan(0);
+    expect(hbMsg.telemetry.sampleMs).toBeLessThanOrEqual(60_000);
+
+    // Window counters reset after heartbeat while EWMA persists until run/owner rotation
+    const snapAfterHb = controller.getTelemetrySnapshot();
+    expect(snapAfterHb.windowDecodedFrames).toBe(0);
+    expect(snapAfterHb.windowReplacedFrames).toBe(0);
+    expect(snapAfterHb.decodeMsEwma).not.toBeNull();
+
+    // Start an in-flight decode and a pending frame on the old run, then rotate producerRun BEFORE decode resolves!
+    let resolveStaleRunDecode: ((bitmap: ImageBitmap) => void) | null = null;
+    let resolveNewRunDecode: ((bitmap: ImageBitmap) => void) | null = null;
+    let runSwitchCall = 0;
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockImplementation(() => {
+        runSwitchCall += 1;
+        const { promise, resolve } = Promise.withResolvers<ImageBitmap>();
+        if (runSwitchCall === 1) {
+          resolveStaleRunDecode = resolve;
+        } else {
+          resolveNewRunDecode = resolve;
+        }
+        return promise;
+      }),
+    );
+    const oldRunActive = packBhjfFrame(makeHeader("5"), jpeg);
+    const oldRunPending = packBhjfFrame(makeHeader("6"), jpeg);
+    mediaWs.onmessage?.(
+      new MessageEvent("message", { data: oldRunActive.buffer }),
+    );
+    mediaWs.onmessage?.(
+      new MessageEvent("message", { data: oldRunPending.buffer }),
+    );
+
+    // Rotate producerRun while oldRunActive is decoding and oldRunPending is queued
+    const nextRunFrame = packBhjfFrame(
+      {
+        ...makeHeader("1"),
+        producerRun: "11111111-2222-4333-8444-555555555555",
+      },
+      jpeg,
+    );
+    mediaWs.onmessage?.(
+      new MessageEvent("message", { data: nextRunFrame.buffer }),
+    );
+    // oldRunPending must be discarded as "obsolete", NOT counted as congestion "replaced"
+    const stalePendingDiscard = JSON.parse(mediaWs.sentMessages.at(-1)!);
+    expect(stalePendingDiscard).toMatchObject({
+      kind: "frameDiscarded",
+      frameSeq: "6",
+      reason: "obsolete",
+    });
+    expect(controller.getTelemetrySnapshot().windowReplacedFrames).toBe(0);
+
+    // Resolve stale old-run active decode: must be discarded as "obsolete" and MUST NOT contaminate new-run telemetry!
+    const closeStale = vi.fn();
+    resolveStaleRunDecode!({
+      width: 640,
+      height: 480,
+      close: closeStale,
+    } as unknown as ImageBitmap);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closeStale).toHaveBeenCalled();
+    expect(controller.getTelemetrySnapshot()).toEqual({
+      windowDecodedFrames: 0,
+      windowReplacedFrames: 0,
+      totalDecodedFrames: 0,
+      totalReplacedFrames: 0,
+      lastDecodeMs: null,
+      decodeMsEwma: null,
+    });
+
+    // Resolve new-run pending frame that drained after old-run finished
+    resolveNewRunDecode!({
+      width: 640,
+      height: 480,
+      close: vi.fn(),
+    } as unknown as ImageBitmap);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(controller.getTelemetrySnapshot().windowDecodedFrames).toBe(1);
+    vi.useRealTimers();
+  });
+
+  it("enforces MediaClientControl validator bounds and <=1KiB cap", () => {
+    const maxValidAck = {
+      kind: "frameAck" as const,
+      subscriptionEpoch: "s".repeat(128),
+      producerRun: "fedcba98-7654-4321-8901-abcdef012345",
+      viewportEpoch: "18446744073709551615",
+      frameSeq: "18446744073709551615",
+      reason: "r".repeat(64),
+      decodeMs: MAX_CLIENT_DECODE_MS,
+    };
+    expect(isValidMediaClientControl(maxValidAck)).toBe(true);
+    expect(
+      new TextEncoder().encode(JSON.stringify(maxValidAck)).byteLength,
+    ).toBeLessThanOrEqual(MAX_MEDIA_CONTROL_BYTES);
+
+    const maxValidHeartbeat = {
+      kind: "heartbeat" as const,
+      subscriptionEpoch: "s".repeat(128),
+      visible: true,
+      telemetry: {
+        sampleMs: MAX_HEARTBEAT_SAMPLE_MS,
+        decodedFrames: MAX_HEARTBEAT_FRAME_COUNT,
+        replacedFrames: MAX_HEARTBEAT_FRAME_COUNT,
+        decodeMsEwma: MAX_CLIENT_DECODE_MS,
+      },
+    };
+    expect(isValidMediaClientControl(maxValidHeartbeat)).toBe(true);
+    expect(
+      new TextEncoder().encode(JSON.stringify(maxValidHeartbeat)).byteLength,
+    ).toBeLessThanOrEqual(MAX_MEDIA_CONTROL_BYTES);
+
+    // Reject NaN, Infinity, negative, overflow, fractional integers, and unknown keys
+    expect(
+      isValidMediaClientControl({ ...maxValidAck, decodeMs: Number.NaN }),
+    ).toBe(false);
+    expect(
+      isValidMediaClientControl({
+        ...maxValidAck,
+        decodeMs: Number.POSITIVE_INFINITY,
+      }),
+    ).toBe(false);
+    expect(isValidMediaClientControl({ ...maxValidAck, decodeMs: -0.01 })).toBe(
+      false,
+    );
+    expect(
+      isValidMediaClientControl({
+        ...maxValidAck,
+        decodeMs: MAX_CLIENT_DECODE_MS + 0.01,
+      }),
+    ).toBe(false);
+    expect(
+      isValidMediaClientControl({
+        ...maxValidHeartbeat,
+        telemetry: {
+          ...maxValidHeartbeat.telemetry,
+          sampleMs: MAX_HEARTBEAT_SAMPLE_MS + 1,
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isValidMediaClientControl({
+        ...maxValidHeartbeat,
+        telemetry: { ...maxValidHeartbeat.telemetry, decodedFrames: 1.5 },
+      }),
+    ).toBe(false);
+    expect(
+      isValidMediaClientControl({
+        ...maxValidHeartbeat,
+        telemetry: {
+          ...maxValidHeartbeat.telemetry,
+          extraField: 1,
+        } as unknown as typeof maxValidHeartbeat.telemetry,
+      }),
+    ).toBe(false);
+    expect(
+      isValidMediaClientControl({
+        kind: "frameDiscarded",
+        subscriptionEpoch: "sub-1",
+        producerRun: "fedcba98-7654-4321-8901-abcdef012345",
+        viewportEpoch: "1",
+        frameSeq: "1",
+        reason: "toString" as unknown as "replaced",
+      }),
+    ).toBe(false);
   });
 });
