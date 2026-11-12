@@ -59,6 +59,7 @@ import {
   requestMfaStepUpChallenge,
   verifyMfa,
   AuthClientError,
+  type AuthStatusResult,
   type AuthStatusSuccess,
 } from "./auth-client.js";
 import {
@@ -574,8 +575,20 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
   };
 
   let verifiedIdentity: VerifiedBrowserIdentity | undefined;
+  let effectiveEndpoint = cleanUrl;
   try {
-    const statusResult = await checkAuthStatus(cleanUrl, token);
+    let statusResult: AuthStatusResult;
+    try {
+      statusResult = await checkAuthStatus(cleanUrl, token);
+    } catch (authErr) {
+      if (/^https?:\/\/localhost(?::\d+)?\b/i.test(cleanUrl)) {
+        const v4Url = cleanUrl.replace(/^(https?:\/\/)localhost\b/i, "$1127.0.0.1");
+        statusResult = await checkAuthStatus(v4Url, token);
+        effectiveEndpoint = v4Url;
+      } else {
+        throw authErr;
+      }
+    }
     if (!isAttemptCurrent()) {
       retireAttempt();
       return;
@@ -678,7 +691,7 @@ async function performConnectProfile(profileId: ProfileId): Promise<void> {
     generation: nextGen,
   });
   const transport = new WsTransport({
-    baseUrl: cleanUrl,
+    baseUrl: effectiveEndpoint,
     profileId,
     authToken: token,
     generation: nextGen,

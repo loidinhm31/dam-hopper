@@ -285,9 +285,9 @@ All animations honor user operating system preferences via `@media (prefers-redu
 
 ---
 
-## 7. Native Browser Tab Chrome, Navigation, Recovery & Accessibility (Proposed / Intended — Phases 02–05 Pending)
+## 7. Native Browser Tab Chrome, Navigation, Recovery & Accessibility (Implemented — Phases 01–05)
 
-> **Status:** Proposed / Intended UX Guidelines (Phases 02–05 Pending Implementation and Visual Qualification). Phase 01 owner/identity and pure tab-state model contracts (`verifiedBrowserIdentity`, `browser-tab-types.ts`, `browser-owner-scope.ts`, `browser-tab-state.ts` — including per-tab `BrowserTabDraft` memory drafts and collision-safe tuple keys) are implemented and unit-tested, while active runtime (`packages/ui/src/os/apps/BrowserApp.tsx`) still renders single-session whole-window `BrowserTargetChooser` / `BrowserResourceView` chrome until Phases 02–05 cut over.
+> **Status:** Implemented UX Guidelines (Phases 01–04 Implemented; Phase 05 Test Authoring & Reconciled, Live Visual Acceptance Gate Pending). Phase 01 owner/identity and pure tab-state model contracts, Phase 02 canonical persistence and Web Locks recovery, Phase 03 tuple-keyed stream slots and active-only streaming, Phase 04 modular native chrome (`BrowserTabStrip`, `BrowserAddressBar`, `BrowserNewTabPage`, `BrowserTools`, `BrowserRecoveryPanel`), and Phase 05 browser component and E2E qualification suites are authored, with live visual review receipt remaining the final gate.
 
 ### 7.1 Utilitarian Native Chrome & Tab Strip Geometry
 

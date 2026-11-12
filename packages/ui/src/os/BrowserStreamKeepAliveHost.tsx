@@ -51,6 +51,7 @@ import {
   findBrowserTab,
   patchBrowserTab,
 } from "./browser/browser-tab-state.js";
+import { readCanonicalBrowserWindowState } from "./browser/browser-navigation.js";
 import {
   areBrowserOwnerScopesEqual,
   captureVerifiedBrowserOwner,
@@ -314,8 +315,7 @@ function readBrowserWindowAndTab(
 ): { win: OsWindow; appState: BrowserWindowState; tab: BrowserTabRuntime } | null {
   const win = useWindowStore.getState().session?.windows?.[windowId];
   if (!win || win.appId !== "browser" || !win.appState) return null;
-  const appState = win.appState as unknown as BrowserWindowState;
-  if (!Array.isArray(appState.tabs)) return null;
+  const appState = readCanonicalBrowserWindowState(win.appState, tabId);
   const tab = findBrowserTab(appState, tabId);
   if (!tab) return null;
   return { win, appState, tab };
@@ -582,7 +582,7 @@ function ParkedBrowserStreamItem({
       ) {
         return false;
       }
-      const currentApp = currentWin.appState as unknown as BrowserWindowState;
+      const currentApp = readCanonicalBrowserWindowState(currentWin.appState, tab.tabId);
       if (
         !Array.isArray(currentApp.tabs) ||
         currentApp.closing ||
@@ -619,6 +619,10 @@ function ParkedBrowserStreamItem({
       const cur = readBrowserWindowAndTab(win.id, tab.tabId);
       if (!cur) return false;
       if (targetCreds) {
+        const streamCtrl = streamControllerRef.current;
+        const hasMatchingSubscriptionEpoch = streamCtrl
+          ? streamCtrl.getCurrentSubscriptionEpoch() === targetCreds.subscriptionEpoch
+          : pendingCredsRef.current === targetCreds;
         return (
           cur.tab.phase === "live" &&
           cur.tab.snapshot?.status === "running" &&
@@ -627,8 +631,7 @@ function ParkedBrowserStreamItem({
             targetCreds.browserIncarnation &&
           String(cur.tab.snapshot.profileEpoch) ===
             String(targetCreds.profileEpoch) &&
-          streamControllerRef.current?.getCurrentSubscriptionEpoch() ===
-            targetCreds.subscriptionEpoch
+          hasMatchingSubscriptionEpoch
         );
       }
       return (
@@ -1657,11 +1660,12 @@ function ParkedBrowserStreamItem({
           commitNativeTargetAdmission(verified.scope, rawSessionId, () => {
             pendingCredsRef.current = creds;
             currentAttachedCredsRef.current = creds;
+            streamControllerRef.current?.attach(creds);
+            streamControllerRef.current?.setVisibility(true);
+            syncDialogFromSnapshot(snapshot, creds);
             updateBrowserTabInStore(win.id, tab.tabId, {
               viewerId: creds.viewerId,
             });
-            streamControllerRef.current?.attach(creds);
-            syncDialogFromSnapshot(snapshot, creds);
           });
         } catch (ticketErr) {
           if (
@@ -2119,8 +2123,7 @@ export function BrowserStreamKeepAliveHost() {
     const items: { window: OsWindow; tab: BrowserTabRuntime }[] = [];
     for (const win of Object.values(sessionWindows)) {
       if (win.appId !== "browser" || !win.appState) continue;
-      const appState = win.appState as unknown as BrowserWindowState;
-      if (!Array.isArray(appState.tabs)) continue;
+      const appState = readCanonicalBrowserWindowState(win.appState, `tab-${win.id}`);
       for (const tab of appState.tabs) {
         if (!tab || typeof tab.tabId !== "string" || !tab.tabId) continue;
         items.push({ window: win, tab });

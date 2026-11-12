@@ -17,9 +17,9 @@ import { createDefaultOsSession } from "@/os/window-ops.js";
 import { globalResourceRegistry } from "@/os/resource-registry.js";
 import { useCognitoModeStore } from "@/stores/cognito-mode.js";
 import type { OsWindow } from "@/os/types.js";
+import type { BrowserOwnerScope, BrowserWindowState } from "@/os/browser/browser-tab-types.js";
 import "@/index.css";
 import "@/os/os.css";
-
 describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium", () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
@@ -70,10 +70,13 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
         api: apiClient,
         mfaState: "none",
         sessionTtl: null,
+        verifiedBrowserIdentity: {
+          principal: "dev-user",
+          namespace: "dev",
+        },
       },
       transport,
     );
-
     fetchStub = vi.fn();
     vi.stubGlobal("fetch", fetchStub);
   });
@@ -124,15 +127,35 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
       ctx: { profileId: owner.profileId },
       mode: "tile",
       appState: {
-        presentation: { kind: "resource", url: "http://example.com" },
-        url: "http://example.com",
-        sessionId: "bsess-1",
-        navigationRevision: 1,
-        isController: true,
-        leaseToken: "lease-token-1",
+        browserStateVersion: 1,
+        activeTabId: "tab-sel-1",
+        ownerScope: {
+          profileId: owner.profileId,
+          endpoint: "http://127.0.0.1:4801",
+          principal: "dev-user",
+          namespace: "dev",
+        },
+        tabs: [
+          {
+            tabId: "tab-sel-1",
+            kind: "ordinary",
+            phase: "live",
+            sessionId: "bsess-1",
+            committedUrl: "http://example.com",
+            draft: { value: "http://example.com", dirty: false },
+            actionSequence: 1,
+            isController: true,
+            leaseToken: "lease-token-1",
+            snapshot: {
+              browserSessionId: "bsess-1",
+              url: "http://example.com",
+              status: "running",
+              navigationRevision: "1",
+            },
+          },
+        ],
       },
     });
-
     return useWindowStore.getState().session.windows["win-browser-1"]!;
   }
 
@@ -154,6 +177,16 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
     );
   }
 
+  async function openToolsPanel() {
+    const toolsBtn = container!.querySelector<HTMLButtonElement>(
+      '[data-testid="browser-tools-toggle-btn"]',
+    );
+    if (toolsBtn) {
+      await act(async () => {
+        toolsBtn.click();
+      });
+    }
+  }
   it("selects element via CDP preview, prepares ManagedBrowser PNG artifact, and hands off to exact terminal", async () => {
     openBrowserAndTerminalWindows(42);
 
@@ -251,7 +284,7 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
     await act(async () => {
       root?.render(<ReactiveBrowserHarness />);
     });
-
+    await openToolsPanel();
     const selectBtn = container!.querySelector<HTMLButtonElement>(
       '[data-testid="browser-select-element-btn"]',
     );
@@ -379,7 +412,7 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
     await act(async () => {
       root?.render(<ReactiveBrowserHarness />);
     });
-
+    await openToolsPanel();
     await act(async () => {
       container!
         .querySelector<HTMLButtonElement>('[data-testid="browser-select-element-btn"]')!
@@ -550,7 +583,7 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
     await act(async () => {
       root?.render(<ReactiveBrowserHarness />);
     });
-
+    await openToolsPanel();
     await act(async () => {
       container!
         .querySelector<HTMLButtonElement>('[data-testid="browser-select-element-btn"]')!
@@ -562,10 +595,10 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
         container!.querySelector('[data-testid="browser-selection-prepare-btn"]'),
       ).not.toBeNull();
     });
+    const appState = useWindowStore.getState().session.windows["win-browser-1"]?.appState as unknown as BrowserWindowState | undefined;
     expect(
-      String(useWindowStore.getState().session.windows["win-browser-1"]?.appState?.navigationRevision),
+      String(appState?.tabs?.[0]?.snapshot?.navigationRevision ?? ""),
     ).toBe("2");
-
     // Prepare artifact, then simulate native server navigation to revision 3 while preview/artifact are open
     await act(async () => {
       container!
@@ -589,8 +622,9 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
       },
       { timeout: 2500 },
     );
+    const finalAppState = useWindowStore.getState().session.windows["win-browser-1"]?.appState as unknown as BrowserWindowState | undefined;
     expect(
-      String(useWindowStore.getState().session.windows["win-browser-1"]?.appState?.navigationRevision),
+      String(finalAppState?.tabs?.[0]?.snapshot?.navigationRevision ?? ""),
     ).toBe("3");
     expect(discarded).toContain("art-bg-nav-1");
   });

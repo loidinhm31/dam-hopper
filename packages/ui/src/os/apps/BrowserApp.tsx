@@ -107,9 +107,10 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
     [window.appState],
   );
   const activeTab = useMemo<BrowserTabRuntime>(
-    () => canonicalState.tabs.find((t) => t.tabId === canonicalState.activeTabId) ?? canonicalState.tabs[0]!,
+    () => canonicalState.tabs.find((t) => t.tabId === canonicalState.activeTabId) ?? canonicalState.tabs[0] ?? createBlankBrowserTab({ tabId: fallbackTabIdRef.current }),
     [canonicalState],
   );
+  const activeDraftValue = activeTab?.draft?.value ?? activeTab?.committedUrl ?? "";
   const ownerMismatch = Boolean(
     canonicalState.ownerScope && verifiedScope && !areBrowserOwnerScopesEqual(canonicalState.ownerScope, verifiedScope),
   );
@@ -321,8 +322,8 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
 
   const handleSubmitAddress = useCallback(() => {
     clearBrowserViewFenceForProfile(owner.profileId);
-    void submitTabAddress({ ...navParams, rawInput: activeTab.draft.value });
-  }, [activeTab.draft.value, navParams, owner.profileId]);
+    void submitTabAddress({ ...navParams, rawInput: activeDraftValue });
+  }, [activeDraftValue, navParams, owner.profileId]);
 
   const handleReload = useCallback(() => {
     clearBrowserViewFenceForProfile(owner.profileId);
@@ -774,7 +775,7 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
       <BrowserAddressBar
         windowId={window.id}
         tab={activeTab}
-        draftValue={activeTab.draft.value}
+        draftValue={activeDraftValue}
         navigationPending={navigationPending}
         audioMuted={audioMuted}
         audioBlocked={audioBlocked}
@@ -883,7 +884,7 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
 
         {!showStreamSlot && activeTab.phase === "new-tab" && (
           <BrowserNewTabPage
-            draftValue={activeTab.draft.value}
+            draftValue={activeDraftValue}
             navigationError={navigationError}
             privacyMasked={privacyMasked}
             ownerMismatch={ownerMismatch}

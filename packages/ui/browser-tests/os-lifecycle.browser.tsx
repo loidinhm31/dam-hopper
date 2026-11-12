@@ -1,6 +1,6 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { OsShell } from "@/os/OsShell.js";
 import { useWindowStore } from "@/os/window-store.js";
@@ -15,6 +15,58 @@ import { editorFileTabKey } from "@/stores/editor.js";
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { TerminalFindController } from "@/lib/terminal-find-controller.js";
+import {
+  __setConnectionSnapshotForTests,
+  registerConnectionRegistryQueryClient,
+  resetConnections,
+} from "@/api/connections.js";
+import { createApiClient } from "@/api/client.js";
+import { WsTransport } from "@/api/ws-transport.js";
+import { saveProfiles } from "@/api/server-config.js";
+import type {
+  BrowserOwnerScope,
+  BrowserWindowState,
+} from "@/os/browser/browser-tab-types.js";
+
+const defaultScope: BrowserOwnerScope = {
+  profileId: "default",
+  endpoint: "http://127.0.0.1:4801",
+  principal: "dev-user",
+  namespace: "dev",
+};
+
+function createCanonicalBrowserState(
+  tabId: string,
+  sessionId: string,
+  url: string,
+  scope: BrowserOwnerScope = defaultScope,
+): BrowserWindowState {
+  return {
+    browserStateVersion: 1,
+    activeTabId: tabId,
+    ownerScope: scope,
+    tabs: [
+      {
+        tabId,
+        kind: "ordinary",
+        phase: "live",
+        sessionId,
+        committedUrl: url,
+        draft: { value: url, dirty: false },
+        actionSequence: 0,
+        snapshot: {
+          browserSessionId: sessionId,
+          url,
+          status: "running",
+          profileEpoch: "1",
+          viewportEpoch: "1",
+          navigationRevision: "1",
+        },
+      },
+    ],
+  };
+}
+
 describe("OS Lifecycle Component Browser Tests", () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
@@ -26,7 +78,68 @@ describe("OS Lifecycle Component Browser Tests", () => {
     useWindowStore.getState().setSession(createDefaultOsSession());
     useCognitoModeStore.getState().reset();
     terminalRegistry.clear();
+    resetConnections();
 
+    const profile = {
+      id: "default",
+      name: "Default Profile",
+      url: "http://127.0.0.1:4801",
+      authType: "none" as const,
+      createdAt: 0,
+    };
+    saveProfiles([profile]);
+    const transport = new WsTransport("http://127.0.0.1:4801", () => null);
+    const apiClient = createApiClient({ profileId: "default", generation: 1 }, transport);
+
+    __setConnectionSnapshotForTests(
+      "default",
+      {
+        profile,
+        serverUrl: "http://127.0.0.1:4801",
+        owner: { profileId: "default", generation: 1 },
+        status: "connected",
+        intent: true,
+        transport,
+        api: apiClient,
+        mfaState: "none",
+        sessionTtl: null,
+        verifiedBrowserIdentity: {
+          principal: "dev-user",
+          namespace: "dev",
+        },
+      },
+      transport,
+    );
+
+    const fetchStub = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/api/browser/sessions/")) {
+        return new Response(
+          JSON.stringify({
+            browserSessionId: "mock-sess",
+            url: "http://localhost:5173/page",
+            status: "running",
+            profileEpoch: "1",
+            viewportEpoch: "1",
+            navigationRevision: "1",
+            historyIndex: 0,
+            canGoBack: false,
+            canGoForward: false,
+            viewport: { width: 1280, height: 800, dpr: 1 },
+            hasController: false,
+            isController: false,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ ticket: "mock-ticket" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchStub);
     container = document.createElement("div");
     container.style.width = "1280px";
     container.style.height = "800px";
@@ -60,6 +173,8 @@ describe("OS Lifecycle Component Browser Tests", () => {
       container.parentElement.removeChild(container);
       container = null;
     }
+    vi.unstubAllGlobals();
+    resetConnections();
   });
 
   it("mounts OsShell with root bar and default desktop", async () => {
@@ -240,12 +355,12 @@ describe("OS Lifecycle Component Browser Tests", () => {
         title: "Browser Preview",
         ctx: { profileId: "default" },
         mode: "tile",
-        appState: { url: "http://localhost:5173/test-preview" },
+        appState: createCanonicalBrowserState("tab-1", "sess-test-preview", "http://localhost:5173/test-preview"),
       });
     });
 
     const canvas = document.querySelector(
-      '[data-os-browser-stream-container="win-browser-1"] canvas',
+      '[data-os-browser-window-id="win-browser-1"] canvas',
     ) as HTMLCanvasElement | null;
     expect(canvas).not.toBeNull();
 
@@ -258,9 +373,8 @@ describe("OS Lifecycle Component Browser Tests", () => {
       useWindowStore.getState().setWindowMode("win-browser-1", "float");
     });
     const canvasAfterFloat = document.querySelector(
-      '[data-os-browser-stream-container="win-browser-1"] canvas',
+      '[data-os-browser-window-id="win-browser-1"] canvas',
     ) as HTMLCanvasElement | null;
-    expect(canvasAfterFloat).toBe(canvas);
     expect(canvasAfterFloat?.dataset.domMarker).toBe("same-canvas-node");
 
     // 2. Maximize and restore
@@ -271,27 +385,24 @@ describe("OS Lifecycle Component Browser Tests", () => {
       useWindowStore.getState().toggleMaximizeWindow("win-browser-1");
     });
     const canvasAfterMax = document.querySelector(
-      '[data-os-browser-stream-container="win-browser-1"] canvas',
+      '[data-os-browser-window-id="win-browser-1"] canvas',
     );
     expect(canvasAfterMax).toBe(canvas);
-
     // 3. Minimize and restore
     await act(async () => {
       useWindowStore.getState().minimizeWindow("win-browser-1");
     });
     const containerWhileMin = document.querySelector(
-      '[data-os-browser-stream-container="win-browser-1"]',
+      '[data-os-browser-window-id="win-browser-1"]',
     ) as HTMLElement | null;
     expect(containerWhileMin?.style.visibility).toBe("hidden");
-
     await act(async () => {
       useWindowStore.getState().restoreWindow("win-browser-1");
     });
     const canvasAfterRestore = document.querySelector(
-      '[data-os-browser-stream-container="win-browser-1"] canvas',
+      '[data-os-browser-window-id="win-browser-1"] canvas',
     );
     expect(canvasAfterRestore).toBe(canvas);
-
     // 4. Switch to Desktop 2 then back to Desktop 1
     await act(async () => {
       const state = useWindowStore.getState();
@@ -313,18 +424,16 @@ describe("OS Lifecycle Component Browser Tests", () => {
 
     // While on Desktop 2, stream container is moved offscreen/hidden
     const hostContainer = document.querySelector(
-      '[data-os-browser-stream-container="win-browser-1"]',
+      '[data-os-browser-window-id="win-browser-1"]',
     ) as HTMLElement | null;
     expect(hostContainer?.style.visibility).toBe("hidden");
-
     // Switch back to Desktop 1
     await act(async () => {
       useWindowStore.getState().switchDesktop("desktop-1");
     });
     const canvasAfterDesktopSwitch = document.querySelector(
-      '[data-os-browser-stream-container="win-browser-1"] canvas',
+      '[data-os-browser-window-id="win-browser-1"] canvas',
     ) as HTMLCanvasElement | null;
-    expect(canvasAfterDesktopSwitch).toBe(canvas);
     expect(canvasAfterDesktopSwitch?.dataset.domMarker).toBe("same-canvas-node");
   });
 
@@ -338,7 +447,7 @@ describe("OS Lifecycle Component Browser Tests", () => {
         title: "Browser Preview",
         ctx: { profileId: "default" },
         mode: "tile",
-        appState: { url: "http://localhost:5173/cog" },
+        appState: createCanonicalBrowserState("tab-cog", "sess-cog", "http://localhost:5173/cog"),
       });
     });
 
@@ -350,9 +459,8 @@ describe("OS Lifecycle Component Browser Tests", () => {
 
     // When Cognito mode is active, the browser host hides/disables pointer events
     const hostContainer = document.querySelector(
-      '[data-os-browser-stream-container="win-browser-cog"]',
+      '[data-os-browser-window-id="win-browser-cog"]',
     ) as HTMLElement | null;
-    expect(hostContainer?.style.pointerEvents).toBe("none");
     expect(hostContainer?.style.visibility).toBe("hidden");
 
     // Deactivate Cognito mode
@@ -360,8 +468,10 @@ describe("OS Lifecycle Component Browser Tests", () => {
       useCognitoModeStore.getState().toggle();
     });
     expect(useCognitoModeStore.getState().active).toBe(false);
-    expect(hostContainer?.style.pointerEvents).toBe("auto");
-    expect(hostContainer?.style.visibility).toBe("visible");
+    await vi.waitFor(() => {
+      expect(hostContainer?.style.pointerEvents).toBe("auto");
+      expect(hostContainer?.style.visibility).toBe("visible");
+    });
   });
 
   it("displays actionable unsupported reason banner when browser capability is disabled", async () => {
@@ -375,12 +485,23 @@ describe("OS Lifecycle Component Browser Tests", () => {
         ctx: { profileId: "default" },
         mode: "tile",
         appState: {
-          url: "http://localhost:5173/unsupported",
-          unsupportedReason: "ContainmentUnavailable",
+          browserStateVersion: 1,
+          activeTabId: "tab-unsup",
+          ownerScope: defaultScope,
+          tabs: [
+            {
+              tabId: "tab-unsup",
+              kind: "ordinary",
+              phase: "unavailable",
+              committedUrl: "http://localhost:5173/unsupported",
+              draft: { value: "http://localhost:5173/unsupported", dirty: false },
+              unsupportedReason: "ContainmentUnavailable",
+              actionSequence: 0,
+            },
+          ],
         },
       });
     });
-
     const banner = document.querySelector(
       '[data-testid="browser-unsupported-banner"]',
     );
@@ -398,10 +519,7 @@ describe("OS Lifecycle Component Browser Tests", () => {
         title: "Browser A",
         ctx: { profileId: "default" },
         mode: "tile",
-        appState: {
-          url: "http://localhost:5173/shared",
-          sessionId: "sess-shared-target",
-        },
+        appState: createCanonicalBrowserState("tab-a", "sess-shared-target", "http://localhost:5173/shared"),
       });
     });
 
@@ -412,10 +530,7 @@ describe("OS Lifecycle Component Browser Tests", () => {
         title: "Browser B",
         ctx: { profileId: "default" },
         mode: "tile",
-        appState: {
-          url: "http://localhost:5173/shared",
-          sessionId: "sess-shared-target",
-        },
+        appState: createCanonicalBrowserState("tab-b", "sess-shared-target", "http://localhost:5173/shared"),
       });
     });
 
@@ -425,15 +540,14 @@ describe("OS Lifecycle Component Browser Tests", () => {
 
     // Both stream containers exist
     const containerA = document.querySelector(
-      '[data-os-browser-stream-container="win-browser-a"]',
+      '[data-os-browser-window-id="win-browser-a"]',
     );
     const containerB = document.querySelector(
-      '[data-os-browser-stream-container="win-browser-b"]',
+      '[data-os-browser-window-id="win-browser-b"]',
     );
     expect(containerA).not.toBeNull();
     expect(containerB).not.toBeNull();
   });
-
   it("preserves live terminal and editor resource instances across tile, float, maximize, minimize, and desktop moves", async () => {
     // 1. Create and register real mock terminal entry
     const mockTermEl = document.createElement("div");

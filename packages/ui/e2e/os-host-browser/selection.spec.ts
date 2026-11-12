@@ -435,13 +435,17 @@ type = "custom"
       const browserCard = page.locator('[data-testid="app-card-browser"]').first();
       await expect(browserCard).toBeVisible({ timeout: 10_000 });
       await browserCard.click();
-      const chooserUrlInput = page
-        .locator('[data-testid="browser-chooser-url-input"]')
+      const urlInput = page
+        .locator('[data-testid="browser-new-tab-url-input"], [data-testid="browser-address-input"]')
         .first();
-      await expect(chooserUrlInput).toBeVisible({ timeout: 10_000 });
-      await chooserUrlInput.fill(targetPageUrl);
-      await page.locator('[data-testid="browser-chooser-open-btn"]').first().click();
-
+      await expect(urlInput).toBeVisible({ timeout: 15_000 });
+      await urlInput.fill(targetPageUrl);
+      const openBtn = page.locator('[data-testid="browser-new-tab-open-btn"]').first();
+      if (await openBtn.isVisible()) {
+        await openBtn.click();
+      } else {
+        await urlInput.press("Enter");
+      }
       const browserSlot = page.locator('[data-os-browser-slot]').first();
       await expect(browserSlot).toBeVisible({ timeout: 15_000 });
 
@@ -459,6 +463,13 @@ type = "custom"
         )
         .toBe(true);
 
+      // Open Tools & Recovery panel
+      const toolsToggle = page
+        .locator('[data-testid="browser-tools-toggle-btn"]')
+        .first();
+      await expect(toolsToggle).toBeVisible({ timeout: 15_000 });
+      await toolsToggle.click();
+
       // 3. Acquire control lease
       const takeControlBtn = page
         .locator('[data-testid="browser-take-control-btn"]')
@@ -468,6 +479,7 @@ type = "custom"
       await expect(
         page.locator('[data-testid="browser-controller-badge"]').first(),
       ).toBeVisible({ timeout: 10_000 });
+
       // 4. Start CDP Overlay selection
       const selectBtn = page
         .locator('[data-testid="browser-select-element-btn"]')
@@ -481,8 +493,11 @@ type = "custom"
       // Click on the button area in the live rendered canvas (top-left area inside padding:40px, button 360x140)
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
-      await page.mouse.move(box!.x + box!.width * 0.15, box!.y + box!.height * 0.12);
-      await page.mouse.click(box!.x + box!.width * 0.15, box!.y + box!.height * 0.12);
+      const scale = Math.min(box!.width / 1280, box!.height / 800);
+      const clickX = box!.x + (box!.width - 1280 * scale) / 2 + (40 + 180) * scale;
+      const clickY = box!.y + (box!.height - 800 * scale) / 2 + (40 + 70) * scale;
+      await page.mouse.move(clickX, clickY);
+      await page.mouse.click(clickX, clickY);
       const previewCard = page
         .locator('[data-testid="browser-selection-preview-card"]')
         .first();

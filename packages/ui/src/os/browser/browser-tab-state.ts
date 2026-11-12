@@ -65,7 +65,17 @@ export function createInitialBrowserWindowState(options?: {
   for (const tab of options?.tabs ?? []) {
     if (typeof tab.tabId !== "string" || !tab.tabId.trim() || seen.has(tab.tabId)) continue;
     seen.add(tab.tabId);
-    dedupedTabs.push(tab);
+    const rawDraft = tab.draft && typeof tab.draft === "object" ? tab.draft : undefined;
+    const committedUrl = typeof tab.committedUrl === "string" ? tab.committedUrl : undefined;
+    const draftValue = rawDraft && "value" in rawDraft && typeof rawDraft.value === "string" ? rawDraft.value : (committedUrl ?? "");
+    const dirty = rawDraft && "dirty" in rawDraft && typeof rawDraft.dirty === "boolean" ? rawDraft.dirty : false;
+    dedupedTabs.push({
+      ...tab,
+      kind: tab.kind === "popup" ? "popup" : "ordinary",
+      phase: tab.phase ?? (tab.sessionId ? "connecting" : committedUrl ? "unavailable" : "new-tab"),
+      draft: { value: draftValue, dirty },
+      actionSequence: typeof tab.actionSequence === "number" ? tab.actionSequence : 0,
+    });
   }
   const tabs = dedupedTabs.length > 0 ? dedupedTabs : [createBlankBrowserTab()];
   const activeTabId = options?.activeTabId && tabs.some((t) => t.tabId === options.activeTabId)

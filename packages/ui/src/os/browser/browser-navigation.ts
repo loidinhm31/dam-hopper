@@ -9,8 +9,9 @@ import { areBrowserOwnerScopesEqual, captureVerifiedBrowserOwner, isCapturedBrow
 import { loadBrowserRecoveryDisk, saveBrowserRecoveryDisk, withBrowserRecoveryLock } from "./browser-recovery-store.js";
 import { isOperationRiskAcknowledged } from "./browser-session-inventory.js";
 import { browserTabSlotKey, createBlankBrowserTab, createInitialBrowserWindowState, findBrowserTab, patchBrowserTab, selectBrowserTab, setBrowserTabDraft } from "./browser-tab-state.js";
-import { BROWSER_STATE_VERSION, type BrowserTabRuntime, type BrowserWindowState } from "./browser-tab-types.js";
+import { BROWSER_STATE_VERSION, type BrowserOwnerScope, type BrowserTabKind, type BrowserTabPhase, type BrowserTabRuntime, type BrowserWindowClosingState, type BrowserWindowState } from "./browser-tab-types.js";
 import { normalizeBrowserCommittedUrl } from "./browser-url-normalization.js";
+import { parseBrowserWindowDisk } from "./browser-persistence.js";
 
 export interface TabNavActionParams {
   owner: ConnectionRef; windowId: string; tabId: string; fallbackTabId?: string;
@@ -38,10 +39,81 @@ export const sanitizeBrowserError = (err: unknown, fallback: string): string => 
   const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "";
   return SAFE_BROWSER_ERROR_PREFIXES.some((p) => msg.startsWith(p)) ? msg.slice(0, 140) : fallback;
 };
+export function hydrateBrowserTabRuntime(rawTab: unknown, fallbackTabId: string): BrowserTabRuntime {
+  if (!rawTab || typeof rawTab !== "object") {
+    return createBlankBrowserTab({ tabId: fallbackTabId });
+  }
+  const t = rawTab as Record<string, unknown>;
+  const tabId = typeof t.tabId === "string" && t.tabId.trim() ? t.tabId : fallbackTabId;
+  const committedUrl = normalizeBrowserCommittedUrl(t.committedUrl);
+  const sessionId = typeof t.sessionId === "string" && t.sessionId.trim() ? t.sessionId : undefined;
+  const rawDraft = t.draft && typeof t.draft === "object" ? t.draft : undefined;
+  const draftValue = rawDraft && "value" in rawDraft && typeof rawDraft.value === "string" ? rawDraft.value : (committedUrl ?? "");
+  const dirty = rawDraft && "dirty" in rawDraft && typeof rawDraft.dirty === "boolean" ? rawDraft.dirty : false;
+  const kind: BrowserTabKind = t.kind === "popup" ? "popup" : "ordinary";
+  const parentTabId = typeof t.parentTabId === "string" && t.parentTabId.trim() ? t.parentTabId : undefined;
+  const phase: BrowserTabPhase =
+    typeof t.phase === "string" &&
+    ["new-tab", "connecting", "live", "unavailable", "capacity", "creating", "create-unknown", "closing", "close-unknown", "deferred"].includes(t.phase)
+      ? (t.phase as BrowserTabPhase)
+      : sessionId
+        ? "connecting"
+        : committedUrl
+          ? "unavailable"
+          : "new-tab";
+  const actionSequence = typeof t.actionSequence === "number" && Number.isFinite(t.actionSequence) ? t.actionSequence : 0;
+
+  return {
+    ...t,
+    tabId,
+    kind,
+    ...(parentTabId ? { parentTabId } : {}),
+    ...(committedUrl ? { committedUrl } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    phase,
+    draft: { value: draftValue, dirty },
+    actionSequence,
+  } as BrowserTabRuntime;
+}
 export function readCanonicalBrowserWindowState(rawAppState: Record<string, unknown> | undefined, fallbackTabId: string): BrowserWindowState {
   if (rawAppState?.browserStateVersion === BROWSER_STATE_VERSION && Array.isArray(rawAppState.tabs) && rawAppState.tabs.length > 0) {
-    const c = rawAppState as unknown as BrowserWindowState;
-    return c.tabs.some((t) => t.tabId === c.activeTabId) ? c : { ...c, activeTabId: c.tabs[0]!.tabId };
+    const rawTabs = rawAppState.tabs as Array<Record<string, unknown>>;
+    const alreadyValid = rawTabs.every(
+      (t) => t && typeof t === "object" && typeof t.tabId === "string" && t.tabId.trim() &&
+             t.draft && typeof t.draft === "object" && "value" in t.draft && typeof t.draft.value === "string" &&
+             typeof t.phase === "string" && typeof t.kind === "string"
+    );
+    if (alreadyValid) {
+      const c = rawAppState as unknown as BrowserWindowState;
+      return c.tabs.some((t) => t.tabId === c.activeTabId) ? c : { ...c, activeTabId: c.tabs[0]!.tabId };
+    }
+    const tabs: BrowserTabRuntime[] = rawTabs.map((t, idx) =>
+      hydrateBrowserTabRuntime(t, idx === 0 ? fallbackTabId : `${fallbackTabId}-${idx}`)
+    );
+    const activeTabId = typeof rawAppState.activeTabId === "string" && tabs.some((t) => t.tabId === rawAppState.activeTabId)
+      ? (rawAppState.activeTabId as string)
+      : tabs[0]!.tabId;
+    return {
+      browserStateVersion: BROWSER_STATE_VERSION,
+      ...(rawAppState.ownerScope ? { ownerScope: rawAppState.ownerScope as BrowserOwnerScope } : {}),
+      tabs,
+      activeTabId,
+      ...(rawAppState.closing && typeof rawAppState.closing === "object" ? { closing: rawAppState.closing as BrowserWindowClosingState } : {}),
+      ...(typeof rawAppState.restoreGroupId === "string" ? { restoreGroupId: rawAppState.restoreGroupId } : {}),
+    };
+  }
+  if (rawAppState && typeof rawAppState === "object" && (rawAppState.url !== undefined || rawAppState.sessionId !== undefined)) {
+    const committedUrl = normalizeBrowserCommittedUrl(rawAppState.url);
+    const tab: BrowserTabRuntime = {
+      tabId: fallbackTabId,
+      kind: "ordinary",
+      ...(committedUrl ? { committedUrl } : {}),
+      ...(typeof rawAppState.sessionId === "string" && rawAppState.sessionId.trim() ? { sessionId: rawAppState.sessionId } : {}),
+      phase: committedUrl ? "unavailable" : "new-tab",
+      draft: { value: committedUrl ?? "", dirty: false },
+      actionSequence: 0,
+    };
+    return createInitialBrowserWindowState({ tabs: [tab], activeTabId: fallbackTabId });
   }
   return createInitialBrowserWindowState({ tabs: [createBlankBrowserTab({ tabId: fallbackTabId })] });
 }
@@ -140,7 +212,7 @@ async function runCasNav(
     const response = await op(current.navigationRevision, ctrl.signal);
     if (isCurrent()) {
       const latest = resolveTab(windowId, tab.tabId, fallbackTabId);
-      if (latest && submittedValues && (latest.tab.draft.value === submittedValues[0] || latest.tab.draft.value === submittedValues[1])) writeCanonicalWindowState(windowId, setBrowserTabDraft(latest.appState, tab.tabId, latest.tab.draft.value, false));
+      if (latest && submittedValues && (latest.tab.draft?.value === submittedValues[0] || latest.tab.draft?.value === submittedValues[1])) writeCanonicalWindowState(windowId, setBrowserTabDraft(latest.appState, tab.tabId, latest.tab.draft?.value ?? "", false));
       syncBrowserSessionWindow(verified.owner, windowId, tab.tabId, sessionId, response, expectedRuntime);
     }
   } catch (err) {

@@ -406,7 +406,7 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
           if (!stream || (stream.getAudioTracks && stream.getAudioTracks().length === 0)) return;
           const ctx = ensureMixCtx(); if (!ctx) return;
           const mediaSrc = ctx.createMediaStreamSource(stream);
-          const proc = ctx.createScriptProcessor(1024, 1, 1);
+          const proc = ctx.createScriptProcessor(1024, 2, 1);
           const zero = ctx.createGain(); zero.gain.value = 0;
           let onEnd = null;
           const srcState = makeSrc(() => {
@@ -416,7 +416,24 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
           });
           if (!srcState) return;
           onEnd = () => { srcState.kill(); };
-          proc.onaudioprocess = (ev) => { pushSrc(srcState, ev.inputBuffer.getChannelData(0), ctx.sampleRate || 24000); };
+          proc.onaudioprocess = (ev) => {
+            if (!el || el.muted) { srcState.writePos = -1; return; }
+            const v = typeof el.volume === 'number' && Number.isFinite(el.volume) ? Math.max(0, Math.min(1, el.volume)) : 1;
+            if (v <= 0.0001) { srcState.writePos = -1; return; }
+            const ib = ev.inputBuffer; const ch0 = ib.getChannelData(0);
+            if (ib.numberOfChannels > 1) {
+              const ch1 = ib.getChannelData(1); const mono = new Float32Array(ch0.length);
+              const factor = v * 0.5;
+              for (let i = 0; i < ch0.length; i++) mono[i] = (ch0[i] + ch1[i]) * factor;
+              pushSrc(srcState, mono, ctx.sampleRate || 24000);
+            } else if (Math.abs(v - 1) > 0.001) {
+              const scaled = new Float32Array(ch0.length);
+              for (let i = 0; i < ch0.length; i++) scaled[i] = ch0[i] * v;
+              pushSrc(srcState, scaled, ctx.sampleRate || 24000);
+            } else {
+              pushSrc(srcState, ch0, ctx.sampleRate || 24000);
+            }
+          };
           mediaSrc.connect(proc); proc.connect(zero); zero.connect(ctx.destination);
           el.addEventListener?.('ended', onEnd, { once: true });
           el.addEventListener?.('emptied', onEnd, { once: true });
@@ -483,6 +500,12 @@ pub const ANTI_DETECTION_SCRIPT: &str = r#"(() => {
       };
       w.addEventListener('play', (e) => { if (activeRun && e?.target) tapEl(e.target); }, { capture: true, passive: true });
       w.addEventListener('playing', (e) => { if (activeRun && e?.target) tapEl(e.target); }, { capture: true, passive: true });
+      w.addEventListener('volumechange', (e) => {
+        if (activeRun && e?.target) {
+          const el = e.target;
+          if (el && !el.paused && !el.muted && !tappedEls.has(el)) tapEl(el);
+        }
+      }, { capture: true, passive: true });
       w.addEventListener('pagehide', () => { stopAll(); }, { capture: true, passive: true });
       const onSameDocNav = () => {
         subDocGen += 1;

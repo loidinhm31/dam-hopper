@@ -1,5 +1,5 @@
 import { test as base, expect, type Page } from "@playwright/test";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as http from "node:http";
@@ -33,6 +33,7 @@ export interface HostBrowserAppServer {
   readonly tempRoot: string;
   readonly deniedRequestCount: () => number;
   readonly serverLog: () => string;
+  readonly restartApi: () => Promise<void>;
 }
 
 export interface HostBrowserAppOptions {
@@ -430,71 +431,91 @@ type = "custom"
 
   // Launch server process with web-dir enabled
   const isUnix = process.platform !== "win32";
-  const serverProc = spawn(
-    serverBin,
-    [
-      "--config",
-      configPath,
-      "--host",
-      "127.0.0.1",
-      "--port",
-      String(appPort),
-      "--web-dir",
-      webDist,
-    ],
-    {
-      cwd: REPO_ROOT,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: isUnix,
-    },
-  );
-
   let serverOutput = "";
   const recordOutput = (data: Buffer) => {
     serverOutput = (serverOutput + data.toString()).slice(-1_048_576);
   };
-  // Drain both pipes: an unread stdout must never stall the isolated backend.
-  serverProc.stdout?.on("data", recordOutput);
-  serverProc.stderr?.on("data", recordOutput);
 
-  // Wait for server health / readiness
-  const deadline = Date.now() + 30_000;
-  let ready = false;
-  while (Date.now() < deadline) {
-    try {
-      const resp = await fetch(`${appOrigin}/api/auth/status`, {
-        headers: { Authorization: `Bearer ${adminSeeded.token}` },
-      });
-      if (resp.status === 200) {
-        ready = true;
-        break;
+  let currentServerProc: ChildProcess | null = null;
+  const spawnServer = async (): Promise<void> => {
+    const proc = spawn(
+      serverBin,
+      [
+        "--config",
+        configPath,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(appPort),
+        "--web-dir",
+        webDist,
+      ],
+      {
+        cwd: REPO_ROOT,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: isUnix,
+      },
+    );
+
+    proc.stdout?.on("data", recordOutput);
+    proc.stderr?.on("data", recordOutput);
+    currentServerProc = proc;
+
+    const deadline = Date.now() + 30_000;
+    let ready = false;
+    while (Date.now() < deadline) {
+      try {
+        const resp = await fetch(`${appOrigin}/api/auth/status`, {
+          headers: { Authorization: `Bearer ${adminSeeded.token}` },
+        });
+        if (resp.status === 200) {
+          ready = true;
+          break;
+        }
+      } catch {
+        // waiting
       }
-    } catch {
-      // waiting
+      await sleep(250);
     }
-    await sleep(250);
-  }
 
-  if (!ready) {
-    if (serverProc.pid) {
-      if (isUnix) killGroup(serverProc.pid, "SIGKILL");
-      serverProc.kill("SIGKILL");
+    if (!ready) {
+      if (proc.pid) {
+        if (isUnix) killGroup(proc.pid, "SIGKILL");
+        proc.kill("SIGKILL");
+      }
+      targetHttpServer.close();
+      deniedHttpServer.close();
+      throw new Error(`Server failed to boot within 30s. Output: ${serverOutput}`);
     }
-    targetHttpServer.close();
-    deniedHttpServer.close();
-    throw new Error(`Server failed to boot within 30s. Output: ${serverOutput}`);
-  }
+  };
 
-  const cleanup = async () => {
-    if (serverProc && serverProc.pid) {
+  await spawnServer();
+
+  const restartApi = async (): Promise<void> => {
+    if (currentServerProc && currentServerProc.pid) {
       if (isUnix) {
-        killGroup(serverProc.pid, "SIGTERM");
+        killGroup(currentServerProc.pid, "SIGTERM");
         await sleep(500);
-        killGroup(serverProc.pid, "SIGKILL");
+        killGroup(currentServerProc.pid, "SIGKILL");
       } else {
-        serverProc.kill("SIGKILL");
+        currentServerProc.kill("SIGKILL");
       }
+      currentServerProc = null;
+    }
+    await sleep(500);
+    await spawnServer();
+  };
+  const cleanup = async () => {
+    if (currentServerProc && currentServerProc.pid) {
+      if (isUnix) {
+        killGroup(currentServerProc.pid, "SIGTERM");
+        await sleep(500);
+        killGroup(currentServerProc.pid, "SIGKILL");
+      } else {
+        currentServerProc.kill("SIGKILL");
+      }
+      currentServerProc = null;
     }
     targetHttpServer.close();
     deniedHttpServer.close();
@@ -521,6 +542,7 @@ type = "custom"
     tempRoot,
     deniedRequestCount: () => deniedRequests,
     serverLog: () => serverOutput,
+    restartApi,
   };
 }
 

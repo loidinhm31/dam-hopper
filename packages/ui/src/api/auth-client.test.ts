@@ -319,6 +319,30 @@ describe("auth-client", () => {
         expect(status.code).toBe("SESSION_EXPIRED");
       }
     });
+    it("falls back to 127.0.0.1 when localhost fails with a network error", async () => {
+      globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes("localhost")) {
+          throw new TypeError("Failed to fetch (ERR_CONNECTION_REFUSED)");
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            authenticated: true,
+            user: "bob",
+            role: "user",
+            workbenchProtocol: 2,
+            authProtocol: 2,
+          }),
+        };
+      });
+
+      const status = await checkAuthStatus("http://localhost:4803", "tok");
+      expect(status.authenticated).toBe(true);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(globalThis.fetch).mock.calls[0]?.[0]).toContain("http://localhost:4803");
+      expect(vi.mocked(globalThis.fetch).mock.calls[1]?.[0]).toContain("http://127.0.0.1:4803");
+    });
   });
 
   describe("logout & logoutAccount", () => {

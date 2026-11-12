@@ -441,11 +441,29 @@ export async function checkAuthStatus(
       signal,
     });
   } catch (err) {
-    throw new AuthClientError(
-      err instanceof Error ? err.message : "Network error checking auth status",
-      AUTH_ERROR_CODES.NETWORK_ERROR,
-      0,
-    );
+    if (/^https?:\/\/localhost(?::\d+)?\b/i.test(url)) {
+      const fallbackUrl = url.replace(/^(https?:\/\/)localhost\b/i, "$1127.0.0.1");
+      try {
+        res = await fetch(fallbackUrl, {
+          method: "GET",
+          headers,
+          credentials: "omit",
+          signal,
+        });
+      } catch {
+        throw new AuthClientError(
+          err instanceof Error ? err.message : "Network error checking auth status",
+          AUTH_ERROR_CODES.NETWORK_ERROR,
+          0,
+        );
+      }
+    } else {
+      throw new AuthClientError(
+        err instanceof Error ? err.message : "Network error checking auth status",
+        AUTH_ERROR_CODES.NETWORK_ERROR,
+        0,
+      );
+    }
   }
 
   const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;

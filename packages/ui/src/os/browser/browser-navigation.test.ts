@@ -24,7 +24,7 @@ vi.mock("@/api/connections.js", () => ({
 vi.mock("../window-store.js", () => ({ useWindowStore: { getState: () => store } }));
 
 import {
-  activateTabInWindow, clearNavigationsForTesting, navigateTabHistory, reloadBrowserTab,
+  activateTabInWindow, clearNavigationsForTesting, navigateTabHistory, readCanonicalBrowserWindowState, reloadBrowserTab,
   resetTabDraftToCommitted, retireTabNavigation, sanitizeBrowserError, submitTabAddress, validateBrowserUrlInput,
 } from "./browser-navigation.js";
 import {
@@ -165,5 +165,30 @@ describe("browser-navigation", () => {
     expect(sanitizeBrowserError(new SyntaxError("Unexpected token https://secret.test/?k=1"), "Fallback.")).toBe("Fallback.");
     expect(sanitizeBrowserError(new BrowserHostClientError("confidential data:text/plain,tok /opt/key", "sessionConflict", 409), "Fallback.")).toBe("Page state changed; retry the action.");
     expect(sanitizeBrowserError(new BrowserHostClientError("secret internal msg", "unknownKind", 500), "Fallback.")).toBe("Fallback.");
+  });
+
+  it("hydrates disk-persisted tabs lacking draft and recovers legacy flat appState", () => {
+    const diskState = {
+      browserStateVersion: 1,
+      ownerScope: scopeA,
+      activeTabId: "tab-disk",
+      tabs: [
+        { tabId: "tab-disk", committedUrl: "http://example.test/page" },
+      ],
+    };
+    const canonical = readCanonicalBrowserWindowState(diskState as unknown as Record<string, unknown>, "fallback");
+    expect(canonical.tabs[0]?.draft).toEqual({ value: "http://example.test/page", dirty: false });
+    expect(canonical.tabs[0]?.phase).toBe("unavailable");
+    expect(canonical.tabs[0]?.kind).toBe("ordinary");
+    expect(canonical.tabs[0]?.actionSequence).toBe(0);
+
+    const legacyFlat = { url: "http://legacy.test/home" };
+    const recovered = readCanonicalBrowserWindowState(legacyFlat, "fallback");
+    expect(recovered.tabs[0]?.draft).toEqual({ value: "http://legacy.test/home", dirty: false });
+    expect(recovered.tabs[0]?.committedUrl).toBe("http://legacy.test/home");
+
+    const emptyState = readCanonicalBrowserWindowState(undefined, "fallback");
+    expect(emptyState.tabs[0]?.draft).toEqual({ value: "", dirty: false });
+    expect(emptyState.tabs[0]?.tabId).toBe("fallback");
   });
 });

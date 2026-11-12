@@ -1032,6 +1032,58 @@ async fn test_real_chromium_media_stealth_and_pcm_audio_bridge() {
         media_el_pcm.chunks_exact(2).any(|b| i16::from_le_bytes([b[0], b[1]]).abs() > 100),
         "isolated <audio> element captureStream must produce non-silent PCM"
     );
+    // Verify dynamic element volume and mute without page reload (e.g. YouTube in-page controls)
+    client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({
+                "expression": r#"(() => {
+                    window.__parentAudioEl.muted = true;
+                    return true;
+                })()"#,
+                "returnByValue": true
+            })),
+            Some(&page_sid),
+        )
+        .await
+        .expect("mute <audio> element");
+
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    while audio_rx.try_recv().is_ok() {}
+    let muted_recv = tokio::time::timeout(std::time::Duration::from_millis(250), audio_rx.recv()).await;
+    assert!(
+        muted_recv.is_err(),
+        "muting playing media element must immediately silence stream without reload"
+    );
+
+    // Unmute <audio> element and set volume = 0.5
+    client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({
+                "expression": r#"(() => {
+                    window.__parentAudioEl.muted = false;
+                    window.__parentAudioEl.volume = 0.5;
+                    return true;
+                })()"#,
+                "returnByValue": true
+            })),
+            Some(&page_sid),
+        )
+        .await
+        .expect("unmute <audio> element with volume 0.5");
+
+    let unmuted_chunk = tokio::time::timeout(std::time::Duration::from_secs(2), audio_rx.recv())
+        .await
+        .expect("unmuting media element must immediately resume stream without reload")
+        .expect("receive unmuted ProducerAudioChunk");
+    let unmuted_pcm = BASE64_STANDARD
+        .decode(unmuted_chunk.data.as_ref())
+        .expect("decode unmuted PCM");
+    assert!(
+        unmuted_pcm.chunks_exact(2).any(|b| i16::from_le_bytes([b[0], b[1]]).abs() > 50),
+        "unmuted media element must produce non-silent PCM at volume 0.5"
+    );
 
     // Pause and remove <audio> element -> verify stream goes silent
     client

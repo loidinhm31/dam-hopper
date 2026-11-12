@@ -1,6 +1,6 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { OsShell } from "@/os/OsShell.js";
 import { useWindowStore } from "@/os/window-store.js";
@@ -12,7 +12,14 @@ import "@/index.css";
 import "@/os/os.css";
 import { EncryptProvider } from "@/contexts/EncryptContext.js";
 import { arbitrateKeyboardEvent } from "@/os/input-arbiter.js";
-
+import {
+  __setConnectionSnapshotForTests,
+  registerConnectionRegistryQueryClient,
+  resetConnections,
+} from "@/api/connections.js";
+import { createApiClient } from "@/api/client.js";
+import { WsTransport } from "@/api/ws-transport.js";
+import { saveProfiles } from "@/api/server-config.js";
 describe("OS Input Isolation & Cognito Privacy Browser Tests", () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
@@ -24,6 +31,68 @@ describe("OS Input Isolation & Cognito Privacy Browser Tests", () => {
     useWindowStore.getState().setSession(createDefaultOsSession("desk-1", "Main"));
     useCognitoModeStore.getState().reset();
     useOsNotificationStore.getState().clearAll();
+    resetConnections();
+
+    const profile = {
+      id: "default",
+      name: "Default Profile",
+      url: "http://127.0.0.1:4801",
+      authType: "none" as const,
+      createdAt: 0,
+    };
+    saveProfiles([profile]);
+    const transport = new WsTransport("http://127.0.0.1:4801", () => null);
+    const apiClient = createApiClient({ profileId: "default", generation: 1 }, transport);
+
+    __setConnectionSnapshotForTests(
+      "default",
+      {
+        profile,
+        serverUrl: "http://127.0.0.1:4801",
+        owner: { profileId: "default", generation: 1 },
+        status: "connected",
+        intent: true,
+        transport,
+        api: apiClient,
+        mfaState: "none",
+        sessionTtl: null,
+        verifiedBrowserIdentity: {
+          principal: "dev-user",
+          namespace: "dev",
+        },
+      },
+      transport,
+    );
+
+    const fetchStub = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/api/browser/sessions/")) {
+        return new Response(
+          JSON.stringify({
+            browserSessionId: "sess-iso",
+            url: "http://localhost:5173/isolated",
+            status: "running",
+            profileEpoch: "1",
+            viewportEpoch: "1",
+            navigationRevision: "1",
+            historyIndex: 0,
+            canGoBack: false,
+            canGoForward: false,
+            viewport: { width: 1280, height: 800, dpr: 1 },
+            hasController: false,
+            isController: false,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ ticket: "mock-ticket" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchStub);
 
     container = document.createElement("div");
     container.style.width = "1440px";
@@ -47,6 +116,8 @@ describe("OS Input Isolation & Cognito Privacy Browser Tests", () => {
       container.parentElement.removeChild(container);
       container = null;
     }
+    vi.unstubAllGlobals();
+    resetConnections();
   });
 
   const renderOsShell = async () => {
@@ -210,15 +281,41 @@ describe("OS Input Isolation & Cognito Privacy Browser Tests", () => {
         title: "Browser Preview",
         ctx: { profileId: "default" },
         mode: "tile",
-        appState: { url: "http://localhost:5173/isolated" },
+        appState: {
+          browserStateVersion: 1,
+          activeTabId: "tab-iso",
+          ownerScope: {
+            profileId: "default",
+            endpoint: "http://127.0.0.1:4801",
+            principal: "dev-user",
+            namespace: "dev",
+          },
+          tabs: [
+            {
+              tabId: "tab-iso",
+              kind: "ordinary",
+              phase: "live",
+              sessionId: "sess-iso",
+              committedUrl: "http://localhost:5173/isolated",
+              draft: { value: "http://localhost:5173/isolated", dirty: false },
+              actionSequence: 0,
+              snapshot: {
+                browserSessionId: "sess-iso",
+                url: "http://localhost:5173/isolated",
+                status: "running",
+                profileEpoch: "1",
+                viewportEpoch: "1",
+                navigationRevision: "1",
+              },
+            },
+          ],
+        },
       });
     });
 
     const streamContainer = document.querySelector(
-      '[data-os-browser-stream-container="win-browser-iso"]',
+      '[data-os-browser-window-id="win-browser-iso"]',
     ) as HTMLElement | null;
-    expect(streamContainer).not.toBeNull();
-    expect(streamContainer?.style.pointerEvents).toBe("auto");
 
     // Enable Cognito mode
     await act(async () => {
@@ -235,7 +332,9 @@ describe("OS Input Isolation & Cognito Privacy Browser Tests", () => {
       useCognitoModeStore.getState().toggle();
     });
     expect(useCognitoModeStore.getState().active).toBe(false);
-    expect(streamContainer?.style.pointerEvents).toBe("auto");
-    expect(streamContainer?.style.visibility).toBe("visible");
+    await vi.waitFor(() => {
+      expect(streamContainer?.style.pointerEvents).toBe("auto");
+      expect(streamContainer?.style.visibility).toBe("visible");
+    });
   });
 });

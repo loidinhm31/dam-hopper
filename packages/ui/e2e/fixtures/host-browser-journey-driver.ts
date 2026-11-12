@@ -99,14 +99,22 @@ export async function openJourneyView(page: Page, host: HostBrowserAppServer, ob
   await page.getByRole("button", { name: /^Launch or focus Browser Preview/ }).click({ button: "right" });
   await page.getByTestId("dock-menu-new-window").click();
   const targetUrl = `http://127.0.0.1:${host.targetPort}/journey?page=a&view=${randomUUID()}`;
-  await page.getByTestId("browser-chooser-url-input").fill(targetUrl);
+  const frame = page.locator('[data-os-window-frame][data-os-focused="true"]').first();
+  await expect(frame).toBeVisible({ timeout: 15_000 });
+  const urlInput = frame.locator('[data-testid="browser-new-tab-url-input"], [data-testid="browser-address-input"]').first();
+  await expect(urlInput).toBeVisible({ timeout: 15_000 });
+  await urlInput.fill(targetUrl);
   const created = page.waitForResponse(response =>
     new URL(response.url()).pathname === "/api/browser/sessions" && response.request().method() === "POST");
-  await page.getByTestId("browser-chooser-open-btn").click();
+  const openBtn = frame.locator('[data-testid="browser-new-tab-open-btn"]').first();
+  if (await openBtn.isVisible()) {
+    await openBtn.click();
+  } else {
+    await urlInput.press("Enter");
+  }
   const response = await created;
   expect(response.status()).toBe(201);
   const session = await response.json();
-  const frame = page.locator('[data-os-window-frame][data-os-focused="true"]');
   const canvas = frame.locator("[data-os-browser-app] canvas");
   await expectJourneyCanvas(canvas);
   const windowId = await frame.getAttribute("data-os-window-frame");

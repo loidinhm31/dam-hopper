@@ -771,4 +771,20 @@ describe("BrowserApp native chrome & tab continuity", () => {
       vi.useRealTimers();
     }
   });
+  it("renders safely without throwing when window.appState tabs lack draft property", async () => {
+    store.session.windows["window-1"] = {
+      ...store.session.windows["window-1"]!,
+      appState: {
+        browserStateVersion: 1,
+        tabs: [
+          { tabId: "disk-tab-1", committedUrl: "http://example.test/restored" },
+        ],
+        activeTabId: "disk-tab-1",
+      },
+    };
+    await rerender();
+    expect(container.querySelector('[data-testid="browser-app-window-1"]')).not.toBeNull();
+    const addr = container.querySelector('[data-testid="browser-address-input"]') as HTMLInputElement;
+    expect(addr.value).toBe("http://example.test/restored");
+  });
 });

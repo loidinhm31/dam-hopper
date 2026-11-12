@@ -144,8 +144,13 @@ export function syncBrowserSessionWindow(
 
   const nextCommittedUrl = tab.kind === "popup" ? undefined : staleNavigation ? tab.committedUrl : normalizeBrowserCommittedUrl(effectiveUrl);
   const cleanDraftValue = nextCommittedUrl ?? effectiveUrl;
-  const nextDraft = tab.draft.dirty || staleNavigation
-    ? tab.draft : tab.draft.value === cleanDraftValue && !tab.draft.dirty ? tab.draft : { value: cleanDraftValue, dirty: false };
+  const isDirty = Boolean(tab.draft?.dirty);
+  const currentDraftVal = tab.draft?.value ?? (tab.committedUrl ?? "");
+  const nextDraft = isDirty || staleNavigation
+    ? (tab.draft ?? { value: currentDraftVal, dirty: isDirty })
+    : currentDraftVal === cleanDraftValue && !isDirty
+      ? (tab.draft ?? { value: cleanDraftValue, dirty: false })
+      : { value: cleanDraftValue, dirty: false };
 
   const nextPhase: BrowserTabPhase = snapshot.status === "running" ? "live" : snapshot.status === "initializing" ? "connecting" : "unavailable";
   const retainControl = sameRuntime && snapshot.status === "running";
