@@ -295,15 +295,23 @@ async fn test_full_ticket_pairing_and_lease_scoping_journey() {
         .await
         .unwrap();
 
-    // 3. Register connections and verify pairing
-    let (conn_media, _cancel_media) = att_manager
-        .register_connection(&admitted_media)
+    // 3. Register connections and verify pairing: the pair owns ONE global permit, taken by the
+    //    first socket and shared by its mate.
+    static PAIR_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let permit = || {
+        dam_hopper_server::browser_host::media::ViewerPermit::try_acquire_in(&PAIR_COUNTER, 2)
+            .map_err(|_| dam_hopper_server::browser_host::attachments::AttachmentError::ViewerCapacityExceeded(2))
+    };
+    let media_reg = att_manager
+        .register_pair_connection(&admitted_media, permit)
         .await
         .unwrap();
-    let (conn_ctrl, _cancel_ctrl) = att_manager
-        .register_connection(&admitted_control)
+    let ctrl_reg = att_manager
+        .register_pair_connection(&admitted_control, || panic!("the mate must join the pair's permit"))
         .await
         .unwrap();
+    let (conn_media, conn_ctrl) = (media_reg.connection_id, ctrl_reg.connection_id);
+    assert_eq!(PAIR_COUNTER.load(std::sync::atomic::Ordering::SeqCst), 1);
 
     // 4. Viewer A acquires lease
     let (lease_tok_a, _) = input_manager
@@ -331,6 +339,7 @@ async fn test_full_ticket_pairing_and_lease_scoping_journey() {
 
 #[tokio::test]
 async fn test_live_axum_media_and_control_websocket_journey() {
+    let _live = pair_live::live_guard().await;
     use dam_hopper_server::agent_store::AgentStoreService;
     use dam_hopper_server::api::browser_host::global_attachment_manager;
     use dam_hopper_server::api::build_router;
@@ -428,6 +437,7 @@ async fn test_live_axum_media_and_control_websocket_journey() {
         .await
         .unwrap();
     let session_id = dto.browser_session_id;
+    pair_live::attach_mock_producer(&session_id, &inc).await;
     let viewer_id = "test-viewer-ws";
     let sub_epoch = Uuid::new_v4().to_string();
 
@@ -2635,6 +2645,7 @@ where
 
 #[tokio::test]
 async fn test_live_media_session_withholds_muted_viewer_audio_server_side_and_resumes_fresh() {
+    let _live = pair_live::live_guard().await;
     use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine as _;
     use dam_hopper_server::agent_store::AgentStoreService;
@@ -2869,7 +2880,8 @@ async fn test_live_media_session_withholds_muted_viewer_audio_server_side_and_re
             if let Ok(dam_hopper_server::browser_host::protocol::ServerMediaEvent::Quality(q)) =
                 dam_hopper_server::browser_host::protocol::ServerMediaEvent::parse_and_validate(&t)
             {
-                if q.audio_suppressed
+                if q.subscription_epoch == sub_epoch
+                    && q.audio_suppressed
                     && q.audio_reason
                         == Some(dam_hopper_server::browser_host::protocol::StreamAudioReason::Muted)
                 {
@@ -2975,6 +2987,7 @@ async fn test_live_media_session_withholds_muted_viewer_audio_server_side_and_re
     };
     // Deterministic barrier: hold audio drain so broadcast chunks are queued unread
     // in the receiver while the gate is suppressed.
+    let dropped_before = producer.ledger.audio_dropped_by_boundary.load(std::sync::atomic::Ordering::SeqCst);
     producer.hold_audio_drain();
 
     // 4b.1: Recovery via tier/stall (Hidden report)
@@ -2994,10 +3007,23 @@ async fn test_live_media_session_withholds_muted_viewer_audio_server_side_and_re
 
     // Release audio drain: media.rs drains queued chunks 6 and 7 while gate is Allowed,
     // but the admission watermark (7) drops them, delivering ONLY chunk 8!
+    // The barrier parks the media receiver BEFORE it takes anything off the broadcast channel, so
+    // nothing was consumed while the gate was closed or at the instant it reopened.
+    assert_eq!(
+        producer.ledger.audio_dropped_by_boundary.load(std::sync::atomic::Ordering::SeqCst),
+        dropped_before,
+        "held backlog (chunks 6, 7) must still be unread before release"
+    );
     producer.release_audio_drain();
     assert_eq!(collect_audio_seqs(&mut wm_ws, Duration::from_millis(900)).await, vec!["8"]);
+    assert_eq!(
+        producer.ledger.audio_dropped_by_boundary.load(std::sync::atomic::Ordering::SeqCst),
+        dropped_before + 2,
+        "exactly the two pre-recovery chunks were dequeued after reopening and dropped by the boundary"
+    );
 
     // 4b.2: Recovery via explicit wire unmute
+    let dropped_before_wire = producer.ledger.audio_dropped_by_boundary.load(std::sync::atomic::Ordering::SeqCst);
     producer.hold_audio_drain();
     wm_ws.send(tokio_tungstenite::tungstenite::Message::Text(
         serde_json::json!({
@@ -3014,7 +3040,7 @@ async fn test_live_media_session_withholds_muted_viewer_audio_server_side_and_re
             if let Ok(dam_hopper_server::browser_host::protocol::ServerMediaEvent::Quality(q)) =
                 dam_hopper_server::browser_host::protocol::ServerMediaEvent::parse_and_validate(&t)
             {
-                if q.audio_suppressed && q.audio_reason == Some(dam_hopper_server::browser_host::protocol::StreamAudioReason::Muted) {
+                if q.subscription_epoch == sub_wm && q.audio_suppressed && q.audio_reason == Some(dam_hopper_server::browser_host::protocol::StreamAudioReason::Muted) {
                     wm_mute_ack = true;
                     break;
                 }
@@ -3047,8 +3073,18 @@ async fn test_live_media_session_withholds_muted_viewer_audio_server_side_and_re
     producer.admit_and_broadcast_audio_chunk(run, doc, &pcm).await.expect("chunk 11");
 
     // Release audio drain: chunks 9 and 10 were queued in backlog; admission watermark (10) drops them!
+    assert_eq!(
+        producer.ledger.audio_dropped_by_boundary.load(std::sync::atomic::Ordering::SeqCst),
+        dropped_before_wire,
+        "held backlog (chunks 9, 10) must still be unread before release"
+    );
     producer.release_audio_drain();
     assert_eq!(collect_audio_seqs(&mut wm_ws, Duration::from_millis(900)).await, vec!["11"]);
+    assert_eq!(
+        producer.ledger.audio_dropped_by_boundary.load(std::sync::atomic::Ordering::SeqCst),
+        dropped_before_wire + 2,
+        "chunks 9 and 10 were dequeued after the wire unmute and dropped by the boundary"
+    );
     // 4c. Source-scoped admission watermark (C3-W1d): audio source restart resets audio_seq to 0
     // and creates a new audio_source_run. The retained subscription keeps watermark (10 under run1),
     // but because watermark is source-scoped, first chunks from the new source (seq 1, 2 <= 10)
@@ -3259,4 +3295,581 @@ async fn test_media_writer_drops_queued_audio_when_gate_closes_before_the_write(
     drop(packets);
     cancel.cancel();
     let _ = join.await;
+}
+
+/// Live pair lifecycle over real sockets: pair-owned global capacity, timer reaping of half
+/// pairs, producer-attach failure and closed/stale session tickets (dev-mode server, mock CDP).
+mod pair_live {
+    use super::*;
+    use dam_hopper_server::agent_store::AgentStoreService;
+    use dam_hopper_server::api::browser_host::{get_or_register_producer, global_session_registry};
+    use dam_hopper_server::browser_host::attachments::PAIR_WAIT_TIMEOUT;
+    use dam_hopper_server::browser_host::cdp::CdpClient;
+    use dam_hopper_server::browser_host::screencast::ScreencastProducer;
+    use dam_hopper_server::config::{DamHopperConfig, FeaturesConfig, GlobalConfig, WorkspaceInfo};
+    use dam_hopper_server::crypto::DamHopperOpaqueSuite;
+    use dam_hopper_server::diagnostics::DiagnosticStore;
+    use dam_hopper_server::fs::FsSubsystem;
+    use dam_hopper_server::pty::{BroadcastEventSink, PtySessionManager};
+    use dam_hopper_server::state::AppState;
+    use dam_hopper_server::tunnel::{CloudflaredDriver, TunnelSessionManager};
+    use futures_util::{SinkExt, StreamExt};
+    use opaque_ke::ServerSetup;
+    use rand::rngs::OsRng;
+    use serde_json::{json, Value};
+    use std::net::SocketAddr;
+    use tokio::time::timeout;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::Message;
+
+    type Ws = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+
+    /// ACTIVE_VIEWERS is process-global: every live-socket test of this file takes this guard.
+    static LIVE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Serializes live-socket tests and waits until the previous test's server-side pairs have
+    /// finished tearing down (their permits are released asynchronously after the socket drops).
+    pub async fn live_guard() -> tokio::sync::MutexGuard<'static, ()> {
+        let guard = LIVE_LOCK.lock().await;
+        for _ in 0..200 {
+            if dam_hopper_server::browser_host::media::ACTIVE_VIEWERS
+                .load(std::sync::atomic::Ordering::SeqCst)
+                == 0
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        guard
+    }
+
+    pub struct Server {
+        pub addr: SocketAddr,
+        pub inc: String,
+        http: reqwest::Client,
+        _tmp: tempfile::TempDir,
+    }
+
+    pub async fn start(max_viewers: usize) -> Server {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let (event_sink, _rx) = BroadcastEventSink::new(512);
+        let pty_manager = PtySessionManager::new(Arc::new(event_sink.clone()));
+        let config = DamHopperConfig {
+            workspace: WorkspaceInfo { name: "test".into(), root: root.display().to_string() },
+            agent_store: None,
+            server: dam_hopper_server::config::ServerConfig::default(),
+            projects: vec![],
+            features: FeaturesConfig::default(),
+            ui: None,
+            workspaces: None,
+            config_path: root.join("dam-hopper.toml"),
+        };
+        let state = AppState::new(
+            root.clone(),
+            config,
+            GlobalConfig::default(),
+            pty_manager,
+            AgentStoreService::new(root.join(".dam-hopper/agent-store")),
+            event_sink.clone(),
+            "test-secret-pair-live".to_string(),
+            FsSubsystem::new(vec![]),
+            None,
+            true,
+            TunnelSessionManager::new(Arc::new(event_sink), Arc::new(CloudflaredDriver)),
+            None,
+            ServerSetup::<DamHopperOpaqueSuite>::new(&mut OsRng),
+            DiagnosticStore::new(root.join("diagnostics.jsonl")),
+        )
+        .expect("test AppState");
+        state.config.write().await.server.browser.budgets.max_viewers = max_viewers;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        state.record_bound_listener(addr).expect("record listener");
+        let router = dam_hopper_server::api::build_router(state);
+        tokio::spawn(async move {
+            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
+                .await
+                .unwrap();
+        });
+        Server { addr, inc: Uuid::new_v4().to_string(), http: reqwest::Client::new(), _tmp: tmp }
+    }
+
+    /// A Running session; `with_producer` also registers a producer over a mock CDP browser.
+    pub async fn session(server: &Server, with_producer: bool) -> String {
+        let (dto, _) = global_session_registry()
+            .insert_running_for_test(
+                "dev-user",
+                true,
+                &server.inc,
+                1,
+                &dam_hopper_server::browser_host::session::CreateSessionRequest {
+                    creation_key: Uuid::new_v4().to_string(),
+                    url: "about:blank".to_string(),
+                    viewport: dam_hopper_server::browser_host::session::ViewportRequest {
+                        width: 1280,
+                        height: 900,
+                        dpr: 1.0,
+                    },
+                },
+                &[],
+            )
+            .await
+            .unwrap();
+        let session_id = dto.browser_session_id;
+        if with_producer {
+            attach_mock_producer(&session_id, &server.inc).await;
+        }
+        session_id
+    }
+
+    /// Registers a producer for `session_id` over a mock CDP browser (replies success to
+    /// every command), so the media upgrade's producer attach succeeds.
+    pub async fn attach_mock_producer(session_id: &str, inc: &str) {
+        let cdp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let cdp_addr = cdp.local_addr().unwrap();
+        tokio::spawn(async move {
+            let Ok((stream, _)) = cdp.accept().await else { return };
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                let cmd: Value = serde_json::from_str(&text).unwrap();
+                let result = if cmd["method"] == "Target.attachToTarget" {
+                    json!({"sessionId": "MOCK-PAGE-SESSION"})
+                } else {
+                    json!({})
+                };
+                let reply = json!({"id": cmd["id"], "result": result});
+                if ws.send(Message::Text(reply.to_string().into())).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let client = CdpClient::connect(&format!("ws://{cdp_addr}")).await.expect("mock cdp");
+        let producer = Arc::new(ScreencastProducer::new(
+            session_id.to_string(),
+            inc.to_string(),
+            1,
+            1,
+            client,
+            "PAGE-PAIR-LIVE".to_string(),
+            TargetGeometry {
+                css_width: 1280.0, css_height: 900.0, offset_top: 0.0, scroll_x: 0.0,
+                scroll_y: 0.0, page_scale: 1.0, visual_offset_x: 0.0, visual_offset_y: 0.0,
+                dpr: 1.0,
+            },
+        ));
+        producer.ensure_page_session().await.expect("page session");
+        get_or_register_producer(session_id, producer).await;
+    }
+
+    impl Server {
+        pub async fn rest(&self, method: &str, path: &str, body: Value) -> (u16, Value) {
+            let url = format!("http://{}{path}", self.addr);
+            let req = match method {
+                "DELETE" => self.http.delete(url),
+                _ => self.http.post(url).header("content-type", "application/json").body(body.to_string()),
+            };
+            let resp = req.send().await.expect("rest request");
+            let status = resp.status().as_u16();
+            let bytes = resp.bytes().await.unwrap();
+            (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+        }
+
+        pub async fn ticket_for(&self, purpose: &str, session: &str, viewer: &str, sub: &str, inc: &str, epoch: &str) -> (u16, Value) {
+            self.rest(
+                "POST",
+                "/api/browser/attachments",
+                json!({
+                    "purpose": purpose, "browserSessionId": session, "viewerId": viewer,
+                    "subscriptionEpoch": sub, "browserIncarnation": inc, "profileEpoch": epoch,
+                }),
+            )
+            .await
+        }
+
+        pub async fn upgrade(&self, kind: &str, ticket: &str) -> Result<Ws, u16> {
+            let mut req = format!("ws://{}/api/browser/{kind}", self.addr).into_client_request().unwrap();
+            req.headers_mut().insert(
+                "Sec-WebSocket-Protocol",
+                format!("damhopper.browser.{kind}.v1, damhopper.ticket.{ticket}").parse().unwrap(),
+            );
+            match tokio_tungstenite::connect_async(req).await {
+                Ok((ws, _)) => Ok(ws),
+                Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => Err(resp.status().as_u16()),
+                Err(other) => panic!("ws connect failed: {other}"),
+            }
+        }
+
+        /// Issues a ticket (must succeed) and attempts the upgrade.
+        pub async fn connect(&self, kind: &str, session: &str, viewer: &str) -> Result<Ws, u16> {
+            let sub = Uuid::new_v4().to_string();
+            self.connect_sub(kind, session, viewer, &sub).await
+        }
+
+        pub async fn connect_sub(&self, kind: &str, session: &str, viewer: &str, sub: &str) -> Result<Ws, u16> {
+            let (status, body) = self.ticket_for(kind, session, viewer, sub, &self.inc, "1").await;
+            assert_eq!(status, 200, "ticket issue: {body}");
+            self.upgrade(kind, body["ticket"].as_str().unwrap()).await
+        }
+    }
+
+    async fn first_text(ws: &mut Ws) -> String {
+        loop {
+            match timeout(Duration::from_secs(5), ws.next()).await.expect("ws message") {
+                Some(Ok(Message::Text(text))) => return text.to_string(),
+                Some(Ok(_)) => continue,
+                other => panic!("socket ended early: {other:?}"),
+            }
+        }
+    }
+
+    /// True once the server closed the socket (Close frame or end of stream) within `within`.
+    async fn closed_within(ws: &mut Ws, within: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(within.as_millis() as u64);
+        loop {
+            let Ok(next) = timeout(deadline.saturating_duration_since(tokio::time::Instant::now()), ws.next()).await else {
+                return false;
+            };
+            match next {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return true,
+                Some(Ok(_)) => continue,
+            }
+        }
+    }
+
+    /// Fires every pending pair deadline timer without waiting 15s of wall clock.
+    async fn pass_pair_deadline() {
+        tokio::time::pause();
+        tokio::time::advance(PAIR_WAIT_TIMEOUT + Duration::from_secs(1)).await;
+        tokio::time::resume();
+    }
+
+    async fn retry_connect(server: &Server, kind: &str, session: &str, viewer: &str) -> Result<Ws, u16> {
+        let mut last = 0;
+        for _ in 0..60 {
+            match server.connect(kind, session, viewer).await {
+                Ok(ws) => return Ok(ws),
+                Err(status) => last = status,
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Err(last)
+    }
+
+    #[tokio::test]
+    async fn control_only_socket_is_reaped_at_the_pair_deadline_without_traffic() {
+        let _live = live_guard().await;
+        let server = start(4).await;
+        let session = session(&server, true).await;
+        let mut control = server.connect("control", &session, "viewer-solo").await.expect("control upgrade");
+        let status = first_text(&mut control).await;
+        assert!(status.contains("\"inputAvailable\":false"), "unpaired control must not advertise input: {status}");
+        assert!(!closed_within(&mut control, Duration::from_millis(300)).await, "half pair must survive until its deadline");
+
+        pass_pair_deadline().await;
+        assert!(
+            closed_within(&mut control, Duration::from_secs(5)).await,
+            "control-only socket still open after the pair deadline, with no traffic to trigger pruning"
+        );
+    }
+
+    #[tokio::test]
+    async fn half_pairs_hold_global_capacity_until_reaped() {
+        let _live = live_guard().await;
+        let server = start(1).await;
+        let with_producer = session(&server, true).await;
+        let mut solo = server.connect("control", &with_producer, "viewer-1").await.expect("first half pair admitted");
+        first_text(&mut solo).await;
+
+        assert_eq!(server.connect("control", &with_producer, "viewer-2").await.err(), Some(429), "control-only socket bypassed capacity");
+        assert_eq!(server.connect("media", &with_producer, "viewer-3").await.err(), Some(429), "capacity must be held by the half pair");
+
+        pass_pair_deadline().await;
+        assert!(closed_within(&mut solo, Duration::from_secs(5)).await);
+        retry_connect(&server, "control", &with_producer, "viewer-2")
+            .await
+            .expect("capacity returns once the half pair is reaped");
+    }
+
+    #[tokio::test]
+    async fn media_and_control_of_one_pair_share_a_single_global_permit() {
+        let _live = live_guard().await;
+        let server = start(2).await;
+        let session_a = session(&server, true).await;
+        let session_b = session(&server, true).await;
+        let session_c = session(&server, true).await;
+        let sub_a = Uuid::new_v4().to_string();
+
+        let _media_a = server.connect_sub("media", &session_a, "viewer-a", &sub_a).await.expect("media A");
+        let mut control_a = server.connect_sub("control", &session_a, "viewer-a", &sub_a).await.expect("A's control joins A's permit");
+        let status = first_text(&mut control_a).await;
+        assert!(status.contains("\"inputAvailable\":true"), "complete pair is input-ready: {status}");
+        let _media_b = server.connect("media", &session_b, "viewer-b").await.expect("pair B takes the second permit");
+
+        assert_eq!(
+            server.connect("control", &session_c, "viewer-c").await.err(),
+            Some(429),
+            "two pairs fill capacity 2; a third viewer's control must be refused"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_producer_attach_holds_no_capacity_and_never_readies_control() {
+        let _live = live_guard().await;
+        let server = start(1).await;
+        let without_producer = session(&server, false).await;
+        let sub = Uuid::new_v4().to_string();
+        let mut media = server.connect_sub("media", &without_producer, "viewer-1", &sub).await.expect("media upgrade");
+        let quality = first_text(&mut media).await;
+        assert!(quality.contains("unavailable"), "producer-less media reports unavailable: {quality}");
+
+        let with_producer = session(&server, true).await;
+        let _healthy = server
+            .connect("media", &with_producer, "viewer-2")
+            .await
+            .expect("failed attach must not keep the only capacity slot");
+        assert_eq!(
+            server.connect_sub("control", &without_producer, "viewer-1", &sub).await.err(),
+            Some(403),
+            "control must not pair with a media socket whose producer attach failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn closed_and_stale_sessions_refuse_ticket_issue_and_consumption() {
+        let _live = live_guard().await;
+        let server = start(4).await;
+        let session = session(&server, true).await;
+
+        // Stale identity at issue: wrong incarnation / wrong profile epoch.
+        let sub = Uuid::new_v4().to_string();
+        let (stale_inc, _) = server.ticket_for("media", &session, "viewer-1", &sub, "other-incarnation", "1").await;
+        assert_eq!(stale_inc, 404, "stale incarnation must not receive a ticket");
+        let (stale_epoch, _) = server.ticket_for("media", &session, "viewer-1", &sub, &server.inc, "2").await;
+        assert_eq!(stale_epoch, 404, "stale profile epoch must not receive a ticket");
+
+        // Ticket issued before close, consumed after close.
+        let (status, body) = server.ticket_for("control", &session, "viewer-1", &sub, &server.inc, "1").await;
+        assert_eq!(status, 200);
+        let early_ticket = body["ticket"].as_str().unwrap().to_string();
+        let (status, body) = server.ticket_for("media", &session, "viewer-1", &sub, &server.inc, "1").await;
+        assert_eq!(status, 200);
+        let early_media_ticket = body["ticket"].as_str().unwrap().to_string();
+        let _ = server.rest("DELETE", &format!("/api/browser/sessions/{session}"), Value::Null).await;
+
+        assert!(server.upgrade("control", &early_ticket).await.is_err(), "ticket issued before close must not upgrade after it");
+        assert!(server.upgrade("media", &early_media_ticket).await.is_err(), "ticket issued before close must not upgrade after it");
+
+        // Issue on a closed/closing session.
+        let (late, _) = server.ticket_for("control", &session, "viewer-1", &sub, &server.inc, "1").await;
+        assert!(late == 404 || late == 409, "closed session must not receive a ticket, got {late}");
+    }
+
+    /// The consume-time identity check stands on its own: no DELETE/revoke ran, the session is
+    /// merely no longer `Running` when the pre-issued ticket is presented.
+    #[tokio::test]
+    async fn ticket_issued_before_close_is_refused_at_consume_without_any_revoke() {
+        let _live = live_guard().await;
+        let server = start(4).await;
+        let session = session(&server, true).await;
+        let sub = Uuid::new_v4().to_string();
+        let (status, body) = server.ticket_for("control", &session, "viewer-1", &sub, &server.inc, "1").await;
+        assert_eq!(status, 200);
+        let ticket = body["ticket"].as_str().unwrap().to_string();
+        global_session_registry()
+            .begin_close(&session, "dev-user")
+            .await
+            .expect("session begins closing");
+        assert_eq!(server.upgrade("control", &ticket).await.err(), Some(409));
+    }
+
+    #[tokio::test]
+    async fn simultaneous_half_pair_flood_admits_at_most_capacity_and_the_timer_reaps_all() {
+        let _live = live_guard().await;
+        let server = start(2).await;
+        let session = session(&server, true).await;
+        let attempts = (0..8).map(|n| {
+            let (server, session) = (&server, &session);
+            async move { server.connect("control", session, &format!("flood-viewer-{n}")).await }
+        });
+        let results = futures_util::future::join_all(attempts).await;
+        let (ok, refused): (Vec<_>, Vec<_>) = results.into_iter().partition(Result::is_ok);
+        let mut admitted: Vec<Ws> = ok.into_iter().map(Result::unwrap).collect();
+        let refused: Vec<u16> = refused.into_iter().map(|r| r.err().unwrap()).collect();
+        assert_eq!(admitted.len(), 2, "capacity 2 admits exactly two half pairs");
+        assert_eq!(refused.len(), 6, "{refused:?}");
+        assert!(refused.iter().all(|s| *s == 429), "{refused:?}");
+
+        pass_pair_deadline().await;
+        for ws in &mut admitted {
+            assert!(closed_within(ws, Duration::from_secs(5)).await, "flooded half pair outlived its deadline");
+        }
+        retry_connect(&server, "control", &session, "after-flood")
+            .await
+            .expect("capacity returns after the flood is reaped");
+    }
+
+    /// Scriptable mock CDP browser for a recovering producer: a distinct Page session per attach,
+    /// switchable ACK and attach failures, and frames pushed on the live connection.
+    struct RecoveryPeer {
+        fail_acks: Arc<std::sync::atomic::AtomicBool>,
+        fail_attach: Arc<std::sync::atomic::AtomicBool>,
+        push: tokio::sync::mpsc::UnboundedSender<Value>,
+    }
+
+    impl RecoveryPeer {
+        fn frame(&self, session: &str, native_id: i64) {
+            use base64::engine::general_purpose::STANDARD as B64;
+            use base64::Engine as _;
+            let _ = self.push.send(json!({"method": "Page.screencastFrame", "sessionId": session, "params": {
+                "sessionId": native_id, "data": B64.encode(make_dummy_jpeg()),
+                "metadata": {"offsetTop": 0.0, "pageScaleFactor": 1.0, "deviceWidth": 1280.0, "deviceHeight": 900.0,
+                             "scrollOffsetX": 0.0, "scrollOffsetY": 0.0, "timestamp": 1.0}
+            }}));
+        }
+    }
+
+    async fn attach_recovering_producer(session_id: &str, inc: &str) -> RecoveryPeer {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (fail_acks, fail_attach) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+        let (push, mut push_rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let (acks, attach_failures) = (fail_acks.clone(), fail_attach.clone());
+        tokio::spawn(async move {
+            let attaches = AtomicUsize::new(0);
+            let Ok((stream, _)) = listener.accept().await else { return };
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            loop {
+                tokio::select! {
+                    ev = push_rx.recv() => {
+                        let Some(ev) = ev else { break };
+                        if ws.send(Message::Text(ev.to_string().into())).await.is_err() { break; }
+                    }
+                    incoming = ws.next() => {
+                        let Some(Ok(Message::Text(text))) = incoming else { break };
+                        let cmd: Value = serde_json::from_str(&text).unwrap();
+                        let reply = match cmd["method"].as_str().unwrap_or("") {
+                            "Page.screencastFrameAck" if acks.load(Ordering::SeqCst) => {
+                                json!({"id": cmd["id"], "error": {"code": -32000, "message": "ack failed"}})
+                            }
+                            "Target.attachToTarget" => {
+                                let n = attaches.fetch_add(1, Ordering::SeqCst);
+                                if n > 0 && attach_failures.load(Ordering::SeqCst) {
+                                    json!({"id": cmd["id"], "error": {"code": -32000, "message": "attach failed"}})
+                                } else {
+                                    json!({"id": cmd["id"], "result": {"sessionId": format!("SESSION-{n}")}})
+                                }
+                            }
+                            _ => json!({"id": cmd["id"], "result": {}}),
+                        };
+                        if ws.send(Message::Text(reply.to_string().into())).await.is_err() { break; }
+                    }
+                }
+            }
+        });
+        let client = CdpClient::connect(&url).await.expect("scripted cdp");
+        let producer = Arc::new(
+            ScreencastProducer::new(
+                session_id.to_string(),
+                inc.to_string(),
+                1,
+                1,
+                client,
+                "PAGE-RECOVERY-LIVE".to_string(),
+                TargetGeometry {
+                    css_width: 1280.0, css_height: 900.0, offset_top: 0.0, scroll_x: 0.0,
+                    scroll_y: 0.0, page_scale: 1.0, visual_offset_x: 0.0, visual_offset_y: 0.0,
+                    dpr: 1.0,
+                },
+            )
+            .with_recovery_policy(dam_hopper_server::browser_host::screencast::RecoveryPolicy {
+                max_attempts: 2,
+                base_backoff: Duration::from_millis(30),
+                max_backoff: Duration::from_millis(60),
+                ack_timeout: Duration::from_millis(400),
+                stable_run: Duration::from_secs(60),
+            }),
+        );
+        assert_eq!(producer.ensure_page_session().await.expect("page session"), "SESSION-0");
+        get_or_register_producer(session_id, producer).await;
+        RecoveryPeer { fail_acks, fail_attach, push }
+    }
+
+    /// Next `streamQuality` text event (other text messages are skipped).
+    async fn next_quality(ws: &mut Ws) -> Value {
+        loop {
+            let v: Value = serde_json::from_str(&first_text(ws).await).unwrap();
+            if v["kind"] == "streamQuality" {
+                return v;
+            }
+        }
+    }
+
+    /// Waits for a streamQuality event satisfying `pred`, acknowledging nothing.
+    async fn quality_where(ws: &mut Ws, pred: impl Fn(&Value) -> bool) -> Value {
+        for _ in 0..40 {
+            let q = next_quality(ws).await;
+            if pred(&q) {
+                return q;
+            }
+        }
+        panic!("no matching streamQuality event");
+    }
+
+    /// Next delivered frame header whose run is `run`; every frame seen is acknowledged so the
+    /// viewer's credit never starves.
+    async fn frame_of_run(ws: &mut Ws, sub: &str, run: &str) -> dam_hopper_server::browser_host::protocol::TargetFrameHeader {
+        for _ in 0..60 {
+            let msg = timeout(Duration::from_secs(5), ws.next()).await.expect("media message").expect("media open").expect("ws ok");
+            if let Message::Binary(bytes) = msg {
+                let (header, _) = unpack_bhjf_frame(&bytes).expect("valid BHJF frame");
+                let ack = json!({"kind": "frameAck", "subscriptionEpoch": sub, "producerRun": header.producer_run,
+                    "viewportEpoch": header.viewport_epoch, "frameSeq": header.frame_seq, "decodeMs": 1.0});
+                ws.send(Message::Text(ack.to_string().into())).await.expect("ack send");
+                if header.producer_run == run {
+                    return header;
+                }
+            }
+        }
+        panic!("no frame of run {run}");
+    }
+
+    #[tokio::test]
+    async fn producer_recovery_keeps_the_viewer_socket_and_serves_the_fresh_run_then_reports_unavailable() {
+        use std::sync::atomic::Ordering;
+        let _live = live_guard().await;
+        let server = start(2).await;
+        let session = session(&server, false).await;
+        let peer = attach_recovering_producer(&session, &server.inc).await;
+        let sub = Uuid::new_v4().to_string();
+        let mut media = server.connect_sub("media", &session, "viewer-recovery", &sub).await.expect("media upgrade");
+
+        // Demand-driven start: the first run is announced by the stream quality event.
+        let nil = Uuid::nil().to_string();
+        let run1 = quality_where(&mut media, |q| q["producerRun"] != json!(nil)).await["producerRun"].as_str().unwrap().to_string();
+        peer.frame("SESSION-0", 1);
+        assert_eq!(frame_of_run(&mut media, &sub, &run1).await.producer_run, run1);
+
+        // The next ACK fails: the run is ambiguous, the SAME socket is told about a fresh run
+        // and receives its frames from the fresh Page session.
+        peer.fail_acks.store(true, Ordering::SeqCst);
+        peer.frame("SESSION-0", 1);
+        let run2 = quality_where(&mut media, |q| q["producerRun"] != json!(nil) && q["producerRun"] != json!(run1)).await["producerRun"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        peer.fail_acks.store(false, Ordering::SeqCst);
+        peer.frame("SESSION-1", 1);
+        assert_eq!(frame_of_run(&mut media, &sub, &run2).await.producer_run, run2, "same viewer, fresh run");
+
+        // A persistently failing page ends visibly unavailable instead of spinning.
+        peer.fail_acks.store(true, Ordering::SeqCst);
+        peer.fail_attach.store(true, Ordering::SeqCst);
+        peer.frame("SESSION-1", 1);
+        let q = quality_where(&mut media, |q| q["status"] == "unavailable").await;
+        assert_eq!(q["subscriptionEpoch"], json!(sub));
+    }
 }

@@ -477,6 +477,92 @@ pub fn evaluate_downscale_oracle(
     Ok(())
 }
 
+/// Version protocol for everything a viewer-visible quality event is built from (current run,
+/// proven frame, shared target, geometry, ceilings).
+///
+/// Every event-affecting mutation holds a [`QualityMutation`] around its commit: the guard marks a
+/// writer in flight and, when dropped, publishes the next version. A reader accepts a snapshot only
+/// if no writer was in flight and the version was identical before and after reading, so a torn
+/// view (some inputs old, some new) can never be mistaken for a coherent one, and a mutation that
+/// commits without a version bump is impossible by construction. Both halves live in one atomic.
+#[derive(Debug)]
+pub struct QualityRevision {
+    /// `version << WRITER_BITS | writers_in_flight`.
+    state: AtomicU64,
+}
+
+const WRITER_BITS: u32 = 16;
+const WRITER_MASK: u64 = (1 << WRITER_BITS) - 1;
+
+impl Default for QualityRevision {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl QualityRevision {
+    pub const fn new() -> Self {
+        Self {
+            state: AtomicU64::new(1 << WRITER_BITS),
+        }
+    }
+
+    /// Marks a mutation in flight; the version advances when the guard is dropped.
+    pub fn begin(&self) -> QualityMutation<'_> {
+        self.state.fetch_add(1, Ordering::AcqRel);
+        QualityMutation {
+            revision: self,
+            publish: true,
+        }
+    }
+
+    /// Advances the version for a mutation that has already fully committed.
+    pub fn bump(&self) {
+        drop(self.begin());
+    }
+
+    /// Current committed version (in-flight writers are not reflected until they finish).
+    pub fn version(&self) -> u64 {
+        self.state.load(Ordering::Acquire) >> WRITER_BITS
+    }
+
+    /// Version to read a snapshot under: `None` while a mutation is in flight.
+    pub fn begin_read(&self) -> Option<u64> {
+        let state = self.state.load(Ordering::Acquire);
+        (state & WRITER_MASK == 0).then_some(state >> WRITER_BITS)
+    }
+
+    /// True when no mutation started or finished since `begin_read` returned `version`.
+    pub fn validate_read(&self, version: u64) -> bool {
+        self.state.load(Ordering::Acquire) == version << WRITER_BITS
+    }
+}
+
+/// RAII marker for one in-flight event-affecting mutation (see [`QualityRevision`]).
+#[derive(Debug)]
+pub struct QualityMutation<'a> {
+    revision: &'a QualityRevision,
+    publish: bool,
+}
+
+impl QualityMutation<'_> {
+    /// Ends the mutation without advancing the version: it turned out to change nothing.
+    pub fn discard(mut self) {
+        self.publish = false;
+    }
+}
+
+impl Drop for QualityMutation<'_> {
+    fn drop(&mut self) {
+        let end = if self.publish {
+            (1u64 << WRITER_BITS) - 1 // version + 1, writers - 1
+        } else {
+            u64::MAX // writers - 1 (wrapping add of -1)
+        };
+        self.revision.state.fetch_add(end, Ordering::AcqRel);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,6 +594,41 @@ mod tests {
             "only scale steps remain at the floor ceilings"
         );
         assert_eq!(tiny.anchor(CaptureTier::High), 0);
+    }
+
+    #[test]
+    fn quality_revision_reads_are_coherent_only_without_overlapping_mutations() {
+        let rev = QualityRevision::new();
+        let v0 = rev.begin_read().expect("quiescent");
+        assert!(rev.validate_read(v0));
+
+        let m = rev.begin();
+        assert_eq!(rev.begin_read(), None, "a mutation in flight forbids a coherent read");
+        assert!(!rev.validate_read(v0), "a read started before the mutation is torn");
+        assert_eq!(rev.version(), v0, "the version advances only when the mutation commits");
+        drop(m);
+        assert_eq!(rev.version(), v0 + 1);
+        assert!(!rev.validate_read(v0), "a read that overlapped the mutation must be retried");
+        let v1 = rev.begin_read().expect("quiescent again");
+        assert_eq!(v1, v0 + 1);
+        assert!(rev.validate_read(v1));
+    }
+
+    #[test]
+    fn quality_revision_discarded_mutation_keeps_the_version_but_still_blocks_reads_while_in_flight() {
+        let rev = QualityRevision::new();
+        let v0 = rev.begin_read().unwrap();
+        rev.begin().discard();
+        assert_eq!(rev.version(), v0, "a no-op mutation must not bump (steady state stays quiet)");
+        assert!(rev.validate_read(v0), "nothing changed, so a read of nothing is still valid");
+        let (a, b) = (rev.begin(), rev.begin());
+        assert_eq!(rev.begin_read(), None);
+        drop(a);
+        assert_eq!(rev.begin_read(), None, "still one writer in flight");
+        b.discard();
+        assert_eq!(rev.begin_read(), Some(v0 + 1));
+        rev.bump();
+        assert_eq!(rev.version(), v0 + 2);
     }
 
     #[test]

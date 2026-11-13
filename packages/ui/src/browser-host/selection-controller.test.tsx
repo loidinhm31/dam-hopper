@@ -85,8 +85,8 @@ describe("useHostBrowserSelection single-flight polling & visibility gating", ()
         if (path.endsWith("/selection/start")) {
           return Promise.resolve({
             selectionActive: true,
-            selectionRevision: 1,
-            navigationRevision: 1,
+            selectionRevision: "1",
+            navigationRevision: "1",
           });
         }
         if (path.endsWith("/sess-1")) {
@@ -106,10 +106,10 @@ describe("useHostBrowserSelection single-flight polling & visibility gating", ()
             resolve({
               sessionId: "sess-1",
               url: "https://example.com",
-              navigationRevision: 1,
+              navigationRevision: "1",
               selection: {
                 active: true,
-                selectionRevision: 1,
+                selectionRevision: "1",
                 preview: null,
               },
             });

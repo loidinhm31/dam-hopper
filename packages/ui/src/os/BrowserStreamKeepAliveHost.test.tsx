@@ -11,6 +11,7 @@ import {
 } from "./browser/browser-stream-quality.js";
 import type * as BrowserHostClientModule from "@/api/browser-host-client.js";
 import type { ViewerAttachmentCredentials } from "@/api/browser-host-client.js";
+import type * as StreamControllerModule from "@/browser-host/stream-controller.js";
 import type { StreamControllerOptions } from "@/browser-host/stream-controller.js";
 import { BrowserHostClientError } from "@/api/browser-host-types.js";
 import type { CanvasViewProps } from "@/browser-host/canvas-view.js";
@@ -120,6 +121,9 @@ const {
       onStatusChange: undefined as StreamControllerOptions["onStatusChange"],
       setQualityPreference: vi.fn(),
       setAudioMuted: vi.fn(),
+      /** When true the host gets the REAL BrowserStreamController (driven through fake sockets). */
+      useRealController: false,
+      realResetCalls: 0,
     },
     acquireControl: vi.fn(),
     releaseControl: vi.fn(),
@@ -248,10 +252,21 @@ vi.mock("../browser-host/pcm-player.js", () => ({
     }
   },
 }));
-vi.mock("../browser-host/stream-controller.js", () => ({
+vi.mock("../browser-host/stream-controller.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof StreamControllerModule>();
+  return {
   BrowserStreamController: class {
     instance: ControllerMockInstance;
     constructor(options: StreamControllerOptions) {
+      if (streamState.useRealController) {
+        return new actual.BrowserStreamController({
+          ...options,
+          onStreamQualityReset: () => {
+            streamState.realResetCalls += 1;
+            options.onStreamQualityReset?.();
+          },
+        }) as never;
+      }
       this.instance = {
         options,
         credentials: null,
@@ -363,7 +378,8 @@ vi.mock("../browser-host/stream-controller.js", () => ({
       };
     }
   },
-}));
+  };
+});
 
 import {
   BrowserStreamKeepAliveHost,
@@ -475,6 +491,8 @@ beforeEach(async () => {
   streamState.subscriptionEpoch = "subscription-1";
   streamState.suppressed = false;
   streamState.locked = false;
+  streamState.useRealController = false;
+  streamState.realResetCalls = 0;
   snapshots.clear();
   snapshots.set("profile-1", {
     owner,
@@ -589,7 +607,7 @@ describe("browser keepalive pushed session state & tab-scoped resources", () => 
       owner,
       "session-1",
       "live-runtime",
-      2,
+      "2",
       expect.any(AbortSignal),
     );
     patchTabInTest("tab-1", { isController: true, leaseToken: "human-lease" });
@@ -817,7 +835,7 @@ describe("browser keepalive pushed session state & tab-scoped resources", () => 
       owner2,
       "session-1",
       "live-runtime",
-      2,
+      "2",
       expect.any(AbortSignal),
     );
     // All 3 references (window-1/tab-1, window-2/tab-p2-active, window-2/tab-p2-hidden) counted across profiles
@@ -906,7 +924,7 @@ describe("browser keepalive pushed session state & tab-scoped resources", () => 
         owner: { profileId: "profile-1", generation: 2 },
         browserSessionId: "session-1",
         browserIncarnation: "live-runtime",
-        profileEpoch: 2,
+        profileEpoch: "2",
         viewerId: "late-viewer",
         subscriptionEpoch: "late-sub",
         mediaTicket: "m",
@@ -1749,5 +1767,194 @@ describe("BrowserStreamKeepAliveHost quality & live mute lifecycle regressions",
 
     expect(getStreamQuality(tuple).preference).toBe("auto");
     expect(getStreamQuality(tuple).status).toBeNull();
+  });
+});
+
+/**
+ * C3-W6: the same host wired to the REAL BrowserStreamController over fake sockets, so the first
+ * media-open payload and socket-close retirement are observed on the wire / through the real
+ * controller, not through a hand-written double.
+ */
+class FakeSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  static instances: FakeSocket[] = [];
+  readyState = 0;
+  binaryType = "blob";
+  sent: string[] = [];
+  onopen: (() => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: ((err: unknown) => void) | null = null;
+  constructor(
+    readonly url: string,
+    readonly protocols?: string | string[],
+  ) {
+    FakeSocket.instances.push(this);
+  }
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  /** Local close(): the controller retires its reference first, so late callbacks are fenced. */
+  close(): void {
+    this.serverClose();
+  }
+  serverOpen(): void {
+    this.readyState = 1;
+    this.onopen?.();
+  }
+  serverClose(): void {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    this.onclose?.();
+  }
+}
+
+describe("BrowserStreamKeepAliveHost with the real stream controller (C3-W6)", () => {
+  const tuple: StreamQualityTuple = {
+    profileId: "profile-1",
+    generation: 1,
+    windowId: "window-1",
+    tabId: "tab-1",
+  };
+
+  const credentialsFor = (subscriptionEpoch: string): ViewerAttachmentCredentials => ({
+    owner,
+    browserSessionId: "session-1",
+    browserIncarnation: readTab("tab-1").snapshot?.browserIncarnation ?? "live-runtime",
+    profileEpoch: String(readTab("tab-1").snapshot?.profileEpoch ?? "2"),
+    viewerId: `viewer-${subscriptionEpoch}`,
+    subscriptionEpoch,
+    mediaTicket: "media-ticket",
+    controlTicket: "control-ticket",
+    mediaWsUrl: "ws://127.0.0.1:4801/api/browser/media",
+    controlWsUrl: "ws://127.0.0.1:4801/api/browser/control",
+    mediaSubprotocols: ["damhopper.browser.media.v1", "damhopper.ticket.media-ticket"],
+    controlSubprotocols: ["damhopper.browser.control.v1", "damhopper.ticket.control-ticket"],
+  });
+
+  /** A server streamQuality text message delivered through the real controller's media socket. */
+  const deliverEffectiveQuality = async (media: FakeSocket, subscriptionEpoch: string) => {
+    const event: StreamQualityEvent = {
+      kind: "streamQuality",
+      subscriptionEpoch,
+      preference: "auto",
+      producerRun: "11111111-1111-4111-8111-111111111111",
+      captureVersion: "5",
+      sharedTier: "medium",
+      viewerTier: "medium",
+      fps: 10,
+      jpegQuality: 65,
+      scale: 1,
+      imageWidth: 800,
+      imageHeight: 600,
+      audioSuppressed: false,
+      audioReason: null,
+      status: "effective",
+    };
+    await act(async () => media.onmessage?.({ data: JSON.stringify(event) } as MessageEvent));
+  };
+
+  /** Remounts the host so its controller is the real one, then attaches a fresh subscription. */
+  const attachRealController = async (subscriptionEpoch: string, preference?: QualityPreference) => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    FakeSocket.instances = [];
+    vi.stubGlobal("WebSocket", FakeSocket);
+    await act(async () => root.unmount());
+    streamState.useRealController = true;
+    root = createRoot(container);
+    await render();
+    if (preference) setQualityPreference(tuple, preference);
+    await act(async () => {
+      setDocumentVisibilityForTests(false);
+    });
+    await render();
+    mintTickets.mockResolvedValueOnce(credentialsFor(subscriptionEpoch));
+    updateBrowserStreamSlot("window-1", "tab-1", slot, true, false);
+    patchTabInTest("tab-1", { phase: "live" });
+    await act(async () => {
+      setDocumentVisibilityForTests(true);
+    });
+    await render();
+    await render();
+    const media = FakeSocket.instances.find((s) => s.url.endsWith("/media"));
+    const control = FakeSocket.instances.find((s) => s.url.endsWith("/control"));
+    expect(media, "real controller opened its media socket").toBeDefined();
+    expect(control, "real controller opened its control socket").toBeDefined();
+    streamState.realResetCalls = 0; // only retirements of THIS acquisition are counted
+    return { media: media!, control: control! };
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setDocumentVisibilityForTests(null);
+  });
+
+  it("first media-open payload carries the stored preference and the host's pre-attach mute", async () => {
+    const { media } = await attachRealController("sub-real-first-open", "high");
+    expect(media.sent, "nothing is sent before the media socket opens").toEqual([]);
+
+    await act(async () => media.serverOpen());
+
+    const payload = media.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    expect(payload[0]).toMatchObject({
+      kind: "qualityPreference",
+      subscriptionEpoch: "sub-real-first-open",
+      preference: "high",
+    });
+    // Visible, live, not locally muted: the host derived unmuted BEFORE attach.
+    expect(payload[1]).toMatchObject({
+      kind: "muteState",
+      subscriptionEpoch: "sub-real-first-open",
+      muted: false,
+    });
+    expect(payload).toHaveLength(2);
+  });
+
+  it("a real media socket closing before it ever opened clears diagnostics exactly once and keeps the preference", async () => {
+    const { media, control } = await attachRealController("sub-real-close-before-open");
+    setQualityPreference(tuple, "high");
+    expect(getStreamQuality(tuple).pending).toBe(true);
+    expect(streamState.realResetCalls).toBe(0);
+
+    await act(async () => media.serverClose());
+
+    expect(streamState.realResetCalls).toBe(1);
+    expect(readTab("tab-1").phase).toBe("live");
+    expect(getStreamQuality(tuple).status).toBeNull();
+    expect(getStreamQuality(tuple).ackedPreference).toBeNull();
+    expect(getStreamQuality(tuple).pending).toBe(false);
+    expect(getStreamQuality(tuple).preference).toBe("high");
+
+    // The mate socket retiring afterwards is the same acquisition: no second clear.
+    await act(async () => control.serverClose());
+    expect(streamState.realResetCalls).toBe(1);
+  });
+
+  it("an opened real media socket error then close clears once; a control-only close clears once", async () => {
+    const first = await attachRealController("sub-real-open-close");
+    await act(async () => first.media.serverOpen());
+    await deliverEffectiveQuality(first.media, "sub-real-open-close");
+    expect(getStreamQuality(tuple).status?.status).toBe("effective");
+
+    await act(async () => {
+      first.media.onerror?.(new Event("error"));
+      first.media.serverClose();
+    });
+    expect(streamState.realResetCalls).toBe(1);
+    expect(getStreamQuality(tuple).status).toBeNull();
+
+    // New acquisition whose CONTROL socket closes first retires diagnostics once as well.
+    const second = await attachRealController("sub-real-control-close");
+    await act(async () => second.media.serverOpen());
+    await deliverEffectiveQuality(second.media, "sub-real-control-close");
+    expect(getStreamQuality(tuple).status?.status).toBe("effective");
+    await act(async () => second.control.serverClose());
+    expect(streamState.realResetCalls).toBe(1);
+    expect(getStreamQuality(tuple).status).toBeNull();
+    await act(async () => second.media.serverClose());
+    expect(streamState.realResetCalls).toBe(1);
   });
 });

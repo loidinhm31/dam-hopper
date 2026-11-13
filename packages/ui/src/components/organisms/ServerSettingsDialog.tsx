@@ -81,6 +81,7 @@ import {
   setActiveProfile,
 } from "@/api/server-config.js";
 import { connectProfile, disconnectProfile } from "@/api/connections.js";
+import { fenceThenDisconnectProfile } from "@/os/browser/browser-logout-fence.js";
 
 interface Props {
   open: boolean;
@@ -380,12 +381,17 @@ export function ServerSettingsDialog({
       const pendingCtx = getPendingBrowserResetContext(tokenProfileId);
       if (pendingCtx?.operationId && pendingCtx.browserResetState === "cleanupPending") {
         setBrowserResetPendingOpId(pendingCtx.operationId);
-        setBrowserResetOutcome({
-          status: "cleanupPending",
-          profileEpoch: pendingCtx.profileEpoch ?? 1,
-          operationId: pendingCtx.operationId,
-          reason: pendingCtx.reason,
-        });
+        // No canonical epoch retained: the status check supplies the outcome, never a guess.
+        setBrowserResetOutcome(
+          pendingCtx.profileEpoch === undefined
+            ? null
+            : {
+                status: "cleanupPending",
+                profileEpoch: pendingCtx.profileEpoch,
+                operationId: pendingCtx.operationId,
+                reason: pendingCtx.reason,
+              },
+        );
       } else {
         setBrowserResetPendingOpId(null);
         setBrowserResetOutcome(null);
@@ -1858,18 +1864,7 @@ export function ServerSettingsDialog({
             }
           }
           if (captured.profileId) {
-            disconnectProfile(captured.profileId);
-            if (
-              outcome.browserResetState === "cleared" ||
-              outcome.browserResetState === "cleanupPending" ||
-              outcome.sessionRevoked !== false
-            ) {
-              fenceBrowserViewsForProfile(
-                captured.profileId,
-                "Shared Browser profile reset or logged out",
-                captured.generation,
-              );
-            }
+            fenceThenDisconnectProfile(captured.profileId, captured.generation, outcome);
           }
           if (
             latestUrlRef.current === normalizeServerUrl(captured.serverUrl) &&
@@ -1908,12 +1903,16 @@ export function ServerSettingsDialog({
           }
           if (outcome.browserResetState === "cleanupPending") {
             setBrowserResetPendingOpId(outcome.operationId ?? null);
-            setBrowserResetOutcome({
-              status: "cleanupPending",
-              profileEpoch: outcome.profileEpoch ?? 1,
-              operationId: outcome.operationId,
-              reason: outcome.reason,
-            });
+            setBrowserResetOutcome(
+              outcome.profileEpoch === undefined
+                ? null
+                : {
+                    status: "cleanupPending",
+                    profileEpoch: outcome.profileEpoch,
+                    operationId: outcome.operationId,
+                    reason: outcome.reason,
+                  },
+            );
           }
           setLogoutTarget(null);
         }}

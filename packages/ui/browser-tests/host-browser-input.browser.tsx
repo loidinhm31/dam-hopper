@@ -52,10 +52,10 @@ function TestHarness({
     controllerRef.current = new BrowserInputController({
       getSessionId: () => "sess-test-1",
       getIncarnation: () => "inc-test-1",
-      getProfileEpoch: () => 1,
+      getProfileEpoch: () => "1",
       getSubscriptionEpoch: () => "sub-test-1",
       getLeaseToken: () => leaseRef.current,
-      getViewportEpoch: () => 1,
+      getViewportEpoch: () => "1",
       getDrawnRect: () => drawnRect,
       getControlSocket: () => socket as unknown as WebSocket,
     });
@@ -196,7 +196,7 @@ describe("host-browser-input in Chromium", () => {
     expect(socket.sentMessages.length).toBe(1);
     const downMsg = JSON.parse(socket.sentMessages[0]) as InputMessage;
     expect(downMsg.event.kind).toBe("pointerDown");
-    expect(downMsg.inputSeq).toBe(1);
+    expect(downMsg.inputSeq).toBe("1");
 
     // PointerMove
     canvas!.dispatchEvent(
@@ -275,7 +275,7 @@ describe("host-browser-input in Chromium", () => {
       { kind: "keyDown", key: "Backspace", code: "Backspace", modifiers: 0 },
     ]);
     expect(socket.sentMessages.map(message => JSON.parse(message).inputSeq))
-      .toEqual(socket.sentMessages.map((_, index) => index + 1));
+      .toEqual(socket.sentMessages.map((_, index) => String(index + 1)));
   });
 
   it("commits IME once during a handoff and cancels uncommitted composition on blur", async () => {

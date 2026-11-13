@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { revokeCurrentMediaSession } from "@/api/media-session.js";
 import { setPendingBrowserResetContext } from "@/api/browser-host-client.js";
-import { fenceBrowserViewsForProfile } from "@/os/BrowserStreamKeepAliveHost.js";
+import { fenceThenDisconnectProfile } from "@/os/browser/browser-logout-fence.js";
 import {
   AccountLogoutDialog,
   type AccountLogoutTarget,
@@ -461,18 +461,7 @@ export function ServerProfilesDialog({
             }
           }
           if (captured.profileId) {
-            disconnectProfile(captured.profileId);
-            if (
-              outcome.browserResetState === "cleared" ||
-              outcome.browserResetState === "cleanupPending" ||
-              outcome.sessionRevoked !== false
-            ) {
-              fenceBrowserViewsForProfile(
-                captured.profileId,
-                "Shared Browser profile reset or logged out",
-                captured.generation,
-              );
-            }
+            fenceThenDisconnectProfile(captured.profileId, captured.generation, outcome);
           }
           handleRefresh();
           return true;

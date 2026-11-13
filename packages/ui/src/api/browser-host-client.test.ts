@@ -164,24 +164,24 @@ describe("browser-host-client", () => {
 
     const navigated = await navigateBrowser(mockOwner, "sess-1", {
       url: "https://example.org",
-      navigationRevision: 1,
+      navigationRevision: "1",
     });
     expect(navigated.browserSessionId).toBe("sess-1");
 
     const hist = await historyBrowser(mockOwner, "sess-1", {
       direction: "back",
-      navigationRevision: 2,
+      navigationRevision: "2",
     });
     expect(hist.browserSessionId).toBe("sess-1");
 
     const reloaded = await reloadBrowser(mockOwner, "sess-1", {
-      navigationRevision: 3,
+      navigationRevision: "3",
     });
     expect(reloaded.browserSessionId).toBe("sess-1");
 
     const viewport = await setBrowserViewport(mockOwner, "sess-1", {
       leaseToken: "lease-1",
-      viewportEpoch: 1,
+      viewportEpoch: "1",
       width: 1024,
       height: 768,
       dpr: 1,
@@ -280,12 +280,12 @@ describe("browser-host-client", () => {
       mockOwner,
       "sess-1",
       "inc-1",
-      1,
+      "1",
     );
     expect(creds.owner).toEqual(mockOwner);
     expect(creds.browserSessionId).toBe("sess-1");
     expect(creds.browserIncarnation).toBe("inc-1");
-    expect(creds.profileEpoch).toBe(1);
+    expect(creds.profileEpoch).toBe("1");
     expect(creds.mediaTicket).toBe("media-tok-123");
     expect(creds.controlTicket).toBe("control-tok-456");
     expect(creds.mediaWsUrl).toBe("ws://127.0.0.1:4801/api/browser/media");
@@ -311,7 +311,7 @@ describe("browser-host-client", () => {
     });
 
     await expect(
-      mintViewerAttachmentTickets(mockOwner, "sess-1", "inc-1", 1),
+      mintViewerAttachmentTickets(mockOwner, "sess-1", "inc-1", "1"),
     ).rejects.toThrow(ConnectionOwnerError);
   });
 
@@ -338,7 +338,7 @@ describe("browser-host-client", () => {
         mockOwner,
         "12345678-1234-4234-8234-123456789abc",
         "fedcba98-7654-4321-8901-abcdef012345",
-        1,
+        "1",
       ),
     ).rejects.toMatchObject({
       kind: "insecureOrigin",
@@ -375,7 +375,7 @@ describe("browser-host-client", () => {
         mockOwner,
         "12345678-1234-4234-8234-123456789abc",
         "fedcba98-7654-4321-8901-abcdef012345",
-        1,
+        "1",
       );
 
       if (allowedOrigin.startsWith("https://")) {
@@ -461,7 +461,7 @@ describe("browser-host-client", () => {
           return new Response(
             JSON.stringify({
               available: true,
-              profileEpoch: 1,
+              profileEpoch: "1",
               runningSessions: 1,
               maxConcurrentSessions: 5,
               supportedProtocols: ["bhjf-v1"],
@@ -482,7 +482,7 @@ describe("browser-host-client", () => {
             operationId: "op-abc",
             profileId: "profile-1",
             status: "completed",
-            profileEpoch: 2,
+            profileEpoch: "2",
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
@@ -494,7 +494,7 @@ describe("browser-host-client", () => {
       );
       expect(preflight.kind).toBe("admitted");
       expect(preflight.available).toBe(true);
-      expect(preflight.profileEpoch).toBe(1);
+      expect(preflight.profileEpoch).toBe("1");
 
       const resetRes = await resetBrowserProfileForOrigin(
         allowedOrigin,
@@ -520,5 +520,91 @@ describe("browser-host-client", () => {
         );
       }
     }
+  });
+
+  describe("canonical decimal string counters", () => {
+    const TWO_POW_53_PLUS_1 = "9007199254740993";
+    const U64_MAX = "18446744073709551615";
+
+    function jsonResponse(body: unknown): Response {
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    function sentBodies(): Array<Record<string, unknown>> {
+      return fetchSpy.mock.calls
+        .map(([, init]) => (init as RequestInit | undefined)?.body)
+        .filter((body): body is string => typeof body === "string")
+        .map((body) => JSON.parse(body) as Record<string, unknown>);
+    }
+
+    it("sends navigation/viewport counters verbatim as strings above 2^53 and at u64 max", async () => {
+      fetchSpy.mockImplementation(async () => jsonResponse({ browserSessionId: "sess-1" }));
+      await navigateBrowser(mockOwner, "sess-1", {
+        url: "https://example.org",
+        navigationRevision: TWO_POW_53_PLUS_1,
+      });
+      await reloadBrowser(mockOwner, "sess-1", { navigationRevision: U64_MAX });
+      await setBrowserViewport(mockOwner, "sess-1", {
+        leaseToken: "lease-1",
+        viewportEpoch: U64_MAX,
+        width: 800,
+        height: 600,
+        dpr: 1,
+      });
+      const [navigate, reload, viewport] = sentBodies();
+      expect(navigate.navigationRevision).toBe(TWO_POW_53_PLUS_1);
+      expect(reload.navigationRevision).toBe(U64_MAX);
+      expect(viewport.viewportEpoch).toBe(U64_MAX);
+      const raw = fetchSpy.mock.calls.map(([, init]) => String((init as RequestInit).body)).join("\n");
+      expect(raw).toContain(`"navigationRevision":"${TWO_POW_53_PLUS_1}"`);
+    });
+
+    it("mints tickets with the profile epoch as an exact decimal string", async () => {
+      fetchSpy.mockImplementation(async () => jsonResponse({ ticket: "tok", expiresAtUnixMs: 30000 }));
+      const creds = await mintViewerAttachmentTickets(mockOwner, "sess-1", "inc-1", U64_MAX);
+      expect(creds.profileEpoch).toBe(U64_MAX);
+      for (const body of sentBodies()) {
+        expect(body.profileEpoch).toBe(U64_MAX);
+      }
+    });
+
+    it("keeps profile epochs exact in capability preflight and reset status", async () => {
+      fetchSpy.mockImplementationOnce(async () =>
+        jsonResponse({ available: true, managedProfilePresent: true, profileEpoch: TWO_POW_53_PLUS_1 }),
+      );
+      const preflight = await preflightBrowserCapabilitiesForOrigin("http://127.0.0.1:4801", "tok");
+      expect(preflight).toMatchObject({ kind: "admitted", profileEpoch: TWO_POW_53_PLUS_1 });
+
+      fetchSpy.mockImplementationOnce(async () =>
+        jsonResponse({ operationId: "op-1", status: "completed", profileEpoch: U64_MAX }),
+      );
+      const reset = await resetBrowserProfile(mockOwner, {
+        operationId: "op-1",
+        expectedProfileEpoch: TWO_POW_53_PLUS_1,
+        confirmed: true,
+      });
+      expect(reset.profileEpoch).toBe(U64_MAX);
+      expect(sentBodies().at(-1)?.expectedProfileEpoch).toBe(TWO_POW_53_PLUS_1);
+    });
+
+    it("rejects numeric or non-canonical profile epochs from the server instead of guessing one", async () => {
+      for (const bad of [1, 2, 9007199254740993, "01", "0", "-1", "1.5", "", null]) {
+        fetchSpy.mockImplementationOnce(async () =>
+          jsonResponse({ available: true, managedProfilePresent: true, profileEpoch: bad }),
+        );
+        const preflight = await preflightBrowserCapabilitiesForOrigin("http://127.0.0.1:4801", "tok");
+        expect(preflight.kind, `capabilities profileEpoch ${String(bad)}`).toBe("unavailable");
+
+        fetchSpy.mockImplementationOnce(async () =>
+          jsonResponse({ operationId: "op-1", status: "completed", profileEpoch: bad }),
+        );
+        await expect(getBrowserProfileResetStatus(mockOwner, "op-1")).rejects.toMatchObject({
+          kind: "protocol",
+        });
+      }
+    });
   });
 });

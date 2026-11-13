@@ -1695,7 +1695,7 @@ async fn reset_profile_and_wait(env: &NativeEnv, operation_id: &str, epoch: u64)
         .call(
             "POST",
             "/api/browser/profile/reset",
-            Some(json!({ "operationId": operation_id, "expectedProfileEpoch": epoch, "confirmed": true })),
+            Some(json!({ "operationId": operation_id, "expectedProfileEpoch": epoch.to_string(), "confirmed": true })),
         )
         .await;
     assert!(
@@ -1958,4 +1958,74 @@ async fn test_popup_admission_policy_and_overflow_share_capacity() {
     assert_eq!(env.pages().await.len(), 1);
 
     env.state.browser_host.shutdown_all().await;
+}
+
+/// Simultaneous control-only (half pair) registrations race for the global viewer capacity: at
+/// most `cap` are admitted, each pair's own timer reaps it without traffic, and the capacity
+/// returns once the sockets' tasks drop their permits.
+#[tokio::test(start_paused = true)]
+async fn test_simultaneous_half_pair_flood_is_bounded_and_timer_reaped() {
+    use dam_hopper_server::browser_host::attachments::{
+        AdmittedAttachment, AttachmentError, AttachmentManager, AttachmentPurpose,
+        PAIR_WAIT_TIMEOUT,
+    };
+    use dam_hopper_server::browser_host::media::ViewerPermit;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    const CAP: usize = 3;
+    let admitted = |viewer: String| AdmittedAttachment {
+        purpose: AttachmentPurpose::Control,
+        principal: "flood-user".to_string(),
+        is_dev: false,
+        auth_session_id: Some("auth".to_string()),
+        auth_version: Some(1),
+        credential_version: Some(1),
+        effective_deadline: None,
+        profile_epoch: 1,
+        browser_incarnation: "inc".to_string(),
+        browser_session_id: Some("session".to_string()),
+        viewer_id: Some(viewer),
+        subscription_epoch: Some("sub".to_string()),
+    };
+    let mgr = Arc::new(AttachmentManager::new());
+    let mut tasks = Vec::new();
+    for n in 0..24 {
+        let (mgr, adm) = (mgr.clone(), admitted(format!("viewer-{n}")));
+        tasks.push(tokio::spawn(async move {
+            mgr.register_pair_connection(&adm, || {
+                ViewerPermit::try_acquire_in(&COUNTER, CAP)
+                    .map_err(|_| AttachmentError::ViewerCapacityExceeded(CAP))
+            })
+            .await
+        }));
+    }
+    let mut regs = Vec::new();
+    let mut refused = 0;
+    for task in tasks {
+        match task.await.unwrap() {
+            Ok(reg) => regs.push(reg),
+            Err(AttachmentError::ViewerCapacityExceeded(CAP)) => refused += 1,
+            Err(other) => panic!("unexpected: {other}"),
+        }
+    }
+    assert_eq!((regs.len(), refused), (CAP, 24 - CAP), "flood admitted beyond capacity");
+    assert_eq!(COUNTER.load(Ordering::SeqCst), CAP);
+
+    tokio::task::yield_now().await;
+    tokio::time::advance(PAIR_WAIT_TIMEOUT + std::time::Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    assert!(
+        regs.iter().all(|r| r.cancel_token.is_cancelled()),
+        "each half pair is reaped by its own timer with no later traffic"
+    );
+    drop(regs);
+    assert_eq!(COUNTER.load(Ordering::SeqCst), 0, "capacity returns with the sockets' permits");
+    let again = mgr
+        .register_pair_connection(&admitted("late-viewer".to_string()), || {
+            ViewerPermit::try_acquire_in(&COUNTER, CAP)
+                .map_err(|_| AttachmentError::ViewerCapacityExceeded(CAP))
+        })
+        .await;
+    assert!(again.is_ok());
 }

@@ -26,46 +26,6 @@ use crate::browser_host::session::{
     ViewportRequest,
 };
 use crate::state::AppState;
-fn deserialize_u64_or_string<'de, D>(deserializer: D) -> Result<u64, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    struct Visitor;
-    impl<'de> serde::de::Visitor<'de> for Visitor {
-        type Value = u64;
-        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            f.write_str("u64 integer or canonical decimal string")
-        }
-        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<u64, E> {
-            Ok(v)
-        }
-        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<u64, E> {
-            u64::try_from(v).map_err(|_| E::custom("negative integer"))
-        }
-        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<u64, E> {
-            v.parse::<u64>().map_err(E::custom)
-        }
-    }
-    deserializer.deserialize_any(Visitor)
-}
-
-fn deserialize_opt_u64_or_string<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Val {
-        Num(u64),
-        Str(String),
-    }
-    match Option::<Val>::deserialize(deserializer)? {
-        None => Ok(None),
-        Some(Val::Num(n)) => Ok(Some(n)),
-        Some(Val::Str(s)) => s.parse::<u64>().map(Some).map_err(serde::de::Error::custom),
-    }
-}
-
 fn selection_error_to_response(err: SelectionError) -> Response {
     match err {
         SelectionError::Session(e) => e.into(),
@@ -126,7 +86,7 @@ pub fn global_input_managers(
 pub async fn get_or_create_input_manager(session_id: &str) -> Arc<SessionInputManager> {
     let mut map = global_input_managers().write().await;
     map.entry(session_id.to_string())
-        .or_insert_with(|| Arc::new(SessionInputManager::new()))
+        .or_insert_with(|| SessionInputManager::new_shared(crate::browser_host::input::LEASE_TTL))
         .clone()
 }
 
@@ -210,6 +170,11 @@ impl From<AttachmentError> for Response {
                 "ticketCapacityExceeded",
                 &msg,
             ),
+            AttachmentError::ViewerCapacityExceeded(max) => browser_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "browserBusy",
+                &format!("global active viewer capacity reached ({max})"),
+            ),
             _ => {
                 browser_error_response(StatusCode::BAD_REQUEST, "attachmentError", &err.to_string())
             }
@@ -258,6 +223,9 @@ impl From<InputError> for Response {
                 "inputUnavailable",
                 "geometry unavailable",
             ),
+            InputError::ReleaseFailed(msg) => {
+                browser_error_response(StatusCode::SERVICE_UNAVAILABLE, "inputUnavailable", &msg)
+            }
             InputError::InvalidFraction { .. } => browser_error_response(
                 StatusCode::BAD_REQUEST,
                 "invalidCoordinates",
@@ -513,7 +481,7 @@ pub async fn get_session(
     {
         Ok(dto) => {
             let mut val = serde_json::to_value(&dto).unwrap_or_default();
-            let nav_rev = dto.navigation_revision.parse::<u64>().unwrap_or(0);
+            let nav_rev = crate::browser_host::decimal_counter::parse_canonical_u64(&dto.navigation_revision, false).unwrap_or(0);
             if let Some(summary) =
                 selection::get_selection_summary(&id, &admission.principal, nav_rev).await
             {
@@ -573,7 +541,7 @@ pub async fn delete_session(
 #[serde(rename_all = "camelCase")]
 pub struct NavigateRequest {
     pub url: String,
-    #[serde(deserialize_with = "deserialize_u64_or_string")]
+    #[serde(with = "crate::browser_host::decimal_counter::positive")]
     pub navigation_revision: u64,
 }
 
@@ -612,7 +580,7 @@ pub async fn navigate_session(
             body.navigation_revision,
             &state.browser_host.config().allowed_target_origins,
         ),
-        |dto| dto.navigation_revision.parse::<u64>().ok(),
+        |dto| crate::browser_host::decimal_counter::parse_canonical_u64(&dto.navigation_revision, false),
     )
     .await
     {
@@ -620,7 +588,7 @@ pub async fn navigate_session(
             let input_mgr = get_or_create_input_manager(&id).await;
             input_mgr.set_selected_text("").await;
             if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
-                let parsed_rev = dto.navigation_revision.parse::<u64>().ok();
+                let parsed_rev = crate::browser_host::decimal_counter::parse_canonical_u64(&dto.navigation_revision, false);
                 if let Some(rev) = parsed_rev {
                     prod.request_audio_doc_epoch(rev);
                 }
@@ -660,7 +628,7 @@ pub async fn navigate_session(
 #[serde(rename_all = "camelCase")]
 pub struct HistoryRequest {
     pub direction: String,
-    #[serde(deserialize_with = "deserialize_u64_or_string")]
+    #[serde(with = "crate::browser_host::decimal_counter::positive")]
     pub navigation_revision: u64,
 }
 
@@ -694,13 +662,13 @@ pub async fn history_session(
             &body.direction,
             body.navigation_revision,
         ),
-        |dto| dto.navigation_revision.parse::<u64>().ok(),
+        |dto| crate::browser_host::decimal_counter::parse_canonical_u64(&dto.navigation_revision, false),
     )
     .await
     {
         Ok(dto) => {
             if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
-                let parsed_rev = dto.navigation_revision.parse::<u64>().ok();
+                let parsed_rev = crate::browser_host::decimal_counter::parse_canonical_u64(&dto.navigation_revision, false);
                 let mut dispatched = false;
                 if let Ok(page_sid) = prod.ensure_page_session().await {
                     if let Ok(hist) = prod
@@ -774,7 +742,7 @@ pub async fn history_session(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReloadRequest {
-    #[serde(deserialize_with = "deserialize_u64_or_string")]
+    #[serde(with = "crate::browser_host::decimal_counter::positive")]
     pub navigation_revision: u64,
 }
 
@@ -803,13 +771,13 @@ pub async fn reload_session(
         &state,
         &id,
         global_session_registry().reload(&id, &admission.principal, body.navigation_revision),
-        |dto| dto.navigation_revision.parse::<u64>().ok(),
+        |dto| crate::browser_host::decimal_counter::parse_canonical_u64(&dto.navigation_revision, false),
     )
     .await
     {
         Ok(dto) => {
             if let Some(prod) = crate::browser_host::media::get_producer(&id).await {
-                let parsed_rev = dto.navigation_revision.parse::<u64>().ok();
+                let parsed_rev = crate::browser_host::decimal_counter::parse_canonical_u64(&dto.navigation_revision, false);
                 if let Some(rev) = parsed_rev {
                     prod.request_audio_doc_epoch(rev);
                 }
@@ -840,6 +808,7 @@ pub async fn reload_session(
 #[serde(rename_all = "camelCase")]
 pub struct UpdateViewportRequest {
     pub lease_token: String,
+    #[serde(with = "crate::browser_host::decimal_counter::positive")]
     pub viewport_epoch: u64,
     pub width: u32,
     pub height: u32,
@@ -994,6 +963,11 @@ async fn apply_single_viewport_step(
     if !changed {
         return Ok(dto);
     }
+    let applied_epoch =
+        crate::browser_host::decimal_counter::parse_canonical_u64(&dto.viewport_epoch, false)
+            .ok_or_else(|| SessionError::Internal("registry produced a non-canonical viewportEpoch".to_string()))?;
+    // Old-epoch input is rejected from here on, before any native command or cache swap.
+    input_mgr.set_expected_viewport_epoch(applied_epoch).await;
     if let Some(prod) = crate::browser_host::media::get_producer(session_id).await {
         let new_geom = crate::browser_host::protocol::TargetGeometry {
             css_width: sanitized.width as f64,
@@ -1006,17 +980,15 @@ async fn apply_single_viewport_step(
             visual_offset_y: 0.0,
             dpr: sanitized.dpr,
         };
-        if let Err(err) = prod.update_geometry(new_geom).await {
+        if let Err(err) = prod.update_geometry(new_geom, applied_epoch).await {
             global_session_registry()
                 .rollback_viewport(session_id, prev_geom, prev_epoch)
                 .await;
+            input_mgr.set_expected_viewport_epoch(prev_epoch).await;
             return Err(SessionError::NativeUnavailable(format!(
                 "failed to apply native viewport geometry: {err}"
             )));
         }
-    }
-    if let Ok(applied_epoch) = dto.viewport_epoch.parse::<u64>() {
-        input_mgr.set_expected_viewport_epoch(applied_epoch).await;
     }
     Ok(dto)
 }
@@ -1220,7 +1192,7 @@ pub async fn handle_dialog(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SelectionActionRequest {
     pub lease_token: String,
-    #[serde(deserialize_with = "deserialize_u64_or_string")]
+    #[serde(with = "crate::browser_host::decimal_counter::positive")]
     pub navigation_revision: u64,
     #[serde(default)]
     pub inspect_point: Option<InspectPoint>,
@@ -1276,8 +1248,8 @@ pub async fn start_selection(
             StatusCode::OK,
             json!({
                 "selectionActive": summary.active,
-                "navigationRevision": summary.navigation_revision,
-                "selectionRevision": summary.selection_revision,
+                "navigationRevision": summary.navigation_revision.to_string(),
+                "selectionRevision": summary.selection_revision.to_string(),
                 "preview": summary.preview,
             }),
         ),
@@ -1328,8 +1300,8 @@ pub async fn cancel_selection(
             StatusCode::OK,
             json!({
                 "selectionActive": summary.active,
-                "navigationRevision": summary.navigation_revision,
-                "selectionRevision": summary.selection_revision,
+                "navigationRevision": summary.navigation_revision.to_string(),
+                "selectionRevision": summary.selection_revision.to_string(),
             }),
         ),
         Err(err) => selection_error_to_response(err),
@@ -1339,12 +1311,12 @@ pub async fn cancel_selection(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SelectionArtifactsRequest {
-    #[serde(deserialize_with = "deserialize_u64_or_string")]
+    #[serde(with = "crate::browser_host::decimal_counter::nonneg")]
     pub selection_revision: u64,
     pub terminal_id: String,
-    #[serde(deserialize_with = "deserialize_u64_or_string")]
+    #[serde(with = "crate::browser_host::decimal_counter::nonneg")]
     pub terminal_incarnation: u64,
-    #[serde(default, deserialize_with = "deserialize_opt_u64_or_string")]
+    #[serde(default, with = "crate::browser_host::decimal_counter::positive_opt")]
     pub navigation_revision: Option<u64>,
     #[serde(default)]
     pub include_png: Option<bool>,
@@ -1533,16 +1505,26 @@ pub async fn issue_attachment_ticket(
         Err(resp) => return resp,
     };
     if let Some(sid) = &body.browser_session_id {
-        if global_session_registry()
-            .get_session(sid, &admission.principal)
+        // Issue authority is the live session identity: `Running`, same owner and mode, and
+        // the exact profile epoch + incarnation the ticket claims.
+        if let Err(err) = global_session_registry()
+            .verify_attachment_identity(
+                sid,
+                &admission.principal,
+                admission.is_dev,
+                body.profile_epoch,
+                &body.browser_incarnation,
+            )
             .await
-            .is_err()
         {
-            return browser_error_response(
-                StatusCode::NOT_FOUND,
-                "sessionNotFound",
-                "session not found or foreign principal",
-            );
+            return match err {
+                SessionError::NotFound => browser_error_response(
+                    StatusCode::NOT_FOUND,
+                    "sessionNotFound",
+                    "session not found, stale identity or foreign principal",
+                ),
+                other => other.into(),
+            };
         }
     }
     let origin = match validate_request_origin(&state, &headers) {
@@ -1609,28 +1591,22 @@ pub(crate) async fn revoke_auth_session_browser_resources(
     if cancelled.is_empty() {
         return;
     }
-    let managers = global_input_managers().read().await;
-    for (browser_session_id, viewer_id) in cancelled {
-        if let Some(mgr) = managers.get(&browser_session_id).cloned() {
-            if mgr.is_lease_holder(&viewer_id).await {
-                let releases = mgr.revoke_lease().await;
-                if !releases.is_empty() {
-                    if let Some(producer) = get_producer(&browser_session_id).await {
-                        if let Ok(page_sid) = producer.ensure_page_session().await {
-                            let geom = producer.geometry().await;
-                            for rel in &releases {
-                                crate::browser_host::media::dispatch_input_event_to_cdp(
-                                    &producer.cdp_client,
-                                    &page_sid,
-                                    &geom,
-                                    rel,
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                }
-            }
+    let holders: Vec<(Arc<SessionInputManager>, String)> = {
+        let managers = global_input_managers().read().await;
+        cancelled
+            .into_iter()
+            .filter_map(|(browser_session_id, viewer_id)| {
+                managers
+                    .get(&browser_session_id)
+                    .cloned()
+                    .map(|mgr| (mgr, viewer_id))
+            })
+            .collect()
+    };
+    // The map lock is released: each revoke awaits its native key/button release.
+    for (mgr, viewer_id) in holders {
+        if let Err(err) = mgr.revoke_lease_if_holder(&viewer_id).await {
+            tracing::warn!(error = %err, "auth revoke: native input release failed");
         }
     }
 }
@@ -1649,10 +1625,12 @@ pub(crate) async fn fence_principal_browser_resources_sync(
         .close_principal_sessions(principal)
         .await;
     {
-        let mut input_map = global_input_managers().write().await;
+        // In-memory only: no further input is accepted. The native release (browser I/O) is
+        // done by `teardown_principal_network_resources`, which keeps the managers until then.
+        let input_map = global_input_managers().read().await;
         for session_id in &closed_session_ids {
-            if let Some(mgr) = input_map.remove(session_id) {
-                let _ = mgr.revoke_lease().await;
+            if let Some(mgr) = input_map.get(session_id) {
+                mgr.fence_lease().await;
             }
         }
     }
@@ -1690,6 +1668,8 @@ pub(crate) async fn purge_principal_artifacts_until_clean(state: &AppState, prin
 
 pub(crate) async fn teardown_principal_network_resources(session_ids: Vec<String>) {
     for sid in session_ids {
+        // Native keyup/mouseup first, while the producer's CDP connection is still alive.
+        release_session_input(&sid).await;
         remove_producer(&sid).await;
     }
 }
@@ -1703,11 +1683,21 @@ pub(crate) async fn retire_session_native_resources(session_id: &str) {
 
 /// Revokes the viewer tickets, attachments and control lease of a session, keeping its producer.
 pub(crate) async fn release_session_viewers(session_id: &str) {
+    // Held native keys/buttons are released BEFORE sockets and producer go away.
+    release_session_input(session_id).await;
     global_attachment_manager()
         .revoke_by_browser_session(session_id)
         .await;
-    if let Some(mgr) = global_input_managers().write().await.remove(session_id) {
-        let _ = mgr.revoke_lease().await;
+}
+
+/// Ends the session's control lease with a native release on the captured identity and drops
+/// its input manager. A failed release is logged (the session is going away).
+async fn release_session_input(session_id: &str) {
+    let manager = global_input_managers().write().await.remove(session_id);
+    if let Some(mgr) = manager {
+        if let Err(err) = mgr.revoke_lease().await {
+            tracing::warn!(session_id, error = %err, "session end: native input release failed");
+        }
     }
 }
 
@@ -1779,7 +1769,7 @@ pub(crate) fn make_reset_fence_hooks(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileResetRequest {
     pub operation_id: String,
-    #[serde(deserialize_with = "deserialize_u64_or_string")]
+    #[serde(with = "crate::browser_host::decimal_counter::positive")]
     pub expected_profile_epoch: u64,
     pub confirmed: bool,
 }
@@ -1868,8 +1858,8 @@ pub async fn reset_profile(
             json!({
                 "operationId": operation_id,
                 "status": "completed",
-                "profileEpoch": new_profile_epoch,
-                "newProfileEpoch": new_profile_epoch,
+                "profileEpoch": new_profile_epoch.to_string(),
+                "newProfileEpoch": new_profile_epoch.to_string(),
             }),
         ),
         Ok(ResetOutcome::CleanupPending {
@@ -1881,7 +1871,7 @@ pub async fn reset_profile(
             json!({
                 "operationId": operation_id,
                 "status": "cleanupPending",
-                "profileEpoch": profile_epoch,
+                "profileEpoch": profile_epoch.to_string(),
                 "reason": reason,
             }),
         ),
@@ -1952,8 +1942,8 @@ pub async fn get_profile_reset_status(
             json!({
                 "operationId": operation_id,
                 "status": "completed",
-                "profileEpoch": profile_epoch,
-                "newProfileEpoch": profile_epoch,
+                "profileEpoch": profile_epoch.to_string(),
+                "newProfileEpoch": profile_epoch.to_string(),
             }),
         ),
         Ok(ResetStatus::CleanupPending {
@@ -1965,7 +1955,7 @@ pub async fn get_profile_reset_status(
             json!({
                 "operationId": operation_id,
                 "status": "cleanupPending",
-                "profileEpoch": profile_epoch,
+                "profileEpoch": profile_epoch.to_string(),
                 "reason": reason,
             }),
         ),

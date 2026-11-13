@@ -33,27 +33,28 @@ export interface InspectPoint {
 
 export interface BrowserSelectionSummary {
   active: boolean;
-  selectionRevision: number;
-  navigationRevision: number;
+  /** Canonical decimal u64 string (may be "0" before the first selection). */
+  selectionRevision: string;
+  navigationRevision: string;
   preview: BrowserSelectionV1 | null;
 }
 
 export interface HostSelectionStartResponse {
   selectionActive: boolean;
-  navigationRevision: number;
-  selectionRevision: number;
+  navigationRevision: string;
+  selectionRevision: string;
   preview?: BrowserSelectionV1 | null;
 }
 
 export interface HostSelectionCancelResponse {
   selectionActive: boolean;
-  navigationRevision: number;
-  selectionRevision: number;
+  navigationRevision: string;
+  selectionRevision: string;
 }
 
 export interface HostSelectionArtifactResponse extends BrowserDebugArtifactResponse {
-  selectionRevision: number;
-  navigationRevision: number;
+  selectionRevision: string;
+  navigationRevision: string;
   selection?: BrowserSelectionV1;
 }
 
@@ -73,7 +74,7 @@ export async function startHostBrowserSelection(
   sessionId: string,
   req: {
     leaseToken: string;
-    navigationRevision: number | string;
+    navigationRevision: string;
     inspectPoint?: InspectPoint;
   },
   signal?: AbortSignal,
@@ -94,7 +95,7 @@ export async function cancelHostBrowserSelection(
   sessionId: string,
   req: {
     leaseToken: string;
-    navigationRevision: number | string;
+    navigationRevision: string;
   },
   signal?: AbortSignal,
 ): Promise<HostSelectionCancelResponse> {
@@ -133,10 +134,10 @@ export async function createHostSelectionArtifacts(
   owner: ConnectionRef,
   sessionId: string,
   req: {
-    selectionRevision: number;
+    selectionRevision: string;
     terminalId: string;
-    terminalIncarnation: string | number;
-    navigationRevision?: number | string;
+    terminalIncarnation: string;
+    navigationRevision?: string;
     includePng?: boolean;
   },
   signal?: AbortSignal,
@@ -149,7 +150,7 @@ export async function createHostSelectionArtifacts(
       body: {
         selectionRevision: req.selectionRevision,
         terminalId: req.terminalId,
-        terminalIncarnation: String(req.terminalIncarnation),
+        terminalIncarnation: req.terminalIncarnation,
         navigationRevision: req.navigationRevision,
         includePng: req.includePng ?? true,
       },
@@ -330,7 +331,7 @@ export function collectHostTerminalCandidates(
 export interface UseHostBrowserSelectionOptions {
   owner: ConnectionRef;
   sessionId: string | undefined;
-  navigationRevision: number | string;
+  navigationRevision: string;
   leaseToken: string | undefined;
   onNavigationSync?: (update: { navigationRevision: string; url?: string }) => void;
   targets: HostTerminalCandidate[];
@@ -340,7 +341,7 @@ export interface UseHostBrowserSelectionOptions {
 
 export interface HostBrowserSelectionController {
   selectionActive: boolean;
-  selectionRevision: number;
+  selectionRevision: string;
   preview: BrowserSelectionV1 | null;
   preparedArtifact: PreparedBrowserTerminalArtifact | null;
   capturedTarget: HostTerminalCandidate | null;
@@ -370,7 +371,7 @@ export function useHostBrowserSelection({
   enabled = true,
 }: UseHostBrowserSelectionOptions): HostBrowserSelectionController {
   const [selectionActive, setSelectionActive] = useState(false);
-  const [selectionRevision, setSelectionRevision] = useState(0);
+  const [selectionRevision, setSelectionRevision] = useState("0");
   const [preview, setPreview] = useState<BrowserSelectionV1 | null>(null);
   const [preparedArtifact, setPreparedArtifact] =
     useState<PreparedBrowserTerminalArtifact | null>(null);
@@ -460,7 +461,7 @@ export function useHostBrowserSelection({
       });
     }
     setSelectionActive(false);
-    setSelectionRevision(0);
+    setSelectionRevision("0");
     setPreview(null);
     setPreparedArtifact(null);
     setCapturedTarget(null);
@@ -567,7 +568,7 @@ export function useHostBrowserSelection({
           }
           epochRef.current += 1;
           setSelectionActive(false);
-          setSelectionRevision(res.selection?.selectionRevision ?? 0);
+          setSelectionRevision(res.selection?.selectionRevision ?? "0");
           setPreview(null);
           setPreparedArtifact(null);
           setCapturedTarget(null);
@@ -665,7 +666,7 @@ export function useHostBrowserSelection({
       setInserted(false);
 
       try {
-        let usedNavRev: number | string = navigationRevision;
+        let usedNavRev = navigationRevision;
         let res: HostSelectionStartResponse;
         try {
           res = await startHostBrowserSelection(owner, sessionId, {

@@ -36,7 +36,9 @@ class MockWebSocket {
   }
 
   public send(data: string | ArrayBuffer): void {
-    if (typeof data === "string") {
+    // Only frame feedback (frameAck/frameDiscarded) is under test; quality/mute
+    // status messages sent on first open are asserted elsewhere.
+    if (typeof data === "string" && /"kind":"frame(Ack|Discarded)"/.test(data)) {
       this.sentMessages.push(data);
     }
   }
@@ -104,7 +106,7 @@ describe("host-browser-decoder in Chromium", () => {
     owner: { profileId: "profile-1", generation: 1 },
     browserSessionId: "12345678-1234-4234-8234-123456789abc",
     browserIncarnation: "abcdef01-2345-4678-8901-234567890abc",
-    profileEpoch: 1,
+    profileEpoch: "1",
     viewerId: "viewer-1",
     subscriptionEpoch: "sub-1",
     mediaTicket: "t-1",
@@ -119,7 +121,7 @@ describe("host-browser-decoder in Chromium", () => {
     owner: { profileId: "profile-1", generation: 1 },
     browserSessionId: "12345678-1234-4234-8234-123456789abc",
     browserIncarnation: "abcdef01-2345-4678-8901-234567890abc",
-    profileEpoch: 1,
+    profileEpoch: "1",
     viewerId: "viewer-2",
     subscriptionEpoch: "sub-2",
     mediaTicket: "t-2",

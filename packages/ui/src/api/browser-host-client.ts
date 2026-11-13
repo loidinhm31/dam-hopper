@@ -51,7 +51,7 @@ export interface ViewerAttachmentCredentials {
   owner: ConnectionRef;
   browserSessionId: string;
   browserIncarnation: string;
-  profileEpoch: number;
+  profileEpoch: string;
   viewerId: string;
   subscriptionEpoch: string;
   mediaTicket: string;
@@ -444,7 +444,7 @@ export type BrowserResetPreflightResult =
       kind: "admitted";
       available: boolean;
       managedProfilePresent: boolean;
-      profileEpoch: number;
+      profileEpoch: string;
       unavailableReason?: string;
     }
   | {
@@ -455,7 +455,7 @@ export type BrowserResetPreflightResult =
 
 export interface PendingBrowserResetContext {
   operationId?: string;
-  profileEpoch?: number;
+  profileEpoch?: string;
   browserResetState?: string;
   reason?: string;
 }
@@ -607,10 +607,16 @@ function parseProfileResetStatus(data: unknown): ProfileResetStatusResponse {
     data && typeof data === "object" ? (data as Record<string, unknown>) : {};
   const status =
     rec.status === "completed" ? "completed" : "cleanupPending";
-  const parsedEpoch = parsePositiveEpoch(rec.profileEpoch) ?? 1;
+  const profileEpoch = parsePositiveEpoch(rec.profileEpoch);
+  if (profileEpoch === undefined) {
+    throw new BrowserHostClientError(
+      "Browser profile reset response carried no canonical profileEpoch",
+      "protocol",
+    );
+  }
   return {
     status,
-    profileEpoch: parsedEpoch,
+    profileEpoch,
     operationId:
       typeof rec.operationId === "string" ? rec.operationId : undefined,
     reason: typeof rec.reason === "string" ? rec.reason : undefined,
@@ -692,7 +698,7 @@ export async function mintViewerAttachmentTickets(
   owner: ConnectionRef,
   sessionId: string,
   browserIncarnation: string,
-  profileEpoch: number,
+  profileEpoch: string,
   signal?: AbortSignal,
 ): Promise<ViewerAttachmentCredentials> {
   const { serverUrl } = assertValidConnection(owner);

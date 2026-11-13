@@ -298,7 +298,7 @@ async fn test_security_matrix_role_denial_unauthenticated_and_ordinary() {
         "viewerId": "viewer-1",
         "subscriptionEpoch": "sub-1",
         "browserIncarnation": "inc-1",
-        "profileEpoch": 1
+        "profileEpoch": "1"
     }).to_string();
 
     // 3a. Unauth -> 401
@@ -343,7 +343,7 @@ async fn test_security_matrix_role_denial_unauthenticated_and_ordinary() {
     // 5. Profile reset
     let reset_body = json!({
         "operationId": "op-test-1",
-        "expectedProfileEpoch": 1,
+        "expectedProfileEpoch": "1",
         "confirmed": true
     }).to_string();
 

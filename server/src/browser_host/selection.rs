@@ -115,7 +115,9 @@ pub struct InspectPoint {
 #[serde(rename_all = "camelCase")]
 pub struct SelectionSummaryDto {
     pub active: bool,
+    #[serde(with = "crate::browser_host::decimal_counter::nonneg")]
     pub selection_revision: u64,
+    #[serde(with = "crate::browser_host::decimal_counter::positive")]
     pub navigation_revision: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<BrowserSelectionV1>,
@@ -126,7 +128,9 @@ pub struct SelectionSummaryDto {
 pub struct SelectionArtifactResult {
     #[serde(flatten)]
     pub artifact: BrowserDebugArtifactResponse,
+    #[serde(with = "crate::browser_host::decimal_counter::nonneg")]
     pub selection_revision: u64,
+    #[serde(with = "crate::browser_host::decimal_counter::positive")]
     pub navigation_revision: u64,
     pub selection: BrowserSelectionV1,
 }
@@ -213,9 +217,12 @@ pub static GLOBAL_SELECTION_MANAGER: LazyLock<SelectionManager> =
 struct NavWatcher {
     id: u64,
     token: CancellationToken,
+    cdp: std::sync::Weak<CdpClient>,
+    page_sid: String,
 }
 
 static NAV_WATCHER_SEQ: AtomicU64 = AtomicU64::new(1);
+static PAGE_GAP_SEQ: AtomicU64 = AtomicU64::new(1);
 
 static GLOBAL_NAV_WATCHERS: LazyLock<StdMutex<HashMap<String, NavWatcher>>> =
     LazyLock::new(|| StdMutex::new(HashMap::new()));
@@ -229,6 +236,8 @@ static GLOBAL_NAV_WATCHERS: LazyLock<StdMutex<HashMap<String, NavWatcher>>> =
 struct NavigationObservations {
     observed: u64,
     applied: u64,
+    gap_generation: u64,
+    gap_open: bool,
 }
 
 static NAVIGATION_OBSERVATIONS: LazyLock<StdMutex<HashMap<String, NavigationObservations>>> =
@@ -262,7 +271,7 @@ impl ObservedNavigation {
 fn settled_navigation_observation(session_id: &str) -> Option<u64> {
     let mut map = NAVIGATION_OBSERVATIONS.lock().unwrap();
     let entry = map.entry(session_id.to_string()).or_default();
-    (entry.observed == entry.applied).then_some(entry.observed)
+    (entry.observed == entry.applied && !entry.gap_open).then_some(entry.observed)
 }
 
 fn forget_navigation_observations(session_id: &str) {
@@ -277,6 +286,85 @@ pub fn observed_navigation_count(session_id: &str) -> u64 {
         .unwrap()
         .get(session_id)
         .map_or(0, |entry| entry.observed)
+}
+
+/// A Page-session replacement whose observation remains unavailable until its exact replacement
+/// watcher is installed. Dropping this value deliberately leaves the gap open.
+pub struct PageObservationGap {
+    session_id: String,
+    generation: u64,
+    observed: Option<ObservedNavigation>,
+    invalidated: bool,
+}
+
+/// Publish the fence synchronously, before detaching the old Page session or awaiting any lock.
+pub fn begin_page_observation_gap(session_id: &str) -> PageObservationGap {
+    let mut observations = NAVIGATION_OBSERVATIONS.lock().unwrap();
+    let entry = observations.entry(session_id.to_string()).or_default();
+    entry.observed += 1;
+    entry.gap_generation = PAGE_GAP_SEQ
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .expect("Page observation generation exhausted");
+    entry.gap_open = true;
+    let generation = entry.gap_generation;
+    // Lock ordering is observations then watchers, also used by watcher installation.
+    stop_session_navigation_watcher(session_id);
+    PageObservationGap {
+        session_id: session_id.to_string(),
+        generation,
+        observed: Some(ObservedNavigation { session_id: session_id.to_string() }),
+        invalidated: false,
+    }
+}
+
+impl PageObservationGap {
+    /// Advance the navigation revision and revoke the old selection. Slow teardown is queued.
+    pub async fn invalidate(&mut self, state: &AppState) {
+        if self.invalidated {
+            return;
+        }
+        let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
+        let new_rev = global_session_registry()
+            .record_cdp_navigation(
+                &self.session_id,
+                None,
+                &state.browser_host.config().allowed_target_origins,
+            )
+            .await;
+        let invalidated = apply_navigation_invalidation(&mut map, &self.session_id, new_rev);
+        if let Some(invalidated) = invalidated {
+            invalidated.queue_teardown(state, &self.session_id);
+        }
+        self.observed.take().unwrap().mark_applied();
+        self.invalidated = true;
+    }
+
+    /// Install the exact new watcher and settle only this generation. Failure or supersession
+    /// leaves observation fail-closed.
+    pub async fn finish(self, state: &AppState, cdp: &Arc<CdpClient>, page_sid: &str) -> bool {
+        if !self.invalidated
+            || !install_navigation_watcher(state, &self.session_id, cdp, page_sid, Some(self.generation)).await
+        {
+            return false;
+        }
+        let mut observations = NAVIGATION_OBSERVATIONS.lock().unwrap();
+        let Some(entry) = observations.get_mut(&self.session_id) else {
+            return false;
+        };
+        if !entry.gap_open || entry.gap_generation != self.generation {
+            return false;
+        }
+        let watchers = GLOBAL_NAV_WATCHERS.lock().unwrap();
+        if !watchers.get(&self.session_id).is_some_and(|watcher| {
+            !watcher.token.is_cancelled()
+                && watcher.page_sid == page_sid
+                && watcher.cdp.ptr_eq(&Arc::downgrade(cdp))
+        }) {
+            return false;
+        }
+        entry.gap_open = false;
+        true
+    }
 }
 
 /// Holds the selection read lock (postponing navigation bookkeeping) for a handoff and
@@ -294,7 +382,7 @@ impl HandoffFence for ManagedSelectionFence {
             .lock()
             .unwrap()
             .get(&self.session_id)
-            .is_some_and(|entry| entry.observed == self.observed && entry.applied == self.observed)
+            .is_some_and(|entry| entry.observed == self.observed && entry.applied == self.observed && !entry.gap_open)
     }
 }
 
@@ -456,7 +544,10 @@ impl SelectionManager {
     ) -> Option<SelectionSummaryDto> {
         let map = self.sessions.read().await;
         let state = map.get(session_id)?;
-        if state.owner_principal != principal || state.navigation_revision != current_nav_rev {
+        if settled_navigation_observation(session_id).is_none()
+            || state.owner_principal != principal
+            || state.navigation_revision != current_nav_rev
+        {
             return None;
         }
         Some(state.to_summary())
@@ -474,6 +565,9 @@ impl SelectionManager {
         let sanitized = extract_and_sanitize_selection(&raw_selection)
             .map_err(|e| SelectionError::NoSelection(e))?;
         let mut map = self.sessions.write().await;
+        if settled_navigation_observation(session_id).is_none() {
+            return Err(SelectionError::Conflict("navigation observation unavailable".into()));
+        }
         let entry = map
             .entry(session_id.to_string())
             .or_insert_with(|| SessionSelectionState::new(principal, nav_rev));
@@ -514,7 +608,8 @@ pub async fn is_selection_live(
     let Some(entry) = map.get(session_id) else {
         return false;
     };
-    entry.owner_principal == principal
+    settled_navigation_observation(session_id).is_some()
+        && entry.owner_principal == principal
         && !entry.active
         && entry.navigation_revision == nav_rev
         && entry.selection_revision == sel_rev
@@ -533,7 +628,7 @@ pub(crate) async fn acquire_managed_selection_fence(
         .get_session(session_id, principal)
         .await
         .ok()?;
-    if dto.status != "running" || dto.navigation_revision.parse::<u64>().ok() != Some(nav_rev) {
+    if dto.status != "running" || crate::browser_host::decimal_counter::parse_canonical_u64(&dto.navigation_revision, false) != Some(nav_rev) {
         return None;
     }
     let entry = guard.get(session_id)?;
@@ -603,7 +698,7 @@ pub async fn start_selection(
             session_dto.status
         )));
     }
-    let current_nav_rev = session_dto.navigation_revision.parse::<u64>().unwrap_or(0);
+    let current_nav_rev = crate::browser_host::decimal_counter::parse_canonical_u64(&session_dto.navigation_revision, false).unwrap_or(0);
     if current_nav_rev != expected_nav_rev {
         return Err(SelectionError::Conflict(format!(
             "stale navigationRevision (expected {}, current {})",
@@ -611,8 +706,15 @@ pub async fn start_selection(
         )));
     }
 
+    if settled_navigation_observation(session_id).is_none() {
+        return Err(SelectionError::Conflict("navigation observation unavailable".into()));
+    }
+
     let (old_token, old_task, old_pending, start_sel_rev) = {
         let mut map = GLOBAL_SELECTION_MANAGER.sessions.write().await;
+        if settled_navigation_observation(session_id).is_none() {
+            return Err(SelectionError::Conflict("navigation observation unavailable".into()));
+        }
         let entry = map
             .entry(session_id.to_string())
             .or_insert_with(|| SessionSelectionState::new(principal, current_nav_rev));
@@ -664,7 +766,8 @@ pub async fn start_selection(
             let Some(entry) = map.get_mut(session_id) else {
                 return Err(SelectionError::Session(SessionError::NotFound));
             };
-            if entry.navigation_revision != current_nav_rev
+            if settled_navigation_observation(session_id).is_none()
+                || entry.navigation_revision != current_nav_rev
                 || entry.selection_revision != start_sel_rev
             {
                 return Err(SelectionError::Conflict(
@@ -707,6 +810,13 @@ pub async fn start_selection(
             cancel_token.cancel();
             return Err(SelectionError::Session(SessionError::NotFound));
         };
+        if settled_navigation_observation(session_id).is_none()
+            || entry.selection_revision != start_sel_rev
+        {
+            cancel_token.cancel();
+            task.abort();
+            return Err(SelectionError::Conflict("navigation observation unavailable".into()));
+        }
         entry.cancel_token = Some(cancel_token);
         entry.inspect_task = Some(task);
         entry.to_summary()
@@ -736,7 +846,7 @@ pub async fn cancel_selection(
     let session_dto = global_session_registry()
         .get_session(session_id, principal)
         .await?;
-    let current_nav_rev = session_dto.navigation_revision.parse::<u64>().unwrap_or(0);
+    let current_nav_rev = crate::browser_host::decimal_counter::parse_canonical_u64(&session_dto.navigation_revision, false).unwrap_or(0);
     if current_nav_rev != expected_nav_rev {
         return Err(SelectionError::Conflict(format!(
             "stale navigationRevision (expected {}, current {})",
@@ -928,7 +1038,7 @@ pub async fn create_managed_selection_artifact(
             session_dto.status
         )));
     }
-    let current_nav_rev = session_dto.navigation_revision.parse::<u64>().unwrap_or(0);
+    let current_nav_rev = crate::browser_host::decimal_counter::parse_canonical_u64(&session_dto.navigation_revision, false).unwrap_or(0);
     if let Some(expected) = expected_nav_rev {
         if expected != current_nav_rev {
             return Err(SelectionError::Conflict(format!(
@@ -940,6 +1050,9 @@ pub async fn create_managed_selection_artifact(
     // 2. Recheck selection preview & revision under lock
     let selection = {
         let map = GLOBAL_SELECTION_MANAGER.sessions.read().await;
+        if settled_navigation_observation(session_id).is_none() {
+            return Err(SelectionError::Conflict("navigation observation unavailable".into()));
+        }
         let entry = map.get(session_id).ok_or_else(|| {
             SelectionError::NoSelection("no selection recorded for session".into())
         })?;
@@ -979,7 +1092,7 @@ pub async fn create_managed_selection_artifact(
     }
 
     // 4. Create ManagedBrowser artifact atomically (rechecking admission, selection & terminal before publish)
-    let profile_epoch = session_dto.profile_epoch.parse::<u64>().unwrap_or(1);
+    let profile_epoch = crate::browser_host::decimal_counter::parse_canonical_u64(&session_dto.profile_epoch, false).unwrap_or(1);
     let browser_incarnation = session_dto.browser_incarnation.clone();
     let mut artifact = state
         .browser_debug_artifacts
@@ -1109,7 +1222,7 @@ async fn recheck_before_png_completion(
             "session no longer running before PNG completion".to_string(),
         ));
     }
-    let current_nav_rev = session_dto.navigation_revision.parse::<u64>().unwrap_or(0);
+    let current_nav_rev = crate::browser_host::decimal_counter::parse_canonical_u64(&session_dto.navigation_revision, false).unwrap_or(0);
     if current_nav_rev != expected_nav_rev {
         return Err(SelectionError::Conflict(
             "navigation changed before PNG completion".to_string(),
@@ -1418,13 +1531,6 @@ impl Drop for NavWatcherRegistration {
     }
 }
 
-fn nav_watcher_is_live(session_id: &str) -> bool {
-    GLOBAL_NAV_WATCHERS
-        .lock()
-        .unwrap()
-        .get(session_id)
-        .is_some_and(|w| !w.token.is_cancelled())
-}
 
 /// Starts a persistent session-lifetime CDP navigation watcher decoupled from the one-shot picker.
 /// Subscribes to projected `CdpLifecycleEvent`s and enables `Page` domain events before returning.
@@ -1440,9 +1546,31 @@ pub(crate) async fn ensure_session_navigation_watcher(
     cdp: &Arc<CdpClient>,
     page_sid: &str,
 ) -> bool {
-    if nav_watcher_is_live(session_id) {
-        return true;
-    }
+    install_navigation_watcher(state, session_id, cdp, page_sid, None).await
+}
+
+async fn install_navigation_watcher(
+    state: &AppState,
+    session_id: &str,
+    cdp: &Arc<CdpClient>,
+    page_sid: &str,
+    gap: Option<u64>,
+) -> bool {
+    let generation = {
+        let mut observations = NAVIGATION_OBSERVATIONS.lock().unwrap();
+        let entry = observations.entry(session_id.to_string()).or_default();
+        if match gap {
+            Some(generation) => !entry.gap_open || entry.gap_generation != generation,
+            None => entry.gap_open || entry.observed != entry.applied,
+        } {
+            return false;
+        }
+        let watchers = GLOBAL_NAV_WATCHERS.lock().unwrap();
+        if let Some(watcher) = watchers.get(session_id).filter(|w| !w.token.is_cancelled()) {
+            return watcher.page_sid == page_sid && watcher.cdp.ptr_eq(&Arc::downgrade(cdp));
+        }
+        entry.gap_generation
+    };
 
     let event_rx = cdp.subscribe_events();
     if cdp
@@ -1460,18 +1588,27 @@ pub(crate) async fn ensure_session_navigation_watcher(
     let cancel_token = CancellationToken::new();
     let watcher_id = NAV_WATCHER_SEQ.fetch_add(1, Ordering::Relaxed);
     {
+        let observations = NAVIGATION_OBSERVATIONS.lock().unwrap();
+        let Some(entry) = observations.get(session_id) else {
+            return false;
+        };
+        if entry.gap_generation != generation || match gap {
+            Some(expected) => !entry.gap_open || generation != expected,
+            None => entry.gap_open || entry.observed != entry.applied,
+        } {
+            return false;
+        }
         let mut watchers = GLOBAL_NAV_WATCHERS.lock().unwrap();
-        if watchers
-            .get(session_id)
-            .is_some_and(|w| !w.token.is_cancelled())
-        {
-            return true;
+        if let Some(watcher) = watchers.get(session_id).filter(|w| !w.token.is_cancelled()) {
+            return watcher.page_sid == page_sid && watcher.cdp.ptr_eq(&Arc::downgrade(cdp));
         }
         watchers.insert(
             session_id.to_string(),
             NavWatcher {
                 id: watcher_id,
                 token: cancel_token.clone(),
+                cdp: Arc::downgrade(cdp),
+                page_sid: page_sid.to_string(),
             },
         );
     }

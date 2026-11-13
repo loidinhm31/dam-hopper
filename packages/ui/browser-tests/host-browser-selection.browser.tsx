@@ -223,8 +223,8 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
         return new Response(
           JSON.stringify({
             selectionActive: true,
-            navigationRevision: 1,
-            selectionRevision: 2,
+            navigationRevision: "1",
+            selectionRevision: "2",
             preview: null,
           }),
           { status: 200 },
@@ -239,8 +239,8 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
             status: "running",
             selection: {
               active: false,
-              selectionRevision: 3,
-              navigationRevision: 1,
+              selectionRevision: "3",
+              navigationRevision: "1",
               preview: previewSelection,
             },
           }),
@@ -252,7 +252,7 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
         const body = JSON.parse(String(init?.body ?? "{}"));
         expect(body.terminalId).toBe("shell:alpha");
         expect(body.terminalIncarnation).toBe("42");
-        expect(body.selectionRevision).toBe(3);
+        expect(body.selectionRevision).toBe("3");
         expect(body.source).toBeUndefined();
         return new Response(
           JSON.stringify({
@@ -266,8 +266,8 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
             pngPath: "/tmp/private/art-managed-1.png",
             pngSize: 1024,
             pngSha256: "cafebabe",
-            selectionRevision: 3,
-            navigationRevision: 1,
+            selectionRevision: "3",
+            navigationRevision: "1",
           }),
           { status: 201 },
         );
@@ -375,8 +375,8 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
         return new Response(
           JSON.stringify({
             selectionActive: false,
-            navigationRevision: 1,
-            selectionRevision: 2,
+            navigationRevision: "1",
+            selectionRevision: "2",
             preview: previewSelection,
           }),
           { status: 200 },
@@ -392,8 +392,8 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
             jsonPath: "/tmp/private/art-race-1.json",
             jsonSize: 150,
             jsonSha256: "abc",
-            selectionRevision: 2,
-            navigationRevision: 1,
+            selectionRevision: "2",
+            navigationRevision: "1",
           }),
           { status: 201 },
         );
@@ -486,7 +486,7 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
     // Advance navigationRevision -> clears selection preview completely
     await act(async () => {
       useWindowStore.getState().updateAppState("win-browser-1", {
-        navigationRevision: 2,
+        navigationRevision: "2",
       });
     });
 
@@ -523,13 +523,13 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
             url: serverUrl,
             navigationRevision: String(serverNavRev),
             status: "active",
-            selection: { active: false, selectionRevision: 1, navigationRevision: serverNavRev, preview: null },
+            selection: { active: false, selectionRevision: "1", navigationRevision: String(serverNavRev), preview: null },
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
       if (url.endsWith("/api/browser/sessions/bsess-1/selection/start") && method === "POST") {
-        const parsed = JSON.parse(String(init?.body ?? "{}")) as { navigationRevision?: string | number };
+        const parsed = JSON.parse(String(init?.body ?? "{}")) as { navigationRevision?: string };
         if (String(parsed.navigationRevision) !== String(serverNavRev)) {
           return new Response(
             JSON.stringify({ error: "stale navigationRevision", kind: "conflict" }),
@@ -539,7 +539,7 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
         return new Response(
           JSON.stringify({
             selectionActive: false,
-            selectionRevision: 1,
+            selectionRevision: "1",
             preview: {
               version: 1,
               tag: "button",
@@ -562,8 +562,8 @@ describe("Host Browser Selection Preview and Atomic Terminal Handoff in Chromium
             jsonPath: "/tmp/private/art-bg-nav-1.json",
             jsonSize: 120,
             jsonSha256: "deadbeef",
-            selectionRevision: 1,
-            navigationRevision: 2,
+            selectionRevision: "1",
+            navigationRevision: "2",
           }),
           { status: 201, headers: { "Content-Type": "application/json" } },
         );

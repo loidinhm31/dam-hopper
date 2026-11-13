@@ -15,7 +15,9 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 use dam_hopper_server::agent_store::AgentStoreService;
-use dam_hopper_server::api::browser_host::global_session_registry;
+use dam_hopper_server::api::browser_host::{
+    get_or_create_input_manager, get_or_register_producer, global_session_registry,
+};
 use dam_hopper_server::api::build_router_with_origins;
 use dam_hopper_server::auth::model::{
     chrono_to_bson, AuthClaims, AuthSession, UserRecord, UserRole,
@@ -23,13 +25,21 @@ use dam_hopper_server::auth::model::{
 use dam_hopper_server::auth::policy::AUTH_PROTOCOL_VERSION;
 use dam_hopper_server::auth::AuthService;
 use dam_hopper_server::browser_host::auth::{verify_live_admission, BrowserAdmission};
+use dam_hopper_server::browser_host::cdp::CdpClient;
 use dam_hopper_server::browser_host::cdp_gateway::{
-    global_cdp_gateway, handle_client_cdp_message, write_with_cancel, CdpGatewayManager,
-    WriteOutcome,
+    global_cdp_gateway, write_with_cancel, CdpGatewayManager, WriteOutcome,
 };
+use dam_hopper_server::browser_host::input::{
+    InputError, InputEvent, InputMessage, SessionInputManager,
+};
+use dam_hopper_server::browser_host::protocol::TargetGeometry;
+use dam_hopper_server::browser_host::raw_geometry_fence::handle_client_cdp_message;
+use dam_hopper_server::browser_host::raw_session_targets::RawSessionTargets;
+use dam_hopper_server::browser_host::screencast::ScreencastProducer;
 use dam_hopper_server::browser_host::config::{BrowserHostConfig, PublicServerOrigin};
 use dam_hopper_server::browser_host::session::{
-    CreateSessionRequest, SessionError, ViewportRequest,
+    BindOutcome, CreateParams, CreateReservation, CreateSessionRequest, SessionError,
+    ViewportRequest,
 };
 use dam_hopper_server::config::{DamHopperConfig, FeaturesConfig, GlobalConfig, WorkspaceInfo};
 use dam_hopper_server::crypto::DamHopperOpaqueSuite;
@@ -469,120 +479,254 @@ async fn test_origin_less_capability_only_denied_401() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
-async fn test_native_geometry_mutation_fences_managed_input() {
-    let tmp = tempdir().unwrap();
-    let state = create_test_state(tmp.path().to_path_buf(), false);
-    let registry = global_session_registry();
+/// Mock browser CDP endpoint: acknowledges every command; `Target.attachToTarget` returns a session.
+async fn spawn_mock_cdp() -> String {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else { return };
+                while let Some(Ok(Message::Text(text))) = ws.next().await {
+                    let cmd: Value = serde_json::from_str(&text).unwrap();
+                    let result = if cmd["method"] == "Target.attachToTarget" {
+                        serde_json::json!({ "sessionId": "MOCK-PAGE-SESSION" })
+                    } else {
+                        serde_json::json!({})
+                    };
+                    let reply = serde_json::json!({ "id": cmd["id"], "result": result });
+                    if ws.send(Message::Text(reply.to_string().into())).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    format!("ws://{addr}")
+}
 
-    let creation_key = uuid::Uuid::new_v4().to_string();
-    let req = CreateSessionRequest {
-        creation_key,
-        url: "http://example.com".to_string(),
-        viewport: ViewportRequest {
-            width: 800,
-            height: 600,
+struct ManagedSession {
+    session_id: String,
+    producer: Arc<ScreencastProducer>,
+    input: Arc<SessionInputManager>,
+    lease_token: String,
+}
+
+/// A running registry session bound to `target_id`, with a producer, input manager and lease at epoch 1.
+async fn managed_session(principal: &str, target_id: &str, mock_url: &str) -> ManagedSession {
+    let registry = global_session_registry();
+    let request = CreateSessionRequest {
+        creation_key: uuid::Uuid::new_v4().to_string(),
+        url: "about:blank".to_string(),
+        viewport: ViewportRequest { width: 800, height: 600, dpr: 1.0 },
+    };
+    let CreateReservation::Pending { session_id } = registry
+        .reserve_creation(
+            &CreateParams {
+                principal,
+                is_dev: false,
+                browser_incarnation: "inc-1",
+                profile_epoch: 1,
+                request: &request,
+                allowed_origins: &[],
+                max_targets: usize::MAX,
+            },
+            &|| true,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("fresh creation key must reserve");
+    };
+    assert_eq!(registry.bind_native_target(&session_id, "inc-1", target_id).await, BindOutcome::Bound);
+    registry.commit_running(&session_id, &|| true).await.unwrap();
+    let client = CdpClient::connect(mock_url).await.expect("connect mock cdp");
+    let producer = Arc::new(ScreencastProducer::new(
+        session_id.clone(),
+        "inc-1".to_string(),
+        1,
+        1,
+        client,
+        target_id.to_string(),
+        TargetGeometry {
+            css_width: 800.0,
+            css_height: 600.0,
+            offset_top: 0.0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            page_scale: 1.0,
+            visual_offset_x: 0.0,
+            visual_offset_y: 0.0,
             dpr: 1.0,
         },
-    };
+    ));
+    get_or_register_producer(&session_id, producer.clone()).await;
+    let input = get_or_create_input_manager(&session_id).await;
+    let (lease_token, _) = input.acquire_lease("viewer-1", "human").await.unwrap();
+    input.set_expected_viewport_epoch(1).await;
+    ManagedSession { session_id, producer, input, lease_token }
+}
 
-    let (session, _) = registry
-        .insert_running_for_test("admin-geom-user", false, "inc-1", 1, &req, &[])
-        .await
-        .expect("create session");
-    assert_eq!(session.viewport_epoch, "1");
+fn key_input(ms: &ManagedSession, seq: u64, viewport_epoch: u64) -> InputMessage {
+    InputMessage {
+        browser_session_id: ms.session_id.clone(),
+        browser_incarnation: "inc-1".to_string(),
+        profile_epoch: 1,
+        subscription_epoch: "sub-1".to_string(),
+        lease_token: ms.lease_token.clone(),
+        input_seq: seq,
+        viewport_epoch,
+        event: InputEvent::KeyDown { key: "A".to_string(), code: "KeyA".to_string(), modifiers: 0 },
+    }
+}
 
-    // Agent sends native Emulation.setDeviceMetricsOverride
-    let cdp_msg = serde_json::json!({
-        "id": 1,
-        "method": "Emulation.setDeviceMetricsOverride",
-        "params": {
-            "width": 1024,
-            "height": 768,
-            "deviceScaleFactor": 2.0,
-            "mobile": false
-        }
-    })
-    .to_string();
+fn raw_attach(id: i64, target: &str) -> String {
+    serde_json::json!({ "id": id, "method": "Target.attachToTarget",
+        "params": { "targetId": target, "flatten": true } }).to_string()
+}
 
-    handle_client_cdp_message(&cdp_msg, "admin-geom-user", false).await;
+fn raw_resize(session: Option<&str>, w: u32, h: u32, dpr: f64) -> String {
+    let mut msg = serde_json::json!({ "id": 9, "method": "Emulation.setDeviceMetricsOverride",
+        "params": { "width": w, "height": h, "deviceScaleFactor": dpr, "mobile": false } });
+    if let Some(sid) = session {
+        msg["sessionId"] = serde_json::json!(sid);
+    }
+    msg.to_string()
+}
 
-    // Verify stale epoch 1 input is rejected with Conflict
-    let stale_input_res = registry
-        .update_viewport(
-            &session.browser_session_id,
-            "admin-geom-user",
-            1,
-            900,
-            700,
-            1.0,
-        )
-        .await;
-    assert!(
-        matches!(stale_input_res, Err(SessionError::Conflict(_))),
-        "stale epoch input must fail with Conflict"
+/// Correlates `flat` -> `target` exactly as the relay does: client request, upstream response.
+async fn attach(targets: &mut RawSessionTargets, principal: &str, flat: &str, target: &str) {
+    handle_client_cdp_message(&raw_attach(5, target), principal, false, targets).await;
+    targets.observe_upstream(
+        &serde_json::json!({ "id": 5, "result": { "sessionId": flat } }).to_string(),
     );
+}
 
-    // Verify session epoch has advanced to 2 and geometry updated
-    let updated = registry
-        .get_session(&session.browser_session_id, "admin-geom-user")
-        .await
-        .expect("get session");
+#[tokio::test]
+async fn test_raw_flattened_resize_fences_registry_input_and_producer_before_relay() {
+    let principal = "raw-fence-user";
+    let mock = spawn_mock_cdp().await;
+    let ms = managed_session(principal, "TARGET-RAW-A", &mock).await;
+    let registry = global_session_registry();
+    assert_eq!(registry.get_session(&ms.session_id, principal).await.unwrap().viewport_epoch, "1");
+    assert!(ms.producer.input_geometry_trusted());
+
+    let mut targets = RawSessionTargets::new(None);
+    attach(&mut targets, principal, "FLAT-A", "TARGET-RAW-A").await;
+    // The relay inspects the message BEFORE forwarding it upstream; the fence is complete on return.
+    handle_client_cdp_message(&raw_resize(Some("FLAT-A"), 1024, 768, 2.0), principal, false, &mut targets).await;
+
+    let updated = registry.get_session(&ms.session_id, principal).await.unwrap();
     assert_eq!(updated.viewport_epoch, "2");
     assert_eq!(updated.geometry.css_width, 1024.0);
     assert_eq!(updated.geometry.css_height, 768.0);
     assert_eq!(updated.geometry.dpr, 2.0);
     assert!(updated.input_available);
 
-    // Verify real SessionInputManager rejects stale epoch with StaleViewportEpoch
-    let input_mgr = dam_hopper_server::browser_host::input::SessionInputManager::new();
-    let (lease_token, _) = input_mgr.acquire_lease("viewer1", "human").await.unwrap();
-    input_mgr.set_expected_viewport_epoch(2).await;
-
-    let stale_msg = dam_hopper_server::browser_host::input::InputMessage {
-        lease_token,
-        browser_session_id: session.browser_session_id.clone(),
-        browser_incarnation: "inc-1".to_string(),
-        profile_epoch: 1,
-        subscription_epoch: "sub-1".to_string(),
-        input_seq: 1,
-        viewport_epoch: 1,
-        event: dam_hopper_server::browser_host::input::InputEvent::KeyDown {
-            key: "A".to_string(),
-            code: "KeyA".to_string(),
-            modifiers: 0,
-        },
-    };
-    let enqueue_res = input_mgr.enqueue_input(stale_msg).await;
+    // Producer cache/epoch fence and projection basis follow the registry identity.
+    assert_eq!(ms.producer.viewport_epoch(), 2);
+    let geometry = ms.producer.geometry().await;
+    assert_eq!((geometry.css_width, geometry.css_height), (1024.0, 768.0));
+    assert!(ms.producer.get_cached_frame().await.is_none());
     assert!(
-        matches!(
-            enqueue_res,
-            Err(
-                dam_hopper_server::browser_host::input::InputError::StaleViewportEpoch {
-                    expected: 2,
-                    actual: 1
-                }
-            )
-        ),
-        "stale viewport epoch must be rejected at input manager boundary"
+        !ms.producer.input_geometry_trusted(),
+        "projection stays untrusted until a native frame confirms the raw geometry"
     );
 
-    // Test clearDeviceMetricsOverride marks input unavailable pending layout reconciliation
-    let clear_msg = serde_json::json!({
-        "method": "Emulation.clearDeviceMetricsOverride"
-    })
-    .to_string();
-    handle_client_cdp_message(&clear_msg, "admin-geom-user", false).await;
+    // Input manager: the old epoch is rejected, only the new identity is accepted.
+    let stale = ms.input.enqueue_input(key_input(&ms, 1, 1)).await;
+    assert!(
+        matches!(stale, Err(InputError::StaleViewportEpoch { expected: 2, actual: 1 })),
+        "{stale:?}"
+    );
+    assert!(ms.input.enqueue_input(key_input(&ms, 1, 2)).await.is_ok());
+    // REST viewport on the registry also rejects the pre-fence identity.
+    let stale_rest = registry.update_viewport(&ms.session_id, principal, 1, 900, 700, 1.0).await;
+    assert!(matches!(stale_rest, Err(SessionError::Conflict(_))));
+}
 
-    let cleared = registry
-        .get_session(&session.browser_session_id, "admin-geom-user")
-        .await
-        .expect("get cleared session");
+#[tokio::test]
+async fn test_raw_resize_fences_only_the_addressed_native_target() {
+    let principal = "raw-fence-scope-user";
+    let mock = spawn_mock_cdp().await;
+    let a = managed_session(principal, "TARGET-SCOPE-A", &mock).await;
+    let b = managed_session(principal, "TARGET-SCOPE-B", &mock).await;
+    let registry = global_session_registry();
+
+    let mut targets = RawSessionTargets::new(None);
+    attach(&mut targets, principal, "FLAT-B", "TARGET-SCOPE-B").await;
+    attach(&mut targets, principal, "FLAT-FOREIGN", "TARGET-NOT-MANAGED").await;
+
+    // A flattened session attached to an unmanaged page changes nothing managed.
+    handle_client_cdp_message(&raw_resize(Some("FLAT-FOREIGN"), 500, 400, 1.0), principal, false, &mut targets).await;
+    // A browser-level command without a session is rejected by the browser: nothing to fence.
+    handle_client_cdp_message(&raw_resize(None, 500, 400, 1.0), principal, false, &mut targets).await;
+    for ms in [&a, &b] {
+        assert_eq!(registry.get_session(&ms.session_id, principal).await.unwrap().viewport_epoch, "1");
+        assert_eq!(ms.producer.viewport_epoch(), 1);
+        assert!(ms.producer.input_geometry_trusted());
+        assert!(ms.input.enqueue_input(key_input(ms, 1, 1)).await.is_ok());
+    }
+
+    // A mapped session addressing a managed target fences exactly that target's session.
+    handle_client_cdp_message(&raw_resize(Some("FLAT-B"), 640, 480, 1.0), principal, false, &mut targets).await;
+    assert_eq!(registry.get_session(&b.session_id, principal).await.unwrap().viewport_epoch, "2");
+    assert_eq!(registry.get_session(&a.session_id, principal).await.unwrap().viewport_epoch, "1");
+    assert_eq!(a.producer.viewport_epoch(), 1);
+    assert_eq!(b.producer.viewport_epoch(), 2);
+}
+
+#[tokio::test]
+async fn test_raw_resize_from_unmapped_session_fences_conservatively_without_guessing_geometry() {
+    let principal = "raw-fence-unmapped-user";
+    let mock = spawn_mock_cdp().await;
+    let ms = managed_session(principal, "TARGET-UNMAPPED", &mock).await;
+    let registry = global_session_registry();
+
+    let mut targets = RawSessionTargets::new(None);
+    // Never saw this flattened session attach: its target is unknown.
+    handle_client_cdp_message(&raw_resize(Some("FLAT-UNKNOWN"), 1024, 768, 2.0), principal, false, &mut targets).await;
+
+    let updated = registry.get_session(&ms.session_id, principal).await.unwrap();
+    assert_eq!(updated.viewport_epoch, "2");
+    assert_eq!(updated.geometry.css_width, 800.0, "unmapped command must not adopt guessed geometry");
+    assert!(!updated.input_available);
+    assert_eq!(ms.producer.viewport_epoch(), 2);
+    assert_eq!(ms.producer.geometry().await.css_width, 800.0);
+    assert!(!ms.producer.input_geometry_trusted());
+    assert!(matches!(
+        ms.input.enqueue_input(key_input(&ms, 1, 1)).await,
+        Err(InputError::StaleViewportEpoch { expected: 2, actual: 1 })
+    ));
+}
+
+#[tokio::test]
+async fn test_raw_page_socket_sessionless_resize_and_clear_fence_its_target() {
+    let principal = "raw-fence-page-user";
+    let mock = spawn_mock_cdp().await;
+    let ms = managed_session(principal, "TARGET-PAGE-SOCKET", &mock).await;
+    let registry = global_session_registry();
+
+    // `/cdp/ws/{target}`: sessionless Emulation commands address the page itself.
+    let mut targets = RawSessionTargets::new(Some("TARGET-PAGE-SOCKET".to_string()));
+    handle_client_cdp_message(&raw_resize(None, 1024, 768, 1.0), principal, false, &mut targets).await;
+    let resized = registry.get_session(&ms.session_id, principal).await.unwrap();
+    assert_eq!((resized.viewport_epoch.as_str(), resized.geometry.css_width), ("2", 1024.0));
+    assert_eq!(ms.producer.viewport_epoch(), 2);
+
+    let clear = serde_json::json!({ "id": 10, "method": "Emulation.clearDeviceMetricsOverride" }).to_string();
+    handle_client_cdp_message(&clear, principal, false, &mut targets).await;
+    let cleared = registry.get_session(&ms.session_id, principal).await.unwrap();
     assert_eq!(cleared.viewport_epoch, "3");
-    assert!(
-        !cleared.input_available,
-        "clearing geometry must disable input pending layout reconciliation"
-    );
+    assert!(!cleared.input_available, "clearing geometry must disable input pending reconciliation");
+    assert_eq!(ms.producer.viewport_epoch(), 3);
+    assert!(!ms.producer.input_geometry_trusted());
+    assert!(matches!(
+        ms.input.enqueue_input(key_input(&ms, 1, 2)).await,
+        Err(InputError::StaleViewportEpoch { expected: 3, actual: 2 })
+    ));
 }
 
 fn find_test_browser() -> Option<PathBuf> {

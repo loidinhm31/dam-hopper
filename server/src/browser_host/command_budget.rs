@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use super::cdp::CdpError;
+use super::diagnostics::{MemoryAdmissionController, MemoryReservation};
 
 #[derive(Debug)]
 pub(super) struct CommandBudget {
@@ -16,15 +17,36 @@ pub(super) struct CommandBudget {
     max_bytes: usize,
     slots: AtomicUsize,
     bytes: AtomicUsize,
+    /// When set, every reserved command byte is also charged to the global payload budget.
+    memory: Option<Arc<MemoryAdmissionController>>,
 }
 
 impl CommandBudget {
+    /// Local-only budget without the global payload charge (unit tests).
+    #[cfg(test)]
     pub(super) fn new(max_slots: usize, max_bytes: usize) -> Arc<Self> {
+        Self::build(max_slots, max_bytes, None)
+    }
+
+    pub(super) fn with_memory(
+        max_slots: usize,
+        max_bytes: usize,
+        memory: Arc<MemoryAdmissionController>,
+    ) -> Arc<Self> {
+        Self::build(max_slots, max_bytes, Some(memory))
+    }
+
+    fn build(
+        max_slots: usize,
+        max_bytes: usize,
+        memory: Option<Arc<MemoryAdmissionController>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             max_slots,
             max_bytes,
             slots: AtomicUsize::new(0),
             bytes: AtomicUsize::new(0),
+            memory,
         })
     }
 
@@ -48,6 +70,7 @@ impl CommandBudget {
                     return Ok(CommandReservation {
                         budget: Arc::clone(self),
                         bytes: 0,
+                        memory: None,
                     })
                 }
                 Err(observed) => current = observed,
@@ -89,6 +112,7 @@ impl CommandBudget {
 pub(super) struct CommandReservation {
     budget: Arc<CommandBudget>,
     bytes: usize,
+    memory: Option<MemoryReservation>,
 }
 
 impl CommandReservation {
@@ -96,6 +120,27 @@ impl CommandReservation {
     /// in use after the reservation.
     pub(super) fn grow(&mut self, additional: usize) -> Result<usize, CdpError> {
         let total = self.budget.try_reserve_bytes(additional)?;
+        if let Some(controller) = &self.budget.memory {
+            let target = self.bytes + additional;
+            let charged = match self.memory.as_mut() {
+                Some(held) => held.adjust(target).is_ok(),
+                None => match controller.try_reserve(target) {
+                    Ok(held) => {
+                        self.memory = Some(held);
+                        true
+                    }
+                    Err(_) => false,
+                },
+            };
+            if !charged {
+                // Failed growth must not leak the local reservation either.
+                self.budget.bytes.fetch_sub(additional, Ordering::AcqRel);
+                return Err(CdpError::WriterQueueFull {
+                    messages: self.budget.slots.load(Ordering::Acquire),
+                    bytes: total - additional,
+                });
+            }
+        }
         self.bytes += additional;
         Ok(total)
     }

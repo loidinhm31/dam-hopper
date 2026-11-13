@@ -854,3 +854,132 @@ async fn test_cdp_byte_budget_shared_across_queued_and_inflight_commands() {
         }
     }
 }
+
+#[tokio::test]
+async fn test_cdp_ack_enqueue_returns_before_any_response_and_wait_observes_it() {
+    let (addr, server_tx, mut server_rx) = start_mock_cdp_server().await;
+    let client = CdpClient::connect(&format!("ws://{addr}")).await.expect("client connect failed");
+
+    // Two ACKs are admitted back to back; neither response exists yet.
+    let first = client.enqueue_screencast_ack("page-session", 11).expect("first ACK admitted");
+    let second = client.enqueue_screencast_ack("page-session", 11).expect("second ACK admitted without waiting");
+    let mut wire_ids = Vec::new();
+    for _ in 0..2 {
+        let Message::Text(text) = timeout(Duration::from_secs(2), server_rx.recv()).await.unwrap().unwrap() else {
+            panic!("expected text")
+        };
+        let cmd: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(cmd["method"], "Page.screencastFrameAck");
+        assert_eq!(cmd["sessionId"], "page-session");
+        assert_eq!(cmd["params"]["sessionId"], 11);
+        wire_ids.push(cmd["id"].clone());
+    }
+    assert_eq!(client.stats().screencast_frames_acked.load(std::sync::atomic::Ordering::Relaxed), 0);
+
+    // Answering (out of order) resolves each handle; an error answer is the ambiguous outcome.
+    server_tx.send(Message::Text(json!({"id": wire_ids[1], "result": {}}).to_string().into())).await.unwrap();
+    server_tx
+        .send(Message::Text(json!({"id": wire_ids[0], "error": {"code": -32000, "message": "nope"}}).to_string().into()))
+        .await
+        .unwrap();
+    assert!(second.wait().await.is_ok());
+    assert!(matches!(first.wait().await, Err(CdpError::Protocol { .. })));
+    assert_eq!(client.stats().screencast_frames_acked.load(std::sync::atomic::Ordering::Relaxed), 1);
+}
+
+/// Peer that accepts every connection: answers commands, lets the test push events to, or drop,
+/// the live connection and counts connections.
+struct ReconnectPeer {
+    addr: SocketAddr,
+    connections: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    push: tokio::sync::mpsc::UnboundedSender<Message>,
+    drop_live: tokio::sync::mpsc::UnboundedSender<()>,
+}
+
+async fn start_reconnect_peer() -> ReconnectPeer {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (push, push_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
+    let (drop_live, drop_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let counter = connections.clone();
+    let push_rx = std::sync::Arc::new(tokio::sync::Mutex::new(push_rx));
+    let drop_rx = std::sync::Arc::new(tokio::sync::Mutex::new(drop_rx));
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else { return };
+            let Ok(mut ws) = accept_async(stream).await else { continue };
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (push_rx, drop_rx) = (push_rx.clone(), drop_rx.clone());
+            tokio::spawn(async move {
+                let (mut push_rx, mut drop_rx) = (push_rx.lock().await, drop_rx.lock().await);
+                loop {
+                    tokio::select! {
+                        msg = push_rx.recv() => {
+                            let Some(msg) = msg else { break };
+                            if ws.send(msg).await.is_err() { break; }
+                        }
+                        _ = drop_rx.recv() => break,
+                        incoming = ws.next() => {
+                            let Some(Ok(Message::Text(text))) = incoming else { break };
+                            let cmd: serde_json::Value = serde_json::from_str(&text).unwrap();
+                            let reply = json!({"id": cmd["id"], "result": {"echo": cmd["method"]}});
+                            if ws.send(Message::Text(reply.to_string().into())).await.is_err() { break; }
+                        }
+                    }
+                }
+            });
+        }
+    });
+    ReconnectPeer { addr, connections, push, drop_live }
+}
+
+#[tokio::test]
+async fn test_cdp_reconnect_replaces_a_dead_actor_and_keeps_existing_subscribers() {
+    use std::sync::atomic::Ordering;
+    let peer = start_reconnect_peer().await;
+    let client = CdpClient::connect(&format!("ws://{}", peer.addr)).await.expect("client connect failed");
+    let mut frames = client.subscribe_screencast();
+    assert_eq!(client.send_command("Browser.getVersion", None, None).await.unwrap()["echo"], "Browser.getVersion");
+
+    // Alive: reconnect is a no-op and never dials again.
+    client.reconnect().await.expect("reconnect while alive");
+    assert_eq!(peer.connections.load(Ordering::SeqCst), 1);
+
+    // Actor death is observable, commands fail, then reconnect brings a fresh actor.
+    peer.drop_live.send(()).unwrap();
+    timeout(Duration::from_secs(2), client.closed()).await.expect("actor must stop when the peer drops");
+    assert!(client.is_closed());
+    assert!(matches!(client.send_command("Browser.getVersion", None, None).await, Err(CdpError::ConnectionClosed)));
+    client.reconnect().await.expect("reconnect after loss");
+    assert!(!client.is_closed());
+    assert_eq!(peer.connections.load(Ordering::SeqCst), 2);
+    assert_eq!(client.send_command("Page.enable", None, None).await.unwrap()["echo"], "Page.enable");
+
+    // The pre-existing subscriber receives events of the new connection.
+    let frame_event = json!({"method": "Page.screencastFrame", "sessionId": "fresh-session", "params": {
+        "data": "aGVsbG8=", "sessionId": 3,
+        "metadata": {"offsetTop": 0, "pageScaleFactor": 1.0, "deviceWidth": 1280, "deviceHeight": 900,
+                     "scrollOffsetX": 0, "scrollOffsetY": 0, "timestamp": 1.5}
+    }});
+    peer.push.send(Message::Text(frame_event.to_string().into())).unwrap();
+    let received = timeout(Duration::from_secs(2), frames.recv()).await.expect("frame timeout").expect("subscriber survives reconnect");
+    assert_eq!(received.session_id, "fresh-session");
+}
+
+#[tokio::test]
+async fn test_cdp_client_without_an_endpoint_cannot_reconnect() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let ws = accept_async(stream).await.unwrap();
+        drop(ws); // dies immediately
+    });
+    let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}")).await.unwrap();
+    let client = CdpClient::from_ws_stream(ws);
+    server.await.unwrap();
+    timeout(Duration::from_secs(2), client.closed()).await.expect("actor stops");
+    assert!(matches!(client.reconnect().await, Err(CdpError::Transport(_))));
+    assert!(client.is_closed(), "a refused reconnect leaves the client closed");
+}

@@ -153,7 +153,7 @@ export type BrowserResetState =
 export interface LogoutRequestOptions {
   browserReset?: boolean;
   confirmed?: boolean;
-  expectedProfileEpoch?: number;
+  expectedProfileEpoch?: string;
   operationId?: string;
 }
 
@@ -166,7 +166,7 @@ export interface LogoutOutcome {
   browserResetState: BrowserResetState;
   browserCredentialsRetained: boolean;
   resetRequired: boolean;
-  profileEpoch?: number;
+  profileEpoch?: string;
   operationId?: string;
   reason?: string;
 }

@@ -25,6 +25,7 @@ use dam_hopper_server::browser_host::attachments::{
 use dam_hopper_server::browser_host::auth::{
     verify_live_admission, BrowserAdmission, BrowserAuthError,
 };
+use dam_hopper_server::browser_host::media::ViewerPermit;
 use dam_hopper_server::config::{DamHopperConfig, FeaturesConfig, GlobalConfig, WorkspaceInfo};
 use dam_hopper_server::crypto::DamHopperOpaqueSuite;
 use dam_hopper_server::diagnostics::DiagnosticStore;
@@ -177,7 +178,7 @@ async fn test_rest_issue_ticket_and_consume() {
         "viewerId": "viewer-uuid-1",
         "subscriptionEpoch": "sub-epoch-1",
         "browserIncarnation": "inc-1",
-        "profileEpoch": 1
+        "profileEpoch": "1"
     });
 
     let req = Request::builder()
@@ -222,6 +223,141 @@ async fn test_rest_issue_ticket_and_consume() {
         .consume_ticket(raw_ticket, AttachmentPurpose::Media, None)
         .await;
     assert_eq!(replay_res.unwrap_err(), AttachmentError::TicketNotFound);
+}
+
+/// Ticket issue is bound to the LIVE session identity (Running, exact incarnation and profile
+/// epoch, same owner), and a DELETE invalidates every unconsumed ticket of the session.
+#[tokio::test]
+async fn test_rest_issue_ticket_requires_live_exact_identity_and_delete_invalidates_tickets() {
+    let tmp = tempdir().unwrap();
+    let (auth_service, token) = make_user_token("admin-ticket-live", UserRole::Admin, true);
+    let state = create_test_state(tmp.path().to_path_buf(), false)
+        .with_auth_service(Arc::new(auth_service));
+    let app = build_router_with_origins(state, vec![]);
+    let registry = dam_hopper_server::api::browser_host::global_session_registry();
+    let new_session = |principal: &str| {
+        let request = dam_hopper_server::browser_host::session::CreateSessionRequest {
+            creation_key: uuid::Uuid::new_v4().to_string(),
+            url: "about:blank".into(),
+            viewport: dam_hopper_server::browser_host::session::ViewportRequest {
+                width: 1280,
+                height: 900,
+                dpr: 1.0,
+            },
+        };
+        let principal = principal.to_string();
+        async move {
+            registry
+                .insert_running_for_test(&principal, false, "inc-live", 1, &request, &[])
+                .await
+                .unwrap()
+                .0
+                .browser_session_id
+        }
+    };
+    let session = new_session("admin-ticket-live").await;
+    let foreign = new_session("someone-else").await;
+    let issue = |session: String, incarnation: &'static str, epoch: &'static str| {
+        let app = app.clone();
+        let token = token.clone();
+        async move {
+            let body = json!({
+                "purpose": "control", "browserSessionId": session, "viewerId": "v",
+                "subscriptionEpoch": "sub", "browserIncarnation": incarnation, "profileEpoch": epoch,
+            });
+            let req = Request::builder()
+                .method("POST")
+                .uri("/api/browser/attachments")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            let status = resp.status();
+            let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null))
+        }
+    };
+
+    assert_eq!(issue(session.clone(), "inc-stale", "1").await.0, StatusCode::NOT_FOUND, "stale incarnation");
+    assert_eq!(issue(session.clone(), "inc-live", "2").await.0, StatusCode::NOT_FOUND, "stale profile epoch");
+    assert_eq!(issue(foreign, "inc-live", "1").await.0, StatusCode::NOT_FOUND, "foreign principal's session");
+    let (status, body) = issue(session.clone(), "inc-live", "1").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let early_ticket = body["ticket"].as_str().unwrap().to_string();
+
+    // DELETE the session: the unconsumed ticket dies with it ...
+    let delete = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/browser/sessions/{session}"))
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let _ = app.clone().oneshot(delete).await.unwrap();
+    let mgr = dam_hopper_server::api::browser_host::global_attachment_manager();
+    assert_eq!(
+        mgr.consume_ticket(&early_ticket, AttachmentPurpose::Control, None).await.unwrap_err(),
+        AttachmentError::TicketNotFound,
+        "ticket issued before the close must not be consumable after it"
+    );
+    // ... and a closed session never receives a new one.
+    let (status, _) = issue(session, "inc-live", "1").await;
+    assert!(
+        status == StatusCode::NOT_FOUND || status == StatusCode::CONFLICT,
+        "closed session issued a ticket: {status}"
+    );
+}
+
+/// `profileEpoch` on the ticket wire is a canonical positive decimal string: numbers and
+/// non-canonical strings are rejected before any ticket state is touched.
+#[tokio::test]
+async fn test_issue_ticket_profile_epoch_is_canonical_decimal_string() {
+    let tmp = tempdir().unwrap();
+    let (auth_service, token) = make_user_token("admin-ticket-epoch", UserRole::Admin, true);
+    let state = create_test_state(tmp.path().to_path_buf(), false)
+        .with_auth_service(Arc::new(auth_service));
+    let app = build_router_with_origins(state, vec![]);
+    for bad in [json!(1), json!("0"), json!("01"), json!("-1"), json!("18446744073709551616"), json!(null)] {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/browser/attachments")
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({
+                    "purpose": "media",
+                    "browserSessionId": "s1",
+                    "viewerId": "v1",
+                    "subscriptionEpoch": "sub-1",
+                    "browserIncarnation": "inc-1",
+                    "profileEpoch": bad
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY, "profileEpoch {bad}");
+    }
+    // u64::MAX is a valid identity: it passes parsing and fails only on session lookup (404).
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/browser/attachments")
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "purpose": "media",
+                "browserSessionId": "no-such-session",
+                "viewerId": "v1",
+                "subscriptionEpoch": "sub-1",
+                "browserIncarnation": "inc-1",
+                "profileEpoch": "18446744073709551615"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -355,16 +491,34 @@ async fn test_paired_media_control_connection_and_cancellation() {
         .await
         .unwrap();
 
-    let (conn_m, cancel_m) = mgr.register_connection(&adm_m).await.unwrap();
-    let (_conn_c, cancel_c) = mgr.register_connection(&adm_c).await.unwrap();
+    // Private counter: the process-global ACTIVE_VIEWERS is shared with live handler tests.
+    static PAIR_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let media = mgr
+        .register_pair_connection(&adm_m, || {
+            ViewerPermit::try_acquire_in(&PAIR_COUNTER, 4)
+                .map_err(|_| AttachmentError::ViewerCapacityExceeded(4))
+        })
+        .await
+        .unwrap();
+    let control = mgr
+        .register_pair_connection(&adm_c, || panic!("control joins the pair's permit"))
+        .await
+        .unwrap();
+    assert_eq!(PAIR_COUNTER.load(std::sync::atomic::Ordering::SeqCst), 1, "one permit per pair");
 
-    assert!(!cancel_m.is_cancelled());
-    assert!(!cancel_c.is_cancelled());
+    assert!(!media.cancel_token.is_cancelled());
+    assert!(!control.cancel_token.is_cancelled());
 
-    // Unregistering media connection cancels pair
-    mgr.unregister_connection(conn_m).await;
-    assert!(cancel_m.is_cancelled());
-    assert!(cancel_c.is_cancelled());
+    // Unregistering media connection cancels the pair; the pair's permit is returned once the
+    // sockets' tasks (which own it) have ended.
+    mgr.unregister_connection(media.connection_id).await;
+    assert!(media.cancel_token.is_cancelled());
+    assert!(control.cancel_token.is_cancelled());
+    assert_eq!(PAIR_COUNTER.load(std::sync::atomic::Ordering::SeqCst), 1);
+    drop(media);
+    assert_eq!(PAIR_COUNTER.load(std::sync::atomic::Ordering::SeqCst), 1, "mate still holds it");
+    drop(control);
+    assert_eq!(PAIR_COUNTER.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

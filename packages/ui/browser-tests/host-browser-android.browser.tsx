@@ -45,10 +45,10 @@ function TestHarness({
       new BrowserInputController({
         getSessionId: () => "android-sess-1",
         getIncarnation: () => "android-inc-1",
-        getProfileEpoch: () => 1,
+        getProfileEpoch: () => "1",
         getSubscriptionEpoch: () => "android-sub-1",
         getLeaseToken: () => "android-lease-1",
-        getViewportEpoch: () => 1,
+        getViewportEpoch: () => "1",
         getDrawnRect: () => drawnRect,
         getControlSocket: () => socket as unknown as WebSocket,
       }),

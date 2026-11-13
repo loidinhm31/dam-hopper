@@ -344,7 +344,7 @@ async fn legacy_expired_missing_and_stale_confirmation_logout_always_200_revokes
                     json!({
                         "browserReset": true,
                         "confirmed": true,
-                        "expectedProfileEpoch": 1,
+                        "expectedProfileEpoch": "1",
                         "operationId": "op-expired-attempt",
                     })
                     .to_string(),
@@ -376,7 +376,7 @@ async fn legacy_expired_missing_and_stale_confirmation_logout_always_200_revokes
                     json!({
                         "browserReset": true,
                         "confirmed": true,
-                        "expectedProfileEpoch": 1,
+                        "expectedProfileEpoch": "1",
                         "operationId": "op-ordinary-attempt",
                     })
                     .to_string(),
@@ -408,26 +408,40 @@ async fn legacy_expired_missing_and_stale_confirmation_logout_always_200_revokes
             "missing-confirmed",
             false,
             None,
-            json!({ "browserReset": true, "expectedProfileEpoch": 1, "operationId": "op-no-conf" }).to_string(),
+            json!({ "browserReset": true, "expectedProfileEpoch": "1", "operationId": "op-no-conf" }).to_string(),
         ),
         ("malformed-json", false, None, "{bad json".to_string()),
         (
             "stale-epoch",
             false,
             None,
-            json!({ "browserReset": true, "confirmed": true, "expectedProfileEpoch": 99, "operationId": "op-stale" }).to_string(),
+            json!({ "browserReset": true, "confirmed": true, "expectedProfileEpoch": "99", "operationId": "op-stale" }).to_string(),
         ),
         (
             "cookie-without-origin-csrf",
             true,
             None,
-            json!({ "browserReset": true, "confirmed": true, "expectedProfileEpoch": 1, "operationId": "op-csrf-cookie" }).to_string(),
+            json!({ "browserReset": true, "confirmed": true, "expectedProfileEpoch": "1", "operationId": "op-csrf-cookie" }).to_string(),
         ),
         (
             "evil-origin",
             false,
             Some("https://evil.example"),
-            json!({ "browserReset": true, "confirmed": true, "expectedProfileEpoch": 1, "operationId": "op-evil-origin" }).to_string(),
+            json!({ "browserReset": true, "confirmed": true, "expectedProfileEpoch": "1", "operationId": "op-evil-origin" }).to_string(),
+        ),
+        // Counters are canonical decimal strings: numbers and non-canonical strings are
+        // malformed bodies, so they can never authorize a destructive reset.
+        (
+            "numeric-epoch",
+            false,
+            None,
+            json!({ "browserReset": true, "confirmed": true, "expectedProfileEpoch": 1, "operationId": "op-numeric-epoch" }).to_string(),
+        ),
+        (
+            "leading-zero-epoch",
+            false,
+            None,
+            json!({ "browserReset": true, "confirmed": true, "expectedProfileEpoch": "01", "operationId": "op-zero-epoch" }).to_string(),
         ),
     ];
 
@@ -493,7 +507,7 @@ async fn legacy_expired_missing_and_stale_confirmation_logout_always_200_revokes
                 .body(Body::from(
                     json!({
                         "operationId": "op-direct-stale",
-                        "expectedProfileEpoch": 99,
+                        "expectedProfileEpoch": "99",
                         "confirmed": true,
                     })
                     .to_string(),
@@ -647,7 +661,7 @@ async fn confirmed_live_admin_logout_wipes_profile_fences_sibling_resources_and_
                     json!({
                         "browserReset": true,
                         "confirmed": true,
-                        "expectedProfileEpoch": 1,
+                        "expectedProfileEpoch": "1",
                         "operationId": "op-confirmed-logout-1",
                     })
                     .to_string(),
@@ -665,7 +679,7 @@ async fn confirmed_live_admin_logout_wipes_profile_fences_sibling_resources_and_
     assert_eq!(body["browserResetState"], "cleared");
     assert_eq!(body["browserCredentialsRetained"], false);
     assert_eq!(body["resetRequired"], false);
-    assert_eq!(body["profileEpoch"], 2);
+    assert_eq!(body["profileEpoch"], "2");
 
     // 1. User-data cookies deleted and user-data recreated empty; manager files preserved
     assert!(!cookie_file.exists());
@@ -766,7 +780,7 @@ async fn slow_or_failed_cleanup_returns_within_2s_with_cleanup_pending_survives_
                     json!({
                         "browserReset": true,
                         "confirmed": true,
-                        "expectedProfileEpoch": 1,
+                        "expectedProfileEpoch": "1",
                         "operationId": "op-slow-reset-1",
                     })
                     .to_string(),
@@ -786,7 +800,7 @@ async fn slow_or_failed_cleanup_returns_within_2s_with_cleanup_pending_survives_
     assert_eq!(body["browserResetState"], "cleanupPending");
     assert_eq!(body["browserCredentialsRetained"], true);
     assert_eq!(body["resetRequired"], true);
-    assert_eq!(body["profileEpoch"], 2);
+    assert_eq!(body["profileEpoch"], "2");
     assert_eq!(body["operationId"], "op-slow-reset-1");
 
     // Revoked logout token cannot query destructive status
@@ -841,7 +855,7 @@ async fn slow_or_failed_cleanup_returns_within_2s_with_cleanup_pending_survives_
     assert_eq!(done_status.status(), StatusCode::OK);
     let done_body = json_body(done_status).await;
     assert_eq!(done_body["status"], "completed");
-    assert_eq!(done_body["profileEpoch"], 2);
+    assert_eq!(done_body["profileEpoch"], "2");
     assert!(!slow_cookie.exists());
 
     // Part B: Kill failure persists cleanupPending across restart, blocks relaunch, and retries idempotently
@@ -868,7 +882,7 @@ async fn slow_or_failed_cleanup_returns_within_2s_with_cleanup_pending_survives_
                     json!({
                         "browserReset": true,
                         "confirmed": true,
-                        "expectedProfileEpoch": 1,
+                        "expectedProfileEpoch": "1",
                         "operationId": "op-fail-reset-1",
                     })
                     .to_string(),
@@ -917,7 +931,7 @@ async fn slow_or_failed_cleanup_returns_within_2s_with_cleanup_pending_survives_
                 .body(Body::from(
                     json!({
                         "operationId": "op-fail-reset-1",
-                        "expectedProfileEpoch": 1,
+                        "expectedProfileEpoch": "1",
                         "confirmed": true,
                     })
                     .to_string(),
@@ -929,7 +943,7 @@ async fn slow_or_failed_cleanup_returns_within_2s_with_cleanup_pending_survives_
     assert_eq!(retry_reset.status(), StatusCode::OK);
     let retry_body = json_body(retry_reset).await;
     assert_eq!(retry_body["status"], "completed");
-    assert_eq!(retry_body["profileEpoch"], 2);
+    assert_eq!(retry_body["profileEpoch"], "2");
     assert!(!fail_cookie.exists());
 
     // Same operation replay is idempotent
@@ -945,7 +959,7 @@ async fn slow_or_failed_cleanup_returns_within_2s_with_cleanup_pending_survives_
                 .body(Body::from(
                     json!({
                         "operationId": "op-fail-reset-1",
-                        "expectedProfileEpoch": 1,
+                        "expectedProfileEpoch": "1",
                         "confirmed": true,
                     })
                     .to_string(),
@@ -955,7 +969,7 @@ async fn slow_or_failed_cleanup_returns_within_2s_with_cleanup_pending_survives_
         .await
         .unwrap();
     assert_eq!(replay_reset.status(), StatusCode::OK);
-    assert_eq!(json_body(replay_reset).await["profileEpoch"], 2);
+    assert_eq!(json_body(replay_reset).await["profileEpoch"], "2");
 }
 
 #[tokio::test]
@@ -1096,7 +1110,7 @@ async fn stalled_cdp_teardown_does_not_delay_reset_past_2s_and_completes_worker(
                     json!({
                         "browserReset": true,
                         "confirmed": true,
-                        "expectedProfileEpoch": 1,
+                        "expectedProfileEpoch": "1",
                         "operationId": "op-stalled-cdp-1"
                     })
                     .to_string(),
@@ -1439,7 +1453,7 @@ async fn denied_artifact_unlink_keeps_confirmed_reset_pending_until_private_file
         Some(json!({
             "browserReset": true,
             "confirmed": true,
-            "expectedProfileEpoch": 1,
+            "expectedProfileEpoch": "1",
             "operationId": "op-denied-unlink-1",
         })),
     )
@@ -1578,7 +1592,7 @@ async fn reset_waits_for_an_unpublished_artifact_writer_started_before_its_fence
         Some(json!({
             "browserReset": true,
             "confirmed": true,
-            "expectedProfileEpoch": 1,
+            "expectedProfileEpoch": "1",
             "operationId": "op-inflight-writer-1",
         })),
     )
@@ -1677,7 +1691,7 @@ async fn denied_artifact_unlink_never_reports_cleared_when_no_browser_profile_ex
     let reset_request = json!({
         "browserReset": true,
         "confirmed": true,
-        "expectedProfileEpoch": 1,
+        "expectedProfileEpoch": "1",
         "operationId": "op-no-profile-denied",
     });
     let headers = [

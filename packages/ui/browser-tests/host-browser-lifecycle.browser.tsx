@@ -690,4 +690,73 @@ describe("Host Browser Lifecycle & Window Policy Browser Tests", () => {
     const tuple1Gen2 = { ...tuple1, generation: 2 };
     expect(getQualityPreference(tuple1Gen2)).toBe("auto");
   });
+
+  /**
+   * Two viewers of ONE native target (same session id, distinct windows/tabs) keep independent
+   * quality preferences end to end: the real selector, the in-memory store, and release on close.
+   * Not provable offline (needs a live shaped link): that the shared capture then runs at the
+   * slowest eligible viewer's fidelity with per-viewer FPS/audio. That ladder is covered by the
+   * server-side controller and screencast suites.
+   */
+  it("two unequal viewers of the same target keep independent real-selector preferences and release independently", async () => {
+    await renderOsShell();
+    const sharedSession = "sess-shared-quality-target";
+    for (const [id, tabId] of [
+      ["win-shared-a", "tab-sa"],
+      ["win-shared-b", "tab-sb"],
+    ] as const) {
+      await act(async () => {
+        useWindowStore.getState().openWindow({
+          id,
+          appId: "browser",
+          title: id,
+          ctx: { profileId: "default" },
+          mode: "float",
+          appState: createCanonicalBrowserState(tabId, sharedSession, "http://localhost:5173/shared-quality"),
+        });
+      });
+    }
+    const tupleA = { profileId: "default", generation: 1, windowId: "win-shared-a", tabId: "tab-sa" };
+    const tupleB = { profileId: "default", generation: 1, windowId: "win-shared-b", tabId: "tab-sb" };
+
+    const selectorOf = async (windowId: string) => {
+      await act(async () => {
+        useWindowStore.getState().focusWindow(windowId);
+      });
+      const frame = `[data-os-window-frame="${windowId}"]`;
+      let panel = document.querySelector(`${frame} [data-testid="browser-tools-panel"]`);
+      if (!panel) {
+        const toggle = document.querySelector<HTMLButtonElement>(`${frame} [data-testid="browser-tools-toggle-btn"]`);
+        expect(toggle).toBeTruthy();
+        await userEvent.click(toggle!);
+        panel = document.querySelector(`${frame} [data-testid="browser-tools-panel"]`);
+      }
+      const select = panel?.querySelector<HTMLSelectElement>('[data-testid="browser-quality-selector"]');
+      expect(select).toBeTruthy();
+      return select!;
+    };
+
+    const selectA = await selectorOf("win-shared-a");
+    await userEvent.selectOptions(selectA, "high");
+    const selectB = await selectorOf("win-shared-b");
+    await userEvent.selectOptions(selectB, "low");
+
+    expect(getQualityPreference(tupleA)).toBe("high");
+    expect(getQualityPreference(tupleB)).toBe("low");
+    await vi.waitFor(() => {
+      expect(selectA.value).toBe("high");
+      expect(selectB.value).toBe("low");
+    });
+
+    // Retiring one viewer releases only its own preference.
+    await act(async () => {
+      useWindowStore.getState().closeWindow("win-shared-a");
+    });
+    await vi.waitFor(() => {
+      expect(useWindowStore.getState().session.windows["win-shared-a"]).toBeUndefined();
+    });
+    expect(getQualityPreference(tupleA)).toBe("auto");
+    expect(getQualityPreference(tupleB)).toBe("low");
+    expect(selectB.value).toBe("low");
+  });
 });

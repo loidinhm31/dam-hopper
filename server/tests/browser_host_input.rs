@@ -313,7 +313,7 @@ async fn test_viewport_update_and_epochs() {
         .body(Body::from(
             json!({
                 "leaseToken": lease_token,
-                "viewportEpoch": 1,
+                "viewportEpoch": "1",
                 "width": 1920,
                 "height": 1080,
                 "dpr": 2.0
@@ -343,7 +343,7 @@ async fn test_viewport_update_and_epochs() {
         .body(Body::from(
             json!({
                 "leaseToken": lease_token,
-                "viewportEpoch": 1,
+                "viewportEpoch": "1",
                 "width": 1280,
                 "height": 900,
                 "dpr": 1.0
@@ -398,7 +398,7 @@ async fn test_viewport_sanitized_noop_and_flood_coalescing() {
         .body(Body::from(
             json!({
                 "leaseToken": lease_token,
-                "viewportEpoch": 1,
+                "viewportEpoch": "1",
                 "width": 1280,
                 "height": 900,
                 "dpr": 1.0
@@ -423,7 +423,7 @@ async fn test_viewport_sanitized_noop_and_flood_coalescing() {
         .body(Body::from(
             json!({
                 "leaseToken": lease_token,
-                "viewportEpoch": 1,
+                "viewportEpoch": "1",
                 "width": 1920,
                 "height": 1080,
                 "dpr": 3.0
@@ -447,7 +447,7 @@ async fn test_viewport_sanitized_noop_and_flood_coalescing() {
         .body(Body::from(
             json!({
                 "leaseToken": lease_token,
-                "viewportEpoch": 2,
+                "viewportEpoch": "2",
                 "width": 4000,
                 "height": 3000,
                 "dpr": 5.0
@@ -930,4 +930,1047 @@ async fn test_viewport_coalescer_race_and_lease_revoked_exit() {
         fresh,
         dam_hopper_server::browser_host::session::ViewportQueueOutcome::Leader { .. }
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Canonical decimal-string counters (SI-08): REST + WS DTO boundaries
+// ---------------------------------------------------------------------------
+
+const TWO_POW_53_PLUS_1: &str = "9007199254740993";
+const U64_MAX: &str = "18446744073709551615";
+
+async fn send_json(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    token: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+struct CounterFixture {
+    app: axum::Router,
+    token: String,
+    session_id: String,
+    lease_token: String,
+    _tmp: tempfile::TempDir,
+}
+
+async fn counter_fixture(principal: &str) -> CounterFixture {
+    global_session_registry().reset_for_test().await;
+    let tmp = tempdir().unwrap();
+    let (auth_service, token) = make_user_token(principal, UserRole::Admin, true);
+    let state = create_test_state(tmp.path().to_path_buf(), false)
+        .with_auth_service(Arc::new(auth_service));
+    let app = build_router_with_origins(state, vec![]);
+    let (dto, _) = global_session_registry()
+        .insert_running_for_test(
+            principal,
+            false,
+            "inc-1",
+            1,
+            &CreateSessionRequest {
+                creation_key: uuid::Uuid::new_v4().to_string(),
+                url: "about:blank".to_string(),
+                viewport: ViewportRequest { width: 1280, height: 900, dpr: 1.0 },
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+    let session_id = dto.browser_session_id;
+    let (lease_token, _) = get_or_create_input_manager(&session_id)
+        .await
+        .acquire_lease("v1", "human")
+        .await
+        .unwrap();
+    CounterFixture { app, token, session_id, lease_token, _tmp: tmp }
+}
+
+#[tokio::test]
+async fn test_rest_counters_reject_numbers_and_non_canonical_strings() {
+    let _serial = SERIAL_TEST_LOCK.lock().await;
+    let fx = counter_fixture("counter-reject-user").await;
+    let bad_values = [
+        json!(1),
+        json!(1.0),
+        json!(null),
+        json!("0"),
+        json!("01"),
+        json!("+1"),
+        json!("-1"),
+        json!("1.0"),
+        json!(" 1"),
+        json!("1 "),
+        json!("1e3"),
+        json!("0x1"),
+        json!(""),
+        json!("18446744073709551616"),
+        json!("١"),
+    ];
+    for bad in &bad_values {
+        let vp = send_json(
+            &fx.app,
+            "PUT",
+            &format!("/api/browser/sessions/{}/viewport", fx.session_id),
+            &fx.token,
+            json!({ "leaseToken": fx.lease_token, "viewportEpoch": bad, "width": 1000, "height": 700, "dpr": 1.0 }),
+        )
+        .await;
+        assert_eq!(vp.0, StatusCode::UNPROCESSABLE_ENTITY, "viewportEpoch {bad} must be rejected");
+        for (route, body) in [
+            ("navigate", json!({ "url": "about:blank", "navigationRevision": bad })),
+            ("history", json!({ "direction": "back", "navigationRevision": bad })),
+            ("reload", json!({ "navigationRevision": bad })),
+        ] {
+            let res = send_json(
+                &fx.app,
+                "POST",
+                &format!("/api/browser/sessions/{}/{route}", fx.session_id),
+                &fx.token,
+                body,
+            )
+            .await;
+            assert_eq!(
+                res.0,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{route} navigationRevision {bad} must be rejected"
+            );
+        }
+    }
+    // Selection and profile-reset DTOs use the same canonical decimal wire format.
+    for bad in &bad_values {
+        for (route, body) in [
+            ("selection/start", json!({ "leaseToken": fx.lease_token, "navigationRevision": bad })),
+            ("selection/cancel", json!({ "leaseToken": fx.lease_token, "navigationRevision": bad })),
+            (
+                "selection/artifacts",
+                json!({ "selectionRevision": bad, "terminalId": "t", "terminalIncarnation": "1" }),
+            ),
+            (
+                "selection/artifacts",
+                json!({ "selectionRevision": "0", "terminalId": "t", "terminalIncarnation": bad }),
+            ),
+        ] {
+            let res = send_json(
+                &fx.app,
+                "POST",
+                &format!("/api/browser/sessions/{}/{route}", fx.session_id),
+                &fx.token,
+                body,
+            )
+            .await;
+            // selectionRevision/terminalIncarnation may legitimately be zero.
+            let zero_ok = bad == &json!("0");
+            if !zero_ok {
+                assert_eq!(res.0, StatusCode::UNPROCESSABLE_ENTITY, "{route} {bad}");
+            }
+        }
+        let reset = send_json(
+            &fx.app,
+            "POST",
+            "/api/browser/profile/reset",
+            &fx.token,
+            json!({ "operationId": "op-1", "expectedProfileEpoch": bad, "confirmed": true }),
+        )
+        .await;
+        assert_eq!(reset.0, StatusCode::UNPROCESSABLE_ENTITY, "reset expectedProfileEpoch {bad}");
+    }
+    // Canonical string is accepted and the DTO is unchanged by the rejected attempts.
+    let ok = send_json(
+        &fx.app,
+        "PUT",
+        &format!("/api/browser/sessions/{}/viewport", fx.session_id),
+        &fx.token,
+        json!({ "leaseToken": fx.lease_token, "viewportEpoch": "1", "width": 1000, "height": 700, "dpr": 1.0 }),
+    )
+    .await;
+    assert_eq!(ok.0, StatusCode::OK);
+    assert_eq!(ok.1["viewportEpoch"], "2");
+}
+
+#[tokio::test]
+async fn test_rest_counters_round_trip_at_two_pow_53_plus_1_and_u64_max() {
+    let _serial = SERIAL_TEST_LOCK.lock().await;
+    let fx = counter_fixture("counter-boundary-user").await;
+    let reg = global_session_registry();
+    let vp_uri = format!("/api/browser/sessions/{}/viewport", fx.session_id);
+    let reload_uri = format!("/api/browser/sessions/{}/reload", fx.session_id);
+
+    // 2^53+1: exact identity above the JS safe-integer range, advances by exactly one.
+    let dto = reg
+        .set_counters_for_test(&fx.session_id, 9_007_199_254_740_993, 9_007_199_254_740_993)
+        .await
+        .unwrap();
+    assert_eq!(dto.navigation_revision, TWO_POW_53_PLUS_1);
+    let vp = send_json(
+        &fx.app,
+        "PUT",
+        &vp_uri,
+        &fx.token,
+        json!({ "leaseToken": fx.lease_token, "viewportEpoch": TWO_POW_53_PLUS_1, "width": 1000, "height": 700, "dpr": 1.0 }),
+    )
+    .await;
+    assert_eq!(vp.0, StatusCode::OK, "{:?}", vp.1);
+    assert_eq!(vp.1["viewportEpoch"], "9007199254740994");
+    let rl = send_json(&fx.app, "POST", &reload_uri, &fx.token, json!({ "navigationRevision": TWO_POW_53_PLUS_1 })).await;
+    assert_eq!(rl.0, StatusCode::OK, "{:?}", rl.1);
+    assert_eq!(rl.1["navigationRevision"], "9007199254740994");
+    // The neighbour that a lossy f64 round trip would collapse to is a different identity.
+    let lossy = send_json(&fx.app, "POST", &reload_uri, &fx.token, json!({ "navigationRevision": "9007199254740992" })).await;
+    assert_eq!(lossy.0, StatusCode::CONFLICT);
+    assert!(lossy.1["error"].as_str().unwrap().contains("expected 9007199254740992, current 9007199254740994"));
+
+    // u64::MAX parses losslessly (no 422) and is compared exactly.
+    reg.set_counters_for_test(&fx.session_id, u64::MAX, u64::MAX).await.unwrap();
+    let near = send_json(&fx.app, "POST", &reload_uri, &fx.token, json!({ "navigationRevision": "18446744073709551614" })).await;
+    assert_eq!(near.0, StatusCode::CONFLICT);
+    assert!(near.1["error"].as_str().unwrap().contains("expected 18446744073709551614, current 18446744073709551615"));
+    // At the exact current identity the counter is exhausted: never wraps or saturates in place.
+    let exhausted = send_json(&fx.app, "POST", &reload_uri, &fx.token, json!({ "navigationRevision": U64_MAX })).await;
+    assert_eq!(exhausted.0, StatusCode::CONFLICT);
+    assert!(exhausted.1["error"].as_str().unwrap().contains("exhausted"), "{:?}", exhausted.1);
+    let vp_max = send_json(
+        &fx.app,
+        "PUT",
+        &vp_uri,
+        &fx.token,
+        json!({ "leaseToken": fx.lease_token, "viewportEpoch": U64_MAX, "width": 900, "height": 600, "dpr": 1.0 }),
+    )
+    .await;
+    assert_eq!(vp_max.0, StatusCode::CONFLICT);
+    assert!(vp_max.1["error"].as_str().unwrap().contains("exhausted"), "{:?}", vp_max.1);
+    // The session still reports the unchanged exact identity.
+    let got = reg.get_session(&fx.session_id, "counter-boundary-user").await.unwrap();
+    assert_eq!(got.navigation_revision, U64_MAX);
+    assert_eq!(got.viewport_epoch, U64_MAX);
+}
+
+#[test]
+fn test_input_message_wire_counters_are_canonical_decimal_strings() {
+    let wire = |profile: Value, seq: Value, epoch: Value| {
+        json!({
+            "browserSessionId": "s1",
+            "browserIncarnation": "inc1",
+            "profileEpoch": profile,
+            "subscriptionEpoch": "sub1",
+            "leaseToken": "lease",
+            "inputSeq": seq,
+            "viewportEpoch": epoch,
+            "event": { "kind": "pointerCancel" }
+        })
+    };
+    let ok: InputMessage = serde_json::from_value(wire(
+        json!(TWO_POW_53_PLUS_1),
+        json!(U64_MAX),
+        json!(U64_MAX),
+    ))
+    .expect("canonical decimal strings parse");
+    assert_eq!(ok.profile_epoch, 9_007_199_254_740_993);
+    assert_eq!(ok.input_seq, u64::MAX);
+    assert_eq!(ok.viewport_epoch, u64::MAX);
+    let echoed = serde_json::to_value(&ok).unwrap();
+    assert_eq!(echoed["profileEpoch"], TWO_POW_53_PLUS_1);
+    assert_eq!(echoed["inputSeq"], U64_MAX);
+    assert_eq!(echoed["viewportEpoch"], U64_MAX);
+
+    for bad in [json!(1), json!("0"), json!("01"), json!("-1"), json!("18446744073709551616"), json!(null)] {
+        for (p, s, e) in [
+            (bad.clone(), json!("1"), json!("1")),
+            (json!("1"), bad.clone(), json!("1")),
+            (json!("1"), json!("1"), bad.clone()),
+        ] {
+            assert!(
+                serde_json::from_value::<InputMessage>(wire(p, s, e)).is_err(),
+                "wire counter {bad} must be rejected"
+            );
+        }
+    }
+}
+
+/// Live real-Chromium lifecycle: real sockets (media + control), REST and a DOM key/mouse
+/// oracle observing what the native page actually received.
+mod live {
+    use super::*;
+    use chromiumoxide_cdp::cdp::browser_protocol::target::CreateTargetParams;
+    use dam_hopper_server::api::browser_host::get_or_register_producer;
+    use dam_hopper_server::browser_host::cdp::CdpClient;
+    use dam_hopper_server::browser_host::process::{
+        find_browser_executable, BrowserLaunchConfig, BrowserProcess,
+    };
+    use dam_hopper_server::browser_host::screencast::ScreencastProducer;
+    use futures_util::{SinkExt, StreamExt};
+    use std::net::SocketAddr;
+    use std::time::Duration;
+    use tokio::time::{sleep, timeout};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::Message;
+
+    pub type Ws = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+    pub const PRINCIPAL: &str = "dev-user";
+
+    pub fn require_browser_executable() -> Option<PathBuf> {
+        if let Ok(path) = find_browser_executable(None) {
+            return Some(path);
+        }
+        for candidate in &["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"] {
+            let p = PathBuf::from(candidate);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+        if std::env::var("DAM_HOPPER_REQUIRE_BROWSER").as_deref() == Ok("1") {
+            panic!("Required Chrome/Chromium executable not found on host");
+        }
+        eprintln!("SKIP: No Chrome/Chromium executable available on this system.");
+        None
+    }
+
+    pub struct LiveInput {
+        _tmp: tempfile::TempDir,
+        process: BrowserProcess,
+        pub client: Arc<CdpClient>,
+        pub page_sid: String,
+        pub producer: Arc<ScreencastProducer>,
+        pub session_id: String,
+        pub incarnation: String,
+        pub addr: SocketAddr,
+        http: reqwest::Client,
+    }
+
+    /// Launches Chromium, binds a running session + producer to its page, serves the real
+    /// router in dev mode and installs a DOM oracle recording keydown/keyup/mousedown/mouseup.
+    /// `lease_ttl` pre-seeds the session's input manager when a short lease is under test.
+    pub async fn start(lease_ttl: Option<Duration>) -> Option<LiveInput> {
+        let exec = require_browser_executable()?;
+        global_session_registry().reset_for_test().await;
+        let tmp = tempdir().unwrap();
+        let mut config = BrowserLaunchConfig::new(tmp.path().join("input-live-data"));
+        config.executable_path = Some(exec);
+        config.headless = true;
+        let process = BrowserProcess::launch(config).await.expect("browser launch");
+        let client = CdpClient::connect(process.ws_endpoint()).await.expect("cdp connect");
+        let target_id: String = client
+            .send_typed(CreateTargetParams::builder().url("about:blank").build().unwrap(), None)
+            .await
+            .expect("Target.createTarget")
+            .target_id
+            .into();
+
+        let state = create_test_state(tmp.path().to_path_buf(), true);
+        state.config.write().await.server.browser.budgets.max_viewers = 16;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        state.record_bound_listener(addr).expect("record listener");
+        let router = dam_hopper_server::api::build_router(state);
+        tokio::spawn(async move {
+            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
+                .await
+                .unwrap();
+        });
+
+        let incarnation = uuid::Uuid::new_v4().to_string();
+        let (dto, _) = global_session_registry()
+            .insert_running_for_test(
+                PRINCIPAL,
+                true,
+                &incarnation,
+                1,
+                &CreateSessionRequest {
+                    creation_key: uuid::Uuid::new_v4().to_string(),
+                    url: "about:blank".to_string(),
+                    viewport: ViewportRequest { width: 1280, height: 900, dpr: 1.0 },
+                },
+                &[],
+            )
+            .await
+            .unwrap();
+        let session_id = dto.browser_session_id;
+        if let Some(ttl) = lease_ttl {
+            dam_hopper_server::api::browser_host::global_input_managers()
+                .write()
+                .await
+                .insert(
+                    session_id.clone(),
+                    dam_hopper_server::browser_host::input::SessionInputManager::new_shared(ttl),
+                );
+        }
+        let producer = Arc::new(ScreencastProducer::new(
+            session_id.clone(),
+            incarnation.clone(),
+            1,
+            1,
+            client.clone(),
+            target_id,
+            TargetGeometry {
+                css_width: 1280.0, css_height: 900.0, offset_top: 0.0, scroll_x: 0.0, scroll_y: 0.0,
+                page_scale: 1.0, visual_offset_x: 0.0, visual_offset_y: 0.0, dpr: 1.0,
+            },
+        ));
+        let page_sid = producer.ensure_page_session().await.expect("page session");
+        get_or_register_producer(&session_id, producer.clone()).await;
+        client
+            .send_command("Emulation.setFocusEmulationEnabled", Some(json!({"enabled": true})), Some(&page_sid))
+            .await
+            .expect("focus emulation");
+        client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({ "expression": "window.__ev=[];document.body.style.margin='0';\
+                    document.body.style.minHeight='100vh';\
+                    for (const t of ['keydown','keyup','mousedown','mouseup']) {\
+                      window.addEventListener(t, e => window.__ev.push(t.startsWith('key') ? t+':'+e.code+':'+e.key : t+':'+e.button), true);\
+                    }" })),
+                Some(&page_sid),
+            )
+            .await
+            .expect("install DOM oracle");
+        Some(LiveInput {
+            _tmp: tmp,
+            process,
+            client,
+            page_sid,
+            producer,
+            session_id,
+            incarnation,
+            addr,
+            http: reqwest::Client::new(),
+        })
+    }
+
+    impl LiveInput {
+        pub async fn finish(mut self) {
+            let _ = self.process.terminate().await;
+        }
+
+        pub async fn rest(&self, method: &str, path: &str, body: Value) -> (u16, Value) {
+            let url = format!("http://{}{path}", self.addr);
+            let req = match method {
+                "DELETE" => self.http.delete(url),
+                _ => self.http.post(url).header("content-type", "application/json").body(body.to_string()),
+            };
+            let resp = req.send().await.expect("rest request");
+            let status = resp.status().as_u16();
+            let bytes = resp.bytes().await.unwrap();
+            (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+        }
+
+        pub async fn acquire(&self, viewer: &str) -> String {
+            let path = format!("/api/browser/sessions/{}/control/acquire", self.session_id);
+            let (status, body) =
+                self.rest("POST", &path, json!({ "viewerId": viewer, "holderKind": "human" })).await;
+            assert_eq!(status, 200, "{body}");
+            body["leaseToken"].as_str().unwrap().to_string()
+        }
+
+        pub async fn release(&self, token: &str) -> (u16, Value) {
+            let path = format!("/api/browser/sessions/{}/control/release", self.session_id);
+            self.rest("POST", &path, json!({ "leaseToken": token })).await
+        }
+
+        pub async fn ticket(&self, purpose: &str, viewer: &str, sub: &str) -> (u16, Value) {
+            self.rest(
+                "POST",
+                "/api/browser/attachments",
+                json!({
+                    "purpose": purpose,
+                    "browserSessionId": self.session_id,
+                    "viewerId": viewer,
+                    "subscriptionEpoch": sub,
+                    "browserIncarnation": self.incarnation,
+                    "profileEpoch": "1",
+                }),
+            )
+            .await
+        }
+
+        /// Upgrade attempt: `Ok(socket)` or the HTTP status of the refused upgrade.
+        pub async fn try_connect(&self, kind: &str, viewer: &str, sub: &str) -> Result<Ws, u16> {
+            let (status, body) = self.ticket(kind, viewer, sub).await;
+            assert_eq!(status, 200, "ticket issue: {body}");
+            let ticket = body["ticket"].as_str().unwrap().to_string();
+            let mut req = format!("ws://{}/api/browser/{kind}", self.addr).into_client_request().unwrap();
+            req.headers_mut().insert(
+                "Sec-WebSocket-Protocol",
+                format!("damhopper.browser.{kind}.v1, damhopper.ticket.{ticket}").parse().unwrap(),
+            );
+            match tokio_tungstenite::connect_async(req).await {
+                Ok((ws, _)) => Ok(ws),
+                Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => Err(resp.status().as_u16()),
+                Err(other) => panic!("ws connect failed: {other}"),
+            }
+        }
+
+        pub async fn connect(&self, kind: &str, viewer: &str, sub: &str) -> Ws {
+            self.try_connect(kind, viewer, sub).await.expect("ws upgrade")
+        }
+
+        /// Media then control for one viewer subscription; the control socket's first status
+        /// frame is consumed so the pair is established when this returns.
+        pub async fn pair(&self, viewer: &str, sub: &str) -> (Ws, Ws) {
+            let media = self.connect("media", viewer, sub).await;
+            let mut control = self.connect("control", viewer, sub).await;
+            next_text(&mut control).await;
+            (media, control)
+        }
+
+        pub fn input(&self, token: &str, sub: &str, seq: u64, event: Value) -> Message {
+            Message::Text(
+                json!({
+                    "browserSessionId": self.session_id,
+                    "browserIncarnation": self.incarnation,
+                    "profileEpoch": "1",
+                    "subscriptionEpoch": sub,
+                    "leaseToken": token,
+                    "inputSeq": seq.to_string(),
+                    "viewportEpoch": "1",
+                    "event": event,
+                })
+                .to_string()
+                .into(),
+            )
+        }
+
+        pub async fn dom_events(&self) -> Vec<String> {
+            let value = self
+                .client
+                .send_command(
+                    "Runtime.evaluate",
+                    Some(json!({ "expression": "JSON.stringify(window.__ev)", "returnByValue": true })),
+                    Some(&self.page_sid),
+                )
+                .await
+                .expect("read DOM oracle");
+            serde_json::from_str(value["result"]["value"].as_str().unwrap()).unwrap()
+        }
+
+        pub async fn wait_dom(&self, what: &str, pred: impl Fn(&[String]) -> bool) -> Vec<String> {
+            let mut last = Vec::new();
+            for _ in 0..100 {
+                last = self.dom_events().await;
+                if pred(&last) {
+                    return last;
+                }
+                sleep(Duration::from_millis(50)).await;
+            }
+            panic!("DOM oracle never observed {what}: {last:?}");
+        }
+    }
+
+    pub async fn next_text(ws: &mut Ws) -> String {
+        loop {
+            match timeout(Duration::from_secs(5), ws.next()).await.expect("ws message") {
+                Some(Ok(Message::Text(text))) => return text.to_string(),
+                Some(Ok(_)) => continue,
+                other => panic!("control socket ended: {other:?}"),
+            }
+        }
+    }
+
+    pub async fn send(ws: &mut Ws, msg: Message) {
+        ws.send(msg).await.expect("ws send");
+    }
+
+    pub fn key_down() -> Value {
+        json!({ "kind": "keyDown", "key": "a", "code": "KeyA", "modifiers": 0 })
+    }
+    pub fn pointer_down() -> Value {
+        json!({ "kind": "pointerDown", "button": "left", "u": 0.5, "v": 0.5, "modifiers": 0 })
+    }
+    pub fn held(events: &[String]) -> bool {
+        events.iter().any(|e| e == "keydown:KeyA:a") && events.iter().any(|e| e == "mousedown:0")
+    }
+    pub fn released(events: &[String]) -> bool {
+        events.iter().any(|e| e == "keyup:KeyA:a") && events.iter().any(|e| e == "mouseup:0")
+    }
+
+    /// Holds key `a` and the left button through the control socket until the DOM saw both.
+    pub async fn hold_key_and_button(live: &LiveInput, control: &mut Ws, token: &str, sub: &str) {
+        send(control, live.input(token, sub, 1, key_down())).await;
+        send(control, live.input(token, sub, 2, pointer_down())).await;
+        live.wait_dom("native keydown+mousedown", held).await;
+    }
+
+    #[tokio::test]
+    async fn real_rest_release_emits_native_keyup_and_mouseup() {
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let Some(live) = start(None).await else { return };
+        let token = live.acquire("viewer-1").await;
+        let (_media, mut control) = live.pair("viewer-1", "sub-rest").await;
+        hold_key_and_button(&live, &mut control, &token, "sub-rest").await;
+
+        let (status, body) = live.release(&token).await;
+        assert_eq!((status, &body["status"]), (200, &json!("released")), "{body}");
+        live.wait_dom("native keyup+mouseup after REST release", released).await;
+        live.finish().await;
+    }
+
+    #[tokio::test]
+    async fn admitted_old_epoch_pointer_is_not_dispatched_after_geometry_fence() {
+        use dam_hopper_server::browser_host::control_input::{
+            handle_control_text, ControlInputContext, ControlInputOutcome,
+        };
+
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let Some(live) = start(None).await else { return };
+        let token = live.acquire("viewer-1").await;
+        let manager = get_or_create_input_manager(&live.session_id).await;
+        manager.set_expected_viewport_epoch(1).await;
+        let ctx = ControlInputContext {
+            input_manager: &manager,
+            session_id: &live.session_id,
+            viewer_id: "viewer-1",
+            subscription_epoch: "sub-race",
+            paired: true,
+        };
+        let text = |seq, event| match live.input(&token, "sub-race", seq, event) {
+            Message::Text(text) => text.to_string(),
+            _ => unreachable!(),
+        };
+
+        // Prove that this production handler and the DOM oracle can deliver native input.
+        assert!(live.producer.input_geometry_trusted());
+        let baseline = text(1, pointer_down());
+        assert!(matches!(handle_control_text(&ctx, &baseline).await, ControlInputOutcome::Continue));
+        live.wait_dom("baseline native mousedown", |events| events.iter().any(|e| e == "mousedown:0")).await;
+        let baseline_up = text(2, json!({
+            "kind": "pointerUp", "button": "left", "u": 0.5, "v": 0.5, "modifiers": 0
+        }));
+        assert!(matches!(handle_control_text(&ctx, &baseline_up).await, ControlInputOutcome::Continue));
+        live.wait_dom("baseline native mouseup", |events| events.iter().any(|e| e == "mouseup:0")).await;
+
+        // Hold the dispatch gate, queue the real geometry fence first, then drive the input
+        // handler until it also waits on the gate. Polling these futures directly keeps their
+        // ordering deterministic; unconstrained polling avoids Tokio's cooperative yield.
+        let gate = manager.begin_dispatch(&token).await.expect("lease live");
+        let registry_guard = dam_hopper_server::api::browser_host::global_input_managers().write().await;
+        drop(registry_guard);
+        let mut fence = Box::pin(tokio::task::unconstrained(live.producer.begin_external_geometry_fence()));
+        assert!(futures_util::poll!(fence.as_mut()).is_pending());
+
+        let stale = text(3, pointer_down());
+        let mut dispatch = Box::pin(tokio::task::unconstrained(handle_control_text(&ctx, &stale)));
+        assert!(futures_util::poll!(dispatch.as_mut()).is_pending());
+
+        // A duplicate proves sequence 3 passed admission; an empty queue proves the handler
+        // already popped it and is waiting for dispatch, not merely waiting for admission.
+        let admitted: InputMessage = serde_json::from_str(&stale).unwrap();
+        assert_eq!(manager.enqueue_input_for_viewer("viewer-1", admitted).await.unwrap(), None);
+        assert!(manager.pop_next_input().await.is_none());
+
+        drop(gate);
+        timeout(Duration::from_secs(5), fence.as_mut()).await.expect("geometry fence");
+        assert!(!live.producer.input_geometry_trusted());
+        live.producer.commit_external_geometry_fence(2, None).await;
+        assert_eq!(live.producer.viewport_epoch(), 2);
+        assert!(matches!(
+            timeout(Duration::from_secs(5), dispatch.as_mut()).await.expect("input dispatch"),
+            ControlInputOutcome::Continue
+        ));
+        drop(dispatch);
+        drop(fence);
+        let events = live.dom_events().await;
+        assert_eq!(events.iter().filter(|e| *e == "mousedown:0").count(), 1, "stale pointer reached Chromium: {events:?}");
+        live.finish().await;
+    }
+
+    #[tokio::test]
+    async fn real_pointer_cancel_releases_the_native_button() {
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let Some(live) = start(None).await else { return };
+        let token = live.acquire("viewer-1").await;
+        let (_media, mut control) = live.pair("viewer-1", "sub-cancel").await;
+        hold_key_and_button(&live, &mut control, &token, "sub-cancel").await;
+
+        send(&mut control, live.input(&token, "sub-cancel", 3, json!({ "kind": "pointerCancel" }))).await;
+        live.wait_dom("native mouseup after pointerCancel", |e| e.iter().any(|x| x == "mouseup:0")).await;
+        live.finish().await;
+    }
+
+    #[tokio::test]
+    async fn real_sequence_gap_releases_native_key_and_button() {
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let Some(live) = start(None).await else { return };
+        let token = live.acquire("viewer-1").await;
+        let (_media, mut control) = live.pair("viewer-1", "sub-gap").await;
+        hold_key_and_button(&live, &mut control, &token, "sub-gap").await;
+
+        send(&mut control, live.input(&token, "sub-gap", 9, json!({ "kind": "pointerMove", "u": 0.1, "v": 0.1, "modifiers": 0 }))).await;
+        live.wait_dom("native keyup+mouseup after sequence gap", released).await;
+        live.finish().await;
+    }
+
+    #[tokio::test]
+    async fn real_control_disconnect_releases_native_key_and_button() {
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let Some(live) = start(None).await else { return };
+        let token = live.acquire("viewer-1").await;
+        let (_media, mut control) = live.pair("viewer-1", "sub-disc").await;
+        hold_key_and_button(&live, &mut control, &token, "sub-disc").await;
+
+        drop(control);
+        live.wait_dom("native keyup+mouseup after control disconnect", released).await;
+        live.finish().await;
+    }
+
+    #[tokio::test]
+    async fn real_session_delete_releases_native_key_and_button() {
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let Some(live) = start(None).await else { return };
+        let token = live.acquire("viewer-1").await;
+        let (_media, mut control) = live.pair("viewer-1", "sub-del").await;
+        hold_key_and_button(&live, &mut control, &token, "sub-del").await;
+
+        let path = format!("/api/browser/sessions/{}", live.session_id);
+        let _ = live.rest("DELETE", &path, Value::Null).await;
+        live.wait_dom("native keyup+mouseup after session delete", released).await;
+        live.finish().await;
+    }
+
+    #[tokio::test]
+    async fn real_lease_expiry_releases_without_further_traffic() {
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let Some(live) = start(Some(Duration::from_millis(1500))).await else { return };
+        let token = live.acquire("viewer-1").await;
+        let (_media, mut control) = live.pair("viewer-1", "sub-exp").await;
+        hold_key_and_button(&live, &mut control, &token, "sub-exp").await;
+
+        // No further message, renewal or REST call: only the lease's own timer can release.
+        live.wait_dom("native keyup+mouseup after active lease expiry", released).await;
+        live.finish().await;
+    }
+
+    #[tokio::test]
+    async fn real_foreign_viewer_cannot_use_another_viewers_lease() {
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let Some(live) = start(None).await else { return };
+        let token_a = live.acquire("viewer-a").await;
+        let (_media_a, mut control_a) = live.pair("viewer-a", "sub-a").await;
+        let (_media_b, mut control_b) = live.pair("viewer-b", "sub-b").await;
+
+        // Viewer B's authenticated socket presents viewer A's (valid) lease token.
+        send(&mut control_b, live.input(&token_a, "sub-b", 1, json!({ "kind": "keyDown", "key": "x", "code": "KeyX", "modifiers": 0 }))).await;
+        // Viewer A's own socket is still served, and arrives strictly after B's rejected message.
+        send(&mut control_a, live.input(&token_a, "sub-a", 1, key_down())).await;
+        let events = live.wait_dom("viewer A's own keydown", |e| e.iter().any(|x| x == "keydown:KeyA:a")).await;
+        assert!(!events.iter().any(|e| e.contains("KeyX")), "foreign viewer reached native input: {events:?}");
+        live.finish().await;
+    }
+
+    #[tokio::test]
+    async fn real_unpaired_control_never_dispatches_native_input_until_media_joins() {
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let Some(live) = start(None).await else { return };
+        let token = live.acquire("viewer-1").await;
+        let mut control = live.connect("control", "viewer-1", "sub-solo").await;
+        let first = next_text(&mut control).await;
+        assert!(first.contains("\"inputAvailable\":false"), "unpaired control must not advertise input: {first}");
+
+        send(&mut control, live.input(&token, "sub-solo", 1, key_down())).await;
+        sleep(Duration::from_millis(600)).await;
+        assert!(live.dom_events().await.is_empty(), "unpaired control reached native input");
+
+        // Media joins the pair: the same control socket is now served and told so.
+        let _media = live.connect("media", "viewer-1", "sub-solo").await;
+        let update = next_text(&mut control).await;
+        assert!(update.contains("\"inputAvailable\":true"), "paired control must advertise input: {update}");
+        send(&mut control, live.input(&token, "sub-solo", 1, key_down())).await;
+        live.wait_dom("keydown once paired", |e| e.iter().any(|x| x == "keydown:KeyA:a")).await;
+        live.finish().await;
+    }
+
+    /// Queue overflow is unreachable through the socket (each frame is drained as it arrives),
+    /// so the manager is driven directly on the real native page identity. Revoke is the
+    /// auth-cancel / authority-loss path.
+    #[tokio::test]
+    async fn real_queue_overflow_and_revoke_release_native_key_and_button() {
+        use dam_hopper_server::browser_host::input_native_release::NativeInputTarget;
+
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        let Some(live) = start(None).await else { return };
+        let manager = get_or_create_input_manager(&live.session_id).await;
+        let target = NativeInputTarget {
+            client: live.client.clone(),
+            page_session_id: live.page_sid.clone(),
+            geometry: live.producer.geometry().await,
+        };
+        for scenario in ["overflow", "revoke"] {
+            let (token, _) = manager.acquire_lease("viewer-1", "human").await.unwrap();
+            manager.capture_native_target(target.clone()).await;
+            let msg = |seq: u64, event: InputEvent| InputMessage {
+                browser_session_id: live.session_id.clone(),
+                browser_incarnation: live.incarnation.clone(),
+                profile_epoch: 1,
+                subscription_epoch: "sub".to_string(),
+                lease_token: token.clone(),
+                input_seq: seq,
+                viewport_epoch: 1,
+                event,
+            };
+            let down = [
+                InputEvent::KeyDown { key: "a".into(), code: "KeyA".into(), modifiers: 0 },
+                InputEvent::PointerDown { button: MouseButton::Left, u: 0.5, v: 0.5, modifiers: 0 },
+            ];
+            for (index, event) in down.into_iter().enumerate() {
+                manager.enqueue_input(msg(index as u64 + 1, event.clone())).await.unwrap();
+                let gate = manager.begin_dispatch(&token).await.expect("lease live");
+                target.dispatch(&event).await.expect("native press");
+                drop(gate);
+            }
+            live.wait_dom("native keydown+mousedown", held).await;
+
+            if scenario == "overflow" {
+                // Nothing pops the queue, so reliable records fill until overflow ends the lease.
+                let mut overflowed = false;
+                for seq in 3..(3 + MAX_RELIABLE_RECORDS as u64 + 8) {
+                    match manager.enqueue_input(msg(seq, InputEvent::InsertText { text: "x".into() })).await {
+                        Err(InputError::QueueOverflow) => {
+                            overflowed = true;
+                            break;
+                        }
+                        other => {
+                            other.unwrap();
+                        }
+                    }
+                }
+                assert!(overflowed, "queue never overflowed");
+            } else {
+                manager.revoke_lease().await.expect("revoke releases natively");
+            }
+            live.wait_dom(&format!("native keyup+mouseup after {scenario}"), released).await;
+            live.client
+                .send_command(
+                    "Runtime.evaluate",
+                    Some(json!({ "expression": "window.__ev.length=0" })),
+                    Some(&live.page_sid),
+                )
+                .await
+                .unwrap();
+        }
+        live.finish().await;
+    }
+}
+
+/// Release semantics against a mock CDP browser: exact captured key/code/button/position on the
+/// original native identity for every termination path, and injected dispatch failure.
+mod native_release {
+    use super::*;
+    use dam_hopper_server::browser_host::cdp::CdpClient;
+    use dam_hopper_server::browser_host::input::SessionInputManager;
+    use dam_hopper_server::browser_host::input_native_release::NativeInputTarget;
+    use futures_util::{SinkExt, StreamExt};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+    use tokio_tungstenite::tungstenite::Message;
+
+    struct MockNative {
+        target: NativeInputTarget,
+        commands: Arc<Mutex<Vec<Value>>>,
+        fail_input: Arc<AtomicBool>,
+    }
+
+    /// Mock CDP: records every command; `Input.*` fails while `fail_input` is set.
+    async fn mock_native() -> MockNative {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let fail_input = Arc::new(AtomicBool::new(false));
+        let (log, fail) = (commands.clone(), fail_input.clone());
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else { return };
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                let cmd: Value = serde_json::from_str(&text).unwrap();
+                log.lock().push(cmd.clone());
+                let method = cmd["method"].as_str().unwrap_or_default();
+                let reply = if method.starts_with("Input.") && fail.load(Ordering::SeqCst) {
+                    json!({"id": cmd["id"], "error": {"code": -32000, "message": "injected dispatch failure"}})
+                } else {
+                    json!({"id": cmd["id"], "result": {}})
+                };
+                if ws.send(Message::Text(reply.to_string().into())).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let client = CdpClient::connect(&format!("ws://{addr}")).await.expect("mock cdp");
+        MockNative {
+            target: NativeInputTarget {
+                client,
+                page_session_id: "ORIGINAL-PAGE-SESSION".to_string(),
+                geometry: TargetGeometry {
+                    css_width: 1000.0, css_height: 800.0, offset_top: 0.0, scroll_x: 0.0,
+                    scroll_y: 0.0, page_scale: 1.0, visual_offset_x: 0.0, visual_offset_y: 0.0,
+                    dpr: 1.0,
+                },
+            },
+            commands,
+            fail_input,
+        }
+    }
+
+    fn input(token: &str, seq: u64, event: InputEvent) -> InputMessage {
+        InputMessage {
+            browser_session_id: "s".into(),
+            browser_incarnation: "i".into(),
+            profile_epoch: 1,
+            subscription_epoch: "sub".into(),
+            lease_token: token.into(),
+            input_seq: seq,
+            viewport_epoch: 1,
+            event,
+        }
+    }
+
+    /// Holds key `a`/`KeyA` and the left button (pointer last at 0.25, 0.75) on `native`.
+    async fn hold(manager: &SessionInputManager, native: &MockNative, token: &str) {
+        manager.capture_native_target(native.target.clone()).await;
+        for (seq, event) in [
+            (1, InputEvent::KeyDown { key: "a".into(), code: "KeyA".into(), modifiers: 0 }),
+            (2, InputEvent::PointerDown { button: MouseButton::Left, u: 0.1, v: 0.1, modifiers: 0 }),
+            (3, InputEvent::PointerMove { u: 0.25, v: 0.75, modifiers: 0 }),
+        ] {
+            manager.enqueue_input(input(token, seq, event)).await.unwrap();
+        }
+        manager.drain_inputs().await;
+    }
+
+    fn input_commands(native: &MockNative) -> Vec<Value> {
+        native.commands.lock().iter().filter(|c| c["method"].as_str().is_some_and(|m| m.starts_with("Input."))).cloned().collect()
+    }
+
+    fn assert_released_exactly(native: &MockNative, what: &str) {
+        let commands = input_commands(native);
+        let key_up = commands.iter().find(|c| c["method"] == "Input.dispatchKeyEvent").unwrap_or_else(|| panic!("{what}: no keyUp: {commands:?}"));
+        assert_eq!((&key_up["params"]["type"], &key_up["params"]["key"], &key_up["params"]["code"]), (&json!("keyUp"), &json!("a"), &json!("KeyA")), "{what}: {key_up}");
+        assert_eq!(key_up["sessionId"], "ORIGINAL-PAGE-SESSION", "{what}: original native identity");
+        let mouse_up = commands.iter().find(|c| c["method"] == "Input.dispatchMouseEvent").unwrap_or_else(|| panic!("{what}: no mouseUp: {commands:?}"));
+        assert_eq!((&mouse_up["params"]["type"], &mouse_up["params"]["button"]), (&json!("mouseReleased"), &json!("left")), "{what}: {mouse_up}");
+        assert_eq!((mouse_up["params"]["x"].as_f64(), mouse_up["params"]["y"].as_f64()), (Some(250.0), Some(600.0)), "{what}: released where the pointer was");
+        assert_eq!(mouse_up["sessionId"], "ORIGINAL-PAGE-SESSION");
+    }
+
+    #[tokio::test]
+    async fn every_termination_path_releases_on_the_captured_identity() {
+        for path in ["release", "revoke", "holder", "gap", "overflow", "expiry"] {
+            let native = mock_native().await;
+            let ttl = if path == "expiry" { Duration::from_millis(250) } else { Duration::from_secs(30) };
+            let manager = SessionInputManager::with_lease_ttl(ttl);
+            let (token, _) = manager.acquire_lease("viewer-1", "human").await.unwrap();
+            hold(&manager, &native, &token).await;
+            assert!(input_commands(&native).is_empty(), "{path}: nothing released while the lease is live");
+            match path {
+                "release" => manager.release_lease(&token).await.unwrap(),
+                "revoke" => manager.revoke_lease().await.unwrap(),
+                "holder" => manager.revoke_lease_if_holder("viewer-1").await.unwrap(),
+                "gap" => {
+                    let err = manager.enqueue_input(input(&token, 9, InputEvent::PointerCancel)).await.unwrap_err();
+                    assert!(matches!(err, InputError::SequenceGap { .. }), "{err:?}");
+                }
+                "overflow" => {
+                    let mut overflowed = false;
+                    for seq in 4..(4 + MAX_RELIABLE_RECORDS as u64 + 8) {
+                        if let Err(err) = manager.enqueue_input(input(&token, seq, InputEvent::InsertText { text: "x".into() })).await {
+                            assert_eq!(err, InputError::QueueOverflow);
+                            overflowed = true;
+                            break;
+                        }
+                    }
+                    assert!(overflowed);
+                }
+                _ => {
+                    tokio::time::sleep(Duration::from_millis(350)).await;
+                    manager.expire_if_due().await.unwrap();
+                }
+            }
+            assert_released_exactly(&native, path);
+            assert!(manager.release_failure().await.is_none(), "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn pointer_cancel_releases_only_the_held_buttons() {
+        let native = mock_native().await;
+        let manager = SessionInputManager::new();
+        let (token, _) = manager.acquire_lease("viewer-1", "human").await.unwrap();
+        hold(&manager, &native, &token).await;
+        manager.release_pointer_buttons().await.unwrap();
+        let commands = input_commands(&native);
+        assert_eq!(commands.len(), 1, "{commands:?}");
+        assert_eq!(commands[0]["params"]["type"], "mouseReleased");
+        // The key is still tracked and released with the lease.
+        manager.release_lease(&token).await.unwrap();
+        assert_released_exactly(&native, "cancel then release");
+    }
+
+    #[tokio::test]
+    async fn lease_cannot_be_used_by_a_foreign_viewer() {
+        let manager = SessionInputManager::new();
+        let (token, _) = manager.acquire_lease("viewer-a", "human").await.unwrap();
+        let msg = input(&token, 1, InputEvent::KeyDown { key: "a".into(), code: "KeyA".into(), modifiers: 0 });
+        assert_eq!(manager.enqueue_input_for_viewer("viewer-b", msg.clone()).await.unwrap_err(), InputError::NotLeaseHolder);
+        assert!(manager.drain_inputs().await.is_empty(), "foreign viewer enqueued input");
+        assert!(manager.enqueue_input_for_viewer("viewer-a", msg).await.unwrap().is_some());
+        assert!(manager.is_lease_holder("viewer-a").await, "a rejected foreign viewer must not revoke the lease");
+    }
+
+    #[tokio::test]
+    async fn failed_release_is_unavailable_not_released_and_recovers_on_retry() {
+        let _serial = SERIAL_TEST_LOCK.lock().await;
+        global_session_registry().reset_for_test().await;
+        let tmp = tempdir().unwrap();
+        let (auth_service, token) = make_user_token("release-failure-user", UserRole::Admin, true);
+        let state = create_test_state(tmp.path().to_path_buf(), false).with_auth_service(Arc::new(auth_service));
+        let app = build_router_with_origins(state, vec![]);
+        let (dto, _) = global_session_registry()
+            .insert_running_for_test(
+                "release-failure-user", false, "inc-1", 1,
+                &CreateSessionRequest {
+                    creation_key: uuid::Uuid::new_v4().to_string(),
+                    url: "about:blank".to_string(),
+                    viewport: ViewportRequest { width: 1280, height: 900, dpr: 1.0 },
+                },
+                &[],
+            )
+            .await
+            .unwrap();
+        let session_id = dto.browser_session_id;
+        let manager = get_or_create_input_manager(&session_id).await;
+        let (lease, _) = manager.acquire_lease("viewer-1", "human").await.unwrap();
+        let native = mock_native().await;
+        hold(&manager, &native, &lease).await;
+
+        native.fail_input.store(true, Ordering::SeqCst);
+        let uri = format!("/api/browser/sessions/{session_id}/control/release");
+        let (status, body) = send_json(&app, "POST", &uri, &token, json!({ "leaseToken": lease })).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "failed release must not be reported as released: {body}");
+        assert_ne!(body["status"], "released");
+        assert!(manager.release_failure().await.is_some(), "input must be marked unavailable");
+
+        // A new lease is refused while native input is still held ...
+        let acquire = format!("/api/browser/sessions/{session_id}/control/acquire");
+        let (status, _) = send_json(&app, "POST", &acquire, &token, json!({ "viewerId": "viewer-2", "holderKind": "human" })).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+
+        // ... and the retry succeeds once the browser accepts the releases.
+        native.fail_input.store(false, Ordering::SeqCst);
+        let (status, _) = send_json(&app, "POST", &acquire, &token, json!({ "viewerId": "viewer-2", "holderKind": "human" })).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(manager.release_failure().await.is_none());
+        let key_ups = input_commands(&native).iter().filter(|c| c["params"]["type"] == "keyUp").count();
+        assert!(key_ups >= 1, "retry released the key");
+    }
 }

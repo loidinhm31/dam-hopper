@@ -23,6 +23,9 @@ use super::protocol::{
     MAX_WRITER_QUEUE_MESSAGES, MAX_WS_MESSAGE_BYTES,
 };
 
+/// Per-frame bookkeeping (metadata object, ids) charged on top of the base64 payload.
+const SCREENCAST_FRAME_OVERHEAD_BYTES: usize = 1024;
+
 /// Metadata members Chromium always sends with `Page.screencastFrame`; geometry consumers rely
 /// on them being finite numbers.
 const SCREENCAST_METADATA_NUMBERS: [&str; 6] = [
@@ -66,6 +69,28 @@ pub enum CdpError {
     Protocol { code: i64, message: String },
     Deserialization(String),
     Transport(String),
+}
+
+impl CdpError {
+    /// Whether the command may have reached the browser and executed. `false` only when the
+    /// browser state is KNOWN unchanged: errors raised before anything was written (admission and
+    /// size limits) and a browser-side rejection. Everything else (timeout, lost or failing
+    /// transport, unreadable answer, serialization of the command or response) is ambiguous.
+    /// Exhaustive on purpose: a new variant must be classified here.
+    pub fn outcome_is_ambiguous(&self) -> bool {
+        match self {
+            Self::TooManyPendingCommands { .. }
+            | Self::WriterQueueFull { .. }
+            | Self::CommandTooLarge { .. }
+            | Self::Protocol { .. } => false,
+            Self::CommandTimeout
+            | Self::MessageTooLarge { .. }
+            | Self::ConnectionClosed
+            | Self::MalformedResponse(_)
+            | Self::Deserialization(_)
+            | Self::Transport(_) => true,
+        }
+    }
 }
 
 impl fmt::Display for CdpError {
@@ -141,6 +166,10 @@ struct CdpErrorWire {
     message: String,
 }
 
+/// One `Page.screencastFrame`. The base64 payload is charged to the global payload budget for as
+/// long as any clone of this `Arc` lives (broadcast slot, receiver, encoded candidate), so the
+/// producer shares it instead of copying. A frame the budget could not admit keeps its identity
+/// (the native ACK must still be sent) but carries no payload and `memory_admitted == false`.
 #[derive(Debug)]
 pub struct ScreencastFrameData {
     pub session_id: String,
@@ -150,6 +179,8 @@ pub struct ScreencastFrameData {
     pub native_capture_time_unix_ms: Option<u64>,
     pub received_at: std::time::Instant,
     pub server_received_unix_ms: u64,
+    pub memory_admitted: bool,
+    _reservation: Option<MemoryReservation>,
 }
 
 /// Extracts and validates optional CDP `Page.ScreencastFrameMetadata.timestamp` (seconds since Unix
@@ -449,10 +480,117 @@ impl io::Write for BudgetedWriter<'_> {
     }
 }
 
-pub struct CdpClient {
-    next_call_id: AtomicU64,
+/// Writer side of one connection actor. Replaced wholesale when the connection is re-established.
+#[derive(Clone)]
+struct ActorLink {
     command_tx: mpsc::Sender<ActorMessage>,
     close_notify: Arc<Notify>,
+    /// Sender lives in a monitor until the actor task and its transport have been dropped.
+    transport_closed: tokio::sync::watch::Receiver<()>,
+}
+
+/// State that outlives a connection: every actor generation publishes into the same event
+/// channels, so existing subscribers keep receiving after a reconnect.
+#[derive(Clone)]
+struct ActorShared {
+    screencast_tx: tokio::sync::broadcast::Sender<Arc<ScreencastFrameData>>,
+    event_tx: tokio::sync::broadcast::Sender<Arc<CdpLifecycleEvent>>,
+    target_tx: tokio::sync::broadcast::Sender<Arc<CdpTargetEvent>>,
+    memory_controller: Arc<MemoryAdmissionController>,
+    stats: Arc<CdpActorStats>,
+    request_policy: SharedRequestPolicy,
+    nav_listeners: SharedNavListeners,
+}
+
+impl ActorShared {
+    /// Spawns one connection actor over `ws_stream` and returns its writer side.
+    fn spawn_actor<S>(&self, ws_stream: S) -> ActorLink
+    where
+        S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+            + SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error>
+            + Send
+            + Unpin
+            + 'static,
+    {
+        let (command_tx, command_rx) = mpsc::channel(MAX_WRITER_QUEUE_MESSAGES);
+        let close_notify = Arc::new(Notify::new());
+        let actor = CdpActor {
+            ws_stream,
+            command_rx,
+            close_notify: close_notify.clone(),
+            screencast_tx: self.screencast_tx.clone(),
+            event_tx: self.event_tx.clone(),
+            target_tx: self.target_tx.clone(),
+            memory_controller: self.memory_controller.clone(),
+            pending_commands: HashMap::with_capacity(MAX_PENDING_COMMANDS),
+            stats: self.stats.clone(),
+            request_policy: self.request_policy.clone(),
+            policy_write: None,
+            next_policy_id: FIRST_POLICY_COMMAND_ID,
+            nav_listeners: self.nav_listeners.clone(),
+        };
+        let actor_task = tokio::spawn(actor.run());
+        let (transport_alive, transport_closed) = tokio::sync::watch::channel(());
+        tokio::spawn(async move {
+            let _ = actor_task.await;
+            drop(transport_alive);
+        });
+        ActorLink {
+            command_tx,
+            close_notify,
+            transport_closed,
+        }
+    }
+}
+
+/// A command that is already queued for the actor writer; awaiting it only waits for the response.
+pub struct PendingCommand {
+    receiver: oneshot::Receiver<Result<Value, CdpError>>,
+    deadline: Instant,
+}
+
+impl PendingCommand {
+    /// Waits for the response, the command deadline, or actor loss.
+    pub async fn wait(self) -> Result<Value, CdpError> {
+        tokio::select! {
+            res = self.receiver => {
+                match res {
+                    Ok(result) => result,
+                    Err(_) => Err(CdpError::ConnectionClosed),
+                }
+            }
+            _ = tokio::time::sleep_until(self.deadline) => {
+                Err(CdpError::CommandTimeout)
+            }
+        }
+    }
+}
+
+/// One `Page.screencastFrameAck` that was admitted to the actor queue. Created synchronously, so
+/// the single ACK attempt for a frame never depends on the response of an earlier command.
+pub struct PendingAck {
+    command: PendingCommand,
+    stats: Arc<CdpActorStats>,
+}
+
+impl PendingAck {
+    /// Resolves once Chromium answered the ACK; any error leaves the ACK outcome ambiguous.
+    pub async fn wait(self) -> Result<(), CdpError> {
+        self.command.wait().await?;
+        self.stats
+            .screencast_frames_acked
+            .fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+pub struct CdpClient {
+    next_call_id: AtomicU64,
+    link: std::sync::RwLock<ActorLink>,
+    /// Browser endpoint this client dialed; `None` for clients wrapped around a caller transport.
+    endpoint: Option<String>,
+    /// Serializes reconnects so exactly one new actor replaces a dead one.
+    reconnect_gate: tokio::sync::Mutex<()>,
     budget: Arc<CommandBudget>,
     screencast_rx_broadcast: tokio::sync::broadcast::Sender<Arc<ScreencastFrameData>>,
     event_rx_broadcast: tokio::sync::broadcast::Sender<Arc<CdpLifecycleEvent>>,
@@ -467,19 +605,32 @@ pub struct CdpClient {
 impl CdpClient {
     /// Connect to a CDP WebSocket endpoint with bounded buffers and actor loops.
     pub async fn connect(ws_url: &str) -> Result<Arc<Self>, CdpError> {
+        let ws_stream = Self::dial(ws_url).await?;
+        Ok(Self::build(
+            ws_stream,
+            global_memory_controller().clone(),
+            Some(ws_url.to_string()),
+        ))
+    }
+
+    async fn dial(
+        ws_url: &str,
+    ) -> Result<
+        tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        CdpError,
+    > {
         let mut config = WebSocketConfig::default();
         config.max_message_size = Some(MAX_WS_MESSAGE_BYTES);
         config.max_frame_size = Some(MAX_WS_MESSAGE_BYTES);
-
         let (ws_stream, _) =
             tokio_tungstenite::connect_async_with_config(ws_url, Some(config), false)
                 .await
                 .map_err(|e| CdpError::Transport(e.to_string()))?;
-
-        Ok(Self::from_ws_stream(ws_stream))
+        Ok(ws_stream)
     }
 
     /// Construct a CdpClient from an existing WebSocketStream (allows unit testing with loopback).
+    /// Such a client cannot [`reconnect`](Self::reconnect): it does not know an endpoint.
     pub fn from_ws_stream<S>(ws_stream: S) -> Arc<Self>
     where
         S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
@@ -503,37 +654,49 @@ impl CdpClient {
             + Unpin
             + 'static,
     {
-        let (command_tx, command_rx) = mpsc::channel(MAX_WRITER_QUEUE_MESSAGES);
+        Self::build(ws_stream, memory_controller, None)
+    }
+
+    fn build<S>(
+        ws_stream: S,
+        memory_controller: Arc<MemoryAdmissionController>,
+        endpoint: Option<String>,
+    ) -> Arc<Self>
+    where
+        S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+            + SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error>
+            + Send
+            + Unpin
+            + 'static,
+    {
         let (screencast_tx, _) = tokio::sync::broadcast::channel(2);
         let (event_tx, _) = tokio::sync::broadcast::channel(MAX_LIFECYCLE_EVENT_SLOTS);
         let request_policy = Arc::new(std::sync::RwLock::new(None));
         let (target_tx, _) = tokio::sync::broadcast::channel(MAX_TARGET_EVENT_SLOTS);
         let stats = Arc::new(CdpActorStats::default());
-        let close_notify = Arc::new(Notify::new());
         let nav_listeners: SharedNavListeners = Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        let actor = CdpActor {
-            ws_stream,
-            command_rx,
-            close_notify: close_notify.clone(),
+        let shared = ActorShared {
             screencast_tx: screencast_tx.clone(),
             event_tx: event_tx.clone(),
             target_tx: target_tx.clone(),
             memory_controller: memory_controller.clone(),
-            pending_commands: HashMap::with_capacity(MAX_PENDING_COMMANDS),
             stats: stats.clone(),
             request_policy: request_policy.clone(),
-            policy_write: None,
-            next_policy_id: FIRST_POLICY_COMMAND_ID,
             nav_listeners: nav_listeners.clone(),
         };
-        tokio::spawn(actor.run());
+        let link = shared.spawn_actor(ws_stream);
 
         Arc::new(Self {
             next_call_id: AtomicU64::new(1),
-            command_tx,
-            close_notify,
-            budget: CommandBudget::new(MAX_PENDING_COMMANDS, MAX_WRITER_QUEUE_BYTES),
+            link: std::sync::RwLock::new(link),
+            endpoint,
+            reconnect_gate: tokio::sync::Mutex::new(()),
+            budget: CommandBudget::with_memory(
+                MAX_PENDING_COMMANDS,
+                MAX_WRITER_QUEUE_BYTES,
+                memory_controller.clone(),
+            ),
             screencast_rx_broadcast: screencast_tx,
             event_rx_broadcast: event_tx,
             request_policy,
@@ -543,6 +706,53 @@ impl CdpClient {
             stats,
             nav_listeners,
         })
+    }
+
+    fn link(&self) -> ActorLink {
+        self.link.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Replaces a dead connection actor with a fresh one over a new transport to the same
+    /// endpoint. Existing subscribers keep their channels; every Page session of the old
+    /// connection is gone, so callers must attach new ones. No-op while the actor is alive.
+    ///
+    /// Refused for clients that never dialed an endpoint and for clients carrying the
+    /// browser-wide request policy: that interception is bound to the connection and must be
+    /// re-established by its owner, never silently dropped.
+    pub async fn reconnect(&self) -> Result<(), CdpError> {
+        let _gate = self.reconnect_gate.lock().await;
+        let link = self.link();
+        if !link.command_tx.is_closed() {
+            return Ok(());
+        }
+        // Queue closure precedes transport teardown; never overlap actor generations.
+        let mut transport_closed = link.transport_closed;
+        let _ = transport_closed.changed().await;
+        let Some(endpoint) = self.endpoint.as_deref() else {
+            return Err(CdpError::Transport(
+                "CDP client has no endpoint to reconnect to".to_string(),
+            ));
+        };
+        if *self.policy_setup.lock().await {
+            return Err(CdpError::Protocol {
+                code: -1,
+                message: "browser request policy is bound to its connection; cannot reconnect"
+                    .to_string(),
+            });
+        }
+        let ws_stream = Self::dial(endpoint).await?;
+        let shared = ActorShared {
+            screencast_tx: self.screencast_rx_broadcast.clone(),
+            event_tx: self.event_rx_broadcast.clone(),
+            target_tx: self.target_rx_broadcast.clone(),
+            memory_controller: self.memory_controller.clone(),
+            stats: self.stats.clone(),
+            request_policy: self.request_policy.clone(),
+            nav_listeners: self.nav_listeners.clone(),
+        };
+        let link = shared.spawn_actor(ws_stream);
+        *self.link.write().unwrap_or_else(|e| e.into_inner()) = link;
+        Ok(())
     }
 
     pub fn register_navigation_listener(
@@ -616,14 +826,15 @@ impl CdpClient {
         self.target_rx_broadcast.subscribe()
     }
 
-    /// True once the actor has stopped (transport closed, protocol failure or `close`).
+    /// True once the actor refuses commands; transport teardown may still be in progress.
     pub fn is_closed(&self) -> bool {
-        self.command_tx.is_closed()
+        self.link().command_tx.is_closed()
     }
 
-    /// Resolves when the actor has stopped.
+    /// Resolves after the current actor task has exited and dropped its transport.
     pub async fn closed(&self) {
-        self.command_tx.closed().await;
+        let mut transport_closed = self.link().transport_closed;
+        let _ = transport_closed.changed().await;
     }
 
     pub fn memory_controller(&self) -> &Arc<MemoryAdmissionController> {
@@ -682,6 +893,21 @@ impl CdpClient {
         explicit_epoch: Option<u64>,
         expected_url: Option<&str>,
     ) -> Result<Value, CdpError> {
+        self.enqueue(method, params, session_id, explicit_epoch, expected_url)?
+            .wait()
+            .await
+    }
+
+    /// Synchronous half of [`dispatch`](Self::dispatch): everything up to and including the
+    /// non-waiting actor enqueue. Never awaits the browser.
+    fn enqueue<P: Serialize>(
+        &self,
+        method: &str,
+        params: Option<&P>,
+        session_id: Option<&str>,
+        explicit_epoch: Option<u64>,
+        expected_url: Option<&str>,
+    ) -> Result<PendingCommand, CdpError> {
         let mut reservation = self.budget.reserve_slot()?;
 
         let call_id = self.next_call_id.fetch_add(1, Ordering::SeqCst) as usize;
@@ -728,7 +954,7 @@ impl CdpClient {
         }
         // The queue holds at most MAX_WRITER_QUEUE_MESSAGES unwritten commands; a full queue
         // is reported immediately rather than waiting with the payload retained.
-        if let Err(err) = self.command_tx.try_send(ActorMessage::SendCommand {
+        if let Err(err) = self.link().command_tx.try_send(ActorMessage::SendCommand {
             id: call_id,
             json,
             reservation,
@@ -751,17 +977,7 @@ impl CdpClient {
             .total_commands_sent
             .fetch_add(1, Ordering::Relaxed);
 
-        tokio::select! {
-            res = receiver => {
-                match res {
-                    Ok(result) => result,
-                    Err(_) => Err(CdpError::ConnectionClosed),
-                }
-            }
-            _ = tokio::time::sleep_until(deadline) => {
-                Err(CdpError::CommandTimeout)
-            }
-        }
+        Ok(PendingCommand { receiver, deadline })
     }
 
     /// Send a strongly typed command from chromiumoxide_types / chromiumoxide_cdp.
@@ -775,26 +991,40 @@ impl CdpClient {
         C::response_from_value(res_val).map_err(|e| CdpError::MalformedResponse(e.to_string()))
     }
 
-    /// Acknowledge a screencast frame to Chromium (releasing run credit) independently of viewer consumption.
+    /// Acknowledge a screencast frame to Chromium (releasing run credit) independently of viewer
+    /// consumption, waiting for the response.
     pub async fn ack_screencast_frame(
         &self,
         session_id: &str,
         frame_session_id: i64,
     ) -> Result<(), CdpError> {
-        let ack_params =
-            chromiumoxide_cdp::cdp::browser_protocol::page::ScreencastFrameAckParams::new(
-                frame_session_id,
-            );
-        let _ = self.send_typed(ack_params, Some(session_id)).await?;
-        self.stats
-            .screencast_frames_acked
-            .fetch_add(1, Ordering::Relaxed);
-        Ok(())
+        self.enqueue_screencast_ack(session_id, frame_session_id)?
+            .wait()
+            .await
+    }
+
+    /// Admits one `Page.screencastFrameAck` to the actor queue without waiting for anything:
+    /// the attempt is made (or refused) before this returns, whatever happened to earlier ACKs.
+    /// The response is awaited separately through the returned [`PendingAck`].
+    pub fn enqueue_screencast_ack(
+        &self,
+        session_id: &str,
+        frame_session_id: i64,
+    ) -> Result<PendingAck, CdpError> {
+        use chromiumoxide_cdp::cdp::browser_protocol::page::ScreencastFrameAckParams;
+        use chromiumoxide_types::Method;
+        let params = ScreencastFrameAckParams::new(frame_session_id);
+        let method = params.identifier().to_string();
+        let command = self.enqueue(&method, Some(&params), Some(session_id), None, None)?;
+        Ok(PendingAck {
+            command,
+            stats: self.stats.clone(),
+        })
     }
 
     /// Request actor shutdown. Never waits on the command queue.
     pub async fn close(&self) {
-        self.close_notify.notify_one();
+        self.link().close_notify.notify_one();
     }
 }
 
@@ -1437,8 +1667,27 @@ where
             }
         }
         let native_capture_time_unix_ms = parse_native_capture_time_unix_ms(&metadata);
+        // Retain only the supported numeric members: an arbitrary extra member would otherwise
+        // keep up to a whole WebSocket message alive under the fixed per-frame overhead. The
+        // capture timestamp was read above, so it is not retained.
+        let metadata = {
+            let mut kept = serde_json::Map::with_capacity(SCREENCAST_METADATA_NUMBERS.len());
+            for key in SCREENCAST_METADATA_NUMBERS {
+                if let Some(value) = metadata.get(key) {
+                    kept.insert(key.to_string(), value.clone());
+                }
+            }
+            Value::Object(kept)
+        };
         let received_at = std::time::Instant::now();
         let server_received_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        // Charge the retained payload before publishing it; the transient parse buffer is bounded
+        // by the WebSocket message cap. Over budget: drop the payload now, keep the ACK identity.
+        let retained = data_base64.len() + session_id.len() + SCREENCAST_FRAME_OVERHEAD_BYTES;
+        let (data_base64, reservation) = match self.memory_controller.try_reserve(retained) {
+            Ok(reservation) => (data_base64, Some(reservation)),
+            Err(_) => (String::new(), None),
+        };
         let frame = Arc::new(ScreencastFrameData {
             session_id,
             frame_session_id,
@@ -1447,6 +1696,8 @@ where
             native_capture_time_unix_ms,
             received_at,
             server_received_unix_ms,
+            memory_admitted: reservation.is_some(),
+            _reservation: reservation,
         });
         self.stats
             .screencast_frames_received
@@ -1812,6 +2063,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn closed_waits_for_transport_drop_not_just_command_queue_closure() {
+        let client = CdpClient::from_ws_stream(StalledWs {
+            entered: Arc::new(Notify::new()),
+        });
+        client.close().await;
+        eventually(|| client.is_closed()).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), client.closed()).await.is_err(),
+            "a stalled websocket close has not dropped the transport"
+        );
+        tokio::time::timeout(Duration::from_secs(6), client.closed())
+            .await
+            .expect("bounded websocket close eventually drops the transport");
+    }
+
+    #[tokio::test]
     async fn test_stalled_writer_saturation_then_close_releases_everything() {
         let entered = Arc::new(Notify::new());
         let client = CdpClient::from_ws_stream(StalledWs {
@@ -2139,6 +2406,150 @@ mod tests {
         eventually(|| controller.current_reserved_bytes() == 0).await;
     }
 
+    fn screencast_frame_msg(data: &str, id: i64) -> Message {
+        Message::Text(
+            serde_json::json!({
+                "method": "Page.screencastFrame",
+                "sessionId": "page-1",
+                "params": {
+                    "data": data,
+                    "sessionId": id,
+                    "metadata": {
+                        "offsetTop": 0, "pageScaleFactor": 1.0, "deviceWidth": 1280,
+                        "deviceHeight": 720, "scrollOffsetX": 0, "scrollOffsetY": 0
+                    }
+                }
+            })
+            .to_string()
+            .into(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_screencast_ingress_is_charged_until_last_holder_and_over_budget_keeps_ack_identity() {
+        use super::super::diagnostics::MemoryAdmissionController;
+
+        let controller = MemoryAdmissionController::new(16 * 1024);
+        let (in_tx, in_rx) = mpsc::channel(16);
+        let (sent_tx, _sent_rx) = mpsc::channel(16);
+        let client = CdpClient::from_ws_stream_with_memory_controller(
+            MockChannelWs { tx: sent_tx, rx: in_rx },
+            controller.clone(),
+        );
+        let mut rx = client.subscribe_screencast();
+
+        // Admitted: the payload is charged for as long as any clone of the frame lives.
+        let payload = "A".repeat(4000);
+        in_tx.send(Ok(screencast_frame_msg(&payload, 1))).await.unwrap();
+        let admitted = rx.recv().await.unwrap();
+        assert!(admitted.memory_admitted);
+        assert_eq!(admitted.data_base64.len(), 4000);
+        assert!(controller.current_reserved_bytes() >= 4000);
+        let second_holder = admitted.clone();
+        drop(admitted);
+        assert!(controller.current_reserved_bytes() >= 4000, "a remaining holder keeps the charge");
+        drop(second_holder);
+        // Last holder gone (the broadcast slot is released once its only receiver read it).
+        eventually(|| controller.current_reserved_bytes() == 0).await;
+
+        // Over budget: payload dropped immediately, identity kept so the ACK can still be sent.
+        let hold = controller.try_reserve(16 * 1024 - 512).unwrap();
+        in_tx.send(Ok(screencast_frame_msg(&payload, 7))).await.unwrap();
+        let refused = rx.recv().await.unwrap();
+        assert!(!refused.memory_admitted);
+        assert!(refused.data_base64.is_empty());
+        assert_eq!(refused.frame_session_id, 7);
+        assert_eq!(refused.session_id, "page-1");
+        assert!(!client.is_closed(), "memory pressure must not close the actor");
+        drop(hold);
+    }
+
+    #[tokio::test]
+    async fn test_screencast_retains_only_supported_metadata_and_keeps_capture_time() {
+        use super::super::diagnostics::MemoryAdmissionController;
+
+        let controller = MemoryAdmissionController::new(1024 * 1024);
+        let (in_tx, in_rx) = mpsc::channel(16);
+        let (sent_tx, _sent_rx) = mpsc::channel(16);
+        let client = CdpClient::from_ws_stream_with_memory_controller(
+            MockChannelWs { tx: sent_tx, rx: in_rx },
+            controller,
+        );
+        let mut rx = client.subscribe_screencast();
+        let msg = serde_json::json!({
+            "method": "Page.screencastFrame",
+            "sessionId": "page-1",
+            "params": {
+                "data": "AAAA",
+                "sessionId": 3,
+                "metadata": {
+                    "offsetTop": 0, "pageScaleFactor": 1.0, "deviceWidth": 1280,
+                    "deviceHeight": 720, "scrollOffsetX": 0, "scrollOffsetY": 0,
+                    "timestamp": 1_700_000_000.5,
+                    "unexpectedHugeMember": "x".repeat(100 * 1024)
+                }
+            }
+        });
+        in_tx.send(Ok(Message::Text(msg.to_string().into()))).await.unwrap();
+        let frame = rx.recv().await.unwrap();
+
+        let kept = frame.metadata.as_object().expect("metadata object");
+        assert_eq!(kept.len(), SCREENCAST_METADATA_NUMBERS.len());
+        assert!(kept.get("unexpectedHugeMember").is_none());
+        assert_eq!(frame.native_capture_time_unix_ms, Some(1_700_000_000_500));
+    }
+
+    #[tokio::test]
+    async fn test_failed_growth_of_an_already_charged_command_reservation_leaks_nothing() {
+        use super::super::diagnostics::MemoryAdmissionController;
+
+        let controller = MemoryAdmissionController::new(100);
+        let budget = CommandBudget::with_memory(4, 1000, controller.clone());
+        let mut held = budget.reserve_slot().unwrap();
+        held.grow(80).unwrap();
+        let mut other = budget.reserve_slot().unwrap();
+        other.grow(10).unwrap();
+
+        // `held` already owns a global reservation; growing it past the ceiling must fail cleanly.
+        assert!(held.grow(20).is_err());
+        assert_eq!(controller.current_reserved_bytes(), 90);
+        assert_eq!(budget.bytes_in_use(), 90);
+        assert_eq!(held.reserved_bytes(), 80);
+
+        drop(held);
+        drop(other);
+        assert_eq!(controller.current_reserved_bytes(), 0);
+        assert_eq!(budget.bytes_in_use(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_command_bytes_are_charged_globally_and_failed_growth_leaks_nothing() {
+        use super::super::diagnostics::MemoryAdmissionController;
+
+        let controller = MemoryAdmissionController::new(100);
+        let budget = CommandBudget::with_memory(4, 1000, controller.clone());
+        let mut a = budget.reserve_slot().unwrap();
+        let mut b = budget.reserve_slot().unwrap();
+
+        a.grow(60).unwrap();
+        assert_eq!(controller.current_reserved_bytes(), 60);
+        a.grow(10).unwrap();
+        assert_eq!(controller.current_reserved_bytes(), 70);
+
+        // Local budget would allow it; the global ceiling refuses and nothing leaks.
+        assert!(b.grow(40).is_err());
+        assert_eq!(controller.current_reserved_bytes(), 70);
+        assert_eq!(budget.bytes_in_use(), 70);
+        b.grow(30).unwrap();
+        assert_eq!(controller.current_reserved_bytes(), 100);
+
+        drop(a);
+        assert_eq!(controller.current_reserved_bytes(), 30);
+        drop(b);
+        assert_eq!(controller.current_reserved_bytes(), 0);
+        assert_eq!(budget.bytes_in_use(), 0);
+    }
+
     #[tokio::test]
     async fn test_request_paused_with_lone_surrogate_and_truncated_hex_escapes_in_post_data_stays_alive() {
         use crate::browser_host::config::BrowserHostConfig;
@@ -2208,5 +2619,34 @@ mod tests {
         }
         assert!(!client.is_closed());
         assert!(!escalated.load(Ordering::SeqCst));
+    }
+}
+
+#[cfg(test)]
+mod outcome_classification_tests {
+    use super::CdpError;
+
+    #[test]
+    fn only_pre_send_rejections_and_browser_errors_prove_the_command_did_not_execute() {
+        let definite = [
+            CdpError::TooManyPendingCommands { current: 64, max: 64 },
+            CdpError::WriterQueueFull { messages: 1, bytes: 1 },
+            CdpError::CommandTooLarge { size: 2, max: 1 },
+            CdpError::Protocol { code: -32000, message: "rejected".into() },
+        ];
+        for error in definite {
+            assert!(!error.outcome_is_ambiguous(), "{error:?} proves the command did not execute");
+        }
+        let ambiguous = [
+            CdpError::CommandTimeout,
+            CdpError::MessageTooLarge { size: 2, max: 1 },
+            CdpError::ConnectionClosed,
+            CdpError::MalformedResponse("x".into()),
+            CdpError::Deserialization("x".into()),
+            CdpError::Transport("x".into()),
+        ];
+        for error in ambiguous {
+            assert!(error.outcome_is_ambiguous(), "{error:?} may have executed");
+        }
     }
 }

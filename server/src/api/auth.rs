@@ -610,45 +610,12 @@ pub async fn login(State(state): State<AppState>, Json(mut body): Json<LoginBody
     }
 }
 
-fn deserialize_opt_u64_or_string<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    struct OptVisitor;
-    impl<'de> serde::de::Visitor<'de> for OptVisitor {
-        type Value = Option<u64>;
-        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            f.write_str("null, u64 integer, or canonical decimal string")
-        }
-        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
-            Ok(Some(v))
-        }
-        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
-            u64::try_from(v)
-                .map(Some)
-                .map_err(|_| E::custom("negative integer"))
-        }
-        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
-            v.parse::<u64>()
-                .map(Some)
-                .map_err(|_| E::custom("invalid u64 string"))
-        }
-    }
-    deserializer.deserialize_any(OptVisitor)
-}
-
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LogoutRequestBody {
     #[serde(default)]
     browser_reset: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_opt_u64_or_string")]
+    #[serde(default, with = "crate::browser_host::decimal_counter::positive_opt")]
     expected_profile_epoch: Option<u64>,
     #[serde(default)]
     operation_id: Option<String>,
@@ -961,7 +928,7 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
                                 payload["browserCredentialsRetained"] = serde_json::json!(false);
                                 payload["resetRequired"] = serde_json::json!(false);
                                 payload["operationId"] = serde_json::json!(operation_id);
-                                payload["profileEpoch"] = serde_json::json!(new_profile_epoch);
+                                payload["profileEpoch"] = serde_json::json!(new_profile_epoch.to_string());
                             }
                             Ok(crate::browser_host::manager::ResetOutcome::CleanupPending {
                                 operation_id,
@@ -972,7 +939,7 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar, request: Requ
                                 payload["browserCredentialsRetained"] = serde_json::json!(true);
                                 payload["resetRequired"] = serde_json::json!(true);
                                 payload["operationId"] = serde_json::json!(operation_id);
-                                payload["profileEpoch"] = serde_json::json!(profile_epoch);
+                                payload["profileEpoch"] = serde_json::json!(profile_epoch.to_string());
                                 payload["reason"] = serde_json::json!(reason);
                             }
                             Err(crate::browser_host::manager::ManagerError::CleanupPending(

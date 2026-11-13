@@ -9,6 +9,7 @@ import {
   logout,
   logoutAccount,
   isSecureOrLoopbackOrigin,
+  parsePositiveEpoch,
   listAuthSessions,
   revokeAuthSession,
   AUTH_PROTOCOL_VERSION,
@@ -367,7 +368,7 @@ describe("auth-client", () => {
             browserResetState: "retained",
             browserCredentialsRetained: true,
             resetRequired: true,
-            profileEpoch: 2,
+            profileEpoch: "2",
           }),
           { status: 200 },
         ),
@@ -386,7 +387,7 @@ describe("auth-client", () => {
         browserResetState: "retained",
         browserCredentialsRetained: true,
         resetRequired: true,
-        profileEpoch: 2,
+        profileEpoch: "2",
       });
       expect(fetchMock).toHaveBeenCalledWith(
         "http://127.0.0.1:4801/api/auth/logout",
@@ -424,7 +425,7 @@ describe("auth-client", () => {
               browserResetState: "cleared",
               browserCredentialsRetained: false,
               resetRequired: false,
-              profileEpoch: 5,
+              profileEpoch: "5",
               operationId: "op-1",
             }),
             { status: 200 },
@@ -448,13 +449,13 @@ describe("auth-client", () => {
       const cleared = await logoutAccount("https://server.test", "tok", {
         browserReset: true,
         confirmed: true,
-        expectedProfileEpoch: 4,
+        expectedProfileEpoch: "4",
         operationId: "op-1",
       });
       expect(cleared.browserResetState).toBe("cleared");
       expect(cleared.browserCredentialsRetained).toBe(false);
       expect(cleared.resetRequired).toBe(false);
-      expect(cleared.profileEpoch).toBe(5);
+      expect(cleared.profileEpoch).toBe("5");
 
       // Contradictory server payload must never report cleared
       const contradictory = await logoutAccount("https://server.test", "tok", {
@@ -638,5 +639,63 @@ describe("device session boundary", () => {
     await expect(listAuthSessions("https://server.test", "old")).rejects.toMatchObject({ status: 401 });
     await expect(revokeAuthSession("https://server.test", "token", "id")).rejects.toMatchObject({ code: "INCOMPATIBLE_PROTOCOL" });
     await expect(revokeAuthSession("https://server.test", "token", "foreign")).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe("browser profile epoch decimal strings", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("accepts only canonical positive decimal u64 strings", () => {
+    expect(parsePositiveEpoch("1")).toBe("1");
+    expect(parsePositiveEpoch("9007199254740993")).toBe("9007199254740993");
+    expect(parsePositiveEpoch("18446744073709551615")).toBe("18446744073709551615");
+    for (const bad of [1, 9007199254740993, 1.5, "0", "01", "+1", "-1", " 1", "1 ", "1e3", "0x1", "", "18446744073709551616", null, undefined, {}]) {
+      expect(parsePositiveEpoch(bad), String(bad)).toBeUndefined();
+    }
+  });
+
+  it("round-trips profile epochs through the logout request and outcome without Number conversion", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          authenticated: false,
+          browserResetState: "cleanupPending",
+          browserCredentialsRetained: true,
+          resetRequired: true,
+          operationId: "op-big",
+          profileEpoch: "18446744073709551615",
+        }),
+        { status: 200 },
+      ),
+    );
+    globalThis.fetch = fetchMock;
+    const outcome = await logoutAccount("https://server.test", "tok", {
+      browserReset: true,
+      confirmed: true,
+      expectedProfileEpoch: "9007199254740993",
+      operationId: "op-big",
+    });
+    expect(outcome.profileEpoch).toBe("18446744073709551615");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(init.body)).toContain('"expectedProfileEpoch":"9007199254740993"');
+  });
+
+  it("drops a numeric profileEpoch from the server rather than coercing it", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          authenticated: false,
+          browserResetState: "cleanupPending",
+          browserCredentialsRetained: true,
+          resetRequired: true,
+          profileEpoch: 2,
+        }),
+        { status: 200 },
+      ),
+    );
+    const outcome = await logoutAccount("https://server.test", "tok", { browserReset: false });
+    expect(outcome.profileEpoch).toBeUndefined();
   });
 });

@@ -126,21 +126,21 @@ export interface CreateSessionRequest {
 
 export interface NavigateRequest {
   url: string;
-  navigationRevision: number | string;
+  navigationRevision: string;
 }
 
 export interface HistoryRequest {
   direction: "back" | "forward";
-  navigationRevision: number | string;
+  navigationRevision: string;
 }
 
 export interface ReloadRequest {
-  navigationRevision: number | string;
+  navigationRevision: string;
 }
 
 export interface SetViewportRequest {
   leaseToken: string;
-  viewportEpoch: number | string;
+  viewportEpoch: string;
   width: number;
   height: number;
   dpr: number;
@@ -197,7 +197,7 @@ export interface IssueTicketRequest {
   viewerId?: string;
   subscriptionEpoch?: string;
   browserIncarnation: string;
-  profileEpoch: number;
+  profileEpoch: string;
 }
 
 export interface IssueTicketResponse {
@@ -207,13 +207,13 @@ export interface IssueTicketResponse {
 
 export interface ProfileResetRequest {
   operationId: string;
-  expectedProfileEpoch: number;
+  expectedProfileEpoch: string;
   confirmed: boolean;
 }
 
 export interface ProfileResetResponse {
   status: "completed" | "cleanupPending";
-  profileEpoch: number;
+  profileEpoch: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -846,11 +846,11 @@ export type InputEvent =
 export interface InputMessage {
   browserSessionId: string;
   browserIncarnation: string;
-  profileEpoch: number;
+  profileEpoch: string;
   subscriptionEpoch: string;
   leaseToken: string;
-  inputSeq: number;
-  viewportEpoch: number;
+  inputSeq: string;
+  viewportEpoch: string;
   event: InputEvent;
 }
 

@@ -113,7 +113,7 @@ describe("stream-controller", () => {
       owner: { profileId: "profile-1", generation: 1 },
       browserSessionId: "12345678-1234-4234-8234-123456789abc",
       browserIncarnation: "abcdef01-2345-4678-8901-234567890abc",
-      profileEpoch: 1,
+      profileEpoch: "1",
       viewerId: "viewer-uuid-1",
       subscriptionEpoch: "sub-epoch-uuid-1",
       mediaTicket: "med-tok",
@@ -419,6 +419,125 @@ describe("stream-controller", () => {
     expect(redrawn?.viewportEpoch).toBe("7");
   });
 
+
+  it("re-attach to a different owner/target retires the previous pixels, hit rectangle and bitmap; the same owner keeps them", async () => {
+    const closeBitmap = vi.fn();
+    const bitmap = { width: 640, height: 480, close: closeBitmap } as unknown as ImageBitmap;
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => bitmap));
+
+    controller.attach(mockCreds);
+    const mediaWs = MockWebSocket.instances[0];
+    mediaWs.onopen?.();
+    mediaWs.onmessage?.({
+      data: packBhjfFrame(makeHeader("1"), createMockJpeg(640, 480)).buffer,
+    } as MessageEvent);
+    await vi.waitFor(() => {
+      expect(controller.getDrawnRect()).not.toBeNull();
+    });
+
+    // Same owner/target (only the subscription changed): pixels and hit rectangle are kept.
+    const sameOwnerRect = controller.getDrawnRect();
+    controller.attach({ ...mockCreds, subscriptionEpoch: "same-owner-sub" });
+    expect(controller.getDrawnRect()).toEqual(sameOwnerRect);
+    expect(closeBitmap).not.toHaveBeenCalled();
+
+    // Different target incarnation: everything painted for the previous one is retired.
+    const fillRectSpy = vi.spyOn(ctx, "fillRect");
+    controller.attach({
+      ...mockCreds,
+      subscriptionEpoch: "replacement-sub",
+      browserIncarnation: "99999999-2345-4678-8901-234567890abc",
+    });
+
+    expect(controller.getDrawnRect()).toBeNull();
+    expect(closeBitmap).toHaveBeenCalled();
+    expect(fillRectSpy).toHaveBeenCalledWith(0, 0, 640, 480);
+    // A layout redraw before the new owner's first frame must not resurrect old pixels.
+    vi.mocked(ctx.drawImage).mockClear();
+    controller.redrawCachedFrame();
+    expect(ctx.drawImage).not.toHaveBeenCalled();
+    expect(controller.getDrawnRect()).toBeNull();
+  });
+
+  it("an in-flight decode never paints once a frame with a newer viewportEpoch arrived", async () => {
+    const resolvers: Array<(bitmap: ImageBitmap) => void> = [];
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockImplementation(() => {
+        const { promise, resolve } = Promise.withResolvers<ImageBitmap>();
+        resolvers.push(resolve);
+        return promise;
+      }),
+    );
+    controller.attach(mockCreds);
+    const mediaWs = MockWebSocket.instances[0];
+    mediaWs.onopen?.();
+    mediaWs.sentMessages = [];
+
+    const sendFrame = (seq: string, viewportEpoch: string) =>
+      mediaWs.onmessage?.({
+        data: packBhjfFrame(
+          { ...makeHeader(seq), viewportEpoch },
+          createMockJpeg(640, 480),
+        ).buffer,
+      } as MessageEvent);
+
+    sendFrame("1", "1"); // decode of the old epoch starts
+    sendFrame("2", "2"); // new geometry arrives while it is in flight (becomes pending)
+    const closeOld = vi.fn();
+    resolvers[0]({ width: 640, height: 480, close: closeOld } as unknown as ImageBitmap);
+    await vi.waitFor(() => {
+      expect(resolvers.length).toBe(2);
+    });
+
+    expect(closeOld).toHaveBeenCalled();
+    expect(controller.getDrawnRect()).toBeNull();
+    const sent = mediaWs.sentMessages.map((m) => JSON.parse(m));
+    expect(sent).toContainEqual(
+      expect.objectContaining({ kind: "frameDiscarded", frameSeq: "1", reason: "obsolete" }),
+    );
+    expect(sent.some((m) => m.kind === "frameAck" && m.frameSeq === "1")).toBe(false);
+
+    // The newer epoch still paints.
+    resolvers[1]({ width: 640, height: 480, close: vi.fn() } as unknown as ImageBitmap);
+    await vi.waitFor(() => {
+      expect(controller.getDrawnRect()?.viewportEpoch).toBe("2");
+    });
+  });
+
+  it("a transitional (bit 63) viewportEpoch never poisons the epoch floor and freezes later frames", async () => {
+    const resolvers: Array<(bitmap: ImageBitmap) => void> = [];
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockImplementation(() => {
+        const { promise, resolve } = Promise.withResolvers<ImageBitmap>();
+        resolvers.push(resolve);
+        return promise;
+      }),
+    );
+    controller.attach(mockCreds);
+    const mediaWs = MockWebSocket.instances[0];
+    mediaWs.onopen?.();
+    const sendFrame = (seq: string, viewportEpoch: string) =>
+      mediaWs.onmessage?.({
+        data: packBhjfFrame(
+          { ...makeHeader(seq), viewportEpoch },
+          createMockJpeg(640, 480),
+        ).buffer,
+      } as MessageEvent);
+
+    sendFrame("1", ((1n << 63n) + 2n).toString()); // transitional marker published mid-resize
+    sendFrame("2", "3"); // the real new epoch follows
+    resolvers[0]({ width: 640, height: 480, close: vi.fn() } as unknown as ImageBitmap);
+    await vi.waitFor(() => {
+      expect(resolvers.length).toBe(2);
+    });
+    resolvers[1]({ width: 640, height: 480, close: vi.fn() } as unknown as ImageBitmap);
+    await vi.waitFor(() => {
+      expect(controller.getDrawnRect()?.viewportEpoch).toBe("3");
+    });
+  });
+
   it.each([
     { localDpr: 1, remoteDpr: 2 },
     { localDpr: 1.5, remoteDpr: 1 },
@@ -454,10 +573,10 @@ describe("stream-controller", () => {
     const input = new BrowserInputController({
       getSessionId: () => header.browserSessionId,
       getIncarnation: () => header.browserIncarnation,
-      getProfileEpoch: () => 1,
+      getProfileEpoch: () => "1",
       getSubscriptionEpoch: () => mockCreds.subscriptionEpoch,
       getLeaseToken: () => "lease",
-      getViewportEpoch: () => 1,
+      getViewportEpoch: () => "1",
       getDrawnRect: () => controller.getDrawnRect(),
       getControlSocket: () => controller.getControlSocket(),
     });
@@ -491,7 +610,7 @@ describe("stream-controller", () => {
     } as unknown as PointerEvent)).toBe(true);
     const controlWs = MockWebSocket.instances[1];
     expect(JSON.parse(controlWs.sentMessages.at(-1)!)).toMatchObject({
-      viewportEpoch: 1,
+      viewportEpoch: "1",
       event: { kind: "pointerDown", button: "left", u: 0.75, v: 0.25 },
     });
     input.dispose();
@@ -1183,10 +1302,10 @@ describe("stream-controller", () => {
     const input = new BrowserInputController({
       getSessionId: () => header.browserSessionId,
       getIncarnation: () => header.browserIncarnation,
-      getProfileEpoch: () => 1,
+      getProfileEpoch: () => "1",
       getSubscriptionEpoch: () => mockCreds.subscriptionEpoch,
       getLeaseToken: () => currentLease,
-      getViewportEpoch: () => 1,
+      getViewportEpoch: () => "1",
       getDrawnRect: () => controller.getDrawnRect(),
       getControlSocket: () => controller.getControlSocket(),
     });
@@ -1214,7 +1333,7 @@ describe("stream-controller", () => {
     expect(sentMoves.length).toBeGreaterThanOrEqual(7);
     expect(sentMoves.length).toBeLessThanOrEqual(13);
     sentMoves.forEach((msg, idx) => {
-      expect(msg.inputSeq).toBe(idx + 1);
+      expect(msg.inputSeq).toBe(String(idx + 1));
       expect(msg.event.kind).toBe("pointerMove");
     });
     // Latest coordinates are preserved in the final coalesced move
@@ -1251,7 +1370,7 @@ describe("stream-controller", () => {
     const discreteDown = JSON.parse(controlWs.sentMessages[countBeforeDiscrete + 1]);
     expect(flushedMove.event).toMatchObject({ kind: "pointerMove", u: 0.25, v: 0.25 });
     expect(discreteDown.event).toMatchObject({ kind: "pointerDown", u: 0.5, v: 0.5 });
-    expect(discreteDown.inputSeq).toBe(flushedMove.inputSeq + 1);
+    expect(discreteDown.inputSeq).toBe(String(BigInt(flushedMove.inputSeq) + 1n));
 
     // 3. Wheel burst coalescing sums deltas across the pacing window
     const countBeforeWheel = controlWs.sentMessages.length;

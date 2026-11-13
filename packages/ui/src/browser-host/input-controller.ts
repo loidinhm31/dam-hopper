@@ -12,7 +12,13 @@ import {
   type InputEvent,
   type InputMessage,
   type MouseButton,
+  isValidPositiveDecimalU64,
 } from "../api/browser-host-types.js";
+
+/** Wire counters are canonical positive decimal u64 strings; the local sequence is a bigint. */
+const MAX_INPUT_SEQ = 18446744073709551615n;
+/** A coalescable event waits for its `inputSeq`, which is assigned only when it is sent. */
+type PendingInputMessage = Omit<InputMessage, "inputSeq">;
 
 export const MODIFIER_ALT = 1;
 export const MODIFIER_CTRL = 2;
@@ -68,10 +74,10 @@ export type CanvasPointerInput = Pick<
 export interface InputControllerOptions {
   getSessionId: () => string;
   getIncarnation: () => string;
-  getProfileEpoch: () => number;
+  getProfileEpoch: () => string;
   getSubscriptionEpoch: () => string | null;
   getLeaseToken: () => string | null;
-  getViewportEpoch: () => number | string;
+  getViewportEpoch: () => string;
   getDrawnRect: () => DrawnRect | null;
   getControlSocket: () => WebSocket | null;
   isInputAllowed?: () => boolean;
@@ -112,21 +118,21 @@ export function mapPointerButton(button: number): MouseButton {
 export class BrowserInputController {
   private readonly getSessionId: () => string;
   private readonly getIncarnation: () => string;
-  private readonly getProfileEpoch: () => number;
+  private readonly getProfileEpoch: () => string;
   private readonly getSubscriptionEpoch: () => string | null;
   private readonly getLeaseToken: () => string | null;
-  private readonly getViewportEpoch: () => number | string;
+  private readonly getViewportEpoch: () => string;
   private readonly getDrawnRect: () => DrawnRect | null;
   private readonly getControlSocket: () => WebSocket | null;
   private readonly isInputAllowed?: () => boolean;
   private readonly onError?: (err: Error) => void;
 
-  private inputSeq = 0;
+  private inputSeq = 0n;
   private lastLeaseToken: string | null = null;
   private heldKeys = new Map<string, { key: string; code: string }>();
   private heldButtons = new Set<MouseButton>();
   private lastPointerCoords: { u: number; v: number } | null = null;
-  private pendingCoalescable: InputMessage | null = null;
+  private pendingCoalescable: PendingInputMessage | null = null;
   private coalescableTimer: number | null = null;
   private lastCoalescableFlushAt = -Infinity;
   /** Every message actually sent live (replaceable + discrete), rolling 1s. */
@@ -255,7 +261,7 @@ export class BrowserInputController {
 
     // Reject input if geometry is untrusted or viewport epoch is stale
     if (!drawn.inputTrusted) return null;
-    if (String(drawn.viewportEpoch) !== String(this.getViewportEpoch())) {
+    if (drawn.viewportEpoch !== this.getViewportEpoch()) {
       return null;
     }
 
@@ -488,16 +494,16 @@ export class BrowserInputController {
       this.scheduleCoalescableFlush();
       return true;
     }
-    const vpEpoch = Number(this.getViewportEpoch());
+    const wire = this.captureWireEpochs();
+    if (!wire) return false;
 
     this.pendingCoalescable = {
       browserSessionId: this.getSessionId(),
       browserIncarnation: this.getIncarnation(),
-      profileEpoch: this.getProfileEpoch(),
+      profileEpoch: wire.profileEpoch,
       subscriptionEpoch: subEpoch,
       leaseToken,
-      inputSeq: 0,
-      viewportEpoch: Number.isFinite(vpEpoch) ? vpEpoch : 1,
+      viewportEpoch: wire.viewportEpoch,
       event,
     };
 
@@ -574,8 +580,11 @@ export class BrowserInputController {
     const currentSubEpoch = this.getSubscriptionEpoch();
     if (
       currentLease !== msg.leaseToken ||
-      currentSubEpoch !== msg.subscriptionEpoch
+      currentSubEpoch !== msg.subscriptionEpoch ||
+      msg.viewportEpoch !== this.getViewportEpoch() ||
+      msg.profileEpoch !== this.getProfileEpoch()
     ) {
+      // Identity moved since the event was captured: never send it under a stale epoch.
       this.pendingCoalescable = null;
       return;
     }
@@ -593,16 +602,41 @@ export class BrowserInputController {
     }
 
     this.pendingCoalescable = null;
-    msg.inputSeq = ++this.inputSeq;
+    const inputSeq = this.nextInputSeq();
+    if (inputSeq === null) return;
+    const wireMsg: InputMessage = { ...msg, inputSeq };
     this.lastCoalescableFlushAt = now;
     this.sentTimestamps.push(now);
     this.replaceableSentTimestamps.push(now);
 
     try {
-      socket.send(JSON.stringify(msg));
+      socket.send(JSON.stringify(wireMsg));
     } catch (err) {
       this.onError?.(err instanceof Error ? err : new Error(String(err)));
     }
+  }
+
+  /** Both wire epochs, or null when either is not a canonical positive decimal u64 string. */
+  private captureWireEpochs(): { profileEpoch: string; viewportEpoch: string } | null {
+    const profileEpoch = this.getProfileEpoch();
+    const viewportEpoch = this.getViewportEpoch();
+    if (!isValidPositiveDecimalU64(profileEpoch) || !isValidPositiveDecimalU64(viewportEpoch)) {
+      return null;
+    }
+    return { profileEpoch, viewportEpoch };
+  }
+
+  /**
+   * Next contiguous wire `inputSeq`. An exhausted u64 sequence is never reused or wrapped: input
+   * stops until the lease is reacquired, which restarts the server-side sequence.
+   */
+  private nextInputSeq(): string | null {
+    if (this.inputSeq >= MAX_INPUT_SEQ) {
+      this.onError?.(new Error("Input sequence exhausted; reacquire control to continue"));
+      return null;
+    }
+    this.inputSeq += 1n;
+    return this.inputSeq.toString();
   }
   private syncLeaseState(): string | null {
     const currentLease = this.getLeaseToken();
@@ -616,7 +650,7 @@ export class BrowserInputController {
         this.flushCoalescable();
       }
       this.lastLeaseToken = currentLease;
-      this.inputSeq = 0;
+      this.inputSeq = 0n;
       if (priorLease !== null) {
         this.releaseAllHeldInput();
       }
@@ -661,17 +695,19 @@ export class BrowserInputController {
     if (!leaseToken || !subEpoch) {
       return false;
     }
-    const vpEpoch = Number(this.getViewportEpoch());
-    const seq = ++this.inputSeq;
+    const wire = this.captureWireEpochs();
+    if (!wire) return false;
+    const seq = this.nextInputSeq();
+    if (seq === null) return false;
 
     const msg: InputMessage = {
       browserSessionId: this.getSessionId(),
       browserIncarnation: this.getIncarnation(),
-      profileEpoch: this.getProfileEpoch(),
+      profileEpoch: wire.profileEpoch,
       subscriptionEpoch: subEpoch,
       leaseToken,
       inputSeq: seq,
-      viewportEpoch: Number.isFinite(vpEpoch) ? vpEpoch : 1,
+      viewportEpoch: wire.viewportEpoch,
       event,
     };
 

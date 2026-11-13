@@ -343,7 +343,7 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
             browserResetState: "retained",
             browserCredentialsRetained: true,
             resetRequired: true,
-            profileEpoch: 1,
+            profileEpoch: "1",
           }),
           { status: 200 },
         );
@@ -441,7 +441,7 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
             browserResetState: "cleanupPending",
             browserCredentialsRetained: true,
             resetRequired: true,
-            profileEpoch: 3,
+            profileEpoch: "3",
             operationId: "op-bg-1",
             reason: "continuing in background",
           }),
@@ -616,12 +616,12 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
       if (u.endsWith("/api/browser/profile/reset") && init?.method === "POST") {
         const parsed = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
         expect(parsed.confirmed).toBe(true);
-        expect(parsed.expectedProfileEpoch).toBe(4);
+        expect(parsed.expectedProfileEpoch).toBe("4");
         return new Response(
           JSON.stringify({
             operationId: String(parsed.operationId),
             status: "cleanupPending",
-            profileEpoch: 5,
+            profileEpoch: "5",
             reason: "waiting for background delete",
           }),
           { status: 202 },
@@ -633,7 +633,7 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
           JSON.stringify({
             operationId: "op-done",
             status: "completed",
-            profileEpoch: 5,
+            profileEpoch: "5",
           }),
           { status: 200 },
         );
@@ -840,7 +840,7 @@ describe("ServerSettingsDialog Android Chrome policy", () => {
         return new Response(
           JSON.stringify({
             status: "completed",
-            profileEpoch: 5,
+            profileEpoch: "5",
             operationId: "server-op-existing-77",
           }),
           { status: 200 },

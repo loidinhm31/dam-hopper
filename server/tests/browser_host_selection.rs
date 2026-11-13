@@ -390,13 +390,13 @@ async fn selection_extracts_sanitized_preview_creates_managed_png_and_hands_off_
         &cookie,
         Some(json!({
             "leaseToken": lease_token,
-            "navigationRevision": 1,
+            "navigationRevision": "1",
             "inspectPoint": { "x": 50, "y": 40 }
         })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let sel_rev = sel_res["selectionRevision"].as_u64().unwrap();
+    let sel_rev = sel_res["selectionRevision"].as_str().unwrap().parse::<u64>().unwrap();
     assert_eq!(sel_res["preview"]["tag"], "button");
     assert_eq!(sel_res["preview"]["role"], "button");
     assert!(!sel_res["preview"]["attributes"]
@@ -412,9 +412,9 @@ async fn selection_extracts_sanitized_preview_creates_managed_png_and_hands_off_
         &format!("/api/browser/sessions/{session_id}/selection/artifacts"),
         &cookie,
         Some(json!({
-            "selectionRevision": sel_rev,
+            "selectionRevision": sel_rev.to_string(),
             "terminalId": "shell:sel-1",
-            "terminalIncarnation": inc,
+            "terminalIncarnation": inc.to_string(),
             "source": "Cooperative",
             "owner": "someone-else"
         })),
@@ -432,10 +432,10 @@ async fn selection_extracts_sanitized_preview_creates_managed_png_and_hands_off_
         &format!("/api/browser/sessions/{session_id}/selection/artifacts"),
         &cookie,
         Some(json!({
-            "selectionRevision": sel_rev,
+            "selectionRevision": sel_rev.to_string(),
             "terminalId": "shell:sel-1",
             "terminalIncarnation": inc.to_string(),
-            "navigationRevision": 1,
+            "navigationRevision": "1",
             "includePng": true
         })),
     )
@@ -531,12 +531,12 @@ async fn terminal_replacement_and_navigation_invalidate_pending_handoff() {
         &cookie,
         Some(json!({
             "leaseToken": lease_token,
-            "navigationRevision": 1,
+            "navigationRevision": "1",
             "inspectPoint": { "x": 10, "y": 10 }
         })),
     )
     .await;
-    let sel_rev = sel["selectionRevision"].as_u64().unwrap();
+    let sel_rev = sel["selectionRevision"].as_str().unwrap().parse::<u64>().unwrap();
 
     // Terminal 1 and ambient Terminal 2
     let inc1 = create_test_terminal(&state, "shell:target", temp.path());
@@ -549,9 +549,9 @@ async fn terminal_replacement_and_navigation_invalidate_pending_handoff() {
         &format!("/api/browser/sessions/{session_id}/selection/artifacts"),
         &cookie,
         Some(json!({
-            "selectionRevision": sel_rev,
+            "selectionRevision": sel_rev.to_string(),
             "terminalId": "shell:target",
-            "terminalIncarnation": inc1,
+            "terminalIncarnation": inc1.to_string(),
             "includePng": false
         })),
     )
@@ -587,7 +587,7 @@ async fn terminal_replacement_and_navigation_invalidate_pending_handoff() {
         "POST",
         &format!("/api/browser/sessions/{session_id}/navigate"),
         &cookie,
-        Some(json!({ "url": "http://example.com/page2", "navigationRevision": 1 })),
+        Some(json!({ "url": "http://example.com/page2", "navigationRevision": "1" })),
     )
     .await;
     assert_eq!(nav_status, StatusCode::OK);
@@ -610,9 +610,9 @@ async fn terminal_replacement_and_navigation_invalidate_pending_handoff() {
         &format!("/api/browser/sessions/{session_id}/selection/artifacts"),
         &cookie,
         Some(json!({
-            "selectionRevision": sel_rev,
+            "selectionRevision": sel_rev.to_string(),
             "terminalId": "shell:ambient",
-            "terminalIncarnation": _inc2
+            "terminalIncarnation": _inc2.to_string()
         })),
     )
     .await;
@@ -683,12 +683,12 @@ async fn demoted_admin_cannot_handoff_managed_selection_artifact() {
         &cookie_admin,
         Some(json!({
             "leaseToken": lease_token,
-            "navigationRevision": 1,
+            "navigationRevision": "1",
             "inspectPoint": { "x": 5, "y": 5 }
         })),
     )
     .await;
-    let sel_rev = sel["selectionRevision"].as_u64().unwrap();
+    let sel_rev = sel["selectionRevision"].as_str().unwrap().parse::<u64>().unwrap();
     let inc = create_test_terminal(&state_admin, "shell:demote", temp.path());
 
     let (status, art) = api_request(
@@ -697,9 +697,9 @@ async fn demoted_admin_cannot_handoff_managed_selection_artifact() {
         &format!("/api/browser/sessions/{session_id}/selection/artifacts"),
         &cookie_admin,
         Some(json!({
-            "selectionRevision": sel_rev,
+            "selectionRevision": sel_rev.to_string(),
             "terminalId": "shell:demote",
-            "terminalIncarnation": inc,
+            "terminalIncarnation": inc.to_string(),
             "includePng": false
         })),
     )
@@ -813,7 +813,7 @@ async fn overlay_inspect_event_populates_preview_and_frame_nav_clears_it() {
         &cookie,
         Some(json!({
             "leaseToken": lease_token,
-            "navigationRevision": 1
+            "navigationRevision": "1"
         })),
     )
     .await;
@@ -948,7 +948,7 @@ async fn inspect_point_installs_observer_and_navigated_within_document_invalidat
         &cookie,
         Some(json!({
             "leaseToken": lease_token,
-            "navigationRevision": 1,
+            "navigationRevision": "1",
             "inspectPoint": { "x": 20, "y": 20 }
         })),
     )
@@ -1048,7 +1048,7 @@ async fn concurrent_navigation_barrier_during_handoff_fails_closed_without_writi
         &cookie,
         Some(json!({
             "leaseToken": lease_token,
-            "navigationRevision": 1,
+            "navigationRevision": "1",
             "inspectPoint": { "x": 10, "y": 10 }
         })),
     )
@@ -1061,10 +1061,10 @@ async fn concurrent_navigation_barrier_during_handoff_fails_closed_without_writi
         &format!("/api/browser/sessions/{session_id}/selection/artifacts"),
         &cookie,
         Some(json!({
-            "selectionRevision": 2,
+            "selectionRevision": "2",
             "terminalId": term_id,
-            "terminalIncarnation": term_inc,
-            "navigationRevision": 1,
+            "terminalIncarnation": term_inc.to_string(),
+            "navigationRevision": "1",
             "includePng": false
         })),
     )
@@ -1112,7 +1112,7 @@ async fn concurrent_navigation_barrier_during_handoff_fails_closed_without_writi
         "POST",
         &format!("/api/browser/sessions/{session_id}/navigate"),
         &cookie,
-        Some(json!({ "url": "http://example.com/other", "navigationRevision": 1 })),
+        Some(json!({ "url": "http://example.com/other", "navigationRevision": "1" })),
     )
     .await;
     assert_eq!(nav_status, StatusCode::OK);
@@ -1191,7 +1191,7 @@ async fn api_nav_does_not_double_bump_while_native_nav_advances_without_picker()
         "POST",
         &format!("/api/browser/sessions/{session_id}/navigate"),
         &cookie,
-        Some(json!({ "url": "http://example.com/two", "navigationRevision": 1 })),
+        Some(json!({ "url": "http://example.com/two", "navigationRevision": "1" })),
     )
     .await;
     assert_eq!(nav_status, StatusCode::OK);
@@ -1330,13 +1330,13 @@ impl Fixture {
             &self.cookie,
             Some(json!({
                 "leaseToken": self.lease_token,
-                "navigationRevision": navigation_revision,
+                "navigationRevision": navigation_revision.to_string(),
                 "inspectPoint": { "x": 10, "y": 10 }
             })),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{sel}");
-        sel["selectionRevision"].as_u64().unwrap()
+        sel["selectionRevision"].as_str().unwrap().parse::<u64>().unwrap()
     }
 
     async fn artifact(&self, term_id: &str, term_inc: u64, sel_rev: u64, nav_rev: u64) -> String {
@@ -1349,10 +1349,10 @@ impl Fixture {
             ),
             &self.cookie,
             Some(json!({
-                "selectionRevision": sel_rev,
+                "selectionRevision": sel_rev.to_string(),
                 "terminalId": term_id,
-                "terminalIncarnation": term_inc,
-                "navigationRevision": nav_rev,
+                "terminalIncarnation": term_inc.to_string(),
+                "navigationRevision": nav_rev.to_string(),
                 "includePng": false
             })),
         )
@@ -2123,7 +2123,7 @@ async fn late_cleanup_of_an_old_selection_never_disables_a_newer_picker() {
         "POST",
         &format!("/api/browser/sessions/{}/selection/start", fx.session_id),
         &fx.cookie,
-        Some(json!({ "leaseToken": fx.lease_token, "navigationRevision": 2 })),
+        Some(json!({ "leaseToken": fx.lease_token, "navigationRevision": "2" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{started}");
@@ -2225,4 +2225,131 @@ async fn navigation_cleanup_queue_coalesces_and_session_close_waits_for_it() {
         nones <= 2,
         "overlay teardown was queued once per navigation instead of coalesced: {nones}"
     );
+}
+
+#[tokio::test]
+async fn page_replacement_gap_fences_parked_handoff_and_invalidates_selection() {
+    use dam_hopper_server::browser_host::selection::{
+        begin_page_observation_gap, is_selection_live, observed_navigation_count,
+    };
+
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("page-gap-handoff", None).await;
+    let term_id = "shell:page-gap-handoff";
+    let term_inc = create_test_terminal(&fx.state, term_id, fx.temp.path());
+    let sel_rev = fx.select(1).await;
+    let artifact = fx.artifact(term_id, term_inc, sel_rev, 1).await;
+    let producer = dam_hopper_server::browser_host::media::get_producer(&fx.session_id)
+        .await
+        .unwrap();
+    let (handoff, release) = handoff_parked_on_pty_lock(&fx, &artifact).await;
+
+    // Publication is synchronous even while the handoff owns the selection read lock.
+    let mut gap = begin_page_observation_gap(&fx.session_id);
+    assert_eq!(observed_navigation_count(&fx.session_id), 1);
+    let state = fx.state.clone();
+    let invalidation = tokio::spawn(async move {
+        gap.invalidate(&state).await;
+        gap
+    });
+    release.send(()).unwrap();
+    assert_eq!(handoff.await.unwrap().0, StatusCode::NOT_FOUND);
+    let gap = invalidation.await.unwrap();
+    assert!(!pty_has_reference(&fx.state, term_id));
+    assert!(!is_selection_live(&fx.session_id, &fx.username, 1, sel_rev).await);
+    assert_eq!(fx.registry_nav().await, 2);
+    assert_eq!(fx.handoff(&artifact).await, StatusCode::NOT_FOUND);
+
+    assert!(gap.finish(&fx.state, &producer.cdp_client, "replacement-page").await);
+    let _ = fx.cdp.event_tx.send(json!({
+        "sessionId": "replacement-page",
+        "method": "Page.navigatedWithinDocument",
+        "params": { "frameId": "main", "url": "http://example.com/replacement" }
+    }));
+    fx.wait_registry_nav(3).await;
+    fx.close().await;
+}
+
+#[tokio::test]
+async fn only_latest_page_gap_can_settle_and_cancelled_gap_stays_closed() {
+    use dam_hopper_server::browser_host::selection::begin_page_observation_gap;
+
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("page-gap-generation", None).await;
+    fx.select(1).await;
+    let producer = dam_hopper_server::browser_host::media::get_producer(&fx.session_id)
+        .await
+        .unwrap();
+    let mut first = begin_page_observation_gap(&fx.session_id);
+    first.invalidate(&fx.state).await;
+    let mut second = begin_page_observation_gap(&fx.session_id);
+    second.invalidate(&fx.state).await;
+    assert!(!first.finish(&fx.state, &producer.cdp_client, "old-page").await);
+    let (status, _) = api_request(
+        fx.state.clone(), "POST",
+        &format!("/api/browser/sessions/{}/selection/start", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "leaseToken": fx.lease_token, "navigationRevision": "3",
+                     "inspectPoint": { "x": 10, "y": 10 } })),
+    ).await;
+    assert_ne!(status, StatusCode::OK);
+    assert!(second.finish(&fx.state, &producer.cdp_client, "new-page").await);
+
+    // A dropped replacement does not reopen selection, even after its invalidation completed.
+    let mut cancelled = begin_page_observation_gap(&fx.session_id);
+    cancelled.invalidate(&fx.state).await;
+    drop(cancelled);
+    let (status, _) = api_request(
+        fx.state.clone(), "POST",
+        &format!("/api/browser/sessions/{}/selection/start", fx.session_id),
+        &fx.cookie,
+        Some(json!({ "leaseToken": fx.lease_token, "navigationRevision": "4",
+                     "inspectPoint": { "x": 10, "y": 10 } })),
+    ).await;
+    assert_ne!(status, StatusCode::OK);
+    fx.close().await;
+}
+
+#[tokio::test]
+async fn actor_recovery_invalidates_production_selection_before_replacement() {
+    use dam_hopper_server::browser_host::selection::is_selection_live;
+
+    let _guard = TEST_SERIAL_LOCK.lock().await;
+    let fx = fixture("recovery-selection-fence", None).await;
+    let terminal = "shell:recovery-selection-fence";
+    let incarnation = create_test_terminal(&fx.state, terminal, fx.temp.path());
+    let selection_revision = fx.select(1).await;
+    let artifact = fx.artifact(terminal, incarnation, selection_revision, 1).await;
+    let producer = dam_hopper_server::browser_host::media::get_producer(&fx.session_id)
+        .await
+        .unwrap();
+    let subscription = uuid::Uuid::new_v4().to_string();
+    producer.register_viewer_demand("v1", &subscription, true).await;
+    let run = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if producer.state().await
+                == dam_hopper_server::browser_host::screencast::ScreencastState::Streaming
+            {
+                break producer.current_run().await.unwrap();
+            }
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+
+    producer.cdp_client.close().await;
+    fx.wait_registry_nav(2).await;
+    assert!(!is_selection_live(&fx.session_id, &fx.username, 1, selection_revision).await);
+    assert_eq!(fx.handoff(&artifact).await, StatusCode::NOT_FOUND);
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if producer.current_run().await.is_some_and(|current| current != run)
+                && !producer.recovery_pending()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("replacement run should become available");
+    assert!(!pty_has_reference(&fx.state, terminal));
+    fx.close().await;
 }

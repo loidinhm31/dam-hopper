@@ -83,10 +83,10 @@ describe("input-controller", () => {
     controller = new BrowserInputController({
       getSessionId: () => "sess-1",
       getIncarnation: () => "inc-1",
-      getProfileEpoch: () => 1,
+      getProfileEpoch: () => "1",
       getSubscriptionEpoch: () => subEpoch,
       getLeaseToken: () => leaseToken,
-      getViewportEpoch: () => 1,
+      getViewportEpoch: () => "1",
       getDrawnRect: () => drawnRect,
       getControlSocket: () => socket as unknown as WebSocket,
     });
@@ -213,7 +213,7 @@ describe("input-controller", () => {
 
       expect(socket.sentMessages.length).toBe(1);
       const keyMsg = JSON.parse(socket.sentMessages[0]) as InputMessage;
-      expect(keyMsg.inputSeq).toBe(1);
+      expect(keyMsg.inputSeq).toBe("1");
 
       socket.sentMessages = [];
       // Change lease token
@@ -224,10 +224,10 @@ describe("input-controller", () => {
       expect(socket.sentMessages.length).toBe(2);
       const releaseMsg = JSON.parse(socket.sentMessages[0]) as InputMessage;
       const insertMsg = JSON.parse(socket.sentMessages[1]) as InputMessage;
-      expect(releaseMsg.inputSeq).toBe(1);
+      expect(releaseMsg.inputSeq).toBe("1");
       expect(releaseMsg.event.kind).toBe("keyUp");
       expect(insertMsg.event.kind).toBe("insertText");
-      expect(insertMsg.inputSeq).toBe(2);
+      expect(insertMsg.inputSeq).toBe("2");
       expect(insertMsg.leaseToken).toBe("new-lease-token-456");
     });
   });
@@ -250,7 +250,7 @@ describe("input-controller", () => {
       expect(socket.sentMessages.length).toBe(1);
 
       const msg1 = JSON.parse(socket.sentMessages[0]) as InputMessage;
-      expect(msg1.inputSeq).toBe(1);
+      expect(msg1.inputSeq).toBe("1");
       expect(msg1.event).toMatchObject({
         kind: "pointerDown",
         button: "left",
@@ -273,7 +273,7 @@ describe("input-controller", () => {
       expect(socket.sentMessages.length).toBe(2);
 
       const msg2 = JSON.parse(socket.sentMessages[1]) as InputMessage;
-      expect(msg2.inputSeq).toBe(2);
+      expect(msg2.inputSeq).toBe("2");
       expect(msg2.event).toMatchObject({
         kind: "pointerUp",
         button: "left",
@@ -453,7 +453,7 @@ describe("input-controller", () => {
       expect(socket.sentMessages.map(message => JSON.parse(message).event.kind)).toEqual([
         "pointerDown", "pointerUp", "keyDown", "keyUp", "insertText",
       ]);
-      expect(socket.sentMessages.map(message => JSON.parse(message).inputSeq)).toEqual([1, 2, 3, 4, 5]);
+      expect(socket.sentMessages.map(message => JSON.parse(message).inputSeq)).toEqual(["1", "2", "3", "4", "5"]);
       expect(controller.getHeldKeys().size).toBe(0);
       expect(controller.completeControlHandoff(handoff)).toBe(false);
     });
@@ -555,7 +555,7 @@ describe("input-controller", () => {
         { kind: "keyUp", key: "Backspace", code: "Backspace", modifiers: 0 },
         { kind: "insertText", text: "new-arrival" },
       ]);
-      expect(messages.map(message => message.inputSeq)).toEqual(Array.from({ length: 125 }, (_, index) => index + 1));
+      expect(messages.map(message => message.inputSeq)).toEqual(Array.from({ length: 125 }, (_, index) => String(index + 1)));
       expect(complete).toHaveBeenCalledOnce();
     });
 
@@ -691,14 +691,14 @@ describe("input-controller", () => {
       expect(sends.maxWindow()).toBeLessThanOrEqual(100);
       expect(sends.maxWindow(kind => !isRelease(kind))).toBeLessThanOrEqual(80);
       const seqs = socket.sentMessages.map(message => (JSON.parse(message) as InputMessage).inputSeq);
-      expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, i) => i + 1));
+      expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, i) => String(i + 1)));
     });
 
     it("closes fail-closed on normal overflow past 80/s without recording held state", () => {
       const errors: Error[] = [];
       controller = new BrowserInputController({
-        getSessionId: () => "sess-1", getIncarnation: () => "inc-1", getProfileEpoch: () => 1,
-        getSubscriptionEpoch: () => subEpoch, getLeaseToken: () => leaseToken, getViewportEpoch: () => 1,
+        getSessionId: () => "sess-1", getIncarnation: () => "inc-1", getProfileEpoch: () => "1",
+        getSubscriptionEpoch: () => subEpoch, getLeaseToken: () => leaseToken, getViewportEpoch: () => "1",
         getDrawnRect: () => drawnRect, getControlSocket: () => socket as unknown as WebSocket,
         onError: err => errors.push(err),
       });
@@ -745,6 +745,84 @@ describe("input-controller", () => {
       const events = socket.sentMessages.map(message => (JSON.parse(message) as InputMessage).event);
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ kind: "wheel", deltaY: 20, u: expect.closeTo((400 - 80) / 480, 4) });
+    });
+  });
+
+  describe("canonical decimal wire counters", () => {
+    const TWO_POW_53_PLUS_1 = "9007199254740993";
+    const U64_MAX = "18446744073709551615";
+
+    function build(profileEpoch: string, viewportEpoch: () => string, errors: Error[] = []) {
+      return new BrowserInputController({
+        getSessionId: () => "sess-1",
+        getIncarnation: () => "inc-1",
+        getProfileEpoch: () => profileEpoch,
+        getSubscriptionEpoch: () => subEpoch,
+        getLeaseToken: () => leaseToken,
+        getViewportEpoch: viewportEpoch,
+        getDrawnRect: () => drawnRect,
+        getControlSocket: () => socket as unknown as WebSocket,
+        onError: err => errors.push(err),
+      });
+    }
+
+    it("sends profile/viewport epochs and inputSeq as exact decimal strings above 2^53 and at u64 max", () => {
+      for (const [profile, viewport] of [
+        [TWO_POW_53_PLUS_1, TWO_POW_53_PLUS_1],
+        [U64_MAX, U64_MAX],
+      ]) {
+        socket.sentMessages = [];
+        const c = build(profile, () => viewport);
+        expect(c.handleInsertText("x")).toBe(true);
+        const raw = socket.sentMessages[0];
+        const msg = JSON.parse(raw) as InputMessage;
+        expect(msg.profileEpoch).toBe(profile);
+        expect(msg.viewportEpoch).toBe(viewport);
+        expect(msg.inputSeq).toBe("1");
+        // The wire carries JSON strings, never lossy numbers.
+        expect(raw).toContain(`"profileEpoch":"${profile}"`);
+        expect(raw).toContain(`"viewportEpoch":"${viewport}"`);
+        expect(raw).toContain('"inputSeq":"1"');
+      }
+    });
+
+    it("never sends under an epoch that is not a canonical positive decimal u64 (no fabricated identity)", () => {
+      for (const bad of ["", "0", "01", "-1", "1.5", "abc", "18446744073709551616"]) {
+        socket.sentMessages = [];
+        const viaViewport = build("1", () => bad);
+        expect(viaViewport.handleInsertText("x")).toBe(false);
+        const viaProfile = build(bad, () => "1");
+        expect(viaProfile.handleInsertText("x")).toBe(false);
+        expect(socket.sentMessages).toEqual([]);
+      }
+    });
+
+    it("stops at an exhausted inputSeq instead of wrapping or reusing it", () => {
+      const errors: Error[] = [];
+      const c = build("1", () => "1", errors);
+      // The first event adopts the lease (sequence restarts); then fast-forward to the edge.
+      expect(c.handleInsertText("prime")).toBe(true);
+      socket.sentMessages = [];
+      (c as unknown as { inputSeq: bigint }).inputSeq = 18446744073709551614n;
+      expect(c.handleInsertText("last")).toBe(true);
+      expect((JSON.parse(socket.sentMessages[0]) as InputMessage).inputSeq).toBe(U64_MAX);
+      expect(c.handleInsertText("past-the-end")).toBe(false);
+      expect(socket.sentMessages).toHaveLength(1);
+      expect(errors.map(e => e.message)).toContain("Input sequence exhausted; reacquire control to continue");
+    });
+
+    it("drops a pending coalesced move whose viewport epoch moved before it was flushed", async () => {
+      vi.useFakeTimers();
+      try {
+        let viewport = "1";
+        const c = build("1", () => viewport);
+        expect(c.handlePointerMove({ currentTarget: canvas, clientX: 300, clientY: 200, button: 0, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false } as unknown as PointerEvent)).toBe(true);
+        viewport = "2";
+        await vi.advanceTimersByTimeAsync(50);
+        expect(socket.sentMessages).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

@@ -181,7 +181,7 @@ describe("ServerProfilesDialog", () => {
             browserResetState: "retained",
             browserCredentialsRetained: true,
             resetRequired: true,
-            profileEpoch: 2,
+            profileEpoch: "2",
           }),
           { status: 200 },
         );
@@ -308,7 +308,7 @@ describe("ServerProfilesDialog", () => {
             browserResetState: "cleared",
             browserCredentialsRetained: false,
             resetRequired: false,
-            profileEpoch: 5,
+            profileEpoch: "5",
           }),
           { status: 200 },
         );
@@ -355,7 +355,7 @@ describe("ServerProfilesDialog", () => {
     expect(sent).toMatchObject({
       browserReset: true,
       confirmed: true,
-      expectedProfileEpoch: 4,
+      expectedProfileEpoch: "4",
     });
     expect(typeof sent.operationId).toBe("string");
     expect(document.querySelector('[data-testid="logout-outcome-panel"]')?.textContent).toContain(

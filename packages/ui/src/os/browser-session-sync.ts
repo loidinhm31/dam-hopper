@@ -35,7 +35,7 @@ export type BrowserSessionSyncResult = "applied" | "stale" | "detached";
 
 export interface BrowserSessionRuntime {
   browserIncarnation: string;
-  profileEpoch: string | number;
+  profileEpoch: string;
   actionSequence?: number;
   subscriptionEpoch?: string;
   currentSubscriptionEpoch?: string;

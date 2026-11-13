@@ -11,20 +11,21 @@ use chromiumoxide_cdp::cdp::browser_protocol::page::{
     StopScreencastParams,
 };
 use chromiumoxide_cdp::cdp::browser_protocol::target::AttachToTargetParams;
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock, Semaphore};
 use parking_lot::Mutex as SyncMutex;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use super::cdp::{CdpClient, CdpError, CdpNavigationListener, ScreencastFrameData};
+use super::cdp::{CdpClient, CdpError, CdpNavigationListener, PendingAck, ScreencastFrameData};
 use super::adaptive_stream_controller::{
     AdaptiveStreamController, AudioGate, AudioSuppression, AudioWatermark, ViewerDirectives,
     ViewerSample,
 };
 use super::capture_tier::{
-    build_start_params, CaptureCeilings, CaptureTierSnapshot, CaptureTierState, QualityPreference,
+    build_start_params, CaptureCeilings, CaptureTierSnapshot, CaptureTierState, QualityMutation,
+    QualityPreference, QualityRevision,
 };
 use super::diagnostics::{global_memory_controller, global_stream_diagnostics, TrackedBhjfFrame};
 use super::protocol::{
@@ -33,6 +34,12 @@ use super::protocol::{
     AUDIO_CHANNELS, AUDIO_ENCODING_PCM16LE, AUDIO_SAMPLE_RATE, MAX_AUDIO_BASE64_BYTES,
     MAX_AUDIO_PCM_BYTES, MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH, MAX_JPEG_PAYLOAD_BYTES, MAX_PIXELS,
 };
+
+mod fresh_page_session;
+mod recovery;
+mod recovery_supervisor;
+pub use recovery::RecoveryPolicy;
+use recovery::{AbortCause, RecoveryState, MAX_ACKS_IN_FLIGHT};
 
 pub const DEFAULT_JPEG_QUALITY_LEGACY: u8 = 65;
 pub const AUDIO_DRAIN_INTERVAL: Duration = Duration::from_millis(50);
@@ -75,13 +82,15 @@ impl fmt::Display for ScreencastState {
 #[derive(Debug, Clone)]
 struct EncodedCandidate {
     _frame_session_id: i64,
-    data_base64: String,
     native_capture_time_unix_ms: Option<u64>,
     server_received_unix_ms: u64,
     received_at: Instant,
     metadata_geometry: Option<TargetGeometry>,
     producer_run: Uuid,
     viewport_epoch: u64,
+    /// Shared ingress frame: its base64 payload stays charged to the global budget while the
+    /// candidate (or any other holder) keeps it alive; nothing is copied.
+    frame: Arc<ScreencastFrameData>,
 }
 #[derive(Debug, Clone)]
 pub struct ViewerDemand {
@@ -97,6 +106,9 @@ pub struct ViewerDemand {
 struct AudioSource {
     run: Uuid,
     cancel: CancellationToken,
+    /// Chunks admitted for THIS source. Scoped to the source (a restart is a new source with a
+    /// fresh counter), so `(run, seq)` can be read as one coherent fresh-audio boundary.
+    seq: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Default)]
@@ -113,6 +125,19 @@ pub struct ScreencastLedger {
     pub periodic_screenshot_violations: AtomicU64,
     pub zero_demand_stops: AtomicU64,
     pub demand_starts: AtomicU64,
+    /// Audio chunks taken off a viewer's receiver and discarded because they were broadcast
+    /// before that viewer's gate (re)opened.
+    pub audio_dropped_by_boundary: AtomicU64,
+    /// ACK answers received for current-run attempts.
+    pub acks_completed: AtomicU64,
+    /// ACK attempts whose run ended before the answer arrived (never replayed).
+    pub acks_abandoned: AtomicU64,
+    /// Ingress `Lagged` events: each one aborted its run.
+    pub ingress_lagged: AtomicU64,
+    pub runs_aborted: AtomicU64,
+    pub recovery_attempts: AtomicU64,
+    pub recoveries_succeeded: AtomicU64,
+    pub recoveries_exhausted: AtomicU64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -578,22 +603,46 @@ impl CdpNavigationListener for ProducerNavListener {
     }
 }
 
+/// Attempts (and per-attempt backoff while a mutation is in flight) to read one coherent quality
+/// snapshot before falling back to an unstable placeholder.
+const QUALITY_SNAPSHOT_ATTEMPTS: usize = 8;
+const QUALITY_SNAPSHOT_BACKOFF: Duration = Duration::from_millis(1);
+
+/// A built quality event and the revision it is provably coherent with.
+#[derive(Debug, Clone)]
+pub struct StreamQualitySnapshot {
+    pub event: BrowserStreamQuality,
+    /// `Some(v)`: no event-affecting mutation overlapped the read; `v` is the committed revision it
+    /// reflects. `None`: state never settled and `event` is a conservative warming placeholder that
+    /// must not be memoized (the next dirty check must rebuild it).
+    pub revision: Option<u64>,
+}
+
 pub struct ScreencastProducer {
     browser_session_id: String,
     browser_incarnation: String,
     profile_epoch: u64,
     viewport_epoch: Arc<AtomicU64>,
     frame_seq: Arc<AtomicU64>,
-    audio_seq: Arc<AtomicU64>,
     audio_doc_epoch: Arc<AtomicU64>,
     doc_epoch_tx: Arc<tokio::sync::watch::Sender<AudioDocAuthority>>,
     nav_listener: Arc<ProducerNavListener>,
     pub cdp_client: Arc<CdpClient>,
     target_id: String,
     page_session_id: Arc<RwLock<Option<String>>>,
+    /// An ambiguous Page-session operation prevents reuse until actor closure is confirmed.
+    page_session_poisoned: Arc<AtomicBool>,
     current_run: Arc<RwLock<Option<Uuid>>>,
     native_screencast_session_id: Arc<RwLock<Option<i64>>>,
     state: Arc<RwLock<ScreencastState>>,
+    /// Serializes native lifecycle operations independently of observable state.
+    lifecycle_operation: Arc<Mutex<()>>,
+    /// Serializes frame publication against geometry fences: a frame is committed only while its
+    /// capture epoch is still current, and a fence cannot slip between that check and the commit.
+    publish_gate: Arc<Mutex<()>>,
+    /// Bumped by every geometry transition and every external geometry fence (begin and commit).
+    /// A rollback restores its snapshot only if no one else bumped it meanwhile.
+    fence_generation: Arc<AtomicU64>,
     current_candidate: Arc<Mutex<Option<EncodedCandidate>>>,
     cached_frame: Arc<RwLock<Option<TrackedBhjfFrame>>>,
     cached_header: Arc<RwLock<Option<TargetFrameHeader>>>,
@@ -613,15 +662,22 @@ pub struct ScreencastProducer {
     frame_broadcast: broadcast::Sender<TrackedBhjfFrame>,
     active_run_cancel: Arc<Mutex<Option<CancellationToken>>>,
     geometry: Arc<RwLock<TargetGeometry>>,
+    /// Native evidence gate for pointer projection (see `input_geometry_trusted`).
+    geometry_trusted: Arc<AtomicBool>,
     current_run_proven: Arc<SyncMutex<Option<ProvenFrameState>>>,
     applied_event_version: Arc<SyncMutex<(Option<Uuid>, u64)>>,
-    quality_revision: Arc<AtomicU64>,
-    #[doc(hidden)]
-    pub test_audio_drain_held: Arc<std::sync::atomic::AtomicBool>,
-    #[doc(hidden)]
-    pub test_audio_drain_notify: Arc<tokio::sync::Notify>,
+    quality_revision: Arc<QualityRevision>,
+    /// Test barrier: while `true`, media sessions do not take chunks off their audio receiver.
+    audio_drain_barrier: Arc<tokio::sync::watch::Sender<bool>>,
     /// Serializes Page-session setup so exactly one session exists.
     page_setup: Arc<Mutex<()>>,
+    /// Run abort/recovery supervisor state (single flight, bounded backoff).
+    recovery: Arc<RecoveryState>,
+    /// Application-owned selection authority used during Page-session replacement.
+    selection_context: Option<crate::state::AppState>,
+    selection_gap: Arc<Mutex<Option<crate::browser_host::selection::PageObservationGap>>>,
+    /// Cancels the previous child-target stealth listener when a Page session is replaced.
+    stealth_listener: Arc<SyncMutex<Option<CancellationToken>>>,
 }
 #[derive(Debug, Clone)]
 pub struct ProvenFrameState {
@@ -629,6 +685,14 @@ pub struct ProvenFrameState {
     pub snapshot: Arc<CaptureTierSnapshot>,
     pub width: u32,
     pub height: u32,
+}
+
+/// Whether a frame's native viewport metadata supports projecting pointer fractions through
+/// `basis`: CSS size within one pixel (rounding of the applied override) and no page zoom.
+fn native_geometry_agrees(native: &TargetGeometry, basis: &TargetGeometry) -> bool {
+    (native.css_width - basis.css_width).abs() <= 1.0
+        && (native.css_height - basis.css_height).abs() <= 1.0
+        && (native.page_scale - 1.0).abs() <= 1e-3
 }
 
 impl ScreencastProducer {
@@ -679,16 +743,19 @@ impl ScreencastProducer {
             profile_epoch,
             viewport_epoch: Arc::new(AtomicU64::new(viewport_epoch.max(1))),
             frame_seq: Arc::new(AtomicU64::new(0)),
-            audio_seq: Arc::new(AtomicU64::new(0)),
             audio_doc_epoch,
             doc_epoch_tx,
             nav_listener,
             cdp_client,
             target_id,
             page_session_id: Arc::new(RwLock::new(None)),
+            page_session_poisoned: Arc::new(AtomicBool::new(false)),
             current_run: Arc::new(RwLock::new(None)),
             native_screencast_session_id: Arc::new(RwLock::new(None)),
             state: Arc::new(RwLock::new(ScreencastState::Stopped)),
+            lifecycle_operation: Arc::new(Mutex::new(())),
+            publish_gate: Arc::new(Mutex::new(())),
+            fence_generation: Arc::new(AtomicU64::new(0)),
             current_candidate: Arc::new(Mutex::new(None)),
             cached_frame: Arc::new(RwLock::new(None)),
             cached_header: Arc::new(RwLock::new(None)),
@@ -705,13 +772,22 @@ impl ScreencastProducer {
             audio_broadcast,
             active_run_cancel: Arc::new(Mutex::new(None)),
             geometry: Arc::new(RwLock::new(initial_geometry)),
+            geometry_trusted: Arc::new(AtomicBool::new(true)),
             current_run_proven: Arc::new(SyncMutex::new(None)),
             applied_event_version: Arc::new(SyncMutex::new((None, 0))),
-            quality_revision: Arc::new(AtomicU64::new(1)),
-            test_audio_drain_held: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            test_audio_drain_notify: Arc::new(tokio::sync::Notify::new()),
+            quality_revision: Arc::new(QualityRevision::new()),
+            audio_drain_barrier: Arc::new(tokio::sync::watch::channel(false).0),
             page_setup: Arc::new(Mutex::new(())),
+            recovery: Arc::new(RecoveryState::new(RecoveryPolicy::default())),
+            selection_context: None,
+            selection_gap: Arc::new(Mutex::new(None)),
+            stealth_listener: Arc::new(SyncMutex::new(None)),
         }
+    }
+
+    pub(crate) fn with_selection_context(mut self, state: crate::state::AppState) -> Self {
+        self.selection_context = Some(state);
+        self
     }
 
     /// Configures admin ceilings for capture FPS (1..=30) and JPEG quality (10..=100).
@@ -781,14 +857,24 @@ impl ScreencastProducer {
             .map(|s| s.run)
     }
 
+    /// Coherent fresh-audio boundary: the live audio source and how many of ITS chunks have been
+    /// admitted, read under the source lock. Without a live source nothing can be in flight, so the
+    /// boundary is `(None, 0)` and a stale count of a retired source can never be recorded.
+    fn audio_boundary(&self) -> (Option<Uuid>, u64) {
+        self.audio_source
+            .lock()
+            .as_ref()
+            .filter(|s| !s.cancel.is_cancelled())
+            .map_or((None, 0), |s| (Some(s.run), s.seq.load(Ordering::SeqCst)))
+    }
+
     /// One feedback sample from an admitted viewer subscription. `None` for unknown/stale subscriptions.
     pub fn adaptive_report(&self, subscription_epoch: &str, visible: bool, sample: ViewerSample) -> Option<ViewerDirectives> {
         let mut adaptive = self.adaptive.lock();
-        // Ordering argument: reading latest_audio_seq inside the adaptive lock ensures that
-        // any audio chunk broadcast before this gate transition must have committed its sequence
-        // number via SeqCst fetch_update prior to send(), so chunk.seq <= watermark.seq.
-        let seq = self.latest_audio_seq();
-        let source_run = self.audio_source_run();
+        // The boundary is sampled while holding the adaptive lock: a chunk's sequence is committed
+        // (SeqCst) before it is broadcast, so every chunk broadcast before this gate transition
+        // has seq <= boundary, and any chunk admitted afterwards is strictly above it.
+        let (source_run, seq) = self.audio_boundary();
         adaptive.report_with_seq(subscription_epoch, visible, sample, Instant::now(), source_run, seq)
     }
 
@@ -806,23 +892,45 @@ impl ScreencastProducer {
 
     pub fn set_viewer_quality_preference(&self, subscription_epoch: &str, pref: QualityPreference) -> bool {
         let mut adaptive = self.adaptive.lock();
-        let seq = self.latest_audio_seq();
-        let source_run = self.audio_source_run();
+        let (source_run, seq) = self.audio_boundary();
         adaptive.set_preference_with_seq(subscription_epoch, pref, Instant::now(), source_run, seq)
     }
 
     pub fn set_viewer_muted(&self, subscription_epoch: &str, muted: bool) -> bool {
         let mut adaptive = self.adaptive.lock();
-        let seq = self.latest_audio_seq();
-        let source_run = self.audio_source_run();
+        let (source_run, seq) = self.audio_boundary();
         adaptive.set_muted_with_seq(subscription_epoch, muted, Instant::now(), source_run, seq)
     }
 
+    /// Gate, generation and source-scoped watermark as one tuple (admission of a new chunk).
     pub fn viewer_audio_gate_info(&self, subscription_epoch: &str) -> Option<(AudioGate, u64, AudioWatermark)> {
         let mut adaptive = self.adaptive.lock();
-        let seq = self.latest_audio_seq();
-        let source_run = self.audio_source_run();
+        let (source_run, seq) = self.audio_boundary();
         adaptive.audio_gate_info(subscription_epoch, Instant::now(), source_run, seq)
+    }
+
+    /// Write-time admission of one queued audio slot, decided from ONE consistent state: the slot's
+    /// own admitted generation and sequence against the viewer's current gate, generation and
+    /// source-scoped boundary, and the live source identity. Unknown subscriptions fail closed.
+    pub fn audio_slot_admissible(
+        &self,
+        subscription_epoch: &str,
+        admitted_gen: u64,
+        chunk_run: Uuid,
+        chunk_seq: u64,
+    ) -> bool {
+        let mut adaptive = self.adaptive.lock();
+        let (source_run, seq) = self.audio_boundary();
+        if source_run != Some(chunk_run) {
+            return false;
+        }
+        adaptive
+            .audio_gate_info(subscription_epoch, Instant::now(), source_run, seq)
+            .is_some_and(|(gate, generation, watermark)| {
+                gate.is_allowed()
+                    && generation == admitted_gen
+                    && !watermark.suppresses(Some(chunk_run), chunk_seq)
+            })
     }
 
     /// Quality preference accepted for this subscription; `None` if unknown.
@@ -830,33 +938,53 @@ impl ScreencastProducer {
         self.adaptive.lock().viewer_preference(subscription_epoch)
     }
 
+    /// Committed revision of the quality-event inputs (the digest's cheap dirty check).
     pub fn quality_revision(&self) -> u64 {
-        self.quality_revision.load(Ordering::Acquire)
-    }
-
-    pub fn latest_audio_seq(&self) -> u64 {
-        self.audio_seq.load(Ordering::Acquire)
+        self.quality_revision.version()
     }
 
     fn bump_quality_revision(&self) {
-        self.quality_revision.fetch_add(1, Ordering::Release);
+        self.quality_revision.bump();
     }
+
+    /// Marks an event-affecting mutation in flight; the revision advances when the guard drops.
+    #[doc(hidden)]
+    pub fn begin_quality_mutation(&self) -> QualityMutation<'_> {
+        self.quality_revision.begin()
+    }
+
     #[doc(hidden)]
     pub fn hold_audio_drain(&self) {
-        self.test_audio_drain_held.store(true, Ordering::SeqCst);
+        self.audio_drain_barrier.send_replace(true);
     }
 
     #[doc(hidden)]
     pub fn release_audio_drain(&self) {
-        self.test_audio_drain_held.store(false, Ordering::SeqCst);
-        self.test_audio_drain_notify.notify_waiters();
+        self.audio_drain_barrier.send_replace(false);
+    }
+
+    #[doc(hidden)]
+    pub fn audio_drain_barrier(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.audio_drain_barrier.subscribe()
     }
 
 
     pub async fn stream_quality_event(&self, subscription_epoch: &str) -> BrowserStreamQuality {
-        // Bounded loop (up to 3 attempts) to sample a coherent state snapshot without mid-read mutations
-        for _ in 0..3 {
-            let rev_pre = self.quality_revision();
+        self.stream_quality_snapshot(subscription_epoch).await.event
+    }
+
+    /// Builds the viewer's quality event from one coherent snapshot of the producer state.
+    ///
+    /// The read is accepted only when no event-affecting mutation was in flight and the revision
+    /// did not move while the inputs were read (see [`QualityRevision`]). A writer in flight is
+    /// waited out for a short bounded time; if state never settles, a conservative warming
+    /// placeholder is returned with `revision: None` so the caller never memoizes it.
+    pub async fn stream_quality_snapshot(&self, subscription_epoch: &str) -> StreamQualitySnapshot {
+        for _ in 0..QUALITY_SNAPSHOT_ATTEMPTS {
+            let Some(version) = self.quality_revision.begin_read() else {
+                tokio::time::sleep(QUALITY_SNAPSHOT_BACKOFF).await;
+                continue;
+            };
             let cur_run = *self.current_run.read().await;
             let target = self.capture.current();
             let proven = self.current_run_proven.lock().clone();
@@ -866,25 +994,27 @@ impl ScreencastProducer {
                 .unwrap_or(QualityPreference::Auto);
             let geom = self.geometry.read().await.clone();
             let ceilings = *self.capture.ceilings();
-            let rev_post = self.quality_revision();
-
-            if rev_pre != rev_post {
+            let unavailable = self.recovery.is_unavailable();
+            if !self.quality_revision.validate_read(version) {
                 continue;
             }
-
-            return self.build_stream_quality_from_snapshot(
-                subscription_epoch,
-                cur_run,
-                target,
-                proven,
-                directives,
-                pref,
-                geom,
-                ceilings,
-            );
+            return StreamQualitySnapshot {
+                event: self.build_stream_quality_from_snapshot(
+                    subscription_epoch,
+                    cur_run,
+                    target,
+                    proven,
+                    directives,
+                    pref,
+                    geom,
+                    ceilings,
+                    unavailable,
+                ),
+                revision: Some(version),
+            };
         }
 
-        // Fall back to warming if producer state is rapidly changing during construction
+        // State never settled: never claim a proof; the placeholder is not memoizable.
         let cur_run = *self.current_run.read().await;
         let target = self.capture.current();
         let directives = self.viewer_directives(subscription_epoch);
@@ -893,16 +1023,21 @@ impl ScreencastProducer {
             .unwrap_or(QualityPreference::Auto);
         let geom = self.geometry.read().await.clone();
         let ceilings = *self.capture.ceilings();
-        self.build_stream_quality_from_snapshot(
-            subscription_epoch,
-            cur_run,
-            target,
-            None,
-            directives,
-            pref,
-            geom,
-            ceilings,
-        )
+        let unavailable = self.recovery.is_unavailable();
+        StreamQualitySnapshot {
+            event: self.build_stream_quality_from_snapshot(
+                subscription_epoch,
+                cur_run,
+                target,
+                None,
+                directives,
+                pref,
+                geom,
+                ceilings,
+                unavailable,
+            ),
+            revision: None,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -916,6 +1051,7 @@ impl ScreencastProducer {
         pref: QualityPreference,
         geom: TargetGeometry,
         ceilings: CaptureCeilings,
+        unavailable: bool,
     ) -> BrowserStreamQuality {
         let (viewer_tier, fps, audio_suppressed, audio_reason) = match directives {
             Some(d) => {
@@ -1006,7 +1142,8 @@ impl ScreencastProducer {
                 )
             }
             (None, _) => {
-                // No active run yet: warming placeholder.
+                // No active run: warming while a start or recovery is pending, `unavailable`
+                // once recovery gave up on demand that still exists.
                 let (w, h) = target.image_bounds(&ceilings, geom.css_width, geom.css_height);
                 let scale = (f64::from(target.scale_permille) / 1000.0).clamp(0.001, 1.0);
                 (
@@ -1017,7 +1154,11 @@ impl ScreencastProducer {
                     scale,
                     w.clamp(1, MAX_IMAGE_WIDTH),
                     h.clamp(1, MAX_IMAGE_HEIGHT),
-                    StreamQualityStatus::Warming,
+                    if unavailable {
+                        StreamQualityStatus::Unavailable
+                    } else {
+                        StreamQualityStatus::Warming
+                    },
                 )
             }
         };
@@ -1043,12 +1184,14 @@ impl ScreencastProducer {
 
     fn run_adaptive_evaluation(&self) {
         let mut adaptive = self.adaptive.lock();
-        let seq = self.latest_audio_seq();
-        let source_run = self.audio_source_run();
+        let (source_run, seq) = self.audio_boundary();
         let decision = adaptive.evaluate_with_seq(Instant::now(), source_run, seq);
         if let Some(d) = decision {
+            let mutation = self.begin_quality_mutation();
             if self.capture.publish(d.fidelity_stage, d.fps).is_some() {
-                self.bump_quality_revision();
+                drop(mutation);
+            } else {
+                mutation.discard();
             }
         }
     }
@@ -1059,8 +1202,12 @@ impl ScreencastProducer {
         if let Some(cur) = src.as_ref().filter(|s| !s.cancel.is_cancelled()) {
             return (cur.run, cur.cancel.clone(), false);
         }
-        self.audio_seq.store(0, Ordering::SeqCst);
-        let fresh = AudioSource { run: producer_run, cancel: CancellationToken::new() };
+        // `producer_run` is a fresh UUID per run, so a restarted source never reuses an identity.
+        let fresh = AudioSource {
+            run: producer_run,
+            cancel: CancellationToken::new(),
+            seq: Arc::new(AtomicU64::new(0)),
+        };
         let out = (fresh.run, fresh.cancel.clone(), true);
         *src = Some(fresh);
         out
@@ -1112,15 +1259,19 @@ impl ScreencastProducer {
     /// Advancing viewport epoch (e.g. on client resize or viewport change).
     /// Contract: viewportEpoch advances BEFORE commands and publishing.
     pub async fn retire_producer_on_fatal_error(&self) {
+        self.recovery.cancel();
+        let _operation = self.lifecycle_operation.lock().await;
         let mut state = self.state.write().await;
         self.retire_locked(&mut state).await;
     }
 
     async fn retire_locked(&self, state: &mut ScreencastState) {
         *state = ScreencastState::Stopped;
-        *self.current_run.write().await = None;
-        *self.current_run_proven.lock() = None;
-        self.bump_quality_revision();
+        {
+            let _mutation = self.begin_quality_mutation();
+            *self.current_run.write().await = None;
+            *self.current_run_proven.lock() = None;
+        }
         let mut cancel_lock = self.active_run_cancel.lock().await;
         if let Some(token) = cancel_lock.take() {
             token.cancel();
@@ -1133,27 +1284,191 @@ impl ScreencastProducer {
         *self.current_candidate.lock().await = None;
     }
 
-    pub async fn update_geometry(&self, new_geometry: TargetGeometry) -> Result<(), String> {
+    /// Whether pointer projection against `geometry()` is currently backed by native evidence.
+    /// False while an external (raw CDP) mutation is unreconciled or when a native frame's
+    /// viewport metadata diverged from the producer geometry; never guessed back to true.
+    pub fn input_geometry_trusted(&self) -> bool {
+        self.geometry_trusted.load(Ordering::Acquire)
+    }
+
+    /// Monotonically advances the unmasked viewport epoch to `target`, clearing any transition
+    /// fence. Returns false (stale, dropped) when a newer epoch was already committed.
+    fn commit_epoch_monotonic(&self, target: u64) -> bool {
+        let target = target & !TRANSITIONAL_EPOCH_MASK;
+        let mut current = self.viewport_epoch.load(Ordering::SeqCst);
+        loop {
+            if (current & !TRANSITIONAL_EPOCH_MASK) > target {
+                return false;
+            }
+            match self.viewport_epoch.compare_exchange(
+                current,
+                target,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    /// Synchronously fences frames and trusted input before an external geometry mutation
+    /// reaches the browser: frame publication halts, old-geometry caches are dropped and pointer
+    /// projection is untrusted. No CDP is issued and no lock is held across an await.
+    pub async fn begin_external_geometry_fence(&self) {
+        let input = crate::api::browser_host::get_or_create_input_manager(&self.browser_session_id).await;
+        // Same lock order as `update_geometry` (publish gate, then the input fence gate), and the
+        // publication gate is held through the cache clears: a publisher that already passed its
+        // epoch check cannot repopulate the caches after the fence.
+        let publish = self.publish_gate.lock().await;
+        self.fence_generation.fetch_add(1, Ordering::SeqCst);
+        let gate = input.begin_geometry_fence().await;
+        let current = self.viewport_epoch.load(Ordering::SeqCst);
+        self.viewport_epoch
+            .store(current | TRANSITIONAL_EPOCH_MASK, Ordering::SeqCst);
+        self.geometry_trusted.store(false, Ordering::Release);
+        drop(gate);
+        self.screenshot_taken_in_epoch.store(false, Ordering::SeqCst);
+        *self.current_candidate.lock().await = None;
+        *self.cached_frame.write().await = None;
+        *self.cached_header.write().await = None;
+        drop(publish);
+    }
+
+    /// Restores the pre-transition authority of `update_geometry` iff this transition still owns the
+    /// viewport: no fence began or committed since `generation` was taken and the epoch is still
+    /// `expected_epoch` (compare-exchanged to `old_epoch`). Runs under the publication gate (an
+    /// external fence begins under it) and the geometry lock (its commit writes under it), so a
+    /// fence is either wholly before this restore (it is skipped, nothing is touched) or wholly
+    /// after it (the fence overwrites the restored state). Returns whether anything was restored.
+    #[allow(clippy::too_many_arguments)]
+    async fn restore_authority_if_owner(
+        &self,
+        generation: u64,
+        expected_epoch: u64,
+        old_epoch: u64,
+        geometry: Option<&TargetGeometry>,
+        trusted: bool,
+        candidate: Option<EncodedCandidate>,
+        frame: Option<TrackedBhjfFrame>,
+        header: Option<TargetFrameHeader>,
+    ) -> bool {
+        let _publish = self.publish_gate.lock().await;
+        let mutation = self.begin_quality_mutation();
+        let mut current = self.geometry.write().await;
+        if self.fence_generation.load(Ordering::SeqCst) != generation
+            || self
+                .viewport_epoch
+                .compare_exchange(expected_epoch, old_epoch, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+        {
+            drop(current);
+            mutation.discard();
+            return false;
+        }
+        match geometry {
+            Some(geometry) if *current != *geometry => {
+                *current = geometry.clone();
+                drop(current);
+                drop(mutation);
+            }
+            _ => {
+                drop(current);
+                mutation.discard();
+            }
+        }
+        self.geometry_trusted.store(trusted, Ordering::Release);
+        *self.cached_frame.write().await = frame;
+        *self.cached_header.write().await = header;
+        *self.current_candidate.lock().await = candidate;
+        true
+    }
+
+    /// Commits the registry-assigned epoch of an external geometry mutation. Reported geometry
+    /// is adopted as the pointer-projection basis but stays untrusted until a native frame's
+    /// viewport metadata confirms it; without usable metrics the old geometry stays untrusted.
+    pub async fn commit_external_geometry_fence(&self, epoch: u64, reported: Option<TargetGeometry>) {
+        // A rejected (stale) commit changes nothing and must not bump the generation: that would
+        // make a concurrent resize refuse to restore and strand the producer fenced. An accepted
+        // commit bumps it after the epoch changed (a restore's epoch compare-exchange already
+        // fails from that moment on).
+        if !self.commit_epoch_monotonic(epoch) {
+            return;
+        }
+        self.fence_generation.fetch_add(1, Ordering::SeqCst);
+        if let Some(geometry) = reported.filter(|g| g.validate().is_ok()) {
+            let mutation = self.begin_quality_mutation();
+            let mut current = self.geometry.write().await;
+            if *current == geometry {
+                drop(current);
+                mutation.discard();
+            } else {
+                *current = geometry;
+                drop(current);
+                drop(mutation);
+            }
+        }
+        // Stays false: only a confirming native frame (`publish_governed_candidate`) re-trusts.
+        self.geometry_trusted.store(false, Ordering::Release);
+    }
+
+    /// Applies a requested viewport at the registry-assigned `target_epoch`.
+    ///
+    /// Lifecycle operations serialize before state and page setup; geometry/cache locks are
+    /// taken for short sections. The operation gate keeps the Page session stable through commit.
+    pub async fn update_geometry(
+        &self,
+        new_geometry: TargetGeometry,
+        target_epoch: u64,
+    ) -> Result<(), String> {
+        // Owned by its own task: a caller that goes away mid-transition (e.g. a dropped REST
+        // request) must not strand the transitional epoch or a half-restarted screencast.
+        let this = self.clone_handle();
+        tokio::spawn(async move { this.update_geometry_serialized(new_geometry, target_epoch).await })
+            .await
+            .map_err(|e| format!("geometry transition task failed: {e}"))?
+    }
+
+    async fn update_geometry_serialized(
+        &self,
+        new_geometry: TargetGeometry,
+        target_epoch: u64,
+    ) -> Result<(), String> {
         new_geometry
             .validate()
             .map_err(|e| format!("invalid geometry: {e}"))?;
-        let current_geom = self.geometry.read().await.clone();
-        if current_geom == new_geometry {
+        let _operation = self.lifecycle_operation.lock().await;
+        let mut state = self.state.write().await;
+        let setup = self.page_setup.lock().await;
+        let old_geom = self.geometry.read().await.clone();
+        let old_epoch = self.viewport_epoch() & !TRANSITIONAL_EPOCH_MASK;
+        if old_geom == new_geometry
+            && old_epoch == (target_epoch & !TRANSITIONAL_EPOCH_MASK)
+            && self.input_geometry_trusted()
+        {
             return Ok(());
         }
 
         // Save COMPLETE pre-transition state (including None)
-        let old_geom = current_geom;
-        let old_epoch = self.viewport_epoch.load(Ordering::SeqCst) & !TRANSITIONAL_EPOCH_MASK;
+        // Frame publication is fenced against this transition: no frame can be committed with the
+        // old epoch after the caches below are taken, nor carry the transitional marker.
+        let publish = self.publish_gate.lock().await;
+        let my_gen = self.fence_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let prev_candidate = self.current_candidate.lock().await.take();
         let prev_cached_frame = self.cached_frame.write().await.take();
         let prev_cached_header = self.cached_header.write().await.take();
+        let prev_trusted = self.input_geometry_trusted();
 
         // (a) Fence frame publication and trusted input geometry for the whole transition
+        let input = crate::api::browser_host::get_or_create_input_manager(&self.browser_session_id).await;
+        let gate = input.begin_geometry_fence().await;
         self.viewport_epoch
             .store(old_epoch | TRANSITIONAL_EPOCH_MASK, Ordering::SeqCst);
+        self.geometry_trusted.store(false, Ordering::Release);
+        drop(gate);
         self.screenshot_taken_in_epoch
             .store(false, Ordering::SeqCst);
+        drop(publish);
 
         let page_sid_opt = self.page_session_id.read().await.clone();
         if let Some(page_sid) = page_sid_opt.as_ref() {
@@ -1173,10 +1488,19 @@ impl ScreencastProducer {
                 .await
             {
                 // Override failed before modifying native state. Restore complete cache state.
-                self.viewport_epoch.store(old_epoch, Ordering::SeqCst);
-                *self.cached_frame.write().await = prev_cached_frame;
-                *self.cached_header.write().await = prev_cached_header;
-                *self.current_candidate.lock().await = prev_candidate;
+                // Nothing changed natively. Restore the snapshot unless a newer fence took over.
+                let _ = self
+                    .restore_authority_if_owner(
+                        my_gen,
+                        old_epoch | TRANSITIONAL_EPOCH_MASK,
+                        old_epoch,
+                        None,
+                        prev_trusted,
+                        prev_candidate,
+                        prev_cached_frame,
+                        prev_cached_header,
+                    )
+                    .await;
                 return Err(format!("Emulation.setDeviceMetricsOverride failed: {e}"));
             }
         }
@@ -1184,75 +1508,142 @@ impl ScreencastProducer {
         let dims_changed = old_geom.css_width != new_geometry.css_width
             || old_geom.css_height != new_geometry.css_height;
 
-        if let Some(page_sid) = page_sid_opt.as_ref() {
-            if dims_changed && *self.state.read().await == ScreencastState::Streaming {
-                let run_snap = self.run_snapshot.lock().clone();
-                let screencast_params = build_start_params(
-                    &run_snap,
-                    self.capture.ceilings(),
-                    new_geometry.css_width,
-                    new_geometry.css_height,
-                );
-                if let Err(e) = self
-                    .cdp_client
-                    .send_typed(screencast_params, Some(page_sid))
-                    .await
-                {
-                    // (c) Roll back native state FIRST!
-                    let rollback_emu = serde_json::json!({
-                        "width": old_geom.css_width.round() as u32,
-                        "height": old_geom.css_height.round() as u32,
-                        "deviceScaleFactor": old_geom.dpr,
-                        "mobile": false,
-                    });
-                    let rollback_res = self
-                        .cdp_client
-                        .send_command(
-                            "Emulation.setDeviceMetricsOverride",
-                            Some(rollback_emu),
-                            Some(page_sid),
-                        )
-                        .await;
-
-                    let rollback_sc_res = if *self.state.read().await == ScreencastState::Streaming {
-                        let rollback_params = build_start_params(
-                            &run_snap,
-                            self.capture.ceilings(),
-                            old_geom.css_width,
-                            old_geom.css_height,
-                        );
-                        self.cdp_client
-                            .send_typed(rollback_params, Some(page_sid))
-                            .await
-                            .map(|_| ())
-                    } else {
-                        Ok(())
-                    };
-
-                    // If native rollback command fails, do NOT trust old geometry: mark producer unusable/retire it!
-                    if rollback_res.is_err() || rollback_sc_res.is_err() {
-                        self.retire_producer_on_fatal_error().await;
-                        return Err(format!(
-                            "screencast restart failed ({e}) and native rollback command failed; producer retired"
-                        ));
-                    }
-
-                    // Native rollback is proven! Restore producer trusted geometry and epoch.
-                    *self.geometry.write().await = old_geom.clone();
-                    self.viewport_epoch.store(old_epoch, Ordering::SeqCst);
-                    // (b) Restore the COMPLETE cache state to exactly pre-transition values (incl None)
-                    *self.cached_frame.write().await = prev_cached_frame;
-                    *self.cached_header.write().await = prev_cached_header;
-                    *self.current_candidate.lock().await = prev_candidate;
-
-                    return Err(format!("Page.startScreencast restart failed: {e}"));
+        // A running screencast cannot be reconfigured in place: Chromium refuses a second
+        // `Page.startScreencast` while one is active ("Screencast is already active") and numbers
+        // native sessions per start. A dimension change therefore restarts it as a fresh run
+        // (stop -> start), exactly like a capture-tier switch. Stop first: a failed stop leaves
+        // the live run untouched, so only the native metrics override has to be rolled back.
+        let restart_run = dims_changed
+            && *state == ScreencastState::Streaming
+            && page_sid_opt.is_some();
+        if restart_run {
+            let page_sid = page_sid_opt.as_deref().unwrap_or_default();
+            if let Err(e) = self.stop_and_retire_run_locked(&mut state, page_sid).await {
+                // The live run is untouched (stop failed), so only the native override and the
+                // epoch/trust/caches have to be rolled back, and only while a newer fence (raw
+                // CDP) has not taken over the viewport.
+                if self.fence_generation.load(Ordering::SeqCst) != my_gen {
+                    return Err(format!(
+                        "Page.stopScreencast before restart failed ({e}); a newer geometry fence owns the viewport"
+                    ));
                 }
+                let rollback_res = self
+                    .cdp_client
+                    .send_command(
+                        "Emulation.setDeviceMetricsOverride",
+                        Some(serde_json::json!({
+                            "width": old_geom.css_width.round() as u32,
+                            "height": old_geom.css_height.round() as u32,
+                            "deviceScaleFactor": old_geom.dpr,
+                            "mobile": false,
+                        })),
+                        Some(page_sid),
+                    )
+                    .await;
+                if rollback_res.is_err() {
+                    self.retire_locked(&mut state).await;
+                    return Err(format!(
+                        "Page.stopScreencast before restart failed ({e}) and native rollback command failed; producer retired"
+                    ));
+                }
+                let restored = self
+                    .restore_authority_if_owner(
+                        my_gen,
+                        old_epoch | TRANSITIONAL_EPOCH_MASK,
+                        old_epoch,
+                        None,
+                        prev_trusted,
+                        prev_candidate,
+                        prev_cached_frame,
+                        prev_cached_header,
+                    )
+                    .await;
+                if !restored {
+                    return Err(format!(
+                        "Page.stopScreencast before restart failed ({e}); a newer geometry fence owns the viewport"
+                    ));
+                }
+                return Err(format!("Page.stopScreencast before restart failed: {e}"));
             }
         }
 
-        // Transition succeeded! Commit new geometry and advance epoch.
-        *self.geometry.write().await = new_geometry.clone();
-        self.viewport_epoch.store(old_epoch + 1, Ordering::SeqCst);
+        // Transition succeeded! Commit new geometry and the registry-assigned epoch. A newer
+        // epoch (a raw-CDP fence that raced this command) wins: the stale commit is dropped.
+        let owns_epoch = self.commit_epoch_monotonic(target_epoch);
+        if owns_epoch {
+            let mutation = self.begin_quality_mutation();
+            let mut current = self.geometry.write().await;
+            if *current == new_geometry {
+                drop(current);
+                mutation.discard();
+            } else {
+                *current = new_geometry.clone();
+                drop(current);
+                drop(mutation);
+            }
+            // The override just succeeded natively; the next native frame's metadata re-verifies.
+            self.geometry_trusted.store(true, Ordering::Release);
+        }
+        // Otherwise a newer epoch won: its commit already overwrote this transition's marker, and
+        // whatever epoch encoding is current (e.g. a successor fence's transitional bit) belongs to
+        // the winner and is left untouched.
+        if restart_run {
+            // Geometry and epoch are committed: start the fresh run at the new size. Session setup
+            // is released first; starting a run takes it again.
+            drop(setup);
+            if let Err(e) = self.start_run_locked(&mut state).await {
+                // Roll back to the proven geometry only while this transition still owns the
+                // viewport. A newer fence's authority is never overwritten: then just restart at
+                // its geometry. Ownership is re-verified atomically with the restore itself.
+                let mut owned = owns_epoch && self.fence_generation.load(Ordering::SeqCst) == my_gen;
+                let mut rollback_ok = true;
+                if owned {
+                    let page_sid = page_sid_opt.as_deref().unwrap_or_default();
+                    rollback_ok = self
+                        .cdp_client
+                        .send_command(
+                            "Emulation.setDeviceMetricsOverride",
+                            Some(serde_json::json!({
+                                "width": old_geom.css_width.round() as u32,
+                                "height": old_geom.css_height.round() as u32,
+                                "deviceScaleFactor": old_geom.dpr,
+                                "mobile": false,
+                            })),
+                            Some(page_sid),
+                        )
+                        .await
+                        .is_ok();
+                    owned = self
+                        .restore_authority_if_owner(
+                            my_gen,
+                            target_epoch,
+                            old_epoch,
+                            Some(&old_geom),
+                            prev_trusted,
+                            prev_candidate,
+                            prev_cached_frame,
+                            prev_cached_header,
+                        )
+                        .await;
+                }
+                if !owned {
+                    if self.start_run_locked(&mut state).await.is_err() {
+                        self.retire_locked(&mut state).await;
+                    }
+                    return Err(format!(
+                        "Page.startScreencast restart failed ({e}); a newer geometry fence owns the viewport"
+                    ));
+                }
+                let restarted = rollback_ok && self.start_run_locked(&mut state).await.is_ok();
+                if !restarted {
+                    self.retire_locked(&mut state).await;
+                    return Err(format!(
+                        "screencast restart failed ({e}) and native rollback command failed; producer retired"
+                    ));
+                }
+                return Err(format!("Page.startScreencast restart failed: {e}"));
+            }
+        }
         if !dims_changed {
             *self.cached_frame.write().await = prev_cached_frame;
             *self.cached_header.write().await = prev_cached_header;
@@ -1264,14 +1655,44 @@ impl ScreencastProducer {
 
     /// Attach a dedicated flattened Page session for this target if not already attached.
     pub async fn ensure_page_session(&self) -> Result<String, CdpError> {
-        if let Some(session_id) = self.page_session_id.read().await.clone() {
-            return Ok(session_id);
-        }
         let _setup = self.page_setup.lock().await;
+        if self.selection_gap.lock().await.is_some() {
+            return Err(CdpError::ConnectionClosed);
+        }
+        if self.page_session_poisoned.load(Ordering::Acquire) {
+            return Err(CdpError::ConnectionClosed);
+        }
         if let Some(session_id) = self.page_session_id.read().await.clone() {
             return Ok(session_id);
         }
+        self.page_session_poisoned.store(true, Ordering::Release);
+        match self.attach_page_session_locked().await {
+            Ok(session_id) => {
+                self.page_session_poisoned.store(false, Ordering::Release);
+                Ok(session_id)
+            }
+            Err(error) => {
+                self.close_ambiguous_page_actor().await?;
+                Err(error)
+            }
+        }
+    }
 
+    /// Session to start a run on: a lost actor is re-established first (the same path recovery
+    /// takes), otherwise the existing dedicated Page session is reused.
+    async fn session_for_start(&self) -> Result<String, CdpError> {
+        let gap_pending = self.selection_gap.lock().await.is_some();
+        if self.cdp_client.is_closed()
+            || self.page_session_poisoned.load(Ordering::Acquire)
+            || gap_pending
+        {
+            return self.open_fresh_page_session_locked().await;
+        }
+        self.ensure_page_session().await
+    }
+
+    /// Attaches the dedicated Page session. Caller holds `page_setup`.
+    async fn attach_page_session_locked(&self) -> Result<String, CdpError> {
         let attach_params = AttachToTargetParams::builder()
             .target_id(self.target_id.clone())
             .flatten(true)
@@ -1292,7 +1713,8 @@ impl ScreencastProducer {
         // Input fractions are expanded using this CSS viewport. Install it before exposing
         // the Page session; otherwise Chrome's default window size is captured while input
         // is dispatched against the requested (but never applied) dimensions.
-        let geometry = self.geometry.read().await;
+        // Snapshot under the data lock, then drop it: no geometry lock spans the CDP await.
+        let geometry = self.geometry.read().await.clone();
         self.cdp_client
             .send_command(
                 "Emulation.setDeviceMetricsOverride",
@@ -1305,7 +1727,6 @@ impl ScreencastProducer {
                 Some(&session_id),
             )
             .await?;
-        drop(geometry);
 
         let mut lock = self.page_session_id.write().await;
         *lock = Some(session_id.clone());
@@ -1348,9 +1769,18 @@ impl ScreencastProducer {
             )
             .await?;
         let weak_client = Arc::downgrade(&self.cdp_client);
+        // One listener per producer: a replacement Page session retires the previous listener.
+        let listener_cancel = CancellationToken::new();
+        if let Some(previous) = self.stealth_listener.lock().replace(listener_cancel.clone()) {
+            previous.cancel();
+        }
         tokio::spawn(async move {
             loop {
-                match target_events.recv().await {
+                let received = tokio::select! {
+                    _ = listener_cancel.cancelled() => break,
+                    received = target_events.recv() => received,
+                };
+                match received {
                     Ok(ev) => {
                         if let CdpTargetEvent::ChildAttached {
                             session_id: child_sid,
@@ -1419,24 +1849,33 @@ impl ScreencastProducer {
         entry.visible = visible;
         {
             let mut adaptive = self.adaptive.lock();
-            let seq = self.latest_audio_seq();
-            let source_run = self.audio_source_run();
+            let (source_run, seq) = self.audio_boundary();
             adaptive.register_with_seq(subscription_epoch, Instant::now(), source_run, seq);
         }
         let visible_count = viewers.values().filter(|v| v.visible).count();
         drop(viewers);
 
         if visible_count > 0 {
-            let state = *self.state.read().await;
-            if state == ScreencastState::Stopped {
-                self.ledger.demand_starts.fetch_add(1, Ordering::Relaxed);
-                let this = self.clone_handle();
-                tokio::spawn(async move {
-                    if let Err(e) = this.start_screencast_run().await {
-                        warn!(error = %e, "failed to start screencast on demand");
-                    }
-                });
-            }
+            // A native start/stop holds the state lock for as long as Chromium takes to answer, so
+            // the "is it stopped?" decision is made on its own task: a viewer attaching during a slow
+            // start must not wait on it (up to the 10s command timeout).
+            let this = self.clone_handle();
+            let epoch = self.recovery.epoch.load(Ordering::SeqCst);
+            tokio::spawn(async move {
+                if *this.state.read().await != ScreencastState::Stopped {
+                    return;
+                }
+                this.ledger.demand_starts.fetch_add(1, Ordering::Relaxed);
+                let _operation = this.lifecycle_operation.lock().await;
+                if this.recovery.epoch.load(Ordering::SeqCst) != epoch
+                    || this.visible_viewer_count().await == 0
+                {
+                    return;
+                }
+                if let Err(e) = this.start_with_operation().await {
+                    warn!(error = %e, "failed to start screencast on demand");
+                }
+            });
         }
     }
 
@@ -1501,15 +1940,44 @@ impl ScreencastProducer {
     }
 
     /// Start screencast run.
-    /// Strictly serial: the state write lock is the single lifecycle owner. Generates a fresh
-    /// `producerRun` UUID, subscribes to the broadcast stream, issues `Page.startScreencast` with
+    /// Serialized by the lifecycle operation gate. Generates a fresh `producerRun` UUID,
+    /// subscribes to the broadcast stream, issues `Page.startScreencast` with
     /// the latest shared capture snapshot, spawns drain and governor tasks.
     pub async fn start_screencast_run(&self) -> Result<Uuid, CdpError> {
-        let mut state_lock = self.state.write().await;
-        self.start_run_locked(&mut state_lock).await
+        // Owned by its own task: a caller that goes away mid-start must not leave `Starting` and
+        // a run id behind without drain/ACK tasks. The transition runs to completion or fails.
+        // The recovery epoch is captured HERE, before the spawn: a stop that completes before the
+        // child first runs must still cancel this start.
+        let epoch = self.recovery.epoch.load(Ordering::SeqCst);
+        let this = self.clone_handle();
+        tokio::spawn(async move { this.start_screencast_run_serialized(epoch).await })
+            .await
+            .map_err(|_| CdpError::ConnectionClosed)?
     }
 
-    /// Caller holds the state write lock. No second lifecycle lock is introduced.
+    async fn start_screencast_run_serialized(&self, epoch: u64) -> Result<Uuid, CdpError> {
+        let _operation = self.lifecycle_operation.lock().await;
+        if self.recovery.epoch.load(Ordering::SeqCst) != epoch {
+            return Err(CdpError::ConnectionClosed);
+        }
+        self.start_with_operation().await
+    }
+
+    async fn start_with_operation(&self) -> Result<Uuid, CdpError> {
+        let mut state_lock = self.state.write().await;
+        let run = self.start_run_locked(&mut state_lock).await?;
+        let input = crate::api::browser_host::global_input_managers()
+            .read()
+            .await
+            .get(&self.browser_session_id)
+            .cloned();
+        if let Some(input) = input {
+            input.resume_after_recovery().await;
+        }
+        Ok(run)
+    }
+
+    /// Caller holds both the lifecycle operation gate and the state write lock.
     async fn start_run_locked(&self, state_lock: &mut ScreencastState) -> Result<Uuid, CdpError> {
         if *state_lock == ScreencastState::Streaming || *state_lock == ScreencastState::Starting {
             if let Some(run_id) = *self.current_run.read().await {
@@ -1519,15 +1987,18 @@ impl ScreencastProducer {
 
         *state_lock = ScreencastState::Starting;
         let producer_run = Uuid::new_v4();
-        *self.current_run.write().await = Some(producer_run);
-        *self.current_run_proven.lock() = None;
-        self.bump_quality_revision();
+        {
+            let _mutation = self.begin_quality_mutation();
+            *self.current_run.write().await = Some(producer_run);
+            *self.current_run_proven.lock() = None;
+        }
         *self.native_screencast_session_id.write().await = None;
 
-        let page_session_id = match self.ensure_page_session().await {
+        let page_session_id = match self.session_for_start().await {
             Ok(sid) => sid,
             Err(e) => {
                 *state_lock = ScreencastState::Stopped;
+                let _mutation = self.begin_quality_mutation();
                 *self.current_run.write().await = None;
                 return Err(e);
             }
@@ -1561,7 +2032,10 @@ impl ScreencastProducer {
             .await
         {
             *state_lock = ScreencastState::Stopped;
-            *self.current_run.write().await = None;
+            {
+                let _mutation = self.begin_quality_mutation();
+                *self.current_run.write().await = None;
+            }
             if new_audio_source {
                 self.teardown_audio_source();
             }
@@ -1571,6 +2045,7 @@ impl ScreencastProducer {
         self.applied_fps.store(snap.fps, Ordering::Release);
         *self.run_snapshot.lock() = snap;
         *state_lock = ScreencastState::Streaming;
+        self.note_run_started(producer_run);
 
         // Spawn drain & governor tasks for this run
         let this = self.clone_handle();
@@ -1594,6 +2069,14 @@ impl ScreencastProducer {
     /// Stops screencast explicitly or due to zero demand.
     /// Retains the final cached frame and does not withhold ACKs.
     pub async fn stop_screencast(&self) -> Result<(), CdpError> {
+        // An explicit stop supersedes any recovery still pending for demand that no longer counts.
+        self.recovery.cancel();
+        if *self.state.read().await == ScreencastState::Stopped
+            && (!self.page_session_poisoned.load(Ordering::Acquire) || self.recovery_pending())
+        {
+            return Ok(());
+        }
+        let _operation = self.lifecycle_operation.lock().await;
         let mut state_lock = self.state.write().await;
         self.stop_run_locked(&mut state_lock).await
     }
@@ -1601,34 +2084,92 @@ impl ScreencastProducer {
     /// Caller holds the state write lock (the single lifecycle owner).
     async fn stop_run_locked(&self, state_lock: &mut ScreencastState) -> Result<(), CdpError> {
         if *state_lock == ScreencastState::Stopped || *state_lock == ScreencastState::Stopping {
+            if self.page_session_poisoned.load(Ordering::Acquire) {
+                self.close_ambiguous_page_actor().await?;
+            }
+            *state_lock = ScreencastState::Stopped;
             return Ok(());
         }
 
+        // The native outcome is ambiguous from here on: poison BEFORE the first await so a caller
+        // dropped at any point leaves the Page session poisoned (closed by the next stop/start)
+        // instead of a half-stopped run.
+        let was_poisoned = self.page_session_poisoned.swap(true, Ordering::AcqRel);
         *state_lock = ScreencastState::Stopping;
         let page_session_id = self.page_session_id.read().await.clone();
 
         // Retire the run identity before cancelling so ending tasks see a planned stop.
-        *self.current_run.write().await = None;
-        *self.current_run_proven.lock() = None;
-        self.bump_quality_revision();
+        {
+            let _mutation = self.begin_quality_mutation();
+            *self.current_run.write().await = None;
+            *self.current_run_proven.lock() = None;
+        }
         {
             let mut cancel_lock = self.active_run_cancel.lock().await;
             if let Some(token) = cancel_lock.take() {
                 token.cancel();
             }
         }
+        // Silence immediately even if Chromium never answers the native stop.
+        self.teardown_audio_source();
 
-        if let Some(sid) = page_session_id {
-            let _ = self
-                .cdp_client
+        let stop_result = if let Some(sid) = page_session_id {
+            let result = self.cdp_client
                 .send_typed(StopScreencastParams::default(), Some(&sid))
                 .await;
-        }
+            if result.is_ok() {
+                self.page_session_poisoned.store(false, Ordering::Release);
+            }
+            result.map(|_| ())
+        } else {
+            self.page_session_poisoned.store(was_poisoned, Ordering::Release);
+            Ok(())
+        };
 
         *state_lock = ScreencastState::Stopped;
         *self.native_screencast_session_id.write().await = None;
-        // A real stop (zero demand, owner or privacy change) ends the audio source too.
-        self.teardown_audio_source();
+        stop_result
+    }
+
+    /// Native stop followed by retirement of the run identity, cached pixels and native session
+    /// id. A failed stop leaves the live run untouched (nothing is retired, no start is reissued).
+    /// Caller holds the lifecycle operation gate and the state write lock.
+    async fn stop_and_retire_run_locked(
+        &self,
+        state_lock: &mut ScreencastState,
+        sid: &str,
+    ) -> Result<(), CdpError> {
+        if let Err(e) = self
+            .cdp_client
+            .send_typed(StopScreencastParams::default(), Some(sid))
+            .await
+        {
+            // Only an outcome that PROVES the stop did not execute (a browser rejection, or an
+            // error raised before anything was sent) leaves the run untouched. A timeout, lost
+            // transport or unreadable answer may mean the stop executed: abort the run into
+            // recovery instead of assuming it is still running.
+            if e.outcome_is_ambiguous() {
+                if let Some(run) = *self.current_run.read().await {
+                    self.fail_run(run, AbortCause::NativeStopAmbiguous);
+                }
+            }
+            return Err(e);
+        }
+        {
+            let _mutation = self.begin_quality_mutation();
+            *self.current_run.write().await = None;
+            *self.current_run_proven.lock() = None;
+        }
+        if let Some(token) = self.active_run_cancel.lock().await.take() {
+            token.cancel();
+        }
+        *self.native_screencast_session_id.write().await = None;
+        // Fence old-run work; prior pixels stay client-side display-only until a fresh native frame.
+        *self.current_candidate.lock().await = None;
+        *self.cached_frame.write().await = None;
+        *self.cached_header.write().await = None;
+        self.screenshot_taken_in_epoch.store(false, Ordering::SeqCst);
+        *state_lock = ScreencastState::Stopped;
         Ok(())
     }
 
@@ -1637,6 +2178,7 @@ impl ScreencastProducer {
     /// `viewportEpoch` are never touched and audio source authority is preserved.
     /// Returns `Ok(true)` only when a new run actually started.
     pub async fn apply_capture_snapshot(&self) -> Result<bool, CdpError> {
+        let _operation = self.lifecycle_operation.lock().await;
         let mut state_lock = self.state.write().await;
         if *state_lock != ScreencastState::Streaming {
             return Ok(false); // the next start reads the latest snapshot
@@ -1652,34 +2194,20 @@ impl ScreencastProducer {
             return Ok(false);
         };
         // Stop first: a failed stop leaves the live run untouched (no active-start reissue).
-        if let Err(e) = self
-            .cdp_client
-            .send_typed(StopScreencastParams::default(), Some(&sid))
-            .await
-        {
+        if let Err(e) = self.stop_and_retire_run_locked(&mut state_lock, &sid).await {
             *self.switch_backoff_until.lock() = Some(Instant::now() + FAILED_SWITCH_BACKOFF);
             return Err(e);
         }
-        *self.current_run.write().await = None;
-        *self.current_run_proven.lock() = None;
-        self.bump_quality_revision();
-        if let Some(token) = self.active_run_cancel.lock().await.take() {
-            token.cancel();
-        }
-        *self.native_screencast_session_id.write().await = None;
-        // Fence old-run work; prior pixels stay client-side display-only until a fresh native frame.
-        *self.current_candidate.lock().await = None;
-        *self.cached_frame.write().await = None;
-        *self.cached_header.write().await = None;
-        self.screenshot_taken_in_epoch.store(false, Ordering::SeqCst);
-        *state_lock = ScreencastState::Stopped;
 
         match self.start_run_locked(&mut state_lock).await {
             Ok(_) => Ok(true),
             Err(e) => {
                 *self.switch_backoff_until.lock() = Some(Instant::now() + FAILED_SWITCH_BACKOFF);
                 // Never advertise unapplied settings: fall back to the last proven parameters once.
-                self.capture.revert_to_effective();
+                {
+                    let _mutation = self.begin_quality_mutation();
+                    self.capture.revert_to_effective();
+                }
                 if self.start_run_locked(&mut state_lock).await.is_err() {
                     self.retire_locked(&mut state_lock).await;
                 }
@@ -1689,6 +2217,7 @@ impl ScreencastProducer {
     }
 
     async fn stop_screencast_due_to_zero_demand(&self) {
+        let _operation = self.lifecycle_operation.lock().await;
         let mut state_lock = self.state.write().await;
         if !matches!(*state_lock, ScreencastState::Streaming | ScreencastState::Starting) {
             return;
@@ -1755,10 +2284,21 @@ impl ScreencastProducer {
             }
         });
 
+        // Unanswered ACKs of this run are bounded; the ingress receiver itself is bounded by the
+        // CDP client's broadcast capacity.
+        let acks = Arc::new(Semaphore::new(MAX_ACKS_IN_FLIGHT));
+        let mut ingress_gate = self.recovery.ingress_barrier();
+        let mut actor_closed = std::pin::pin!(self.cdp_client.closed());
+        let mut abort: Option<AbortCause> = None;
         loop {
             tokio::select! {
                 _ = cancel_token.cancelled() => {
                     debug!(producer_run = %producer_run, "producer tasks cancelled");
+                    break;
+                }
+                _ = &mut actor_closed => {
+                    warn!(producer_run = %producer_run, "CDP actor lost; aborting run");
+                    abort = Some(AbortCause::ActorLost);
                     break;
                 }
                 _ = heartbeat_ticker.tick() => {
@@ -1769,20 +2309,34 @@ impl ScreencastProducer {
                         self.spawn_capture_restart();
                     }
                 }
-                res = screencast_rx.recv() => {
+                res = async {
+                    // Test barrier: parked here, ingress overflows exactly like a stalled consumer.
+                    let _ = ingress_gate.wait_for(|held| !*held).await;
+                    screencast_rx.recv().await
+                } => {
                     match res {
                         Ok(frame_data) => {
-                            self.handle_incoming_frame(
+                            if let Some(cause) = self.handle_incoming_frame(
                                 &page_session_id,
                                 producer_run,
                                 frame_data,
-                            ).await;
+                                &acks,
+                                &cancel_token,
+                            ).await {
+                                abort = Some(cause);
+                                break;
+                            }
                         }
+                        // Dropped frames took their native ACK obligations with them: the run is
+                        // ambiguous, not merely behind.
                         Err(broadcast::error::RecvError::Lagged(n)) => {
-                            warn!(lagged = n, "screencast receiver lagged; proceeding without crash");
+                            warn!(lagged = n, "screencast ingress lagged; aborting run");
+                            abort = Some(AbortCause::IngressLagged(n));
+                            break;
                         }
                         Err(broadcast::error::RecvError::Closed) => {
-                            warn!("screencast broadcast channel closed");
+                            warn!("screencast ingress closed; aborting run");
+                            abort = Some(AbortCause::IngressClosed);
                             break;
                         }
                     }
@@ -1797,9 +2351,15 @@ impl ScreencastProducer {
                         self.applied_fps.store(snap.fps, Ordering::Release);
                         if snap.native_key() == self.run_snapshot.lock().native_key() {
                             if let Some(run) = *self.current_run.read().await {
+                                let mutation = self.begin_quality_mutation();
                                 let mut applied_lock = self.applied_event_version.lock();
-                                if applied_lock.0 == Some(run) {
-                                    applied_lock.1 = applied_lock.1.max(snap.version);
+                                if applied_lock.0 == Some(run) && snap.version > applied_lock.1 {
+                                    applied_lock.1 = snap.version;
+                                    drop(applied_lock);
+                                    drop(mutation);
+                                } else {
+                                    drop(applied_lock);
+                                    mutation.discard();
                                 }
                             }
                         }
@@ -1822,8 +2382,11 @@ impl ScreencastProducer {
 
         cancel_token.cancel();
         let _ = nav_handle.await;
-        // Unplanned end (neither stopped nor replaced by the lifecycle owner): audio ends with it.
-        if *self.current_run.read().await == Some(producer_run) {
+        if let Some(cause) = abort {
+            // The lifecycle owner retires this exact run (if it is still current) and recovers.
+            self.fail_run(producer_run, cause);
+        } else if *self.current_run.read().await == Some(producer_run) {
+            // Unplanned end (neither stopped nor replaced by the lifecycle owner): audio ends with it.
             self.teardown_audio_source();
         }
     }
@@ -2249,11 +2812,17 @@ impl ScreencastProducer {
             return None;
         }
         if !self.audio_doc_authority().is_admissible(expected_doc_epoch)
-            || self.audio_source_run() != Some(audio_run)
             || self.visible_viewer_count().await == 0
         {
             return None;
         }
+        // Chunks are counted by the live source they belong to; a stale/foreign run is rejected here.
+        let source_seq = self
+            .audio_source
+            .lock()
+            .as_ref()
+            .filter(|s| s.run == audio_run && !s.cancel.is_cancelled())
+            .map(|s| s.seq.clone())?;
         let reservation = global_memory_controller()
             .try_reserve(b64.len() + 256)
             .ok()?;
@@ -2264,8 +2833,7 @@ impl ScreencastProducer {
         if !self.audio_doc_authority().is_admissible(expected_doc_epoch) {
             return None;
         }
-        let prev_seq = self
-            .audio_seq
+        let prev_seq = source_seq
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
             .ok()?;
         let seq = prev_seq + 1;
@@ -2295,7 +2863,9 @@ impl ScreencastProducer {
         expected_page_session: &str,
         expected_producer_run: Uuid,
         frame_data: Arc<ScreencastFrameData>,
-    ) {
+        acks: &Arc<Semaphore>,
+        run_cancel: &CancellationToken,
+    ) -> Option<AbortCause> {
         self.ledger.events_received.fetch_add(1, Ordering::Relaxed);
         global_stream_diagnostics()
             .events_received
@@ -2306,7 +2876,7 @@ impl ScreencastProducer {
             self.ledger
                 .events_dropped_old_run
                 .fetch_add(1, Ordering::Relaxed);
-            return;
+            return None;
         }
 
         // Check if current run matches
@@ -2315,19 +2885,16 @@ impl ScreencastProducer {
             self.ledger
                 .events_dropped_old_run
                 .fetch_add(1, Ordering::Relaxed);
-            return;
+            return None;
         }
 
-        // Enforce base64 byte bounds
+        // A frame that cannot be admitted leaves its native credit stranded: fatal for the run.
         if frame_data.data_base64.len() > MAX_BASE64_BYTES {
             warn!(
                 len = frame_data.data_base64.len(),
                 "screencast base64 frame exceeded maximum size"
             );
-            self.ledger
-                .events_dropped_old_run
-                .fetch_add(1, Ordering::Relaxed);
-            return;
+            return Some(AbortCause::OversizeFrame);
         }
 
         // Establish or verify native sessionId
@@ -2335,45 +2902,66 @@ impl ScreencastProducer {
         {
             let mut native_sess = self.native_screencast_session_id.write().await;
             if let Some(expected_native) = *native_sess {
-                if expected_native != frame_session_id {
+                if frame_session_id < expected_native {
+                    // A frame of an earlier native session (stale after a restart): Chromium no
+                    // longer tracks credit for it, so dropping it strands nothing.
+                    debug!(
+                        expected = expected_native,
+                        got = frame_session_id,
+                        "stale native session frame on current run; dropping event"
+                    );
+                    return None;
+                }
+                if frame_session_id > expected_native {
+                    // A newer native session on this run can only come from an unplanned native
+                    // restart: its ACK obligations are unaccounted for. Fail the run (recover with
+                    // a fresh run/session) instead of dropping frames silently forever.
                     warn!(
                         expected = expected_native,
                         got = frame_session_id,
-                        "native session id mismatch on current run; dropping event"
+                        "native screencast session changed under the current run; aborting run"
                     );
-                    return;
+                    return Some(AbortCause::NativeSessionChanged);
                 }
             } else {
                 *native_sess = Some(frame_session_id);
             }
         }
 
-        // Enqueue exactly one ACK for each received current-run event
-        let ack_res = self
+        // Exactly one ACK attempt per accepted current-run event, queued right now: neither the
+        // answer to an earlier ACK nor any viewer credit participates. The queue and the number
+        // of unanswered ACKs are bounded; hitting either bound is fatal, never deferred.
+        let Ok(permit) = acks.clone().try_acquire_owned() else {
+            self.ledger.acks_failed.fetch_add(1, Ordering::Relaxed);
+            return Some(AbortCause::AckBacklog);
+        };
+        match self
             .cdp_client
-            .ack_screencast_frame(expected_page_session, frame_session_id)
-            .await;
-
-        match ack_res {
-            Ok(()) => {
+            .enqueue_screencast_ack(expected_page_session, frame_session_id)
+        {
+            Ok(pending) => {
                 self.ledger.acks_enqueued.fetch_add(1, Ordering::Relaxed);
                 global_stream_diagnostics()
                     .acks_enqueued
                     .fetch_add(1, Ordering::Relaxed);
+                self.watch_ack(expected_producer_run, pending, permit, run_cancel.clone());
             }
             Err(e) => {
                 self.ledger.acks_failed.fetch_add(1, Ordering::Relaxed);
                 global_stream_diagnostics()
                     .acks_failed
                     .fetch_add(1, Ordering::Relaxed);
-                warn!(error = %e, frame_session_id, "failed to enqueue screencast frame ACK; connection failure aborts run");
-                *self.state.write().await = ScreencastState::Stopped;
-                let cancel_lock = self.active_run_cancel.lock().await;
-                if let Some(token) = cancel_lock.as_ref() {
-                    token.cancel();
-                }
-                return;
+                warn!(error = %e, frame_session_id, "failed to enqueue screencast frame ACK");
+                return Some(AbortCause::AckEnqueue(e));
             }
+        }
+        // Over the payload budget: the ACK above keeps native credit flowing; the frame is dropped.
+        if !frame_data.memory_admitted {
+            global_stream_diagnostics()
+                .events_dropped
+                .fetch_add(1, Ordering::Relaxed);
+            debug!("dropping screencast frame: payload memory budget exhausted at ingress");
+            return None;
         }
         // Extract metadata geometry if present and valid
         let metadata_geometry = self.extract_geometry_from_metadata(&frame_data.metadata);
@@ -2392,13 +2980,13 @@ impl ScreencastProducer {
 
         let candidate = EncodedCandidate {
             _frame_session_id: frame_session_id,
-            data_base64: frame_data.data_base64.clone(),
             native_capture_time_unix_ms: frame_data.native_capture_time_unix_ms,
             server_received_unix_ms: frame_data.server_received_unix_ms,
             received_at: frame_data.received_at,
             metadata_geometry,
             producer_run: expected_producer_run,
             viewport_epoch: self.viewport_epoch.load(Ordering::Relaxed),
+            frame: frame_data,
         };
         // Replace candidate atomically
         let mut cand_lock = self.current_candidate.lock().await;
@@ -2415,6 +3003,7 @@ impl ScreencastProducer {
         global_stream_diagnostics()
             .events_admitted
             .fetch_add(1, Ordering::Relaxed);
+        None
     }
 
     fn extract_geometry_from_metadata(&self, meta: &serde_json::Value) -> Option<TargetGeometry> {
@@ -2469,18 +3058,27 @@ impl ScreencastProducer {
         }
         let run_snap = self.run_snapshot.lock().clone();
 
-        // Pre-reserve memory BEFORE base64 decoding and packing
-        let est_bytes = candidate.data_base64.len() + 1024 + 16;
-        let mut reservation = match global_memory_controller().try_reserve(est_bytes) {
+        // The base64 text is already charged (ingress reservation held through `candidate`).
+        // Pre-reserve the decoded JPEG (alive until this function returns) and the packed frame
+        // (adjusted down to its exact size) BEFORE either buffer is allocated.
+        let decoded_estimate = candidate.frame.data_base64.len() / 4 * 3 + 3;
+        let _decoded_guard = match global_memory_controller().try_reserve(decoded_estimate) {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, "dropping candidate: memory ceiling reached before decode");
                 return;
             }
         };
+        let mut reservation = match global_memory_controller().try_reserve(decoded_estimate + 1024 + 16) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "dropping candidate: memory ceiling reached before packing");
+                return;
+            }
+        };
 
         // Decode base64 only once
-        let jpeg_bytes = match BASE64_STANDARD.decode(&candidate.data_base64) {
+        let jpeg_bytes = match BASE64_STANDARD.decode(&candidate.frame.data_base64) {
             Ok(b) => b,
             Err(e) => {
                 warn!(error = %e, "failed to decode screencast candidate base64");
@@ -2526,21 +3124,36 @@ impl ScreencastProducer {
             return;
         }
 
-        let geom = match candidate.metadata_geometry {
-            Some(mut meta) => {
-                if run_snap.scale_permille < 1000 {
-                    // CSS geometry must stay invariant under downscale; never trust scaled metadata.
-                    let auth = self.geometry.read().await;
-                    meta.css_width = auth.css_width;
-                    meta.css_height = auth.css_height;
-                }
-                meta
+        // Native evidence for the pointer-projection basis: when the run is not downscaled, the
+        // frame's viewport metadata must agree with the producer geometry (size and no zoom).
+        // Disagreement revokes trust (no guessed projection); agreement after an external
+        // mutation re-establishes it. Downscaled runs carry no CSS metadata and keep the gate.
+        let producer_geometry = self.geometry.read().await.clone();
+        let (geom, native_agrees) = match candidate.metadata_geometry {
+            Some(meta) if run_snap.scale_permille >= 1000 => {
+                // The header reports what the engine saw so a divergence is visible to clients.
+                let agrees = native_geometry_agrees(&meta, &producer_geometry);
+                (meta, Some(agrees))
             }
-            None => self.geometry.read().await.clone(),
+            Some(mut meta) => {
+                // CSS geometry must stay invariant under downscale; never trust scaled metadata.
+                meta.css_width = producer_geometry.css_width;
+                meta.css_height = producer_geometry.css_height;
+                (meta, None)
+            }
+            None => (producer_geometry, None),
         };
+        if let Some(agrees) = native_agrees {
+            // Only a frame from the current epoch may confirm or revoke trust.
+            if self.viewport_epoch.load(Ordering::SeqCst) == candidate.viewport_epoch {
+                self.geometry_trusted.store(agrees, Ordering::Release);
+            }
+        }
 
         let next_seq = self.frame_seq.fetch_add(1, Ordering::SeqCst) + 1;
-        let v_epoch = self.viewport_epoch.load(Ordering::Relaxed);
+        // The capture epoch, never a re-read: a fence that landed meanwhile must not relabel old
+        // pixels with the new epoch (or leak the transitional marker into a header).
+        let v_epoch = candidate.viewport_epoch;
 
         let header = TargetFrameHeader {
             browser_session_id: self.browser_session_id.clone(),
@@ -2553,7 +3166,7 @@ impl ScreencastProducer {
             height,
             capture_time_unix_ms: candidate.native_capture_time_unix_ms.unwrap_or(0),
             geometry: geom,
-            input_trusted: self.capture.input_trusted_for(&run_snap),
+            input_trusted: self.capture.input_trusted_for(&run_snap) && self.input_geometry_trusted(),
         };
 
         match pack_validated_bhjf_frame_with_dims(header.clone(), &jpeg_bytes, validated_dims) {
@@ -2568,6 +3181,13 @@ impl ScreencastProducer {
                 // Hold the current-run guard across cache + broadcast: retirement (capture switch,
                 // stop) needs the write lock, so a commit is atomic relative to it and the caches
                 // are cleared strictly after any in-flight publication.
+                // Commit only while the capture epoch is still current; geometry fences take the
+                // same gate, so none can land between this check and the broadcast below.
+                let _publish = self.publish_gate.lock().await;
+                if self.viewport_epoch.load(Ordering::SeqCst) != candidate.viewport_epoch {
+                    debug!("dropping frame: viewport epoch changed before publication");
+                    return;
+                }
                 let run_guard = self.current_run.read().await;
                 if *run_guard != Some(producer_run) {
                     debug!("dropping frame: producer run retired before publication");
@@ -2591,6 +3211,7 @@ impl ScreencastProducer {
                 let applied_fps = self.applied_fps.load(Ordering::Acquire);
                 self.capture.mark_effective_applied(&run_snap, applied_fps);
                 let eff = self.capture.effective().unwrap_or_else(|| run_snap.clone());
+                let mutation = self.begin_quality_mutation();
                 let mut proven_lock = self.current_run_proven.lock();
                 let mut proven_changed = false;
                 match proven_lock.as_ref() {
@@ -2624,7 +3245,9 @@ impl ScreencastProducer {
                 }
                 drop(proven_lock);
                 if proven_changed {
-                    self.bump_quality_revision();
+                    drop(mutation);
+                } else {
+                    mutation.discard();
                 }
                 self.ledger.frames_published.fetch_add(1, Ordering::Relaxed);
                 drop(run_guard);
@@ -2675,6 +3298,33 @@ impl ScreencastProducer {
             }
         };
 
+        // The response text is already resident: charge it NOW, before the next await, then
+        // pre-reserve the decoded JPEG (alive until return) and the packed frame before either is
+        // allocated. (The transient copy inside the CDP actor is bounded by the WS message cap.)
+        let text_len = AsRef::<[u8]>::as_ref(&shot_res.data).len();
+        let decoded_estimate = text_len / 4 * 3 + 3;
+        let _text_guard = match global_memory_controller().try_reserve(text_len + 1024) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "dropping fallback screenshot: memory ceiling reached");
+                return;
+            }
+        };
+        let _decoded_guard = match global_memory_controller().try_reserve(decoded_estimate) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "dropping fallback screenshot: memory ceiling reached before decode");
+                return;
+            }
+        };
+        let mut reservation = match global_memory_controller().try_reserve(decoded_estimate + 1024 + 16) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "dropping fallback screenshot: memory ceiling reached before packing");
+                return;
+            }
+        };
+
         // 3. Bracket layout metrics after
         let _metrics_after = self
             .cdp_client
@@ -2687,16 +3337,6 @@ impl ScreencastProducer {
             warn!("epoch changed or transition in progress during fallback screenshot; discarding snapshot");
             return;
         }
-
-        // Pre-reserve memory BEFORE decode
-        let est_bytes = AsRef::<[u8]>::as_ref(&shot_res.data).len() + 1024 + 16;
-        let mut reservation = match global_memory_controller().try_reserve(est_bytes) {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(error = %e, "dropping fallback screenshot: memory ceiling reached");
-                return;
-            }
-        };
 
         let jpeg_bytes = match BASE64_STANDARD.decode(&shot_res.data) {
             Ok(b) => b,
@@ -2751,6 +3391,11 @@ impl ScreencastProducer {
             global_stream_diagnostics()
                 .screenshot_count
                 .fetch_add(1, Ordering::Relaxed);
+            let _publish = self.publish_gate.lock().await;
+            if self.viewport_epoch.load(Ordering::SeqCst) != epoch_after {
+                debug!("dropping fallback screenshot: viewport epoch changed before publication");
+                return;
+            }
             let run_guard = self.current_run.read().await;
             if *run_guard != Some(producer_run) {
                 debug!("dropping fallback screenshot: producer run retired before publication");
@@ -2778,7 +3423,6 @@ impl ScreencastProducer {
             profile_epoch: self.profile_epoch,
             viewport_epoch: self.viewport_epoch.clone(),
             frame_seq: self.frame_seq.clone(),
-            audio_seq: self.audio_seq.clone(),
             audio_doc_epoch: self.audio_doc_epoch.clone(),
             doc_epoch_tx: self.doc_epoch_tx.clone(),
             nav_listener: self.nav_listener.clone(),
@@ -2788,6 +3432,9 @@ impl ScreencastProducer {
             current_run: self.current_run.clone(),
             native_screencast_session_id: self.native_screencast_session_id.clone(),
             state: self.state.clone(),
+            lifecycle_operation: self.lifecycle_operation.clone(),
+            publish_gate: self.publish_gate.clone(),
+            fence_generation: self.fence_generation.clone(),
             current_candidate: self.current_candidate.clone(),
             cached_frame: self.cached_frame.clone(),
             cached_header: self.cached_header.clone(),
@@ -2804,12 +3451,17 @@ impl ScreencastProducer {
             audio_broadcast: self.audio_broadcast.clone(),
             active_run_cancel: self.active_run_cancel.clone(),
             geometry: self.geometry.clone(),
+            geometry_trusted: self.geometry_trusted.clone(),
             current_run_proven: self.current_run_proven.clone(),
             applied_event_version: self.applied_event_version.clone(),
             quality_revision: self.quality_revision.clone(),
-            test_audio_drain_held: self.test_audio_drain_held.clone(),
-            test_audio_drain_notify: self.test_audio_drain_notify.clone(),
+            audio_drain_barrier: self.audio_drain_barrier.clone(),
             page_setup: self.page_setup.clone(),
+            page_session_poisoned: self.page_session_poisoned.clone(),
+            recovery: self.recovery.clone(),
+            stealth_listener: self.stealth_listener.clone(),
+            selection_context: self.selection_context.clone(),
+            selection_gap: self.selection_gap.clone(),
         })
     }
 }
@@ -2980,7 +3632,7 @@ mod request_policy_tests {
                 if expected_epoch == 2 {
                     producer.update_geometry(TargetGeometry {
                         css_width: width, css_height: height, ..geometry.clone()
-                    }).await.unwrap();
+                    }, expected_epoch).await.unwrap();
                     let command = timeout(Duration::from_secs(1), browser.commands.recv())
                         .await.unwrap().unwrap();
                     assert_eq!(command["method"], "Emulation.setDeviceMetricsOverride");
@@ -3807,15 +4459,16 @@ mod request_policy_tests {
             .is_none());
 
         // u64::MAX sequence boundary never wraps to 0 or emits sequence 1
-        producer.audio_seq.store(u64::MAX, Ordering::SeqCst);
+        let source_seq = producer.audio_source.lock().as_ref().unwrap().seq.clone();
+        source_seq.store(u64::MAX, Ordering::SeqCst);
         assert!(producer
             .admit_and_broadcast_audio_chunk(active_run, new_doc_epoch, &valid_pcm_b64)
             .await
             .is_none());
-        assert_eq!(producer.audio_seq.load(Ordering::SeqCst), u64::MAX);
+        assert_eq!(source_seq.load(Ordering::SeqCst), u64::MAX);
 
         // Zero visible viewers rejects audio admission
-        producer.audio_seq.store(1, Ordering::SeqCst);
+        source_seq.store(1, Ordering::SeqCst);
         producer.remove_viewer_demand(&sub_epoch).await;
         assert!(producer
             .admit_and_broadcast_audio_chunk(active_run, new_doc_epoch, &valid_pcm_b64)

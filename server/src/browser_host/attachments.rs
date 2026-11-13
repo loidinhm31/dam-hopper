@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::sync::RwLock;
+use tokio::sync::{watch, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
@@ -19,6 +19,7 @@ use uuid::Uuid;
 use super::auth::{
     verify_live_admission, BrowserAdmission, LIVE_CHECK_INTERVAL, LIVE_CHECK_TIMEOUT,
 };
+use super::media::ViewerPermit;
 use crate::state::AppState;
 
 pub const TICKET_TTL: Duration = Duration::from_secs(30);
@@ -62,6 +63,8 @@ pub enum AttachmentError {
     ViewerMismatch,
     SubscriptionMismatch,
     CapacityExceeded(String),
+    /// The global viewer capacity is exhausted (carries the effective cap).
+    ViewerCapacityExceeded(usize),
     PairNotFound(String),
     InvalidInput(String),
 }
@@ -84,6 +87,9 @@ impl fmt::Display for AttachmentError {
             Self::ViewerMismatch => write!(f, "viewerId mismatch"),
             Self::SubscriptionMismatch => write!(f, "subscriptionEpoch mismatch"),
             Self::CapacityExceeded(msg) => write!(f, "ticket capacity exceeded (429): {msg}"),
+            Self::ViewerCapacityExceeded(max) => {
+                write!(f, "global active viewer capacity reached ({max})")
+            }
             Self::PairNotFound(msg) => write!(f, "attachment pair not found or expired: {msg}"),
             Self::InvalidInput(msg) => write!(f, "invalid input (400): {msg}"),
         }
@@ -100,6 +106,7 @@ pub struct IssueTicketRequest {
     pub viewer_id: Option<String>,
     pub subscription_epoch: Option<String>,
     pub browser_incarnation: String,
+    #[serde(with = "crate::browser_host::decimal_counter::positive")]
     pub profile_epoch: u64,
 }
 
@@ -158,20 +165,67 @@ pub struct ActiveAttachment {
     pub subscription_epoch: Option<String>,
     pub cancel_token: CancellationToken,
     pub admitted_at: Instant,
+    /// Identity of the pair slot this connection joined (media/control only), so a stale
+    /// connection can never tear down a newer slot that reuses the same key.
+    pub pair_id: Option<Uuid>,
 }
 
+type PairKey = (String, String, String, String); // (principal, session_id, viewer_id, subscription_epoch)
+
+/// The pair's single global viewer permit, shared by its sockets. Each socket's task owns a
+/// clone for its whole life, so capacity returns exactly when the last socket task ends (or an
+/// upgrade that never started is dropped): handler teardown, task abort and runtime shutdown
+/// all release it without going through the attachment registry.
+pub type PairPermit = Arc<ViewerPermit>;
+
+/// Registration result of one media/control socket.
+pub struct PairRegistration {
+    pub connection_id: Uuid,
+    pub cancel_token: CancellationToken,
+    pub permit: PairPermit,
+}
+
+/// One viewer pair: the media and control socket of one (viewer, subscription) identity.
 struct PairedSlot {
+    id: Uuid,
     media_connected: bool,
     control_connected: bool,
-    created_at: Instant,
-    first_connected_at: Option<Instant>,
+    /// Media socket registered AND its producer attached; only then may the pair be ready.
+    media_attached: bool,
+    /// The media producer attach failed: the pair never pairs with a control socket.
+    media_failed: bool,
+    /// Weak: the sockets own the capacity, the registry only lets the mate share it.
+    permit: std::sync::Weak<ViewerPermit>,
+    profile_epoch: u64,
+    browser_incarnation: String,
     cancel_token: CancellationToken,
+    /// Publishes pair readiness (media attached + control connected) to the control socket.
+    ready: watch::Sender<bool>,
+}
+
+impl PairedSlot {
+    fn is_ready(&self) -> bool {
+        self.media_attached && self.control_connected
+    }
+
+    fn publish_ready(&self) {
+        self.ready.send_replace(self.is_ready());
+    }
+}
+
+fn pair_key_of(conn: &ActiveAttachment) -> Option<PairKey> {
+    Some((
+        conn.principal.clone(),
+        conn.browser_session_id.clone()?,
+        conn.viewer_id.clone()?,
+        conn.subscription_epoch.clone()?,
+    ))
 }
 
 pub struct AttachmentManager {
     tickets: Arc<RwLock<HashMap<[u8; 32], StoredTicket>>>, // sha256 -> ticket
     active_connections: Arc<RwLock<HashMap<Uuid, ActiveAttachment>>>,
-    pairs: Arc<RwLock<HashMap<(String, String, String, String), PairedSlot>>>, // (principal, session_id, viewer_id, subscription_epoch) -> slot
+    pairs: Arc<RwLock<HashMap<PairKey, PairedSlot>>>,
     global_ticket_count: Arc<AtomicUsize>,
     supervisor_started: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -376,94 +430,130 @@ impl AttachmentManager {
         })
     }
 
-    /// Registers an admitted attachment connection and binds its pair/lifecycle.
+    /// Registers a non-pair attachment (agent CDP). Media and control sockets are admitted
+    /// only through [`Self::register_pair_connection`], which binds the pair's global permit.
     pub async fn register_connection(
         &self,
         admitted: &AdmittedAttachment,
     ) -> Result<(Uuid, CancellationToken), AttachmentError> {
-        let connection_id = Uuid::new_v4();
-        let mut cancel_token = CancellationToken::new();
-        // For Media or Control, pair them under (viewer_id, subscription_epoch)
-        if admitted.purpose == AttachmentPurpose::Media
-            || admitted.purpose == AttachmentPurpose::Control
-        {
-            let principal = admitted.principal.clone();
-            let session_id = admitted
-                .browser_session_id
-                .as_deref()
-                .unwrap_or_default()
-                .to_string();
-            let viewer_id = admitted
-                .viewer_id
-                .as_deref()
-                .unwrap_or_default()
-                .to_string();
-            let sub_epoch = admitted
-                .subscription_epoch
-                .as_deref()
-                .unwrap_or_default()
-                .to_string();
-            let pair_key = (principal, session_id, viewer_id, sub_epoch);
-            let mut pairs = self.pairs.write().await;
-            let now = Instant::now();
-
-            pairs.retain(|_, slot| {
-                if !(slot.media_connected && slot.control_connected)
-                    && now.duration_since(slot.created_at) > TICKET_TTL
-                {
-                    slot.cancel_token.cancel();
-                    return false;
-                }
-                if let Some(first_at) = slot.first_connected_at {
-                    if !(slot.media_connected && slot.control_connected)
-                        && now.duration_since(first_at) > PAIR_WAIT_TIMEOUT
-                    {
-                        slot.cancel_token.cancel();
-                        return false;
-                    }
-                }
-                true
-            });
-
-            let slot = pairs.entry(pair_key).or_insert_with(|| PairedSlot {
-                media_connected: false,
-                control_connected: false,
-                created_at: now,
-                first_connected_at: None,
-                cancel_token: CancellationToken::new(),
-            });
-
-            cancel_token = slot.cancel_token.child_token();
-
-            match admitted.purpose {
-                AttachmentPurpose::Media => {
-                    if slot.media_connected {
-                        return Err(AttachmentError::CapacityExceeded(
-                            "media socket already connected for this viewer subscription"
-                                .to_string(),
-                        ));
-                    }
-                    slot.media_connected = true;
-                    if slot.first_connected_at.is_none() {
-                        slot.first_connected_at = Some(now);
-                    }
-                }
-                AttachmentPurpose::Control => {
-                    if slot.control_connected {
-                        return Err(AttachmentError::CapacityExceeded(
-                            "control socket already connected for this viewer subscription"
-                                .to_string(),
-                        ));
-                    }
-                    slot.control_connected = true;
-                    if slot.first_connected_at.is_none() {
-                        slot.first_connected_at = Some(now);
-                    }
-                }
-                _ => {}
-            }
+        if matches!(
+            admitted.purpose,
+            AttachmentPurpose::Media | AttachmentPurpose::Control
+        ) {
+            return Err(AttachmentError::InvalidInput(
+                "media and control sockets register through register_pair_connection".to_string(),
+            ));
         }
+        Ok(self
+            .insert_active(admitted, CancellationToken::new(), None)
+            .await)
+    }
 
+    /// Registers a media or control socket into its (viewer, subscription) pair.
+    ///
+    /// The first socket of a pair acquires the pair's ONE global viewer permit through
+    /// `acquire_permit` and arms the mate deadline timer; the mate shares that permit (never a
+    /// second one). Every socket's task must keep `PairRegistration::permit` alive until it ends.
+    pub async fn register_pair_connection<F>(
+        &self,
+        admitted: &AdmittedAttachment,
+        acquire_permit: F,
+    ) -> Result<PairRegistration, AttachmentError>
+    where
+        F: FnOnce() -> Result<ViewerPermit, AttachmentError>,
+    {
+        let purpose = admitted.purpose;
+        if !matches!(purpose, AttachmentPurpose::Media | AttachmentPurpose::Control) {
+            return Err(AttachmentError::InvalidInput(
+                "only media and control sockets form a pair".to_string(),
+            ));
+        }
+        let pair_key: PairKey = (
+            admitted.principal.clone(),
+            admitted.browser_session_id.clone().unwrap_or_default(),
+            admitted.viewer_id.clone().unwrap_or_default(),
+            admitted.subscription_epoch.clone().unwrap_or_default(),
+        );
+        let (pair_id, cancel_token, permit, armed_deadline) = {
+            let mut pairs = self.pairs.write().await;
+            // A slot whose sockets are all gone (no permit holder left, no failed attach) is
+            // stale: it is replaced instead of blocking the identity forever.
+            let stale = pairs
+                .get(&pair_key)
+                .is_some_and(|slot| slot.permit.strong_count() == 0 && !slot.media_failed);
+            if stale {
+                if let Some(old) = pairs.remove(&pair_key) {
+                    old.cancel_token.cancel();
+                }
+            }
+            let mut armed_deadline = None;
+            let permit = if let Some(slot) = pairs.get(&pair_key) {
+                if slot.profile_epoch != admitted.profile_epoch
+                    || slot.browser_incarnation != admitted.browser_incarnation
+                {
+                    return Err(AttachmentError::SessionMismatch);
+                }
+                let permit = match slot.permit.upgrade() {
+                    Some(permit) if !slot.media_failed => permit,
+                    _ => {
+                        return Err(AttachmentError::PairNotFound(
+                            "media producer attach failed for this viewer subscription"
+                                .to_string(),
+                        ));
+                    }
+                };
+                let duplicate = match purpose {
+                    AttachmentPurpose::Media => slot.media_connected,
+                    _ => slot.control_connected,
+                };
+                if duplicate {
+                    return Err(AttachmentError::CapacityExceeded(format!(
+                        "{purpose} socket already connected for this viewer subscription"
+                    )));
+                }
+                permit
+            } else {
+                let permit = Arc::new(acquire_permit()?);
+                let slot = PairedSlot {
+                    id: Uuid::new_v4(),
+                    media_connected: false,
+                    control_connected: false,
+                    media_attached: false,
+                    media_failed: false,
+                    permit: Arc::downgrade(&permit),
+                    profile_epoch: admitted.profile_epoch,
+                    browser_incarnation: admitted.browser_incarnation.clone(),
+                    cancel_token: CancellationToken::new(),
+                    ready: watch::channel(false).0,
+                };
+                armed_deadline = Some((slot.id, slot.cancel_token.clone()));
+                pairs.insert(pair_key.clone(), slot);
+                permit
+            };
+            let slot = pairs.get_mut(&pair_key).expect("slot present under the write lock");
+            match purpose {
+                AttachmentPurpose::Media => slot.media_connected = true,
+                _ => slot.control_connected = true,
+            }
+            slot.publish_ready();
+            (slot.id, slot.cancel_token.child_token(), permit, armed_deadline)
+        };
+        if let Some((slot_id, slot_token)) = armed_deadline {
+            self.spawn_pair_reaper(pair_key, slot_id, slot_token);
+        }
+        let (connection_id, cancel_token) = self
+            .insert_active(admitted, cancel_token, Some(pair_id))
+            .await;
+        Ok(PairRegistration { connection_id, cancel_token, permit })
+    }
+
+    async fn insert_active(
+        &self,
+        admitted: &AdmittedAttachment,
+        cancel_token: CancellationToken,
+        pair_id: Option<Uuid>,
+    ) -> (Uuid, CancellationToken) {
+        let connection_id = Uuid::new_v4();
         let active = ActiveAttachment {
             connection_id,
             purpose: admitted.purpose,
@@ -477,32 +567,104 @@ impl AttachmentManager {
             subscription_epoch: admitted.subscription_epoch.clone(),
             cancel_token: cancel_token.clone(),
             admitted_at: Instant::now(),
+            pair_id,
         };
-        {
-            let mut conns = self.active_connections.write().await;
-            conns.insert(connection_id, active);
-        }
+        self.active_connections
+            .write()
+            .await
+            .insert(connection_id, active);
+        (connection_id, cancel_token)
+    }
 
-        Ok((connection_id, cancel_token))
+    /// Independent timer: a pair that is not ready when `PAIR_WAIT_TIMEOUT` elapses is torn
+    /// down (its sockets cancelled, its permit released) with no later traffic required.
+    fn spawn_pair_reaper(&self, key: PairKey, slot_id: Uuid, slot_token: CancellationToken) {
+        let pairs = self.pairs.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = slot_token.cancelled() => {}
+                _ = tokio::time::sleep(PAIR_WAIT_TIMEOUT) => {
+                    let mut pairs = pairs.write().await;
+                    let expired = pairs
+                        .get(&key)
+                        .is_some_and(|slot| slot.id == slot_id && !slot.is_ready());
+                    if expired {
+                        if let Some(slot) = pairs.remove(&key) {
+                            warn!(
+                                session_id = %key.1,
+                                viewer_id = %key.2,
+                                "viewer pair incomplete at deadline; reaping its sockets"
+                            );
+                            slot.cancel_token.cancel();
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Marks the pair's media producer attached (media socket is about to be upgraded). The
+    /// pair becomes ready once its control socket is also connected.
+    pub async fn mark_media_attached(&self, connection_id: Uuid) -> bool {
+        self.with_pair_slot(connection_id, |slot| {
+            slot.media_attached = true;
+            slot.publish_ready();
+        })
+        .await
+    }
+
+    /// The media producer attach failed: the pair never becomes ready and the control socket
+    /// can no longer join it. The caller drops its permit clone so no capacity stays held
+    /// behind the inert media socket.
+    pub async fn fail_media_attach(&self, connection_id: Uuid) -> bool {
+        self.with_pair_slot(connection_id, |slot| {
+            slot.media_attached = false;
+            slot.media_failed = true;
+            slot.publish_ready();
+        })
+        .await
+    }
+
+    /// Pair-readiness watch (media attached + control connected) for a registered socket.
+    pub async fn subscribe_pair(&self, connection_id: Uuid) -> Option<watch::Receiver<bool>> {
+        let mut receiver = None;
+        self.with_pair_slot(connection_id, |slot| receiver = Some(slot.ready.subscribe()))
+            .await;
+        receiver
+    }
+
+    async fn with_pair_slot(
+        &self,
+        connection_id: Uuid,
+        apply: impl FnOnce(&mut PairedSlot),
+    ) -> bool {
+        let conns = self.active_connections.read().await;
+        let Some(conn) = conns.get(&connection_id) else {
+            return false;
+        };
+        let (Some(pair_id), Some(key)) = (conn.pair_id, pair_key_of(conn)) else {
+            return false;
+        };
+        let mut pairs = self.pairs.write().await;
+        match pairs.get_mut(&key) {
+            Some(slot) if slot.id == pair_id => {
+                apply(slot);
+                true
+            }
+            _ => false,
+        }
     }
 
     pub async fn unregister_connection(&self, connection_id: Uuid) {
         let mut conns = self.active_connections.write().await;
         if let Some(conn) = conns.remove(&connection_id) {
             conn.cancel_token.cancel();
-            if let (Some(session_id), Some(viewer_id), Some(sub_epoch)) = (
-                conn.browser_session_id,
-                conn.viewer_id.as_ref(),
-                conn.subscription_epoch.as_ref(),
-            ) {
+            if let (Some(pair_id), Some(key)) = (conn.pair_id, pair_key_of(&conn)) {
                 let mut pairs = self.pairs.write().await;
-                if let Some(slot) = pairs.remove(&(
-                    conn.principal.clone(),
-                    session_id,
-                    viewer_id.clone(),
-                    sub_epoch.clone(),
-                )) {
-                    slot.cancel_token.cancel();
+                if pairs.get(&key).is_some_and(|slot| slot.id == pair_id) {
+                    if let Some(slot) = pairs.remove(&key) {
+                        slot.cancel_token.cancel();
+                    }
                 }
             }
         }
@@ -594,17 +756,36 @@ impl AttachmentManager {
         self.global_ticket_count
             .store(tickets.len(), Ordering::SeqCst);
     }
-    /// Revokes connections bound to a browser session when it closes.
+    /// Revokes everything bound to a browser session when it closes: its sockets, its pair
+    /// slots (releasing their global permits) and every unconsumed ticket, so a ticket issued
+    /// before the close can never be consumed after it.
     pub async fn revoke_by_browser_session(&self, session_id: &str) {
-        let mut conns = self.active_connections.write().await;
-        conns.retain(|_, c| {
-            if c.browser_session_id.as_deref() == Some(session_id) {
-                c.cancel_token.cancel();
-                false
-            } else {
-                true
-            }
-        });
+        {
+            let mut conns = self.active_connections.write().await;
+            conns.retain(|_, c| {
+                if c.browser_session_id.as_deref() == Some(session_id) {
+                    c.cancel_token.cancel();
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        {
+            let mut pairs = self.pairs.write().await;
+            pairs.retain(|(_, sid, _, _), slot| {
+                if sid == session_id {
+                    slot.cancel_token.cancel();
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        let mut tickets = self.tickets.write().await;
+        tickets.retain(|_, t| t.browser_session_id.as_deref() != Some(session_id));
+        self.global_ticket_count
+            .store(tickets.len(), Ordering::SeqCst);
     }
 
     /// Runs one supervision round over every registered attachment.
@@ -890,8 +1071,13 @@ mod tests {
             .await
             .unwrap();
 
-        let (_id1, cancel1) = mgr.register_connection(&c1).await.unwrap();
-        let (_id2, cancel2) = mgr.register_connection(&c2).await.unwrap();
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let permit = || {
+            ViewerPermit::try_acquire_in(&COUNTER, 8).map_err(|_| AttachmentError::ViewerCapacityExceeded(8))
+        };
+        let reg1 = mgr.register_pair_connection(&c1, permit).await.unwrap();
+        let reg2 = mgr.register_pair_connection(&c2, permit).await.unwrap();
+        let (cancel1, cancel2) = (reg1.cancel_token.clone(), reg2.cancel_token.clone());
 
         // Revoke session-A
         mgr.revoke_by_auth_session("admin1", "session-A").await;
@@ -900,5 +1086,173 @@ mod tests {
         assert!(cancel1.is_cancelled());
         // cancel2 (session-B) must NOT be cancelled (sibling profile preserved)
         assert!(!cancel2.is_cancelled());
+    }
+
+    fn pair_admission(session: &str, viewer: &str, purpose: AttachmentPurpose) -> AdmittedAttachment {
+        AdmittedAttachment {
+            purpose,
+            principal: "alice".to_string(),
+            is_dev: false,
+            auth_session_id: Some("auth-1".to_string()),
+            auth_version: Some(1),
+            credential_version: Some(1),
+            effective_deadline: None,
+            profile_epoch: 1,
+            browser_incarnation: "inc-1".to_string(),
+            browser_session_id: Some(session.to_string()),
+            viewer_id: Some(viewer.to_string()),
+            subscription_epoch: Some("sub-1".to_string()),
+        }
+    }
+
+    fn counter_permit(
+        counter: &'static AtomicUsize,
+        cap: usize,
+    ) -> impl FnOnce() -> Result<ViewerPermit, AttachmentError> {
+        move || {
+            ViewerPermit::try_acquire_in(counter, cap)
+                .map_err(|_| AttachmentError::ViewerCapacityExceeded(cap))
+        }
+    }
+
+    #[tokio::test]
+    async fn pair_shares_one_permit_and_returns_it_with_its_last_socket() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let mgr = AttachmentManager::new();
+        let media = mgr
+            .register_pair_connection(&pair_admission("s", "v", AttachmentPurpose::Media), counter_permit(&COUNTER, 4))
+            .await
+            .unwrap();
+        let control = mgr
+            .register_pair_connection(&pair_admission("s", "v", AttachmentPurpose::Control), || {
+                panic!("the mate must not acquire a second permit")
+            })
+            .await
+            .unwrap();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
+        mgr.unregister_connection(media.connection_id).await;
+        drop(media);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1, "the mate's task still owns the permit");
+        drop(control);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn half_pair_is_reaped_by_its_own_timer_and_ready_pair_survives() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let mgr = AttachmentManager::new();
+        let solo = mgr
+            .register_pair_connection(&pair_admission("solo", "v", AttachmentPurpose::Control), counter_permit(&COUNTER, 4))
+            .await
+            .unwrap();
+        let media = mgr
+            .register_pair_connection(&pair_admission("both", "v", AttachmentPurpose::Media), counter_permit(&COUNTER, 4))
+            .await
+            .unwrap();
+        let control = mgr
+            .register_pair_connection(&pair_admission("both", "v", AttachmentPurpose::Control), counter_permit(&COUNTER, 4))
+            .await
+            .unwrap();
+        assert!(mgr.mark_media_attached(media.connection_id).await);
+        let mut ready = mgr.subscribe_pair(control.connection_id).await.unwrap();
+        assert!(*ready.borrow_and_update(), "attached media + connected control is ready");
+        let mut solo_ready = mgr.subscribe_pair(solo.connection_id).await.unwrap();
+        assert!(!*solo_ready.borrow_and_update(), "a control socket alone is never ready");
+
+        // Let the reaper tasks arm their timers, then pass the pair deadline.
+        tokio::task::yield_now().await;
+        tokio::time::advance(PAIR_WAIT_TIMEOUT + Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert!(solo.cancel_token.is_cancelled(), "half pair reaped with no traffic");
+        assert!(!media.cancel_token.is_cancelled() && !control.cancel_token.is_cancelled());
+        assert!(mgr.subscribe_pair(solo.connection_id).await.is_none(), "reaped slot is gone");
+        drop(solo);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1, "reaped pair's capacity returned");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stale_connection_never_removes_a_newer_slot_for_the_same_key() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let mgr = AttachmentManager::new();
+        let old = mgr
+            .register_pair_connection(&pair_admission("s", "v", AttachmentPurpose::Media), counter_permit(&COUNTER, 4))
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        tokio::time::advance(PAIR_WAIT_TIMEOUT + Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert!(old.cancel_token.is_cancelled());
+        let new = mgr
+            .register_pair_connection(&pair_admission("s", "v", AttachmentPurpose::Media), counter_permit(&COUNTER, 4))
+            .await
+            .unwrap();
+        mgr.unregister_connection(old.connection_id).await;
+        assert!(!new.cancel_token.is_cancelled(), "old socket's cleanup tore down the new slot");
+        assert!(mgr.mark_media_attached(new.connection_id).await);
+    }
+
+    #[tokio::test]
+    async fn failed_media_attach_blocks_control_pairing_and_capacity_is_capped_per_pair() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let mgr = AttachmentManager::new();
+        let media = mgr
+            .register_pair_connection(&pair_admission("s", "v", AttachmentPurpose::Media), counter_permit(&COUNTER, 1))
+            .await
+            .unwrap();
+        assert!(mgr.fail_media_attach(media.connection_id).await);
+        let err = mgr
+            .register_pair_connection(&pair_admission("s", "v", AttachmentPurpose::Control), || panic!("no permit for a failed pair"))
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(err, AttachmentError::PairNotFound(_)), "{err}");
+        // Capacity 1 is held by the pair: another viewer is refused until the pair's task ends.
+        let busy = mgr
+            .register_pair_connection(&pair_admission("s2", "v2", AttachmentPurpose::Control), counter_permit(&COUNTER, 1))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(busy, AttachmentError::ViewerCapacityExceeded(1));
+        drop(media);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn close_revokes_pair_slots_and_unconsumed_tickets_of_the_session() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let mgr = AttachmentManager::new();
+        let admission = BrowserAdmission {
+            principal: "alice".to_string(),
+            is_dev: false,
+            session_id: Some("auth-1".to_string()),
+            auth_version: Some(1),
+            credential_version: Some(1),
+            effective_deadline: None,
+        };
+        let request = |session: &str| IssueTicketRequest {
+            purpose: AttachmentPurpose::Media,
+            browser_session_id: Some(session.to_string()),
+            viewer_id: Some("v".to_string()),
+            subscription_epoch: Some("sub-1".to_string()),
+            browser_incarnation: "inc-1".to_string(),
+            profile_epoch: 1,
+        };
+        let closed = mgr.issue_ticket(&admission, &request("closing"), None).await.unwrap();
+        let other = mgr.issue_ticket(&admission, &request("other"), None).await.unwrap();
+        let reg = mgr
+            .register_pair_connection(&pair_admission("closing", "v", AttachmentPurpose::Control), counter_permit(&COUNTER, 4))
+            .await
+            .unwrap();
+
+        mgr.revoke_by_browser_session("closing").await;
+
+        assert!(reg.cancel_token.is_cancelled());
+        assert!(mgr.subscribe_pair(reg.connection_id).await.is_none(), "slot dropped with the session");
+        assert_eq!(
+            mgr.consume_ticket(&closed.ticket, AttachmentPurpose::Media, None).await.unwrap_err(),
+            AttachmentError::TicketNotFound,
+            "ticket issued before the close must not be consumable after it"
+        );
+        assert!(mgr.consume_ticket(&other.ticket, AttachmentPurpose::Media, None).await.is_ok());
     }
 }

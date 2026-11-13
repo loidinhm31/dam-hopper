@@ -140,7 +140,7 @@ function BrowserTabbedShell({ window, owner }: { window: OsWindow; owner: Connec
   const sessionId = activeTab.sessionId;
   const isController = Boolean(activeTab.isController);
   const leaseToken = activeTab.leaseToken;
-  const navigationRevision = activeTab.snapshot?.navigationRevision ?? 1;
+  const navigationRevision = activeTab.snapshot?.navigationRevision ?? "";
   const navigationPending = Boolean(pendingByTab[activeTabId]);
   const audioMuted = Boolean(audioMutedByTab[activeTabId]);
   const audioBlocked = useSyncExternalStore(

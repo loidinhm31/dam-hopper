@@ -21,13 +21,19 @@ use crate::api::auth::AuthenticatedActor;
 use crate::api::browser_host::{
     browser_error_response, global_attachment_manager, global_session_registry,
 };
-use crate::browser_host::attachments::AttachmentPurpose;
+use crate::browser_host::attachments::{
+    AdmittedAttachment, AttachmentError, AttachmentManager, AttachmentPurpose, PairPermit,
+    PairRegistration,
+};
 use crate::browser_host::auth::{
     validate_request_origin, verify_dev_boundary, verify_live_admission, BrowserAdmission,
 };
-use crate::browser_host::cdp::{CdpClient, CdpLifecycleEvent};
+use crate::browser_host::cdp::{CdpClient, CdpError, CdpLifecycleEvent};
+use crate::browser_host::control_input::{
+    handle_control_text, input_unavailable_json, ControlInputContext, ControlInputOutcome,
+};
 use crate::browser_host::diagnostics::{global_stream_diagnostics, TrackedBhjfFrame};
-use crate::browser_host::input::{InputEvent, InputMessage};
+use crate::browser_host::input::InputEvent;
 use crate::browser_host::manager::{
     BrowserInstanceHandle, NativeCloseOutcome, NativeControl, NativeControlError,
     NativeCreateError, NativeFaults, NativePumpRequest,
@@ -101,8 +107,12 @@ pub async fn remove_producer(session_id: &str) {
 /// A cached producer is only usable for the browser incarnation it was built for and while its
 /// CDP connection is alive.
 fn producer_is_current(producer: &ScreencastProducer, incarnation: &str) -> bool {
-    producer.browser_incarnation() == incarnation && !producer.cdp_client.is_closed()
+    // A producer that is re-establishing its own lost connection is still the live owner;
+    // once recovery gave up it is replaced like any dead one.
+    producer.browser_incarnation() == incarnation
+        && (!producer.cdp_client.is_closed() || producer.recovery_pending())
 }
+
 
 /// Why a producer is being materialized; decides whether the initial managed navigation runs.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -383,7 +393,7 @@ async fn materialize_producer(
                 };
                 let nav_rev = match &*nav_updates.borrow_and_update() {
                     ServerControlEvent::SessionUpdated { session } => {
-                        session.navigation_revision.parse::<u64>().ok()
+                        crate::browser_host::decimal_counter::parse_canonical_u64(&session.navigation_revision, false)
                     }
                     _ => None,
                 };
@@ -497,7 +507,7 @@ async fn build_producer(
     let client = CdpClient::connect(&control.ws_endpoint)
         .await
         .map_err(|err| SessionError::NativeUnavailable(format!("CDP connect failed: {err}")))?;
-    let viewport_epoch = snapshot.dto.viewport_epoch.parse::<u64>().unwrap_or(1);
+    let viewport_epoch = crate::browser_host::decimal_counter::parse_canonical_u64(&snapshot.dto.viewport_epoch, false).unwrap_or(1);
     let (fps, jpeg_quality, max_width, max_height) = {
         let cfg = state.config.read().await;
         let b = &cfg.server.browser.budgets;
@@ -514,9 +524,10 @@ async fn build_producer(
             snapshot.dto.geometry.clone(),
         )
         .with_capture_policy(fps, jpeg_quality)
-        .with_image_bounds(max_width, max_height),
+        .with_image_bounds(max_width, max_height)
+        .with_selection_context(state.clone()),
     );
-    let initial_nav_rev = snapshot.dto.navigation_revision.parse::<u64>().unwrap_or(1);
+    let initial_nav_rev = crate::browser_host::decimal_counter::parse_canonical_u64(&snapshot.dto.navigation_revision, false).unwrap_or(1);
     producer.init_audio_doc_epoch(initial_nav_rev);
     let page_sid = producer.ensure_page_session().await.map_err(|err| {
         SessionError::NativeUnavailable(format!("browser page session setup failed: {err}"))
@@ -1212,18 +1223,61 @@ pub fn audio_chunk_admissible(
     chunk_audio_run: &str,
     doc_epoch: u64,
 ) -> bool {
-    let chunk_run = Uuid::parse_str(chunk_audio_run).ok();
     producer.audio_doc_authority().is_admissible(doc_epoch)
-        && chunk_run.is_some_and(|r| producer.audio_source_run() == Some(r))
-        && producer
-            .viewer_audio_gate(subscription_epoch)
-            .is_some_and(|g| g.is_allowed())
-        && producer.viewer_audio_generation(subscription_epoch) == Some(admitted_gen)
-        && producer
-            .viewer_audio_gate_info(subscription_epoch)
-            .is_some_and(|(_gate, gen, watermark)| {
-                gen == admitted_gen && !watermark.suppresses(chunk_run, audio_seq)
-            })
+        && Uuid::parse_str(chunk_audio_run).is_ok_and(|chunk_run| {
+            producer.audio_slot_admissible(subscription_epoch, admitted_gen, chunk_run, audio_seq)
+        })
+}
+
+/// Effective configured `max_viewers` (clamped like the permit itself).
+async fn configured_max_viewers(state: &AppState) -> usize {
+    state
+        .config
+        .read()
+        .await
+        .server
+        .browser
+        .budgets
+        .max_viewers
+        .clamp(1, 16)
+}
+
+/// Registers a media/control socket into its viewer pair. The pair owns ONE global viewer
+/// permit: the first socket to arrive acquires it, the mate joins under it.
+async fn register_pair(
+    state: &AppState,
+    att_manager: &AttachmentManager,
+    admitted: &AdmittedAttachment,
+) -> Result<PairRegistration, Response> {
+    let max_viewers = configured_max_viewers(state).await;
+    att_manager
+        .register_pair_connection(admitted, || {
+            ViewerPermit::try_acquire_with_cap(max_viewers)
+                .map_err(|_| AttachmentError::ViewerCapacityExceeded(max_viewers))
+        })
+        .await
+        .map_err(|err| match err {
+            AttachmentError::ViewerCapacityExceeded(max) => browser_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "browserBusy",
+                &format!("global active viewer capacity reached ({max})"),
+            ),
+            other => browser_error_response(StatusCode::FORBIDDEN, "pairingFailed", &other.to_string()),
+        })
+}
+
+/// The ticket's exact session identity must still be a live `Running` session.
+async fn attachment_session_live(admitted: &AdmittedAttachment) -> Result<(), Response> {
+    global_session_registry()
+        .verify_attachment_identity(
+            admitted.browser_session_id.as_deref().unwrap_or_default(),
+            &admitted.principal,
+            admitted.is_dev,
+            admitted.profile_epoch,
+            &admitted.browser_incarnation,
+        )
+        .await
+        .map_err(Response::from)
 }
 
 /// GET /api/browser/media WebSocket upgrade handler.
@@ -1307,32 +1361,23 @@ pub async fn media_ws_handler(
         );
     }
 
-    // Capacity check against effective configured max_viewers
-    let configured_max_viewers = state
-        .config
-        .read()
-        .await
-        .server
-        .browser
-        .budgets
-        .max_viewers
-        .clamp(1, 16);
-    let permit = match ViewerPermit::try_acquire_with_cap(configured_max_viewers) {
-        Ok(p) => p,
-        Err(status) => {
-            return browser_error_response(
-                status,
-                "browserBusy",
-                &format!("global active viewer capacity reached ({configured_max_viewers})"),
-            );
-        }
-    };
-    let (conn_id, cancel_token) = match att_manager.register_connection(&admitted).await {
-        Ok(c) => c,
-        Err(e) => {
-            return browser_error_response(StatusCode::FORBIDDEN, "pairingFailed", &e.to_string());
-        }
-    };
+    // Live session identity: a ticket issued before a close can never be consumed after it.
+    if let Err(resp) = attachment_session_live(&admitted).await {
+        return resp;
+    }
+
+    // The pair's one global permit (capacity) is acquired by the first socket of the pair.
+    let PairRegistration { connection_id: conn_id, cancel_token, permit } =
+        match register_pair(&state, att_manager, &admitted).await {
+            Ok(registration) => registration,
+            Err(resp) => return resp,
+        };
+    // A close that began after the check above already revoked the sockets it could see, so
+    // re-check now that this socket is visible to it.
+    if let Err(resp) = attachment_session_live(&admitted).await {
+        att_manager.unregister_connection(conn_id).await;
+        return resp;
+    }
 
     let session_id = admitted.browser_session_id.clone().unwrap_or_default();
     let viewer_id = admitted.viewer_id.clone().unwrap_or_default();
@@ -1361,6 +1406,24 @@ pub async fn media_ws_handler(
             "live authentication validation failed",
         );
     }
+
+    // Only an attached producer makes the pair ready (and control input available). A failed
+    // attach releases the pair's permit now instead of holding capacity behind an inert socket.
+    let pair_alive = match &producer {
+        Some(_) => att_manager.mark_media_attached(conn_id).await,
+        None => att_manager.fail_media_attach(conn_id).await,
+    };
+    if !pair_alive {
+        att_manager.unregister_connection(conn_id).await;
+        return browser_error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalidSession",
+            "viewer pair ended during setup",
+        );
+    }
+    // Without a producer this socket only reports "unavailable": it must not keep holding the
+    // pair's capacity. (A producer-less pair can no longer be joined by a control socket.)
+    let permit = producer.is_some().then_some(permit);
 
     let configured_fps = state
         .config
@@ -1498,6 +1561,10 @@ fn compute_viewer_quality_digest(
     }
 }
 
+/// Digest revision of a quality event built from state that never settled: equals no live
+/// revision, so the next dirty check rebuilds it.
+const UNSETTLED_QUALITY_REVISION: u64 = u64::MAX;
+
 async fn emit_stream_quality_if_changed(
     producer: Option<&Arc<ScreencastProducer>>,
     subscription_epoch: &str,
@@ -1505,10 +1572,17 @@ async fn emit_stream_quality_if_changed(
     viewer_visible: bool,
     last_digest: &mut Option<ViewerQualityDigest>,
 ) {
-    let current_digest = compute_viewer_quality_digest(producer, subscription_epoch, viewer_visible);
+    let mut current_digest = compute_viewer_quality_digest(producer, subscription_epoch, viewer_visible);
     if last_digest.as_ref() != Some(&current_digest) {
+        // The memoized digest is bound to the revision the event is provably coherent with, not to
+        // whatever the revision is by the time the digest was computed; an unsettled read is never
+        // memoized (sentinel), so the next dirty check rebuilds it.
         let quality = match producer {
-            Some(p) => p.stream_quality_event(subscription_epoch).await,
+            Some(p) => {
+                let snapshot = p.stream_quality_snapshot(subscription_epoch).await;
+                current_digest.quality_rev = snapshot.revision.unwrap_or(UNSETTLED_QUALITY_REVISION);
+                snapshot.event
+            }
             None => crate::browser_host::protocol::BrowserStreamQuality {
                 kind: "streamQuality".to_string(),
                 subscription_epoch: subscription_epoch.to_string(),
@@ -1548,7 +1622,7 @@ async fn run_media_session(
     effective_deadline: Option<DateTime<Utc>>,
     cancel_token: CancellationToken,
     conn_id: Uuid,
-    _permit: ViewerPermit,
+    _permit: Option<PairPermit>,
 ) {
     let (ws_sink, mut ws_stream) = socket.split();
     let controller = Arc::new(Mutex::new(ViewerCreditController::with_min_interval(
@@ -1586,6 +1660,7 @@ async fn run_media_session(
         },
     );
 
+    let mut audio_drain_barrier = producer.as_ref().map(|p| p.audio_drain_barrier());
     let (mut frame_rx, mut audio_rx) = if let Some(prod) = &producer {
         prod.register_viewer_demand(&viewer_id, &subscription_epoch, true)
             .await;
@@ -1835,18 +1910,30 @@ async fn run_media_session(
             }
             // Incoming broadcast audio chunk from screencast producer
             audio_res = async {
-                if let Some(prod) = &producer {
-                    if prod.test_audio_drain_held.load(Ordering::Acquire) {
-                        let notified = prod.test_audio_drain_notify.notified();
-                        if prod.test_audio_drain_held.load(Ordering::Acquire) {
-                            notified.await;
+                let Some(rx) = audio_rx.as_mut() else {
+                    return futures_util::future::pending::<Option<Result<crate::browser_host::protocol::ProducerAudioChunk, tokio::sync::broadcast::error::RecvError>>>().await;
+                };
+                loop {
+                    // Test barrier: park before taking anything off the receiver while held, and
+                    // re-park if it engages while waiting (recv is cancel-safe: nothing is consumed).
+                    if let Some(barrier) = audio_drain_barrier.as_mut() {
+                        if barrier.wait_for(|held| !*held).await.is_err() {
+                            audio_drain_barrier = None;
+                            continue;
                         }
                     }
-                }
-                match audio_rx.as_mut() {
-                    Some(rx) => Some(rx.recv().await),
-                    None => {
-                        futures_util::future::pending::<Option<Result<crate::browser_host::protocol::ProducerAudioChunk, tokio::sync::broadcast::error::RecvError>>>().await
+                    let engaged = async {
+                        match audio_drain_barrier.as_mut() {
+                            Some(barrier) => {
+                                let _ = barrier.wait_for(|held| *held).await;
+                            }
+                            None => futures_util::future::pending::<()>().await,
+                        }
+                    };
+                    tokio::select! {
+                        biased;
+                        _ = engaged => continue,
+                        received = rx.recv() => break Some(received),
                     }
                 }
             } => {
@@ -1874,6 +1961,7 @@ async fn run_media_session(
                             let seq: u64 = chunk.audio_seq.parse().unwrap_or(0);
                             let chunk_run = Uuid::parse_str(&chunk.audio_run).ok();
                             if watermark.suppresses(chunk_run, seq) {
+                                prod.ledger.audio_dropped_by_boundary.fetch_add(1, Ordering::Relaxed);
                                 continue;
                             }
                             (admitted_gen, seq)
@@ -2198,12 +2286,22 @@ pub async fn control_ws_handler(
         );
     }
 
-    let (conn_id, cancel_token) = match att_manager.register_connection(&admitted).await {
-        Ok(c) => c,
-        Err(e) => {
-            return browser_error_response(StatusCode::FORBIDDEN, "pairingFailed", &e.to_string());
-        }
-    };
+    // Live session identity: a ticket issued before a close can never be consumed after it.
+    if let Err(resp) = attachment_session_live(&admitted).await {
+        return resp;
+    }
+
+    // The control socket joins (or opens) the pair under ONE global permit: it no longer
+    // bypasses viewer capacity.
+    let PairRegistration { connection_id: conn_id, cancel_token, permit } =
+        match register_pair(&state, att_manager, &admitted).await {
+            Ok(registration) => registration,
+            Err(resp) => return resp,
+        };
+    if let Err(resp) = attachment_session_live(&admitted).await {
+        att_manager.unregister_connection(conn_id).await;
+        return resp;
+    }
 
     let session_id = admitted.browser_session_id.clone().unwrap_or_default();
     let viewer_id = admitted.viewer_id.clone().unwrap_or_default();
@@ -2229,6 +2327,14 @@ pub async fn control_ws_handler(
             );
         }
     };
+    let Some(paired_rx) = att_manager.subscribe_pair(conn_id).await else {
+        att_manager.unregister_connection(conn_id).await;
+        return browser_error_response(
+            StatusCode::FORBIDDEN,
+            "pairingFailed",
+            "viewer pair ended during setup",
+        );
+    };
 
     ws.protocols([CONTROL_SUBPROTOCOL])
         .max_message_size(MAX_CONTROL_MESSAGE_BYTES)
@@ -2245,6 +2351,8 @@ pub async fn control_ws_handler(
                 effective_deadline,
                 cancel_token,
                 conn_id,
+                paired_rx,
+                permit,
             )
         })
 }
@@ -2260,6 +2368,8 @@ async fn run_control_session(
     effective_deadline: Option<DateTime<Utc>>,
     cancel_token: CancellationToken,
     conn_id: Uuid,
+    mut paired_rx: watch::Receiver<bool>,
+    _permit: PairPermit,
 ) {
     let (mut ws_sink, mut ws_stream) = socket.split();
     let input_manager = crate::api::browser_host::get_or_create_input_manager(&session_id).await;
@@ -2295,6 +2405,14 @@ async fn run_control_session(
                 warn!(viewer_id = %viewer_id, "control session reached absolute auth deadline; closing");
                 break;
             }
+            // The pair became ready or incomplete: re-publish the snapshot with its input
+            // readiness (unpaired control never advertises input).
+            changed = paired_rx.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                initial_update = true;
+            }
             changed = async {
                 if initial_update {
                     Ok(())
@@ -2308,7 +2426,7 @@ async fn run_control_session(
                 }
                 // Release the watch borrow before the socket await: producers never wait on
                 // a slow viewer and only one latest-state slot is retained per session.
-                let Ok((json, retired)) = serialize_control_snapshot(&mut updates) else {
+                let Ok((json, retired)) = serialize_control_snapshot(&mut updates, *paired_rx.borrow()) else {
                     break;
                 };
                 let json_len = json.len();
@@ -2361,38 +2479,25 @@ async fn run_control_session(
                             break;
                         }
 
-                        // Parse input message
-                        if let Ok(input_msg) = serde_json::from_str::<InputMessage>(&text) {
-                            // Validate subscription epoch matches
-                            if input_msg.subscription_epoch != subscription_epoch {
-                                warn!("subscription epoch mismatch in input message");
-                                continue;
+                        let paired = *paired_rx.borrow();
+                        let outcome = handle_control_text(
+                            &ControlInputContext {
+                                input_manager: &input_manager,
+                                session_id: &session_id,
+                                viewer_id: &viewer_id,
+                                subscription_epoch: &subscription_epoch,
+                                paired,
+                            },
+                            &text,
+                        )
+                        .await;
+                        if let ControlInputOutcome::ReleaseFailed(reason) = outcome {
+                            // Native state is uncertain: tell the viewer input is unavailable
+                            // and cancel this channel (the pair goes with it).
+                            if let Some(json) = input_unavailable_json(&reason) {
+                                let _ = timeout(WRITE_DEADLINE, ws_sink.send(AxumWsMessage::Text(json.into()))).await;
                             }
-
-                            if let Err(e) = input_manager.enqueue_input(input_msg).await {
-                                warn!(error = ?e, "enqueue_input rejected");
-                            } else {
-                                // Dispatch popped input events to target CDP
-                                if let Some(producer) = get_producer(&session_id).await {
-                                    if let Ok(page_sid) = producer.ensure_page_session().await {
-                                        let geom = producer.geometry().await;
-                                        while let Some(msg) = input_manager.pop_next_input().await {
-                                            let event_kind = match &msg.event {
-                                                crate::browser_host::input::InputEvent::PointerDown { .. } => "pointerDown",
-                                                crate::browser_host::input::InputEvent::PointerUp { .. } => "pointerUp",
-                                                crate::browser_host::input::InputEvent::PointerMove { .. } => "pointerMove",
-                                                crate::browser_host::input::InputEvent::PointerCancel => "pointerCancel",
-                                                crate::browser_host::input::InputEvent::Wheel { .. } => "wheel",
-                                                crate::browser_host::input::InputEvent::KeyDown { .. } => "keyDown",
-                                                crate::browser_host::input::InputEvent::KeyUp { .. } => "keyUp",
-                                                crate::browser_host::input::InputEvent::InsertText { .. } => "insertText",
-                                            };
-                                            debug!(session_id = %session_id, event_kind, "Dispatching CDP input event");
-                                            dispatch_input_event_to_cdp(&producer.cdp_client, &page_sid, &geom, &msg.event).await;
-                                        }
-                                    }
-                                }
-                            }
+                            break;
                         }
                     }
                     AxumWsMessage::Close(_) => break,
@@ -2417,7 +2522,7 @@ async fn run_control_session(
             ) {
                 if let (Some(deadline), Ok((json, _))) = (
                     control_write_deadline(effective_deadline),
-                    serialize_control_snapshot(&mut updates),
+                    serialize_control_snapshot(&mut updates, false),
                 ) {
                     let json_len = json.len();
                     let write_started = Instant::now();
@@ -2439,20 +2544,10 @@ async fn run_control_session(
     }
     drop(updates);
 
-    // Teardown: revoke lease only if this viewer is the current lease holder
-    if input_manager.is_lease_holder(&viewer_id).await {
-        let releases = input_manager.revoke_lease().await;
-        if !releases.is_empty() {
-            if let Some(producer) = get_producer(&session_id).await {
-                if let Ok(page_sid) = producer.ensure_page_session().await {
-                    let geom = producer.geometry().await;
-                    for rel in &releases {
-                        dispatch_input_event_to_cdp(&producer.cdp_client, &page_sid, &geom, rel)
-                            .await;
-                    }
-                }
-            }
-        }
+    // Teardown: the lease ends (releasing held native input on its original native identity)
+    // only if this viewer is the current lease holder, decided atomically.
+    if let Err(err) = input_manager.revoke_lease_if_holder(&viewer_id).await {
+        warn!(viewer_id = %viewer_id, error = %err, "control teardown: native input release failed");
     }
     global_stream_diagnostics().clear_pending_control_write(&subscription_epoch);
     global_attachment_manager()
@@ -2461,8 +2556,11 @@ async fn run_control_session(
     let _ = timeout(WRITE_DEADLINE, ws_sink.send(AxumWsMessage::Close(None))).await;
 }
 
+/// Serializes the latest session snapshot. Until the viewer pair is ready (media producer
+/// attached and control connected) the snapshot says input is unavailable.
 fn serialize_control_snapshot(
     updates: &mut watch::Receiver<ServerControlEvent>,
+    paired: bool,
 ) -> Result<(String, bool), serde_json::Error> {
     let event = updates.borrow_and_update();
     let retired = matches!(
@@ -2470,7 +2568,15 @@ fn serialize_control_snapshot(
         ServerControlEvent::SessionUpdated { session }
             if session.status == "closed" || session.status == "lost"
     );
-    serde_json::to_string(&*event).map(|json| (json, retired))
+    match &*event {
+        ServerControlEvent::SessionUpdated { session } if !paired && session.input_available => {
+            let mut gated = session.clone();
+            gated.input_available = false;
+            serde_json::to_string(&ServerControlEvent::SessionUpdated { session: gated })
+        }
+        other => serde_json::to_string(other),
+    }
+    .map(|json| (json, retired))
 }
 
 fn control_write_deadline(effective_deadline: Option<DateTime<Utc>>) -> Option<Duration> {
@@ -2569,157 +2675,79 @@ fn keyboard_event_params(key: &str, code: &str, modifiers: u32, down: bool) -> s
     params
 }
 
+/// Projects image fractions to CDP CSS coordinates; `None` for out-of-range fractions.
+fn project_pointer(geom: &TargetGeometry, u: f64, v: f64) -> Option<(f64, f64)> {
+    if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
+        return None;
+    }
+    let x = (u * geom.css_width).clamp(0.0, geom.css_width);
+    let y = (v * geom.css_height + geom.offset_top).clamp(0.0, geom.css_height + geom.offset_top);
+    Some((x, y))
+}
+
+/// The CDP command one input event becomes; `None` when nothing is dispatched.
+fn input_event_command(
+    geom: &TargetGeometry,
+    event: &InputEvent,
+) -> Option<(&'static str, serde_json::Value)> {
+    let mouse = |kind: &str, button: Option<&str>, u: f64, v: f64, modifiers: u32| {
+        let (x, y) = project_pointer(geom, u, v)?;
+        let mut params = serde_json::json!({
+            "type": kind,
+            "x": x,
+            "y": y,
+            "modifiers": modifiers,
+        });
+        if let Some(button) = button {
+            params["button"] = serde_json::json!(button);
+            params["clickCount"] = serde_json::json!(1);
+        }
+        Some(("Input.dispatchMouseEvent", params))
+    };
+    match event {
+        InputEvent::PointerDown { button, u, v, modifiers } => {
+            mouse("mousePressed", Some(button.as_cdp_str()), *u, *v, *modifiers)
+        }
+        InputEvent::PointerUp { button, u, v, modifiers } => {
+            mouse("mouseReleased", Some(button.as_cdp_str()), *u, *v, *modifiers)
+        }
+        InputEvent::PointerMove { u, v, modifiers } => mouse("mouseMoved", None, *u, *v, *modifiers),
+        InputEvent::Wheel { u, v, delta_x, delta_y, modifiers } => {
+            let (_, mut params) = mouse("mouseWheel", None, *u, *v, *modifiers)?;
+            params["deltaX"] = serde_json::json!(delta_x);
+            params["deltaY"] = serde_json::json!(delta_y);
+            Some(("Input.dispatchMouseEvent", params))
+        }
+        InputEvent::KeyDown { key, code, modifiers } => Some((
+            "Input.dispatchKeyEvent",
+            keyboard_event_params(key, code, *modifiers, true),
+        )),
+        InputEvent::KeyUp { key, code, modifiers } => Some((
+            "Input.dispatchKeyEvent",
+            keyboard_event_params(key, code, *modifiers, false),
+        )),
+        InputEvent::InsertText { text } => {
+            Some(("Input.insertText", serde_json::json!({ "text": text })))
+        }
+        InputEvent::PointerCancel => None,
+    }
+}
+
+/// Dispatches one input event on the given native page session. A CDP failure is returned so
+/// release paths can report input unavailable instead of silently succeeding.
 pub async fn dispatch_input_event_to_cdp(
     client: &CdpClient,
     page_session_id: &str,
     geom: &TargetGeometry,
     event: &InputEvent,
-) {
-    match event {
-        InputEvent::PointerDown {
-            button,
-            u,
-            v,
-            modifiers,
-        } => {
-            if *u < 0.0 || *u > 1.0 || *v < 0.0 || *v > 1.0 {
-                return;
-            }
-            let x = (u * geom.css_width).clamp(0.0, geom.css_width);
-            let y = (v * geom.css_height + geom.offset_top)
-                .clamp(0.0, geom.css_height + geom.offset_top);
-            let params = serde_json::json!({
-                "type": "mousePressed",
-                "x": x,
-                "y": y,
-                "button": button.as_cdp_str(),
-                "clickCount": 1,
-                "modifiers": modifiers,
-            });
-            let _ = client
-                .send_command(
-                    "Input.dispatchMouseEvent",
-                    Some(params),
-                    Some(page_session_id),
-                )
-                .await;
-        }
-        InputEvent::PointerUp {
-            button,
-            u,
-            v,
-            modifiers,
-        } => {
-            if *u < 0.0 || *u > 1.0 || *v < 0.0 || *v > 1.0 {
-                return;
-            }
-            let x = (u * geom.css_width).clamp(0.0, geom.css_width);
-            let y = (v * geom.css_height + geom.offset_top)
-                .clamp(0.0, geom.css_height + geom.offset_top);
-            let params = serde_json::json!({
-                "type": "mouseReleased",
-                "x": x,
-                "y": y,
-                "button": button.as_cdp_str(),
-                "clickCount": 1,
-                "modifiers": modifiers,
-            });
-            let _ = client
-                .send_command(
-                    "Input.dispatchMouseEvent",
-                    Some(params),
-                    Some(page_session_id),
-                )
-                .await;
-        }
-        InputEvent::PointerMove { u, v, modifiers } => {
-            if *u < 0.0 || *u > 1.0 || *v < 0.0 || *v > 1.0 {
-                return;
-            }
-            let x = (u * geom.css_width).clamp(0.0, geom.css_width);
-            let y = (v * geom.css_height + geom.offset_top)
-                .clamp(0.0, geom.css_height + geom.offset_top);
-            let params = serde_json::json!({
-                "type": "mouseMoved",
-                "x": x,
-                "y": y,
-                "modifiers": modifiers,
-            });
-            let _ = client
-                .send_command(
-                    "Input.dispatchMouseEvent",
-                    Some(params),
-                    Some(page_session_id),
-                )
-                .await;
-        }
-        InputEvent::Wheel {
-            u,
-            v,
-            delta_x,
-            delta_y,
-            modifiers,
-        } => {
-            if *u < 0.0 || *u > 1.0 || *v < 0.0 || *v > 1.0 {
-                return;
-            }
-            let x = (u * geom.css_width).clamp(0.0, geom.css_width);
-            let y = (v * geom.css_height + geom.offset_top)
-                .clamp(0.0, geom.css_height + geom.offset_top);
-            let params = serde_json::json!({
-                "type": "mouseWheel",
-                "x": x,
-                "y": y,
-                "deltaX": delta_x,
-                "deltaY": delta_y,
-                "modifiers": modifiers,
-            });
-            let _ = client
-                .send_command(
-                    "Input.dispatchMouseEvent",
-                    Some(params),
-                    Some(page_session_id),
-                )
-                .await;
-        }
-        InputEvent::KeyDown {
-            key,
-            code,
-            modifiers,
-        } => {
-            let params = keyboard_event_params(key, code, *modifiers, true);
-            let _ = client
-                .send_command(
-                    "Input.dispatchKeyEvent",
-                    Some(params),
-                    Some(page_session_id),
-                )
-                .await;
-        }
-        InputEvent::KeyUp {
-            key,
-            code,
-            modifiers,
-        } => {
-            let params = keyboard_event_params(key, code, *modifiers, false);
-            let _ = client
-                .send_command(
-                    "Input.dispatchKeyEvent",
-                    Some(params),
-                    Some(page_session_id),
-                )
-                .await;
-        }
-        InputEvent::InsertText { text } => {
-            let params = serde_json::json!({
-                "text": text,
-            });
-            let _ = client
-                .send_command("Input.insertText", Some(params), Some(page_session_id))
-                .await;
-        }
-        InputEvent::PointerCancel => {}
-    }
+) -> Result<(), CdpError> {
+    let Some((method, params)) = input_event_command(geom, event) else {
+        return Ok(());
+    };
+    client
+        .send_command(method, Some(params), Some(page_session_id))
+        .await
+        .map(|_| ())
 }
 
 #[cfg(test)]

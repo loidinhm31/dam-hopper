@@ -17,6 +17,7 @@ import {
   type LogoutOutcome,
   type LogoutRequestOptions,
 } from "./auth-types.js";
+import { isValidPositiveDecimalU64 } from "./browser-host-types.js";
 
 export * from "./auth-types.js";
 
@@ -543,17 +544,12 @@ export function isSecureOrLoopbackOrigin(baseUrl: string): boolean {
   }
 }
 
-export function parsePositiveEpoch(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 1) {
-    return value;
-  }
-  if (typeof value === "string" && /^\d+$/.test(value)) {
-    const parsed = Number(value);
-    if (Number.isSafeInteger(parsed) && parsed >= 1) {
-      return parsed;
-    }
-  }
-  return undefined;
+/**
+ * A Browser profile epoch is a canonical positive decimal u64 string end to end; numbers and
+ * non-canonical strings are rejected (no lossy `Number` identity).
+ */
+export function parsePositiveEpoch(value: unknown): string | undefined {
+  return isValidPositiveDecimalU64(value) ? value : undefined;
 }
 
 function parseLogoutOutcome(status: number, data: unknown): LogoutOutcome {

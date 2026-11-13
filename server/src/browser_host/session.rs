@@ -80,6 +80,50 @@ impl From<NetworkPolicyError> for SessionError {
     }
 }
 
+const NAVIGATION_REVISION_EXHAUSTED: &str =
+    "navigationRevision exhausted; recreate the Browser session for a fresh identity";
+const VIEWPORT_EPOCH_EXHAUSTED: &str =
+    "viewportEpoch exhausted; recreate the Browser session for a fresh identity";
+
+/// Next navigation revision. An exhausted counter is never reused or saturated in place: reusing
+/// the final value would let a stale identity pass the compare-and-swap fence.
+fn next_navigation_revision(current: u64) -> Result<u64, SessionError> {
+    current
+        .checked_add(1)
+        .ok_or_else(|| SessionError::Conflict(NAVIGATION_REVISION_EXHAUSTED.to_string()))
+}
+
+fn next_viewport_epoch(current: u64) -> Result<u64, SessionError> {
+    current
+        .checked_add(1)
+        .ok_or_else(|| SessionError::Conflict(VIEWPORT_EPOCH_EXHAUSTED.to_string()))
+}
+
+/// One session whose viewport epoch an external (raw CDP) geometry mutation advanced.
+#[derive(Debug, Clone)]
+pub struct GeometryFence {
+    pub session_id: String,
+    /// Committed epoch (unchanged when the counter was exhausted).
+    pub viewport_epoch: u64,
+    /// Geometry the registry adopted from the command; `None` leaves input unavailable.
+    pub geometry: Option<TargetGeometry>,
+}
+
+fn matches_native_target(
+    session: &BrowserSession,
+    principal: &str,
+    is_dev: bool,
+    target_id: Option<&str>,
+) -> bool {
+    session.owner_principal == principal
+        && session.is_dev == is_dev
+        && match (target_id, &session.native_target_id) {
+            (Some(tid), Some(st_id)) => tid == st_id,
+            (Some(_), None) => false,
+            (None, _) => true,
+        }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionStatus {
@@ -747,6 +791,26 @@ impl SessionRegistry {
         }
     }
 
+    /// Forces counter values on a live session so boundary identities (2^53+1, u64::MAX) are
+    /// exercised end to end without 2^64 real transitions. Test support only.
+    #[doc(hidden)]
+    pub async fn set_counters_for_test(
+        &self,
+        session_id: &str,
+        navigation_revision: u64,
+        viewport_epoch: u64,
+    ) -> Result<BrowserSessionDto, SessionError> {
+        let mut inner = self.inner.write().await;
+        let session = inner
+            .sessions
+            .get_mut(session_id)
+            .ok_or(SessionError::NotFound)?;
+        session.navigation_revision = navigation_revision;
+        session.viewport_epoch = viewport_epoch;
+        session.publish_update();
+        Ok(session.to_dto())
+    }
+
     pub async fn get_session(
         &self,
         session_id: &str,
@@ -816,6 +880,34 @@ impl SessionRegistry {
             native_create_attempted: session.native_create_attempted,
             is_dev: session.is_dev,
         })
+    }
+
+    /// Live-identity gate for viewer attachments (ticket issue, consume, upgrade). Admits only
+    /// a `Running` session whose exact owner/dev/profile-epoch/incarnation identity still
+    /// matches: a retired, closing or replaced session never admits a ticket or socket.
+    pub async fn verify_attachment_identity(
+        &self,
+        session_id: &str,
+        principal: &str,
+        is_dev: bool,
+        profile_epoch: u64,
+        browser_incarnation: &str,
+    ) -> Result<(), SessionError> {
+        let inner = self.inner.read().await;
+        let session = inner.sessions.get(session_id).ok_or(SessionError::NotFound)?;
+        if session.owner_principal != principal
+            || session.is_dev != is_dev
+            || session.profile_epoch != profile_epoch
+            || session.browser_incarnation != browser_incarnation
+        {
+            return Err(SessionError::NotFound);
+        }
+        if session.status != SessionStatus::Running {
+            return Err(SessionError::Conflict(
+                "browser session is not running".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Per-session single-flight gate for creation/publication of its producer.
@@ -1374,8 +1466,9 @@ impl SessionRegistry {
         }
 
         let parsed = validate_navigation_url(raw_url, session.is_dev, allowed_origins)?;
+        let next_revision = next_navigation_revision(session.navigation_revision)?;
         session.url = parsed.to_string();
-        session.navigation_revision = session.navigation_revision.saturating_add(1);
+        session.navigation_revision = next_revision;
         session.publish_update();
 
         Ok(session.to_dto())
@@ -1417,7 +1510,7 @@ impl SessionRegistry {
         }
 
         // In practice this triggers CDP Page.navigateToHistoryEntry; we advance revision
-        session.navigation_revision = session.navigation_revision.saturating_add(1);
+        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
         session.publish_update();
 
         Ok(session.to_dto())
@@ -1451,7 +1544,7 @@ impl SessionRegistry {
             )));
         }
 
-        session.navigation_revision = session.navigation_revision.saturating_add(1);
+        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
         session.publish_update();
 
         Ok(session.to_dto())
@@ -1647,7 +1740,7 @@ impl SessionRegistry {
         }
 
         // Epoch advances before command
-        session.viewport_epoch = session.viewport_epoch.saturating_add(1);
+        session.viewport_epoch = next_viewport_epoch(session.viewport_epoch)?;
         session.geometry.css_width = sanitized.width as f64;
         session.geometry.css_height = sanitized.height as f64;
         session.geometry.dpr = sanitized.dpr;
@@ -1701,7 +1794,14 @@ impl SessionRegistry {
             .take()
             .is_some_and(|at| at.elapsed() < Duration::from_secs(5));
         if !skip_bump {
-            session.navigation_revision = session.navigation_revision.saturating_add(1);
+            let Ok(next) = next_navigation_revision(session.navigation_revision) else {
+                // Exhausted identity: never reuse a revision; the session must be recreated.
+                session.input_available = false;
+                session.unavailable_reason = Some(NAVIGATION_REVISION_EXHAUSTED.to_string());
+                session.publish_update();
+                return None;
+            };
+            session.navigation_revision = next;
         }
         if let Some(url) = raw_url {
             if let Ok(parsed) = validate_navigation_url(url, session.is_dev, allowed_origins) {
@@ -1712,6 +1812,27 @@ impl SessionRegistry {
         Some(session.navigation_revision)
     }
 
+    /// Session ids whose native page is `target_id` (every session of the principal when the
+    /// raw command could not be correlated to a target).
+    pub async fn sessions_for_native_target(
+        &self,
+        principal: &str,
+        is_dev: bool,
+        target_id: Option<&str>,
+    ) -> Vec<String> {
+        let inner = self.inner.read().await;
+        inner
+            .sessions
+            .values()
+            .filter(|s| matches_native_target(s, principal, is_dev, target_id))
+            .map(|s| s.browser_session_id.clone())
+            .collect()
+    }
+
+    /// Advances the viewport epoch of every matching session for an external (raw CDP) geometry
+    /// mutation and returns the committed identities so callers can fence producer caches and
+    /// input before the command reaches the browser. Reported dimensions are adopted only when
+    /// the command named usable metrics; otherwise input stays unavailable (no guessed geometry).
     pub async fn fence_geometry_and_advance_epoch(
         &self,
         principal: &str,
@@ -1720,35 +1841,45 @@ impl SessionRegistry {
         width: Option<u32>,
         height: Option<u32>,
         dpr: Option<f64>,
-    ) {
+    ) -> Vec<GeometryFence> {
         let mut inner = self.inner.write().await;
+        let mut fences = Vec::new();
         for s in inner.sessions.values_mut() {
-            if s.owner_principal == principal && s.is_dev == is_dev {
-                let matches_target = match (target_id, &s.native_target_id) {
-                    (Some(tid), Some(st_id)) => tid == st_id,
-                    (Some(_), None) => false,
-                    (None, _) => true,
-                };
-                if matches_target {
-                    s.viewport_epoch = s.viewport_epoch.saturating_add(1);
-                    if let (Some(w), Some(h)) = (width, height) {
-                        if w > 0 && h > 0 && (dpr.is_none() || dpr.unwrap() > 0.0) {
-                            s.geometry.css_width = w as f64;
-                            s.geometry.css_height = h as f64;
-                            if let Some(d) = dpr {
-                                s.geometry.dpr = d;
-                            }
-                            s.input_available = true;
-                        } else {
-                            s.input_available = false;
-                        }
-                    } else {
-                        s.input_available = false;
-                    }
-                    s.publish_update();
-                }
+            if !matches_native_target(s, principal, is_dev, target_id) {
+                continue;
             }
+            let Ok(next_epoch) = next_viewport_epoch(s.viewport_epoch) else {
+                s.input_available = false;
+                s.unavailable_reason = Some(VIEWPORT_EPOCH_EXHAUSTED.to_string());
+                s.publish_update();
+                fences.push(GeometryFence {
+                    session_id: s.browser_session_id.clone(),
+                    viewport_epoch: s.viewport_epoch,
+                    geometry: None,
+                });
+                continue;
+            };
+            s.viewport_epoch = next_epoch;
+            let adopted = match (width, height) {
+                (Some(w), Some(h)) if w > 0 && h > 0 && dpr.is_none_or(|d| d > 0.0) => {
+                    s.geometry.css_width = w as f64;
+                    s.geometry.css_height = h as f64;
+                    if let Some(d) = dpr {
+                        s.geometry.dpr = d;
+                    }
+                    Some(s.geometry.clone())
+                }
+                _ => None,
+            };
+            s.input_available = adopted.is_some();
+            s.publish_update();
+            fences.push(GeometryFence {
+                session_id: s.browser_session_id.clone(),
+                viewport_epoch: next_epoch,
+                geometry: adopted,
+            });
         }
+        fences
     }
 
     pub async fn reset_for_test(&self) {

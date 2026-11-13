@@ -32,6 +32,8 @@ import { unpackBhjfFrame } from "./frame-protocol.js";
 const DECIMAL_SEQ_PATTERN = /^[1-9][0-9]{0,19}$/;
 const textEncoder = new TextEncoder();
 const MAX_U64 = 18446744073709551615n;
+/** Bit 63 of a server viewport epoch marks an in-progress geometry transition (not a real epoch). */
+const TRANSITIONAL_EPOCH_FLAG = 1n << 63n;
 type TimeoutHandle = ReturnType<typeof setTimeout>;
 
 function parsePositiveU64(value: unknown): bigint | null {
@@ -134,6 +136,10 @@ export class BrowserStreamController {
   private lastDrawnRect: DrawnRect | null = null;
   private lastFrameHeader: TargetFrameHeader | null = null;
   private lastCachedBitmap: ImageBitmap | null = null;
+  /** Newest canonical viewportEpoch seen on this attachment; older in-flight decodes are obsolete. */
+  private newestViewportEpoch: bigint | null = null;
+  /** Identity of the owner/target whose pixels are currently cached; a different one retires them. */
+  private presentationOwnerKey: string | null = null;
   private status: StreamStatus = "idle";
   private currentProducerRun: string | null = null;
   private lastKnownProducerRun: string | null = null;
@@ -261,6 +267,19 @@ export class BrowserStreamController {
     this.appliedCaptureVersionsByRun.clear();
     this.clearRateLimitTimers();
     this.resetAudioState();
+    const ownerKey = [
+      credentials.owner.profileId,
+      credentials.owner.generation,
+      credentials.browserSessionId,
+      credentials.browserIncarnation,
+      credentials.profileEpoch,
+    ].join("|");
+    // Pixels, hit rectangle and header belong to one owner/target: a different one must never
+    // see them, even for a layout redraw before its first frame. Same-owner reconnects keep them.
+    if (this.presentationOwnerKey !== null && this.presentationOwnerKey !== ownerKey) {
+      this.retireCachedPresentation();
+    }
+    this.presentationOwnerKey = ownerKey;
     this.resetTelemetryAggregates();
     if (this.pending) {
       const prev = this.pending;
@@ -752,6 +771,7 @@ export class BrowserStreamController {
       this.lastKnownProducerRun = header.producerRun;
     }
     this.currentProducerRun = header.producerRun;
+    this.noteViewportEpoch(header.viewportEpoch);
     // Geometry callback
     this.onGeometryChange?.(header.geometry, header.inputTrusted);
     if (this.isDecoding) {
@@ -784,11 +804,54 @@ export class BrowserStreamController {
     }
   }
 
+  /** Records the newest viewportEpoch (canonical decimal string) seen on this attachment. */
+  private noteViewportEpoch(viewportEpoch: string): void {
+    if (!/^[1-9][0-9]*$/.test(viewportEpoch)) return;
+    const epoch = BigInt(viewportEpoch);
+    // The server marks an in-progress geometry transition with bit 63. That is a marker, not a
+    // real epoch: letting it raise the floor would make every later normal frame look superseded.
+    if (epoch >= TRANSITIONAL_EPOCH_FLAG) return;
+    if (this.newestViewportEpoch === null || epoch > this.newestViewportEpoch) {
+      this.newestViewportEpoch = epoch;
+    }
+  }
+
+  /** True once a frame with a newer viewportEpoch arrived: the older decode must not paint. */
+  private isViewportEpochSuperseded(viewportEpoch: string): boolean {
+    if (this.newestViewportEpoch === null || !/^[1-9][0-9]*$/.test(viewportEpoch)) {
+      return false;
+    }
+    return BigInt(viewportEpoch) < this.newestViewportEpoch;
+  }
+
+  /**
+   * Drops everything painted for the previous owner: cached bitmap, hit rectangle, frame header
+   * and canvas pixels, so a resize before the first frame of a new owner can never redraw them.
+   */
+  private retireCachedPresentation(): void {
+    if (this.lastCachedBitmap) {
+      try {
+        this.lastCachedBitmap.close();
+      } catch {
+        // Ignore close error on the retired bitmap
+      }
+      this.lastCachedBitmap = null;
+    }
+    this.lastDrawnRect = null;
+    this.lastFrameHeader = null;
+    this.newestViewportEpoch = null;
+    if (this.ctx) {
+      this.ctx.fillStyle = "#000000";
+      this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    }
+  }
+
   private isOriginatingOwnerValid(
     socket: WebSocket,
     subscriptionEpoch: string,
     producerRun: string,
     decodeEpoch: number,
+    viewportEpoch: string,
   ): boolean {
     return (
       !this.isDisposed &&
@@ -799,6 +862,7 @@ export class BrowserStreamController {
       this.currentCredentials?.subscriptionEpoch === subscriptionEpoch &&
       socket.readyState === WebSocket.OPEN &&
       !this.retiredProducerRuns.has(producerRun) &&
+      !this.isViewportEpochSuperseded(viewportEpoch) &&
       (this.lastKnownProducerRun === null ||
         this.lastKnownProducerRun === producerRun)
     );
@@ -823,6 +887,7 @@ export class BrowserStreamController {
           originatingSubEpoch,
           header.producerRun,
           currentEpoch,
+          header.viewportEpoch,
         )
       ) {
         this.lastDrawnRect = null;
@@ -868,6 +933,7 @@ export class BrowserStreamController {
             originatingSubEpoch,
             header.producerRun,
             currentEpoch,
+            header.viewportEpoch,
           )
         ) {
           this.lastDrawnRect = null;
@@ -897,6 +963,7 @@ export class BrowserStreamController {
         originatingSubEpoch,
         header.producerRun,
         currentEpoch,
+        header.viewportEpoch,
       );
       if (decodeSucceeded && bitmap && isStillValid) {
         const drawSucceeded = this.drawBitmapToCanvas(bitmap, header);

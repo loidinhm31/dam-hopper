@@ -121,18 +121,12 @@ impl std::error::Error for ProtocolError {}
 /// Invariants: canonical positive decimal `^[1-9][0-9]{0,19}$` with numeric value <= u64::MAX.
 /// Zero, leading zeros, signs, whitespace and non-ASCII digits are rejected.
 pub fn validate_decimal_sequence(field: &'static str, s: &str) -> Result<u64, ProtocolError> {
-    let invalid = || ProtocolError::InvalidDecimalSequence {
-        field,
-        value: s.to_string(),
-    };
-    let bytes = s.as_bytes();
-    if bytes.is_empty() || bytes.len() > 20 {
-        return Err(invalid());
-    }
-    if !(b'1'..=b'9').contains(&bytes[0]) || !bytes[1..].iter().all(u8::is_ascii_digit) {
-        return Err(invalid());
-    }
-    s.parse::<u64>().map_err(|_| invalid())
+    crate::browser_host::decimal_counter::parse_canonical_u64(s, false).ok_or_else(|| {
+        ProtocolError::InvalidDecimalSequence {
+            field,
+            value: s.to_string(),
+        }
+    })
 }
 
 /// Geometry metadata from browser engine layout metrics

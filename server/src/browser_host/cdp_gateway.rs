@@ -29,7 +29,10 @@ use crate::browser_host::auth::{
     validate_request_origin, verify_live_admission, BrowserAdmission, LIVE_CHECK_INTERVAL,
 };
 use crate::browser_host::config::PublicServerOrigin;
+use crate::browser_host::diagnostics::global_memory_controller;
 use crate::browser_host::protocol::MAX_WS_MESSAGE_BYTES;
+use crate::browser_host::raw_geometry_fence::handle_client_cdp_message;
+use crate::browser_host::raw_session_targets::RawSessionTargets;
 use crate::state::AppState;
 
 pub const DEFAULT_MAX_AGENT_CDP_CONNECTIONS: usize = 2;
@@ -728,7 +731,7 @@ async fn cdp_ws_handler_internal(
     }
 
     response_builder.on_upgrade(move |client_socket| {
-        relay_agent_cdp_socket(client_socket, upstream_url, permit, state, admission)
+        relay_agent_cdp_socket(client_socket, upstream_url, permit, state, admission, target_id)
     })
 }
 
@@ -755,6 +758,7 @@ async fn relay_agent_cdp_socket(
     _permit: CdpGatewayPermit,
     state: AppState,
     admission: BrowserAdmission,
+    page_target: Option<String>,
 ) {
     let mut ws_config = WebSocketConfig::default();
     ws_config.max_message_size = Some(MAX_WS_MESSAGE_BYTES);
@@ -870,6 +874,7 @@ async fn relay_agent_cdp_socket(
 
     let deadline_sleep = tokio::time::sleep_until(deadline_instant);
     tokio::pin!(deadline_sleep);
+    let mut raw_targets = RawSessionTargets::new(page_target);
     let mut aborted_by_auth = false;
     loop {
         tokio::select! {
@@ -885,7 +890,12 @@ async fn relay_agent_cdp_socket(
             client_msg = client_ws.next() => {
                 let (forwarded, aborted) = match client_msg {
                     Some(Ok(AxumWsMessage::Text(t))) => {
-                        let handle_fut = handle_client_cdp_message(t.as_str(), &admission.principal, admission.is_dev);
+                        // The incoming text stays alive during the send and `.into()` below copies it.
+                        let Ok(_resident) = global_memory_controller().try_reserve(t.len().saturating_mul(2)) else {
+                            warn!(principal = %admission.principal, "Agent CDP relay closed: payload memory budget exhausted");
+                            break;
+                        };
+                        let handle_fut = handle_client_cdp_message(t.as_str(), &admission.principal, admission.is_dev, &mut raw_targets);
                         let aborted_during_handle = tokio::select! {
                             _ = auth_abort_rx.recv() => true,
                             _ = tokio::time::sleep_until(deadline_instant) => true,
@@ -903,6 +913,10 @@ async fn relay_agent_cdp_socket(
                         (outcome == WriteOutcome::Ok, aborted)
                     }
                     Some(Ok(AxumWsMessage::Binary(b))) => {
+                        let Ok(_resident) = global_memory_controller().try_reserve(b.len()) else {
+                            warn!(principal = %admission.principal, "Agent CDP relay closed: payload memory budget exhausted");
+                            break;
+                        };
                         let (outcome, aborted) = write_with_cancel(
                             upstream_ws.send(UpstreamMessage::Binary(b)),
                             &mut auth_abort_rx,
@@ -939,6 +953,12 @@ async fn relay_agent_cdp_socket(
             upstream_msg = upstream_ws.next() => {
                 let (forwarded, aborted) = match upstream_msg {
                     Some(Ok(UpstreamMessage::Text(t))) => {
+                        // The incoming text stays alive during the send and `.into()` below copies it.
+                        let Ok(_resident) = global_memory_controller().try_reserve(t.len().saturating_mul(2)) else {
+                            warn!(principal = %admission.principal, "Agent CDP relay closed: payload memory budget exhausted");
+                            break;
+                        };
+                        raw_targets.observe_upstream(t.as_str());
                         let (outcome, aborted) = write_with_cancel(
                             client_ws.send(AxumWsMessage::Text(t.as_str().into())),
                             &mut auth_abort_rx,
@@ -947,6 +967,10 @@ async fn relay_agent_cdp_socket(
                         (outcome == WriteOutcome::Ok, aborted)
                     }
                     Some(Ok(UpstreamMessage::Binary(b))) => {
+                        let Ok(_resident) = global_memory_controller().try_reserve(b.len()) else {
+                            warn!(principal = %admission.principal, "Agent CDP relay closed: payload memory budget exhausted");
+                            break;
+                        };
                         let (outcome, aborted) = write_with_cancel(
                             client_ws.send(AxumWsMessage::Binary(b)),
                             &mut auth_abort_rx,
@@ -1003,45 +1027,4 @@ async fn relay_agent_cdp_socket(
         .unregister_agent_cdp(&admission.principal, admission.is_dev)
         .await;
     debug!(principal = %admission.principal, "CDP gateway relay closed");
-}
-
-pub async fn handle_client_cdp_message(msg_str: &str, principal: &str, is_dev: bool) {
-    if !msg_str.contains("\"Emulation.") {
-        return;
-    }
-    let Ok(val) = serde_json::from_str::<serde_json::Value>(msg_str) else {
-        return;
-    };
-
-    if let Some(method) = val.get("method").and_then(|m| m.as_str()) {
-        match method {
-            "Emulation.setDeviceMetricsOverride"
-            | "Emulation.clearDeviceMetricsOverride"
-            | "Emulation.setPageScaleFactor"
-            | "Emulation.setVisibleSize" => {
-                let target_id = val
-                    .get("sessionId")
-                    .or_else(|| val.get("targetId"))
-                    .and_then(|v| v.as_str());
-                let (w, h, dpr) = if let Some(params) = val.get("params") {
-                    let w = params
-                        .get("width")
-                        .and_then(|v| v.as_u64())
-                        .map(|v| v as u32);
-                    let h = params
-                        .get("height")
-                        .and_then(|v| v.as_u64())
-                        .map(|v| v as u32);
-                    let dpr = params.get("deviceScaleFactor").and_then(|v| v.as_f64());
-                    (w, h, dpr)
-                } else {
-                    (None, None, None)
-                };
-                crate::api::browser_host::global_session_registry()
-                    .fence_geometry_and_advance_epoch(principal, is_dev, target_id, w, h, dpr)
-                    .await;
-            }
-            _ => {}
-        }
-    }
 }

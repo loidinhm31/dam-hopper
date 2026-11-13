@@ -71,6 +71,7 @@ import {
   areBrowserOwnerScopesEqual,
   captureVerifiedBrowserOwner,
   createBrowserNativeTargetKey,
+  isCanonicalPositiveU64Decimal,
   isCapturedBrowserOwnerCurrent,
 } from "./browser/browser-owner-scope.js";
 import { commitNativeTargetAdmission } from "./browser/browser-admission-guard.js";
@@ -1452,19 +1453,16 @@ function ParkedBrowserStreamItem({
         getIncarnation: () =>
           readBrowserWindowAndTab(win.id, tab.tabId)?.tab.snapshot
             ?.browserIncarnation ?? "",
-        getProfileEpoch: () => {
-          const raw = readBrowserWindowAndTab(win.id, tab.tabId)?.tab.snapshot
-            ?.profileEpoch;
-          const num = raw !== undefined ? Number(raw) : 0;
-          return Number.isSafeInteger(num) && num > 0 ? num : 0;
-        },
+        getProfileEpoch: () =>
+          readBrowserWindowAndTab(win.id, tab.tabId)?.tab.snapshot
+            ?.profileEpoch ?? "",
         getSubscriptionEpoch: () =>
           streamControllerRef.current?.getCurrentSubscriptionEpoch() ?? null,
         getLeaseToken: () =>
           readBrowserWindowAndTab(win.id, tab.tabId)?.tab.leaseToken ?? null,
         getViewportEpoch: () =>
           readBrowserWindowAndTab(win.id, tab.tabId)?.tab.snapshot
-            ?.viewportEpoch ?? 0,
+            ?.viewportEpoch ?? "",
         getDrawnRect: () => streamControllerRef.current?.getDrawnRect() ?? null,
         getControlSocket: () =>
           streamControllerRef.current?.getControlSocket() ?? null,
@@ -1792,12 +1790,7 @@ function ParkedBrowserStreamItem({
           return;
         }
 
-        const profileEpochNum = Number(snapshot.profileEpoch);
-        if (
-          !Number.isSafeInteger(profileEpochNum) ||
-          profileEpochNum <= 0 ||
-          String(profileEpochNum) !== snapshot.profileEpoch
-        ) {
+        if (!isCanonicalPositiveU64Decimal(snapshot.profileEpoch)) {
           updateBrowserTabInStore(win.id, tab.tabId, {
             unavailableReason:
               "Browser profile epoch cannot be represented exactly",
@@ -1810,7 +1803,7 @@ function ParkedBrowserStreamItem({
             owner,
             rawSessionId,
             snapshot.browserIncarnation,
-            profileEpochNum,
+            snapshot.profileEpoch,
             abortCtrl.signal,
           );
 
