@@ -11,16 +11,18 @@ created: 2026-11-09
 # Host Browser review remediation
 
 ## Outcome and authority
-Repair existing owners across original phases 01–09; preserve same-target human/agent browsing and bounded streaming. This is planning only: no product edits, execution approval, Git actions, activation or task hydration.
+Repair existing owners across original phases 01–09; preserve same-target human/agent browsing and bounded streaming. Phase 02 implementation is in progress in the uncommitted working tree; no Phase 02 review or release approval has been granted.
 
 ## Phases
 | Phase | Priority | Status |
 |---|---|---|
 | [01 Backend authority, native targets and durable cleanup](phase-01-backend-authority-lifecycle.md) | P1 | partial, 4/5 tasks |
-| [02 Stream/input authority, recovery and bounds](phase-02-stream-input-contracts.md) | P1/P2 | pending |
+| [02 Stream/input authority, recovery and bounds](phase-02-stream-input-contracts.md) | P1/P2 | in progress; recovery lifecycle tests failing |
 | [03 OS ownership, presentation and interaction](phase-03-os-viewer-lifecycle.md) | P1/P2 | pending |
 | [04 Integrated qualification and documentation](phase-04-integrated-qualification-docs.md) | P1/P2 | pending |
-Four phases, 17 durable tasks; Phase 01 partial (4/5 tasks completed 2026-11-10; Windows containment blocked). Remaining phases pending. Missing native Windows access blocks its task and final qualification, not reachable Linux repairs.
+Four phases, 17 durable tasks; Phase 01 partial (4/5 tasks completed 2026-11-10; Windows containment blocked). Phase 02 work in progress, phases 03–04 pending. Missing native Windows access blocks its task and final qualification, not reachable Linux repairs.
+
+**2026-11-13 handoff:** [Phase 02 work and failing recovery regressions](phase-02-stream-input-contracts.md#current-execution-handoff-2026-11-13). Changes are uncommitted and unreviewed; task checkboxes remain open until their acceptance and review gates pass.
 
 ## Settled design and order
 - Keep Rust CDP actor, dedicated Page sessions, target-only BHJF 16-byte immutable `Bytes`, prompt native ACK independent of viewer credits, current React/Axum runners. No sidecar, framework, compatibility shim, iframe fallback or parallel registries.
@@ -45,7 +47,7 @@ Four phases, 17 durable tasks; Phase 01 partial (4/5 tasks completed 2026-11-10;
 - Related auth/device-login and OS/privacy writers overlap; coordinator serializes them. No imported whole-plan dependency or completion claim.
 - Phase 04 owns one coherent verification/review reconciliation after implementation; task verification strings are future checks, not executed receipts. Use actual engine/binary/SPA identity, commands, exits, raw records and human/device provenance; failures/skips stay failures/pending.
 - No launch approval while any severe finding, missing required proof or failed gate remains. Rollout only after gate closure; disable/drain Browser before rollback, preserve profile/lock/tombstone, never promise undo of credential deletion.
-- Existing docs/changelog paths and exact future ownership are in Phase 04. Coordinator checked task schema, paths, links, markers and dependency DAG; this remains an unexecuted improvement plan, not implementation or release approval.
+- Existing docs/changelog paths and exact ownership are in Phase 04. Phase 02 implementation has begun, but remains unreviewed and does not constitute release approval.
 
 ## Unresolved questions
 None requiring a product decision. Native Windows runner, physical Android/human receipts and raw matched measurements remain unavailable blocking verification prerequisites until supplied and exercised.
